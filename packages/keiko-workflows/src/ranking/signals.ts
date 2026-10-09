@@ -10,12 +10,13 @@ import type {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { isCanonicalMetadataFile } from "@oscharko-dev/keiko-workspace";
 
-import type { SearchAnchor } from "../planner/index.js";
+import type { SearchAnchor, SearchReference } from "../planner/index.js";
 import { isIntentBoosted } from "./scoring.js";
 
 export interface RankingInput {
   readonly atoms: readonly EvidenceAtom[];
   readonly anchors: readonly SearchAnchor[];
+  readonly references?: readonly SearchReference[];
   readonly hints?: RankingHints;
   // Optional intent context (enterprise retrieval M4). When present with a boosted intent, two
   // extra signals are APPENDED (canonical-metadata, structural-edge); absent ⇒ the signal vector is
@@ -165,18 +166,105 @@ function computeProvenanceCount(atoms: readonly EvidenceAtom[]): number {
   return Math.min(atoms.length, 10) / 10;
 }
 
+function normalizedPathTerm(term: string): string {
+  return term
+    .replace(/:\d{1,9}(?::\d{1,9})?$/u, "")
+    .replace(/^\.\//u, "")
+    .toLowerCase();
+}
+
+function basenameOf(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+function exactPathMatch(scopePath: string, anchor: SearchAnchor): number {
+  if (anchor.kind !== "path") return 0;
+  const path = normalizedPathTerm(anchor.sourceTerm ?? anchor.term);
+  const candidate = scopePath.toLowerCase();
+  if (candidate === path) return clampUnit(anchor.weight);
+  return candidate.endsWith(`/${path}`) ? 0.8 * clampUnit(anchor.weight) : 0;
+}
+
+function directorySegments(path: string): ReadonlySet<string> {
+  return new Set(path.toLowerCase().split("/").slice(0, -1).filter(Boolean));
+}
+
+function segmentAffinity(scopePath: string, path: string): number {
+  const requested = directorySegments(path);
+  if (requested.size === 0) return 0;
+  const candidate = directorySegments(scopePath);
+  return [...requested].filter((segment) => candidate.has(segment)).length / requested.size;
+}
+
+function pathAnchors(
+  anchors: readonly SearchAnchor[],
+  references: readonly SearchReference[],
+): readonly SearchAnchor[] {
+  const combined = new Map(anchors.map((anchor) => [normalizedPathTerm(anchor.term), anchor]));
+  for (const reference of references) {
+    const term = normalizedPathTerm(reference.path);
+    const existing = combined.get(term);
+    if (existing?.kind !== "path")
+      combined.set(term, { term, sourceTerm: reference.path, kind: "path", weight: 0.95 });
+  }
+  return [...combined.values()];
+}
+
+function anchorMatch(scopePath: string, anchor: SearchAnchor): number {
+  if (anchor.kind === "path") return exactPathMatch(scopePath, anchor);
+  const tokens = new Set(scopePath.toLowerCase().split(/[/._-]+/u));
+  if (!tokens.has(anchor.term.toLowerCase())) return 0;
+  const kindWeight = anchor.kind === "literal" ? 0.5 : 1;
+  return kindWeight * clampUnit(anchor.weight);
+}
+
 function computeAnchorOverlap(scopePath: string, anchors: readonly SearchAnchor[]): number {
-  if (anchors.length === 0) {
-    return 0;
+  if (anchors.length === 0) return 0;
+  return clampUnit(
+    anchors.reduce((sum, anchor) => sum + anchorMatch(scopePath, anchor), 0) / anchors.length,
+  );
+}
+
+interface PathEvidenceSignals {
+  readonly exactPathMatch: number;
+  readonly pathSegmentAffinity: number;
+  readonly basenameMatch: number;
+}
+
+function pairedPathAffinity(scopePath: string, atoms: readonly EvidenceAtom[]): number {
+  let best = 0;
+  for (const atom of atoms) {
+    if (atom.edge?.kind !== "test-source") continue;
+    const peer =
+      atom.edge.source.scopePath === scopePath
+        ? atom.edge.target.scopePath
+        : atom.edge.source.scopePath;
+    best = Math.max(best, segmentAffinity(scopePath, peer));
   }
-  const lowerPath = scopePath.toLowerCase();
-  let hits = 0;
-  for (const anc of anchors) {
-    if (anc.term.length > 0 && lowerPath.includes(anc.term.toLowerCase())) {
-      hits += 1;
-    }
+  return best;
+}
+
+function pathEvidenceSignals(
+  scopePath: string,
+  atoms: readonly EvidenceAtom[],
+  anchors: readonly SearchAnchor[],
+): PathEvidenceSignals {
+  let exactPath = 0;
+  let affinity = pairedPathAffinity(scopePath, atoms);
+  let basename = 0;
+  for (const anchor of anchors) {
+    const term = normalizedPathTerm(anchor.sourceTerm ?? anchor.term);
+    exactPath = Math.max(exactPath, exactPathMatch(scopePath, anchor));
+    if (anchor.kind === "path")
+      affinity = Math.max(affinity, segmentAffinity(scopePath, term) * clampUnit(anchor.weight));
+    if (basenameOf(term) === basenameOf(scopePath.toLowerCase()))
+      basename = Math.max(basename, clampUnit(anchor.weight));
   }
-  return clampUnit(hits / anchors.length);
+  return { exactPathMatch: exactPath, pathSegmentAffinity: affinity, basenameMatch: basename };
+}
+
+function hasPathEvidence(signals: PathEvidenceSignals): boolean {
+  return signals.exactPathMatch > 0 || signals.pathSegmentAffinity > 0 || signals.basenameMatch > 0;
 }
 
 function computePathDepthAffinity(scopePath: string): number {
@@ -238,58 +326,105 @@ function deriveScopePath(atoms: readonly EvidenceAtom[]): string {
   return first === undefined ? "" : first.scopePath;
 }
 
+function baseSignalVector(
+  atoms: readonly EvidenceAtom[],
+  anchors: readonly SearchAnchor[],
+  scopePath: string,
+  generated: boolean,
+  pathEvidence: PathEvidenceSignals,
+  references: readonly SearchReference[],
+): CandidateSignal[] {
+  return [
+    { name: "provenance-best-score", value: computeProvenanceBestScore(atoms) },
+    { name: "lexical-score", value: bestLexicalScore(atoms) },
+    { name: "semantic-score", value: bestSemanticScore(atoms) },
+    { name: "provenance-count", value: computeProvenanceCount(atoms) },
+    { name: "anchor-overlap", value: computeAnchorOverlap(scopePath, anchors) },
+    {
+      name: "path-depth-affinity",
+      value: hasPathEvidence(pathEvidence) ? 1 : computePathDepthAffinity(scopePath),
+    },
+    { name: "test-pair-bonus", value: computeTestPairBonus(scopePath, anchors) },
+    {
+      name: "stacktrace-position-bonus",
+      value:
+        referenceStackBonus(scopePath, references) ||
+        computeStacktracePositionBonus(scopePath, anchors),
+    },
+    { name: "generated-penalty", value: generated ? -1 : 0 },
+  ];
+}
+
+function referenceStackBonus(scopePath: string, references: readonly SearchReference[]): number {
+  const primary = references.find((reference) => reference.origin === "diagnostic");
+  return primary?.path.toLowerCase() === scopePath.toLowerCase() ? 1 : 0;
+}
+
+function appendIntentSignals(
+  signals: CandidateSignal[],
+  scopePath: string,
+  atoms: readonly EvidenceAtom[],
+  context: RankingContext | undefined,
+): void {
+  if (!isIntentBoosted(context?.retrievalIntent)) return;
+  signals.push(
+    { name: "canonical-metadata", value: isCanonicalMetadataFile(scopePath) ? 1 : 0 },
+    { name: "structural-edge", value: hasStructuralEdge(atoms) ? 1 : 0 },
+  );
+  if (hasDiscoveredSymbolDefinition(atoms)) signals.push({ name: "symbol-definition", value: 1 });
+}
+
+const BASE_SCORE_SIGNALS: ReadonlySet<string> = new Set([
+  "provenance-best-score",
+  "provenance-count",
+  "anchor-overlap",
+  "path-depth-affinity",
+  "test-pair-bonus",
+  "stacktrace-position-bonus",
+]);
+
+function baseSignalScore(signals: readonly CandidateSignal[], generated: boolean): number {
+  const total = signals
+    .filter((signal) => BASE_SCORE_SIGNALS.has(signal.name))
+    .reduce((sum, signal) => sum + signal.value, 0);
+  return clampUnit(total / BASE_SCORE_SIGNALS.size - (generated ? 1 : 0));
+}
+
 export function extractSignals(
   atomsForPath: readonly EvidenceAtom[],
   anchors: readonly SearchAnchor[],
   hints: Required<RankingHints>,
   context?: RankingContext,
+  references: readonly SearchReference[] = [],
 ): ExtractedSignals {
   const scopePath = deriveScopePath(atomsForPath);
   const generatedHint = isGeneratedRankingPath(scopePath, hints.generatedPathPatterns);
-  const provBest = computeProvenanceBestScore(atomsForPath);
-  const lexicalScore = bestLexicalScore(atomsForPath);
-  const semanticScore = bestSemanticScore(atomsForPath);
-  const provCount = computeProvenanceCount(atomsForPath);
-  const overlap = computeAnchorOverlap(scopePath, anchors);
-  const depthAff = computePathDepthAffinity(scopePath);
-  const testBonus = computeTestPairBonus(scopePath, anchors);
-  const stackBonus = computeStacktracePositionBonus(scopePath, anchors);
+  const combinedAnchors = pathAnchors(anchors, references);
+  const pathEvidence = pathEvidenceSignals(scopePath, atomsForPath, combinedAnchors);
+  const baseSignals = baseSignalVector(
+    atomsForPath,
+    combinedAnchors,
+    scopePath,
+    generatedHint,
+    pathEvidence,
+    references,
+  );
+  if (combinedAnchors.some((anchor) => anchor.kind === "path") || hasPathEvidence(pathEvidence)) {
+    baseSignals.push(
+      { name: "exact-path-match", value: pathEvidence.exactPathMatch },
+      { name: "path-segment-affinity", value: pathEvidence.pathSegmentAffinity },
+      { name: "basename-match", value: pathEvidence.basenameMatch },
+    );
+  }
   const gitRecency = computeGitRecency(atomsForPath);
   const gitChurn = computeGitChurn(atomsForPath);
-  const penalty = generatedHint ? -1 : 0;
-  const baseSignals: CandidateSignal[] = [
-    { name: "provenance-best-score", value: provBest },
-    { name: "lexical-score", value: lexicalScore },
-    { name: "semantic-score", value: semanticScore },
-    { name: "provenance-count", value: provCount },
-    { name: "anchor-overlap", value: overlap },
-    { name: "path-depth-affinity", value: depthAff },
-    { name: "test-pair-bonus", value: testBonus },
-    { name: "stacktrace-position-bonus", value: stackBonus },
-    { name: "generated-penalty", value: penalty },
-  ];
   if (gitRecency > 0 || gitChurn > 0) {
     baseSignals.push(
       { name: "git-recency", value: gitRecency },
       { name: "git-churn", value: gitChurn },
     );
   }
-  // M4: only a boosted intent appends the two new signals (and weightsForIntent only weights them
-  // for the same intents), so the signal vector — and therefore the pack/cache content — is
-  // byte-identical for every other intent and for callers that pass no context.
-  if (isIntentBoosted(context?.retrievalIntent)) {
-    baseSignals.push(
-      { name: "canonical-metadata", value: isCanonicalMetadataFile(scopePath) ? 1 : 0 },
-      { name: "structural-edge", value: hasStructuralEdge(atomsForPath) ? 1 : 0 },
-    );
-    if (hasDiscoveredSymbolDefinition(atomsForPath)) {
-      baseSignals.push({ name: "symbol-definition", value: 1 });
-    }
-  }
-  // baseScore intentionally stays over the original positive signals (it feeds nothing the new
-  // weighted score touches; the filter uses computeScore output, not baseScore).
-  const positives = [provBest, provCount, overlap, depthAff, testBonus, stackBonus];
-  const positiveMean = positives.reduce((acc, n) => acc + n, 0) / positives.length;
-  const baseScore = clampUnit(positiveMean + penalty);
+  appendIntentSignals(baseSignals, scopePath, atomsForPath, context);
+  const baseScore = baseSignalScore(baseSignals, generatedHint);
   return { scopePath, signals: baseSignals, baseScore, generatedHint };
 }

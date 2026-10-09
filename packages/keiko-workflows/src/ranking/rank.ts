@@ -103,7 +103,13 @@ function buildAnnotated(
 ): AnnotatedCandidate[] {
   const annotated: AnnotatedCandidate[] = [];
   for (const [scopePath, atomsForPath] of group) {
-    const signals = extractSignals(atomsForPath, input.anchors, hints, input.context);
+    const signals = extractSignals(
+      atomsForPath,
+      input.anchors,
+      hints,
+      input.context,
+      input.references,
+    );
     const score = computeScore(signals, weights);
     const candidate: CandidateFile = {
       scopePath,
