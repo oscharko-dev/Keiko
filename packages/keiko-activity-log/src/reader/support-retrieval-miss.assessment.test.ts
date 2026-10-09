@@ -31,6 +31,7 @@ function line(
 
 function assessment(extra: Readonly<Record<string, unknown>> = {}): ReturnType<typeof line> {
   return line(ASSESSED, {
+    phase: "accepted-final",
     policy: "allowed",
     outcome: "assessment-only",
     sourceBackedChars: 0,
@@ -63,6 +64,8 @@ describe("intentional source-free assessment does not fabricate retrieval incide
   });
 
   it.each([
+    { phase: undefined },
+    { phase: "candidate" },
     { policy: "disabled", outcome: "neutralized" },
     { outcome: "assessment", sourceBackedChars: 100 },
     { outcome: "none" },
@@ -134,6 +137,35 @@ describe("intentional source-free assessment does not fabricate retrieval incide
         line(STARTED),
         assessment(),
       ]),
+    ).toEqual(["low-confidence-selection"]);
+  });
+  it("cannot promote a rejected assessment-only repair over the delivered source-backed answer", () => {
+    expect(
+      reasons([
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment({ phase: "candidate", outcome: "none", sourceBackedChars: 100 }),
+        assessment({ phase: "candidate" }),
+        assessment({ outcome: "none", sourceBackedChars: 100 }),
+      ]),
+    ).toEqual(["low-confidence-selection"]);
+  });
+
+  it("does not let a later candidate revoke the accepted-final assessment", () => {
+    expect(
+      reasons([
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment(),
+        assessment({ phase: "candidate", outcome: "none", sourceBackedChars: 100 }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps a partial timeline without a witnessed request start unknown", () => {
+    expect(
+      projectRetrievalMisses(CORRELATION, [
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment(),
+      ]).map((finding) => finding.reason),
     ).toEqual(["low-confidence-selection"]);
   });
 });
