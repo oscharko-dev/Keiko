@@ -439,6 +439,41 @@ async function leaseFixture(): Promise<{
   };
 }
 
+function pausedFingerprintRead(fixture: StaleFixture): {
+  readonly fs: WorkspaceFs;
+  readonly entered: Promise<void>;
+  readonly finish: () => void;
+  readonly stat: ReturnType<typeof vi.fn<WorkspaceFs["stat"]>>;
+  readonly realPath: ReturnType<typeof vi.fn<WorkspaceFs["realPath"]>>;
+  readonly cleanup: ReturnType<typeof vi.fn>;
+} {
+  fixture.files["src/auth.ts"] = "export const sessionState = 'changed';\n";
+  const entered = Promise.withResolvers<void>();
+  const read = Promise.withResolvers<Uint8Array>();
+  const cleanup = vi.fn();
+  const stat = vi.fn(fixture.fs.stat);
+  const realPath = vi.fn(fixture.fs.realPath);
+  const fs: WorkspaceFs = {
+    ...fixture.fs,
+    stat,
+    realPath,
+    readFileBytes: (): Promise<Uint8Array> => {
+      entered.resolve();
+      return read.promise.finally(cleanup);
+    },
+  };
+  return {
+    fs,
+    entered: entered.promise,
+    cleanup,
+    stat,
+    realPath,
+    finish: (): void => {
+      read.resolve(new TextEncoder().encode(fixture.files["src/auth.ts"] ?? ""));
+    },
+  };
+}
+
 async function searchMissingCandidate(
   provider: SemanticSearchProvider,
 ): Promise<readonly SemanticSearchMatch[]> {
@@ -1182,6 +1217,57 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
       fixture.close();
     }
   });
+
+  it.each(["elapsed", "aborted"])(
+    "stops freshness I/O after a deferred fingerprint read is %s",
+    async (stop) => {
+      const fixture = await staleFixture();
+      const paused = pausedFingerprintRead(fixture);
+      const controller = new AbortController();
+      let now = 1;
+      const provider = refreshProviderFor(fixture, {
+        fs: paused.fs,
+        nowMs: (): number => now,
+        deadlineAtMs: 100,
+        semanticRefreshFilesMax: 8,
+      });
+      let settled = false;
+      const search = provider
+        .search({
+          query: QUERY,
+          signal: controller.signal,
+          documents: Object.entries(fixture.files).map(([scopePath, text]) => ({
+            scopePath,
+            text,
+          })),
+        })
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await paused.entered;
+        paused.stat.mockClear();
+        paused.realPath.mockClear();
+        if (stop === "elapsed") {
+          now = 100;
+          paused.finish();
+        } else controller.abort();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(true);
+        expect(await search).toEqual([]);
+        expect(paused.stat).not.toHaveBeenCalled();
+        expect(paused.realPath).not.toHaveBeenCalled();
+        expect(fixture.embedding).not.toHaveBeenCalled();
+      } finally {
+        paused.finish();
+        await search;
+        expect(paused.cleanup).toHaveBeenCalledTimes(1);
+        fixture.close();
+      }
+    },
+  );
 
   it("reports stale fallback but sends no embedding request after the explicit refresh deadline", async () => {
     const fixture = await staleFixture({
