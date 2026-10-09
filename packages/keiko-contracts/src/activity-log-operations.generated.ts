@@ -28218,6 +28218,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 64,
       },
+      basenameCollisionGroupCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      basenameDedupDemotedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      exactPathSignalPresentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      pathSegmentSignalPresentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      directoryProximityTieBreakCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       stackTraceFrameCount: {
         type: "integer",
         dataClass: "count",
@@ -28233,7 +28258,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     lifecycle: "state",
     analyzerProjection: "timeline",
     failureClasses: ["connected-context-retrieval"],
-    proofIds: ["search.connected-context.selection-details.line"],
+    proofIds: [
+      "search.connected-context.selection-details.line",
+      "search.connected-context.path-ranking.line",
+    ],
     releaseImpact: "patch",
   },
   {
