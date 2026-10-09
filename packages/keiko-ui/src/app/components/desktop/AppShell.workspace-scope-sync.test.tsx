@@ -13,6 +13,10 @@ import {
   resetClientDiagnosticWriter,
 } from "@/lib/client-diagnostics";
 import type { AppWindow, Connection } from "./windows/types";
+import { FilesWindowSessionHost } from "./widgets/SelectionAwareWorkspaceHosts";
+import type { WindowRenderContext } from "./windows/WindowsRegistry";
+import { nativeFilesChatFixture } from "../../../../../../tests/support/files-chat-native-support";
+import { usePublishChatWindowRuntime } from "./windows/chatWindowActivity";
 
 const mocks = vi.hoisted(() => ({
   initialChat: undefined as Chat | undefined,
@@ -23,7 +27,49 @@ const mocks = vi.hoisted(() => ({
   fetchHealth: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
+  renderFiles: false,
+  fetchFilesTree: vi.fn(),
 }));
+
+function filesContext(ws: UseWorkspaceResult, win: AppWindow): WindowRenderContext {
+  return {
+    windowId: win.id,
+    linkedRoot: null,
+    linkedFilePath: undefined,
+    linkedRoots: [],
+    linkedCapsuleIds: [],
+    linkedCapsuleSetIds: [],
+    linkedFigmaSnapshotRunIds: [],
+    activeRoot: null,
+    activeBinding: null,
+    updateCfg: (patch): void => ws.api.update(win.id, { cfg: { ...win.cfg, ...patch } }),
+    openWindow: ws.api.add,
+    focusWindow: ws.api.focus,
+    updateWindow: ws.api.update,
+    openEditorFile: ws.api.openEditorFile,
+  };
+}
+
+function NativeChatRuntime(): ReactNode {
+  const chat = mocks.serverChat;
+  usePublishChatWindowRuntime(
+    "chat-window",
+    chat === undefined
+      ? undefined
+      : {
+          conversationId: chat.id,
+          projectPath: chat.projectPath,
+          connectedScopes: chat.connectedScopes ?? [],
+        },
+  );
+  return null;
+}
+
+function currentFilesWindow(): AppWindow {
+  const files = mocks.workspace?.wins?.find((win) => win.type === "files");
+  if (files === undefined) throw new TypeError("Missing mounted Files window");
+  return files;
+}
 
 function useTestChatSession(): Record<string, unknown> {
   const [activeChat, setActiveChat] = useState(mocks.initialChat);
@@ -51,6 +97,41 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   fetchConfig: vi.fn(async () => ({ effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS })),
   fetchStartupUpdatePreflight: vi.fn(async () => ({})),
   updateChatConnectedScopes: mocks.updateChatConnectedScopes,
+  fetchFilesTree: mocks.fetchFilesTree,
+  fetchGitStatus: vi.fn(async (root: string) => ({
+    schemaVersion: "1",
+    root,
+    state: "unavailable",
+    available: false,
+    reason: "not-a-repository",
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  })),
+  fetchFilesPreview: vi.fn(async (root: string, path: string) => ({
+    root,
+    path,
+    name: "one.ts",
+    sizeBytes: 34,
+    modifiedAt: 1,
+    extension: "ts",
+    mime: "text/plain",
+    symlink: false,
+    kind: "text",
+    content: "export const validationAlpha = 11;",
+    truncated: false,
+    maxBytes: 1000,
+  })),
+}));
+vi.mock("@/lib/workspace-manifest-api", async (original) => ({
+  ...(await original<typeof import("@/lib/workspace-manifest-api")>()),
+  fetchWorkspaceManifestAccess: vi.fn(async () => ({ session: "paired", manifests: [] })),
 }));
 vi.mock("../../relationships/connector-relationship", () => ({
   recordReadsContextRelationship: mocks.recordReadsContextRelationship,
@@ -103,7 +184,29 @@ vi.mock("./Workspace", () => ({
     mocks.workspace = ws;
     return (
       <main ref={wsRef} data-testid="workspace">
-        {ws.wins?.length ?? 0}
+        {mocks.renderFiles ? (
+          <>
+            <NativeChatRuntime />
+            <button onPointerDown={(event) => ws.api.startConnect("files-0", event)}>
+              Connect Files
+            </button>
+            <button onPointerDown={(event) => ws.api.confirmConnect("chat-window", event)}>
+              Confirm Chat
+            </button>
+          </>
+        ) : null}
+        {mocks.renderFiles
+          ? ws.wins
+              ?.filter((win) => win.type === "files")
+              .map((win) => (
+                <FilesWindowSessionHost
+                  key={win.id}
+                  cfg={win.cfg}
+                  ctx={filesContext(ws, win)}
+                  root={typeof win.cfg["root"] === "string" ? win.cfg["root"] : undefined}
+                />
+              ))
+          : (ws.wins?.length ?? 0)}
       </main>
     );
   },
@@ -208,6 +311,7 @@ beforeEach((): void => {
   vi.clearAllMocks();
   window.localStorage.clear();
   mocks.workspace = undefined;
+  mocks.renderFiles = false;
   mocks.fetchHealth.mockResolvedValue({ status: "ok", version: "1.2.3" });
   Object.defineProperty(navigator, "webdriver", { configurable: true, value: true });
   vi.stubGlobal(
@@ -240,7 +344,92 @@ afterEach((): void => {
   vi.unstubAllGlobals();
 });
 
+type NativeFilesSession = Awaited<ReturnType<typeof nativeFilesChatFixture>>;
+type FilesSelection = "file" | "directory" | "keep-folder";
+
+async function mountNativeFilesSession(
+  native: NativeFilesSession,
+  kind: "canonical" | "symlink",
+  selection: FilesSelection,
+): Promise<void> {
+  const selectedRoot = kind === "symlink" ? native.alias : native.root;
+  const initial = fixture([selectedRoot]);
+  const files = initial.wins.find((win) => win.type === "files");
+  const chatWindow = initial.wins.find((win) => win.type === "chat");
+  if (files === undefined || chatWindow === undefined)
+    throw new TypeError("Missing Files/Chat fixture");
+  files.cfg["activeDirectoryPath"] = "Alpha";
+  chatWindow.cfg["chatId"] = native.chat.id;
+  chatWindow.cfg["projectPath"] = native.root;
+  if (selection === "keep-folder") chatWindow.cfg["keepFilesFolder"] = true;
+  initial.conns.length = 0;
+  mocks.initialChat = (await native.patch(null)).chat;
+  mocks.serverChat = mocks.initialChat;
+  mocks.renderFiles = true;
+  mocks.fetchFilesTree.mockImplementation(native.tree);
+  mocks.updateChatConnectedScopes.mockImplementation(async (_id, scopes, identity) => {
+    const result = await native.patch(scopes, identity);
+    mocks.serverChat = result.chat;
+    return result;
+  });
+  persist(initial.wins, initial.conns);
+  render(<AppShell />);
+  await screen.findByRole("treeitem", { name: /one\.ts/u });
+}
+
 describe("AppShell canonical workspace scope synchronization", () => {
+  it.each([
+    ["canonical", "file"],
+    ["symlink", "file"],
+    ["canonical", "directory"],
+    ["symlink", "directory"],
+    ["canonical", "keep-folder"],
+    ["symlink", "keep-folder"],
+  ] as const)(
+    "keeps mounted Files %s/%s scope through canonical ACK and authenticates no sibling",
+    async (kind, selection) => {
+      const native = await nativeFilesChatFixture();
+      try {
+        await mountNativeFilesSession(native, kind, selection);
+        fireEvent.pointerDown(screen.getByRole("button", { name: "Connect Files" }));
+        fireEvent.pointerDown(screen.getByRole("button", { name: "Confirm Chat" }));
+        await waitFor(() => expect(mocks.workspace?.conns[0]?.boundScopeKind).toBe("directory"));
+        if (selection !== "directory")
+          fireEvent.click(await screen.findByRole("treeitem", { name: /one\.ts/u }));
+        const expectedKind = selection === "file" ? "files" : "directory";
+        await waitFor(() => expect(mocks.workspace?.conns[0]?.boundScopeKind).toBe(expectedKind));
+        await waitFor(() => expect(currentFilesWindow().cfg["root"]).toBe(native.root));
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        });
+        const reply = await native.ask();
+        expect({
+          betaSent: reply.betaSent,
+          betaAuthenticated: reply.answer.citations.some(
+            (citation) => citation.scopePath === "Beta/two.ts",
+          ),
+        }).toEqual({ betaSent: false, betaAuthenticated: false });
+        expect(reply.answer.citations).toEqual([
+          expect.objectContaining({ scopePath: "Alpha/one.ts" }),
+        ]);
+        expect(mocks.serverChat?.connectedScopes).toEqual([
+          expect.objectContaining({
+            root: native.root,
+            kind: expectedKind,
+            relativePaths: [selection === "file" ? "Alpha/one.ts" : "Alpha"],
+          }),
+        ]);
+        expect(currentFilesWindow().cfg).toMatchObject({
+          activeDirectoryPath: "Alpha",
+          ...(selection === "directory" ? {} : { activeFilePath: "Alpha/one.ts" }),
+        });
+        expect(mocks.workspace?.conns[0]?.boundRoot).toBe(native.root);
+      } finally {
+        cleanup();
+        await native.close();
+      }
+    },
+  );
   it("adopts only the attributed canonical PATCH acknowledgement and persists its Files root", async () => {
     const alias = "/var/folders/canonical-ack-proof";
     const canonical = "/private/var/folders/canonical-ack-proof";

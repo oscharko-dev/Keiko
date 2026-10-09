@@ -10,6 +10,25 @@ import { observeFilesDirectoryRead } from "@/lib/files-navigation-evidence";
 import { useFilesNavigation } from "./useFilesNavigation";
 
 describe("folder navigation", () => {
+  it("preserves the selected folder and history only for its acknowledged canonical root", () => {
+    const changeRoot = vi.fn();
+    const view = renderHook(
+      ({ root, resolved }) => useFilesNavigation(root, changeRoot, "Alpha", resolved),
+      {
+        initialProps: { root: "/alias", resolved: "/canonical" },
+      },
+    );
+    act(() => view.result.current.visit("Alpha/nested"));
+    view.rerender({ root: "/canonical", resolved: "/canonical" });
+    expect(view.result.current.path).toBe("Alpha/nested");
+    act(() => view.result.current.back());
+    expect(view.result.current.path).toBe("Alpha");
+    expect(changeRoot).not.toHaveBeenCalled();
+    view.rerender({ root: "/unrelated", resolved: "/canonical" });
+    expect(view.result.current.path).toBeNull();
+    act(() => view.result.current.back());
+    expect(changeRoot).toHaveBeenCalledWith("/canonical");
+  });
   it("restores an initial canonical folder while root changes reset its relative binding", () => {
     const view = renderHook(({ root }) => useFilesNavigation(root, undefined, "docs"), {
       initialProps: { root: "/repo" },
