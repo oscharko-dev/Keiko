@@ -125,10 +125,12 @@ and a complete support-analyze scenario prove retention and projection.
 
 ## Gate and evidence prerequisites
 
-Every change runs the applicable [AGENTS.md minimum loop](../../AGENTS.md) and
-`npm run gates:sonar`. Runtime logging changes additionally regenerate the catalog and run
-`npm run check:activity-log`, which proves the complete registered inventory. Package export changes
-require the assembled surface gate; run it last because it prunes live dependencies.
+Under the owner's accepted execution instruction, implementation checkpoints run pointed tests and
+necessary compilation for the changed behavior. After the runtime is frozen, the final evidence run
+must pass the applicable [AGENTS.md minimum loop](../../AGENTS.md), coverage, touched-area gates, and
+`npm run gates:sonar` before completion. Runtime logging changes additionally regenerate the catalog
+and pass `npm run check:activity-log`, which proves the complete registered inventory. Package export
+changes require the assembled surface gate; run it last because it prunes live dependencies.
 
 UI packages run their own typecheck/lint, `test:coverage:ui`, `check:ui-i18n` and
 `check:editor-release-evidence`. The scope smoke spec uses the existing Chromium smoke lane and must
