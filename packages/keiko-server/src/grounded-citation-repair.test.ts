@@ -11,6 +11,23 @@ const index: PackCitationIndex = {
 };
 
 describe("bounded marker-only citation repair", () => {
+  it("never inserts a source citation inside the preserved own-assessment block", () => {
+    const original = "Feature returns true.\n\n<assessment>General advice.</assessment>";
+    expect(
+      validateCitationRepair(
+        original,
+        "Feature returns true [src/Feature.ts:3].\n\n<assessment>General advice [src/Feature.ts:3].</assessment>",
+        index,
+      ),
+    ).toBe(false);
+    expect(
+      validateCitationRepair(
+        original,
+        "Feature returns true [src/Feature.ts:3].\n\n<assessment>General advice.</assessment>",
+        index,
+      ),
+    ).toBe(true);
+  });
   it.each([
     ["Feature returns true.", "Feature returns true [src/Feature.ts:3]."],
     ["Feature returns true.\n", "Feature returns true. [src/Feature.ts:3]\n"],

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import {
   buildEvidenceReport,
   loadEvidence,
@@ -157,6 +158,7 @@ function responseWithReportedUsageThenTransportFailure(): Response {
 function configuredRuntime(
   maxRetries = 0,
   baseUrl = "https://synthesis.example.invalid/v1",
+  ownAssessment?: OwnAssessmentPolicy,
 ): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
@@ -174,6 +176,7 @@ function configuredRuntime(
   disposals.push(deps);
   deps.gatewayConfig?.set(
     parseGatewayConfig({
+      ...(ownAssessment === undefined ? {} : { groundedAnswers: { ownAssessment } }),
       providers: [
         {
           modelId: MODEL,
@@ -300,14 +303,14 @@ async function compatibilityLoopback(): Promise<{
   };
 }
 
-function route(chatId: string): RouteContext {
+function route(chatId: string, content = "Explain src/Feature.ts"): RouteContext {
   const req = Readable.from([
     Buffer.from(
       JSON.stringify({
         chatId,
         projectPath: root,
         modelId: MODEL,
-        content: "Explain src/Feature.ts",
+        content,
       }),
     ),
   ]) as IncomingMessage;
@@ -321,13 +324,14 @@ function route(chatId: string): RouteContext {
   };
 }
 
-function installProvider(answers: readonly string[]): string[] {
+function installProvider(answers: readonly string[], allSynthesis = false): string[] {
   const requests: string[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((_url, init) => {
       const body = typeof init?.body === "string" ? init.body : "";
-      if (!body.includes("File: src/Feature.ts")) return Promise.resolve(providerResponse(CITED));
+      if (!allSynthesis && !body.includes("File: src/Feature.ts"))
+        return Promise.resolve(providerResponse(CITED));
       requests.push(body);
       return Promise.resolve(providerResponse(answers[requests.length - 1] ?? CITED));
     }),
@@ -392,6 +396,83 @@ async function configuredProviderTurn(
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
+  it("allows a labelled general explanation with no matching folder evidence under default authority", async () => {
+    rmSync(join(root, "src"), { recursive: true });
+    rmSync(join(root, "lib"), { recursive: true });
+    const knowledge =
+      "<assessment>\nCertificates identify a public key; private keys remain secret.\n</assessment>";
+    const requests = installProvider([knowledge], true);
+    const { deps, chatId } = configuredRuntime();
+    const result = await handleGroundedAsk(
+      route(chatId, "Explain the difference between a certificate and a private key."),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(1);
+    expect(result.body).toMatchObject({ content: knowledge, citations: [], answerKind: "answer" });
+    expect(requests[0]).toContain("Use learned knowledge");
+    expect(deps.evidenceStore.list()).toEqual([]);
+    expect(readPersistedActivityLog(stateDir)).toContain('"outcome":"assessment-only"');
+  });
+
+  it("keeps operator-disabled empty-source abstention without synthesis", async () => {
+    rmSync(join(root, "src"), { recursive: true });
+    rmSync(join(root, "lib"), { recursive: true });
+    const requests = installProvider(["<assessment>General knowledge.</assessment>"], true);
+    const { deps, chatId } = configuredRuntime(0, undefined, "disabled");
+    const result = await handleGroundedAsk(route(chatId, "Explain certificate signatures."), deps);
+    expect(result.status).toBe(200);
+    expect(requests).toEqual([]);
+    expect(result.body).toMatchObject({ citations: [] });
+  });
+
+  it.each([
+    ["assessment-only", "<assessment>\nGeneral advice. [src/Feature.ts:999]\n</assessment>", 0],
+    ["mixed", `${CITED}\n\n<assessment>\nGeneral advice. [src/Feature.ts:999]\n</assessment>`, 1],
+  ] as const)(
+    "keeps %s knowledge outside repository citation and repair authority",
+    async (_kind, answerText, citations) => {
+      const requests = installProvider([answerText], true);
+      const { deps, chatId } = configuredRuntime();
+      const result = await handleGroundedAsk(route(chatId), deps);
+      expect(result.status).toBe(200);
+      expect(requests).toHaveLength(1);
+      const answer = result.body as GroundedAnswer;
+      expect(answer.citations).toHaveLength(citations);
+      expect(
+        answer.uncertainty.filter(
+          (marker) => marker.kind === "uncited-answer" || marker.kind === "unsupported-citation",
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("does not promote a disabled model-authored assessment to source-backed prose", async () => {
+    const requests = installProvider(["<assessment>Only learned knowledge.</assessment>"], true);
+    const { deps, chatId } = configuredRuntime(0, undefined, "disabled");
+    const result = await handleGroundedAsk(route(chatId), deps);
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(1);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.content).not.toContain("Only learned knowledge");
+    expect(answer.content).not.toContain("<assessment>");
+    expect(answer.citations).toEqual([]);
+    expect(readPersistedActivityLog(stateDir)).toContain('"outcome":"neutralized"');
+  });
+
+  it("repairs only the uncited source claims while preserving the assessment verbatim", async () => {
+    const knowledge = "\n\n<assessment>\nGeneral advice.\n</assessment>";
+    const requests = installProvider([UNCITED + knowledge, CITED + knowledge], true);
+    const { deps, chatId } = configuredRuntime();
+    const result = await handleGroundedAsk(route(chatId), deps);
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(result.body).toMatchObject({
+      content: CITED + knowledge,
+      citations: [expect.objectContaining({ scopePath: "src/Feature.ts" })],
+    });
+  });
+
   it("does not open the provider breaker after repeated local attempt-grant refusals", async () => {
     const provider = await compatibilityLoopback();
     try {
