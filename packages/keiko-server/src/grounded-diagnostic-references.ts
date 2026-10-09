@@ -53,6 +53,7 @@ export interface DiagnosticReferenceInputs {
   readonly deadlineAtMs: number;
   readonly signal: AbortSignal | undefined;
   readonly tryReserveSearchCall: () => boolean;
+  readonly onPathRejected?: ((scopePath: string) => void) | undefined;
   readonly metadataInjectionReason: DiagnosticReferenceObservation["metadataInjectionReason"];
 }
 

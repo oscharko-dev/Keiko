@@ -234,6 +234,39 @@ describe("explicit-path trust boundary", () => {
     expect(reads).not.toContain(join(root, path));
   });
 
+  it.each([
+    `Explain ${TARGET} and src/oversized.ts`,
+    `Explain src/oversized.ts and ${TARGET}`,
+    `TypeError: controlled failure\n    at retainedFact (${TARGET}:1:1)\n    at oversized (src/oversized.ts:1:1)\nExplain both implementations.`,
+    `TypeError: controlled failure\n    at oversized (src/oversized.ts:1:1)\n    at retainedFact (${TARGET}:1:1)\nExplain both implementations.`,
+  ])("classifies all addressed targets before helper graph reads: %s", async (text) => {
+    const path = "src/oversized.ts";
+    writeFixture(path, new Uint8Array(DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned + 1));
+    const reads: string[] = [];
+    const result = await retrieve(text, { fs: watchedFs(reads) });
+    expectPrivateRejection(result, path, "size-exceeded");
+    expect(reads).not.toContain(join(root, path));
+    expect(reads).toContain(join(root, TARGET));
+    expect(result.output.pack.files.map((file) => file.scopePath)).toContain(TARGET);
+  });
+
+  it("preserves an unaddressed allowed structural prefix beside an admitted source", async () => {
+    const path = "src/oversized-helper.ts";
+    writeFixture(
+      path,
+      "export const partialHelper = 3;\n" +
+        " ".repeat(DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned + 1),
+    );
+    const reads: string[] = [];
+    const result = await retrieve(`Trace retainedFact from ${TARGET}`, { fs: watchedFs(reads) });
+    expect(reads).toContain(join(root, path));
+    expect(result.output.pack.files.map((file) => file.scopePath)).toContain(TARGET);
+    expect(
+      result.log.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra,
+    ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
+  });
+
   it("classifies binary content without admitting or exposing it", async () => {
     const path = "src/binary.ts";
     writeFixture(path, Buffer.from(PRIVATE_BODY + "\u0000".repeat(32)));
