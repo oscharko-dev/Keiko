@@ -87,6 +87,7 @@ interface AdmissionInputs {
   readonly deadlineAtMs: number;
   readonly signal: AbortSignal | undefined;
   readonly tryReserveSearchCall: () => boolean;
+  readonly onPathRejected?: ((scopePath: string) => void) | undefined;
 }
 
 type PathPolicyInputs = Pick<AdmissionInputs, "scope" | "searchScope" | "fs" | "hasGitMetadata">;
@@ -299,11 +300,13 @@ function rejectPath(
   path: string | undefined,
   reason: ExplicitPathRejectionReason,
   nowMs: number,
+  onPathRejected?: (scopePath: string) => void,
 ): void {
   state.rejectedCount += 1;
   state.reasons.add(reason);
   if (path === undefined) return;
   state.rejectedPaths.add(path);
+  onPathRejected?.(path);
   // Missing and denied paths are not corpus entries, and never become manifest paths.
   if (reason === "missing" || reason === "denied" || reason === "outside-scope") return;
   state.omitted.push({ scopePath: path, reason, omittedAtMs: nowMs });
@@ -325,7 +328,7 @@ async function admitReference(
   state.seen.add(identity);
   state.anchorCount += 1;
   if (path === undefined) {
-    rejectPath(state, path, "outside-scope", inputs.nowMs());
+    rejectPath(state, path, "outside-scope", inputs.nowMs(), inputs.onPathRejected);
     return;
   }
   let snapshot: ValidatedPathSnapshot | undefined;
@@ -338,7 +341,7 @@ async function admitReference(
     return;
   }
   if (reason !== undefined) {
-    rejectPath(state, path, reason, inputs.nowMs());
+    rejectPath(state, path, reason, inputs.nowMs(), inputs.onPathRejected);
     return;
   }
   state.selections.push({ ...reference, path });

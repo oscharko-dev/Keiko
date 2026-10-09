@@ -440,7 +440,12 @@ selections. A single admission seam applies selected-scope membership, canonical
 and ignore rules, safe regular-file checks, and the existing binary/size classifier before injection.
 Its closed rejection vocabulary is `outside-scope`, `denied`, `missing`, `ignored`, `generated`,
 `binary`, `size-exceeded`, and `unsupported-format`. Human Files selections retain their existing
-safe ignored-file exemption; pasted paths cannot acquire it. Admitted paths reuse `repo.selectedFile`
+safe ignored-file exemption; pasted paths cannot acquire it. All primary references are classified
+before diagnostic pairing builds content graphs. The existing request-local structural context
+checks their rejected-path eligibility again when consuming a retained candidate inventory, so a
+rejected explicit source cannot be read through a helper graph or its prefix/probe lane. This does
+not disable bounded structural prefix reads for other eligible, unaddressed sources. Admitted paths
+reuse `repo.selectedFile`
 evidence, survive both relevance floors, and receive read-budget priority without widening byte or
 token grants. A valid line hint selects the existing located-source window; a hint beyond the file
 falls back to the default window and never claims an anchored read. Known dotted basenames use

@@ -109,13 +109,13 @@ function fixtureDeps(activityLog: BufferedServerLogSink): OrchestratorDeps {
 }
 
 describe("retrieveConnectedContextPack Activity Log proofs", () => {
-  it("resolves the started, completion-details, source-details and completed proofs from one real retrieval", async () => {
+  it("resolves started, completion, source and selection siblings from one real retrieval", async () => {
     const activityLog = createBufferedServerLogSink();
 
     const output = await retrieveConnectedContextPack(fixtureInput(), fixtureDeps(activityLog));
 
-    expect(activityLog.events).toHaveLength(4);
-    const [started, details, sourceDetails, completed] = activityLog.events;
+    expect(activityLog.events).toHaveLength(5);
+    const [started, details, sourceDetails, selectionDetails, completed] = activityLog.events;
 
     const startedProof = expectActivityLogProof(
       "search.connected-context.started.line",
@@ -152,6 +152,18 @@ describe("retrieveConnectedContextPack Activity Log proofs", () => {
     expect(sourceProof).toMatchObject({
       correlationId: CORRELATION_ID,
       activityDetailStatus: "complete",
+      scopeIdentitySha256: startedProof.scopeIdentitySha256,
+      queryIdentitySha256: startedProof.queryIdentitySha256,
+      completeness: "complete",
+      loss: "none",
+    });
+
+    const selectionProof = expectActivityLogProof(
+      "search.connected-context.selection-details.line",
+      formatActivityLogProofLine(selectionDetails ?? {}),
+    );
+    expect(selectionProof).toMatchObject({
+      correlationId: CORRELATION_ID,
       scopeIdentitySha256: startedProof.scopeIdentitySha256,
       queryIdentitySha256: startedProof.queryIdentitySha256,
       completeness: "complete",

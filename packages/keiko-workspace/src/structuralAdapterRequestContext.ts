@@ -94,6 +94,7 @@ export interface StructuralAdapterRequestContextDeps {
   readonly nowMs?: (() => number) | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly deadlineAtMs?: number | undefined;
+  readonly isCandidateAllowed?: ((scopePath: string) => boolean) | undefined;
 }
 
 export interface StructuralRequestContextDiagnostics {
@@ -203,6 +204,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private readonly boundLimitsKey: string;
   private readonly executionControl: StructuralExecutionControl;
   private readonly executionFs: WorkspaceFs;
+  private readonly isCandidateAllowed: ((scopePath: string) => boolean) | undefined;
   private candidateState: CandidateInventoryState = { status: "empty" };
   private readonly queryCandidateStates = new Map<string, CandidateInventoryState>();
   private readonly contentPreviews = new Map<string, CachedCandidateContentPreview>();
@@ -243,10 +245,12 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       deps.deadlineAtMs,
     );
     this.executionFs = executionControlledWorkspaceFs(this.fs, this.executionControl);
+    this.isCandidateAllowed = deps.isCandidateAllowed;
   }
 
   private candidateSet(): CandidateSet {
-    if (this.candidateState.status === "ready") return this.candidateState.candidates;
+    if (this.candidateState.status === "ready")
+      return this.allowedCandidates(this.candidateState.candidates);
     if (this.candidateState.status === "failed") throw this.candidateState.error;
     try {
       this.candidateInventoryBuildCount += 1;
@@ -258,11 +262,18 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       );
       this.recordCandidateInventory(candidates);
       this.candidateState = { status: "ready", candidates };
-      return candidates;
+      return this.allowedCandidates(candidates);
     } catch (error) {
       this.candidateState = { status: "failed", error };
       throw error;
     }
+  }
+
+  private allowedCandidates(candidates: CandidateSet): CandidateSet {
+    const isAllowed = this.isCandidateAllowed;
+    return isAllowed === undefined
+      ? candidates
+      : { ...candidates, files: candidates.files.filter((file) => isAllowed(file.relativePath)) };
   }
 
   private recordCandidateInventory(candidates: CandidateSet): void {
@@ -320,7 +331,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       limits,
       fs: this.executionFs,
       policy,
-      inventory,
+      inventory: this.allowedCandidates(inventory),
       candidatePathPredicate,
       contentPreviewFor: (file) => this.contentPreview(file, control),
       executionControl: control,
@@ -333,6 +344,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     control: StructuralExecutionControl,
   ): string | undefined {
     if (structuralExecutionStopped(control)) return undefined;
+    if (this.isCandidateAllowed?.(file.relativePath) === false) return undefined;
     const resolution = this.resolveCachedContentPreview(file, control);
     if (resolution.status === "reused") return resolution.content;
     const previewFile = resolution.file;
@@ -412,6 +424,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   }
 
   private cachedCandidateContent(scopePath: string): string | undefined {
+    if (this.isCandidateAllowed?.(scopePath) === false) return undefined;
     return this.contentPreviews.get(scopePath)?.content ?? undefined;
   }
 
@@ -423,7 +436,8 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
 
   public candidatePaths(): readonly string[] {
     this.paths ??= this.candidateSet().files.map((file) => file.relativePath);
-    return this.paths;
+    const isAllowed = this.isCandidateAllowed;
+    return isAllowed === undefined ? this.paths : this.paths.filter(isAllowed);
   }
 
   public skippedSymbolicLinks(): readonly string[] {
