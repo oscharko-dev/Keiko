@@ -3989,6 +3989,7 @@ function excerptResultForWindow(
 interface BatchedExcerptResults {
   readonly results: readonly ReadExcerptWindowResult[];
   readonly omittedRangeCount: number;
+  readonly outsideRangeCount: number;
 }
 
 function excerptBatchCapacity(
@@ -4010,6 +4011,7 @@ interface ExcerptBatchState {
   remainingWindows: number;
   processed: number;
   emptyRanges: number;
+  outsideRangeCount: number;
 }
 
 async function readBatchedExcerptRange(
@@ -4027,7 +4029,12 @@ async function readBatchedExcerptRange(
     maxTotalBytes: batch.remainingBytes,
     maxWindows: Math.max(1, batch.remainingWindows),
   };
-  assertExcerptStartWithinLines(bounded, batch.lines);
+  if (bounded.startLine > batch.lines.length) {
+    batch.processed += 1;
+    batch.emptyRanges += 1;
+    batch.outsideRangeCount += 1;
+    return [];
+  }
   const windows = excerptWindows(bounded, batch.lines).filter(
     (window) => window.content.length > 0 || !window.truncated,
   );
@@ -4066,6 +4073,7 @@ async function batchedExcerptResults(
         excerptResultForWindow(scope, request, window, nowMs),
       ),
       omittedRangeCount: 0,
+      outsideRangeCount: 0,
     };
   const capacity = excerptBatchCapacity(request, request.ranges.length);
   const batch: ExcerptBatchState = {
@@ -4079,6 +4087,7 @@ async function batchedExcerptResults(
     remainingWindows: capacity.windows,
     processed: 0,
     emptyRanges: 0,
+    outsideRangeCount: 0,
   };
   const results: ReadExcerptWindowResult[] = [];
   for await (const windows of excerptBatchRanges(batch, request.ranges))
@@ -4086,6 +4095,7 @@ async function batchedExcerptResults(
   return {
     results,
     omittedRangeCount: request.ranges.length - batch.processed + batch.emptyRanges,
+    outsideRangeCount: batch.outsideRangeCount,
   };
 }
 
@@ -4146,6 +4156,11 @@ function completedExcerptBatch(
     throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
   const results = batch.results;
   const first = results[0];
+  if (first === undefined && batch.outsideRangeCount === request.ranges?.length)
+    throw new RepoSearchUnsupportedFileError(
+      "all requested excerpt ranges are outside the file",
+      "outside-range",
+    );
   if (first === undefined) throw excerptUnreadable(request.scopePath);
   const result = results.length === 1 ? first : { ...first, windows: results };
   return request.ranges === undefined

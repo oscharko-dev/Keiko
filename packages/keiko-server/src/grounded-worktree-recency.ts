@@ -162,6 +162,7 @@ function collectedObservation(
     paths,
     statusDigest: createHash("sha256").update(stdout).digest("hex"),
     observation: {
+      // Available is a bounded scoped observation, not a promise of exhaustive enumeration.
       worktreeStatusState: "available",
       worktreeStatusDisposition: "applied",
       worktreeObservedFileCount: changes.length,
@@ -189,6 +190,11 @@ function completeResult(result: GitProcessResult): boolean {
     result.timedOut !== true &&
     result.aborted !== true
   );
+}
+
+function selectedStatusPathspecs(scope: SelectedScope): readonly string[] {
+  const paths = scope.kind === "workspace-root" ? ["."] : scope.relativePaths;
+  return paths.map((path) => `:(literal)${path}`);
 }
 
 async function resolveMembership(
@@ -235,7 +241,7 @@ async function readStatus(
         "-z",
         "--untracked-files=all",
         "--",
-        ":(literal).",
+        ...selectedStatusPathspecs(inputs.scope),
       ],
       { cwd: root, maxBytes: STATUS_MAX_BYTES, timeoutMs, abortSignal: signal },
     ),

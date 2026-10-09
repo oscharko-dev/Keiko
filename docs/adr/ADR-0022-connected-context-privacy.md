@@ -367,7 +367,10 @@ preserve complete anchors when their combined required bytes fit, and zero-byte 
 Selected files retain every distinct, already-admitted evidence range rather than independent
 per-file atom or window quotas. The existing safe excerpt reader batches those ranges from one
 freshly classified, decoded and redacted file snapshot, preserves original line coordinates, and
-charges every returned fragment against the accepted cumulative byte grant. Remaining ranges are
+charges every returned fragment against the accepted cumulative byte grant. A stale location beyond
+physical EOF is an omitted range and cannot discard another valid requested window from that same
+snapshot. The ordinary default-window fallback applies only when every requested location is invalid.
+Remaining ranges are
 reported when that grant is spent; cancellation or a changed source prevents publication. Global
 retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
@@ -400,6 +403,9 @@ reference-channel, and closed metadata-injection observations. Total/external fr
 registered `search.connected-context.selection-details` sibling on the same log port and
 correlation. This companion accommodates later selection observations without dropping existing
 fields or expanding the formatter's contextual-field cap.
+Optional augmentation skip reason and metadata retention capacity reside on completion-details.
+Completed and source-details each retain their full emitted observations within 48 context fields;
+the strict writer and reader caps remain unchanged, including metadata-evaluated follow-up cases.
 The registered `search.connected-context.answer-details` companion uses the same canonical
 scope/query digests and correlation to reconstruct answer kind, observed citation behaviour,
 actual final-prompt file count, bounded declared/unread counts, citation-repair disposition, and
@@ -415,6 +421,8 @@ Declared unread targets receive priority during final prompt fitting;
 the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
 fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
 against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
+Follow-up pass count observes a completed retrieval pass even if its additional synthesis is refused;
+admitted-path count records physical target reads, separately from final sent membership.
 A file already physically read does not acquire another read through an unread-in-prompt declaration.
 The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
 from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
@@ -425,7 +433,10 @@ explicit `1` enables, explicit `0` disables, and every other explicit value fail
 passes with a body-free invalid configuration observation (ADR-0180).
 Working-tree recency uses one scope-bound request-local snapshot from the existing observed Git
 runner, capped at 64 admitted paths and a shared 1.5-second ceiling further bounded by the remaining
-request deadline. Ordinary folders spawn no process; exhausted grants and elapsed deadlines refuse
+request deadline. A directly connected repository subfolder uses a bounded ancestor metadata check
+only as the Git-discovery hint; hardened Git membership still executes in that selected cwd, and
+the selected evidence root never expands to the repository parent. Ordinary folders spawn no process;
+exhausted grants and elapsed deadlines refuse
 observation. Allowed paths feed the existing recent-path search policy and a small targeted/diagnostic
 ranking signal without changing provenance, admission, or floor exemptions. Selection-details
 records only the closed status disposition, measured duration, observed/deleted counts and hint/hit

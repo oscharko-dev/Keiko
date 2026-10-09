@@ -1129,7 +1129,7 @@ function expectVerifiedTargetAudit(
   )?.extra;
   expect(output.plan.targetDecision?.kind).toBe("contextual");
   expect(completion?.ringSkipReasons).toEqual(["verified-target-context"]);
-  expect(completion?.augmentationSkipReason).toBe("verified-target-context");
+  expect(details?.augmentationSkipReason).toBe("verified-target-context");
   expect(details?.structuralCandidateInventoryBuildCount).toBe(0);
   expect(details?.structuralCodeIndexBuildCount).toBe(0);
   expect(measured.counts().unboundedReadDir).toBe(0);
@@ -2520,8 +2520,11 @@ describe("runGroundedExploration", () => {
       skippedRingKinds: ["git-history"],
       ringSkipReasons: ["no-git-metadata"],
       augmentationSkipped: true,
-      augmentationSkipReason: "literal-absence",
     });
+    expect(
+      log.events.find((item) => item.op === "search.connected-context.completion-details")?.extra
+        ?.augmentationSkipReason,
+    ).toBe("literal-absence");
     expect(log.lines().join("\n")).not.toContain("MISSING_REVIEW_PROBE");
   });
 

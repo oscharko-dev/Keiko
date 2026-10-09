@@ -61,7 +61,7 @@ async function retrieve(
     },
   );
   const completion = activityLog.events.find(
-    (event) => event.op === "search.connected-context.completed",
+    (event) => event.op === "search.connected-context.completion-details",
   );
   return {
     pack: result.pack,
