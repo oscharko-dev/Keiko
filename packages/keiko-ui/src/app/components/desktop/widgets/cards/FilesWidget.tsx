@@ -85,6 +85,7 @@ interface FilesWidgetProps {
   readonly openingRoot?: boolean;
   readonly root?: string;
   readonly activeFilePath?: string | undefined;
+  readonly initialDirectoryPath?: string | undefined;
   readonly openFilesDirectly?: boolean | undefined;
   readonly watchActive?: boolean | undefined;
   readonly onActiveFileChange?: (
@@ -761,6 +762,7 @@ export function FilesWidget({
   presentation = "directory",
   openingRoot = false,
   activeFilePath,
+  initialDirectoryPath,
   openFilesDirectly = false,
   watchActive = true,
   onActiveFileChange,
@@ -785,7 +787,7 @@ export function FilesWidget({
   // (real) root whenever the widget loads a folder, so it always shows where we are.
   const [rootDraft, setRootDraft] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const navigation = useFilesNavigation(apiRoot, onRootChange);
+  const navigation = useFilesNavigation(apiRoot, onRootChange, initialDirectoryPath);
   const currentDirectoryPath = navigation.path;
   const takeNavigationRead = navigation.takeRead;
   const selectNavigationRoot = navigation.selectRoot;
@@ -1037,7 +1039,7 @@ export function FilesWidget({
     setSelectedPath(null);
     setGitDiffState(null);
     previousDirectoryRef.current = null;
-    activeFileChangeRef.current?.(null, null, null);
+    activeFileChangeRef.current?.(null, null, currentDirectoryRef.current);
     setResolvedRootValue(null);
     setExpanded(new Set([""]));
     setDirectories({});
