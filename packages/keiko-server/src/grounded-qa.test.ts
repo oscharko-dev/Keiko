@@ -1,3 +1,4 @@
+import * as multiSourceQa from "./grounded-qa-multi-source.js";
 import { buildPackCitationIndex, reconcileInlineCitations } from "./grounded-faithfulness.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
@@ -5395,6 +5396,33 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
 });
 
 describe("actual fitted repository evidence authority", () => {
+  it("forwards original current-question and answer-context authority through the actual plural dispatcher", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    mkdirSync(join(tmp, "lib"), { recursive: true });
+    writeFileSync(join(tmp, "src/Feature.ts"), "export function Feature() { return true; }\n");
+    writeFileSync(join(tmp, "lib/Companion.ts"), "export const Companion = 42;\n");
+    store.updateChat(chatId, {
+      connectedScopes: [
+        { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
+        { kind: "directory", relativePaths: ["lib"], connectedAtMs: NOW + 1 },
+      ],
+    });
+    const factory = vi.spyOn(multiSourceQa, "createMultiSourceAnswerer");
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain Feature" })),
+        deps(fakeModel("Feature returns true [source:1|src/Feature.ts:1].", [])),
+      );
+      expect(result.status).toBe(200);
+      expect(factory.mock.calls[0]?.[5]).toEqual({
+        currentQuestion: "Explain Feature",
+        answerOnlyContextAvailable: false,
+      });
+    } finally {
+      factory.mockRestore();
+    }
+  });
   it("publishes only the bounded second answer and persists its validated first declarations", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });
