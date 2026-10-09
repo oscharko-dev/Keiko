@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { splitOwnAssessment } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
@@ -24,7 +25,11 @@ import { createInMemoryUiStore } from "./store/index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
-import { formatActivityLogProofLine } from "../../../tests/support/activity-log-proof.js";
+import {
+  expectRegisteredActivityLogLine,
+  formatActivityLogProofLine,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const MODEL = "general-knowledge-authority-proof";
@@ -238,6 +243,121 @@ function assertAssessmentOnly(answer: GroundedAnswer): void {
     ),
   ).toBe(false);
 }
+
+function persistedEvidence(setup: Fixture): {
+  readonly text: string;
+  readonly records: readonly Record<string, unknown>[];
+  readonly analysis: ReturnType<typeof analyzeLogText>;
+} {
+  const text = readPersistedActivityLog(join(setup.directory, "state"));
+  const records = text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const record = JSON.parse(line) as Record<string, unknown>;
+      return expectRegisteredActivityLogLine(String(record.op), line);
+    });
+  expect(text).not.toContain("Compare the benefits");
+  expect(text).not.toContain("src/Feature.ts");
+  const analysis = analyzeLogText(text);
+  expect(analysis.evidence.classification).toBe("supported");
+  return { text, records, analysis };
+}
+
+function usePersistedEvidence(): void {
+  vi.stubEnv("KEIKO_LOG_LEVEL", "debug");
+  resetServerLogger();
+}
+
+describe("accepted assessment authority reaches the persisted support analyzer", () => {
+  it("suppresses only incidental selection misses for a final learned-knowledge answer", async () => {
+    const setup = await fixture("single", [GENERAL], { empty: true });
+    usePersistedEvidence();
+    assertAssessmentOnly(await ask(setup, "What causes oscillation?"));
+    const { text, records, analysis } = persistedEvidence(setup);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "search.connected-context.completed",
+        selectedFileCount: 0,
+        retrievalIntent: "targeted-code-search",
+      }),
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "search.answer.assessed",
+        phase: "accepted-final",
+        outcome: "assessment-only",
+        sourceBackedChars: 0,
+      }),
+    );
+    expect(analysis.findings ?? []).toEqual([]);
+    const partial = text
+      .split("\n")
+      .filter((line) => !line.includes('"phase":"accepted-final"'))
+      .join("\n");
+    expect(analyzeLogText(partial).findings).toContainEqual(
+      expect.objectContaining({ reason: "semantic-unavailable-with-miss" }),
+    );
+    expect(synthesisCalls(setup)).toHaveLength(1);
+  });
+
+  it("retains an actual selection miss when an assessment-only repair changes source content", async () => {
+    const source = "The workspace guarantees every requested option.";
+    const setup = await fixture("single", [source, GENERAL]);
+    usePersistedEvidence();
+    const answer = await ask(setup, "Explain src/Feature.ts and src/Missing.ts");
+    expect(answer.content).toBe(source);
+    const { records, analysis } = persistedEvidence(setup);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "search.connected-context.answer-details",
+        citationRepairDisposition: "rejected-content-changed",
+      }),
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "search.answer.assessed",
+        phase: "accepted-final",
+        outcome: "none",
+      }),
+    );
+    expect(analysis.findings).toContainEqual(
+      expect.objectContaining({ kind: "retrieval-miss", reason: "explicit-path-rejected" }),
+    );
+    expect(synthesisCalls(setup)).toHaveLength(2);
+  });
+
+  it("retains the real unread source gap after an assessment-only second pass", async () => {
+    const setup = await fixture("single", [
+      "I need more evidence.\nMissing evidence: [src/Companion.ts]",
+      GENERAL,
+    ]);
+    writeFileSync(join(setup.directory, "alpha/src/Companion.ts"), "42;\n");
+    usePersistedEvidence();
+    const answer = await ask(setup, "Explain src/Feature.ts");
+    expect(splitOwnAssessment(answer.content).assessment).toContain("Compare the benefits");
+    const { records, analysis } = persistedEvidence(setup);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "search.connected-context.answer-details",
+        followUpPassCount: 1,
+        followUpOutcome: "still-insufficient",
+      }),
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "search.citations.reconciled",
+        followUpPass: 0,
+        declaredUnreadInScopeCount: 1,
+      }),
+    );
+    for (const reason of ["declared-unread-in-scope", "follow-up-still-insufficient"])
+      expect(analysis.findings).toContainEqual(
+        expect.objectContaining({ kind: "retrieval-miss", reason }),
+      );
+    expect(synthesisCalls(setup)).toHaveLength(2);
+  });
+});
 
 describe("learned knowledge uses the existing assessment authority across connected sources", () => {
   it.each(["plural", "hybrid"] as const)(
