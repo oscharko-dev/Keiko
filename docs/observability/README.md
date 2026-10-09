@@ -638,6 +638,32 @@ guide](support-workspace.md) before sharing or giving an artifact to an agent.
 
 ### What a validated timeline shows
 
+Connected-folder retrieval also derives optional `retrieval-miss` findings in
+`analysis.findings`, each affected timeline's `findings`, and its reproduction seed. Finding
+schema version 1 names the correlation, available process/scope/query identities, the closed reason,
+and the actual triggering fields. The reader joins source, selection, completion, and answer
+siblings within the same process, correlation, and scope. Query-specific ranking and intent facts
+stay separate; an answered follow-up disposes the initial unread declaration even when its query
+or selection fingerprint changes.
+
+| Reason                            | Triggering evidence                                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `declared-unread-in-scope`        | Positive `declaredUnreadInScopeCount` without a confirmed answered follow-up.                                    |
+| `explicit-path-rejected`          | Positive `explicitPathRejectedCount`, with observed closed `explicitPathRejectionReasons`.                       |
+| `low-confidence-selection`        | `keepOneFallbackApplied: true`.                                                                                  |
+| `basename-dedup-demoted-explicit` | Positive `addressedBasenameDedupDemotedCount`; ordinary basename diversity alone is valid.                       |
+| `follow-up-still-insufficient`    | Positive `followUpPassCount` with `followUpOutcome: still-insufficient`.                                         |
+| `semantic-unavailable-with-miss`  | Semantic provider unavailable/rejected together with an observed miss or an empty targeted/diagnostic selection. |
+| `intent-overview-on-follow-up`    | `retrievalIntent: repository-overview` with a non-`none` `continuityReferentSource` in the same query.           |
+
+Missing historical fields remain unknown. An unconfigured semantic provider with a successful
+lexical answer produces no finding. Positive general `basenameDedupDemotedCount` does not establish
+demotion of an addressed file. When all per-reason omission counters are present, findings carry
+`omissionGroups.ranking` and `.eligibility` from the same canonical grouping helper the chat uses.
+Partial counters never become a manufactured zero total. Seeds warn that file bodies and retrieval
+inputs were never logged; a replay needs a separately supplied allowed fixture. See
+[Restore connected-folder file grounding](../troubleshooting/chat-connected-folder-file-not-read.md).
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,

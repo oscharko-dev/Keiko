@@ -58,6 +58,10 @@ Coding Workbench runs that start with less authority than the composer shows —
 workspace or Full access selection capped by the installation's deployment ceiling — are covered in
 the dedicated [Coding Workbench Authority Limit](coding-workbench-authority-limit.md) entry.
 
+Chat answers that request a file already inside the connected folder are covered in
+[Restore connected-folder file grounding](chat-connected-folder-file-not-read.md). Use that entry
+for explicit path admission, narrowed scope, low-confidence selection, and insufficient follow-ups.
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a
@@ -192,8 +196,7 @@ than a process crash.
   alive.
 - If the Activity Log contains `process.fatal`, address the underlying
   error it classifies (typically a port conflict or a Node.js version
-  older than 22; see the [Requirements](../../README.md#requirements)
-  section).
+  outside the [supported runtime range](../../package.json)).
 - If the foreground UI starts cleanly, raise the start timeout for slow
   hosts by exporting `KEIKO_START_TIMEOUT_SECS=60` before invoking
   `keiko start` or `npm run keiko:start`.
@@ -429,8 +432,8 @@ npx keiko models validate
   valid base URL and API token. The loopback BFF will rewrite the
   runtime configuration after a successful smoke call.
 - For scripted use, provide a JSON config file via `KEIKO_CONFIG_FILE`
-  or `--config` as documented in the [Configuration](../../README.md#configuration)
-  section.
+  or `--config` as documented in the
+  [runtime-state precedence](../local-runtime-state-contract.md#precedence-ladders) contract.
 - After updating the configuration, restart the UI so the runtime
   registry reloads:
 
