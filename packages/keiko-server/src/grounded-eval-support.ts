@@ -217,9 +217,15 @@ export async function runConnectedRetrievalEval(
         scopeId: "incident-retrieval-miss",
         workspaceRoot: root,
         kind: "workspace-root" as const,
+        conversationId: user.chatId,
       },
       query: { ...EVAL_QUERY, text: continuity.retrievalContent, maxResults: 100 },
       currentQuestion: fixture.query,
+      assistantReferents: continuity.assistantReferents,
+      continuityReferentSource: continuity.continuityReferentSource,
+      ...(continuity.previousRetrievalIntent === undefined
+        ? {}
+        : { previousRetrievalIntent: continuity.previousRetrievalIntent }),
       workspaceRoot: root,
     };
     const retrievalDeps = {

@@ -48,6 +48,7 @@ import {
   type ContextCoverageDiagnostics,
   type ContextPackDiagnostics,
   type ContextSelectionDiagnostics,
+  type ContinuityReferentSource,
   type EvidenceAtom,
   type ExplorationBudget,
   type ExplorationUsage,
@@ -637,6 +638,21 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     },
     stackTraceFrameCount: { type: "integer", dataClass: "count", required: false },
     stackTraceExternalFrameCount: { type: "integer", dataClass: "count", required: false },
+    continuityReferentSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "none",
+        "previous-user-question",
+        "assistant-paths",
+        "assistant-declaration",
+        "assistant-paths-and-declaration",
+      ],
+    },
+    continuityReferentCount: { type: "integer", dataClass: "count", required: false },
+    continuityAdmittedCount: { type: "integer", dataClass: "count", required: false },
+    continuityRejectedCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -649,6 +665,7 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     "search.connected-context.selection-details.line",
     "search.connected-context.path-ranking.line",
     "search.connected-context.selection-quality.line",
+    "search.connected-context.continuity.line",
   ],
   releaseImpact: "patch",
 });
@@ -1008,8 +1025,9 @@ export interface GroundedAnswerer {
 }
 
 export interface OrchestratorInput {
-  readonly assistantReferents?: readonly SearchReference[];
-  readonly previousRetrievalIntent?: RetrievalIntent;
+  readonly continuityReferentSource?: ContinuityReferentSource | undefined;
+  readonly assistantReferents?: readonly SearchReference[] | undefined;
+  readonly previousRetrievalIntent?: RetrievalIntent | undefined;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   // The original query remains authoritative for every retrieval ring. Callers may supply a
@@ -8073,6 +8091,10 @@ function sourceReferenceActivityExtra(
   const {
     stackTraceFrameCount: _all,
     stackTraceExternalFrameCount: _external,
+    continuityReferentSource: _source,
+    continuityReferentCount: _referents,
+    continuityAdmittedCount: _admitted,
+    continuityRejectedCount: _rejected,
     ...fields
   } = observation;
   return fields;
@@ -8336,6 +8358,10 @@ function selectionDetailsActivityExtra(
       : {
           stackTraceFrameCount: status.referenceObservation.stackTraceFrameCount,
           stackTraceExternalFrameCount: status.referenceObservation.stackTraceExternalFrameCount,
+          continuityReferentSource: status.referenceObservation.continuityReferentSource,
+          continuityReferentCount: status.referenceObservation.continuityReferentCount,
+          continuityAdmittedCount: status.referenceObservation.continuityAdmittedCount,
+          continuityRejectedCount: status.referenceObservation.continuityRejectedCount,
         }),
     completeness: "complete",
     loss: "none",
@@ -9214,6 +9240,8 @@ async function liveExplicitPathAdmission(
   const budget = createAugmentationBudgetMeter(plan, governor, runtime.nowMs, context.deadlineAtMs);
   const result = await admitDiagnosticReferences({
     plan,
+    assistantReferents: input.assistantReferents,
+    continuityReferentSource: input.continuityReferentSource,
     structuralFs: context.ringFs,
     requestContext: () => context.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS),
     metadataInjectionReason: metadataInjectionReason(input, plan),
