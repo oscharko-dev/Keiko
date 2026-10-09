@@ -165,9 +165,14 @@ afterEach((): void => {
 });
 
 describe("explicit-path trust boundary", () => {
-  it.each(["escaping", "dangling", "denied-alias", "hard-link"])(
-    "rejects a %s without reading its target or failing the retrieval",
-    async (kind) => {
+  it.each([
+    { kind: "escaping", reason: "outside-scope" },
+    { kind: "dangling", reason: "outside-scope" },
+    { kind: "denied-alias", reason: "denied" },
+    { kind: "hard-link", reason: "outside-scope" },
+  ])(
+    "rejects $kind without reading its target or failing the retrieval",
+    async ({ kind, reason }) => {
       const path = "src/alias.ts";
       writeFileSync(join(outside, "target.ts"), PRIVATE_BODY);
       writeFixture(".env", PRIVATE_BODY);
@@ -181,7 +186,7 @@ describe("explicit-path trust boundary", () => {
         );
       const reads: string[] = [];
       const result = await retrieve(`Explain ${path}`, { fs: watchedFs(reads) });
-      expectPrivateRejection(result, path, "outside-scope");
+      expectPrivateRejection(result, path, reason);
       expect(reads).not.toContain(join(root, path));
       expect(reads).not.toContain(join(root, ".env"));
       expect(reads).not.toContain(join(outside, "target.ts"));
@@ -249,6 +254,19 @@ describe("explicit-path trust boundary", () => {
     });
     expect(selected.output.pack.files.map((file) => file.scopePath)).toEqual([path]);
   });
+
+  it.each(["Explain ignored/selected.ts", "Explain selected.ts"])(
+    "preserves the human-selected ignored file when the query names it: %s",
+    async (text) => {
+      const path = "ignored/selected.ts";
+      writeFixture(path, "export const manuallySelectedFact = 19;\n");
+      const result = await retrieve(text, { kind: "files", relativePaths: [path] });
+      expect(result.output.pack.files.map((file) => file.scopePath)).toEqual([path]);
+      expect(result.output.pack.files[0]?.excerpts[0]?.content).toContain(
+        "manuallySelectedFact = 19",
+      );
+    },
+  );
 });
 
 describe("bounded explicit basename discovery", () => {
