@@ -82,6 +82,8 @@ interface AdmissionInputs {
   readonly tryReserveSearchCall: () => boolean;
 }
 
+type PathPolicyInputs = Pick<AdmissionInputs, "scope" | "searchScope" | "fs">;
+
 interface AdmissionState {
   readonly selections: ExplicitPathReference[];
   readonly rejectedPaths: Set<string>;
@@ -134,7 +136,7 @@ function expectedPathFailure(error: unknown): ExplicitPathRejectionReason | unde
 
 function pathPolicyRejection(
   path: string,
-  inputs: AdmissionInputs,
+  inputs: PathPolicyInputs,
 ): ExplicitPathRejectionReason | undefined {
   if (!isPathWithinSelectedScope(inputs.scope, new Set(inputs.scope.relativePaths), path))
     return "outside-scope";
@@ -160,7 +162,7 @@ function pathPolicyRejection(
   }
 }
 
-function humanSelectedPath(path: string, inputs: AdmissionInputs): boolean {
+function humanSelectedPath(path: string, inputs: PathPolicyInputs): boolean {
   return (
     inputs.scope.explicitConnection === true &&
     inputs.scope.kind === "files" &&
@@ -168,10 +170,18 @@ function humanSelectedPath(path: string, inputs: AdmissionInputs): boolean {
   );
 }
 
+/** Canonical metadata policy only: no content read, binary probe or search grant. */
+export function admissibleDeclaredScopePath(path: string, inputs: PathPolicyInputs): boolean {
+  return (
+    isValidScopePath(path, { mustBeRelative: true }) &&
+    pathPolicyRejection(path, inputs) === undefined
+  );
+}
+
 function existingPathPolicyRejection(
   path: string,
   absolute: string,
-  inputs: AdmissionInputs,
+  inputs: PathPolicyInputs,
 ): ExplicitPathRejectionReason | undefined {
   const contained = explicitContainedPath(inputs, absolute);
   if (contained === undefined) return "outside-scope";
@@ -188,7 +198,7 @@ function existingPathPolicyRejection(
 }
 
 function explicitContainedPath(
-  inputs: AdmissionInputs,
+  inputs: PathPolicyInputs,
   absolute: string,
 ): ReturnType<typeof containedRealPathInfo> | undefined {
   try {

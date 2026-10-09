@@ -161,6 +161,8 @@ export interface EvidenceAtomMetrics {
 // Seven independently-exhausted dimensions; conflating any pair lets one dimension hide
 // overshoot in another.
 export interface ExplorationBudget {
+  /** A turn-local server-owned follow-up; omission preserves the accepted default. */
+  readonly followUpPassesMax?: 0 | 1 | undefined;
   readonly searchCallsMax: number;
   // Null selects evidence under byte/model bounds without an artificial file-count cutoff.
   readonly filesReadMax: number | null;
@@ -181,6 +183,7 @@ export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = Object.freeze({
   modelOutputTokensMax: 4_096,
   elapsedMsMax: null,
   rerankCallsMax: 1,
+  followUpPassesMax: 1,
 });
 
 export interface ExplorationUsage {
@@ -690,6 +693,12 @@ function isValidBudgetUsage(value: unknown): value is number {
 
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
   if (!isRecord(usage) || !isRecord(budget)) return false;
+  if (
+    budget.followUpPassesMax !== undefined &&
+    budget.followUpPassesMax !== 0 &&
+    budget.followUpPassesMax !== 1
+  )
+    return false;
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
     const field = `${dimension}Max` as const;
     const cap = budget[field];
@@ -1376,6 +1385,13 @@ function validatePackBudget(
     reasons.push("pack.budget invalid");
     return;
   }
+  pushIf(
+    reasons,
+    pack.budget.followUpPassesMax !== undefined &&
+      pack.budget.followUpPassesMax !== 0 &&
+      pack.budget.followUpPassesMax !== 1,
+    "budget.followUpPassesMax invalid",
+  );
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
     checkBudgetDimension(pack.usage[dimension], pack.budget[`${dimension}Max`], dimension, reasons);
   }

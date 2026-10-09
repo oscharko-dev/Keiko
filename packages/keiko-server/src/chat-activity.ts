@@ -1,3 +1,6 @@
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { SentGroundedPrompt } from "./grounded-prompt-context.js";
 import type { ModelKind } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
@@ -417,6 +420,37 @@ export function logChatContextSelection(
         inputBudget: diagnostics.profile.effectiveInputBudget,
         imageCount,
         imageReserveTokens: Math.max(0, diagnostics.totalEstimatedTokens - textTokens),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+/** Grounded prompts have no history-message or image lane; log the actual fitted dispatch. */
+export function logGroundedPromptSelection(
+  correlationId: string | undefined,
+  prompt: SentGroundedPrompt,
+  inputBudget: number,
+  accounting?: ContextProfile["tokenAccounting"],
+): void {
+  const tokens = countGatewayPromptTokens({ messages: prompt.messages }, accounting);
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_CONTEXT_SELECTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        state: "verbatim",
+        omittedSummaryCategories: 0,
+        compactedHistoryMessages: 0,
+        retainedHistoryMessages: 0,
+        tokensBefore: 0,
+        tokensAfter: 0,
+        tokensSaved: 0,
+        promptTokens: tokens,
+        inputBudget,
+        imageCount: 0,
+        imageReserveTokens: 0,
         completeness: "complete",
         loss: "none",
       },
