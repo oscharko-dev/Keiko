@@ -1221,7 +1221,7 @@ const CLIENT_SCOPE_NOTICE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "client.scope.notice",
-  category: "diagnostic",
+  category: "search",
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientScopeNotice",
   fields: {
@@ -1259,7 +1259,7 @@ const CLIENT_EVIDENCE_INSPECTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "client.evidence.inspected",
-  category: "diagnostic",
+  category: "search",
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientEvidenceInspection",
   fields: {
