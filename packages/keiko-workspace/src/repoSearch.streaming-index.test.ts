@@ -52,9 +52,11 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
     const { scope, fs, reads } = fixture();
     const workspaceIndex = createWorkspaceIndex();
     const cold = await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+    expect(cold.workspaceIndex).toMatchObject({ indexedRecords: 12, reusedRecords: 0 });
     expect(reads).toHaveBeenCalledTimes(12);
     reads.mockClear();
     const warm = await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+    expect(warm.workspaceIndex).toMatchObject({ reusedRecords: 12 });
     expect(warm.atoms).toEqual(cold.atoms);
     expect(warm.filesScanned).toBe(12);
     expect(warm.coverage).toEqual(cold.coverage);
@@ -66,17 +68,19 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
     const workspaceIndex = createWorkspaceIndex();
     await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
     reads.mockClear();
+    const request = { scopePath: "manual-11.html", startLine: 1, endLine: 1, maxBytes: 512 };
+    const live = await readExcerpt(scope, request, { fs });
+    const liveReadCount = reads.mock.calls.length;
+    expect(liveReadCount).toBeGreaterThan(0);
+    reads.mockClear();
     const warm = await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
     expect(reads).not.toHaveBeenCalled();
     const atom = warm.atoms[0];
     expect(atom?.scopePath).toBe("manual-11.html");
-    const excerpt = await readExcerpt(
-      scope,
-      { scopePath: "manual-11.html", startLine: 1, endLine: 1, maxBytes: 512 },
-      { fs },
-    );
+    const excerpt = await readExcerpt(scope, request, { fs });
     expect(excerpt.content).toContain("73.5");
-    expect(reads).toHaveBeenCalledOnce();
+    expect(excerpt.content).toBe(live.content);
+    expect(reads).toHaveBeenCalledTimes(liveReadCount);
   });
 
   it("rereads changed negative records and discovers newly matching files", async () => {
