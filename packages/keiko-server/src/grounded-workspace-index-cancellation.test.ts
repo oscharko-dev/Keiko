@@ -9,7 +9,10 @@ import {
   createWorkspaceIndex,
   type WorkspaceIndexStore,
 } from "@oscharko-dev/keiko-workspace";
-import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 
 const roots: string[] = [];
@@ -33,6 +36,7 @@ async function retrieve(
   root: string,
   store: WorkspaceIndexStore,
   signal?: AbortSignal,
+  activityLog: BufferedServerLogSink = createBufferedServerLogSink(),
 ): Promise<Awaited<ReturnType<typeof retrieveConnectedContextPack>>> {
   return retrieveConnectedContextPack(
     {
@@ -58,7 +62,7 @@ async function retrieve(
     },
     {
       correlationId: "grounded-index-guard",
-      activityLog: createBufferedServerLogSink(),
+      activityLog,
       signal,
       workspaceIndexForRoot: () => createWorkspaceIndex(store),
       answerer: { answer: (): Promise<string> => Promise.resolve("unused") },
@@ -67,6 +71,78 @@ async function retrieve(
 }
 
 describe("grounded index request cancellation forwarding", () => {
+  it("reports actual live fallback when failed loading retains no index records", async () => {
+    const log = createBufferedServerLogSink();
+    const store: WorkspaceIndexStore = {
+      loadSnapshot: () => Promise.reject(new TypeError("PRIVATE_INDEX_LOAD_FAILURE")),
+      saveSnapshot: (): Promise<void> => Promise.resolve(),
+    };
+    const output = await retrieve(fixtureRoot(), store, undefined, log);
+    expect(output.pack.files.length).toBeGreaterThan(0);
+    const details = log.events.find(
+      (event) => event.op === "search.connected-context.completion-details",
+    );
+    expect(details?.extra).toMatchObject({
+      indexSearchMode: "live-fallback",
+      indexLoadStatus: "failed",
+      indexIndexedRecords: 0,
+      indexReusedRecords: 0,
+      indexSaveStatus: "not-attempted",
+    });
+    expect(details?.extra?.indexLoadFailures).toBeGreaterThan(0);
+    expect(details?.extra?.indexReportCount).toBeGreaterThan(0);
+    expect(log.lines().join("\n")).toContain('"indexSearchMode":"live-fallback"');
+    expect(log.lines().join("\n")).not.toContain("PRIVATE_INDEX_LOAD_FAILURE");
+  });
+
+  it("preserves actual cold index work when only persistence fails", async () => {
+    const base = createInMemoryWorkspaceIndexStore();
+    const log = createBufferedServerLogSink();
+    const store: WorkspaceIndexStore = {
+      loadSnapshot: base.loadSnapshot,
+      saveSnapshot: () => Promise.reject(new TypeError("PRIVATE_INDEX_SAVE_FAILURE")),
+    };
+    const output = await retrieve(fixtureRoot(), store, undefined, log);
+    expect(output.pack.files.length).toBeGreaterThan(0);
+    const details = log.events.find(
+      (event) => event.op === "search.connected-context.completion-details",
+    );
+    expect(details?.extra).toMatchObject({
+      indexSearchMode: "request-local-cold",
+      indexLoadStatus: "miss",
+      indexSaveStatus: "failed",
+      indexReusedRecords: 0,
+    });
+    expect(details?.extra?.indexIndexedRecords).toBeGreaterThan(0);
+    expect(details?.extra?.indexSaveFailures).toBeGreaterThan(0);
+    expect(log.lines().join("\n")).not.toContain("PRIVATE_INDEX_SAVE_FAILURE");
+  });
+
+  it("preserves healthy persisted cold and warm search modes", async () => {
+    const root = fixtureRoot();
+    const store = createInMemoryWorkspaceIndexStore();
+    const cold = createBufferedServerLogSink();
+    await retrieve(root, store, undefined, cold);
+    const coldDetails = cold.events.find(
+      (event) => event.op === "search.connected-context.completion-details",
+    );
+    expect(coldDetails?.extra).toMatchObject({
+      indexSearchMode: "persistent-cold",
+      indexLoadStatus: "miss",
+      indexSaveStatus: "succeeded",
+    });
+    const warm = createBufferedServerLogSink();
+    await retrieve(root, store, undefined, warm);
+    const warmDetails = warm.events.find(
+      (event) => event.op === "search.connected-context.completion-details",
+    );
+    expect(warmDetails?.extra).toMatchObject({
+      indexSearchMode: "persistent-warm",
+      indexLoadStatus: "hit",
+    });
+    expect(warmDetails?.extra?.indexReusedRecords).toBeGreaterThan(0);
+  });
+
   it("forwards the active request guard through the observed index to both store operations", async () => {
     const base = createInMemoryWorkspaceIndexStore();
     const loads: ((() => boolean) | undefined)[] = [];
