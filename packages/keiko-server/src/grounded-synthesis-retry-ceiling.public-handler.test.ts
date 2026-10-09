@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -208,6 +208,62 @@ function configuredRuntime(
   return { deps, chatId: chat.id };
 }
 
+interface CompatibilityLoopbackState {
+  mode: "shape" | "healthy" | "provider-failure";
+  readonly requests: string[];
+}
+
+function replyCompatibilityLoopback(
+  res: ServerResponse,
+  request: Record<string, unknown>,
+  state: CompatibilityLoopbackState,
+): void {
+  if (state.mode === "provider-failure") {
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "Synthetic provider outage" } }));
+    return;
+  }
+  const param =
+    state.mode === "healthy"
+      ? undefined
+      : "stream_options" in request
+        ? "stream_options"
+        : "max_tokens" in request
+          ? "max_tokens"
+          : undefined;
+  res.writeHead(param === undefined ? 200 : 400, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify(
+      param === undefined
+        ? {
+            id: "breaker-proof",
+            model: MODEL,
+            choices: [
+              { index: 0, message: { role: "assistant", content: CITED }, finish_reason: "stop" },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }
+        : { error: { param, code: "unsupported_parameter" } },
+    ),
+  );
+}
+
+function serveCompatibilityLoopback(
+  req: IncomingMessage,
+  res: ServerResponse,
+  state: CompatibilityLoopbackState,
+): void {
+  const chunks: Buffer[] = [];
+  req.on("data", (chunk: Buffer): void => {
+    chunks.push(chunk);
+  });
+  req.on("end", (): void => {
+    const body = Buffer.concat(chunks).toString();
+    state.requests.push(body);
+    replyCompatibilityLoopback(res, JSON.parse(body) as Record<string, unknown>, state);
+  });
+}
+
 async function compatibilityLoopback(): Promise<{
   readonly baseUrl: string;
   readonly requests: readonly string[];
@@ -215,50 +271,9 @@ async function compatibilityLoopback(): Promise<{
   readonly enableProviderFailure: () => void;
   readonly close: () => Promise<void>;
 }> {
-  const requests: string[] = [];
-  let healthy = false;
-  let providerFailure = false;
+  const state: CompatibilityLoopbackState = { mode: "shape", requests: [] };
   const server = createServer((req, res): void => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer): void => {
-      chunks.push(chunk);
-    });
-    req.on("end", (): void => {
-      const body = Buffer.concat(chunks).toString();
-      requests.push(body);
-      const request = JSON.parse(body) as Record<string, unknown>;
-      if (providerFailure) {
-        res.writeHead(503, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "Synthetic provider outage" } }));
-        return;
-      }
-      const param = healthy
-        ? undefined
-        : "stream_options" in request
-          ? "stream_options"
-          : "max_tokens" in request
-            ? "max_tokens"
-            : undefined;
-      res.writeHead(param === undefined ? 200 : 400, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify(
-          param === undefined
-            ? {
-                id: "breaker-proof",
-                model: MODEL,
-                choices: [
-                  {
-                    index: 0,
-                    message: { role: "assistant", content: CITED },
-                    finish_reason: "stop",
-                  },
-                ],
-                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-              }
-            : { error: { param, code: "unsupported_parameter" } },
-        ),
-      );
-    });
+    serveCompatibilityLoopback(req, res, state);
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -268,13 +283,12 @@ async function compatibilityLoopback(): Promise<{
     throw new TypeError("Expected loopback port");
   return {
     baseUrl: `http://127.0.0.1:${String(address.port)}/v1`,
-    requests,
+    requests: state.requests,
     enableHealthy: (): void => {
-      healthy = true;
-      providerFailure = false;
+      state.mode = "healthy";
     },
     enableProviderFailure: (): void => {
-      providerFailure = true;
+      state.mode = "provider-failure";
     },
     close: (): Promise<void> =>
       new Promise((resolve, reject) => {
@@ -408,7 +422,7 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
       provider.enableProviderFailure();
       const { deps, chatId } = configuredRuntime(0, provider.baseUrl);
       for (let index = 0; index < 5; index += 1)
-        expect((await handleGroundedAsk(route(chatId), deps)).status).toBe(502);
+        expect((await handleGroundedAsk(route(chatId), deps)).status).toBe(503);
       expect(provider.requests).toHaveLength(5);
       provider.enableHealthy();
       expect((await handleGroundedAsk(route(chatId), deps)).status).toBe(502);
