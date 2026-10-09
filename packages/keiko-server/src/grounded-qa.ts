@@ -1,3 +1,4 @@
+import { logGroundedPromptSelection } from "./chat-activity.js";
 import {
   citationBehaviourFor,
   citationBehaviourObserverFor,
@@ -38,6 +39,7 @@ import type { IncomingMessage } from "node:http";
 import { basename } from "node:path";
 import {
   CancelledError,
+  TimeoutError,
   ContextOverflowError,
   GatewayError,
   ProviderError,
@@ -1438,6 +1440,16 @@ async function groundedGatewayAttempt(
     ),
   });
   if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
+  ensureNotCancelled(ctx.signal);
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) {
+    throw new TimeoutError("Grounded synthesis deadline elapsed before gateway admission");
+  }
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    sent,
+    options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    ctx.tokenAccounting,
+  );
   const response = await ctx.model.call(
     {
       modelId: ctx.modelId,

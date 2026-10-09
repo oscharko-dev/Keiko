@@ -1,3 +1,5 @@
+import { admissibleDeclaredScopePath } from "./grounded-explicit-paths.js";
+import { declaredInsufficiencyPaths } from "./grounded-faithfulness.js";
 import {
   repairGroundedAnswer,
   observeGroundedCitationBehaviour,
@@ -1151,6 +1153,8 @@ export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
 // answer. `elapsedMs` here is retrieval-only wall time (no model call), distinct from
 // OrchestratorOutput.elapsedMs which also includes the answer.
 export interface RetrievalOnlyOutput {
+  readonly declarationScopeIndexFor?:
+    ((paths: readonly string[]) => ReadonlyMap<string, "unread-in-scope">) | undefined;
   readonly pack: ConnectedContextPack;
   readonly elapsedMs: number;
   readonly plan: ExplorationPlan;
@@ -2398,6 +2402,7 @@ function isKnownFitSourceAnchor(anchor: SearchAnchor): boolean {
 }
 
 function hasKnownFitSourceTarget(inputs: SearchInputs): boolean {
+  if (inputs.anchors.some((anchor) => anchor.kind === "path")) return true;
   if (inputs.targetDecision.definitionRequested && inputs.targetDecision.kind !== "contextual")
     return true;
   // Preserve source spelling: plain technical routing hints are not independently selected
@@ -9220,7 +9225,7 @@ async function retrieveLiveConnectedContext(
   );
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
-  return connectedContextExecution(
+  const execution = connectedContextExecution(
     withRetrievalSourceDiagnostics(assembled.pack, runtime.progress),
     plan,
     runtime.activity,
@@ -9233,6 +9238,37 @@ async function retrieveLiveConnectedContext(
     workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
+  return {
+    ...execution,
+    output: {
+      ...execution.output,
+      declarationScopeIndexFor: (paths) =>
+        declarationScopeIndex(paths, input, deps, runtime, context),
+    },
+  };
+}
+
+function declarationScopeIndex(
+  paths: readonly string[],
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): ReadonlyMap<string, "unread-in-scope"> {
+  const verified = new Map<string, "unread-in-scope">();
+  for (const path of paths.slice(0, 3)) {
+    throwIfCancelled(deps.signal);
+    if (runtime.nowMs() >= context.deadlineAtMs) break;
+    if (
+      admissibleDeclaredScopePath(path, {
+        scope: input.scope,
+        searchScope: context.searchScope,
+        fs: runtime.fs,
+      })
+    )
+      verified.set(path, "unread-in-scope");
+  }
+  return verified;
 }
 
 function withRetrievalSourceDiagnostics(
@@ -9600,6 +9636,7 @@ async function groundedAnswerForPack(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   pack: ConnectedContextPack,
+  declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
 ): Promise<GroundedAnswerResult> {
   const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
     modelInputTokensMax: pack.budget.modelInputTokensMax,
@@ -9607,10 +9644,12 @@ async function groundedAnswerForPack(
     answerOnlyContextAvailable: input.answerOnlyContextAvailable,
     currentQuestion: input.currentQuestion ?? input.query.text,
   });
+  const answer = normalizeGroundedAnswerPayload(payload);
   return validateSingleAnswerEvidence(
-    normalizeGroundedAnswerPayload(payload),
+    answer,
     pack,
     input.currentQuestion ?? input.query.text,
+    declarationScopeIndexFor?.(declaredInsufficiencyPaths(answer.content)),
   );
 }
 
@@ -9649,8 +9688,9 @@ async function refinedGroundedAnswer(
   pack: ConnectedContextPack,
   start: number,
   nowMs: () => number,
+  declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
 ): Promise<import("./grounded-answer-repair.js").GroundedRepairResult> {
-  const initial = await groundedAnswerForPack(input, deps, pack);
+  const initial = await groundedAnswerForPack(input, deps, pack, declarationScopeIndexFor);
   const repairContext = {
     answer: initial,
     pack,
@@ -9674,8 +9714,16 @@ async function answerWithAvailableContext(
   sourceEvidenceAvailable: boolean,
   start: number,
   nowMs: () => number,
+  declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
 ): Promise<OrchestratorOutput> {
-  const repair = await refinedGroundedAnswer(input, deps, pack, start, nowMs);
+  const repair = await refinedGroundedAnswer(
+    input,
+    deps,
+    pack,
+    start,
+    nowMs,
+    declarationScopeIndexFor,
+  );
   const answer = repair.answer;
   const elapsedMs = Math.max(0, nowMs() - start);
   const sentPack = answer.sentEvidencePacks?.[0] ?? pack;
@@ -9715,7 +9763,7 @@ export async function runGroundedExploration(
   // by retrieveConnectedContextPack is deliberately discarded here.
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
-  const { pack, plan } = await retrieveConnectedContextPack(input, deps);
+  const { pack, plan, declarationScopeIndexFor } = await retrieveConnectedContextPack(input, deps);
   // GEN-AI-GROUNDING-002/-003 (RB-4): abstain BEFORE the model call when the assembled pack carries
   // no usable evidence. The local-knowledge and hybrid paths already short-circuit here; the folder
   // path must too, so the model is never asked to answer confidently over zero evidence and no
@@ -9732,7 +9780,16 @@ export async function runGroundedExploration(
       noEvidence: true,
     };
   }
-  return answerWithAvailableContext(input, deps, pack, plan, sourceEvidenceAvailable, start, nowMs);
+  return answerWithAvailableContext(
+    input,
+    deps,
+    pack,
+    plan,
+    sourceEvidenceAvailable,
+    start,
+    nowMs,
+    declarationScopeIndexFor,
+  );
 }
 
 // Re-export DEFAULT_SEARCH_LIMITS for parity with #179 callers that import limits via the
