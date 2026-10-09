@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fa5631993b639c4a90b3e1bf4464a037c71a7e98f8e5662acbdc527b2c9e2cf4",
+    "catalogDigest": "bc2396bd44f4d04ffefcd81c1e6cd19a3ccf5679b1f95cb20562dd326ca5e0d4",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3717,7 +3717,7 @@
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
         "op": "client.evidence.inspected",
-        "category": "diagnostic",
+        "category": "search",
         "owner": "keiko-server",
         "emitter": "client-diagnostics-routes.logClientEvidenceInspection",
         "fields": {
@@ -4095,7 +4095,7 @@
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
         "op": "client.scope.notice",
-        "category": "diagnostic",
+        "category": "search",
         "owner": "keiko-server",
         "emitter": "client-diagnostics-routes.logClientScopeNotice",
         "fields": {
@@ -50566,7 +50566,7 @@
             {
               "op": "client.evidence.inspected",
               "owner": "keiko-server",
-              "category": "diagnostic",
+              "category": "search",
               "lifecycle": "state",
               "causal": "correlation",
               "analyzerProjection": "timeline",
@@ -50817,7 +50817,7 @@
             {
               "op": "client.scope.notice",
               "owner": "keiko-server",
-              "category": "diagnostic",
+              "category": "search",
               "lifecycle": "state",
               "causal": "correlation",
               "analyzerProjection": "timeline",
@@ -89678,7 +89678,7 @@
     },
     {
       "op": "client.evidence.inspected",
-      "category": "diagnostic",
+      "category": "search",
       "site": "packages/keiko-server/src/client-diagnostics-routes.ts:1261",
       "package": "keiko-server"
     },
@@ -89714,7 +89714,7 @@
     },
     {
       "op": "client.scope.notice",
-      "category": "diagnostic",
+      "category": "search",
       "site": "packages/keiko-server/src/client-diagnostics-routes.ts:1223",
       "package": "keiko-server"
     },
