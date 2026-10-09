@@ -1,4 +1,5 @@
 import type {
+  CitationRepairDisposition,
   GroundedAnswerKind,
   GroundedCitationBehaviour,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -59,6 +60,19 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["answer", "refusal", "clarification", "insufficiency"],
     },
+    citationRepairDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "not-needed",
+        "applied",
+        "rejected-content-changed",
+        "failed",
+        "skipped-budget",
+        "skipped-capability",
+      ],
+    },
     citationBehaviour: {
       type: "string",
       dataClass: "closed-enum",
@@ -96,6 +110,7 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
 });
 
 export interface CitationReconciliationMetadata {
+  readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly answerKind?: GroundedAnswerKind | undefined;
   readonly citationBehaviour?: GroundedCitationBehaviour | undefined;
   readonly scopeIdentitySha256?: string | undefined;
@@ -111,6 +126,9 @@ function definedCitationMetadata(
   metadata: CitationReconciliationMetadata,
 ): Partial<ActivityLogFields<typeof SEARCH_CITATIONS_RECONCILED_OPERATION>> {
   return {
+    ...(metadata.citationRepairDisposition === undefined
+      ? {}
+      : { citationRepairDisposition: metadata.citationRepairDisposition }),
     ...(metadata.answerKind === undefined ? {} : { answerKind: metadata.answerKind }),
     ...(metadata.citationBehaviour === undefined
       ? {}
@@ -121,6 +139,14 @@ function definedCitationMetadata(
     ...(metadata.queryIdentitySha256 === undefined
       ? {}
       : { queryIdentitySha256: metadata.queryIdentitySha256 }),
+    ...citationCountMetadata(metadata),
+  };
+}
+
+function citationCountMetadata(
+  metadata: CitationReconciliationMetadata,
+): Partial<ActivityLogFields<typeof SEARCH_CITATIONS_RECONCILED_OPERATION>> {
+  return {
     ...(metadata.followUpPass === undefined ? {} : { followUpPass: metadata.followUpPass }),
     ...(metadata.insufficiencyDeclaredCount === undefined
       ? {}

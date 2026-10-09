@@ -27086,6 +27086,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["answer", "refusal", "clarification", "insufficiency"],
       },
+      citationRepairDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "not-needed",
+          "applied",
+          "rejected-content-changed",
+          "failed",
+          "skipped-budget",
+          "skipped-capability",
+        ],
+      },
       citationBehaviour: {
         type: "string",
         dataClass: "closed-enum",
