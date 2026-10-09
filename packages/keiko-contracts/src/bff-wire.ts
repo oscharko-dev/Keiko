@@ -1593,9 +1593,12 @@ export interface GroundedInsufficiencyDeclaration {
   readonly state: "read-in-this-turn" | "unread-in-scope";
 }
 
+export type GroundedAnswerKind = "answer" | "refusal" | "clarification" | "insufficiency";
+export type GroundedCitationBehaviour = "cites" | "cites-after-repair" | "never";
+
 export interface GroundedAnswerEvidenceDeclaration {
-  readonly answerKind?: "answer" | "refusal" | "clarification" | "insufficiency" | undefined;
-  readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
+  readonly answerKind?: GroundedAnswerKind | undefined;
+  readonly citationBehaviour?: GroundedCitationBehaviour | undefined;
   readonly insufficiencyDeclarations?: readonly GroundedInsufficiencyDeclaration[] | undefined;
 }
 
