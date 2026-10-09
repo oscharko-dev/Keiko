@@ -236,7 +236,8 @@ existing labelled assessment authority rather than adding question-specific rout
   excerpts do not back (a recommendation, an opinion, general knowledge, small talk) goes after the
   source-backed part inside one `<assessment>` block. The block opens by saying it is Keiko's own
   assessment and carries no source markers or missing-evidence declarations. Source-specific claims
-  remain outside it and use the actual supplied file or numeric marker grammar. A plain text tag works with every model family,
+  remain outside it and use the actual supplied file or numeric marker grammar. This policy rule
+  participates in prompt fitting before dispatch. A plain text tag works with every model family,
   open-weight models included, and needs no structured-output support.
 - **Only the source-backed part is checked.** The runner splits the block off right after
   generation (`splitOwnAssessment`), so the following steps see only the text outside it:
@@ -247,9 +248,12 @@ existing labelled assessment authority rather than adding question-specific rout
   The assessment is never cited, judged or reported as evidence.
 - **The answer keeps the model's words.** The stored answer is the source-backed part followed by
   the canonical block (`composeOwnAssessment`). With an assessment, Keiko does not replace the
-  model's own "the documents do not say" sentence with the generic no-evidence notice; the answer
-  still carries `noEvidence`. When retrieval finds nothing, the model is still asked, and the
-  assessment stands alone.
+  model's own "the documents do not say" sentence with the generic no-evidence notice. Source
+  availability and actual retrieval, prompt, and usage counters remain truthful. An assessment-only
+  answer does not acquire an uncited-answer, no-evidence, or low-selection-confidence warning merely
+  for using learned knowledge; actual source omissions, unsupported markers, and budget degradation
+  remain observable. When retrieval finds nothing, the allowed policy may still ask the model within
+  the original synthesis grants, and the assessment may stand alone.
 - **The UI labels it.** The chat shows the block apart from the cited text as a note labelled
   "Keiko's own assessment · not from the sources" / "Eigene Einschätzung von Keiko · nicht aus den
   Quellen". Copying and reading aloud keep its words and drop the tags. Only grounded answers are
@@ -261,6 +265,9 @@ existing labelled assessment authority rather than adding question-specific rout
   - When the policy is disabled, the prompt carries no rule. A block the model writes anyway is
     dropped (`neutralized`), never promoted to source-backed text that its citations and the judge
     would not cover.
+  - If dropping the block leaves no source-backed text, use the existing localized abstention. That
+    deliberate neutralization does not trigger a second citation-repair call. The existing repair
+    for a genuinely empty, unneutralized generation remains available under its original bounds.
 - **Every block counts.** A second or a nested block is assessment too, by nesting depth; none of
   its words reaches the source-backed part.
 - **Code stays literal.** Tags inside inline code or a fenced block, such as an XML example, are
@@ -268,15 +275,23 @@ existing labelled assessment authority rather than adding question-specific rout
   the citation markers.
 - **Evidence.** `search.answer.assessed` records the policy, the outcome (`none`, `assessment`,
   `assessment-only`, `neutralized`) and the character sizes of both parts per grounded answer,
-  never the text. The note's own layout evidence posts under the message's correlation.
+  never the text. Optional canonical scope/query digests and `phase` distinguish early `candidate`
+  observations from the `accepted-final` answer after source validation and repair. A plural answer
+  binds its final observation to each actual folder identity rather than inferring a source from
+  prose or repeating another folder's counters. Support analysis may explain an incidental empty
+  retrieval only with a matching, allowed, assessment-only `accepted-final` observation; unknown or
+  candidate phases, explicit unavailable targets, and mixed source claims retain their findings.
+  The note's own layout evidence posts under the message's correlation.
 - **Scope.** The same existing `allowed`/`disabled` policy governs a single folder, multiple folders,
   Knowledge Pods, and hybrid answers. No topic classifier, alternate conversation route, Internet
   dependency, or extra synthesis call grants permission to use learned knowledge. The existing
   synthesis token, deadline, spend, and physical-call limits remain authoritative.
 - **Honest authority.** General explanations and recommendations may stand alone when no selected
   source answers the question. Only text outside the labelled block authenticates citations,
-  missing-evidence requests, continuity source referents, or entailment claims. A loose heading does
-  not change authority. The block is model knowledge rather than evidence; it cannot establish
+  missing-evidence declarations, or entailment claims. Suggested paths remain untrusted continuity
+  hints; a later explicit human request can admit and freshly read an eligible file before citing
+  it. Mentioning a path in an assessment does not establish that it was read or supplied as evidence.
+  A loose heading does not change authority. The block is model knowledge rather than evidence; it cannot establish
   current/live verification without a supplied timely source. The prompt requires relevant
   uncertainty about freshness. Structural separation does not prove every model-authored assertion
   semantically true; unsupported source-specific claims outside the block retain existing warnings.
