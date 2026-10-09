@@ -1213,11 +1213,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
         evidenceStore: {
           put: (runId: string, json: string): string => {
             evidenceRunIds.push(runId);
-            const manifest = JSON.parse(json) as {
-              connectedContext?: { scope: { sourceScopeFingerprint?: string } };
-            };
-            if (manifest.connectedContext !== undefined)
-              folderFingerprints.push(manifest.connectedContext.scope.sourceScopeFingerprint);
+            collectManifestFingerprint(json, folderFingerprints);
             return runId;
           },
           list: () => [],
@@ -1305,13 +1301,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     // Regression for Epic #1820 / #1922: a not-configured reranker is the default, fully-supported
     // install state on the hybrid path too — it must not degrade the connector's activity row (this
     // mirrors the single-scope assertion in local-knowledge-grounded-qa.rescue.test.ts).
-    expect(answer.retrievalActivity?.summary.degradedCount).toBe(0);
-    expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).not.toContain("degraded");
-    expect(
-      answer.retrievalActivity?.pods.some((pod) =>
-        pod.reasonCodes.includes("reranker-unavailable"),
-      ),
-    ).toBe(false);
+    assertHealthyHybridRetrieval(answer);
 
     // Messages persisted in the UiStore
     const messages = store.listMessages(chatId);
@@ -2232,9 +2222,25 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
   );
 });
 
+function assertHealthyHybridRetrieval(answer: HybridGroundedAnswer): void {
+  expect(answer.retrievalActivity?.summary.degradedCount).toBe(0);
+  expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).not.toContain("degraded");
+  expect(
+    answer.retrievalActivity?.pods.some((pod) => pod.reasonCodes.includes("reranker-unavailable")),
+  ).toBe(false);
+}
+
+function collectManifestFingerprint(json: string, fingerprints: (string | undefined)[]): void {
+  const manifest = JSON.parse(json) as {
+    connectedContext?: { scope: { sourceScopeFingerprint?: string } };
+  };
+  if (manifest.connectedContext !== undefined)
+    fingerprints.push(manifest.connectedContext.scope.sourceScopeFingerprint);
+}
+
 describe("hybrid bounded citation repair", () => {
   interface RepairControls {
-    readonly failure?: unknown;
+    readonly failure?: Error;
     readonly original?: string;
     readonly promptTokens?: number;
     readonly completionTokens?: number;
@@ -2247,7 +2253,7 @@ describe("hybrid bounded citation repair", () => {
     controls: RepairControls,
   ): ModelPort {
     return {
-      call: (request) => {
+      call: (request): Promise<NormalizedResponse> => {
         calls.push(request);
         if (calls.length > 1 && controls.failure !== undefined)
           return Promise.reject(controls.failure);
@@ -2590,9 +2596,10 @@ describe("hybrid model budget and runtime truth", () => {
     expect(prompt).toContain("evidence for src/review.ts");
     expect(prompt).toContain("Files excluded by file-size policy: 2000.");
     expect(prompt).toContain("Additional excluded paths not listed:");
-    expect(sentTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    // The original 960-token grant already spent five tokens during folder retrieval.
+    expect(sentTokens).toBeLessThanOrEqual(955);
     expect((result.body as GroundedAnswer).promptContext?.estimatedPromptTokens).toBe(sentTokens);
-    assertHybridWindowFitLine(sink, sentTokens, profile.effectiveInputBudget);
+    assertHybridWindowFitLine(sink, sentTokens, 955);
   });
 
   it("measures wall time through retrieval, model wait and entailment", async () => {
@@ -4833,10 +4840,14 @@ describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(observedBudgets).toHaveLength(3);
-    for (const key of Object.keys(
-      DEFAULT_EXPLORATION_BUDGET,
-    ) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
+    const publicBudget = buildGroundedAnswerContextPackSummary(
+      folderPack("budget-resource-projection", 0.5, "budget-resource-projection"),
+      0,
+      0,
+    ).budget;
+    for (const key of Object.keys(publicBudget) as (keyof typeof publicBudget)[]) {
       const cap = DEFAULT_EXPLORATION_BUDGET[key];
+      if (cap === undefined) continue;
       if (cap === null) {
         expect(observedBudgets.map((budget) => budget[key])).toEqual([null, null, null]);
         continue;

@@ -61,14 +61,22 @@ export interface ConnectionPresentation {
   readonly runtimes?: ReadonlyMap<string, ChatWindowRuntimeTarget>;
 }
 
+function runtimeConnectedScopes(
+  a: AppWindow,
+  b: AppWindow,
+  presentation: ConnectionPresentation,
+): readonly ChatConnectedScope[] | undefined {
+  const id = chatWindowId(a, b);
+  return id === undefined ? undefined : presentation.runtimes?.get(id)?.connectedScopes;
+}
+
 function connectionScope(
   c: Connection,
   a: AppWindow,
   b: AppWindow,
   presentation: ConnectionPresentation,
 ): ChatConnectedScope | null | undefined {
-  const id = chatWindowId(a, b);
-  const scopes = id === undefined ? undefined : presentation.runtimes?.get(id)?.connectedScopes;
+  const scopes = runtimeConnectedScopes(a, b, presentation);
   if (scopes === undefined || (a.type !== "files" && b.type !== "files")) return undefined;
   const restored = restoredConnectionScope(c, scopes);
   if (restored !== null) return restored;

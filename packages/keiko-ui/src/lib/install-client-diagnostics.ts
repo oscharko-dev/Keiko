@@ -392,14 +392,23 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
 function closedReportPostBudget(
   meta: ClientDiagnosticMeta,
 ): ClientDiagnosticPostBudget | undefined {
-  if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
-  if (meta.selectDismissal !== undefined || meta.knowledgeCatalog !== undefined) return "routine";
-  if (meta.answerSpeech !== undefined || routineSupportReportEvidence(meta)) return "routine";
+  if (routineClosedReportEvidence(meta)) return "routine";
   if (meta.evidenceInspection !== undefined) {
     return meta.evidenceInspection.reason === "manifest-fetch-failed" ? "failure" : "routine";
   }
   if (meta.answerCopy === undefined) return undefined;
   return meta.answerCopy.outcome === "failed" ? "failure" : "routine";
+}
+
+function routineClosedReportEvidence(meta: ClientDiagnosticMeta): boolean {
+  return (
+    meta.stageReport !== undefined ||
+    meta.gitRetryAttemptReport !== undefined ||
+    meta.selectDismissal !== undefined ||
+    meta.knowledgeCatalog !== undefined ||
+    meta.answerSpeech !== undefined ||
+    routineSupportReportEvidence(meta)
+  );
 }
 
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {

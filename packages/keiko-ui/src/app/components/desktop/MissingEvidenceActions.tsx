@@ -50,20 +50,29 @@ export function declarationRoots(
   );
 }
 
-function useAddDeclaredFile(
-  props: MissingEvidenceActionsProps,
-  path: string,
-  root: string,
-): {
+interface AddDeclaredFileAction {
   readonly busy: boolean;
   readonly error: string | null;
   readonly add: () => Promise<void>;
+}
+
+function useLatestActionProps(props: MissingEvidenceActionsProps): {
+  current: MissingEvidenceActionsProps;
 } {
-  const t = useTranslate();
   const latest = useRef(props);
   useEffect(() => {
     latest.current = props;
   }, [props]);
+  return latest;
+}
+
+function useAddDeclaredFile(
+  props: MissingEvidenceActionsProps,
+  path: string,
+  root: string,
+): AddDeclaredFileAction {
+  const t = useTranslate();
+  const latest = useLatestActionProps(props);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const add = async (): Promise<void> => {

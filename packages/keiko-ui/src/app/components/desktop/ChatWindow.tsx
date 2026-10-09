@@ -4410,19 +4410,31 @@ function connectorScopeLabels(
   return labels;
 }
 
+function ChatGroundingHelp({ chat }: { readonly chat: Chat }): ReactNode {
+  const t = useTranslate();
+  if (effectiveConnectedScopes(chat).length === 0) return null;
+  return (
+    <p className={scopeNoticeStyles.help} data-testid="grounding-help" tabIndex={-1}>
+      {t("chat.grounding.help")}
+    </p>
+  );
+}
+
+interface ChatScopeHeaderProps {
+  readonly chat: Chat;
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
+  readonly onChatChanged: (chat: Chat) => void;
+  readonly memoryControl?: ReactNode;
+  readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
+}
+
 function ChatScopeHeaderImpl({
   chat,
   onChatChanged,
   memoryControl,
   pendingGitChangeComparisons,
   onKeepFolderChange,
-}: {
-  readonly chat: Chat;
-  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
-  readonly onChatChanged: (chat: Chat) => void;
-  readonly memoryControl?: ReactNode;
-  readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
-}): ReactNode {
+}: ChatScopeHeaderProps): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
   const t = useTranslate();
@@ -4439,11 +4451,7 @@ function ChatScopeHeaderImpl({
         catalog={catalog}
         connected={connected}
       />
-      {effectiveConnectedScopes(chat).length === 0 ? null : (
-        <p className={scopeNoticeStyles.help} data-testid="grounding-help" tabIndex={-1}>
-          {t("chat.grounding.help")}
-        </p>
-      )}
+      <ChatGroundingHelp chat={chat} />
       <ChatScopeNotice
         chat={chat}
         onChatChanged={onChatChanged}

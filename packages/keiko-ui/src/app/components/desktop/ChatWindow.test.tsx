@@ -5283,7 +5283,7 @@ it("does not attribute an old manifest first expanded after switching repositori
   let reconnect: (() => void) | undefined;
   function ConnectedChat(): React.JSX.Element {
     const [scope, setScope] = useState(originalScope);
-    reconnect = () => setScope({ ...originalScope, root: "/repo-b", connectedAtMs: 2 });
+    reconnect = (): void => setScope({ ...originalScope, root: "/repo-b", connectedAtMs: 2 });
     const session = makeSession({
       activeChat: makeChat({ projectPath: scope.root, connectedScopes: [scope] }),
       messages: [
@@ -5361,7 +5361,9 @@ it("acknowledges a missing-file scope before the user explicitly sends the focus
   expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
   expect(session.sendMessage).not.toHaveBeenCalled();
   expect(session.replaceChat).toHaveBeenCalledWith(acknowledged);
-  expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent("@src/validation.ts");
+  expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+    "@src/validation.ts",
+  );
   expect(vi.mocked(updateChatConnectedScopes).mock.calls[0]?.[1]).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
