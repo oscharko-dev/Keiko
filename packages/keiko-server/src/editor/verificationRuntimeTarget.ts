@@ -107,7 +107,12 @@ function enforcedRuntime(result: CommandResult): boolean {
 }
 
 function parseRuntimeMetadata(text: string): RuntimeMetadata {
-  const value: unknown = JSON.parse(text);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new TypeError("VERIFICATION_RUNTIME_TARGET_INVALID");
+  }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("VERIFICATION_RUNTIME_TARGET_INVALID");
   }

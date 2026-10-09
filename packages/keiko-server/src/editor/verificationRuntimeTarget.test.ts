@@ -204,6 +204,26 @@ it.each(["networkEnforced", "filesystemEnforced"] as const)(
 );
 
 it.each([
+  "",
+  "PRIVATE_CHILD_FAILURE",
+  '{"os":"PRIVATE_CHILD_FAILURE"',
+  '{"os":}',
+  JSON.stringify(metadata()) + "\nPRIVATE_CHILD_FAILURE",
+])("classifies malformed probe JSON without retaining child output: %j", async (stdout) => {
+  const workspace = fixture();
+  vi.spyOn(tools, "runCommand").mockResolvedValue({ ...result(workspace), stdout });
+  const pending = resolveVerificationRuntimeTarget({
+    workspace,
+    signal: new AbortController().signal,
+  });
+  await expect(pending).rejects.toBeInstanceOf(TypeError);
+  await expect(pending).rejects.toMatchObject({
+    message: "VERIFICATION_RUNTIME_TARGET_INVALID",
+  });
+  await expect(pending).rejects.not.toHaveProperty("cause");
+});
+
+it.each([
   { os: "freebsd" },
   { cpu: "unknown" },
   { libc: "unknown" },
@@ -330,52 +350,58 @@ it.each(["off", "no-dependencies"] as const)(
   },
 );
 
-it("returns the original failed bootstrap report and one diagnostic when the actual probe refuses", async () => {
-  const workspace = fixture();
-  writeFileSync(
-    join(workspace.root, "package.json"),
-    JSON.stringify({
-      name: "fixture",
-      scripts: { typecheck: "node -e 'process.exit(0)'" },
-      devDependencies: { typescript: "^6.0.3" },
-    }),
-  );
-  const plan = verification.buildVerificationPlan(
-    workspace,
-    verification.detectScripts(workspace),
-    { only: ["typecheck"] },
-  );
-  const run = vi
-    .spyOn(tools, "runCommand")
-    .mockResolvedValue({ ...result(workspace), exitCode: 1, stderr: "PRIVATE_CHILD_FAILURE" });
-  const log = loggedSink();
-  const diagnostic = vi.fn();
-  const { report } = await executeVerificationEnforced({
-    workspace,
-    plan,
-    signal: new AbortController().signal,
-    dependencyBootstrap: "auto",
-    activityLog: log,
-    diagnostics: { record: diagnostic },
-    correlationId: "runtime-target-refused",
-  });
-  expect(report.overallStatus).toBe("failed");
-  expect(report.dependencies?.state).toBe("failed");
-  expect(run).toHaveBeenCalledOnce();
-  expect(run.mock.calls[0]?.[0].command).toBe("node");
-  expect(diagnostic).toHaveBeenCalledOnce();
-  expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
-    source: "verification.dependency-bootstrap.target-probe",
-  });
-  expect(log.events.find((event) => event.extra?.state === "runtime-target")?.extra).toMatchObject({
-    runtimeTargetOutcome: "refused",
-  });
-  expect(persistedTarget(log)).toMatchObject({
-    state: "runtime-target",
-    runtimeTargetOutcome: "refused",
-    correlationId: "runtime-target-refused",
-  });
-  expect(JSON.stringify([report, log.events, diagnostic.mock.calls])).not.toContain(
-    "PRIVATE_CHILD_FAILURE",
-  );
-});
+it.each([{ exitCode: 1, stderr: "PRIVATE_CHILD_FAILURE" }, { stdout: "PRIVATE_CHILD_FAILURE" }])(
+  "retains the original failed bootstrap report and one body-free diagnostic: %j",
+  async (change) => {
+    const workspace = fixture();
+    writeFileSync(
+      join(workspace.root, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        scripts: { typecheck: "node -e 'process.exit(0)'" },
+        devDependencies: { typescript: "^6.0.3" },
+      }),
+    );
+    const plan = verification.buildVerificationPlan(
+      workspace,
+      verification.detectScripts(workspace),
+      { only: ["typecheck"] },
+    );
+    const run = vi
+      .spyOn(tools, "runCommand")
+      .mockResolvedValue({ ...result(workspace), ...change });
+    const log = loggedSink();
+    const diagnostic = vi.fn();
+    const { report } = await executeVerificationEnforced({
+      workspace,
+      plan,
+      signal: new AbortController().signal,
+      dependencyBootstrap: "auto",
+      activityLog: log,
+      diagnostics: { record: diagnostic },
+      correlationId: "runtime-target-refused",
+    });
+    expect(report.overallStatus).toBe("failed");
+    expect(report.dependencies?.state).toBe("failed");
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]?.[0].command).toBe("node");
+    expect(diagnostic).toHaveBeenCalledOnce();
+    expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+      source: "verification.dependency-bootstrap.target-probe",
+    });
+    expect(
+      log.events.find((event) => event.extra?.state === "runtime-target")?.extra,
+    ).toMatchObject({
+      runtimeTargetOutcome: "refused",
+    });
+    expect(persistedTarget(log)).toMatchObject({
+      state: "runtime-target",
+      runtimeTargetOutcome: "refused",
+      correlationId: "runtime-target-refused",
+    });
+    expect(JSON.stringify([report, log.events, diagnostic.mock.calls])).not.toContain(
+      "PRIVATE_CHILD_FAILURE",
+    );
+    expect(readPersistedActivityLog(log.stateRoot)).not.toContain("PRIVATE_CHILD_FAILURE");
+  },
+);
