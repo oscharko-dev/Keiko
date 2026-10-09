@@ -502,6 +502,9 @@ system that exists, never beside it:
   OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
   caller and durable spend admission for each actual POST; adapters without that transport hook
   retain the existing gateway boundary. No nested compatibility path grants another attempt.
+  A terminal caller attempt/cap refusal remains a local fault even after an earlier compatibility
+  dispatch; it cannot open the shared provider breaker. Genuine provider failures retain the
+  existing breaker and retry classification.
   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity

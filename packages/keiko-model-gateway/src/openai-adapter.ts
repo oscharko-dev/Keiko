@@ -4,6 +4,7 @@ import {
   onceCallerReservation,
   settleCallerAttempt,
   settleFailedCallerAttempt,
+  CallerAttemptAdmissionError,
 } from "./gateway-attempt-admission.js";
 // Zero-dependency OpenAI-compatible HTTP adapter built on globalThis.fetch and
 // AbortSignal. fetch, clock, request-id, and cost class are injected so tests run
@@ -2024,7 +2025,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       maxOutputTokens: dispatchedMaxOutputTokens(request, config) ?? 0,
     });
     if (reservation === undefined)
-      throw new ContextOverflowError(
+      throw new CallerAttemptAdmissionError(
         "Caller synthesis attempt grant exhausted before HTTP dispatch",
       );
     return onceCallerReservation(reservation);

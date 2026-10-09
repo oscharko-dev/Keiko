@@ -769,7 +769,10 @@ available for bounded recovery. These admission charges do not claim exact measu
 OpenAI-compatible adapters invoke the same optional caller admission and durable spend lifecycle
 for each physical synthesis HTTP POST, including stream-shape and output-token-field compatibility
 fallbacks. This avoids double-reserving the first request at both gateway and adapter boundaries.
-Other adapters retain the gateway-owned attempt boundary. Each reservation settles once; early
+Other adapters retain the gateway-owned attempt boundary. Each reservation settles once.
+Terminal caller attempt/cap refusals are classified independently of prior compatibility
+dispatches and cannot increment the shared provider breaker. Genuine provider errors retain
+their existing resilience classification. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token
