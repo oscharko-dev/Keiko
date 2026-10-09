@@ -1,6 +1,6 @@
 import { LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import type { LineMatcher } from "./repoSearchMatchers.js";
-import { decodeXmlEntities } from "./xmlEntities.js";
+import { decodeHTML } from "entities";
 
 const HTML_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS);
 
@@ -10,7 +10,7 @@ export function isHtmlSearchPath(scopePath: string): boolean {
 
 function projectedLine(line: string): string {
   // Encoded line breaks separate human terms but cannot introduce new physical source lines.
-  return decodeXmlEntities(line).replaceAll("\r", " ").replaceAll("\n", " ");
+  return decodeHTML(line).replaceAll("\r", " ").replaceAll("\n", " ");
 }
 
 export function htmlEntitySearchText(scopePath: string, text: string): string {
