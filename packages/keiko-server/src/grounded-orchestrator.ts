@@ -1518,6 +1518,13 @@ function unindexedWorkspaceSearchMode(
   return counters.bypassedSearchCount > 0 ? "live-scan" : "unused";
 }
 
+function failedUnusedWorkspaceIndex(counters: MutableWorkspaceIndexActivityCounters): boolean {
+  return (
+    counters.loadFailures + counters.saveFailures > 0 &&
+    counters.retainedEntries + counters.indexedRecords + counters.reusedRecords === 0
+  );
+}
+
 function workspaceIndexSearchMode(
   providerStatus: WorkspaceIndexProviderStatus,
   counters: MutableWorkspaceIndexActivityCounters,
@@ -1525,6 +1532,7 @@ function workspaceIndexSearchMode(
   if (providerStatus === "not-evaluated") return "not-evaluated";
   if (counters.searchCount === 0) return "unused";
   if (counters.reportCount === 0) return unindexedWorkspaceSearchMode(counters);
+  if (failedUnusedWorkspaceIndex(counters)) return "live-fallback";
   const reconciled = counters.staleRecords + counters.deletedEntries + counters.droppedRecords > 0;
   const persistent = workspaceIndexPersistenceSucceeded(providerStatus, counters);
   if (reconciled) return persistent ? "persistent-reconciled" : "request-local-reconciled";
