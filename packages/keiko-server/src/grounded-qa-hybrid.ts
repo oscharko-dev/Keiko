@@ -15,6 +15,7 @@ import {
 import {
   logCitationReconciliation,
   reconcileAndLogInlineCitations,
+  type CitationReconciliationMetadata,
 } from "./grounded-citation-log.js";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import {
@@ -69,6 +70,7 @@ import {
   type GroundedUncertainty,
   type HybridGroundedAnswer,
   type GroundedInsufficiencyDeclaration,
+  type CitationRepairDisposition,
   type LocalKnowledgeEvidenceCitation,
   type LocalKnowledgeGroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -92,6 +94,7 @@ import {
   ClarificationNeededError,
   clarificationUserMessage,
   type RetrievalOnlyOutput,
+  type GroundedAnswerOptions,
 } from "./grounded-orchestrator.js";
 import {
   buildConnectedScopes,
@@ -159,6 +162,7 @@ import {
   mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
+  promptByteLength,
   fitPromptOmissionMetadata,
   promptSafeExcerptText,
   numberedEvidenceText,
@@ -170,6 +174,15 @@ import {
   type GroundedRetrievalContinuityInput,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
+import {
+  repairGroundedAnswer,
+  observeGroundedCitationBehaviour,
+} from "./grounded-answer-repair.js";
+import {
+  citationBehaviourFor,
+  citationBehaviourObserverFor,
+} from "./grounded-citation-capability.js";
 import {
   captureConversationReadinessAdmission,
   withConversationReadinessAdmission,
@@ -212,7 +225,17 @@ export type ConnectorRetrieve = (
   selected: SelectedLocalKnowledgeScope,
   signal?: AbortSignal,
 ) => Promise<RetrievalResult>;
-export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
+export interface HybridAnswerer {
+  (system: string, user: string): Promise<GroundedAnswerPayload>;
+  readonly repair?: (
+    original: string,
+    options: GroundedAnswerOptions,
+  ) => Promise<GroundedAnswerPayload>;
+}
+
+interface RepairedHybridAnswer extends GroundedAnswerResult {
+  readonly citationRepairDisposition?: CitationRepairDisposition;
+}
 
 export interface HybridGroundedAskCtx extends GroundedRetrievalContinuityInput {
   /** Verified discovered paths; only actual sent evidence promotes a path to read-state. */
@@ -932,16 +955,22 @@ export function createHybridAnswerer(
   modelId: string,
   signal: AbortSignal,
   correlationId: string | undefined,
+  deps?: UiHandlerDeps,
 ): HybridAnswerer {
-  return async (system, user): Promise<GroundedAnswerResult> => {
+  let lastPrompt: readonly GatewayChatMessage[] | undefined;
+  const answer = async (system: string, user: string): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
+    lastPrompt = [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
     const response = await model.call(
       {
         modelId,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
+        messages: lastPrompt,
+        ...(deps === undefined
+          ? {}
+          : { maxOutputTokens: modelWindowAwareBudget(deps, modelId).modelOutputTokensMax }),
         stream: false,
         logContext: { correlationId },
       },
@@ -957,6 +986,82 @@ export function createHybridAnswerer(
       },
       finishReason: response.finishReason,
     };
+  };
+  return Object.assign(answer, {
+    repair: (original: string, options: GroundedAnswerOptions): Promise<GroundedAnswerPayload> =>
+      hybridGatewayRepair(
+        { model, modelId, signal, correlationId, deps, lastPrompt },
+        original,
+        options,
+      ),
+  });
+}
+
+interface HybridGatewayRepairContext {
+  readonly model: ModelPort;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly deps: UiHandlerDeps | undefined;
+  readonly lastPrompt: readonly GatewayChatMessage[] | undefined;
+}
+
+async function hybridGatewayRepair(
+  ctx: HybridGatewayRepairContext,
+  original: string,
+  options: GroundedAnswerOptions,
+): Promise<GroundedAnswerResult> {
+  const system = ctx.lastPrompt?.[0];
+  const user = ctx.lastPrompt?.[1];
+  const profile =
+    ctx.deps === undefined ? undefined : currentContextProfileForModel(ctx.deps, ctx.modelId);
+  const inputMax = Math.min(
+    options.modelInputTokensMax ?? 0,
+    profile?.effectiveInputBudget ?? Number.MAX_SAFE_INTEGER,
+  );
+  const messages: readonly GatewayChatMessage[] =
+    system === undefined || user === undefined
+      ? []
+      : [
+          system,
+          {
+            ...user,
+            content: `${user.content}\n\n${buildCitationRepairPrompt(original, "numeric")}`,
+          },
+        ];
+  if (
+    messages.length === 0 ||
+    promptByteLength(messages) > modelInputPromptByteLimit(inputMax) ||
+    countGatewayPromptTokens({ messages }, profile?.tokenAccounting) > inputMax
+  )
+    return {
+      content: original,
+      modelInvoked: false,
+      usage: { promptTokens: 0, completionTokens: 0 },
+    };
+  const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
+  if (options.deadlineAtMs !== undefined)
+    signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
+  const signal = AbortSignal.any(signals);
+  ensureNotCancelled(signal);
+  const response = await ctx.model.call(
+    {
+      modelId: ctx.modelId,
+      messages,
+      stream: false,
+      maxOutputTokens: options.modelOutputTokensMax,
+      logContext: { correlationId: ctx.correlationId },
+    },
+    signal,
+  );
+  assertUsableAssistantContent(response.content.trim(), ctx.modelId);
+  return {
+    content: response.content.trim(),
+    modelInvoked: true,
+    usage: {
+      promptTokens: response.usage.promptTokens,
+      completionTokens: response.usage.completionTokens,
+    },
   };
 }
 
@@ -1259,6 +1364,7 @@ function hybridNumericReconciliation(
   answer: string,
   selected: readonly SelectedCandidate<HybridPayload>[],
   correlationId: string | undefined,
+  metadata: CitationReconciliationMetadata = {},
 ): NumericCitationReconciliation {
   const supportedMarkers = new Set(selected.map((candidate) => candidate.marker));
   const reconciliation = reconcileNumericCitations(answer, supportedMarkers);
@@ -1268,10 +1374,28 @@ function hybridNumericReconciliation(
       referenceCount: supportedMarkers.size,
       attachedIndices: [...reconciliation.citedMarkers],
       refusal: isNoEvidenceAnswerText(answer),
+      ...metadata,
     },
     correlationId,
   );
   return reconciliation;
+}
+
+function hybridCitationMetadata(assistant: RepairedHybridAnswer): CitationReconciliationMetadata {
+  const counts = assistant.insufficiencyObservation;
+  return {
+    answerKind: assistant.answerKind,
+    citationBehaviour: assistant.citationBehaviour,
+    citationRepairDisposition: assistant.citationRepairDisposition,
+    ...(counts === undefined
+      ? {}
+      : {
+          insufficiencyDeclaredCount: counts.declaredCount,
+          declaredInScopeCount: counts.inScopeCount,
+          declaredUnreadInScopeCount: counts.unreadInScopeCount,
+          declaredNotInScopeCount: counts.notInScopeCount,
+        }),
+  };
 }
 
 // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the hybrid answer's inline `[path:line]` citations
@@ -1279,7 +1403,7 @@ function hybridNumericReconciliation(
 // labels rather than repo paths, so path-shaped inline references are validated against folder
 // evidence (where the [path:line] format applies). Mirrors the single/multi-source reconciliation.
 function hybridReconciliationUncertainty(
-  assistant: GroundedAnswerResult,
+  assistant: RepairedHybridAnswer,
   folders: readonly RetrievedFolder[],
   selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
@@ -1291,12 +1415,14 @@ function hybridReconciliationUncertainty(
     assistant.content,
     buildPackCitationIndex(sentFolderPacks(folders, selected)),
     correlationId,
+    hybridCitationMetadata(assistant),
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const numericReconciliation = hybridNumericReconciliation(
     assistant.content,
     selected,
     correlationId,
+    hybridCitationMetadata(assistant),
   );
   const unsupportedNumeric = unsupportedNumericCitationMarker(
     numericReconciliation.unsupportedMarkers,
@@ -1950,7 +2076,9 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     readinessAdmission,
     ctx.deps,
   );
-  return { answer: createHybridAnswerer(model, ctx.modelId, ctx.signal, ctx.correlationId) };
+  return {
+    answer: createHybridAnswerer(model, ctx.modelId, ctx.signal, ctx.correlationId, ctx.deps),
+  };
 }
 
 async function noEvidenceAssistant(
@@ -2489,12 +2617,17 @@ async function answerHybridWithinWindow(
   answerer: ResolvedAnswerer,
   selected: readonly SelectedCandidate<HybridPayload>[],
 ): Promise<{
-  readonly assistant: GroundedAnswerResult;
+  readonly assistant: RepairedHybridAnswer;
   readonly sent: readonly SelectedCandidate<HybridPayload>[];
   readonly promptCtx: HybridGroundedAskCtx;
 }> {
   let sent = selected;
   let promptCtx = ctx;
+  const observeCitationBehaviour = citationBehaviourObserverFor(
+    ctx.deps,
+    ctx.modelId,
+    ctx.correlationId,
+  );
   const assistant = await withAdoptedContextWindowRetry(
     ctx.deps,
     { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
@@ -2515,17 +2648,87 @@ async function answerHybridWithinWindow(
     sentEvidencePacks,
     ctx.insufficiencyScopeIndex,
   );
+  const validated = {
+    ...assistant,
+    insufficiencyDeclarations: undefined,
+    evidenceScopeIndex,
+    sentEvidencePacks,
+    filesInPrompt: sentGroundedFileCount(sentEvidencePacks),
+    ...validateGroundedAnswerEvidence(assistant.content, evidenceScopeIndex, ctx.content),
+  };
   return {
-    assistant: {
-      ...assistant,
-      insufficiencyDeclarations: undefined,
-      evidenceScopeIndex,
-      sentEvidencePacks,
-      filesInPrompt: sentGroundedFileCount(sentEvidencePacks),
-      ...validateGroundedAnswerEvidence(assistant.content, evidenceScopeIndex, ctx.content),
-    },
+    assistant: await repairHybridAnswer(
+      promptCtx,
+      answerer,
+      validated,
+      sent,
+      observeCitationBehaviour,
+    ),
     sent,
     promptCtx,
+  };
+}
+
+async function repairHybridAnswer(
+  ctx: HybridGroundedAskCtx,
+  answerer: ResolvedAnswerer,
+  answer: GroundedAnswerResult,
+  sent: readonly SelectedCandidate<HybridPayload>[],
+  observeCitationBehaviour: ReturnType<typeof citationBehaviourObserverFor>,
+): Promise<RepairedHybridAnswer> {
+  const budget = modelWindowAwareBudget(ctx.deps, ctx.modelId);
+  const originalPack = ctx.folderOmissionPacks?.[0]?.pack;
+  const pack =
+    originalPack === undefined
+      ? undefined
+      : {
+          ...originalPack,
+          usage: {
+            ...originalPack.usage,
+            modelInputTokens: (ctx.folderOmissionPacks ?? []).reduce(
+              (sum, source) => sum + source.pack.usage.modelInputTokens,
+              0,
+            ),
+            modelOutputTokens: (ctx.folderOmissionPacks ?? []).reduce(
+              (sum, source) => sum + source.pack.usage.modelOutputTokens,
+              0,
+            ),
+          },
+        };
+  let budgetRefused = false;
+  const repair = answerer.answer.repair;
+  const repairContext = {
+    question: ctx.answerContent ?? ctx.content,
+    pack,
+    budget,
+    answer,
+    nowMs: Date.now,
+    numericMarkers: new Set(sent.map((candidate) => candidate.marker)),
+    ...(budget.elapsedMsMax === null
+      ? {}
+      : { deadlineAtMs: (ctx.startedAtMs ?? Date.now()) + budget.elapsedMsMax }),
+    ...(repair === undefined
+      ? {}
+      : {
+          invokeRepair: async (
+            original: string,
+            options: GroundedAnswerOptions,
+          ): Promise<GroundedAnswerPayload> => {
+            const result = normalizeGroundedAnswerPayload(await repair(original, options));
+            budgetRefused = result.modelInvoked === false;
+            return result;
+          },
+        }),
+    deps: {
+      signal: ctx.signal,
+      reliableCitationBehaviour: citationBehaviourFor(ctx.deps, ctx.modelId),
+      observeCitationBehaviour,
+    },
+  };
+  const repaired = await repairGroundedAnswer(repairContext);
+  return {
+    ...observeGroundedCitationBehaviour({ ...repairContext, answer: repaired.answer }),
+    citationRepairDisposition: budgetRefused ? "skipped-budget" : repaired.disposition,
   };
 }
 
