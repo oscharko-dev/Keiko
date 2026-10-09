@@ -1449,21 +1449,44 @@ async function unavailableProfileFlow(page: Page, capability: unknown): Promise<
 
 // Issue #1563 — active-session composer evidence.
 //
-// Voice selection now lives in Settings > General. The active composer remains a clean dialogue surface:
-// the Keiko-logo switch plus the microphone mute control are the only voice-dialogue controls.
+// Voice selection lives in Settings > General. Connected dialogue also keeps the Issue #2894
+// interrupt reachable and focusable while its idle action remains guarded.
+async function expectConnectedIdleInterrupt(page: Page): Promise<void> {
+  const ready = page.getByRole("status").filter({ hasText: "Voice dialogue is ready." });
+  await expect(ready).toBeVisible();
+  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
+  await expect(interrupt).toBeVisible();
+  await expect(interrupt).toHaveAttribute("aria-disabled", "true");
+  await expect(interrupt).toHaveAccessibleDescription(
+    "Available only while the assistant is speaking",
+  );
+  expect(await interrupt.evaluate((button) => button.hasAttribute("disabled"))).toBe(false);
+  await interrupt.focus();
+  await expect(interrupt).toBeFocused();
+  await expect.poll(() => micStat(page, "getUserMedia")).toBe(1);
+  expect(await micStat(page, "stopped")).toBe(0);
+  // Keyboard activation reaches the focusable button while its idle action remains guarded.
+  await interrupt.press("Enter");
+  await expect(ready).toBeVisible();
+  await expect(interrupt).toHaveAttribute("aria-disabled", "true");
+  expect(await micStat(page, "getUserMedia")).toBe(1);
+  expect(await micStat(page, "stopped")).toBe(0);
+}
+
 async function activeComposerControlsFlow(page: Page): Promise<void> {
-  await page.addInitScript(fakeRealtimeInit());
+  await page.addInitScript(fakeRealtimeInit({ instrumentMic: true }));
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   await openChatComposer(page);
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
+  await expectConnectedIdleInterrupt(page);
 
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Attach file" })).toHaveCount(0);
@@ -1480,6 +1503,7 @@ async function activeComposerControlsFlow(page: Page): Promise<void> {
 
   // Leave returns to a clean, text-capable composer (master cleanup).
   await dialogSwitch.click();
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
@@ -1522,7 +1546,7 @@ test("voice dialogue @smoke — Realtime without explicit TTS offers no spoken T
   await unavailableProfileFlow(page, REALTIME_WITHOUT_TTS_CAPABILITY);
 });
 
-test("voice dialogue @smoke — active composer keeps only switch and mic mute visible (AC1/AC4)", async ({
+test("voice dialogue @smoke — connected composer keeps its guarded interrupt and dialogue controls (AC1/AC4)", async ({
   page,
 }) => {
   await activeComposerControlsFlow(page);
