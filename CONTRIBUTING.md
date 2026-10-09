@@ -89,9 +89,14 @@ Only counts, closed dispositions and digests enter the log, never paths, declara
 `search.connected-context.answer-details` records answer kind, observed citation behaviour,
 declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,
 outcome and configuration disposition. Technical failures retain the existing closed error header,
-reduced frames and causes. Initial synthesis plus either marker repair or an insufficiency follow-up
-shares two synthesis slots and the original remaining budgets. Provider retries and the separately
-bounded entailment stage keep their existing contracts. Normalized output is buffered before
+reduced frames and causes. Initial synthesis, marker repair, follow-up and their gateway transport or
+context-window retries share at most two physical adapter attempts and the original cumulative
+input/output and remaining elapsed grants. Admission occurs before each actual dispatch and spend
+reservation. Charged input retains the greater of the canonical sent prompt estimate and reported
+usage; measured partial output survives a discarded attempt, while uncertain failed stream output
+retains its requested cap. These conservative charges are distinct from provider-measured usage.
+Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
+contracts without supplying another synthesis attempt. Normalized output is buffered before
 publication; rejected declarations cannot escape through streamed chunks. The existing allocator's
 high/exceeded pressure refuses follow-up. `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` defaults to `1`;
 explicit `0` disables it, and other explicit values fail closed to zero passes with an invalid
