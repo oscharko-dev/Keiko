@@ -66,6 +66,10 @@ function useScopeTransition(
   const scopes = effectiveScopes(chat);
   const signature = connectedScopeSignature(scopes);
   const previous = useRef({ id: chat.id, scopes });
+  const releasePinRef = useRef(releasePin);
+  useEffect(() => {
+    releasePinRef.current = releasePin;
+  }, [releasePin]);
   const folder = useRef<ChatConnectedScope | undefined>(undefined);
   const [notice, setNotice] = useState<ScopeTransition | null>(null);
   useEffect(() => {
@@ -74,7 +78,7 @@ function useScopeTransition(
     if (old.id !== chat.id) {
       folder.current = undefined;
       setNotice(null);
-      releasePin?.(false);
+      releasePinRef.current?.(false);
       return;
     }
     const scope = changedScope(old.scopes, scopes);
@@ -82,7 +86,7 @@ function useScopeTransition(
     const prior = old.scopes.find((candidate) => candidate.root === scope.root);
     if (prior === undefined) {
       folder.current = undefined;
-      releasePin?.(false);
+      releasePinRef.current?.(false);
     } else if (prior.kind !== "files") folder.current = prior;
     const transition = {
       scope,
@@ -96,7 +100,7 @@ function useScopeTransition(
     return () => clearTimeout(timer);
     // Scope identity excludes timestamps and messages; unrelated chat updates keep the pending notice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.id, signature, releasePin]);
+  }, [chat.id, signature]);
   return { notice, dismiss: (): void => setNotice(null) };
 }
 
