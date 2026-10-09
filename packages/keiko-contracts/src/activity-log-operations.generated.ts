@@ -28451,6 +28451,36 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      semanticStaleFallbackCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      semanticRefreshedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      semanticRefreshEmbeddingCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      semanticRefreshReadFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      semanticRefreshReadBytesUpperBound: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      semanticRefreshInputTokenUpperBound: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       recentPathHintCount: {
         type: "integer",
         dataClass: "count",

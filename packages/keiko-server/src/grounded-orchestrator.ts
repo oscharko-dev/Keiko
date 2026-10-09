@@ -1,3 +1,12 @@
+import type { RepositorySemanticFreshnessObservation } from "./grounded-repo-semantic-search.js";
+import {
+  groundedSemanticFreshnessSummary,
+  staleSemanticMarker,
+  type GroundedSemanticFreshnessSummary,
+  type GroundedSemanticProviderFactory,
+  type GroundedSemanticRequest,
+  type SemanticRefreshUsageGrant,
+} from "./grounded-semantic-request.js";
 import type { ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { observeWorktreeRecency, type WorktreeRecencyResult } from "./grounded-worktree-recency.js";
@@ -628,6 +637,12 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
       values: ["not-git", "unavailable", "applied", "skipped-budget"],
     },
     worktreeStatusDurationMs: { type: "integer", dataClass: "count", required: false },
+    semanticStaleFallbackCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshedFileCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshEmbeddingCallCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshReadFileCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshReadBytesUpperBound: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshInputTokenUpperBound: { type: "integer", dataClass: "count", required: false },
     recentPathHintCount: { type: "integer", dataClass: "count", required: false },
     recentPathHitCount: { type: "integer", dataClass: "count", required: false },
     worktreeObservedFileCount: { type: "integer", dataClass: "count", required: false },
@@ -1108,6 +1123,7 @@ export interface OrchestratorInput {
 }
 
 export interface OrchestratorDeps {
+  readonly repoSemanticSearchProviderFor?: GroundedSemanticProviderFactory | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly worktreeGitRunner?: GitProcessRunner | undefined;
   readonly worktreeRecencySnapshot?: WorktreeRecencySnapshot | undefined;
@@ -1251,6 +1267,10 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
 }
 
 interface SearchInputs {
+  readonly repoSemanticSearchProviderFor?:
+    ((grant: SemanticRefreshUsageGrant) => SemanticSearchProvider | undefined) | undefined;
+  readonly resolveRepoSemanticSearchProvider?:
+    (() => SemanticSearchProvider | undefined) | undefined;
   readonly recentPaths?: readonly string[] | undefined;
   readonly observeSourceDecision: (observation: SourceDecisionObservation) => void;
   readonly discoverDefinitions: (
@@ -2291,17 +2311,22 @@ function planSearchAnchors(plan: ExplorationPlan): readonly SearchAnchor[] {
   return [...plan.anchors, ...searchReferenceAnchors(plan.references ?? [])];
 }
 
-function lexicalSemanticProvider(inputs: SearchInputs): SemanticSearchProvider | undefined {
-  if (inputs.targetDecision.kind === "contextual") return inputs.repoSemanticSearchProvider;
+function semanticProviderAllowed(inputs: SearchInputs): boolean {
+  if (inputs.targetDecision.kind === "contextual") return true;
   if (
     inputs.targetDecision.kind === "literal-search" ||
     inputs.targetDecision.definitionSymbol !== undefined ||
     isDirectEvidenceLookup(inputs.query, inputs.anchors, inputs.targetDecision)
   )
-    return undefined;
-  return inputs.targetDecision.targets.some((anchor) => anchor.kind === "quoted")
-    ? undefined
-    : inputs.repoSemanticSearchProvider;
+    return false;
+  return !inputs.targetDecision.targets.some((anchor) => anchor.kind === "quoted");
+}
+
+function lexicalSemanticProvider(inputs: SearchInputs): SemanticSearchProvider | undefined {
+  if (!semanticProviderAllowed(inputs)) return undefined;
+  return inputs.resolveRepoSemanticSearchProvider === undefined
+    ? inputs.repoSemanticSearchProvider
+    : inputs.resolveRepoSemanticSearchProvider();
 }
 
 function lexicalSearchOptions(inputs: SearchInputs): {
@@ -2354,8 +2379,9 @@ function observedLexicalSemanticProvider(
 ): SemanticSearchProvider | undefined {
   const provider = lexicalSemanticProvider(inputs);
   if (provider === undefined) {
-    observation.semanticProviderDisposition =
-      inputs.repoSemanticSearchProvider === undefined ? "unavailable" : "suppressed";
+    observation.semanticProviderDisposition = semanticProviderUnavailable(inputs)
+      ? "unavailable"
+      : "suppressed";
     return undefined;
   }
   return {
@@ -3099,9 +3125,18 @@ async function runReservedRing(
   if (reservation.marker !== undefined)
     return { governor: reservation.governor, marker: reservation.marker };
   let governor = reservation.governor;
+  const grant: SemanticRefreshUsageGrant = (delta): boolean => {
+    throwIfCancelled(inputs.signal);
+    if (inputs.nowMs() >= inputs.deadlineAtMs) return false;
+    const next = applyUsage(governor, usageDelta(delta));
+    if (next.status === "budget-exhausted") return false;
+    governor = next;
+    return true;
+  };
   decisions.executedRingKinds.push(ring.kind);
   const result = await runRing(ring, {
     ...inputs,
+    resolveRepoSemanticSearchProvider: semanticProviderResolver(inputs, grant),
     tryReserveAdditionalSearchCall: (): boolean => {
       if (governor.usage.searchCalls >= governor.plan.budget.searchCallsMax) return false;
       governor = applyUsage(governor, usageDelta({ searchCalls: 1 }));
@@ -7491,6 +7526,7 @@ function explicitAssemblyDetails(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly semanticFreshness?: GroundedSemanticFreshnessSummary | undefined;
   readonly worktreeStatusDurationMs?: number | undefined;
   readonly worktreeRecency?: WorktreeRecencyResult | undefined;
   readonly recentPathHitCount?: number | undefined;
@@ -7543,6 +7579,7 @@ type ConnectedContextPhase =
   | "directory-cleanup";
 
 interface ConnectedContextProgress {
+  semanticFreshness?: RepositorySemanticFreshnessObservation[] | undefined;
   plan?: ExplorationPlan | undefined;
   sourceDecision?: SourceDecisionObservation | undefined;
   scopeContextObservation?: ScopeContextObservation | undefined;
@@ -8448,6 +8485,7 @@ function selectionDetailsActivityExtra(
     queryIdentitySha256: identity.queryIdentitySha256,
     ...status.rankingObservation,
     ...worktreeActivityExtra(status),
+    ...status.semanticFreshness,
     ...selectionQualityActivityExtra(status),
     ...(status.referenceObservation === undefined
       ? {}
@@ -8689,6 +8727,7 @@ function connectedContextSearchInputs(
     ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
     workspaceIndexActivity: context.workspaceIndexActivity,
     repoSemanticSearchProvider: deps.repoSemanticSearchProvider ?? deps.semanticSearchProvider,
+    repoSemanticSearchProviderFor: groundedSemanticProviderFactory(deps, runtime, context),
     gitFileHistoryEvidence: deps.gitFileHistoryEvidence ?? defaultGitFileHistoryEvidenceProvider,
     correlationId: deps.correlationId,
     structuralContexts: context.structuralContexts,
@@ -9283,12 +9322,16 @@ async function retrieveLiveConnectedContext(
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
   const execution = connectedContextExecution(
-    withRetrievalSourceDiagnostics(assembled.pack, runtime.progress),
+    withRetrievalSourceDiagnostics(assembled.pack, runtime.progress, runtime.nowMs()),
     plan,
     runtime.activity,
     {
       ...liveRetrievalCompletion(workspaceIndex.providerStatus, assembled, rings.decisions),
       ...liveWorktreeCompletion(context, assembled.pack),
+      semanticFreshness: groundedSemanticFreshnessSummary(
+        runtime.progress.semanticFreshness ?? [],
+        assembled.pack,
+      ),
       scopeContextObservation: runtime.progress.scopeContextObservation,
       sourceDecision: runtime.progress.sourceDecision,
     },
@@ -9342,11 +9385,19 @@ function declarationScopeIndex(
 function withRetrievalSourceDiagnostics(
   pack: ConnectedContextPack,
   progress: ConnectedContextProgress,
+  nowMs: number,
 ): ConnectedContextPack {
   const scopeState = progress.scopeContextObservation?.state;
   const semanticState = progress.sourceDecision?.semanticProviderDisposition;
   return {
     ...pack,
+    uncertainty: [
+      ...pack.uncertainty,
+      ...staleSemanticMarker(
+        groundedSemanticFreshnessSummary(progress.semanticFreshness ?? [], pack),
+        nowMs,
+      ),
+    ],
     diagnostics: {
       rankedCandidates: [],
       ...pack.diagnostics,
@@ -9724,8 +9775,11 @@ async function groundedAnswerForPack(
   deadlineAtMs?: number,
 ): Promise<GroundedAnswerResult> {
   const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
-    modelInputTokensMax: pack.budget.modelInputTokensMax,
-    modelOutputTokensMax: pack.budget.modelOutputTokensMax,
+    modelInputTokensMax: Math.max(0, pack.budget.modelInputTokensMax - pack.usage.modelInputTokens),
+    modelOutputTokensMax: Math.max(
+      0,
+      pack.budget.modelOutputTokensMax - pack.usage.modelOutputTokens,
+    ),
     answerOnlyContextAvailable: input.answerOnlyContextAvailable,
     currentQuestion: input.currentQuestion ?? input.query.text,
     signal: deps.signal,
@@ -10106,4 +10160,54 @@ function liveWorktreeCompletion(
     worktreeStatusDurationMs: context.worktreeStatusDurationMs,
     recentPathHitCount: pack.files.filter((file) => paths.has(file.scopePath)).length,
   };
+}
+
+function semanticProviderResolver(
+  inputs: SearchInputs,
+  grant: SemanticRefreshUsageGrant,
+): () => SemanticSearchProvider | undefined {
+  let resolved = false;
+  let provider: SemanticSearchProvider | undefined;
+  return (): SemanticSearchProvider | undefined => {
+    if (!resolved) {
+      provider =
+        inputs.repoSemanticSearchProviderFor === undefined
+          ? inputs.repoSemanticSearchProvider
+          : inputs.repoSemanticSearchProviderFor(grant);
+      resolved = true;
+    }
+    return provider;
+  };
+}
+
+function groundedSemanticProviderFactory(
+  deps: OrchestratorDeps,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): SearchInputs["repoSemanticSearchProviderFor"] {
+  const factory = deps.repoSemanticSearchProviderFor;
+  if (factory === undefined) return undefined;
+  return (tryReserveRefreshUsage): SemanticSearchProvider | undefined => {
+    const request: GroundedSemanticRequest = {
+      fs: context.ringFs,
+      nowMs: runtime.nowMs,
+      deadlineAtMs: context.deadlineAtMs,
+      signal: deps.signal,
+      correlationId: deps.correlationId,
+      tryReserveRefreshUsage,
+      observeSemanticFreshness: (observation): void => {
+        runtime.progress.semanticFreshness ??= [];
+        runtime.progress.semanticFreshness.push(observation);
+      },
+    };
+    return factory(request);
+  };
+}
+
+function semanticProviderUnavailable(inputs: SearchInputs): boolean {
+  return (
+    semanticProviderAllowed(inputs) ||
+    (inputs.repoSemanticSearchProvider === undefined &&
+      inputs.repoSemanticSearchProviderFor === undefined)
+  );
 }
