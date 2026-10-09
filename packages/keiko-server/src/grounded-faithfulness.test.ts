@@ -19,6 +19,7 @@ import {
   ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM,
   NUMERIC_EVIDENCE_FRAMING_CHARS,
   buildPackCitationIndex,
+  buildInsufficiencyScopeIndex,
   buildPackExcerptTextResolver,
   type EntailmentJudge,
   type EntailmentJudgeInput,
@@ -752,6 +753,27 @@ describe("unsupportedCitationMarker", () => {
 
   it("reports governed memory context outside the evidence as uncited, not as a fabricated citation", () => {
     expect(uncitedMemoryContextMarker(NOW).kind).toBe("uncited-memory-context");
+  });
+});
+
+describe("actual prompt membership for missing evidence", () => {
+  it("downgrades discovery-only reads and admits only files with actual sent excerpts", () => {
+    const pack = packWith([
+      { scopePath: "src/read.ts", excerpts: [excerpt("src/read.ts", 1, 3)] },
+      { scopePath: "src/not-sent.ts", excerpts: [] },
+    ]);
+    expect([
+      ...buildInsufficiencyScopeIndex(
+        [pack],
+        new Map([
+          ["src/old-read.ts", "read-in-this-turn"],
+          ["src/read.ts", "unread-in-scope"],
+        ]),
+      ),
+    ]).toEqual([
+      ["src/old-read.ts", "unread-in-scope"],
+      ["src/read.ts", "read-in-this-turn"],
+    ]);
   });
 });
 

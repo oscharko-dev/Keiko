@@ -68,6 +68,7 @@ import {
   type GroundedRerankerDiagnostics,
   type GroundedUncertainty,
   type HybridGroundedAnswer,
+  type GroundedInsufficiencyDeclaration,
   type LocalKnowledgeEvidenceCitation,
   type LocalKnowledgeGroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -126,6 +127,8 @@ import {
 } from "./grounded-answer.js";
 import {
   buildPackCitationIndex,
+  buildInsufficiencyScopeIndex,
+  validateGroundedAnswerEvidence,
   connectedSearchNoEvidenceAnswer,
   incompleteAnswerMarker,
   missingCitationMarkerFor,
@@ -210,6 +213,8 @@ export type ConnectorRetrieve = (
 export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
 export interface HybridGroundedAskCtx {
+  /** Verified discovered paths; only actual sent evidence promotes a path to read-state. */
+  readonly insufficiencyScopeIndex?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>;
   readonly startedAtMs?: number;
   readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   /** Canonical closed omission counts from retrieved folders; no excluded paths or contents. */
@@ -1300,7 +1305,7 @@ function hybridReconciliationUncertainty(
     unsupportedNumeric === undefined &&
     reconciliation.citedScopePaths.size === 0 &&
     numericReconciliation.citedMarkers.size === 0
-      ? missingCitationMarkerFor(assistant.content, nowMs)
+      ? missingCitationMarkerFor(assistant.content, nowMs, assistant.answerKind)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
@@ -1872,6 +1877,13 @@ function assembleHybridAnswer(
     ...ids,
     ...projection.evidence,
     content: redactString(redactor, assistant.content),
+    answerKind: assistant.answerKind,
+    ...(assistant.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: assistant.citationBehaviour }),
+    ...(assistant.insufficiencyDeclarations === undefined
+      ? {}
+      : { insufficiencyDeclarations: assistant.insufficiencyDeclarations }),
     citations: projection.citations,
     knowledgeCitations: projection.knowledgeCitations,
     uncertainty: projection.uncertainty,
@@ -1949,6 +1961,7 @@ async function noEvidenceAssistant(
     return {
       assistant: {
         content: connectedSearchNoEvidenceAnswer(ctx.content),
+        answerKind: "refusal",
         usage: { promptTokens: 0, completionTokens: 0 },
       },
       promptCtx: ctx,
@@ -2492,7 +2505,20 @@ async function answerHybridWithinWindow(
       return normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
     },
   );
-  return { assistant, sent, promptCtx };
+  const evidenceScopeIndex = buildInsufficiencyScopeIndex(
+    sentFolderPacks(promptCtx.folderOmissionPacks ?? [], sent),
+    ctx.insufficiencyScopeIndex,
+  );
+  return {
+    assistant: {
+      ...assistant,
+      insufficiencyDeclarations: undefined,
+      evidenceScopeIndex,
+      ...validateGroundedAnswerEvidence(assistant.content, evidenceScopeIndex, ctx.content),
+    },
+    sent,
+    promptCtx,
+  };
 }
 
 interface HybridFinalizeInput {
