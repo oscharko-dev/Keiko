@@ -54,6 +54,8 @@ export interface RetrievalRing {
   readonly kind: RetrievalRingKind;
   readonly label: string;
   readonly anchorTerms: readonly string[];
+  readonly references?: readonly SearchReference[];
+  readonly effectiveIntent?: RetrievalIntent;
   readonly searchLimits: SearchLimits;
   readonly rationale: string;
 }
@@ -634,19 +636,30 @@ interface PlanSeed {
   readonly queryText: string;
   readonly retrievalIntent: RetrievalIntent;
   readonly anchorTerms: readonly string[];
+  readonly references?: readonly SearchReference[];
+  readonly effectiveIntent?: RetrievalIntent;
   readonly ringKinds: readonly string[];
 }
 
 function canonicalize(seed: PlanSeed): string {
   // JSON.stringify with sorted keys via explicit ordering — never relies on object key order.
-  return JSON.stringify([
+  const parts: unknown[] = [
     seed.scopeId,
     seed.queryKind,
     seed.queryText,
     seed.retrievalIntent,
     [...seed.anchorTerms].sort(compareStrings),
     [...seed.ringKinds].sort(compareStrings),
-  ]);
+  ];
+  if ((seed.references?.length ?? 0) > 0 || seed.effectiveIntent !== undefined) {
+    parts.push(
+      seed.effectiveIntent ?? seed.retrievalIntent,
+      seed.references
+        ?.map((reference) => [reference.path, reference.line ?? null, reference.origin])
+        .sort((a, b) => compareStrings(JSON.stringify(a), JSON.stringify(b))) ?? [],
+    );
+  }
+  return JSON.stringify(parts);
 }
 
 function derivePlanId(seed: PlanSeed): string {
@@ -731,6 +744,10 @@ export function createExplorationPlan(
     queryText: input.query.text,
     retrievalIntent: classification.intent,
     anchorTerms: searchAnchors.map((a) => a.term),
+    references: extraction.references,
+    ...(classification.effectiveIntent === undefined
+      ? {}
+      : { effectiveIntent: classification.effectiveIntent }),
     ringKinds: rings.map((r) => r.kind),
   };
   return {
