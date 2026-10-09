@@ -189,7 +189,50 @@ function assertIndependentReferenceChannel(content: string): void {
   expect(selection?.continuityReferentCount).toBe(0);
 }
 
+function freshSources(request: GatewayRequest | undefined): string {
+  if (request === undefined) throw new TypeError("Expected an actual dispatched grounded prompt");
+  const prompt = request.messages.map((message) => message.content).join("\n");
+  return (
+    prompt
+      .split("Repository evidence excerpts:")[1]
+      ?.split("Known uncertainty from retrieval:")[0] ?? ""
+  );
+}
+
 describe("compacted eligible tail remains a reference without current-root source authority", () => {
+  it("retains a real compacted prior ask while fetching identical paths from the reconnected root", async () => {
+    const requests: GatewayRequest[] = [];
+    const { deps, chatId } = fixture(requests);
+    const first = await handleGroundedAsk(route(chatId, `Explain ${PATH}`), deps);
+    expect(first.status).toBe(200);
+    const firstAnswer = first.body as GroundedAnswer;
+    if (firstAnswer.groundingKind !== "connected-context")
+      throw new TypeError("Expected grounding");
+    expect(firstAnswer.contextPack.contextSummary?.compactionActive).toBe(true);
+    expect(freshSources(requests[0])).toContain(OLD_FACT);
+    const firstCount = requests.length;
+    deps.store.updateChat(chatId, {
+      connectedScope: {
+        kind: "workspace-root",
+        root: join(directory, "b"),
+        relativePaths: [],
+        connectedAtMs: 1,
+      },
+    });
+    const second = await handleGroundedAsk(route(chatId, "Can you see it now?"), deps);
+    expect(second.status).toBe(200);
+    const secondAnswer = second.body as GroundedAnswer;
+    if (secondAnswer.groundingKind !== "connected-context")
+      throw new TypeError("Expected grounding");
+    expect(secondAnswer.contextPack.contextSummary?.compactionActive).toBe(true);
+    const source = freshSources(requests[firstCount]);
+    expect(source).toContain(LIVE_FACT);
+    expect(source).not.toContain(OLD_FACT);
+    expect(deps.evidenceStore.list().filter((id) => id.startsWith("chat-")).length).toBeGreaterThan(
+      1,
+    );
+  });
+
   it.each(["Can you see it now?", "Siehst du sie jetzt?"])(
     "re-reads the latest cited source after actual conversation-lane compaction: %s",
     async (query) => {
