@@ -15,15 +15,93 @@ afterEach(() => {
   resetClientDiagnosticWriter();
 });
 
-function expand(): void {
+function toggleInspection(open: boolean): void {
   const summary = screen.getByText("Inspect files");
   const details = summary.closest("details");
   if (details === null) throw new TypeError("Missing inspection disclosure");
-  details.open = true;
+  details.open = open;
   fireEvent(details, new Event("toggle"));
 }
 
+function expand(): void {
+  toggleInspection(true);
+}
+
 describe("connected evidence inspection", () => {
+  it("reuses a completed manifest across repeated disclosure toggles", async () => {
+    vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest() });
+    const onRead = vi.fn();
+    render(
+      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} onReadPaths={onRead} />,
+    );
+    expand();
+    await screen.findByRole("table", { name: "Files assembled for this answer" });
+    for (let index = 0; index < 5; index += 1) {
+      toggleInspection(false);
+      expand();
+      await waitFor(() => expect(onRead).toHaveBeenCalledTimes(index + 2));
+      expect(fetchEvidenceManifest).toHaveBeenCalledExactlyOnceWith("run-1");
+    }
+  });
+
+  it("retries failed manifests and publishes cached source identity to the current consumer", async () => {
+    vi.mocked(fetchEvidenceManifest)
+      .mockRejectedValueOnce(new TypeError("unavailable"))
+      .mockResolvedValueOnce({ manifest: manifest() });
+    const beforeReconnect = vi.fn();
+    const afterReconnect = vi.fn();
+    const view = render(
+      <ConnectedEvidenceInspection
+        contextPack={pack}
+        runIds={["run-1"]}
+        onReadPaths={beforeReconnect}
+      />,
+    );
+    expand();
+    await screen.findByRole("alert");
+    toggleInspection(false);
+    expand();
+    await screen.findByRole("table", { name: "Files assembled for this answer" });
+    toggleInspection(false);
+    view.rerender(
+      <ConnectedEvidenceInspection
+        contextPack={pack}
+        runIds={["run-1"]}
+        onReadPaths={afterReconnect}
+      />,
+    );
+    expand();
+    await waitFor(() => expect(afterReconnect).toHaveBeenCalledOnce());
+    expect(fetchEvidenceManifest).toHaveBeenCalledTimes(2);
+    expect(afterReconnect).toHaveBeenCalledWith(
+      "run-1",
+      ["src/feature/read.ts"],
+      ["src/feature"],
+      manifest().connectedContext?.scope.sourceScopeFingerprint,
+    );
+    expect(beforeReconnect).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse a completed manifest for another answer run", async () => {
+    vi.mocked(fetchEvidenceManifest)
+      .mockResolvedValueOnce({ manifest: manifest() })
+      .mockResolvedValueOnce({ manifest: manifest("run-2") });
+    const onRead = vi.fn();
+    const view = render(
+      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} onReadPaths={onRead} />,
+    );
+    expand();
+    await screen.findByRole("table", { name: "Files assembled for this answer" });
+    view.rerender(
+      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-2"]} onReadPaths={onRead} />,
+    );
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expand();
+    await waitFor(() => expect(onRead).toHaveBeenCalledTimes(2));
+    expect(fetchEvidenceManifest).toHaveBeenNthCalledWith(1, "run-1");
+    expect(fetchEvidenceManifest).toHaveBeenNthCalledWith(2, "run-2");
+    expect(onRead.mock.calls.map(([runId]) => runId)).toEqual(["run-1", "run-2"]);
+  });
   it("discards a delayed manifest after the displayed answer changes", async () => {
     let complete:
       ((response: Awaited<ReturnType<typeof fetchEvidenceManifest>>) => void) | undefined;
