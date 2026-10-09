@@ -89,9 +89,9 @@ export interface RepositoryReferenceEvidence {
 }
 
 const EVIDENCE_CLASSES = {
-  cited: "cited",
-  "read-uncited": "readUncited",
-  unread: "unread",
+  cited: "cmpCited",
+  "read-uncited": "cmpReadUncited",
+  unread: "cmpUnread",
 } as const;
 const EVIDENCE_LABELS = {
   cited: "grounded.reference.cited",
@@ -867,6 +867,19 @@ function referenceAccessiblePath(
     : `${repositoryReferenceDisplayPath(sourceLabel)} · ${displayPath}`;
 }
 
+function referenceEvidenceClassName(
+  state: RepositoryReferenceEvidenceState | undefined,
+): string | undefined {
+  return state === undefined ? undefined : evidenceStyles[EVIDENCE_CLASSES[state]];
+}
+
+function referenceButtonClassName(
+  className: string,
+  state: RepositoryReferenceEvidenceState | undefined,
+): string {
+  return `${className}${state === undefined ? "" : ` ${referenceEvidenceClassName(state) ?? ""}`}`;
+}
+
 export function RepositoryReferenceInline({
   reference,
   roots,
@@ -1031,9 +1044,7 @@ export function RepositoryReferenceInline({
   if (openReference === undefined) {
     return (
       <span
-        className={
-          evidenceState === undefined ? undefined : evidenceStyles[EVIDENCE_CLASSES[evidenceState]]
-        }
+        className={referenceEvidenceClassName(evidenceState)}
         data-evidence-state={evidenceState}
         title={evidenceAccessibleLabel(
           repositoryReferenceDisplayPath(reference.label),
@@ -1052,7 +1063,7 @@ export function RepositoryReferenceInline({
       <button
         ref={triggerRef}
         type="button"
-        className={`${className}${evidenceState === undefined ? "" : ` ${evidenceStyles[EVIDENCE_CLASSES[evidenceState]] ?? ""}`}`}
+        className={referenceButtonClassName(className, evidenceState)}
         data-evidence-state={evidenceState}
         aria-label={evidenceAccessibleLabel(
           t("chat.repository.openInEditor", {

@@ -81,10 +81,18 @@ import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
+  createGroundedSynthesisCallBudget,
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
   type GroundedAnswerResult,
+  type GroundedSynthesisCallBudget,
+  type GroundedSynthesisAttemptOptions,
 } from "./grounded-answer.js";
+import {
+  callPluralGroundedSynthesis,
+  pluralSynthesisMetadata,
+  withPluralSynthesisUsage,
+} from "./grounded-plural-synthesis.js";
 import {
   connectedSearchNoEvidenceAnswer,
   groundedAnswerEvidenceFields,
@@ -563,7 +571,8 @@ function multiSourceInputTokens(
   options: GroundedGatewayPromptOptions,
 ): number {
   const packTokens = labeledPacks.reduce(
-    (sum, entry) => sum + entry.pack.budget.modelInputTokensMax,
+    (sum, entry) =>
+      sum + Math.max(0, entry.pack.budget.modelInputTokensMax - entry.pack.usage.modelInputTokens),
     0,
   );
   return Math.min(packTokens, options.modelInputTokensMax ?? packTokens);
@@ -736,9 +745,16 @@ export function defaultRetriever(
 export interface MultiSourceAnswerer {
   (question: string, labeledPacks: readonly LabeledPack[]): Promise<GroundedAnswerPayload>;
   readonly repair?: GroundedAnswerer["repair"];
+  readonly remainingSynthesisCalls?: GroundedSynthesisCallBudget["remaining"];
+  readonly pendingSynthesisUsage?: GroundedSynthesisCallBudget["pendingUsage"];
+  readonly takeFailedSynthesisUsage?: GroundedSynthesisCallBudget["takeUsage"];
+  readonly reservedSynthesisOutputTokens?: GroundedSynthesisCallBudget["reservedOutputTokens"];
 }
 
 interface MultiSourceGatewayContext {
+  readonly synthesisBudget: GroundedSynthesisCallBudget;
+  readonly originalBudget: ReturnType<typeof modelWindowAwareBudget>;
+  readonly startedAtMs: number;
   readonly deps: UiHandlerDeps;
   readonly model: ModelPort;
   readonly modelId: string;
@@ -763,6 +779,9 @@ export function createMultiSourceAnswerer(
   answerOptions: Pick<GroundedAnswerOptions, "answerOnlyContextAvailable" | "currentQuestion"> = {},
 ): MultiSourceAnswerer {
   const ctx: MultiSourceGatewayContext = {
+    synthesisBudget: createGroundedSynthesisCallBudget(),
+    originalBudget: modelWindowAwareBudget(deps, modelId),
+    startedAtMs: Date.now(),
     deps,
     model,
     modelId,
@@ -774,6 +793,12 @@ export function createMultiSourceAnswerer(
     (question: string, packs: readonly LabeledPack[]) =>
       multiSourceGatewayAnswer(ctx, question, packs),
     {
+      remainingSynthesisCalls: (): number => ctx.synthesisBudget.remaining(),
+      pendingSynthesisUsage: (): ReturnType<GroundedSynthesisCallBudget["pendingUsage"]> =>
+        ctx.synthesisBudget.pendingUsage(),
+      takeFailedSynthesisUsage: (): ReturnType<GroundedSynthesisCallBudget["takeUsage"]> =>
+        ctx.synthesisBudget.takeUsage(),
+      reservedSynthesisOutputTokens: (): number => ctx.synthesisBudget.reservedOutputTokens(),
       repair: (
         question: string,
         _pack: ConnectedContextPack,
@@ -789,48 +814,122 @@ async function multiSourceGatewayAnswer(
   question: string,
   labeledPacks: readonly LabeledPack[],
 ): Promise<GroundedAnswerResult> {
-  const { deps, model, modelId, signal, correlationId, answerOptions } = ctx;
-  ensureNotCancelled(signal);
-  let sent: ReturnType<typeof fittedMultiSourcePrompt> | undefined;
+  const remainingBefore = ctx.synthesisBudget.remaining();
+  const reservedBefore = ctx.synthesisBudget.reservedOutputTokens();
+  ensureNotCancelled(ctx.signal);
   const response = await withAdoptedContextWindowRetry(
-    deps,
-    { modelId, surface: "grounded", correlationId },
-    async () => {
-      const tokenAccounting = currentContextProfileForModel(deps, modelId)?.tokenAccounting;
-      const options = groundedPromptOptions(deps, modelId, tokenAccounting);
-      sent = fittedMultiSourcePrompt(question, labeledPacks, deps.redactor, options, correlationId);
-      if (sent.sentReferenceCount === 0 && answerOptions.answerOnlyContextAvailable !== true)
-        return undefined;
-      logGroundedPromptSelection(
-        correlationId,
-        sent,
-        multiSourceInputTokens(labeledPacks, options),
-        tokenAccounting,
-      );
-      return model.call(
-        {
-          modelId,
-          messages: sent.messages,
-          stream: false,
-          maxOutputTokens: Math.min(
-            modelWindowAwareBudget(deps, modelId).modelOutputTokensMax,
-            labeledPacks.reduce((sum, entry) => sum + entry.pack.budget.modelOutputTokensMax, 0),
-          ),
-          logContext: { correlationId },
-        },
-        signal,
-      );
-    },
+    ctx.deps,
+    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
+    () => multiSourceGatewayAttempt(ctx, question, labeledPacks),
   );
+  const sent = ctx.sent;
   if (sent === undefined) throw new TypeError("Multi-source fitted prompt is unavailable");
-  ctx.sent = sent;
-  return multiSourceAnswerResult(
+  const answer = multiSourceAnswerResult(
     response,
     sent,
-    answerOptions.currentQuestion ?? question,
-    modelId,
-    currentContextProfileForModel(deps, modelId),
+    ctx.answerOptions.currentQuestion ?? question,
+    ctx.modelId,
+    currentContextProfileForModel(ctx.deps, ctx.modelId),
   );
+  return withPluralSynthesisUsage(answer, ctx.synthesisBudget, remainingBefore, reservedBefore);
+}
+
+async function multiSourceGatewayAttempt(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  packs: readonly LabeledPack[],
+): Promise<NormalizedResponse | undefined> {
+  const accounting = currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting;
+  const options = multiSourceRemainingPromptOptions(ctx, packs, accounting);
+  const sent = fittedMultiSourcePrompt(
+    question,
+    packs,
+    ctx.deps.redactor,
+    options,
+    ctx.correlationId,
+  );
+  ctx.sent = sent;
+  if (sent.sentReferenceCount === 0 && ctx.answerOptions.answerOnlyContextAvailable !== true)
+    return undefined;
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    sent,
+    multiSourceInputTokens(packs, options),
+    accounting,
+  );
+  const grants = multiSourceSynthesisGrants(ctx, packs);
+  return callPluralGroundedSynthesis({
+    model: ctx.model,
+    signal: ctx.signal,
+    budget: ctx.synthesisBudget,
+    grants,
+    accounting,
+    request: {
+      modelId: ctx.modelId,
+      messages: sent.messages,
+      stream: false,
+      maxOutputTokens: Math.min(
+        modelWindowAwareBudget(ctx.deps, ctx.modelId).modelOutputTokensMax,
+        grants.outputTokensMax - ctx.synthesisBudget.pendingUsage().completionTokens,
+      ),
+      logContext: { correlationId: ctx.correlationId },
+    },
+  });
+}
+
+function multiSourceSynthesisGrants(
+  ctx: MultiSourceGatewayContext,
+  packs: readonly LabeledPack[],
+): GroundedSynthesisAttemptOptions {
+  const elapsed = [
+    ctx.originalBudget.elapsedMsMax,
+    ...packs.map((entry) => entry.pack.budget.elapsedMsMax),
+  ].filter((limit): limit is number => limit !== null);
+  return {
+    inputTokensMax: remainingMultiSourceResource(
+      ctx.originalBudget.modelInputTokensMax,
+      packs,
+      "modelInputTokensMax",
+      "modelInputTokens",
+    ),
+    outputTokensMax: remainingMultiSourceResource(
+      ctx.originalBudget.modelOutputTokensMax,
+      packs,
+      "modelOutputTokensMax",
+      "modelOutputTokens",
+    ),
+    ...(elapsed.length === 0 ? {} : { deadlineAtMs: ctx.startedAtMs + Math.min(...elapsed) }),
+    signal: ctx.signal,
+  };
+}
+
+function remainingMultiSourceResource(
+  max: number,
+  packs: readonly LabeledPack[],
+  budgetKey: "modelInputTokensMax" | "modelOutputTokensMax",
+  usageKey: "modelInputTokens" | "modelOutputTokens",
+): number {
+  const original = Math.min(
+    max,
+    packs.reduce((sum, entry) => sum + entry.pack.budget[budgetKey], 0),
+  );
+  return Math.max(0, original - packs.reduce((sum, entry) => sum + entry.pack.usage[usageKey], 0));
+}
+
+function multiSourceRemainingPromptOptions(
+  ctx: MultiSourceGatewayContext,
+  packs: readonly LabeledPack[],
+  accounting: GroundedGatewayPromptOptions["tokenAccounting"],
+): GroundedGatewayPromptOptions {
+  const options = groundedPromptOptions(ctx.deps, ctx.modelId, accounting);
+  return {
+    ...options,
+    modelInputTokensMax: Math.min(
+      options.modelInputTokensMax ?? Number.MAX_SAFE_INTEGER,
+      multiSourceSynthesisGrants(ctx, packs).inputTokensMax -
+        ctx.synthesisBudget.pendingUsage().promptTokens,
+    ),
+  };
 }
 
 function multiSourceRepairPrompt(
@@ -870,14 +969,55 @@ async function multiSourceGatewayRepair(
   original: string,
   options: GroundedAnswerOptions,
 ): Promise<GroundedAnswerResult> {
+  const remainingBefore = ctx.synthesisBudget.remaining();
+  const reservedBefore = ctx.synthesisBudget.reservedOutputTokens();
   const sent = multiSourceRepairPrompt(ctx, question, original, options);
-  if (sent === undefined) return uninvokedCitationRepair(original);
-  const signal = multiSourceRepairSignal(ctx.signal, options);
-  if (
-    signal === undefined ||
-    (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
-  )
+  if (sent === undefined || ctx.synthesisBudget.remaining() <= 0)
     return uninvokedCitationRepair(original);
+  const signal = multiSourceRepairSignal(ctx.signal, options);
+  if (signal === undefined) return uninvokedCitationRepair(original);
+  logMultiSourceRepairPrompt(ctx, sent, options);
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
+    return uninvokedCitationRepair(original);
+  ensureNotCancelled(signal);
+  const response = await callPluralGroundedSynthesis({
+    model: ctx.model,
+    signal,
+    budget: ctx.synthesisBudget,
+    grants: {
+      inputTokensMax: options.modelInputTokensMax ?? 0,
+      outputTokensMax: options.modelOutputTokensMax ?? 0,
+      signal,
+      deadlineAtMs: options.deadlineAtMs,
+    },
+    accounting: currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
+    request: {
+      modelId: ctx.modelId,
+      messages: sent.messages,
+      stream: false,
+      maxOutputTokens: options.modelOutputTokensMax,
+      logContext: { correlationId: ctx.correlationId },
+    },
+  });
+  assertUsableAssistantContent(response.content.trim(), ctx.modelId);
+  return withPluralSynthesisUsage(
+    {
+      content: response.content.trim(),
+      usage: { promptTokens: 0, completionTokens: 0 },
+      sentEvidencePacks: sent.packs.map((entry) => entry.pack),
+      modelInvoked: true,
+    },
+    ctx.synthesisBudget,
+    remainingBefore,
+    reservedBefore,
+  );
+}
+
+function logMultiSourceRepairPrompt(
+  ctx: MultiSourceGatewayContext,
+  sent: ReturnType<typeof fittedMultiSourcePrompt>,
+  options: GroundedAnswerOptions,
+): void {
   logGroundedPromptSelection(
     ctx.correlationId,
     sent,
@@ -887,29 +1027,6 @@ async function multiSourceGatewayRepair(
     ),
     currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
   );
-  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
-    return uninvokedCitationRepair(original);
-  ensureNotCancelled(signal);
-  const response = await ctx.model.call(
-    {
-      modelId: ctx.modelId,
-      messages: sent.messages,
-      stream: false,
-      maxOutputTokens: options.modelOutputTokensMax,
-      logContext: { correlationId: ctx.correlationId },
-    },
-    signal,
-  );
-  assertUsableAssistantContent(response.content.trim(), ctx.modelId);
-  return {
-    content: response.content.trim(),
-    usage: {
-      promptTokens: response.usage.promptTokens,
-      completionTokens: response.usage.completionTokens,
-    },
-    sentEvidencePacks: sent.packs.map((entry) => entry.pack),
-    modelInvoked: true,
-  };
 }
 
 export function uninvokedCitationRepair(content: string): GroundedAnswerResult {
@@ -1780,6 +1897,7 @@ async function repairMultiSourceAnswer(
           },
         }),
     deps: {
+      answerer: pluralSynthesisMetadata(ctx.answerer),
       signal: ctx.signal,
       reliableCitationBehaviour: citationBehaviourFor(ctx.deps, ctx.modelId),
       observeCitationBehaviour,
@@ -1787,14 +1905,23 @@ async function repairMultiSourceAnswer(
   };
   const repaired = await repairGroundedAnswer(repairContext);
   const finalAnswer = finalPluralRepairAnswer(repairContext, repaired, budgetRefused);
+  recordMultiSourceRepair(sources, finalAnswer, ctx.correlationId, repaired.failure);
+  return finalAnswer;
+}
+
+function recordMultiSourceRepair(
+  sources: readonly RetrievedSource[],
+  answer: GroundedAnswerResult & { readonly citationRepairDisposition: CitationRepairDisposition },
+  correlationId: string | undefined,
+  failure: unknown,
+): void {
   recordPluralGroundedAnswer(
     sources.map((source) => source.pack),
-    finalAnswer,
-    finalAnswer.citationRepairDisposition,
-    ctx.correlationId,
-    repaired.failure,
+    answer,
+    answer.citationRepairDisposition,
+    correlationId,
+    failure,
   );
-  return finalAnswer;
 }
 
 export function finalPluralRepairAnswer(

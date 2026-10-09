@@ -451,6 +451,12 @@ system that exists, never beside it:
   high/low selection vocabulary and actual observed scope/semantic dispositions.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  Complete document path references are data when classifying relationship/history requests;
+  directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
+  factual lookup focuses discovery on canonically admitted named documents with a scope-bound
+  request context. Its source/read/ring observations reuse the same registered retrieval siblings.
+  Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
+  generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
   Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
   into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
   observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
@@ -489,6 +495,11 @@ system that exists, never beside it:
   OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
   caller and durable spend admission for each actual POST; adapters without that transport hook
   retain the existing gateway boundary. No nested compatibility path grants another attempt.
+  Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
+  optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
+  `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
+  and originating request retain the existing causal link. Candidate counts and model-authored
+  marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or

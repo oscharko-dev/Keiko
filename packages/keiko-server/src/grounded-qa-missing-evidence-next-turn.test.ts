@@ -75,7 +75,10 @@ async function nextAnswer(
   const readPaths: string[] = [];
   const content = "Please inspect @src/validation.ts again using the connected evidence.";
   const answer = "Validation uses sentinel 73 [source:1|src/validation.ts:1].";
-  const retrievalDeps = { answerer: { answer: (): Promise<string> => Promise.resolve(answer) } };
+  const retrievalDeps = {
+    correlationId: "missing-evidence-next-turn",
+    answerer: { answer: (): Promise<string> => Promise.resolve(answer) },
+  };
   const observe = (input: OrchestratorInput): void => {
     expect(input.query.text).toContain("src/validation.ts");
   };

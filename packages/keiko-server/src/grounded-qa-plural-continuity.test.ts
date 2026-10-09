@@ -76,7 +76,9 @@ function seedChat(deps: UiHandlerDeps, scopeCount: number): string {
       timestamp: timestamp++,
       runId: undefined,
       workflowId: undefined,
-      attachments: [],
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
     });
   return chat.id;
 }

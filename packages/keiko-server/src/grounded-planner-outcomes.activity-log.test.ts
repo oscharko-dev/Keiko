@@ -75,7 +75,14 @@ describe("planner outcome evidence", () => {
     "records $reason as a correlated clarification outcome",
     async (entry) => {
       const request = clarificationInput(entry.reason, entry.text);
-      const plan = createExplorationPlan(request, { nowMs: () => 0 });
+      const plan = createExplorationPlan(
+        {
+          scope: request.scope,
+          query: request.query,
+          ...(request.budget === undefined ? {} : { budget: request.budget }),
+        },
+        { nowMs: () => 0 },
+      );
       expect(plan.clarification?.reason).toBe(entry.reason);
       const log = createBufferedServerLogSink();
       await expect(retrieveConnectedContextPack(request, deps(log))).rejects.toBeInstanceOf(

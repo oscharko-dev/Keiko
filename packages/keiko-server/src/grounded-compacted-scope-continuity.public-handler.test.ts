@@ -93,7 +93,9 @@ function history(deps: UiHandlerDeps, chatId: string): void {
       timestamp: index + 1,
       runId: undefined,
       workflowId: undefined,
-      attachments: [],
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
     });
 }
 

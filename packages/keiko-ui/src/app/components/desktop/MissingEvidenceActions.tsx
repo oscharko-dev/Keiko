@@ -50,20 +50,29 @@ export function declarationRoots(
   );
 }
 
-function useAddDeclaredFile(
-  props: MissingEvidenceActionsProps,
-  path: string,
-  root: string,
-): {
+interface AddDeclaredFileAction {
   readonly busy: boolean;
   readonly error: string | null;
   readonly add: () => Promise<void>;
+}
+
+function useLatestActionProps(props: MissingEvidenceActionsProps): {
+  current: MissingEvidenceActionsProps;
 } {
-  const t = useTranslate();
   const latest = useRef(props);
   useEffect(() => {
     latest.current = props;
   }, [props]);
+  return latest;
+}
+
+function useAddDeclaredFile(
+  props: MissingEvidenceActionsProps,
+  path: string,
+  root: string,
+): AddDeclaredFileAction {
+  const t = useTranslate();
+  const latest = useLatestActionProps(props);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const add = async (): Promise<void> => {
@@ -122,7 +131,7 @@ function DeclaredFileAction({
   const action = useAddDeclaredFile(props, declaration.scopePath, root);
   if (roots.length === 0) return null;
   return (
-    <div className={styles.notice}>
+    <div className={styles.cmpNotice}>
       <span title={declaration.scopePath}>
         {t("scope.pill.file", { name: scopePathBasename(declaration.scopePath) })}
       </span>
@@ -166,7 +175,7 @@ export function MissingEvidenceActions(props: MissingEvidenceActionsProps): Reac
     ) ?? [];
   if (declarations.length === 0) return null;
   return (
-    <section className={styles.notice} aria-label={t("scope.missing.title")}>
+    <section className={styles.cmpNotice} aria-label={t("scope.missing.title")}>
       <p>{t("scope.missing.count", { count: declarations.length })}</p>
       <button
         type="button"

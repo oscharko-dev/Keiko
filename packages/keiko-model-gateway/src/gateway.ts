@@ -748,6 +748,13 @@ function recordProviderFailure(
   );
 }
 
+function observedProviderDispatch(
+  observed: (() => boolean) | undefined,
+  admitted: boolean,
+): boolean {
+  return observed?.() ?? admitted;
+}
+
 interface RoutedCall {
   readonly provider: ModelProviderConfig;
   readonly compatibilityMemoScope: ModelProviderConfig;
@@ -2134,17 +2141,15 @@ export class Gateway {
     const { adapter, route, ids } = state;
     let reservation: GatewaySpendReservation | undefined;
     let callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
+    let dispatchObserved: (() => boolean) | undefined;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     let received = false;
     let terminal: GatewayStreamChunk | undefined;
     const logRepair = this.streamRepairLogger(state, request);
     try {
-      ({ request, bounds, callerReservation, reservation } = await this.prepareStreamDispatch(
-        state,
-        request,
-        bounds,
-      ));
+      ({ request, bounds, callerReservation, reservation, dispatchObserved } =
+        await this.prepareStreamDispatch(state, request, bounds));
       admitted = true;
       const stream = this.readProviderStream(adapter, request, route.provider, ids, bounds);
       for await (const chunk of stream) {
@@ -2162,7 +2167,7 @@ export class Gateway {
       if (error instanceof ContextOverflowError) logRepair("denied");
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       settleFailedCallerAttempt(callerReservation, error, admitted);
-      recordProviderFailure(admission, error, admitted);
+      recordProviderFailure(admission, error, observedProviderDispatch(dispatchObserved, admitted));
       throw error;
     } finally {
       // Closing an iterator early does not enter catch and is not proof of provider recovery.
@@ -2315,10 +2320,11 @@ export class Gateway {
     bounds = clippedStreamBounds(bounds, remainingMs);
     let reservation: GatewaySpendReservation | undefined;
     let callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
+    let dispatchObserved: (() => boolean) | undefined;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     try {
-      ({ provider, bounds, request, callerReservation, reservation } =
+      ({ provider, bounds, request, callerReservation, reservation, dispatchObserved } =
         await this.prepareBufferedDispatch(attempt, provider, bounds));
       admitted = true;
       const response = await readAnswer(adapter, request, provider, bounds);
@@ -2330,7 +2336,7 @@ export class Gateway {
       usage = measuredCatalogFailureUsage(error, capability, correlationId);
       settleFailedCallerAttempt(callerReservation, error, admitted);
       // A client-initiated cancel is not a provider fault — skip the breaker.
-      recordProviderFailure(admission, error, admitted);
+      recordProviderFailure(admission, error, observedProviderDispatch(dispatchObserved, admitted));
       throw error;
     } finally {
       admission.settle("non-provider-fault");
@@ -2410,8 +2416,10 @@ export class Gateway {
     request: GatewayCallRequest;
     callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
     reservation: GatewaySpendReservation | undefined;
+    dispatchObserved?: () => boolean;
   } {
-    if (adapter.attemptAdmissionBoundary === "transport")
+    if (adapter.attemptAdmissionBoundary === "transport") {
+      let dispatched = false;
       return {
         request: {
           ...request,
@@ -2423,21 +2431,26 @@ export class Gateway {
               },
               capability,
               correlationId,
+              (observed): void => {
+                dispatched ||= observed;
+              },
             ),
         },
         callerReservation: undefined,
         reservation: undefined,
+        dispatchObserved: (): boolean => dispatched,
       };
+    }
     const callerReservation = this.callerAttemptReservation(request, capability);
-    request = callerAdmittedRequest(request, callerReservation);
     try {
+      request = callerAdmittedRequest(request, callerReservation);
       return {
         request,
         callerReservation,
         reservation: this.spendBudget?.reserve(capability, request, correlationId),
       };
     } catch (failure) {
-      settleCallerAttempt(callerReservation, undefined, false);
+      settleCallerAttempt(callerReservation, undefined, false, "none");
       throw failure;
     }
   }
@@ -2446,21 +2459,26 @@ export class Gateway {
     request: GatewayCallRequest,
     capability: ModelCapability,
     correlationId: string,
+    observeDispatch: (dispatched: boolean) => void,
   ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
     const caller = this.callerAttemptReservation(request, capability);
-    request = callerAdmittedRequest(request, caller);
     let spend: GatewaySpendReservation | undefined;
     try {
+      request = callerAdmittedRequest(request, caller);
       spend = this.spendBudget?.reserve(capability, request, correlationId);
     } catch (failure) {
-      settleCallerAttempt(caller, undefined, false);
+      settleCallerAttempt(caller, undefined, false, "none");
       throw failure;
     }
     return onceCallerReservation({
       maxOutputTokens: request.maxOutputTokens,
       settle(usage, dispatched, outputState): void {
-        spend?.settle(completeTransportUsage(usage));
-        settleCallerAttempt(caller, usage, dispatched, outputState);
+        observeDispatch(dispatched);
+        try {
+          spend?.settle(completeTransportUsage(usage));
+        } finally {
+          settleCallerAttempt(caller, usage, dispatched, outputState);
+        }
       },
     });
   }

@@ -21,6 +21,11 @@ export type ChatRejectionReason = "readiness" | "generation" | "grounding-scope"
 // `not-ready` when a check ran and failed.
 export type ChatReadinessObservation = "unobserved" | "not-ready";
 
+export interface ChatResponseMemoryActivity {
+  readonly uncitedMemoryContextMarkerCount: number;
+  readonly memoryContextDisposition: "included" | "excluded" | "not-requested";
+}
+
 interface ChatRejectionModelEvidence {
   readonly modelIdDigest?: string | undefined;
   readonly readinessObservation?: ChatReadinessObservation | undefined;
@@ -157,6 +162,13 @@ const CHAT_RESPONSE_MESSAGE_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-activity.logChatResponseMessage",
   fields: {
+    uncitedMemoryContextMarkerCount: { type: "integer", dataClass: "count", required: false },
+    memoryContextDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["included", "excluded", "not-requested"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -491,6 +503,7 @@ export function logChatResponseMessages(body: unknown, correlationId: string | u
 export function logChatResponseMessage(
   assistantMessageId: string,
   correlationId: string | undefined,
+  memory?: ChatResponseMemoryActivity,
 ): void {
   if (!isValidCorrelationId(assistantMessageId)) return;
   getServerLogger().info(
@@ -502,7 +515,7 @@ export function logChatResponseMessage(
           ? {}
           : { parentCorrelationId: correlationId }),
       },
-      { completeness: "complete", loss: "none" },
+      { completeness: "complete", loss: "none", ...memory },
     ),
   );
 }

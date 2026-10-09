@@ -61,6 +61,7 @@ function retrieve(reranker?: RerankerSeam, primaryScore = 0.99): Promise<Retriev
       },
     },
     {
+      correlationId: "reranker-selection-proof",
       answerer: { answer: () => Promise.resolve("") },
       nowMs: () => 1,
       contextPackReranker: reranker,

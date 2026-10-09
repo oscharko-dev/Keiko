@@ -39,6 +39,7 @@ export interface DiagnosticReferenceObservation {
 }
 
 export interface DiagnosticReferenceInputs {
+  readonly hasGitMetadata?: boolean | undefined;
   readonly assistantReferents?: readonly SearchReference[] | undefined;
   readonly continuityReferentSource?: ContinuityReferentSource | undefined;
   readonly scope: SelectedScope;
