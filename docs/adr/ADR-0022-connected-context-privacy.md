@@ -245,6 +245,11 @@ search scope. Mixed document/implementation lookups retain discovery of the inde
 Ordinary document eligibility reuses the shared web/text-document extension groups, including
 XHTML and Markdown, alongside XML and existing bounded document extraction. It does not enumerate
 navigation neighbours or widen the human's scope.
+Quoted document targets match their extracted reference identity rather than their anchor kind.
+If all complete document targets have closed admission rejections, the existing ring and
+augmentation decision events record `explicit-target-unavailable` and retain those rejection
+facts. They do not substitute another same-basename file or enumerate its contents. An independent
+source target or a requested relationship retains its existing retrieval flow.
 Existing correlated admission, skipped-ring, read and budget observations describe this path;
 non-Git folders cannot dispatch the Git-history ring, even when history was requested.
 An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
