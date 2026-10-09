@@ -132,6 +132,10 @@ import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
 import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
+import {
+  createSemanticRefreshDocumentBudget,
+  type SemanticRefreshDocumentBudget,
+} from "./grounded-repo-semantic-search.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -1638,6 +1642,7 @@ function resolveGroundedAnswerModel(
 }
 
 interface DefaultRunnerContext {
+  readonly refreshDocuments: SemanticRefreshDocumentBudget;
   readonly deps: UiHandlerDeps;
   readonly modelId: string;
   readonly signal: AbortSignal;
@@ -1665,7 +1670,11 @@ function runDefaultGroundedExploration(
     signal,
     budgetedInput.budget.excerptBytesMax,
   );
-  const semanticLease = configuredGroundedSemanticRequest(deps, budgetedInput.workspaceRoot);
+  const semanticLease = configuredGroundedSemanticRequest(
+    deps,
+    budgetedInput.workspaceRoot,
+    runnerCtx.refreshDocuments,
+  );
   return runGroundedExploration(budgetedInput, {
     ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
     followUpConfigurationDisposition: connectedFollowUpConfiguration(
@@ -1723,6 +1732,7 @@ function defaultRunner(
     signal,
   );
   const runnerCtx: DefaultRunnerContext = {
+    refreshDocuments: createSemanticRefreshDocumentBudget(deps),
     deps,
     modelId,
     signal,

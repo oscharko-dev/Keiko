@@ -8,8 +8,10 @@ import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
 import {
   configuredRepoSemanticSearchProviderLeaseFor,
+  createSemanticRefreshDocumentBudget,
   type ConfiguredRepoSemanticSearchProviderLease,
   type RepositorySemanticFreshnessObservation,
+  type SemanticRefreshDocumentBudget,
 } from "./grounded-repo-semantic-search.js";
 
 export type SemanticRefreshUsageGrant = (delta: Readonly<Partial<ExplorationUsage>>) => boolean;
@@ -91,6 +93,9 @@ export function staleSemanticMarker(
 export function configuredGroundedSemanticRequest(
   deps: UiHandlerDeps,
   repositoryRoot: string,
+  semanticRefreshDocumentBudget: SemanticRefreshDocumentBudget = createSemanticRefreshDocumentBudget(
+    deps,
+  ),
 ): {
   readonly providerFor: GroundedSemanticProviderFactory | undefined;
   readonly close: () => void;
@@ -104,7 +109,7 @@ export function configuredGroundedSemanticRequest(
         deps,
         request.signal,
         repositoryRoot,
-        { ...request },
+        { ...request, semanticRefreshDocumentBudget },
       );
       leases.push(lease);
       return lease.provider;
