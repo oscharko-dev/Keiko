@@ -1,4 +1,8 @@
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  composeOwnAssessment,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
 import * as groundedOrchestrator from "./grounded-orchestrator.js";
 import * as chatActivity from "./chat-activity.js";
@@ -477,7 +481,9 @@ function expectGroundedGatewayRequest(request: GatewayRequest): void {
     throw new Error("expected system and user gateway messages");
   }
   expect(systemMessage.role).toBe("system");
-  expect(systemMessage.content).toContain("Use only the supplied repository evidence");
+  expect(systemMessage.content).toContain(
+    "Only supplied repository evidence grounds repository claims",
+  );
   expect(userMessage.role).toBe("user");
   expect(userMessage.content).toContain("User question:");
   expect(userMessage.content).toContain(GROUNDED_FIXTURE_QUESTION);
@@ -1569,11 +1575,16 @@ describe("handleGroundedAsk", () => {
       try {
         const result = await handleGroundedAsk(
           ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
-          deps(fakeModel("Healthy source remains available.", seenRequests)),
+          deps(
+            fakeModel("Healthy source remains available [source:1|src/foo.ts:1-3].", seenRequests),
+          ),
         );
         expect(result.status, JSON.stringify(result.body)).toBe(200);
         expect(seenRequests).toHaveLength(1);
         const answer = asConnectedAnswer(result.body as GroundedAnswer);
+        expect(answer.citations).toContainEqual(
+          expect.objectContaining({ scopePath: "src/foo.ts" }),
+        );
         expect(answer.uncertainty.some((entry) => entry.kind === "source-skipped")).toBe(true);
         expect(JSON.stringify(result)).not.toContain(badRoot);
         expect(JSON.stringify(result)).not.toContain("private-root-detail");
@@ -3661,7 +3672,11 @@ describe("handleGroundedAsk", () => {
     expect(seenRequests).toHaveLength(1);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("Grounded answer [src/foo.ts:1-3]");
-    expect(answer.contextPack.usage.modelInputTokens).toBe(41);
+    // The physical-input ledger charges the canonical sent prompt; the context meter retains the
+    // provider's independent reported measurement, even when that measurement undercounts it.
+    expect(answer.contextPack.usage.modelInputTokens).toBe(
+      countGatewayPromptTokens(firstGatewayRequest(seenRequests)),
+    );
     expect(answer.contextPack.usage.modelOutputTokens).toBe(7);
     // PR #3678 review: a folder answer reports the prompt share of its excerpts to the meter.
     const promptContext = (result.body as GroundedAnswer).promptContext;
@@ -5242,9 +5257,28 @@ function seedFollowUpHandbook(root: string, limit = 73142, days = 19): void {
   );
 }
 
-async function prepareHandbookChat(): Promise<string> {
+function seedHandbookGitHistory(): void {
+  execFileSync("git", ["init", "-q"], { cwd: tmp });
+  execFileSync("git", ["add", "manual"], { cwd: tmp });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Keiko Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-qm",
+      "Document handbook limits",
+    ],
+    { cwd: tmp },
+  );
+}
+
+async function prepareHandbookChat(gitHistory = false): Promise<string> {
   const { chatId, projectPath } = await setupChatWithoutScope();
   seedFollowUpHandbook(projectPath);
+  if (gitHistory) seedHandbookGitHistory();
   store.updateChat(chatId, {
     connectedScope: {
       kind: "workspace-root",
@@ -5270,6 +5304,7 @@ async function prepareHandbookChat(): Promise<string> {
 async function askFreshHandbook(
   chatId: string,
   content: string,
+  ownAssessment: OwnAssessmentPolicy = "allowed",
 ): Promise<{
   readonly answer: ConnectedAnswer;
   readonly seen: readonly GatewayRequest[];
@@ -5286,6 +5321,8 @@ async function askFreshHandbook(
           "Current values [manual/finance/approval.html:2] [manual/claims/processing.html:2]",
           seen,
         ),
+        {},
+        { config: { ...customModelConfig(CHAT_MODEL), groundedAnswers: { ownAssessment } } },
       ),
     );
     expect(result.status).toBe(200);
@@ -5306,6 +5343,29 @@ function freshSourcePrompt(request: GatewayRequest): string {
 }
 
 describe("fresh handbook evidence for generated Chat artifacts", () => {
+  it("allows labelled learned knowledge without authenticating prior handbook citations", async () => {
+    const chatId = await prepareHandbookChat();
+    const seen: GatewayRequest[] = [];
+    const assessment = composeOwnAssessment(
+      "",
+      "General risk controls use independent checks and clear accountability.",
+    );
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: 'Find the exact literal "AbsentPaymentProbe".' })),
+      deps(fakeModel(assessment, seen)),
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(seen).toHaveLength(1);
+    expect(answer.content).toBe(assessment);
+    expect(answer.contextPack.usage.filesRead).toBe(0);
+    expect(answer.contextPack.filesInPrompt).toBe(0);
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
+    expect(freshSourcePrompt(firstGatewayRequest(seen))).not.toContain("TransferLimit");
+    expect(freshSourcePrompt(firstGatewayRequest(seen))).not.toContain("ClaimsWindow");
+  });
+
   it.each([
     HANDBOOK_FOLLOW_UP,
     "Schreibe hier einen TypeScript-Test anhand der Werte im Handbuch.",
@@ -5344,7 +5404,13 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
   ])(
     "does not use prior handbook evidence for an independent missing source selector: %s",
     async (content) => {
-      const { answer, seen } = await askFreshHandbook(await prepareHandbookChat(), content);
+      // These retained source-only guards abstain; default-allowed learned knowledge has separate
+      // public crossflow controls and must never authenticate old source excerpts.
+      const { answer, seen } = await askFreshHandbook(
+        await prepareHandbookChat(),
+        content,
+        "disabled",
+      );
       expect(seen).toEqual([]);
       expect(answer.contextPack.usage.filesRead).toBe(0);
       expect(answer.citations).toEqual([]);
@@ -5387,7 +5453,7 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
   it("discards overflow instead of treating old history as freshly retained source evidence", async () => {
     const chatId = await prepareHandbookChat();
     writeFileSync(join(tmp, "large.txt"), "z".repeat(200_000));
-    const { answer, seen, log } = await askFreshHandbook(chatId, HANDBOOK_FOLLOW_UP);
+    const { answer, seen, log } = await askFreshHandbook(chatId, HANDBOOK_FOLLOW_UP, "disabled");
     expect(seen).toEqual([]);
     expect(answer.contextPack.usage.filesRead).toBe(0);
     expect(answer.contextPack.coverage).toMatchObject({ filesScanned: 4, incomplete: false });
@@ -5402,7 +5468,7 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
   ])(
     "retains supplemental context without skipping requested relationship/history work: %s",
     async (content) => {
-      const { seen, log } = await askFreshHandbook(await prepareHandbookChat(), content);
+      const { seen, log } = await askFreshHandbook(await prepareHandbookChat(true), content);
       expect(seen).toHaveLength(1);
       const source = freshSourcePrompt(firstGatewayRequest(seen));
       expect(source).toContain("TransferLimit is 73142 EUR");
@@ -5427,6 +5493,7 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
     const { answer, seen, log } = await askFreshHandbook(
       await prepareHandbookChat(),
       "Why does MissingPaymentProbe fail? Write a Vitest test.",
+      "disabled",
     );
     expect(seen).toEqual([]);
     expect(answer.contextPack.usage.filesRead).toBe(0);

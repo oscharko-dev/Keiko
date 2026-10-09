@@ -67,10 +67,13 @@ function useLatestActionProps(props: MissingEvidenceActionsProps): {
 }
 
 function ownsActionScope(original: Chat, current: Chat | undefined): boolean {
+  // Scope hashes identify contents, so a newer ACK may restore the original hash. The immutable
+  // chat snapshot owns this action, as it does for the session's acknowledged-refresh fence.
   return (
     current?.id === original.id &&
     current.projectPath === original.projectPath &&
-    current.groundingScopeIdentity === original.groundingScopeIdentity
+    current.groundingScopeIdentity === original.groundingScopeIdentity &&
+    current === original
   );
 }
 
