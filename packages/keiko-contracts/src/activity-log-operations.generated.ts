@@ -28451,6 +28451,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      semanticStaleFallbackCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      semanticRefreshedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       recentPathHintCount: {
         type: "integer",
         dataClass: "count",

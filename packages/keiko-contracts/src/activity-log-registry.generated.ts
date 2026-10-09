@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c2dce52c9d27c7b695323ebc656ddbc66a694b308674d854d80875e4e8c63c9b" as const;
+  "ffecf3e25828c8e611b5089ab5a17abee313febb1b1c39863c480e819931a56f" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13434,6 +13434,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "selectionConfidence",
               type: "string",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "semanticRefreshedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "semanticStaleFallbackCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {

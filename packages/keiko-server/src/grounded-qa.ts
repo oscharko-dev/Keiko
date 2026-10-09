@@ -125,7 +125,7 @@ import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
-import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
+import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -1531,11 +1531,7 @@ function runDefaultGroundedExploration(
     signal,
     budgetedInput.budget.excerptBytesMax,
   );
-  const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
-    deps,
-    signal,
-    budgetedInput.workspaceRoot,
-  );
+  const semanticLease = configuredGroundedSemanticRequest(deps, budgetedInput.workspaceRoot);
   return runGroundedExploration(budgetedInput, {
     followUpConfigurationDisposition: connectedFollowUpConfiguration(
       deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
@@ -1558,9 +1554,8 @@ function runDefaultGroundedExploration(
     microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
     workspaceIndexForRoot: deps.workspaceIndexForRoot,
     ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
-    ...(semanticLease.provider === undefined
-      ? {}
-      : { repoSemanticSearchProvider: semanticLease.provider }),
+    repoSemanticSearchProviderFor: semanticLease.providerFor,
+    diagnostics: deps.diagnostics,
     ...(entailmentStage === undefined ? {} : { entailmentStage }),
     // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
     // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
