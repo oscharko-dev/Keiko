@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
+  groupConnectedContextOmissions,
   chatConnectedScopeFingerprintInput,
   chatConnectedScopeIdentity,
   canonicalDesktopChatTurnReferenceSeed,
@@ -1427,5 +1428,50 @@ describe("UNKNOWN_REPOSITORY_ERROR_CODE", () => {
   // wire change for every producer and consumer at once (PR #3452 review).
   it("is the BFF wire code for a repository the workspace has not opened", () => {
     expect(UNKNOWN_REPOSITORY_ERROR_CODE).toBe("UNKNOWN_REPOSITORY");
+  });
+});
+
+describe("retrieval diagnostics projection", () => {
+  it("preserves old summary shape and projects prompt-reaching counts and canonical dispositions", () => {
+    const diagnostics = {
+      filesInPrompt: 1,
+      semanticProviderDisposition: "suppressed" as const,
+      scopeContextState: "overflow" as const,
+    };
+    const baseline = buildGroundedAnswerContextPackSummary(pack(), 2, 3);
+    expect(baseline).not.toHaveProperty("filesInPrompt");
+    const actual = buildGroundedAnswerContextPackSummary(pack(), 2, 3, undefined, diagnostics);
+    expect(actual).toMatchObject(diagnostics);
+    expect(actual.usage.filesRead).toBe(USAGE_FIXTURE.filesRead);
+    expect(
+      Object.keys(actual)
+        .filter((key) => !Object.hasOwn(baseline, key))
+        .sort(),
+    ).toEqual(["filesInPrompt", "scopeContextState", "semanticProviderDisposition"]);
+  });
+});
+
+describe("connected-context omission groups", () => {
+  it("separates ranking exclusions from eligibility exclusions without changing counts", () => {
+    const counts = {
+      ...emptyOmittedCounts(),
+      "low-relevance": 2,
+      "near-duplicate": 3,
+      "budget-exhausted": 4,
+      ignored: 5,
+      binary: 6,
+      "tool-unavailable": 7,
+      "outside-scope": 8,
+    };
+    expect(groupConnectedContextOmissions(counts)).toEqual({ ranking: 9, eligibility: 26 });
+    expect(counts["budget-exhausted"]).toBe(4);
+  });
+  it("projects only named path-free diagnostic fields", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0, undefined, {
+      filesInPrompt: 0,
+      scopePath: "private/canary",
+    } as { filesInPrompt: number });
+    expect(summary.filesInPrompt).toBe(0);
+    expect(JSON.stringify(summary)).not.toContain("private/canary");
   });
 });
