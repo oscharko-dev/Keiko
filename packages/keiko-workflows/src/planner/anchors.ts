@@ -403,7 +403,7 @@ function freeze(
 ): readonly SearchAnchor[] {
   return anchors.map((a) => ({
     term: caseSensitive ? a.sourceTerm : a.term,
-    ...(a.kind === "path" ? { sourceTerm: a.sourceTerm } : {}),
+    ...(a.kind === "path" && a.sourceTerm !== a.term ? { sourceTerm: a.sourceTerm } : {}),
     weight: a.weight,
     kind: a.kind,
   }));

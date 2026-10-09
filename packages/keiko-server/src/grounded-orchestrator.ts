@@ -192,7 +192,6 @@ import {
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
 import {
   admitExplicitPaths,
-  EXPLICIT_PATH_REJECTION_REASONS,
   type ExplicitPathAdmission,
   type ExplicitPathObservation,
 } from "./grounded-explicit-paths.js";
@@ -372,19 +371,6 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
     excerptAnchoredWindowCount: { type: "integer", dataClass: "count", required: false },
     excerptReadWindowCount: { type: "integer", dataClass: "count", required: false },
-    explicitPathAnchorCount: { type: "integer", dataClass: "count", required: false },
-    explicitPathAdmittedCount: { type: "integer", dataClass: "count", required: false },
-    explicitPathRejectedCount: { type: "integer", dataClass: "count", required: false },
-    explicitPathRejectionReasons: {
-      type: "string-array",
-      dataClass: "closed-enum",
-      required: false,
-      maxItems: 8,
-      values: EXPLICIT_PATH_REJECTION_REASONS,
-    },
-    explicitLineHintCount: { type: "integer", dataClass: "count", required: false },
-    basenameDiscoveryTermCount: { type: "integer", dataClass: "count", required: false },
-    basenameDiscoveryMatchCount: { type: "integer", dataClass: "count", required: false },
     usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
     usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
@@ -584,6 +570,28 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
     },
     directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: false },
     explicitSelectionAtomCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathAnchorCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathAdmittedCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathRejectedCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathRejectionReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 8,
+      values: [
+        "outside-scope",
+        "denied",
+        "missing",
+        "ignored",
+        "generated",
+        "binary",
+        "size-exceeded",
+        "unsupported-format",
+      ],
+    },
+    explicitLineHintCount: { type: "integer", dataClass: "count", required: false },
+    basenameDiscoveryTermCount: { type: "integer", dataClass: "count", required: false },
+    basenameDiscoveryMatchCount: { type: "integer", dataClass: "count", required: false },
     unrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
     reusedEvidenceAtomCount: { type: "integer", dataClass: "count", required: false },
     semanticProviderDisposition: {
@@ -636,7 +644,10 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["connected-context-retrieval"],
-  proofIds: ["search.connected-context.source-details.line"],
+  proofIds: [
+    "search.connected-context.source-details.line",
+    "search.connected-context.explicit-admission.line",
+  ],
   releaseImpact: "patch",
 });
 
@@ -5890,7 +5901,9 @@ async function readPathExcerptWindows(
       deadlineAtMs: inputs.deadlineAtMs,
       ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     },
-    (inputs.atomsByPath.get(scopePath) ?? []).some((atom) => atom.provenance.tool === "repo.selectedFile"),
+    (inputs.atomsByPath.get(scopePath) ?? []).some(
+      (atom) => atom.provenance.tool === "repo.selectedFile",
+    ),
   );
   throwIfCancelled(inputs.signal);
   if (inputs.nowMs() >= inputs.deadlineAtMs) return unreadExcerptWindows(selection, true);
@@ -5917,11 +5930,21 @@ async function readExplicitExcerpt(
   try {
     return await readExcerpt(scope, request, deps);
   } catch (error) {
-    if (!hasExplicitSelection || !(error instanceof RepoSearchUnsupportedFileError) || error.reason !== "outside-range")
+    if (
+      !hasExplicitSelection ||
+      !(error instanceof RepoSearchUnsupportedFileError) ||
+      error.reason !== "outside-range"
+    )
       throw error;
-    return readExcerpt(scope, {
-      ...request, ...DEFAULT_EXCERPT_WINDOW, ranges: [DEFAULT_EXCERPT_WINDOW],
-    }, deps);
+    return readExcerpt(
+      scope,
+      {
+        ...request,
+        ...DEFAULT_EXCERPT_WINDOW,
+        ranges: [DEFAULT_EXCERPT_WINDOW],
+      },
+      deps,
+    );
   }
 }
 
@@ -5931,10 +5954,10 @@ function explicitLineAnchoredWindowCount(
 ): number {
   const lines = (atoms ?? [])
     .filter((atom) => atom.provenance.tool === "repo.selectedFile" && atom.lineRange !== undefined)
-    .flatMap((atom) => atom.lineRange === undefined ? [] : [atom.lineRange.startLine]);
-  return windows.filter((window) => lines.some(
-    (line) => line >= window.startLine && line <= window.endLine,
-  )).length;
+    .flatMap((atom) => (atom.lineRange === undefined ? [] : [atom.lineRange.startLine]));
+  return windows.filter((window) =>
+    lines.some((line) => line >= window.startLine && line <= window.endLine),
+  ).length;
 }
 
 function containingExcerptRange(windows: readonly LineWindow[]): LineWindow {
@@ -6781,7 +6804,7 @@ function preparePackAssembly(
   );
   const ordered = selectGroundedCandidateFiles({
     ...refined,
-    priorityPaths: new Set([...(refined.priorityPaths ?? []), ...explicitSelectionPaths(rings)]),
+    priorityPaths: mergedSelectionPriorities(refined, rings),
     scopeKind: input.scope.kind,
     protectedContentPaths: selectionEvidencePaths(input, plan, rings),
     pathOnlyPaths: pathOnlyEvidencePaths(atoms),
@@ -6800,6 +6823,13 @@ function preparePackAssembly(
       selectedAtoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [],
     keptPaths: ordered.kept.map((c) => c.scopePath),
   };
+}
+
+function mergedSelectionPriorities(
+  refined: CandidateOrdering,
+  rings: RingRunSummary,
+): ReadonlySet<string> {
+  return new Set([...(refined.priorityPaths ?? []), ...explicitSelectionPaths(rings)]);
 }
 
 function afterExcerptReadOmissions(
@@ -7176,12 +7206,7 @@ async function assembleGroundedPack(
   const augmentedRings = filterRejectedExplicitPaths(
     await augmentRingsWithDeterministicAtoms(args),
   );
-  const explicitDetails = {
-    explicitObservation: augmentedRings.explicitAdmission?.observation,
-    explicitSelectionAtomCount: augmentedRings.atoms.filter(
-      (atom) => atom.provenance.tool === "repo.selectedFile",
-    ).length,
-  };
+  const explicitDetails = explicitAssemblyDetails(augmentedRings);
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs, args.hasGitMetadata);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined) {
@@ -7226,6 +7251,17 @@ async function assembleGroundedPack(
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
     anchoredWindowCount: excerptReads.anchoredWindowCount,
     readWindowCount: excerptReads.readWindowCount,
+  };
+}
+
+function explicitAssemblyDetails(
+  rings: RingRunSummary,
+): Pick<GroundedPackAssembly, "explicitObservation" | "explicitSelectionAtomCount"> {
+  return {
+    explicitObservation: rings.explicitAdmission?.observation,
+    explicitSelectionAtomCount: rings.atoms.filter(
+      (atom) => atom.provenance.tool === "repo.selectedFile",
+    ).length,
   };
 }
 
@@ -7826,7 +7862,6 @@ function completionActivityExtra(
           retrievalTargetCount: plan.targetDecision.targets.length,
         }),
     retrievalAnchorCount: plan.anchors.length,
-    ...execution.status.explicitObservation,
     ...execution.status.decisions,
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,
@@ -7917,6 +7952,7 @@ function sourceDetailsActivityExtra(
       activityDetailStatus: "complete",
       directEvidenceLookup: execution.output.plan.directEvidenceLookup,
       explicitSelectionAtomCount: execution.status.explicitSelectionAtomCount ?? 0,
+      ...execution.status.explicitObservation,
       reusedEvidenceAtomCount: execution.status.reusedEvidenceAtomCount ?? 0,
       unrepresentablePathCount:
         execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
@@ -8906,28 +8942,13 @@ async function retrieveLiveConnectedContext(
   context: LiveRetrievalContext,
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "ring-retrieval";
-  const admissionBudget = createAugmentationBudgetMeter(
-    plan,
-    governor,
-    runtime.nowMs,
-    context.deadlineAtMs,
-  );
-  const admission = await admitExplicitPaths({
-    scope: input.scope,
-    query: input.query,
-    searchScope: context.searchScope,
-    fs: runtime.fs,
-    nowMs: runtime.nowMs,
-    deadlineAtMs: context.deadlineAtMs,
-    signal: deps.signal,
-    tryReserveSearchCall: admissionBudget.tryReserveSearchCall,
-  });
+  const admitted = await liveExplicitPathAdmission(input, deps, plan, governor, runtime, context);
   const discovered = await runAllRings(
     plan.rings,
     connectedContextSearchInputs(input, deps, plan, runtime, context),
-    admissionBudget.finish(governor).governor,
+    admitted.governor,
   );
-  const rings = withAdmittedExplicitPaths(discovered, admission, input, runtime.nowMs);
+  const rings = withAdmittedExplicitPaths(discovered, admitted.admission, input, runtime.nowMs);
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "pack-assembly";
   const assembled = await assembleGroundedPack(
@@ -8948,6 +8969,28 @@ async function retrieveLiveConnectedContext(
     workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
+}
+
+async function liveExplicitPathAdmission(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  governor: GovernorState,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): Promise<{ readonly admission: ExplicitPathAdmission; readonly governor: GovernorState }> {
+  const budget = createAugmentationBudgetMeter(plan, governor, runtime.nowMs, context.deadlineAtMs);
+  const admission = await admitExplicitPaths({
+    scope: input.scope,
+    query: input.query,
+    searchScope: context.searchScope,
+    fs: runtime.fs,
+    nowMs: runtime.nowMs,
+    deadlineAtMs: context.deadlineAtMs,
+    signal: deps.signal,
+    tryReserveSearchCall: budget.tryReserveSearchCall,
+  });
+  return { admission, governor: budget.finish(governor).governor };
 }
 
 function withAdmittedExplicitPaths(
