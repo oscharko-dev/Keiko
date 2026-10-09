@@ -359,6 +359,9 @@ export interface OmittedContextEntry {
   readonly omittedAtMs: number;
 }
 
+// A robust ordinary reference supplies the relative cut; protected/selected paths never define it.
+export const CONNECTED_CONTEXT_RELATIVE_SELECTION_FLOOR_PERMILLE = 550;
+
 // ─── Connected context pack ───────────────────────────────────────────────────
 export interface ConnectedContextPack {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
