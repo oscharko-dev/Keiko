@@ -1072,6 +1072,48 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: node scripts/check-sonar-main-quality-gate.mjs
 
+  portable-secure-read:
+    name: Portable secure-read smoke (${{ matrix.platform_target }})
+    needs: [change-scope, verified-tree]
+    if: ${{ !cancelled() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform_target: linux-x64
+            runner: ubuntu-latest
+          - platform_target: windows-x64
+            runner: windows-latest
+          - platform_target: macos-arm64
+            runner: macos-15
+          - platform_target: macos-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Compile and functionally qualify the real secure-read helper
+        run: node scripts/qualify-portable-secure-read.mjs ${{ matrix.platform_target }}
+
   ci:
     name: ci
     # `always()`, not `!cancelled()`: the required aggregate reports on every run, a cancelled one
@@ -1086,6 +1128,7 @@ jobs:
       - coverage-sonar
       - cross-platform-smoke
       - node-26-compatibility
+      - portable-secure-read
       - secret-scan
       - semantic-duplication
       - ui
@@ -1103,6 +1146,7 @@ jobs:
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
           NODE_26_COMPATIBILITY_RESULT: ${{ needs.node-26-compatibility.result }}
+          PORTABLE_SECURE_READ_RESULT: ${{ needs.portable-secure-read.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
@@ -1140,6 +1184,7 @@ jobs:
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
                          "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}" \
+                         "PORTABLE_SECURE_READ:${PORTABLE_SECURE_READ_RESULT:-}" \
                          "SBOM_PROVENANCE:${SBOM_PROVENANCE_RESULT:-}"; do
               state="${named#*:}"
               if [ "$state" != "skipped" ] && [ "$state" != "success" ]; then
@@ -1194,6 +1239,16 @@ jobs:
             echo "Node 26 compatibility skipped: documentation-only change set."
           elif [ "$NODE_26_COMPATIBILITY_RESULT" != "success" ]; then
             echo "Required CI dependency did not succeed: $NODE_26_COMPATIBILITY_RESULT"
+            exit 1
+          fi
+          # Portable helper qualification uses the same smoke fixture as the staged artifacts.
+          if [ "${PORTABLE_SECURE_READ_RESULT:-}" = "skipped" ]; then
+            if [ "$DOCUMENTATION_ONLY" != "true" ]; then
+              echo "Portable secure-read smoke was skipped without a documentation-only change set."
+              exit 1
+            fi
+          elif [ "${PORTABLE_SECURE_READ_RESULT:-}" != "success" ]; then
+            echo "Required CI dependency did not succeed: portable-secure-read (${PORTABLE_SECURE_READ_RESULT:-unset})"
             exit 1
           fi
           # The resolver is never reusable evidence, so it is aggregated on every run. It is checked

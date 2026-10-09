@@ -94,6 +94,16 @@ or cache-restored PR analysis cannot authorize integration merely because the sa
 a fresh scan after merge. This closes incident #3377, where an already-red `dev` was followed by a
 green incremental PR verdict and another red post-merge scan.
 
+The required `ci` aggregate also owns native secure-read qualification on Linux x64, Windows x64,
+macOS arm64, and macOS x64. Each leg freshly compiles the product helper and executes the same
+normal-read, platform-denial, and bounded-load fixture used by portable artifact staging. It does
+not substitute a simulated helper or duplicate the product request encoder. A failed, cancelled,
+missing, or unexpectedly skipped leg blocks integration. This closes the post-merge incident on
+PR #3895: the portable fixture still sent the retired 64 KiB request cap while the current native
+helper required 1 MiB, and a mock that ignored the cap left the PR green. Portable archive staging,
+signing, and attestation remain separate release proofs; those later proofs cannot stand in for
+pre-merge execution of the native protocol.
+
 On pull-request runs, every full-tree CI lane checks out the workflow run's immutable `github.sha`,
 never the moving `refs/pull/<number>/merge` name. Manual runs instead bind the Sonar job and its
 three coverage producers to `dev` as defined by ADR-0134 D3. Immediately after the trusted checkout

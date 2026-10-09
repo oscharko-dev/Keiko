@@ -150,6 +150,10 @@ describe("candidateProvedEveryReusedJob", () => {
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
     "Node 26 compatibility",
+    "Portable secure-read smoke (linux-x64)",
+    "Portable secure-read smoke (windows-x64)",
+    "Portable secure-read smoke (macos-arm64)",
+    "Portable secure-read smoke (macos-x64)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
     "Coverage shard (packages 1/3)",
@@ -178,6 +182,20 @@ describe("candidateProvedEveryReusedJob", () => {
     stubFetch({ "/jobs": { body: {} } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });
+
+  it.each(["linux-x64", "windows-x64", "macos-arm64", "macos-x64"])(
+    "refuses reuse when the portable secure-read proof for %s is absent or failed",
+    async (target) => {
+      const name = `Portable secure-read smoke (${target})`;
+      const missing = everyJob.filter((job) => job.name !== name);
+      stubFetch({ "/jobs": { body: { jobs: missing } } });
+      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+      for (const conclusion of ["failure", "cancelled", "skipped"]) {
+        stubFetch({ "/jobs": { body: { jobs: [...missing, { name, conclusion }] } } });
+        await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+      }
+    },
+  );
 });
 
 describe("resolveGreenPullRequestRun", () => {

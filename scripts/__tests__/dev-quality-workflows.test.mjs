@@ -45,6 +45,7 @@ function runCiAggregate(overrides = {}) {
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
       NODE_26_COMPATIBILITY_RESULT: "success",
+      PORTABLE_SECURE_READ_RESULT: "success",
       PROTECTED_BRANCH_RESULT: "success",
       SECRET_SCAN_RESULT: "success",
       SEMANTIC_DUPLICATION_RESULT: "success",

@@ -34,6 +34,10 @@ export const REUSED_JOB_NAMES = Object.freeze([
   "Coverage and SonarCloud",
   "Build, scan, SBOM, smoke",
   "Node 26 compatibility",
+  "Portable secure-read smoke (linux-x64)",
+  "Portable secure-read smoke (windows-x64)",
+  "Portable secure-read smoke (macos-arm64)",
+  "Portable secure-read smoke (macos-x64)",
   "ui",
 ]);
 

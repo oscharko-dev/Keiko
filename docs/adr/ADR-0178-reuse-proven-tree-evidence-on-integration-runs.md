@@ -17,17 +17,17 @@ the SonarCloud analysis run on every push to `dev` even for a proven tree — se
 Every merge into `dev` ran the complete required matrix a second time. Measured over the 100 most
 recent `dev` push runs of `ci.yml` before this decision:
 
-| Measurement | Value |
-| ----------- | ----- |
-| Total wall-clock time spent on `dev` push runs | 4,898 minutes (81.6 hours) |
-| Mean duration of one `dev` push run | 48 minutes |
-| `dev` push runs that concluded `failure` | 15 of 100 |
-| `dev` commits whose tree an already-green pull-request run had proven | 100 of 100 |
+| Measurement                                                           | Value                      |
+| --------------------------------------------------------------------- | -------------------------- |
+| Total wall-clock time spent on `dev` push runs                        | 4,898 minutes (81.6 hours) |
+| Mean duration of one `dev` push run                                   | 48 minutes                 |
+| `dev` push runs that concluded `failure`                              | 15 of 100                  |
+| `dev` commits whose tree an already-green pull-request run had proven | 100 of 100                 |
 
 The second measurement cannot produce evidence the first did not, and the reason is structural
 rather than statistical. `dev` is protected with linear history and signed squash merges, and branch
 protection only integrates a head that is up to date with its base. The squash commit therefore
-carries a new commit sha and the *identical tree sha* as the pull-request head the matrix already
+carries a new commit sha and the _identical tree sha_ as the pull-request head the matrix already
 measured. A tree sha is the recursive content hash of the whole worktree — every source file, the
 lockfile, and every workflow file under `.github/`. Two commits that share one cannot differ in a
 single byte that a gate could read. This was verified against the five most recent merges at the
@@ -54,7 +54,7 @@ An integration run (`push` to a protected integration branch, or `merge_group`) 
 gate starts, whether this commit's tree is already bound to complete green evidence. When it is, the
 jobs whose verdict that evidence carries do not run: `semantic-duplication`, `core-quality`,
 `coverage-packages`, `coverage-ui`, `coverage-scripts`, `coverage-sonar`, `build-scan-sbom-smoke`,
-`cross-platform-smoke`, `node-26-compatibility`, and `ui`.
+`cross-platform-smoke`, `node-26-compatibility`, `portable-secure-read`, and `ui`.
 
 `protected-branch-gate`, `secret-scan`, `change-scope`, and the resolver itself always run: they cost
 under two minutes in total and they judge the integration commit's own identity and history rather
@@ -82,8 +82,14 @@ closed on any other state, so a red `dev` analysis turns the integration run red
    pull request that merely contains it;
 3. that pull request's head tree sha equals this commit's tree sha;
 4. a completed `pull_request` run of the same workflow on that head concluded `success`;
-5. that run *executed* every job D1 skips — a candidate that skipped one is not evidence, which
+5. that run _executed_ every job D1 skips — a candidate that skipped one is not evidence, which
    forecloses a chain in which one reuse authorizes the next.
+
+The portable secure-read matrix requires successful evidence for all four exact native job names,
+not merely one matching matrix prefix. Missing or unsuccessful evidence for either macOS
+architecture, Linux x64, or Windows x64 forces fresh execution. Its fixture is shared with the
+post-merge portable workflow, while archive identity, staging, signing, and attestation remain
+release-specific proofs outside this reuse claim.
 
 ### D3 — Every uncertainty runs the full matrix
 
@@ -94,7 +100,7 @@ has exactly one success path and treats everything else as unproven.
 ### D4 — The aggregate still fails closed
 
 The `ci` aggregate verifies the resolver's own job succeeded, that a reuse claim carries a complete
-evidence identity (run id and tree sha), and that no gate *ran and failed* on this run. Reuse
+evidence identity (run id and tree sha), and that no gate _ran and failed_ on this run. Reuse
 accepts only the `skipped` state D1's guard produces; a gate that executed and failed still fails
 the aggregate. The non-reuse verdict is unchanged, including the documentation-only skip for the
 cross-platform matrix and the editor fast-path skip for the packaging job.
