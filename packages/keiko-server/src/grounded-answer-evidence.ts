@@ -22,11 +22,15 @@ export function validateSingleAnswerEvidence(
   answer: GroundedAnswerResult,
   pack: ConnectedContextPack,
   question: string,
+  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> | undefined,
 ): GroundedAnswerResult {
   const sentEvidencePacks = answer.sentEvidencePacks ?? [pack];
   const index =
     answer.evidenceScopeIndex ??
-    buildInsufficiencyScopeIndex(sentEvidencePacks, verifiedPackInventory(pack));
+    buildInsufficiencyScopeIndex(
+      sentEvidencePacks,
+      new Map([...verifiedPackInventory(pack), ...(discovered ?? [])]),
+    );
   const evidence = validateGroundedAnswerEvidence(answer.content, index, question);
   return {
     ...answer,

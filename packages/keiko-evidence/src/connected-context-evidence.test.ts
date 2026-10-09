@@ -557,6 +557,41 @@ describe("connected-context evidence", () => {
 });
 
 describe("canonical connected source attribution", () => {
+  it("keeps first-pass validated declarations and the second-pass outcome without source bodies", () => {
+    const store = createInMemoryEvidenceStore();
+    const result = persistConnectedContextEvidence(
+      {
+        runId: "follow-up-audit",
+        modelId: "fixture",
+        workspaceRoot: "/repo",
+        pack: { ...pack(), scope: { ...pack().scope, kind: "workspace-root", relativePaths: [] } },
+        citationCount: 1,
+        elapsedMs: 0,
+        startedAt: NOW,
+        finishedAt: NOW,
+        followUp: {
+          passCount: 1,
+          admittedPathCount: 1,
+          trigger: "insufficiency-declared",
+          outcome: "answered",
+          firstDeclarations: [
+            { scopePath: "src/Companion.ts", state: "unread-in-scope" },
+            { scopePath: "../private.ts", state: "unread-in-scope" },
+          ],
+        },
+      },
+      { store, env: {} },
+    );
+    expect(result.manifest.connectedContext?.followUp).toEqual({
+      passCount: 1,
+      admittedPathCount: 1,
+      trigger: "insufficiency-declared",
+      outcome: "answered",
+      firstDeclarations: [{ scopePath: "src/Companion.ts", state: "unread-in-scope" }],
+    });
+    expect(JSON.stringify(result.manifest)).not.toContain("../private.ts");
+    assertNoSensitiveText(result.manifest);
+  });
   it("preserves an authoritative fingerprint without reconstructing a root digest", () => {
     const store = createInMemoryEvidenceStore();
     const sourceScopeFingerprint = "a".repeat(64);

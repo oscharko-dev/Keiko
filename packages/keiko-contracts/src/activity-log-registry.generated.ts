@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5aa9c606145ec3074b7513604b70bf9e1dd6927fa1beaaaeb010cfcd9f66cbc3" as const;
+  "30528a70a8f4aa63bb8b3b0fa7f06bce5ce602809c913db59644c0ee220e83fa" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -12087,6 +12087,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "search.symbol-line.unavailable",
         ],
         end: [
+          "search.connected-context.answer-details",
           "search.connected-context.clarification-needed",
           "search.connected-context.completed",
         ],
@@ -12094,6 +12095,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         loss: [],
       },
       causalEdges: [
+        {
+          op: "search.connected-context.answer-details",
+          mode: "correlation",
+        },
         {
           op: "search.connected-context.clarification-needed",
           mode: "correlation",
@@ -12133,6 +12138,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
+        "search.connected-context.answer-details",
         "search.connected-context.clarification-needed",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
@@ -12144,6 +12150,134 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "search.connected-context.answer-details",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "answerKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "citationBehaviour",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "citationRepairDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "declaredUnreadInScopeCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "filesInPrompt",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "followUpAdmittedPathCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "followUpConfiguration",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "followUpOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "followUpPass",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "followUpPassCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "followUpTrigger",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "insufficiencyDeclaredCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "queryIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "scopeIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["search.connected-context.answer-details.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "search.connected-context.clarification-needed",
           owner: "keiko-server",
@@ -41470,6 +41604,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "search.answer.assessed": "memory-knowledge",
     "search.citations.reconciled": "memory-knowledge",
     "search.citations.support-settled": "memory-knowledge",
+    "search.connected-context.answer-details": "memory-knowledge",
     "search.connected-context.clarification-needed": "memory-knowledge",
     "search.connected-context.completed": "memory-knowledge",
     "search.connected-context.completion-details": "memory-knowledge",

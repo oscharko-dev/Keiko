@@ -1,3 +1,5 @@
+import { connectedFollowUpConfiguration } from "./grounded-answer-activity.js";
+import { logGroundedPromptSelection } from "./chat-activity.js";
 import {
   citationBehaviourFor,
   citationBehaviourObserverFor,
@@ -38,6 +40,7 @@ import type { IncomingMessage } from "node:http";
 import { basename } from "node:path";
 import {
   CancelledError,
+  TimeoutError,
   ContextOverflowError,
   GatewayError,
   ProviderError,
@@ -796,9 +799,13 @@ function contextProfileForGroundedModel(
 
 export function modelWindowAwareBudget(deps: UiHandlerDeps, modelId: string): ExplorationBudget {
   const profile = contextProfileForGroundedModel(deps, modelId);
-  if (profile === undefined) return DEFAULT_EXPLORATION_BUDGET;
+  const followUpPassesMax = connectedFollowUpConfiguration(
+    deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+  ).passesMax;
+  if (profile === undefined) return { ...DEFAULT_EXPLORATION_BUDGET, followUpPassesMax };
   return {
     ...DEFAULT_EXPLORATION_BUDGET,
+    followUpPassesMax,
     modelInputTokensMax: profile.effectiveInputBudget,
     modelOutputTokensMax: profile.reservedOutputTokens,
   };
@@ -1376,7 +1383,7 @@ function groundedAnswerContextSignal(
   options: GroundedAnswerOptions,
 ): GroundedGatewayAnswerContext {
   const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
-  if (options.deadlineAtMs !== undefined) {
+  if (options.deadlineAtMs !== undefined && Number.isFinite(options.deadlineAtMs)) {
     signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
   }
   return { ...ctx, signal: AbortSignal.any(signals) };
@@ -1438,6 +1445,16 @@ async function groundedGatewayAttempt(
     ),
   });
   if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
+  ensureNotCancelled(ctx.signal);
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) {
+    throw new TimeoutError("Grounded synthesis deadline elapsed before gateway admission");
+  }
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    sent,
+    options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    ctx.tokenAccounting,
+  );
   const response = await ctx.model.call(
     {
       modelId: ctx.modelId,
@@ -1520,6 +1537,9 @@ function runDefaultGroundedExploration(
     budgetedInput.workspaceRoot,
   );
   return runGroundedExploration(budgetedInput, {
+    followUpConfigurationDisposition: connectedFollowUpConfiguration(
+      deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+    ).disposition,
     reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
     observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
     answerer: createGatewayAnswerer(
@@ -1921,6 +1941,7 @@ function persistGroundedAuditEvidence(
       workspaceRoot: workerCtx.scope.workspaceRoot,
       chatId: workerCtx.chat.id,
       sourceScopeFingerprint: groundedSourceScopeFingerprint(output.pack.scope),
+      followUp: output.followUp,
       plan: output.plan,
       pack: output.pack,
       citationCount,

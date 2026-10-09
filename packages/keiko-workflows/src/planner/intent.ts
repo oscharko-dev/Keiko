@@ -241,7 +241,12 @@ function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext
     context.previousIntent !== "targeted-code-search"
   )
     return false;
-  if (!CONVERSATIONAL_FOLLOW_UP_RE.test(text)) return false;
+  const orientation =
+    context.referencePresent === true &&
+    matchedTerms(text, normalizeQueryText(text), REPOSITORY_OVERVIEW_PATTERNS).includes(
+      "orientation",
+    );
+  if (!CONVERSATIONAL_FOLLOW_UP_RE.test(text) && !orientation) return false;
   const anchors = extractAnchors({ text, maxAnchors: text.length }).anchors;
   return !anchors.some(
     (anchor) => anchor.kind === "path" || anchor.kind === "quoted" || anchor.kind === "identifier",

@@ -45,18 +45,17 @@ export interface GroundedRepairResult {
 }
 
 function repairDisposition(ctx: GroundedRepairContext): CitationRepairDisposition | undefined {
-  const answer = ctx.answer;
-  if (
-    answer.answerKind !== "answer" ||
-    answer.modelInvoked === false ||
-    ((answer.filesInPrompt ?? 0) === 0 && (ctx.numericMarkers?.size ?? 0) === 0)
-  )
-    return "not-needed";
+  if (!hasSubstantiveEvidenceAnswer(ctx)) return "not-needed";
   if (hasParsedRepairCitations(ctx)) return "not-needed";
   if (ctx.deps.reliableCitationBehaviour === "cites" || repairInvoker(ctx) === undefined)
     return "skipped-capability";
   if (repairBudgetExhausted(ctx)) return "skipped-budget";
   return undefined;
+}
+
+function hasSubstantiveEvidenceAnswer(ctx: GroundedRepairContext): boolean {
+  const sourceCount = (ctx.answer.filesInPrompt ?? 0) + (ctx.numericMarkers?.size ?? 0);
+  return ctx.answer.answerKind === "answer" && ctx.answer.modelInvoked !== false && sourceCount > 0;
 }
 
 function hasParsedRepairCitations(ctx: GroundedRepairContext): boolean {
@@ -68,14 +67,20 @@ function hasParsedRepairCitations(ctx: GroundedRepairContext): boolean {
 
 function repairBudgetExhausted(ctx: GroundedRepairContext): boolean {
   const budget = ctx.budget ?? ctx.pack?.budget;
+  if (budget === undefined) return true;
+  const usage = repairExistingUsage(ctx);
   return (
-    budget === undefined ||
     (ctx.deadlineAtMs !== undefined && ctx.nowMs() >= ctx.deadlineAtMs) ||
-    budget.modelInputTokensMax <=
-      (ctx.pack?.usage.modelInputTokens ?? 0) + ctx.answer.usage.promptTokens ||
-    budget.modelOutputTokensMax <=
-      (ctx.pack?.usage.modelOutputTokens ?? 0) + ctx.answer.usage.completionTokens
+    budget.modelInputTokensMax <= usage.promptTokens ||
+    budget.modelOutputTokensMax <= usage.completionTokens
   );
+}
+
+function repairExistingUsage(ctx: GroundedRepairContext): GroundedAnswerResult["usage"] {
+  return {
+    promptTokens: (ctx.pack?.usage.modelInputTokens ?? 0) + ctx.answer.usage.promptTokens,
+    completionTokens: (ctx.pack?.usage.modelOutputTokens ?? 0) + ctx.answer.usage.completionTokens,
+  };
 }
 
 function combinedRepairAnswer(
@@ -148,12 +153,13 @@ function repairOptions(ctx: GroundedRepairContext): GroundedAnswerOptions {
 }
 
 export function observeGroundedCitationBehaviour(ctx: GroundedRepairContext): GroundedAnswerResult {
-  if (
-    ctx.answer.answerKind !== "answer" ||
-    ctx.answer.modelInvoked === false ||
-    ((ctx.answer.filesInPrompt ?? 0) === 0 && (ctx.numericMarkers?.size ?? 0) === 0)
-  )
-    return ctx.answer;
+  if (!hasSubstantiveEvidenceAnswer(ctx)) return ctx.answer;
+  const behaviour = ctx.answer.citationBehaviour ?? observedCitationBehaviour(ctx);
+  ctx.deps.observeCitationBehaviour?.(behaviour);
+  return { ...ctx.answer, citationBehaviour: behaviour };
+}
+
+function observedCitationBehaviour(ctx: GroundedRepairContext): "cites" | "never" {
   const reconciliation = reconcileInlineCitations(
     ctx.answer.content,
     buildPackCitationIndex(
@@ -164,11 +170,7 @@ export function observeGroundedCitationBehaviour(ctx: GroundedRepairContext): Gr
     ctx.numericMarkers === undefined
       ? undefined
       : reconcileNumericCitations(ctx.answer.content, ctx.numericMarkers);
-  const behaviour =
-    ctx.answer.citationBehaviour ??
-    (reconciliation.citedScopePaths.size > 0 || (numeric?.citedMarkers.size ?? 0) > 0
-      ? "cites"
-      : "never");
-  ctx.deps.observeCitationBehaviour?.(behaviour);
-  return { ...ctx.answer, citationBehaviour: behaviour };
+  return reconciliation.citedScopePaths.size > 0 || (numeric?.citedMarkers.size ?? 0) > 0
+    ? "cites"
+    : "never";
 }

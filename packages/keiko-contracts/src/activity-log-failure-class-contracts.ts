@@ -2796,11 +2796,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "search.connected-context.source-details",
         "search.symbol-line.unavailable",
       ],
-      end: ["search.connected-context.clarification-needed", "search.connected-context.completed"],
+      end: [
+        "search.connected-context.answer-details",
+        "search.connected-context.clarification-needed",
+        "search.connected-context.completed",
+      ],
       failure: ["search.connected-context.failed"],
       loss: [],
     },
     requiredCausalOperations: [
+      "search.connected-context.answer-details",
       "search.connected-context.clarification-needed",
       "search.connected-context.completed",
       "search.connected-context.completion-details",
@@ -2813,6 +2818,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "search.connected-context.answer-details",
       "search.connected-context.clarification-needed",
       "search.connected-context.completed",
       "search.connected-context.completion-details",
@@ -2825,6 +2831,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "search.connected-context.answer-details",
       "search.connected-context.clarification-needed",
       "search.connected-context.completed",
       "search.connected-context.completion-details",
@@ -2845,12 +2852,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "safe-platform-class",
     ],
     requiredFrameOperations: [
+      "search.connected-context.answer-details",
       "search.connected-context.failed",
       "search.connected-context.metadata-unavailable",
       "search.connected-context.selection-details",
       "search.symbol-line.unavailable",
     ],
     requiredCauseOperations: [
+      "search.connected-context.answer-details",
       "search.connected-context.failed",
       "search.connected-context.metadata-unavailable",
       "search.connected-context.selection-details",

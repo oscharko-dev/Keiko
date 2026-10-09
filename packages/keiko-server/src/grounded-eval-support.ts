@@ -144,6 +144,8 @@ export function buildEvalContextPack(
 
 /** The incident gate drives the real conversation and retrieval composition, with fixture-owned IO. */
 export interface ConnectedRetrievalEvalInput {
+  readonly nowMs?: OrchestratorDeps["nowMs"];
+  readonly signal?: AbortSignal | undefined;
   readonly answerer?: GroundedAnswerer | undefined;
   readonly budget?: ExplorationBudget | undefined;
   readonly files: Readonly<Record<string, string>>;
@@ -270,6 +272,8 @@ export async function runConnectedRetrievalEval(
       workspaceRoot: root,
     };
     const retrievalDeps = {
+      ...(fixture.nowMs === undefined ? {} : { nowMs: fixture.nowMs }),
+      signal: fixture.signal,
       correlationId: fixture.correlationId,
       activityLog: fixture.activityLog,
       ...(fixture.detectWorkspace === undefined

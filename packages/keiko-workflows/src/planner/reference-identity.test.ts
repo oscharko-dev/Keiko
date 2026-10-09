@@ -17,7 +17,7 @@ const scope: SelectedScope = {
 function plan(
   reference: SearchReference,
   previousRetrievalIntent: "diagnostic-search" | "targeted-code-search",
-) {
+): ReturnType<typeof createExplorationPlan> {
   return createExplorationPlan(
     {
       scope,
@@ -70,6 +70,26 @@ describe("bounded reference continuity identity", () => {
       }).intent,
     ).toBe("diagnostic-search");
   });
+  it.each(["What can you see now?", "Was siehst du jetzt?"])(
+    "inherits targeted reference continuity for orientation %s only with an admitted referent",
+    (text) => {
+      expect(
+        classifyRetrievalIntent(text, scope, {
+          previousIntent: "targeted-code-search",
+          referencePresent: true,
+        }),
+      ).toMatchObject({
+        intent: "conversational-follow-up",
+        effectiveIntent: "targeted-code-search",
+      });
+      expect(
+        classifyRetrievalIntent(text, scope, {
+          previousIntent: "targeted-code-search",
+          referencePresent: false,
+        }).intent,
+      ).toBe("repository-overview");
+    },
+  );
   it("binds reference location, origin, and inherited effective intent into plan identity", () => {
     const first = plan(
       { path: "src/Feature.ts", line: 301, origin: "assistant" },
