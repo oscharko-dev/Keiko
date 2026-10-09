@@ -174,3 +174,25 @@ export function computeScore(
       generatedPenalty,
   );
 }
+
+// The floor reserves 90% of the full lexical contribution alone, computed through the same
+// normalization as the score. Targeted intent: provenance weight .35, definition headroom .70,
+// non-definition positive total 2.40 => full lexical baseline .10208, floor .091875. A depth-six
+// full hit adds depth/count evidence and clears this; a half-hit shallow decoy remains below it.
+export function absoluteRelevanceFloor(weights: ScoringWeights): number {
+  return (
+    0.9 *
+    computeScore(
+      {
+        scopePath: "",
+        baseScore: 0,
+        generatedHint: false,
+        signals: [
+          { name: "provenance-best-score", value: 1 },
+          { name: "lexical-score", value: 1 },
+        ],
+      },
+      weights,
+    )
+  );
+}
