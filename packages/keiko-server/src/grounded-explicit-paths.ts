@@ -14,7 +14,9 @@ import {
 import { extractAnchors, isGeneratedRankingPath } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
+  FileTooLargeError,
   PathEscapeError,
+  RepoSearchUnsupportedFileError,
   compileIgnore,
   containedRealPathInfo,
   findFiles,
@@ -22,6 +24,7 @@ import {
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
   isIgnored,
+  readExcerpt,
   resolveWithinWorkspace,
   type SearchResult,
   type SearchScope,
@@ -159,12 +162,27 @@ function pathPolicyRejection(
   if (!isPathWithinSelectedScope(inputs.scope, new Set(inputs.scope.relativePaths), path))
     return "outside-scope";
   if (isDenied(path)) return "denied";
-  if (isGeneratedArtifactPath(path) || isGeneratedRankingPath(path)) return "generated";
-  if (isIgnored(compileIgnore(inputs.searchScope.workspace.ignoreLines), path, false))
+  if (
+    !humanSelectedPath(path, inputs) &&
+    (isGeneratedArtifactPath(path) || isGeneratedRankingPath(path))
+  )
+    return "generated";
+  if (
+    !humanSelectedPath(path, inputs) &&
+    isIgnored(compileIgnore(inputs.searchScope.workspace.ignoreLines), path, false)
+  )
     return "ignored";
   const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, path);
   if (!inputs.fs.exists(absolute)) return "missing";
   return existingPathPolicyRejection(path, absolute, inputs);
+}
+
+function humanSelectedPath(path: string, inputs: AdmissionInputs): boolean {
+  return (
+    inputs.scope.explicitConnection === true &&
+    inputs.scope.kind === "files" &&
+    inputs.scope.relativePaths.includes(path)
+  );
 }
 
 function existingPathPolicyRejection(
@@ -245,7 +263,7 @@ function rejectPath(
   if (path === undefined) return;
   state.rejectedPaths.add(path);
   // Missing and denied paths are not corpus entries, and never become manifest paths.
-  if (reason === "missing" || reason === "denied") return;
+  if (reason === "missing" || reason === "denied" || reason === "outside-scope") return;
   state.omitted.push({ scopePath: path, reason, omittedAtMs: nowMs });
 }
 
@@ -288,10 +306,40 @@ async function classifiedPathRejection(
 ): Promise<ExplicitPathRejectionReason | "budget-exhausted" | undefined> {
   if (classified || isConnectedDocumentPath(path)) return undefined;
   if (!inputs.tryReserveSearchCall()) return "budget-exhausted";
+  if (humanSelectedPath(path, inputs)) return classifyHumanSelectedFile(path, inputs);
   const result = await findExplicitFiles(inputs, path, [path], 1);
   return result.atoms.some((atom) => atom.scopePath === path)
     ? undefined
     : rejectionReason(result, path);
+}
+
+async function classifyHumanSelectedFile(
+  path: string,
+  inputs: AdmissionInputs,
+): Promise<ExplicitPathRejectionReason | undefined> {
+  try {
+    await readExcerpt(
+      inputs.searchScope,
+      {
+        scopePath: path,
+        startLine: 1,
+        endLine: 1,
+        maxBytes: 1,
+      },
+      {
+        fs: inputs.fs,
+        nowMs: inputs.nowMs,
+        deadlineAtMs: inputs.deadlineAtMs,
+        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+      },
+    );
+    return undefined;
+  } catch (error) {
+    if (error instanceof FileTooLargeError) return "size-exceeded";
+    if (error instanceof RepoSearchUnsupportedFileError && error.reason === "binary")
+      return "binary";
+    throw error;
+  }
 }
 
 async function admitBasename(
@@ -308,8 +356,13 @@ async function admitBasename(
     BASENAME_MATCH_CAP,
   );
   const paths = new Set(result.atoms.map((atom) => atom.scopePath));
+  for (const path of inputs.scope.relativePaths) {
+    if (humanSelectedPath(path, inputs) && path.split("/").at(-1) === reference.path)
+      paths.add(path);
+  }
   state.basenameMatches += paths.size;
-  for (const path of paths) await admitReference({ ...reference, path }, inputs, state, true);
+  for (const path of paths)
+    await admitReference({ ...reference, path }, inputs, state, !humanSelectedPath(path, inputs));
 }
 
 function observation(state: AdmissionState): ExplicitPathObservation {

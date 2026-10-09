@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9cff70422cb0c3f75d909280d3ed2fa03aec30966e4801fd6b468475376346bf" as const;
+  "bc2396bd44f4d04ffefcd81c1e6cd19a3ccf5679b1f95cb20562dd326ca5e0d4" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -4390,7 +4390,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         {
           op: "client.evidence.inspected",
           owner: "keiko-server",
-          category: "diagnostic",
+          category: "search",
           lifecycle: "state",
           causal: "correlation",
           analyzerProjection: "timeline",
@@ -4641,7 +4641,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         {
           op: "client.scope.notice",
           owner: "keiko-server",
-          category: "diagnostic",
+          category: "search",
           lifecycle: "state",
           causal: "correlation",
           analyzerProjection: "timeline",
