@@ -1,4 +1,49 @@
 export const EN_MESSAGES = {
+  "grounded.uncertainty.memoryKind": "Memory context",
+  "grounded.files.capabilityUnattached":
+    "This model does not reliably add citations itself. No evidence citations were attached to this answer.",
+  "grounded.promptCounters.one":
+    "{citations} citation · {inPrompt} files in prompt · {ranking} omitted for relevance or budget · {eligibility} ineligible",
+  "grounded.promptCounters.other":
+    "{citations} citations · {inPrompt} files in prompt · {ranking} omitted for relevance or budget · {eligibility} ineligible",
+  "grounded.promptCounters.unrecorded": "not recorded",
+  "grounded.retrieval.semantic": "Semantic retrieval was used.",
+  "grounded.retrieval.lexical": "Retrieval used text matching only.",
+  "grounded.retrieval.reranker":
+    "Relevance refinement was unavailable; the initial ranking was used.",
+  "grounded.retrieval.scopeApplied": "Folder context was included.",
+  "grounded.retrieval.scopeOverflow": "The folder context exceeded the request capacity.",
+  "grounded.retrieval.scopeRefused": "Folder context was refused by its safety gate.",
+  "grounded.retrieval.scopeIncomplete": "The folder could not be fully inspected.",
+  "grounded.retrieval.lowConfidence": "No confident evidence match was found.",
+  "grounded.files.inspection": "Connected evidence inspection",
+  "grounded.files.inspect": "Inspect files",
+  "grounded.files.assembled": "Files assembled for this answer",
+  "grounded.files.omitted": "Omitted files",
+  "grounded.files.path": "Scope-relative file",
+  "grounded.files.lines": "Lines",
+  "grounded.files.bytes": "Excerpt bytes",
+  "grounded.files.reason": "Reason",
+  "grounded.files.scope": "Scope: {scope}",
+  "grounded.files.root": "Connected root folder",
+  "grounded.files.loading": "Loading evidence…",
+  "grounded.files.failed": "Unable to load evidence. Close and reopen this section to retry.",
+  "grounded.files.manifestBoundary":
+    "These are the files recorded by retrieval before prompt fitting. The prompt counter above records how many files actually reached the model.",
+  "grounded.files.boundedDetail":
+    "The manifest retains a bounded list of omissions. The summary reports the full recorded total.",
+  "grounded.files.capability": "This model does not add citations itself; Keiko attaches evidence.",
+  "grounded.files.copy": "Copy",
+  "grounded.files.copyPath": "Copy path: {path}",
+  "grounded.files.copied": "Path copied.",
+  "grounded.files.copyFailed": "Copy failed. Select the path and copy it manually.",
+  "grounded.uncertainty.warningReference": "See the citation warning above.",
+  "grounded.uncertainty.memoryContext": "The answer used memory context without citing it.",
+  "grounded.coverage.file":
+    "This answer covers the connected file. It could not be fully searched (recorded exclusions: {detail}).",
+  "grounded.reference.cited": "Cited evidence",
+  "grounded.reference.readUncited": "Read, not cited",
+  "grounded.reference.unread": "Not read",
   "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
   "editor.taskWorkspaceAccess.checkingDescription":
     "Keiko is checking this browser's local workspace access.",

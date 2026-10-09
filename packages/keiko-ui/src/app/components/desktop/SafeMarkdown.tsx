@@ -40,7 +40,8 @@ import { Icons } from "./Icons";
 import {
   consumeRepositoryReferenceLineSuffix,
   parseExactRepositoryReference,
-  RepositoryReferenceInline,
+  ProseRepositoryReference,
+  type RepositoryReferenceEvidence,
   repositoryReferenceTextParts,
   repositoryReferencePathLabels,
   sanitizeRepositoryEvidenceText,
@@ -59,6 +60,7 @@ export interface SafeMarkdownProps {
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
+  readonly repositoryEvidence?: RepositoryReferenceEvidence | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly streaming?: boolean | undefined;
@@ -69,6 +71,7 @@ interface RenderOptions {
   readonly literalUserInput: boolean;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly repositoryEvidence: RepositoryReferenceEvidence | undefined;
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly streaming: boolean;
   readonly repositoryPathLabels: ReadonlyMap<string, string>;
@@ -670,10 +673,11 @@ function renderRepositoryText(
         const reference = part.reference;
         if (reference === undefined) return null;
         return (
-          <RepositoryReferenceInline
+          <ProseRepositoryReference
             key={partKey}
             reference={reference}
             roots={options.repositoryRoots}
+            evidence={options.repositoryEvidence}
             openReference={options.openRepositoryReference}
             displayPath={options.repositoryPathLabels.get(reference.path)}
           />
@@ -698,9 +702,10 @@ function renderInlineCode(
       {reference === null ? (
         text
       ) : (
-        <RepositoryReferenceInline
+        <ProseRepositoryReference
           reference={reference}
           roots={options.repositoryRoots}
+          evidence={options.repositoryEvidence}
           openReference={options.openRepositoryReference}
           displayPath={options.repositoryPathLabels.get(reference.path)}
           className="repo-ref-link repo-ref-link-inline-code"
@@ -896,6 +901,7 @@ function SafeMarkdownImpl({
   diagnosticCorrelationId,
   diagnosticMessageId,
   repositoryRoots = EMPTY_ROOTS,
+  repositoryEvidence,
   openRepositoryReference,
   citationPreview,
   streaming = false,
@@ -919,6 +925,7 @@ function SafeMarkdownImpl({
       citationPreview,
       streaming,
       repositoryRoots,
+      repositoryEvidence,
       openRepositoryReference,
       repositoryPathLabels,
     }),
@@ -927,6 +934,7 @@ function SafeMarkdownImpl({
       citationPreview,
       openRepositoryReference,
       repositoryRoots,
+      repositoryEvidence,
       repositoryPathLabels,
       streaming,
     ],
@@ -959,6 +967,7 @@ export interface SafeMarkdownBoundaryProps {
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
+  readonly repositoryEvidence?: RepositoryReferenceEvidence | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly streaming?: boolean | undefined;
@@ -995,6 +1004,7 @@ export class SafeMarkdownBoundary extends Component<
         diagnosticCorrelationId={this.props.diagnosticCorrelationId}
         diagnosticMessageId={this.props.diagnosticMessageId}
         repositoryRoots={this.props.repositoryRoots}
+        repositoryEvidence={this.props.repositoryEvidence}
         openRepositoryReference={this.props.openRepositoryReference}
         citationPreview={this.props.citationPreview}
         streaming={this.props.streaming}

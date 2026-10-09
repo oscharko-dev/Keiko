@@ -20,6 +20,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   RepositoryReferenceInline,
+  ProseRepositoryReference,
+  proseReferenceEvidenceState,
   normalizeReferencePath,
   parseExactRepositoryReference,
   repositoryReferenceTextParts,
@@ -37,6 +39,51 @@ import {
 } from "@/lib/client-diagnostics";
 
 describe("current repository scope navigation identities", () => {
+  it("does not infer reads from a basename match or from an ambiguous root", () => {
+    const reference = { path: "src/read.ts", label: "src/read.ts" };
+    const evidence = { citations: [], readPaths: ["other/read.ts"] };
+    expect(
+      proseReferenceEvidenceState(reference, evidence, [{ root: "/repo", label: "repo" }]),
+    ).toBe("unread");
+    expect(
+      proseReferenceEvidenceState(reference, { ...evidence, readPaths: [reference.path] }, [
+        { root: "/repo", label: "repo" },
+        { root: "/other", label: "other" },
+      ]),
+    ).toBe("unread");
+  });
+  it("opens attributed prose in its canonical source root through the existing citation rule", () => {
+    const scopes = ["/repo", "/other"].map((root) => ({
+      kind: "workspace-root" as const,
+      root,
+      relativePaths: [],
+      connectedAtMs: 1,
+    }));
+    const source = scopes[1];
+    if (source === undefined) throw new TypeError("Missing source fixture");
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "source" }));
+    render(
+      <ProseRepositoryReference
+        reference={{ path: "src/read.ts", label: "src/read.ts" }}
+        roots={repositoryReferenceRootsForScopes(scopes, "/repo")}
+        openReference={openReference}
+        evidence={{
+          citations: [
+            {
+              stableId: "atom",
+              scopePath: "src/read.ts",
+              lineRange: undefined,
+              score: 1,
+              sourceScopeFingerprint: connectedScopeFingerprint(source),
+            },
+          ],
+          readPaths: [],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Cited evidence/ }));
+    expect(openReference).toHaveBeenCalledWith({ root: "/other", path: "src/read.ts" });
+  });
   it("retains all selected scope identities on one root and resolves a legacy project root", () => {
     const scopes = ["src", "manuals"].map((path) => ({
       kind: "directory" as const,

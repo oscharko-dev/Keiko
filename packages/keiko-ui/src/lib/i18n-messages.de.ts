@@ -1,5 +1,52 @@
 import type { MessageCatalog } from "./i18n-messages.en";
 export const DE_MESSAGES = {
+  "grounded.uncertainty.memoryKind": "Gedächtniskontext",
+  "grounded.files.capabilityUnattached":
+    "Dieses Modell liefert selbst keine verlässlichen Quellenangaben. Dieser Antwort wurden keine Quellenangaben angehängt.",
+  "grounded.promptCounters.one":
+    "{citations} Quellenangabe · {inPrompt} Dateien im Prompt · {ranking} nach Relevanz oder Budget ausgelassen · {eligibility} nicht zulässig",
+  "grounded.promptCounters.other":
+    "{citations} Quellenangaben · {inPrompt} Dateien im Prompt · {ranking} nach Relevanz oder Budget ausgelassen · {eligibility} nicht zulässig",
+  "grounded.promptCounters.unrecorded": "nicht erfasst",
+  "grounded.retrieval.semantic": "Semantische Suche wurde verwendet.",
+  "grounded.retrieval.lexical": "Die Suche verwendete nur Textabgleiche.",
+  "grounded.retrieval.reranker":
+    "Die Relevanzverfeinerung war nicht verfügbar; die ursprüngliche Rangfolge wurde verwendet.",
+  "grounded.retrieval.scopeApplied": "Der Ordnerkontext wurde einbezogen.",
+  "grounded.retrieval.scopeOverflow": "Der Ordnerkontext überschritt die Kapazität der Anfrage.",
+  "grounded.retrieval.scopeRefused":
+    "Der Ordnerkontext wurde durch seine Sicherheitsprüfung abgelehnt.",
+  "grounded.retrieval.scopeIncomplete": "Der Ordner konnte nicht vollständig untersucht werden.",
+  "grounded.retrieval.lowConfidence": "Es wurde kein verlässlicher Belegtreffer gefunden.",
+  "grounded.files.inspection": "Verbundene Belege prüfen",
+  "grounded.files.inspect": "Dateien prüfen",
+  "grounded.files.assembled": "Für diese Antwort zusammengestellte Dateien",
+  "grounded.files.omitted": "Ausgelassene Dateien",
+  "grounded.files.path": "Datei relativ zum Scope",
+  "grounded.files.lines": "Zeilen",
+  "grounded.files.bytes": "Bytes der Ausschnitte",
+  "grounded.files.reason": "Grund",
+  "grounded.files.scope": "Scope: {scope}",
+  "grounded.files.root": "Verbundener Stammordner",
+  "grounded.files.loading": "Belege werden geladen…",
+  "grounded.files.failed":
+    "Belege konnten nicht geladen werden. Zum erneuten Versuch den Abschnitt schließen und wieder öffnen.",
+  "grounded.files.manifestBoundary":
+    "Dies sind die vor der Prompt-Anpassung erfassten Dateien der Suche. Der Prompt-Zähler oben erfasst, wie viele Dateien das Modell tatsächlich erreichten.",
+  "grounded.files.boundedDetail":
+    "Das Manifest enthält eine begrenzte Liste der Auslassungen. Die Zusammenfassung zeigt die vollständig erfasste Anzahl.",
+  "grounded.files.capability": "Dieses Modell zitiert nicht selbst; Keiko hängt Belege an.",
+  "grounded.files.copy": "Kopieren",
+  "grounded.files.copyPath": "Pfad kopieren: {path}",
+  "grounded.files.copied": "Pfad kopiert.",
+  "grounded.files.copyFailed": "Kopieren fehlgeschlagen. Den Pfad auswählen und manuell kopieren.",
+  "grounded.uncertainty.warningReference": "Siehe den Zitierhinweis oben.",
+  "grounded.uncertainty.memoryContext": "Die Antwort nutzte Gedächtniskontext ohne Quellenangabe.",
+  "grounded.coverage.file":
+    "Diese Antwort bezieht sich auf die verbundene Datei. Sie konnte nicht vollständig durchsucht werden (erfasste Ausschlüsse: {detail}).",
+  "grounded.reference.cited": "Zitierter Beleg",
+  "grounded.reference.readUncited": "Gelesen, nicht zitiert",
+  "grounded.reference.unread": "Nicht gelesen",
   "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
   "editor.taskWorkspaceAccess.checkingDescription":
     "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",

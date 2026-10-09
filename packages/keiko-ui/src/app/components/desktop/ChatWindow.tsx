@@ -61,6 +61,8 @@ import {
 } from "./context/ChatSessionContext";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
+import { useConnectedEvidenceReferences } from "./hooks/useConnectedEvidenceReferences";
+import type { RepositoryReferenceEvidence } from "./repositoryReferences";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
@@ -786,6 +788,7 @@ function useRegisterPdfCitationPreviewTarget(
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
 type ChatBubbleMarkdownProps = {
+  readonly repositoryEvidence: RepositoryReferenceEvidence | undefined;
   readonly message: ChatMessage;
   readonly isUser: boolean;
   readonly streaming: boolean;
@@ -805,6 +808,7 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
         content={message.content}
         messageId={message.id}
         repositoryRoots={props.repositoryRoots}
+        repositoryEvidence={props.repositoryEvidence}
         openRepositoryReference={props.openRepositoryReference}
         citationPreview={props.citationPreview}
       />
@@ -816,6 +820,7 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
       literalUserInput={isUser}
       diagnosticCorrelationId={message.id}
       repositoryRoots={props.repositoryRoots}
+      repositoryEvidence={props.repositoryEvidence}
       openRepositoryReference={props.openRepositoryReference}
       citationPreview={props.citationPreview}
       streaming={streaming}
@@ -992,7 +997,9 @@ function ChatBubbleGroundedSection({
   openRepositoryReference,
   citationPreview,
   openDocumentationTarget,
+  onReadPaths,
 }: {
+  readonly onReadPaths: (runId: string, paths: readonly string[]) => void;
   readonly message: ChatMessage;
   readonly isUser: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
@@ -1005,6 +1012,7 @@ function ChatBubbleGroundedSection({
     <div className="chatw-grounded chatw-grounded-inline">
       <GroundedAnswer
         answer={message.groundedAnswer}
+        onReadPaths={onReadPaths}
         busy={false}
         repositoryRoots={repositoryRoots}
         openRepositoryReference={openRepositoryReference}
@@ -1064,6 +1072,7 @@ function ChatBubbleImpl({
       ? responseSelection.selectedVersion
       : undefined;
   const displayedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
+  const evidence = useConnectedEvidenceReferences(displayedMessage.groundedAnswer, repositoryRoots);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
   const citationPreview = usePdfCitationPreviewController({
@@ -1118,6 +1127,7 @@ function ChatBubbleImpl({
           </output>
         )}
         <ChatBubbleContentArea
+          repositoryEvidence={evidence.evidence}
           message={displayedMessage}
           isUser={isUser}
           streaming={streaming}
@@ -1167,6 +1177,7 @@ function ChatBubbleImpl({
           />
         </div>
         <ChatBubbleGroundedSection
+          onReadPaths={evidence.onReadPaths}
           message={displayedMessage}
           isUser={isUser}
           repositoryRoots={repositoryRoots}
