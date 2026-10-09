@@ -1,4 +1,6 @@
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
+import * as groundedOrchestrator from "./grounded-orchestrator.js";
+import * as chatActivity from "./chat-activity.js";
 import { buildPackCitationIndex, reconcileInlineCitations } from "./grounded-faithfulness.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
@@ -5552,6 +5554,42 @@ describe("actual fitted repository evidence authority", () => {
     expect(calls).toBe(2);
     expect(result.body).toMatchObject({ content: "The threshold is 1000.", citations: [] });
     expect(result.body).not.toMatchObject({ citationBehaviour: "cites-after-repair" });
+  });
+  it("refuses gateway dispatch when prompt logging exhausts the original deadline", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const call = vi.fn(fakeModel("Threshold is 1000 [src/validation.ts:1].", []).call);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const execute = groundedOrchestrator.runGroundedExploration;
+    const logPrompt = chatActivity.logGroundedPromptSelection;
+    const runnerSpy = vi
+      .spyOn(groundedOrchestrator, "runGroundedExploration")
+      .mockImplementation((input, ports) =>
+        execute({ ...input, budget: { ...input.budget, elapsedMsMax: 100 } }, ports),
+      );
+    const loggerSpy = vi
+      .spyOn(chatActivity, "logGroundedPromptSelection")
+      .mockImplementation((...args) => {
+        logPrompt(...args);
+        clock.mockReturnValue(NOW + 100);
+      });
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+        deps({ call }),
+      );
+      expect(loggerSpy).toHaveBeenCalledOnce();
+      expect(call).not.toHaveBeenCalled();
+      expect(result.status).toBe(503);
+    } finally {
+      loggerSpy.mockRestore();
+      runnerSpy.mockRestore();
+      clock.mockRestore();
+    }
   });
   it("abstains when a 970-token input ceiling fits away every source excerpt", async () => {
     const { chatId } = await setupChatWithScope();

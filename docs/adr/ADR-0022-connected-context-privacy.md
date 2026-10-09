@@ -433,7 +433,10 @@ explicit `1` enables, explicit `0` disables, and every other explicit value fail
 passes with a body-free invalid configuration observation (ADR-0180).
 Working-tree recency uses one scope-bound request-local snapshot from the existing observed Git
 runner, capped at 64 admitted paths and a shared 1.5-second ceiling further bounded by the remaining
-request deadline. Ordinary folders spawn no process; exhausted grants and elapsed deadlines refuse
+request deadline. A directly connected repository subfolder uses a bounded ancestor metadata check
+only as the Git-discovery hint; hardened Git membership still executes in that selected cwd, and
+the selected evidence root never expands to the repository parent. Ordinary folders spawn no process;
+exhausted grants and elapsed deadlines refuse
 observation. Allowed paths feed the existing recent-path search policy and a small targeted/diagnostic
 ranking signal without changing provenance, admission, or floor exemptions. Selection-details
 records only the closed status disposition, measured duration, observed/deleted counts and hint/hit
