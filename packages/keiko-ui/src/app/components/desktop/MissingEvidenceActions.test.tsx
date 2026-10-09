@@ -124,12 +124,20 @@ function ScopeActionHarness({
       />
       <output data-testid="scope-identity">{current.groundingScopeIdentity}</output>
       <output data-testid="scope-list">{JSON.stringify(current.connectedScopes)}</output>
+      <input
+        aria-label="Message draft"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+      />
       <output data-testid="draft">{draft}</output>
     </div>
   );
 }
 
-function delayedScopeTransport(): {
+function delayedScopeTransport(
+  disconnect: "Folder" | "File" = "Folder",
+  clock: "advancing" | "same" = "advancing",
+): {
   readonly initial: Chat;
   readonly persist: typeof updateChatConnectedScopes;
   readonly acknowledgeAdd: () => void;
@@ -139,7 +147,7 @@ function delayedScopeTransport(): {
   const pending = scopeResponse();
   let current = initial;
   let added: ChatResponse | undefined;
-  const disconnectedIdentity = "gsi-v1:" + "c".repeat(64);
+  const disconnectedIdentity = "gsi-v1:" + (disconnect === "File" ? "a" : "c").repeat(64);
   const persist = vi
     .fn<typeof updateChatConnectedScopes>()
     .mockImplementation(async (_id, scopes, identity) => {
@@ -151,7 +159,7 @@ function delayedScopeTransport(): {
         connectedScopes: scopes ?? [],
         groundingScopeIdentity:
           added === undefined ? "gsi-v1:" + "b".repeat(64) : disconnectedIdentity,
-        updatedAt: current.updatedAt + 1,
+        updatedAt: clock === "same" ? current.updatedAt : current.updatedAt + 1,
       };
       if (added !== undefined) return { chat: current };
       added = { chat: current };
@@ -180,10 +188,18 @@ async function disconnectFolder(): Promise<void> {
 }
 
 describe("missing-evidence scope acknowledgements", () => {
-  it.each(["scope", "draft"] as const)(
-    "preserves the %s after a newer Disconnect precedes the delayed Add-file reply",
-    async (observable) => {
-      const transport = delayedScopeTransport();
+  it.each([
+    ["Folder", "scope", "advancing"],
+    ["Folder", "draft", "advancing"],
+    ["File", "scope", "advancing"],
+    ["File", "draft", "advancing"],
+    ["File", "scope", "same"],
+    ["File", "draft", "same"],
+  ] as const)(
+    "preserves the %s Disconnect and %s with %s acknowledgement time",
+    async (disconnect, observable, clock) => {
+      const transport = delayedScopeTransport(disconnect, clock);
+      const disconnectName = disconnect === "File" ? /^Disconnect File:/ : /^Disconnect Folder:/;
       const focus = vi.fn();
       render(
         <ScopeActionHarness
@@ -200,7 +216,7 @@ describe("missing-evidence scope acknowledgements", () => {
         expect.any(String),
         chat.id,
       );
-      fireEvent.click(screen.getByRole("button", { name: /^Disconnect Folder:/ }));
+      fireEvent.click(screen.getByRole("button", { name: disconnectName }));
       await waitFor(() =>
         expect(screen.getByTestId("scope-identity")).toHaveTextContent(
           transport.disconnectedIdentity,
@@ -215,12 +231,42 @@ describe("missing-evidence scope acknowledgements", () => {
         transport.disconnectedIdentity,
       );
       expect(screen.getByTestId("scope-list").textContent).toBe(acknowledgedScopes);
-      expect(screen.queryByRole("button", { name: /^Disconnect Folder:/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: disconnectName })).toBeNull();
       expect(screen.getByTestId("draft")).toHaveTextContent(/^Unsent draft$/);
       expect(focus).not.toHaveBeenCalled();
       expect(reportScopeNotice).not.toHaveBeenCalled();
     },
   );
+
+  it("retains action ownership during same-snapshot draft changes and unrelated rerenders", async () => {
+    const transport = delayedScopeTransport();
+    const focus = vi.fn();
+    const view = render(
+      <ScopeActionHarness
+        initial={transport.initial}
+        updateScopes={transport.persist}
+        focus={focus}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add file to scope" }));
+    await waitFor(() => expect(transport.persist).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByRole("textbox", { name: "Message draft" }), {
+      target: { value: "Latest unsent draft" },
+    });
+    view.rerender(
+      <ScopeActionHarness
+        initial={transport.initial}
+        updateScopes={transport.persist}
+        focus={focus}
+      />,
+    );
+    await act(async () => transport.acknowledgeAdd());
+    expect(screen.getByTestId("scope-identity")).toHaveTextContent("gsi-v1:" + "b".repeat(64));
+    expect(screen.getByTestId("draft")).toHaveTextContent("Latest unsent draft");
+    expect(screen.getByTestId("draft")).toHaveTextContent("@src/validation.ts");
+    expect(focus).toHaveBeenCalledOnce();
+    expect(reportScopeNotice).toHaveBeenCalledOnce();
+  });
 
   it("adopts the initial successful Add-file reply and appends one focused unsent follow-up", async () => {
     const transport = delayedScopeTransport();
