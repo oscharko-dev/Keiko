@@ -155,6 +155,7 @@ function atomRangeKey(atom: EvidenceAtom): string {
 }
 
 export function tracePriority(atom: EvidenceAtom): number {
+  if (atom.provenance.tool === "repo.selectedFile" && atom.lineRange !== undefined) return 2;
   if (atom.provenance.tool === "discovered-symbol-definition") return 2;
   if (atom.provenance.tool === "repo.symbolFileDiscovery" && atom.lineRange !== undefined) return 2;
   if (atom.provenance.tool === "structural-edge-target") return 1;

@@ -103,6 +103,7 @@ import {
   searchText,
   symbolGraphAdapter,
   type ReadExcerptResult,
+  type ReadExcerptRequest,
   type SearchLimits,
   type SearchResult,
   type SearchScope,
@@ -189,6 +190,12 @@ import {
   tracePriority,
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
+import {
+  admitExplicitPaths,
+  EXPLICIT_PATH_REJECTION_REASONS,
+  type ExplicitPathAdmission,
+  type ExplicitPathObservation,
+} from "./grounded-explicit-paths.js";
 import { KnownFitScopeContext, type ScopeContextObservation } from "./grounded-scope-context.js";
 import {
   attachContextBudgetDiagnostics,
@@ -365,6 +372,19 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
     excerptAnchoredWindowCount: { type: "integer", dataClass: "count", required: false },
     excerptReadWindowCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathAnchorCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathAdmittedCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathRejectedCount: { type: "integer", dataClass: "count", required: false },
+    explicitPathRejectionReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 8,
+      values: EXPLICIT_PATH_REJECTION_REASONS,
+    },
+    explicitLineHintCount: { type: "integer", dataClass: "count", required: false },
+    basenameDiscoveryTermCount: { type: "integer", dataClass: "count", required: false },
+    basenameDiscoveryMatchCount: { type: "integer", dataClass: "count", required: false },
     usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
     usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
@@ -563,6 +583,7 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
       values: ["complete", "unavailable"],
     },
     directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: false },
+    explicitSelectionAtomCount: { type: "integer", dataClass: "count", required: false },
     unrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
     reusedEvidenceAtomCount: { type: "integer", dataClass: "count", required: false },
     semanticProviderDisposition: {
@@ -2536,6 +2557,7 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly explicitAdmission?: ExplicitPathAdmission;
   readonly reusedEvidenceAtomCount?: number | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
@@ -4744,19 +4766,21 @@ function selectedFileAtom(
   scopePath: string,
   queryFingerprint: string,
   nowMs: () => number,
+  line?: number,
 ): EvidenceAtom {
+  const lineRange = line === undefined ? undefined : { startLine: line, endLine: line };
   return {
     schemaVersion: scope.schemaVersion,
     stableId: evidenceAtomStableId({
       scopeId: scope.scopeId,
       scopePath,
-      lineRange: undefined,
+      lineRange,
       provenanceKind: "file-listing",
       provenanceTool: "repo.selectedFile",
       queryFingerprint,
     }),
     scopePath,
-    lineRange: undefined,
+    lineRange,
     score: 1,
     provenance: {
       kind: "file-listing",
@@ -5847,7 +5871,7 @@ async function readPathExcerptWindows(
   throwIfCancelled(inputs.signal);
   if (inputs.nowMs() >= inputs.deadlineAtMs || remainingBytes <= 0)
     return unreadExcerptWindows(selection, inputs.nowMs() >= inputs.deadlineAtMs);
-  const result = await readExcerpt(
+  const result = await readExplicitExcerpt(
     inputs.searchScope,
     {
       scopePath,
@@ -5866,6 +5890,7 @@ async function readPathExcerptWindows(
       deadlineAtMs: inputs.deadlineAtMs,
       ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     },
+    (inputs.atomsByPath.get(scopePath) ?? []).some((atom) => atom.provenance.tool === "repo.selectedFile"),
   );
   throwIfCancelled(inputs.signal);
   if (inputs.nowMs() >= inputs.deadlineAtMs) return unreadExcerptWindows(selection, true);
@@ -5874,10 +5899,42 @@ async function readPathExcerptWindows(
     windows,
     bytesConsumed: appended.bytes,
     truncatedWindowCount: appended.truncated,
-    anchoredWindowCount: appended.anchored,
+    anchoredWindowCount: Math.max(
+      appended.anchored,
+      explicitLineAnchoredWindowCount(windows, inputs.atomsByPath.get(scopePath)),
+    ),
     deadlineReached: false,
     omittedWindowCount: selection.omittedWindowCount + (result.omittedRangeCount ?? 0),
   };
+}
+
+async function readExplicitExcerpt(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  deps: Parameters<typeof readExcerpt>[2],
+  hasExplicitSelection: boolean,
+): Promise<ReadExcerptResult> {
+  try {
+    return await readExcerpt(scope, request, deps);
+  } catch (error) {
+    if (!hasExplicitSelection || !(error instanceof RepoSearchUnsupportedFileError) || error.reason !== "outside-range")
+      throw error;
+    return readExcerpt(scope, {
+      ...request, ...DEFAULT_EXCERPT_WINDOW, ranges: [DEFAULT_EXCERPT_WINDOW],
+    }, deps);
+  }
+}
+
+function explicitLineAnchoredWindowCount(
+  windows: readonly ExcerptWindow[],
+  atoms: readonly EvidenceAtom[] | undefined,
+): number {
+  const lines = (atoms ?? [])
+    .filter((atom) => atom.provenance.tool === "repo.selectedFile" && atom.lineRange !== undefined)
+    .flatMap((atom) => atom.lineRange === undefined ? [] : [atom.lineRange.startLine]);
+  return windows.filter((window) => lines.some(
+    (line) => line >= window.startLine && line <= window.endLine,
+  )).length;
 }
 
 function containingExcerptRange(windows: readonly LineWindow[]): LineWindow {
@@ -6633,7 +6690,7 @@ function selectPackAtoms(
 }
 
 function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OPTIONS {
-  const certifiedPaths = primaryContentPaths(rings);
+  const certifiedPaths = new Set([...primaryContentPaths(rings), ...explicitSelectionPaths(rings)]);
   return {
     ...DEFAULT_FILTER_OPTIONS,
     minScoreExemptPaths: certifiedPaths,
@@ -6642,15 +6699,18 @@ function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OP
   };
 }
 
-function codeEvidenceAtoms(
-  atoms: readonly EvidenceAtom[],
-  scope: SelectedScope,
-): readonly EvidenceAtom[] {
+function explicitSelectionPaths(rings: RingRunSummary): ReadonlySet<string> {
+  return new Set(
+    rings.atoms
+      .filter((atom) => atom.provenance.tool === "repo.selectedFile")
+      .map((atom) => atom.scopePath),
+  );
+}
+
+function codeEvidenceAtoms(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[] {
   // Explicit documents belong to extraction, including its unsupported diagnostics. Keep them
   // off the code excerpt path before merging that exclusively document-owned result.
-  return scope.kind === "files" && scope.explicitConnection === true
-    ? atoms.filter((atom) => !isConnectedDocumentPath(atom.scopePath))
-    : atoms;
+  return atoms.filter((atom) => !isConnectedDocumentPath(atom.scopePath));
 }
 
 function selectionEvidencePaths(
@@ -6658,7 +6718,7 @@ function selectionEvidencePaths(
   plan: ExplorationPlan,
   rings: RingRunSummary,
 ): ReadonlySet<string> {
-  const paths = new Set(primaryContentPaths(rings));
+  const paths = new Set([...primaryContentPaths(rings), ...explicitSelectionPaths(rings)]);
   const decision = plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors);
   if (decision.kind === "contextual") {
     for (const atom of rings.atoms) {
@@ -6673,9 +6733,8 @@ function selectionEvidencePaths(
 
 function rankingEvidence(
   rings: RingRunSummary,
-  scope: SelectedScope,
 ): Pick<PreparedPackAssembly, "atoms" | "reusedEvidenceAtomCount"> {
-  const sourceAtoms = codeEvidenceAtoms(rings.atoms, scope);
+  const sourceAtoms = codeEvidenceAtoms(rings.atoms);
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
   for (const atom of sourceAtoms) pushUniqueAtom(atoms, seen, atom);
@@ -6693,7 +6752,7 @@ function preparePackAssembly(
   nowMs: () => number,
   hasGitMetadata: boolean,
 ): PreparedPackAssembly {
-  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(rings, input.scope);
+  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(rings);
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   // M4: pass the classified retrieval intent so ranking can apply intent-conditioned signals
   // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
@@ -6722,6 +6781,7 @@ function preparePackAssembly(
   );
   const ordered = selectGroundedCandidateFiles({
     ...refined,
+    priorityPaths: new Set([...(refined.priorityPaths ?? []), ...explicitSelectionPaths(rings)]),
     scopeKind: input.scope.kind,
     protectedContentPaths: selectionEvidencePaths(input, plan, rings),
     pathOnlyPaths: pathOnlyEvidencePaths(atoms),
@@ -6989,6 +7049,8 @@ interface GroundedAssemblyContext {
 }
 
 interface GroundedPackAssembly {
+  readonly explicitObservation?: ExplicitPathObservation | undefined;
+  readonly explicitSelectionAtomCount?: number;
   readonly reusedEvidenceAtomCount?: number | undefined;
   readonly excerptObservation?: ExcerptReadObservation | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
@@ -7015,7 +7077,7 @@ async function prepareGroundedAssembly(
   // Bounded small-document extraction for explicit `files` scopes (Issue #1285). Returns empty
   // evidence for every other scope kind, leaving the code-first path byte-identical.
   const documentEvidence = await collectConnectedDocumentEvidence({
-    scope: input.scope,
+    scope: documentSelectionScope(input.scope, augmentedRings.explicitAdmission),
     query: input.query,
     searchScope,
     fs,
@@ -7054,6 +7116,21 @@ async function prepareGroundedAssembly(
       });
   const cached = cacheKey === undefined ? undefined : assembleOptions.microIndex?.get(cacheKey);
   return { documentEvidence, cached, cacheIdentity, cacheKey, assembleOptions };
+}
+
+function documentSelectionScope(
+  scope: SelectedScope,
+  admission: ExplicitPathAdmission | undefined,
+): SelectedScope {
+  const paths =
+    admission?.selections.map((selection) => selection.path).filter(isConnectedDocumentPath) ?? [];
+  if (paths.length === 0) return scope;
+  return {
+    ...scope,
+    kind: "files",
+    relativePaths: [...new Set([...(scope.kind === "files" ? scope.relativePaths : []), ...paths])],
+    explicitConnection: true,
+  };
 }
 
 // PR4-W1 (ADR-0055 D1): conditional diagnostics observer. When a ContextProfile is threaded
@@ -7096,12 +7173,21 @@ async function assembleGroundedPack(
   args: AssembleGroundedPackInputs,
 ): Promise<GroundedPackAssembly> {
   const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
-  const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
+  const augmentedRings = filterRejectedExplicitPaths(
+    await augmentRingsWithDeterministicAtoms(args),
+  );
+  const explicitDetails = {
+    explicitObservation: augmentedRings.explicitAdmission?.observation,
+    explicitSelectionAtomCount: augmentedRings.atoms.filter(
+      (atom) => atom.provenance.tool === "repo.selectedFile",
+    ).length,
+  };
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs, args.hasGitMetadata);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined) {
     return {
       pack: withGroundedContextDiagnostics(ctx.cached, deps),
+      ...explicitDetails,
       reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
       metadataRetention: augmentedRings.metadataRetention,
       elapsedBudgetBlocked: false,
@@ -7133,6 +7219,7 @@ async function assembleGroundedPack(
   });
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
+    ...explicitDetails,
     reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
     metadataRetention: augmentedRings.metadataRetention,
     excerptObservation: excerptReads.observation,
@@ -7145,6 +7232,8 @@ async function assembleGroundedPack(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly explicitObservation?: ExplicitPathObservation | undefined;
+  readonly explicitSelectionAtomCount?: number | undefined;
   readonly reusedEvidenceAtomCount?: number | undefined;
   readonly sourceDecision?: SourceDecisionObservation | undefined;
   readonly scopeContextObservation?: ScopeContextObservation | undefined;
@@ -7236,6 +7325,8 @@ function liveRetrievalCompletion(
   decisions: RingDecisionAudit | undefined,
 ): ConnectedContextCompletionStatus {
   return {
+    explicitObservation: assembled.explicitObservation,
+    explicitSelectionAtomCount: assembled.explicitSelectionAtomCount,
     anchoredExcerptWindowCount: assembled.anchoredWindowCount,
     excerptReadWindowCount: assembled.readWindowCount,
     excerptObservation: assembled.excerptObservation,
@@ -7735,6 +7826,7 @@ function completionActivityExtra(
           retrievalTargetCount: plan.targetDecision.targets.length,
         }),
     retrievalAnchorCount: plan.anchors.length,
+    ...execution.status.explicitObservation,
     ...execution.status.decisions,
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,
@@ -7824,6 +7916,7 @@ function sourceDetailsActivityExtra(
       ...shared,
       activityDetailStatus: "complete",
       directEvidenceLookup: execution.output.plan.directEvidenceLookup,
+      explicitSelectionAtomCount: execution.status.explicitSelectionAtomCount ?? 0,
       reusedEvidenceAtomCount: execution.status.reusedEvidenceAtomCount ?? 0,
       unrepresentablePathCount:
         execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
@@ -8813,11 +8906,28 @@ async function retrieveLiveConnectedContext(
   context: LiveRetrievalContext,
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "ring-retrieval";
-  const rings = await runAllRings(
+  const admissionBudget = createAugmentationBudgetMeter(
+    plan,
+    governor,
+    runtime.nowMs,
+    context.deadlineAtMs,
+  );
+  const admission = await admitExplicitPaths({
+    scope: input.scope,
+    query: input.query,
+    searchScope: context.searchScope,
+    fs: runtime.fs,
+    nowMs: runtime.nowMs,
+    deadlineAtMs: context.deadlineAtMs,
+    signal: deps.signal,
+    tryReserveSearchCall: admissionBudget.tryReserveSearchCall,
+  });
+  const discovered = await runAllRings(
     plan.rings,
     connectedContextSearchInputs(input, deps, plan, runtime, context),
-    governor,
+    admissionBudget.finish(governor).governor,
   );
+  const rings = withAdmittedExplicitPaths(discovered, admission, input, runtime.nowMs);
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "pack-assembly";
   const assembled = await assembleGroundedPack(
@@ -8838,6 +8948,34 @@ async function retrieveLiveConnectedContext(
     workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
+}
+
+function withAdmittedExplicitPaths(
+  rings: RingRunSummary,
+  admission: ExplicitPathAdmission,
+  input: OrchestratorInput,
+  nowMs: () => number,
+): RingRunSummary {
+  const fingerprint = selectedFileQueryFingerprint(input.query);
+  return filterRejectedExplicitPaths({
+    ...rings,
+    explicitAdmission: admission,
+    atoms: [
+      ...admission.selections
+        .filter((selection) => !isConnectedDocumentPath(selection.path))
+        .map((selection) =>
+          selectedFileAtom(input.scope, selection.path, fingerprint, nowMs, selection.line),
+        ),
+      ...rings.atoms,
+    ],
+    omitted: [...rings.omitted, ...admission.omitted],
+  });
+}
+
+function filterRejectedExplicitPaths(rings: RingRunSummary): RingRunSummary {
+  const rejected = rings.explicitAdmission?.rejectedPaths;
+  if (rejected === undefined || rejected.size === 0) return rings;
+  return { ...rings, atoms: rings.atoms.filter((atom) => !rejected.has(atom.scopePath)) };
 }
 
 // Which budget actually stopped the request is reported, not inferred: `readBudgetBlocked` and
