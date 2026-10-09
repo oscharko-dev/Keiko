@@ -129,18 +129,27 @@ describe("query-named explicit path admission", () => {
     expect(output.pack.files.map((file) => file.scopePath)).toEqual([path]);
   });
 
-  it("reports an admitted explicit file as a budget omission when no read fits", async () => {
-    const { output, log } = await retrieve(`Why does ${TARGET} fail?`, {
-      budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 0 },
+  it("reports unread admitted explicit files under a finite read budget", async () => {
+    const other = "src/Form/other/validation.ts";
+    const { output, log } = await retrieve(`Why do ${TARGET} and ${other} fail?`, {
+      files: {
+        [TARGET]: "export const firstFact = 73;\n",
+        [other]: "export const secondFact = 81;\n",
+      },
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 },
     });
-    expect(output.pack.files).toEqual([]);
+    expect(output.pack.files).toHaveLength(1);
+    const unread = [TARGET, other].filter(
+      (path) => !output.pack.files.some((file) => file.scopePath === path),
+    );
+    expect(unread).toHaveLength(1);
     expect(output.pack.omitted).toContainEqual({
-      scopePath: TARGET,
+      scopePath: unread[0],
       reason: "budget-exhausted",
       omittedAtMs: NOW,
     });
     expect(
       log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
-    ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
+    ).toMatchObject({ explicitPathAdmittedCount: 2, explicitPathRejectedCount: 0 });
   });
 });
