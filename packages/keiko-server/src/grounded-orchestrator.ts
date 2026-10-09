@@ -7613,6 +7613,7 @@ interface ConnectedContextExecution {
 }
 
 interface ConnectedContextActivity {
+  readonly sink?: ServerLogSink;
   readonly symbolReadFailure: SymbolReadFailureObserver;
   readonly metadataUnavailable: MetadataFailureObserver;
   readonly clarification: (plan: ExplorationPlan) => void;
@@ -8662,8 +8663,9 @@ function createConnectedContextActivity(
   nowMs: () => number,
   logicalStartMs: number,
 ): ConnectedContextActivity {
+  const sink = deps.activityLog ?? processServerLogSink();
   const logger = createServerLogger({
-    sink: deps.activityLog ?? processServerLogSink(),
+    sink,
     level: "debug",
   });
   const correlationId = correlationIdOrUnknown(deps.correlationId);
@@ -8671,6 +8673,7 @@ function createConnectedContextActivity(
   const logElapsed = startLogTimer();
   let metadataUnavailableInspectionCount = 0;
   return {
+    sink,
     symbolReadFailure: createSymbolReadFailureObserver(logger, correlationId),
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
@@ -10440,7 +10443,9 @@ async function withLiveWorktreeRecency(
     observationAllowed: plan.budget.searchCallsMax > 0,
     signal: deps.signal,
     gitRunner: deps.worktreeGitRunner,
-    activityLog: deps.activityLog,
+    // Activity setup already captured this port safely. Re-reading a hostile dependency getter
+    // would turn a recorded logging failure into a retrieval failure.
+    activityLog: runtime.activity.sink,
     diagnostics: deps.diagnostics,
     correlationId: deps.correlationId,
   });

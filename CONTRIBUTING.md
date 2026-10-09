@@ -176,9 +176,12 @@ prompts. `client.answer.copied` records each chat answer copy (`copied` or `fail
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
 removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
 for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
-`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
+`search.answer.assessed` records whether a connected answer carried Keiko's own, labelled
 assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
 (`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+Source-linked observations carry canonical scope/query digests and `phase` (`candidate`,
+`accepted-final`); only accepted-final observations describe the delivered answer. Candidate or
+unbound historical observations cannot suppress retrieval-miss findings.
 A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
 provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
 `reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,

@@ -487,7 +487,8 @@ system that exists, never beside it:
   behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,
   pass/admission counts, outcome, and configuration disposition.
   Pass count records a completed follow-up retrieval even when fitting refuses its synthesis;
-  admission count retains its actual physical target reads and never implies final sent membership.
+  admission count records targets retained by follow-up retrieval, independently of physical
+  read/byte accounting and final sent membership.
   Technical failures use the existing closed error header, body-free frames and causes;
   declaration paths remain outside logs.
   Connected synthesis buffers normalized output before publication so rejected declaration lines

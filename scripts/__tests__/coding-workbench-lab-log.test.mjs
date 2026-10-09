@@ -13,6 +13,7 @@ import { activityLogSegmentFileName } from "../../packages/keiko-contracts/dist/
 import {
   flatten,
   readActivityEvents,
+  readActivityLogText,
   resolveLogDirectory,
   selectRunEvents,
 } from "../testing/coding-workbench-lab/activity-log-events.mjs";
@@ -113,6 +114,15 @@ describe("readActivityEvents", () => {
     index,
   });
   const jsonl = (...lines) => `${lines.join("\n")}\n`;
+
+  it("preserves logical segment lines without inventing empty corruption records", async () => {
+    const directory = tempDirectory();
+    const first = activityLogSegmentFileName(identity(10), "sealed");
+    const second = activityLogSegmentFileName(identity(11), "sealed");
+    writeFileSync(join(directory, first), "first record\n");
+    writeFileSync(join(directory, second), "second record\n");
+    expect(await readActivityLogText(directory)).toBe("first record\nsecond record\n");
+  });
 
   it("reads the segments of the logical log in order, through the grammar, and skips what is not an event", async () => {
     const directory = tempDirectory();

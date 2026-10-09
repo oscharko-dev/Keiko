@@ -3,8 +3,12 @@
 Tooling for the live qualification of the Coding Workbench with a self-hosted model behind LiteLLM
 (epic #3871, issue #3872). The end-to-end reproduction (model server, LiteLLM, task suite, fixture
 repository) is in [`docs/qa/coding-workbench-lab/README.md`](../../../docs/qa/coding-workbench-lab/README.md);
-this page is the command reference. The scripts are lab tooling for a local operator: none reads a
-secret from a file or from the repository, none prints one, and the run summaries are body-free.
+this page is the command reference. The Workbench drivers read the launcher secret from the
+environment; none prints it, and run summaries are body-free. The separate
+[connected-chat qualification](../../../docs/qa/connected-chat-local-model-qualification.md)
+driver additionally reads owner-only runtime metadata and its launcher-secret file outside the
+checkout. It uses the same pairing API, requires a held source SHA and explicit folder scope,
+and starts no Workbench task. Its preparation mode makes no model request.
 
 ## Prerequisites
 
