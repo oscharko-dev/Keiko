@@ -35,6 +35,41 @@ afterEach(() => {
 });
 
 describe("acknowledged scope notice", () => {
+  it.each([false, true])(
+    "restores the replaced same-root folder in either order (%s)",
+    async (reverse) => {
+      vi.useFakeTimers();
+      const alpha = { ...folder, relativePaths: ["Alpha"] };
+      const beta = { ...folder, relativePaths: ["Beta"] };
+      const narrowed = { ...file, relativePaths: ["Beta/validation.ts"] };
+      const before = reverse ? [beta, alpha] : [alpha, beta];
+      const after = [alpha, narrowed];
+      const restored = { ...chat(alpha), connectedScopes: [alpha, beta] };
+      const updateScopes = vi.fn().mockResolvedValue({ chat: restored });
+      const changed = vi.fn();
+      const keep = vi.fn();
+      const view = render(
+        <ChatScopeNotice
+          chat={{ ...chat(alpha), connectedScopes: before }}
+          onChatChanged={changed}
+          onKeepFolderChange={keep}
+          updateScopes={updateScopes}
+        />,
+      );
+      view.rerender(
+        <ChatScopeNotice
+          chat={{ ...chat(alpha), connectedScopes: after }}
+          onChatChanged={changed}
+          onKeepFolderChange={keep}
+          updateScopes={updateScopes}
+        />,
+      );
+      settle();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Keep folder" })));
+      expect(updateScopes).toHaveBeenCalledWith("chat-a", [alpha, beta], "identity");
+      expect(changed).toHaveBeenCalledWith(restored);
+    },
+  );
   it.each([true, false])(
     "invalidates a %s-settled file notice and saved pin after disconnect ACK",
     (settled) => {
