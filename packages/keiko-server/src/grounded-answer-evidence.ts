@@ -32,7 +32,7 @@ export function validateSingleAnswerEvidence(
   answer: GroundedAnswerResult,
   pack: ConnectedContextPack,
   question: string,
-  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> | undefined,
+  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
 ): GroundedAnswerResult {
   const sentEvidencePacks = answer.sentEvidencePacks ?? [pack];
   const index =
