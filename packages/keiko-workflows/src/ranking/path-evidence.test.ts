@@ -3,7 +3,12 @@ import type { EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-conte
 import type { SearchAnchor } from "../planner/index.js";
 import { DEFAULT_FILTER_OPTIONS } from "./filter.js";
 import { rankCandidates } from "./rank.js";
-import { computeScore, DEFAULT_SCORING_WEIGHTS, type ScoringWeights } from "./scoring.js";
+import {
+  computeScore,
+  DEFAULT_SCORING_WEIGHTS,
+  positiveWeightTotal,
+  type ScoringWeights,
+} from "./scoring.js";
 import { DEFAULT_GENERATED_PATTERNS, extractSignals, type ExtractedSignals } from "./signals.js";
 
 const DEEP = "src/Form/feature/conditions/deep/validation.ts";
@@ -121,11 +126,9 @@ describe("path evidence signals", () => {
 
 describe("path evidence scoring", () => {
   it("adds path weights without removing established scoring dimensions", () => {
-    expect(DEFAULT_SCORING_WEIGHTS).toMatchObject({
-      exactPathMatch: expect.any(Number),
-      pathSegmentAffinity: expect.any(Number),
-      basenameMatch: expect.any(Number),
-    });
+    expect(DEFAULT_SCORING_WEIGHTS.exactPathMatch).toBeGreaterThan(0);
+    expect(DEFAULT_SCORING_WEIGHTS.pathSegmentAffinity).toBeGreaterThan(0);
+    expect(DEFAULT_SCORING_WEIGHTS.basenameMatch).toBeGreaterThan(0);
     expect(DEFAULT_SCORING_WEIGHTS.provenanceBestScore).toBeGreaterThan(0);
   });
 
@@ -133,6 +136,18 @@ describe("path evidence scoring", () => {
     const weights = { ...zeroWeights(), exactPathMatch: 0.4 };
     expect(computeScore(vector([{ name: "exact-path-match", value: 1 }]), weights)).toBeCloseTo(
       0.4,
+      10,
+    );
+  });
+
+  it("derives the positive-weight invariant from the production table and excludes penalties", () => {
+    const baseline = positiveWeightTotal(DEFAULT_SCORING_WEIGHTS);
+    expect(baseline).toBeGreaterThan(1);
+    expect(positiveWeightTotal({ ...DEFAULT_SCORING_WEIGHTS, generatedPenalty: 100 })).toBe(
+      baseline,
+    );
+    expect(positiveWeightTotal({ ...DEFAULT_SCORING_WEIGHTS, lexicalScore: 0.7 })).toBeCloseTo(
+      baseline + 0.7,
       10,
     );
   });
