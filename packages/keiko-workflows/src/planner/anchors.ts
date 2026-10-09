@@ -172,10 +172,12 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // `(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}` let the trailing `[\w.-]+` and the group's inner
 // `[\w.-]+` trade the same run of characters back and forth across an unbounded number of split
 // points, which is quadratic on adversarial input (measured empirically before this change).
+// Extensions use the same finite 16-character bound as filename targets; the token boundary
+// rejects an oversized extension instead of admitting a shortened, nonexistent path.
 // Exported (module-internal, not re-exported from index.ts) solely so the co-located test can
 // exercise the pattern directly for the S8786 regression test.
 export const PATH_RE =
-  /(?:file:\/\/)?\/?(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}(?::\d{1,9}(?::\d{1,9})?)?/g;
+  /(?:file:\/\/)?\/?(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z0-9]{1,16}(?::\d{1,9}(?::\d{1,9})?)?(?![\w$-]|\.[\w$-])/g;
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
 const DEFINITION_TARGET_BEFORE_VERB_RE =

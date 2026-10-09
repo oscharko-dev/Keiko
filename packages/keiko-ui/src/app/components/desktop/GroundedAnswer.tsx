@@ -1872,6 +1872,7 @@ function FolderAuditDetails(props: FolderAuditDetailsProps): ReactNode {
   return (
     <>
       <ConnectedEvidenceInspection
+        key={answer.assistantMessageId}
         contextPack={pack}
         runIds={[
           ...(answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]),

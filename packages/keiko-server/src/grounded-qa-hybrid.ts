@@ -21,6 +21,7 @@ import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no
 import {
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
@@ -51,6 +52,7 @@ import {
 
 import {
   connectedContextOmittedCount,
+  DEFAULT_EXPLORATION_BUDGET,
   CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateOmissionReason,
@@ -104,6 +106,10 @@ import {
   sourceLabels,
   splitExplorationBudget,
   splitExplorationBudgets,
+  recordPluralCitationRepairFailure,
+  recordPluralGroundedAnswer,
+  finalPluralRepairAnswer,
+  uninvokedCitationRepair,
   type GroundedRetriever,
 } from "./grounded-qa-multi-source.js";
 import {
@@ -130,6 +136,7 @@ import {
 } from "./grounded-answer.js";
 import {
   buildPackCitationIndex,
+  groundedAnswerEvidenceFields,
   buildInsufficiencyScopeIndex,
   validateGroundedAnswerEvidence,
   connectedSearchNoEvidenceAnswer,
@@ -175,10 +182,8 @@ import {
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
-import {
-  repairGroundedAnswer,
-  observeGroundedCitationBehaviour,
-} from "./grounded-answer-repair.js";
+import { logGroundedPromptSelection } from "./chat-activity.js";
+import { repairGroundedAnswer } from "./grounded-answer-repair.js";
 import {
   citationBehaviourFor,
   citationBehaviourObserverFor,
@@ -964,6 +969,16 @@ export function createHybridAnswerer(
       { role: "system", content: system },
       { role: "user", content: user },
     ];
+    logGroundedPromptSelection(
+      correlationId,
+      { messages: lastPrompt },
+      deps === undefined
+        ? DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax
+        : modelWindowAwareBudget(deps, modelId).modelInputTokensMax,
+      deps === undefined
+        ? undefined
+        : currentContextProfileForModel(deps, modelId)?.tokenAccounting,
+    );
     const response = await model.call(
       {
         modelId,
@@ -976,16 +991,7 @@ export function createHybridAnswerer(
       },
       signal,
     );
-    const content = response.content.trim();
-    assertUsableAssistantContent(content, modelId);
-    return {
-      content,
-      usage: {
-        promptTokens: response.usage.promptTokens,
-        completionTokens: response.usage.completionTokens,
-      },
-      finishReason: response.finishReason,
-    };
+    return hybridGatewayAnswerResult(response, modelId);
   };
   return Object.assign(answer, {
     repair: (original: string, options: GroundedAnswerOptions): Promise<GroundedAnswerPayload> =>
@@ -997,6 +1003,22 @@ export function createHybridAnswerer(
   });
 }
 
+function hybridGatewayAnswerResult(
+  response: NormalizedResponse,
+  modelId: string,
+): GroundedAnswerResult {
+  const content = response.content.trim();
+  assertUsableAssistantContent(content, modelId);
+  return {
+    content,
+    usage: {
+      promptTokens: response.usage.promptTokens,
+      completionTokens: response.usage.completionTokens,
+    },
+    finishReason: response.finishReason,
+  };
+}
+
 interface HybridGatewayRepairContext {
   readonly model: ModelPort;
   readonly modelId: string;
@@ -1006,11 +1028,11 @@ interface HybridGatewayRepairContext {
   readonly lastPrompt: readonly GatewayChatMessage[] | undefined;
 }
 
-async function hybridGatewayRepair(
+function hybridRepairMessages(
   ctx: HybridGatewayRepairContext,
   original: string,
   options: GroundedAnswerOptions,
-): Promise<GroundedAnswerResult> {
+): readonly GatewayChatMessage[] | undefined {
   const system = ctx.lastPrompt?.[0];
   const user = ctx.lastPrompt?.[1];
   const profile =
@@ -1034,15 +1056,50 @@ async function hybridGatewayRepair(
     promptByteLength(messages) > modelInputPromptByteLimit(inputMax) ||
     countGatewayPromptTokens({ messages }, profile?.tokenAccounting) > inputMax
   )
-    return {
-      content: original,
-      modelInvoked: false,
-      usage: { promptTokens: 0, completionTokens: 0 },
-    };
-  const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
-  if (options.deadlineAtMs !== undefined)
-    signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
-  const signal = AbortSignal.any(signals);
+    return undefined;
+  return messages;
+}
+
+function hybridRepairSignal(
+  parent: AbortSignal,
+  options: GroundedAnswerOptions,
+): AbortSignal | undefined {
+  const remainingMs =
+    options.deadlineAtMs === undefined ? undefined : options.deadlineAtMs - Date.now();
+  if (remainingMs !== undefined && remainingMs <= 0) return undefined;
+  const signals = [parent, ...(options.signal === undefined ? [] : [options.signal])];
+  if (remainingMs !== undefined) signals.push(AbortSignal.timeout(Math.ceil(remainingMs)));
+  return AbortSignal.any(signals);
+}
+
+async function hybridGatewayRepair(
+  ctx: HybridGatewayRepairContext,
+  original: string,
+  options: GroundedAnswerOptions,
+): Promise<GroundedAnswerResult> {
+  const messages = hybridRepairMessages(ctx, original, options);
+  const signal = hybridRepairSignal(ctx.signal, options);
+  if (
+    messages === undefined ||
+    signal === undefined ||
+    (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
+  )
+    return uninvokedCitationRepair(original);
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    { messages },
+    Math.min(
+      options.modelInputTokensMax ?? 0,
+      ctx.deps === undefined
+        ? Number.MAX_SAFE_INTEGER
+        : modelWindowAwareBudget(ctx.deps, ctx.modelId).modelInputTokensMax,
+    ),
+    ctx.deps === undefined
+      ? undefined
+      : currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
+  );
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
+    return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await ctx.model.call(
     {
@@ -2008,13 +2065,7 @@ function assembleHybridAnswer(
     ...ids,
     ...projection.evidence,
     content: redactString(redactor, assistant.content),
-    answerKind: assistant.answerKind,
-    ...(assistant.citationBehaviour === undefined
-      ? {}
-      : { citationBehaviour: assistant.citationBehaviour }),
-    ...(assistant.insufficiencyDeclarations === undefined
-      ? {}
-      : { insufficiencyDeclarations: assistant.insufficiencyDeclarations }),
+    ...groundedAnswerEvidenceFields(assistant),
     citations: projection.citations,
     knowledgeCitations: projection.knowledgeCitations,
     uncertainty: projection.uncertainty,
@@ -2643,19 +2694,7 @@ async function answerHybridWithinWindow(
       return normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
     },
   );
-  const sentEvidencePacks = sentFolderPacks(promptCtx.folderOmissionPacks ?? [], sent);
-  const evidenceScopeIndex = buildInsufficiencyScopeIndex(
-    sentEvidencePacks,
-    ctx.insufficiencyScopeIndex,
-  );
-  const validated = {
-    ...assistant,
-    insufficiencyDeclarations: undefined,
-    evidenceScopeIndex,
-    sentEvidencePacks,
-    filesInPrompt: sentGroundedFileCount(sentEvidencePacks),
-    ...validateGroundedAnswerEvidence(assistant.content, evidenceScopeIndex, ctx.content),
-  };
+  const validated = validatedHybridEvidence(promptCtx, assistant, sent);
   return {
     assistant: await repairHybridAnswer(
       promptCtx,
@@ -2669,6 +2708,46 @@ async function answerHybridWithinWindow(
   };
 }
 
+function validatedHybridEvidence(
+  ctx: HybridGroundedAskCtx,
+  assistant: GroundedAnswerResult,
+  sent: readonly SelectedCandidate<HybridPayload>[],
+): GroundedAnswerResult {
+  const sentEvidencePacks = sentFolderPacks(ctx.folderOmissionPacks ?? [], sent);
+  const evidenceScopeIndex = buildInsufficiencyScopeIndex(
+    sentEvidencePacks,
+    ctx.insufficiencyScopeIndex,
+  );
+  return {
+    ...assistant,
+    insufficiencyDeclarations: undefined,
+    evidenceScopeIndex,
+    sentEvidencePacks,
+    filesInPrompt: sentGroundedFileCount(sentEvidencePacks),
+    ...validateGroundedAnswerEvidence(assistant.content, evidenceScopeIndex, ctx.content),
+  };
+}
+
+function hybridRepairPack(ctx: HybridGroundedAskCtx): ConnectedContextPack | undefined {
+  const sources = ctx.folderOmissionPacks ?? [];
+  const original = sources[0]?.pack;
+  if (original === undefined) return undefined;
+  return {
+    ...original,
+    usage: {
+      ...original.usage,
+      modelInputTokens: sources.reduce(
+        (sum, source) => sum + source.pack.usage.modelInputTokens,
+        0,
+      ),
+      modelOutputTokens: sources.reduce(
+        (sum, source) => sum + source.pack.usage.modelOutputTokens,
+        0,
+      ),
+    },
+  };
+}
+
 async function repairHybridAnswer(
   ctx: HybridGroundedAskCtx,
   answerer: ResolvedAnswerer,
@@ -2677,24 +2756,7 @@ async function repairHybridAnswer(
   observeCitationBehaviour: ReturnType<typeof citationBehaviourObserverFor>,
 ): Promise<RepairedHybridAnswer> {
   const budget = modelWindowAwareBudget(ctx.deps, ctx.modelId);
-  const originalPack = ctx.folderOmissionPacks?.[0]?.pack;
-  const pack =
-    originalPack === undefined
-      ? undefined
-      : {
-          ...originalPack,
-          usage: {
-            ...originalPack.usage,
-            modelInputTokens: (ctx.folderOmissionPacks ?? []).reduce(
-              (sum, source) => sum + source.pack.usage.modelInputTokens,
-              0,
-            ),
-            modelOutputTokens: (ctx.folderOmissionPacks ?? []).reduce(
-              (sum, source) => sum + source.pack.usage.modelOutputTokens,
-              0,
-            ),
-          },
-        };
+  const pack = hybridRepairPack(ctx);
   let budgetRefused = false;
   const repair = answerer.answer.repair;
   const repairContext = {
@@ -2726,10 +2788,28 @@ async function repairHybridAnswer(
     },
   };
   const repaired = await repairGroundedAnswer(repairContext);
-  return {
-    ...observeGroundedCitationBehaviour({ ...repairContext, answer: repaired.answer }),
-    citationRepairDisposition: budgetRefused ? "skipped-budget" : repaired.disposition,
-  };
+  const finalAnswer = finalPluralRepairAnswer(repairContext, repaired, budgetRefused);
+  recordHybridGroundedAnswer(ctx, finalAnswer, repaired.failure);
+  return finalAnswer;
+}
+
+function recordHybridGroundedAnswer(
+  ctx: HybridGroundedAskCtx,
+  finalAnswer: GroundedAnswerResult & {
+    readonly citationRepairDisposition: CitationRepairDisposition;
+  },
+  failure: unknown,
+): void {
+  const packs = (ctx.folderOmissionPacks ?? []).map((source) => source.pack);
+  recordPluralGroundedAnswer(
+    packs,
+    finalAnswer,
+    finalAnswer.citationRepairDisposition,
+    ctx.correlationId,
+    failure,
+  );
+  if (packs.length === 0 && failure !== undefined)
+    recordPluralCitationRepairFailure(ctx.deps, ctx.correlationId, failure);
 }
 
 interface HybridFinalizeInput {
