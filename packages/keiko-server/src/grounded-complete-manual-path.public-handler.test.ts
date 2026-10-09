@@ -265,8 +265,9 @@ describe("complete bounded manual paths through the actual public grounded handl
     const response = await dispatch(`Explain ${absent}`, deps, chatId);
     expect(response.status).toBe(200);
     expect(requests).toHaveLength(1);
-    expect(requestContent(requests[0]!)).not.toContain(FACT);
-    expect(requestContent(requests[0]!)).not.toContain(DECOY_FACT);
+    const content = requests.map(requestContent).join("\n");
+    expect(content).not.toContain(FACT);
+    expect(content).not.toContain(DECOY_FACT);
     const answer = response.body as ConnectedContextGroundedAnswer;
     expect(answer.content).toBe(knowledge);
     expect(answer.citations).toEqual([]);
