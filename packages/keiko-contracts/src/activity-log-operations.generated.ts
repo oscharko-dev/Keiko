@@ -28336,6 +28336,33 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      continuityReferentSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "none",
+          "previous-user-question",
+          "assistant-paths",
+          "assistant-declaration",
+          "assistant-paths-and-declaration",
+        ],
+      },
+      continuityReferentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      continuityAdmittedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      continuityRejectedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -28345,6 +28372,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       "search.connected-context.selection-details.line",
       "search.connected-context.path-ranking.line",
       "search.connected-context.selection-quality.line",
+      "search.connected-context.continuity.line",
     ],
     releaseImpact: "patch",
     diagnosticWhen: [

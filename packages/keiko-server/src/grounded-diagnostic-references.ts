@@ -1,6 +1,7 @@
 import {
   isPathWithinSelectedScope,
   type EvidenceAtom,
+  type ContinuityReferentSource,
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -23,6 +24,10 @@ import {
 } from "./grounded-explicit-paths.js";
 
 export interface DiagnosticReferenceObservation {
+  readonly continuityReferentSource: ContinuityReferentSource;
+  readonly continuityReferentCount: number;
+  readonly continuityAdmittedCount: number;
+  readonly continuityRejectedCount: number;
   readonly stackTraceDetected: boolean;
   readonly stackTraceFrameCount: number;
   readonly stackTraceInScopeFrameCount: number;
@@ -34,6 +39,8 @@ export interface DiagnosticReferenceObservation {
 }
 
 export interface DiagnosticReferenceInputs {
+  readonly assistantReferents?: readonly SearchReference[] | undefined;
+  readonly continuityReferentSource?: ContinuityReferentSource | undefined;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly plan: ExplorationPlan;
@@ -132,6 +139,7 @@ export async function admitDiagnosticReferences(inputs: DiagnosticReferenceInput
   return {
     admission: mergedAdmission(admission, paired),
     observation: {
+      ...continuityObservation(inputs, admission),
       stackTraceDetected: channels.stackTraceDetected,
       stackTraceFrameCount: channels.stackTraceFrameCount,
       stackTraceInScopeFrameCount: channels.diagnosticFrames.filter((reference) =>
@@ -143,5 +151,37 @@ export async function admitDiagnosticReferences(inputs: DiagnosticReferenceInput
       referenceChannelCount: inputs.plan.references?.length ?? 0,
       metadataInjectionReason: inputs.metadataInjectionReason,
     },
+  };
+}
+
+function continuityObservation(
+  inputs: DiagnosticReferenceInputs,
+  admission: ExplicitPathAdmission,
+): Pick<
+  DiagnosticReferenceObservation,
+  | "continuityReferentSource"
+  | "continuityReferentCount"
+  | "continuityAdmittedCount"
+  | "continuityRejectedCount"
+> {
+  const references = inputs.assistantReferents ?? [];
+  const selected = admission.selections.filter((reference) => reference.origin === "assistant");
+  const admitted = references.filter((reference) => {
+    const normalized = normalizedExplicitReferencePath(
+      reference,
+      inputs.searchScope.workspace.root,
+    );
+    if (normalized === undefined) return false;
+    return selected.some(
+      (candidate) =>
+        candidate.path === normalized ||
+        (!normalized.includes("/") && candidate.path.split("/").at(-1) === normalized),
+    );
+  }).length;
+  return {
+    continuityReferentSource: inputs.continuityReferentSource ?? "none",
+    continuityReferentCount: references.length,
+    continuityAdmittedCount: admitted,
+    continuityRejectedCount: references.length - admitted,
   };
 }
