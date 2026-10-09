@@ -150,4 +150,29 @@ describe("ordinary HTML manual selection under the existing excerpt cap", () => 
       ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
     },
   );
+
+  it.each(["xhtml", "md", "markdown", "asciidoc", "log"])(
+    "preserves the canonical %s document format under ordinary build directories",
+    async (extension) => {
+      const path = `build/manuals/operating-limit.${extension}`;
+      const { pack, log } = await retrieve(`Explain ${path}`, {
+        [path]: "The operating limit is 61.2 degrees Celsius.\n",
+        [`outside/operating-limit.${extension}`]: "The unrelated operating limit is 211.\n",
+      });
+      expect(pack.files.map((file) => file.scopePath)).toEqual([path]);
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+      ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
+    },
+  );
+
+  it("retains an independent implementation target beside a named manual", async () => {
+    const implementation = "src/FeatureController.ts";
+    const { pack } = await retrieve(`Explain ${TRIP} and FeatureController implementation.`, {
+      ...manuals(),
+      [implementation]: "export class FeatureController { readonly operatingLimit = 211; }\n",
+    });
+    expect(pack.files.map((file) => file.scopePath)).toContain(TRIP);
+    expect(pack.files.map((file) => file.scopePath)).toContain(implementation);
+  });
 });

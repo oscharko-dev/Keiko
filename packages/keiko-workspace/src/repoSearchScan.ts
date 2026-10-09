@@ -56,6 +56,7 @@ import {
   type CachedLexicalQuery,
 } from "./repoSearchCachedLexical.js";
 import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
+import { htmlEntityLineMatcher, htmlEntitySearchText, isHtmlSearchPath } from "./repoSearchHtml.js";
 import { evidenceAtomStableId } from "./stableId.js";
 import { structuralLineLooksLikeSymbolDefinition, type LineMatcher } from "./repoSearchMatchers.js";
 import {
@@ -1361,9 +1362,11 @@ function cachedPreviewFileMatches(
   return textFileMatches(runner, file, state, order, content) ?? "handled";
 }
 
-function canUseCachedLexicalMatches(runner: SearchTextRunner): boolean {
+function canUseCachedLexicalMatches(runner: SearchTextRunner, scopePath: string): boolean {
   // Hashed natural-language records cannot prove atomic phrase/alternative matching.
   return (
+    // Existing hashed HTML records describe raw source, not decoded human terms.
+    !isHtmlSearchPath(scopePath) &&
     runner.literalTerms === undefined &&
     runner.eligibleTextObserver?.active !== true &&
     runner.semantic === undefined &&
@@ -1386,7 +1389,7 @@ function cachedFileMatches(
     recordCandidateOmission(candidates, file.relativePath, cached.kind);
     return "handled";
   }
-  if (!canUseCachedLexicalMatches(runner)) {
+  if (!canUseCachedLexicalMatches(runner, file.relativePath)) {
     return undefined;
   }
   if (abortScanFile(runner, state)) {
@@ -1545,6 +1548,30 @@ function fileCanContainMatches(runner: SearchTextRunner, text: string): boolean 
   return shouldScoreContent(runner.query, text, runner.policy);
 }
 
+function projectedFileCanContainMatches(
+  runner: SearchTextRunner,
+  text: string,
+  projected: string,
+): boolean {
+  return (
+    fileCanContainMatches(runner, text) ||
+    (projected !== text && fileCanContainMatches(runner, projected))
+  );
+}
+
+function projectedContentScore(
+  runner: SearchTextRunner,
+  scopePath: string,
+  text: string,
+  projected: string,
+): number {
+  if (runner.policy.intent === "project-metadata") return 0;
+  const rawScore = scoreContentForSearch(runner.query, text, runner.policy, scopePath);
+  return projected === text
+    ? rawScore
+    : Math.max(rawScore, scoreContentForSearch(runner.query, projected, runner.policy, scopePath));
+}
+
 function textFileMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -1554,8 +1581,11 @@ function textFileMatches(
 ): FileMatches | undefined {
   observeEligibleTextFile(runner, file, text);
   collectRankedSemanticDocument(runner, file, text);
-  if (!fileCanContainMatches(runner, text)) return undefined;
-  const matched = scanLines(runner, text, state, file.relativePath);
+  const projected = htmlEntitySearchText(file.relativePath, text);
+  if (!projectedFileCanContainMatches(runner, text, projected)) return undefined;
+  const matchingRunner =
+    projected === text ? runner : { ...runner, matcher: htmlEntityLineMatcher(runner.matcher) };
+  const matched = scanLines(matchingRunner, text, state, file.relativePath);
   const best = sourceInspectionOrMatchedLines(runner, text, state, matched);
   if (best.length === 0) {
     return undefined;
@@ -1565,10 +1595,7 @@ function textFileMatches(
     order,
     best,
     maxScore: maxLineScore(best),
-    contentScore:
-      runner.policy.intent === "project-metadata"
-        ? 0
-        : scoreContentForSearch(runner.query, text, runner.policy, file.relativePath),
+    contentScore: projectedContentScore(runner, file.relativePath, text, projected),
     definitionMatch:
       runner.query.kind === "exact-symbol" &&
       repositorySourceLines(text, file.relativePath).some((line) =>

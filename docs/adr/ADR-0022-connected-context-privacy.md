@@ -239,8 +239,17 @@ read admission. Hard denials, containment, ignore, binary, size and budget check
 Complete extracted document paths are target data, so their `reference`, `history` or `caller`
 directory segments cannot request relationship/history rings. Actual relationship/history words
 outside the path retain their routing. An ordinary factual lookup with admitted named document
-paths focuses discovery on those paths and binds its existing structural request context to that
-narrower search scope. It does not enumerate navigation neighbours or widen the human's scope.
+paths focuses discovery on those paths only when its canonical planner decision contains no
+independent non-path target, and binds its existing structural request context to that narrower
+search scope. Mixed document/implementation lookups retain discovery of the independent target.
+Ordinary document eligibility reuses the shared web/text-document extension groups, including
+XHTML and Markdown, alongside XML and existing bounded document extraction. It does not enumerate
+navigation neighbours or widen the human's scope.
+Quoted document targets match their extracted reference identity rather than their anchor kind.
+If all complete document targets have closed admission rejections, the existing ring and
+augmentation decision events record `explicit-target-unavailable` and retain those rejection
+facts. They do not substitute another same-basename file or enumerate its contents. An independent
+source target or a requested relationship retains its existing retrieval flow.
 Existing correlated admission, skipped-ring, read and budget observations describe this path;
 non-Git folders cannot dispatch the Git-history ring, even when history was requested.
 An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
@@ -765,7 +774,10 @@ available for bounded recovery. These admission charges do not claim exact measu
 OpenAI-compatible adapters invoke the same optional caller admission and durable spend lifecycle
 for each physical synthesis HTTP POST, including stream-shape and output-token-field compatibility
 fallbacks. This avoids double-reserving the first request at both gateway and adapter boundaries.
-Other adapters retain the gateway-owned attempt boundary. Each reservation settles once; early
+Other adapters retain the gateway-owned attempt boundary. Each reservation settles once.
+Terminal caller attempt/cap refusals are classified independently of prior compatibility
+dispatches and cannot increment the shared provider breaker. Genuine provider errors retain
+their existing resilience classification. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token

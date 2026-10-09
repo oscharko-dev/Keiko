@@ -454,7 +454,12 @@ system that exists, never beside it:
   Complete document path references are data when classifying relationship/history requests;
   directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
   factual lookup focuses discovery on canonically admitted named documents with a scope-bound
-  request context. Its source/read/ring observations reuse the same registered retrieval siblings.
+  request context only when the planner has no independent non-path target. Its source/read/ring
+  observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
+  canonical web/text-document extension groups, alongside XML and bounded document extraction.
+  Quoted targets use the same canonical reference identity. When every complete factual document
+  target is rejected, `explicit-target-unavailable` records skipped rings and augmentation; other
+  same-basename files cannot substitute for the unavailable target.
   Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
   generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
   Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
@@ -500,6 +505,9 @@ system that exists, never beside it:
   OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
   caller and durable spend admission for each actual POST; adapters without that transport hook
   retain the existing gateway boundary. No nested compatibility path grants another attempt.
+  A terminal caller attempt/cap refusal remains a local fault even after an earlier compatibility
+  dispatch; it cannot open the shared provider breaker. Genuine provider failures retain the
+  existing breaker and retry classification.
   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
