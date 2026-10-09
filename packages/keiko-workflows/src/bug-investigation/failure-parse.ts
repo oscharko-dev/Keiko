@@ -38,7 +38,8 @@ function toLine(token: string | undefined): number | undefined {
   if (token === undefined || token.length === 0 || !ALL_DIGITS.test(token)) {
     return undefined;
   }
-  return Number(token);
+  const number = Number(token);
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
 // Strips a leading `file://` URL prefix from a location token. `file:///repo/x.ts` -> `/repo/x.ts`.
@@ -124,14 +125,70 @@ function pushMessage(acc: Accumulator, line: string): void {
 }
 
 function scanLine(acc: Accumulator, line: string): void {
-  const token = locationToken(line);
-  const frame = token === undefined ? undefined : peelLocation(token);
+  const frame = parseFailureFrame(line);
   if (frame !== undefined) {
     pushFrame(acc, frame);
   }
   if (isMessageLine(line.toLowerCase())) {
     pushMessage(acc, line);
   }
+}
+
+function pythonFrame(line: string): FailureFrame | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('File "')) return undefined;
+  const close = trimmed.indexOf('"', 6);
+  if (close === -1) return undefined;
+  const suffix = trimmed.slice(close + 1).trimStart();
+  if (!suffix.startsWith(", line ")) return undefined;
+  const token = suffix.slice(7).split(",", 1)[0]?.trim();
+  const number = toLine(token);
+  return number === undefined
+    ? undefined
+    : { file: toPosix(trimmed.slice(6, close)), line: number };
+}
+
+/** ADR-0009 D7: chat and bug investigation share the same bounded source-location parser. */
+export function parseFailureFrame(line: string): FailureFrame | undefined {
+  const python = pythonFrame(line);
+  if (python !== undefined) return python;
+  const token = locationToken(line.trimStart().startsWith("❯ ") ? line.trimStart().slice(2) : line);
+  return token === undefined ? undefined : peelLocation(token);
+}
+
+export interface DiagnosticTraceText {
+  readonly frames: readonly FailureFrame[];
+  readonly questionText: string;
+  readonly detected: boolean;
+}
+
+/** Source locations and assertion output stay separate from the human's request terms. */
+export function parseDiagnosticTraceText(text: string): DiagnosticTraceText {
+  const acc: Accumulator = { frames: [], messages: [], seen: new Set() };
+  const question: string[] = [];
+  let start = 0;
+  let detected = false;
+  for (let scanned = 0; scanned < MAX_LINES_SCANNED && start <= text.length; scanned += 1) {
+    const newline = text.indexOf("\n", start);
+    const end = newline === -1 ? text.length : newline;
+    const line = text.slice(start, end);
+    const trimmed = line.trim();
+    const frame = parseFailureFrame(line);
+    const traceLine =
+      frame !== undefined &&
+      (trimmed.startsWith("at ") ||
+        trimmed.startsWith('File "') ||
+        trimmed.startsWith("❯ ") ||
+        !trimmed.includes(" "));
+    if (traceLine && frame !== undefined) {
+      detected = true;
+      pushFrame(acc, frame);
+    } else if (!trimmed.startsWith("AssertionError:") && !trimmed.startsWith("FAIL "))
+      question.push(line);
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  return { frames: acc.frames, questionText: question.join("\n"), detected };
 }
 
 function scanText(acc: Accumulator, text: string | undefined): void {
