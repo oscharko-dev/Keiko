@@ -27080,6 +27080,55 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["numeric", "file"],
       },
+      answerKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["answer", "refusal", "clarification", "insufficiency"],
+      },
+      citationBehaviour: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["cites", "cites-after-repair", "never"],
+      },
+      scopeIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      queryIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      followUpPass: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      insufficiencyDeclaredCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      declaredInScopeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      declaredUnreadInScopeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      declaredNotInScopeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       ambiguousMarkerCount: {
         type: "integer",
         dataClass: "count",
@@ -27129,6 +27178,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       },
       {
         field: "ambiguousMarkerCount",
+        positive: true,
+      },
+      {
+        field: "declaredUnreadInScopeCount",
         positive: true,
       },
     ],

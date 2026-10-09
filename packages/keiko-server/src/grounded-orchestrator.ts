@@ -1,3 +1,5 @@
+import type { GroundedAnswerEvidenceDeclaration } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { validateSingleAnswerEvidence } from "./grounded-answer-evidence.js";
 import {
   rerankGroundedCandidates,
   type PreselectionRerankerResult,
@@ -26,7 +28,10 @@ import {
   directoryCleanupTracker,
   observeDirectoryIteration,
 } from "./grounded-directory-iteration.js";
-import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
+import {
+  type CitationReconciliationMetadata,
+  reconcileAndLogInlineCitations,
+} from "./grounded-citation-log.js";
 import {
   createSymbolReadFailureObserver,
   type SymbolReadFailureObserver,
@@ -1018,10 +1023,21 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
+export interface GroundedAnswerOptions {
+  readonly modelInputTokensMax?: number | undefined;
+  readonly modelOutputTokensMax?: number | undefined;
+  readonly answerOnlyContextAvailable?: boolean | undefined;
+  readonly currentQuestion?: string | undefined;
+}
+
 export interface GroundedAnswerer {
   // The seam the route uses: production supplies a Model Gateway-backed answerer, while tests can
   // keep deterministic answerers.
-  answer(question: string, pack: ConnectedContextPack): Promise<GroundedAnswerPayload>;
+  answer(
+    question: string,
+    pack: ConnectedContextPack,
+    options?: GroundedAnswerOptions,
+  ): Promise<GroundedAnswerPayload>;
 }
 
 export interface OrchestratorInput {
@@ -1091,7 +1107,10 @@ export interface OrchestratorDeps {
   readonly entailmentStage?: EntailmentStage | undefined;
 }
 
-export interface OrchestratorOutput {
+export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
+  readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
+  readonly filesInPrompt?: number | undefined;
+  readonly insufficiencyObservation?: GroundedAnswerResult["insufficiencyObservation"];
   readonly pack: ConnectedContextPack;
   readonly assistantContent: string;
   readonly elapsedMs: number;
@@ -9529,15 +9548,17 @@ function citationCoverageMarkerFor(
   pack: ConnectedContextPack,
   nowMs: number,
   correlationId: string | undefined,
+  metadata: CitationReconciliationMetadata,
 ): UncertaintyMarker | undefined {
   const reconciliation = reconcileAndLogInlineCitations(
     answerContent,
     buildPackCitationIndex([pack]),
     correlationId,
+    metadata,
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   if (unsupported !== undefined || reconciliation.citedScopePaths.size > 0) return unsupported;
-  return missingCitationMarkerFor(answerContent, nowMs);
+  return missingCitationMarkerFor(answerContent, nowMs, metadata.answerKind);
 }
 
 function exhaustedAnswerBudgetDimensions(
@@ -9556,28 +9577,33 @@ function exhaustedAnswerBudgetDimensions(
   ];
 }
 
-async function answerWithAvailableContext(
+async function groundedAnswerForPack(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   pack: ConnectedContextPack,
-  plan: OrchestratorOutput["plan"],
-  sourceEvidenceAvailable: boolean,
-  start: number,
-  nowMs: () => number,
-): Promise<OrchestratorOutput> {
-  const answer = normalizeGroundedAnswerPayload(
-    await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack),
-  );
-  const elapsedMs = Math.max(0, nowMs() - start);
-  const exhausted = exhaustedAnswerBudgetDimensions(answer, pack, elapsedMs);
-  const unsupportedMarker = citationCoverageMarkerFor(
-    answer.content,
+): Promise<GroundedAnswerResult> {
+  const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
+    modelInputTokensMax: pack.budget.modelInputTokensMax,
+    modelOutputTokensMax: pack.budget.modelOutputTokensMax,
+    answerOnlyContextAvailable: input.answerOnlyContextAvailable,
+    currentQuestion: input.currentQuestion ?? input.query.text,
+  });
+  return validateSingleAnswerEvidence(
+    normalizeGroundedAnswerPayload(payload),
     pack,
-    nowMs(),
-    deps.correlationId,
+    input.currentQuestion ?? input.query.text,
   );
-  const entailmentMarkers = await entailmentMarkersFor(deps, answer.content, pack, nowMs());
-  const groundedPack: ConnectedContextPack = {
+}
+
+function answeredContextPack(
+  pack: ConnectedContextPack,
+  answer: GroundedAnswerResult,
+  elapsedMs: number,
+  markers: readonly UncertaintyMarker[],
+  nowMs: number,
+): ConnectedContextPack {
+  const exhausted = exhaustedAnswerBudgetDimensions(answer, pack, elapsedMs);
+  return {
     ...pack,
     usage: {
       ...pack.usage,
@@ -9590,17 +9616,47 @@ async function answerWithAvailableContext(
     },
     uncertainty: [
       ...pack.uncertainty,
-      ...(exhausted.length === 0 ? [] : [answerBudgetClipped(exhausted, nowMs())]),
-      ...(unsupportedMarker === undefined ? [] : [unsupportedMarker]),
-      ...(answer.finishReason === "length" ? [incompleteAnswerMarker(nowMs())] : []),
-      ...entailmentMarkers,
+      ...(answer.noEvidence === true ? [noEvidenceMarker(nowMs)] : []),
+      ...(exhausted.length === 0 ? [] : [answerBudgetClipped(exhausted, nowMs)]),
+      ...(answer.finishReason === "length" ? [incompleteAnswerMarker(nowMs)] : []),
+      ...markers,
     ],
   };
+}
+
+async function answerWithAvailableContext(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  pack: ConnectedContextPack,
+  plan: OrchestratorOutput["plan"],
+  sourceEvidenceAvailable: boolean,
+  start: number,
+  nowMs: () => number,
+): Promise<OrchestratorOutput> {
+  const answer = await groundedAnswerForPack(input, deps, pack);
+  const elapsedMs = Math.max(0, nowMs() - start);
+  const sentPack = answer.sentEvidencePacks?.[0] ?? pack;
+  const unsupportedMarker = citationCoverageMarkerFor(
+    answer.content,
+    sentPack,
+    nowMs(),
+    deps.correlationId,
+    citationObservation(input, answer),
+  );
+  const entailmentMarkers =
+    answer.modelInvoked === false
+      ? []
+      : await entailmentMarkersFor(deps, answer.content, sentPack, nowMs());
+  const markers = [
+    ...(unsupportedMarker === undefined ? [] : [unsupportedMarker]),
+    ...entailmentMarkers,
+  ];
   return {
-    pack: groundedPack,
+    pack: answeredContextPack(pack, answer, elapsedMs, markers, nowMs()),
     assistantContent: answer.content,
     elapsedMs,
-    modelInvoked: true,
+    modelInvoked: answer.modelInvoked ?? true,
+    ...answerEvidenceFields(answer),
     ...(answer.promptContext === undefined ? {} : { promptContext: answer.promptContext }),
     ...(plan === undefined ? {} : { plan }),
     ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
@@ -9639,3 +9695,48 @@ export async function runGroundedExploration(
 // Re-export DEFAULT_SEARCH_LIMITS for parity with #179 callers that import limits via the
 // orchestrator. Keeps `grounded-qa.ts` from needing a second workspace import path.
 export { DEFAULT_SEARCH_LIMITS };
+
+function answerEvidenceFields(
+  answer: GroundedAnswerResult,
+): Pick<
+  OrchestratorOutput,
+  | "noEvidence"
+  | "answerKind"
+  | "insufficiencyDeclarations"
+  | "insufficiencyObservation"
+  | "sentEvidencePacks"
+  | "filesInPrompt"
+> {
+  return {
+    ...(answer.noEvidence === true ? { noEvidence: true } : {}),
+    ...(answer.answerKind === undefined ? {} : { answerKind: answer.answerKind }),
+    ...(answer.insufficiencyDeclarations === undefined
+      ? {}
+      : { insufficiencyDeclarations: answer.insufficiencyDeclarations }),
+    ...(answer.insufficiencyObservation === undefined
+      ? {}
+      : { insufficiencyObservation: answer.insufficiencyObservation }),
+    ...(answer.sentEvidencePacks === undefined
+      ? {}
+      : { sentEvidencePacks: answer.sentEvidencePacks }),
+    ...(answer.filesInPrompt === undefined ? {} : { filesInPrompt: answer.filesInPrompt }),
+  };
+}
+
+function citationObservation(
+  input: OrchestratorInput,
+  answer: GroundedAnswerResult,
+): CitationReconciliationMetadata {
+  const identity = connectedContextActivityIdentity(input);
+  const observation = answer.insufficiencyObservation;
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    answerKind: answer.answerKind,
+    followUpPass: 0,
+    insufficiencyDeclaredCount: observation?.declaredCount ?? 0,
+    declaredInScopeCount: observation?.inScopeCount ?? 0,
+    declaredUnreadInScopeCount: observation?.unreadInScopeCount ?? 0,
+    declaredNotInScopeCount: observation?.notInScopeCount ?? 0,
+  };
+}
