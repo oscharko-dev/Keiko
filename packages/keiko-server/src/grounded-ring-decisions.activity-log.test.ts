@@ -17,6 +17,7 @@ interface RetrievalResult {
   readonly log: Log;
   readonly completed: Log["events"][number] | undefined;
   readonly source: Log["events"][number] | undefined;
+  readonly details: Log["events"][number] | undefined;
 }
 interface ReadControl {
   readonly fs?: (base: WorkspaceFs) => WorkspaceFs;
@@ -69,7 +70,10 @@ async function retrieve(
   });
   const completed = log.events.find((event) => event.op === "search.connected-context.completed");
   const source = log.events.find((event) => event.op === "search.connected-context.source-details");
-  return { output, log, completed, source };
+  const details = log.events.find(
+    (event) => event.op === "search.connected-context.completion-details",
+  );
+  return { output, log, completed, source, details };
 }
 
 function assertPartition(result: Awaited<ReturnType<typeof retrieve>>): void {
@@ -88,6 +92,7 @@ function assertPartition(result: Awaited<ReturnType<typeof retrieve>>): void {
 function assertCanonical(result: Awaited<ReturnType<typeof retrieve>>, source = false): void {
   const event = source ? result.source : result.completed;
   const formatted = formatActivityLogProofLine(event ?? {});
+  expect(formatted).not.toContain("_truncatedFieldCount");
   const line = source
     ? expectActivityLogProof("search.connected-context.source-details.line", formatted)
     : expectActivityLogProof("search.connected-context.completed.line", formatted);
@@ -134,8 +139,12 @@ describe("ring and listing decision evidence", () => {
     expect(result.completed?.extra).toMatchObject({
       augmentationDisposition: "skipped",
       augmentationSkipped: true,
-      augmentationSkipReason: test.reason,
     });
+    expect(result.details?.extra?.augmentationSkipReason).toBe(test.reason);
+    expectActivityLogProof(
+      "search.connected-context.completion-details.line",
+      formatActivityLogProofLine(result.details ?? {}),
+    );
     expect(result.completed?.extra?.ringSkipReasons).toContain(test.ringReason);
     assertCanonical(result);
   });
@@ -150,8 +159,8 @@ describe("ring and listing decision evidence", () => {
     expect(result.completed?.extra).toMatchObject({
       executedRingKinds: ["lexical"],
       augmentationDisposition: "skipped",
-      augmentationSkipReason: "budget-exhausted",
     });
+    expect(result.details?.extra?.augmentationSkipReason).toBe("budget-exhausted");
     expect(result.completed?.extra?.stoppedRingKinds).not.toEqual([]);
     expect(result.output.pack.usage.searchCalls).toBe(1);
     assertCanonical(result);

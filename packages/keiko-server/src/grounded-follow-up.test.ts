@@ -282,6 +282,34 @@ describe("one server-owned follow-up under the original turn budgets", () => {
     expect(result.pack.usage.filesRead).toBeGreaterThan(1);
   });
 
+  it("keeps actual admission counts when fitting refuses a second provider dispatch", async () => {
+    let calls = 0;
+    const result = await runConnectedRetrievalEval({
+      files,
+      query: "Explain src/Feature.ts",
+      answerer: {
+        answer: async () => {
+          await Promise.resolve();
+          calls += 1;
+          return calls === 1
+            ? first
+            : {
+                content: connectedSearchNoEvidenceAnswer("Explain src/Feature.ts"),
+                usage: { promptTokens: 0, completionTokens: 0 },
+                modelInvoked: false,
+                sentEvidencePacks: [],
+              };
+        },
+      },
+    });
+    expect(result.answer).toMatchObject({
+      assistantContent: first,
+      followUp: { passCount: 1, admittedPathCount: 1, outcome: "budget-refused" },
+    });
+    // The second retrieval reads Feature again plus Companion; all three physical reads remain charged.
+    expect(result.pack.usage.filesRead).toBe(3);
+  });
+
   it.each(["../private.ts", ".env", "outside/private.ts", "dist/generated.ts"])(
     "never follows an unverified or denied declaration %s",
     async (path) => {
