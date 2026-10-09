@@ -124,7 +124,8 @@ bounded counts and closed states where the completed operation's field cap is fu
 
 The canonical counters include `followUpPassCount`, `followUpTrigger`,
 `followUpAdmittedPathCount` and `followUpOutcome`. The trigger is `insufficiency-declared` or `none`;
-the outcome is `answered`, `still-insufficient`, `budget-refused`, `elapsed-refused` or `disabled`.
+the outcome is `not-needed`, `answered`, `still-insufficient`, `budget-refused`, `elapsed-refused`
+or `disabled`.
 The second prompt receives its own `chat.context.selected` evidence and normal gateway lifecycle.
 No raw declaration, source body, provider endpoint or capability-observation body enters the log.
 
