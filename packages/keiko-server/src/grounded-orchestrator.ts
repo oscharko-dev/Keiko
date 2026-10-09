@@ -1083,6 +1083,7 @@ export interface GroundedAnswerOptions {
   readonly currentQuestion?: string | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly deadlineAtMs?: number | undefined;
+  readonly requiredEvidencePaths?: readonly string[] | undefined;
 }
 
 export interface GroundedAnswerer {
@@ -1123,6 +1124,7 @@ export interface OrchestratorInput {
 }
 
 export interface OrchestratorDeps {
+  readonly declarationVerificationSignal?: AbortSignal | undefined;
   readonly repoSemanticSearchProviderFor?: GroundedSemanticProviderFactory | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly worktreeGitRunner?: GitProcessRunner | undefined;
@@ -9368,7 +9370,7 @@ function declarationScopeIndex(
 ): ReadonlyMap<string, "unread-in-scope"> {
   const verified = new Map<string, "unread-in-scope">();
   for (const path of paths.slice(0, 3)) {
-    throwIfCancelled(deps.signal);
+    throwIfCancelled(deps.declarationVerificationSignal ?? deps.signal);
     if (runtime.nowMs() >= context.deadlineAtMs) break;
     if (
       admissibleDeclaredScopePath(path, {
@@ -9773,6 +9775,7 @@ async function groundedAnswerForPack(
   pack: ConnectedContextPack,
   declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
   deadlineAtMs?: number,
+  requiredEvidencePaths?: readonly string[],
 ): Promise<GroundedAnswerResult> {
   const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
     modelInputTokensMax: Math.max(0, pack.budget.modelInputTokensMax - pack.usage.modelInputTokens),
@@ -9784,6 +9787,7 @@ async function groundedAnswerForPack(
     currentQuestion: input.currentQuestion ?? input.query.text,
     signal: deps.signal,
     deadlineAtMs,
+    requiredEvidencePaths,
   });
   const answer = normalizeGroundedAnswerPayload(payload);
   return validateSingleAnswerEvidence(
@@ -9923,13 +9927,14 @@ function followUpAnswerForPack(
     deadlineAtMs,
     nowMs,
     retrieve: (next) => retrieveConnectedContextPack(next, deps),
-    answer: (next, retrieved) =>
+    answer: (next, retrieved, requiredEvidencePaths) =>
       groundedAnswerForPack(
         next,
         deps,
         retrieved.pack,
         retrieved.declarationScopeIndexFor,
         deadlineAtMs,
+        requiredEvidencePaths,
       ),
   });
 }

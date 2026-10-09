@@ -410,8 +410,12 @@ unknown, or excess declaration lines are removed before client delivery and hist
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
-two-slot synthesis ceiling and the original remaining search/read/token/spend/time grants. A file
-already physically read does not acquire another read through an unread-in-prompt declaration.
+maximum of two synthesis calls and the original remaining search/read/token/spend/time grants.
+Declared unread targets receive priority during final prompt fitting;
+the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
+fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
+against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
+A file already physically read does not acquire another read through an unread-in-prompt declaration.
 The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
 from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
 while retaining an honest uncited warning, and never obtains a third synthesis slot. Separately
