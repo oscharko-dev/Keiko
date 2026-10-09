@@ -473,12 +473,22 @@ system that exists, never beside it:
   declaration paths remain outside logs.
   Connected synthesis buffers normalized output before publication so rejected declaration lines
   cannot escape through streamed chunks. Initial synthesis plus either marker repair or an
-  insufficiency follow-up shares two synthesis slots and the original remaining budgets; gateway
-  retries and the separately bounded entailment stage retain their own contracts. The existing
+  insufficiency follow-up shares two physical synthesis attempt slots and the original remaining budgets, including gateway and context-window retries.
+  The separately bounded entailment stage cannot grant another synthesis attempt. The existing
   context allocator's high/exceeded pressure refuses follow-up. `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX`
   defaults to `1`; only explicit `1` enables and `0` disables it, and other explicit values fail
   closed to zero passes with an invalid configuration observation. Final sent packs and ranges
   authenticate citations; assembled reads remain separate physical-usage and audit evidence.
+  The same answer-details line optionally records `synthesisCallCount` and
+  `synthesisReservedOutputTokens`. Synthesis input usage charges the greater of the canonical sent
+  prompt estimate and reported provider usage. Reported discarded output is retained; an interrupted
+  stream without output measurement retains its requested output reservation instead of granting an
+  unknown output amount as zero. These charges are conservative admission bounds, not claims of exact
+  provider consumption. The optional local gateway attempt hook preserves transient recovery within
+  the two-attempt allowance and does not change unrelated callers' retry policy.
+  OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
+  caller and durable spend admission for each actual POST; adapters without that transport hook
+  retain the existing gateway boundary. No nested compatibility path grants another attempt.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or

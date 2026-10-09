@@ -108,7 +108,7 @@ function useManifestInspection(
         setState({ kind: "failed" });
         reportEvidenceInspection({ reason: "manifest-fetch-failed" }, failure);
       });
-    return () => {
+    return (): void => {
       current = false;
     };
   }, [runId, open]);

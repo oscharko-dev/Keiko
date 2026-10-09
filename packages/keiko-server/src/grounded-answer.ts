@@ -9,6 +9,8 @@ import {
   CancelledError,
   ContextOverflowError,
   TimeoutError,
+  GatewayError,
+  ProviderError,
   type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 
@@ -33,14 +35,14 @@ export function groundedSynthesisAttemptUsage(
 
 /** Factory-owned synthesis attempts, including context-window retries; not gateway authority. */
 export interface GroundedSynthesisCallBudget {
-  remaining(): number;
-  tryReserve(): boolean;
-  pendingUsage(): GroundedAnswerUsage;
-  recordUsage(usage: GroundedAnswerUsage): void;
-  takeUsage(): GroundedAnswerUsage;
-  releaseReservation(): void;
-  reservedOutputTokens(): number;
-  recordOutputReservation(tokens: number): void;
+  readonly remaining: () => number;
+  readonly tryReserve: () => boolean;
+  readonly pendingUsage: () => GroundedAnswerUsage;
+  readonly recordUsage: (usage: GroundedAnswerUsage) => void;
+  readonly takeUsage: () => GroundedAnswerUsage;
+  readonly releaseReservation: () => void;
+  readonly reservedOutputTokens: () => number;
+  readonly recordOutputReservation: (tokens: number) => void;
 }
 
 export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget {
@@ -87,6 +89,7 @@ export interface GroundedSynthesisAttemptOptions {
 export interface GroundedSynthesisAttemptTracker {
   readonly admission: NonNullable<GatewayCallRequest["attemptAdmission"]>;
   /** Injected model ports may not implement the gateway's physical-attempt callback. */
+  settleFallbackFailure(promptTokens: number, failure: unknown): void;
   settleFallback(
     promptTokens: number,
     reported?: Readonly<Partial<GroundedAnswerUsage>>,
@@ -105,22 +108,52 @@ export function createGroundedSynthesisAttemptAdmission(
     const pending = budget.pendingUsage();
     if (
       input.promptTokens > options.inputTokensMax - pending.promptTokens ||
-      input.maxOutputTokens > options.outputTokensMax - pending.completionTokens ||
+      options.outputTokensMax <= pending.completionTokens ||
       !budget.tryReserve()
     )
       return undefined;
-    return synthesisAttemptReservation(budget, input.promptTokens, input.maxOutputTokens);
+    return synthesisAttemptReservation(
+      budget,
+      input.promptTokens,
+      Math.min(input.maxOutputTokens, options.outputTokensMax - pending.completionTokens),
+    );
+  };
+  const settleFallback: GroundedSynthesisAttemptTracker["settleFallback"] = (
+    promptTokens,
+    reported,
+    outputState = "observed",
+  ): void => {
+    if (gatewayOwned) return;
+    const reservation = admission({ promptTokens, maxOutputTokens: options.outputTokensMax });
+    if (reservation === undefined)
+      throw new ContextOverflowError("Synthesis attempt grant exhausted before dispatch");
+    reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
   };
   return {
     admission,
-    settleFallback(promptTokens, reported, outputState = "observed"): void {
-      if (gatewayOwned) return;
-      const reservation = admission({ promptTokens, maxOutputTokens: options.outputTokensMax });
-      if (reservation === undefined)
-        throw new ContextOverflowError("Synthesis attempt grant exhausted before dispatch");
-      reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
+    settleFallback,
+    settleFallbackFailure(promptTokens, failure): void {
+      settleFallback(
+        promptTokens,
+        failure instanceof GatewayError ? failure.partialUsage : undefined,
+        failedSynthesisOutputState(failure),
+      );
     },
   };
+}
+
+/** Injected model ports have no gateway-owned attempt settlement. */
+function failedSynthesisOutputState(failure: unknown): "observed" | "none" | "unknown" {
+  if (failure instanceof GatewayError && (failure.partialUsage?.completionTokens ?? 0) > 0)
+    return "observed";
+  if (failure instanceof ContextOverflowError && failure.partialUsage === undefined) return "none";
+  if (
+    failure instanceof ProviderError &&
+    failure.httpStatus >= 400 &&
+    failure.partialUsage === undefined
+  )
+    return "none";
+  return "unknown";
 }
 
 function assertSynthesisAttemptActive(options: GroundedSynthesisAttemptOptions): void {
@@ -136,6 +169,7 @@ function synthesisAttemptReservation(
 ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
   let settled = false;
   return {
+    maxOutputTokens,
     settle(reported, dispatched, outputState = "observed"): void {
       if (settled) return;
       settled = true;
@@ -151,6 +185,53 @@ function synthesisAttemptReservation(
         );
       else budget.releaseReservation();
     },
+  };
+}
+
+export function combinedGroundedSynthesisFields(
+  first: GroundedAnswerResult,
+  next: GroundedAnswerResult,
+): Pick<GroundedAnswerResult, "usage" | "synthesisCallCount" | "synthesisReservedOutputTokens"> {
+  return {
+    usage: {
+      promptTokens: first.usage.promptTokens + next.usage.promptTokens,
+      completionTokens: first.usage.completionTokens + next.usage.completionTokens,
+    },
+    ...(first.synthesisCallCount === undefined && next.synthesisCallCount === undefined
+      ? {}
+      : { synthesisCallCount: (first.synthesisCallCount ?? 0) + (next.synthesisCallCount ?? 0) }),
+    ...(first.synthesisReservedOutputTokens === undefined &&
+    next.synthesisReservedOutputTokens === undefined
+      ? {}
+      : {
+          synthesisReservedOutputTokens:
+            (first.synthesisReservedOutputTokens ?? 0) + (next.synthesisReservedOutputTokens ?? 0),
+        }),
+  };
+}
+
+export function retainFailedGroundedSynthesis(
+  answer: GroundedAnswerResult,
+  accounting?: {
+    readonly remainingSynthesisCalls?: (() => number) | undefined;
+    readonly takeFailedSynthesisUsage?: (() => GroundedAnswerUsage) | undefined;
+    readonly reservedSynthesisOutputTokens?: (() => number) | undefined;
+  },
+): GroundedAnswerResult {
+  const usage = accounting?.takeFailedSynthesisUsage?.() ?? {
+    promptTokens: 0,
+    completionTokens: 0,
+  };
+  const remaining = accounting?.remainingSynthesisCalls?.();
+  const reserved = accounting?.reservedSynthesisOutputTokens?.();
+  return {
+    ...answer,
+    usage: {
+      promptTokens: answer.usage.promptTokens + usage.promptTokens,
+      completionTokens: answer.usage.completionTokens + usage.completionTokens,
+    },
+    ...(remaining === undefined ? {} : { synthesisCallCount: 2 - remaining }),
+    ...(reserved === undefined ? {} : { synthesisReservedOutputTokens: reserved }),
   };
 }
 
