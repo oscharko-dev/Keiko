@@ -139,6 +139,7 @@ import {
 } from "./grounded-answer.js";
 import {
   callPluralGroundedSynthesis,
+  pluralSynthesisCountFields,
   pluralSynthesisMetadata,
   withPluralSynthesisUsage,
 } from "./grounded-plural-synthesis.js";
@@ -2778,12 +2779,23 @@ async function answerHybridWithinWindow(
   selected: readonly SelectedCandidate<HybridPayload>[],
 ): Promise<FittedHybridAnswer & { readonly assistant: RepairedHybridAnswer }> {
   const observe = citationBehaviourObserverFor(ctx.deps, ctx.modelId, ctx.correlationId);
+  const remainingBefore = answerer.answer.remainingSynthesisCalls?.();
+  const reservedBefore = answerer.answer.reservedSynthesisOutputTokens?.();
   const fitted = await withAdoptedContextWindowRetry(
     ctx.deps,
     { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
     () => hybridAnswerAttempt(ctx, answerer, selected),
   );
-  const validated = validatedHybridEvidence(fitted.promptCtx, fitted.assistant, fitted.sent);
+  const assistant = {
+    ...fitted.assistant,
+    ...pluralSynthesisCountFields(
+      remainingBefore,
+      answerer.answer.remainingSynthesisCalls?.(),
+      reservedBefore,
+      answerer.answer.reservedSynthesisOutputTokens?.(),
+    ),
+  };
+  const validated = validatedHybridEvidence(fitted.promptCtx, assistant, fitted.sent);
   return {
     ...fitted,
     assistant: await repairHybridAnswer(

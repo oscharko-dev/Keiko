@@ -3049,6 +3049,8 @@ describe("multi-source final fitted citation authority", () => {
 // createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
 // MultiSourceSeam.answerer; unit-test it directly against a fake ModelPort that records the request.
 function zeroModelUsagePack(pack: ConnectedContextPack): ConnectedContextPack {
+  // This fixture derives its exact empty-prompt grant below. Prior model usage is deliberately
+  // zero here; nonzero retrieval usage is covered by the configured semantic-refresh handler proof.
   return { ...pack, usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 } };
 }
 

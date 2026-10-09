@@ -6,7 +6,7 @@ import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   createDefaultChatCapability,
   parseGatewayConfig,
-  type GatewayChatMessage,
+  type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
@@ -23,11 +23,20 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const MODEL = "plural-physical-synthesis-ceiling";
 const UNCITED = "Feature returns true.";
 const OVERFLOW = "context-overflow";
 const UNAVAILABLE = "service-unavailable";
+const UNKNOWN_OUTPUT = "unknown-stream-output";
+const UNSUPPORTED_USAGE = "unsupported-stream-options";
+const UNSUPPORTED_OUTPUT = "unsupported-max-tokens";
 let root = "";
 let stateDir = "";
 const disposals: UiHandlerDeps[] = [];
@@ -55,6 +64,18 @@ afterEach(async () => {
 });
 
 function providerResponse(content: string): Response {
+  if (content === UNKNOWN_OUTPUT) return unknownOutputResponse();
+  const rejected =
+    content === UNSUPPORTED_USAGE
+      ? "stream_options"
+      : content === UNSUPPORTED_OUTPUT
+        ? "max_tokens"
+        : undefined;
+  if (rejected !== undefined)
+    return Response.json(
+      { error: { param: rejected, code: "unsupported_parameter" } },
+      { status: 400 },
+    );
   const overflow = content === OVERFLOW;
   const unavailable = content === UNAVAILABLE;
   const payload = overflow
@@ -71,6 +92,23 @@ function providerResponse(content: string): Response {
     status: overflow ? 400 : unavailable ? 503 : 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+function unknownOutputResponse(): Response {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller): void {
+      if (reads === 0)
+        controller.enqueue(
+          new TextEncoder().encode(
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "partial" } }] })}\n\n`,
+          ),
+        );
+      else controller.error(new TypeError("Synthetic reset after unmeasured output"));
+      reads += 1;
+    },
+  });
+  return new Response(stream, { headers: { "content-type": "text/event-stream" } });
 }
 
 function configuredRuntime(hybrid: boolean): {
@@ -144,20 +182,32 @@ async function connectReadyPod(deps: UiHandlerDeps, chatId: string): Promise<voi
 
 async function scriptedTurn(
   hybrid: boolean,
-  sequence: "overflow-repair" | "transient-repair" | "transient-cited" | "repair",
+  sequence:
+    | "overflow-repair"
+    | "transient-repair"
+    | "transient-cited"
+    | "repair"
+    | "unknown-output"
+    | "usage-repair"
+    | "usage-cited"
+    | "output-repair"
+    | "output-cited",
+  expectedStatus = 200,
 ): Promise<{
-  readonly calls: readonly { readonly messages: readonly GatewayChatMessage[] }[];
+  readonly calls: readonly { readonly messages: GatewayCallRequest["messages"] }[];
   readonly reservations: number;
   readonly answer: GroundedAnswer;
+  readonly synthesisCounts: readonly number[];
+  readonly body: unknown;
 }> {
-  const calls: { readonly messages: readonly GatewayChatMessage[] }[] = [];
+  const calls: { readonly messages: GatewayCallRequest["messages"] }[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((_url, init) => {
       const body = typeof init?.body === "string" ? init.body : "";
       if (!body.includes("Feature()"))
         return Promise.resolve(providerResponse("No matching evidence."));
-      calls.push(JSON.parse(body) as { readonly messages: readonly GatewayChatMessage[] });
+      calls.push(JSON.parse(body) as { readonly messages: GatewayCallRequest["messages"] });
       const cited = hybrid
         ? "Feature returns true [1]."
         : "Feature returns true [source:1|src/Feature.ts:1].";
@@ -170,20 +220,43 @@ async function scriptedTurn(
   const budget = deps.gatewayConfig?.spendBudget;
   if (budget === undefined) throw new TypeError("Missing real durable spend budget");
   const reserve = vi.spyOn(budget, "reserve");
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
   const result = await handleGroundedAsk(
     {
       req: mockRequest({ body: JSON.stringify({ chatId, content: "Explain src/Feature.ts" }) }),
       res: mockResponse().res,
       params: {},
+      url: new URL("http://127.0.0.1/api/chats/messages/grounded"),
       correlationId: "plural-synthesis-ceiling",
     },
     deps,
   );
-  expect(result.status, JSON.stringify(result.body)).toBe(200);
-  return { calls, reservations: reserve.mock.calls.length, answer: result.body as GroundedAnswer };
+  expect(result.status, JSON.stringify(result.body)).toBe(expectedStatus);
+  const synthesisCounts = sink.events
+    .filter((event) => event.op === "search.connected-context.answer-details")
+    .map((event) =>
+      expectActivityLogProof(
+        "search.connected-context.answer-details.line",
+        formatActivityLogProofLine(event),
+      ),
+    )
+    .map((event) => (typeof event.synthesisCallCount === "number" ? event.synthesisCallCount : 0));
+  return {
+    calls,
+    reservations: reserve.mock.calls.length,
+    answer: result.body as GroundedAnswer,
+    synthesisCounts,
+    body: result.body,
+  };
 }
 
 function providerSequence(sequence: string, cited: string): readonly string[] {
+  if (sequence === "unknown-output") return [UNKNOWN_OUTPUT, cited];
+  if (sequence.startsWith("usage-"))
+    return [UNSUPPORTED_USAGE, ...(sequence.endsWith("cited") ? [cited] : [UNCITED, cited])];
+  if (sequence.startsWith("output-"))
+    return [UNSUPPORTED_OUTPUT, ...(sequence.endsWith("cited") ? [cited] : [UNCITED, cited])];
   if (sequence === "overflow-repair") return [OVERFLOW, UNCITED, cited];
   if (sequence === "transient-repair") return [UNAVAILABLE, UNCITED, cited];
   if (sequence === "transient-cited") return [UNAVAILABLE, cited];
@@ -192,11 +265,42 @@ function providerSequence(sequence: string, cited: string): readonly string[] {
 
 describe("actual configured plural synthesis dispatches", () => {
   it.each([false, true])(
+    "refuses retry after unknown output exhausted the original grant (hybrid=%s)",
+    async (hybrid) => {
+      const turn = await scriptedTurn(hybrid, "unknown-output", 502);
+      expect(turn.calls).toHaveLength(1);
+      expect(turn.reservations).toBe(1);
+      expect(turn.body).toMatchObject({ error: { code: "GATEWAY_CONTEXT_OVERFLOW" } });
+    },
+  );
+
+  it.each([
+    { hybrid: false, sequence: "usage-repair", cited: false },
+    { hybrid: true, sequence: "usage-repair", cited: false },
+    { hybrid: false, sequence: "output-repair", cited: false },
+    { hybrid: true, sequence: "output-repair", cited: false },
+    { hybrid: false, sequence: "usage-cited", cited: true },
+    { hybrid: true, sequence: "usage-cited", cited: true },
+    { hybrid: false, sequence: "output-cited", cited: true },
+    { hybrid: true, sequence: "output-cited", cited: true },
+  ] as const)(
+    "shares actual compatibility attempts with repair (%j)",
+    async ({ hybrid, sequence, cited }) => {
+      const turn = await scriptedTurn(hybrid, sequence);
+      expect(turn.calls).toHaveLength(2);
+      expect(turn.reservations).toBe(2);
+      expect(turn.answer.citations).toHaveLength(cited ? 1 : 0);
+      expect(turn.synthesisCounts.every((count) => count === 2)).toBe(true);
+    },
+  );
+  it.each([false, true])(
     "shares the two physical calls with adopted-window retry (hybrid=%s)",
     async (hybrid) => {
       const turn = await scriptedTurn(hybrid, "overflow-repair");
       expect(turn.calls).toHaveLength(2);
       expect(turn.reservations).toBe(2);
+      expect(turn.synthesisCounts).not.toHaveLength(0);
+      expect(turn.synthesisCounts.every((count) => count === 2)).toBe(true);
       expect(turn.answer.citations).toHaveLength(0);
       expect(turn.answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
     },

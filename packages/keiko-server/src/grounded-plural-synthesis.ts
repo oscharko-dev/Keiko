@@ -50,8 +50,28 @@ export function withPluralSynthesisUsage(
   return {
     ...answer,
     usage: budget.takeUsage(),
-    synthesisCallCount: remainingBefore - budget.remaining(),
-    synthesisReservedOutputTokens: budget.reservedOutputTokens() - reservedBefore,
+    ...pluralSynthesisCountFields(
+      remainingBefore,
+      budget.remaining(),
+      reservedBefore,
+      budget.reservedOutputTokens(),
+    ),
+  };
+}
+
+export function pluralSynthesisCountFields(
+  remainingBefore: number | undefined,
+  remainingAfter: number | undefined,
+  reservedBefore: number | undefined,
+  reservedAfter: number | undefined,
+): Pick<GroundedAnswerResult, "synthesisCallCount" | "synthesisReservedOutputTokens"> {
+  return {
+    ...(remainingBefore === undefined || remainingAfter === undefined
+      ? {}
+      : { synthesisCallCount: remainingBefore - remainingAfter }),
+    ...(reservedBefore === undefined || reservedAfter === undefined
+      ? {}
+      : { synthesisReservedOutputTokens: reservedAfter - reservedBefore }),
   };
 }
 

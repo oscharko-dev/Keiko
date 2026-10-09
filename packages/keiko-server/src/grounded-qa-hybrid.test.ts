@@ -4840,10 +4840,14 @@ describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(observedBudgets).toHaveLength(3);
-    for (const key of Object.keys(
-      DEFAULT_EXPLORATION_BUDGET,
-    ) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
+    const publicBudget = buildGroundedAnswerContextPackSummary(
+      folderPack("budget-resource-projection", 0.5, "budget-resource-projection"),
+      0,
+      0,
+    ).budget;
+    for (const key of Object.keys(publicBudget) as (keyof typeof publicBudget)[]) {
       const cap = DEFAULT_EXPLORATION_BUDGET[key];
+      if (cap === undefined) continue;
       if (cap === null) {
         expect(observedBudgets.map((budget) => budget[key])).toEqual([null, null, null]);
         continue;
