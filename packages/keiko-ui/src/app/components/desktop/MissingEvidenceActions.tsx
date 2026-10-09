@@ -117,8 +117,8 @@ function DeclaredFileAction({
   readonly roots: readonly string[];
 }): ReactNode {
   const t = useTranslate();
-  const [selected, setSelected] = useState(roots.length === 1 ? (roots[0] ?? "") : "");
-  const root = roots.includes(selected) ? selected : "";
+  const [selected, setSelected] = useState("");
+  const root = roots.length === 1 ? (roots[0] ?? "") : roots.includes(selected) ? selected : "";
   const action = useAddDeclaredFile(props, declaration.scopePath, root);
   if (roots.length === 0) return null;
   return (
