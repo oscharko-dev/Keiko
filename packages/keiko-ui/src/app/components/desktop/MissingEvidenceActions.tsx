@@ -32,7 +32,7 @@ function containsPath(scope: ChatConnectedScope, path: string): boolean {
     : scope.relativePaths.some((directory) => path.startsWith(`${directory}/`));
 }
 
-export function declarationRoots(
+function declarationRoots(
   chat: Chat,
   declaration: GroundedInsufficiencyDeclaration,
 ): readonly string[] {
