@@ -1,13 +1,13 @@
-.cited {
+.cmpCited {
   text-decoration-line: underline;
   text-decoration-style: solid;
 }
-.readUncited {
+.cmpReadUncited {
   text-decoration-line: underline;
   text-decoration-style: dashed;
 }
-.unread {
-  color: var(--ink-dim);
+.cmpUnread {
+  color: var(--text-secondary);
   text-decoration-line: underline;
   text-decoration-style: dotted;
 }

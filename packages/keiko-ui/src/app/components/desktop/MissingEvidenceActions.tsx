@@ -131,7 +131,7 @@ function DeclaredFileAction({
   const action = useAddDeclaredFile(props, declaration.scopePath, root);
   if (roots.length === 0) return null;
   return (
-    <div className={styles.notice}>
+    <div className={styles.cmpNotice}>
       <span title={declaration.scopePath}>
         {t("scope.pill.file", { name: scopePathBasename(declaration.scopePath) })}
       </span>
@@ -175,7 +175,7 @@ export function MissingEvidenceActions(props: MissingEvidenceActionsProps): Reac
     ) ?? [];
   if (declarations.length === 0) return null;
   return (
-    <section className={styles.notice} aria-label={t("scope.missing.title")}>
+    <section className={styles.cmpNotice} aria-label={t("scope.missing.title")}>
       <p>{t("scope.missing.count", { count: declarations.length })}</p>
       <button
         type="button"

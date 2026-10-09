@@ -1582,6 +1582,15 @@ export interface UseChatSessionResult {
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
 }
 
+function acknowledgedGroundedRefreshChat(
+  chatId: string,
+  refreshed: Chat | undefined,
+  before: Chat | undefined,
+  acknowledged: Chat | undefined,
+): Chat | undefined {
+  return acknowledged !== before && acknowledged?.id === chatId ? acknowledged : refreshed;
+}
+
 interface SessionState {
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -3025,6 +3034,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, [loadMemoryAutonomyModeImpl, setMemoryMode]);
   const mountedRef = useRef(true);
   const activeChatIdRef = useRef<string | undefined>(renderedChatIdentity);
+  const acknowledgedChatRef = useRef<Chat | undefined>(undefined);
   const renderedActiveChatIdRef = useRef(renderedChatIdentity);
   synchronizeRenderedIdentity(activeChatIdRef, renderedActiveChatIdRef, renderedChatIdentity);
   // GEN-DUP-SEMANTIC-016 — two named predicates for the two repeated stale-landing guards so the
@@ -3505,6 +3515,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   useEffect(() => {
     return subscribeChatMutations((mutation) => {
       if (mutation.type === "upsert") {
+        if (mutation.chat.id === activeChatIdRef.current)
+          acknowledgedChatRef.current = mutation.chat;
         setState((previous) => applyChatUpsert(previous, mutation.chat));
         return;
       }
@@ -4185,6 +4197,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setLatestMemory(result.memory);
         // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
         // re-sorts the active chat to the top after the assistant reply lands.
+        const acknowledgedBeforeRefresh = acknowledgedChatRef.current;
         const [messagePayload, chatsPayload] = await Promise.all([
           fetchChatMessages(chat.id, chat.projectPath),
           fetchChats(chat.projectPath),
@@ -4193,7 +4206,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           return { status: "completed", assistantMessageId: result.assistantMessageId };
         }
         if (signal.aborted) return { status: "cancelled" };
-        const refreshedActive = chatsPayload.chats.find((c) => c.id === chat.id);
+        const refreshedActive = acknowledgedGroundedRefreshChat(
+          chat.id,
+          chatsPayload.chats.find((candidate) => candidate.id === chat.id),
+          acknowledgedBeforeRefresh,
+          acknowledgedChatRef.current,
+        );
+        const refreshedChats =
+          refreshedActive === undefined
+            ? chatsPayload.chats
+            : upsertChatIntoList(chatsPayload.chats, refreshedActive);
         setState((previous) =>
           activeChatIdRef.current !== chat.id || previous.activeChat?.id !== chat.id
             ? previous
@@ -4205,7 +4227,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
                   canonicalVoiceProjectionRef.current,
                   [optimisticId],
                 ),
-                chats: sortChats(chatsPayload.chats),
+                chats: sortChats(refreshedChats),
                 activeChat: refreshedActive ?? previous.activeChat,
               },
         );

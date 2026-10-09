@@ -1,7 +1,9 @@
-import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { ChatScopeNotice, type ChatScopeNoticeProps } from "../ChatScopeNotice";
+import { ConnectedScopePill } from "../ConnectedScopePill";
 import { toUserErrorNotice } from "../format-error";
 import type {
   Chat,
@@ -1882,6 +1884,151 @@ describe("useChatSession pending attachment validation", () => {
 
     expect(result.current.pendingAttachments).toHaveLength(0);
   });
+});
+
+function ScopeRefreshHarness({
+  capture,
+  persist,
+}: {
+  readonly capture: (session: UseChatSessionResult) => void;
+  readonly persist: NonNullable<ChatScopeNoticeProps["updateScopes"]>;
+}): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  useEffect((): void => capture(session), [capture, session]);
+  const active = session.activeChat;
+  if (active === undefined) return null;
+  return (
+    <div>
+      <output data-testid="scope-refresh-identity">{active.groundingScopeIdentity}</output>
+      <ConnectedScopePill chat={active} onDisconnect={session.replaceChat} updateScopes={persist} />
+      <ChatScopeNotice
+        chat={active}
+        onChatChanged={session.replaceChat}
+        onKeepFolderChange={(): void => undefined}
+        updateScopes={persist}
+      />
+      <button
+        onClick={(): void => {
+          void session.sendMessage({ text: "Inspect the current folder" });
+        }}
+      >
+        Send scope question
+      </button>
+    </div>
+  );
+}
+
+function scopeRefreshChats(): {
+  readonly folder: Chat;
+  readonly file: Chat;
+  readonly restored: Chat;
+} {
+  const scope = {
+    kind: "directory" as const,
+    root: "/repo",
+    relativePaths: ["src"],
+    connectedAtMs: 1,
+  };
+  const folder = chat({ id: "chat-grounded", selectedModel: "chat-doc", connectedScopes: [scope] });
+  return {
+    folder,
+    file: {
+      ...folder,
+      connectedScopes: [{ ...scope, kind: "files", relativePaths: ["src/validation.ts"] }],
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+    },
+    restored: { ...folder, groundingScopeIdentity: `gsi-v1:${"c".repeat(64)}`, updatedAt: 3 },
+  };
+}
+
+async function mountScopeRefreshRace(): Promise<{
+  readonly session: () => UseChatSessionResult;
+  readonly observer: ReturnType<typeof renderHook<UseChatSessionResult, never>>;
+  readonly chats: ReturnType<typeof scopeRefreshChats>;
+  readonly persist: NonNullable<ChatScopeNoticeProps["updateScopes"]>;
+}> {
+  const chats = scopeRefreshChats();
+  vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-doc" })] });
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+  vi.mocked(fetchChats).mockResolvedValue({ chats: [chats.folder] });
+  vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+  vi.mocked(askGrounded).mockResolvedValue({
+    answer: "grounded reply",
+    citations: [],
+  } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+  let current: UseChatSessionResult | undefined;
+  const capture = (session: UseChatSessionResult): void => {
+    current = session;
+  };
+  const persist = vi
+    .fn<NonNullable<ChatScopeNoticeProps["updateScopes"]>>()
+    .mockResolvedValue({ chat: chats.restored });
+  render(<ScopeRefreshHarness capture={capture} persist={persist} />);
+  await waitFor(() =>
+    expect(screen.getByTestId("scope-refresh-identity")).toHaveTextContent(
+      chats.folder.groundingScopeIdentity ?? "",
+    ),
+  );
+  const observer = renderHook(() => useChatSession({ autoCreate: false }));
+  await waitFor(() => expect(observer.result.current.loading).toBe(false));
+  act(() => notifyChatUpsert(chats.file));
+  await screen.findByRole("button", { name: "Keep folder" });
+  return {
+    session: (): UseChatSessionResult => {
+      if (current === undefined) throw new TypeError("Missing mounted session");
+      return current;
+    },
+    observer,
+    chats,
+    persist,
+  };
+}
+
+describe("grounded post-answer refresh scope acknowledgement ownership", () => {
+  it.each([false, true])(
+    "preserves Keep folder ACK while a %s-matched list is pending",
+    async (matched) => {
+      const fixture = await mountScopeRefreshRace();
+      const pending = deferred<Awaited<ReturnType<typeof fetchChats>>>();
+      vi.mocked(fetchChats).mockReturnValueOnce(pending.promise);
+      vi.mocked(fetchChats).mockClear();
+      fireEvent.click(screen.getByRole("button", { name: "Send scope question" }));
+      await waitFor(() => expect(fetchChats).toHaveBeenCalledOnce());
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Keep folder" })));
+      expect(fixture.persist).toHaveBeenCalledWith(
+        fixture.chats.file.id,
+        fixture.chats.folder.connectedScopes,
+        fixture.chats.file.groundingScopeIdentity,
+      );
+      expect(fixture.session().activeChat?.groundingScopeIdentity).toBe(
+        fixture.chats.restored.groundingScopeIdentity,
+      );
+      await act(async () => {
+        pending.resolve({ chats: [matched ? fixture.chats.restored : fixture.chats.file] });
+      });
+      await waitFor(() => expect(fixture.session().sendStatus).toBe("completed"));
+      expect(fixture.session().activeChat?.connectedScopes).toEqual(
+        fixture.chats.restored.connectedScopes,
+      );
+      expect(fixture.session().activeChat?.groundingScopeIdentity).toBe(
+        fixture.chats.restored.groundingScopeIdentity,
+      );
+      expect(fixture.session().chats[0]?.groundingScopeIdentity).toBe(
+        fixture.chats.restored.groundingScopeIdentity,
+      );
+      expect(fixture.observer.result.current.activeChat?.groundingScopeIdentity).toBe(
+        fixture.chats.restored.groundingScopeIdentity,
+      );
+      expect(screen.queryByTitle("/repo/src/validation.ts")).toBeNull();
+      vi.mocked(fetchChats).mockResolvedValue({ chats: [fixture.chats.restored] });
+      await act(async () => {
+        await fixture.session().sendMessage({ text: "Use the acknowledged folder" });
+      });
+      expect(vi.mocked(askGrounded).mock.calls.at(-1)?.[0].expectedGroundingScopeIdentity).toBe(
+        fixture.chats.restored.groundingScopeIdentity,
+      );
+    },
+  );
 });
 
 describe("useChatSession sendMessage — grounded attachment guard", () => {

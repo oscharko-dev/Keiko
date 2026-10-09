@@ -1,27 +1,27 @@
-.notice {
+.cmpNotice {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   width: 100%;
-  color: var(--ink);
+  color: var(--text-primary);
   font-size: 12px;
 }
-.notice button {
+.cmpNotice button {
   background: var(--surface);
-  border: 1px solid var(--stroke);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
-  color: var(--ink);
+  color: var(--text-primary);
   min-height: 28px;
   padding: 4px 8px;
 }
-.notice button:focus-visible {
+.cmpNotice button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.help {
+.cmpHelp {
   width: 100%;
-  color: var(--ink-dim);
+  color: var(--text-secondary);
   font-size: 12px;
   margin: 0;
 }
