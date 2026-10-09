@@ -5319,7 +5319,7 @@ it("does not attribute an old manifest first expanded after switching repositori
   ).toBeInTheDocument();
 });
 
-it("lets a scripted insufficiency add its file and focus an unsent follow-up", async () => {
+it("acknowledges a missing-file scope before the user explicitly sends the focused follow-up", async () => {
   const chat = makeChat({
     connectedScopes: [
       { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
@@ -5338,15 +5338,30 @@ it("lets a scripted insufficiency add its file and focus an unsent follow-up", a
     answerKind: "insufficiency",
     insufficiencyDeclarations: [{ scopePath: "src/validation.ts", state: "unread-in-scope" }],
   };
-  vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat });
+  const acknowledged = {
+    ...chat,
+    connectedScopes: [
+      ...(chat.connectedScopes ?? []),
+      {
+        kind: "files" as const,
+        root: "/proj",
+        relativePaths: ["src/validation.ts"],
+        connectedAtMs: 2,
+      },
+    ],
+  };
+  vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: acknowledged });
   const session = makeSession({ activeChat: chat, latestGrounded });
   renderStatefulWindow(session);
-  await userEvent.setup().click(screen.getByRole("button", { name: "Add file to scope" }));
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Add file to scope" }));
   await waitFor(() =>
     expect(session.setDraft).toHaveBeenCalledWith(expect.stringContaining("@src/validation.ts")),
   );
   expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
   expect(session.sendMessage).not.toHaveBeenCalled();
+  expect(session.replaceChat).toHaveBeenCalledWith(acknowledged);
+  expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent("@src/validation.ts");
   expect(vi.mocked(updateChatConnectedScopes).mock.calls[0]?.[1]).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -5356,4 +5371,6 @@ it("lets a scripted insufficiency add its file and focus an unsent follow-up", a
       }),
     ]),
   );
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  expect(session.sendMessage).toHaveBeenCalledTimes(1);
 });
