@@ -8,6 +8,7 @@ import {
   retainFailedGroundedSynthesis,
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
+import { groundedAnswerSourceText } from "./grounded-faithfulness.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import type {
   OrchestratorInput,
@@ -202,7 +203,11 @@ async function executeFollowUp(
       passCount: 1,
       admittedPathCount: admitted,
       trigger: "insufficiency-declared",
-      outcome: answered.answerKind === "answer" ? "answered" : "still-insufficient",
+      outcome:
+        answered.answerKind === "answer" &&
+        groundedAnswerSourceText(answered.content).trim().length > 0
+          ? "answered"
+          : "still-insufficient",
       firstDeclarations: ctx.initial.insufficiencyDeclarations ?? [],
     },
   };

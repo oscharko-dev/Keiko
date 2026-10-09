@@ -515,6 +515,18 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(typeof assessed[0]?.queryIdentitySha256).toBe("string");
   });
 
+  it("keeps a source insufficiency unresolved when the second pass answers only from learned knowledge", async () => {
+    const knowledge =
+      "<assessment>\nGeneral guidance cannot establish this repository value.\n</assessment>";
+    const requests = installProvider([MISSING, knowledge], true);
+    const { deps, chatId } = configuredRuntime();
+    const result = await handleGroundedAsk(route(chatId), deps);
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(result.body).toMatchObject({ content: knowledge, citations: [] });
+    expect(readPersistedActivityLog(stateDir)).toContain('"followUpOutcome":"still-insufficient"');
+  });
+
   it("repairs only the uncited source claims while preserving the assessment verbatim", async () => {
     const knowledge = "\n\n<assessment>\nGeneral advice.\n</assessment>";
     const requests = installProvider([UNCITED + knowledge, CITED + knowledge], true);

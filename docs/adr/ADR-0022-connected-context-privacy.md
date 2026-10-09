@@ -65,7 +65,9 @@ is included before prompt fitting. Assessment text never authenticates source ci
 file declarations or entailment, and operator-disabled blocks are dropped. Source-only marker
 repair preserves the assessment verbatim. General requests with no runnable retrieval anchors may
 use the validated empty assembler under the same original token, spend, time and two-physical-
-attempt envelope; they do not invent repository facts or bypass scope validation. Existing
+attempt envelope; they do not invent repository facts or bypass scope validation. An assessment-only
+second pass does not resolve a source insufficiency, even when the declared file was sent; the
+substantive uncited source-answer case retains its separate successful retrieval outcome. Existing
 `search.answer.assessed` events distinguish early `candidate` from `accepted-final` observations
 and bind final source-warning decisions to canonical scope/query digests. Unknown or candidate
 observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
@@ -494,7 +496,12 @@ Language source inspection is an explicit trusted grounded-caller hint, rather t
 reinterpretation inside shared lexical search. Coding tool and context-provider lexical requests
 retain content-match semantics and cannot receive synthetic nonmatching inspection windows.
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
-filename batches; they do not schedule unrelated graph or history traversal. Explicit relationship,
+filename batches; they do not schedule unrelated graph or history traversal. Ordinary-folder
+named-document focus additionally requires every meaningful request clause to stay bound to a named
+document. The canonical anchor producer removes presentation-only clauses; an independent prose
+topic, even without a quoted or typed identifier, retains recursive discovery. A rejected named
+document cannot stop discovery for that independent topic. Sole named-document requests retain
+focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
