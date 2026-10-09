@@ -456,7 +456,9 @@ system that exists, never beside it:
   Complete document path references are data when classifying relationship/history requests;
   directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
   factual lookup focuses discovery on canonically admitted named documents with a scope-bound
-  request context only when the planner has no independent non-path target. Its source/read/ring
+  request context only when every meaningful request clause stays bound to a named document.
+  Independent prose topics retain recursive discovery even without a strong planner target.
+  Its source/read/ring
   observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
   canonical web/text-document extension groups, alongside XML and bounded document extraction.
   Quoted targets use the same canonical reference identity. When every complete factual document
