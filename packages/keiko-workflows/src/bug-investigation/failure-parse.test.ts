@@ -23,6 +23,27 @@ describe("parseFailureEvidence (AC #4 / AC #9 failure-output handling)", () => {
     expect(out.frames).toContainEqual({ file: "/repo/src/buggy.ts", line: 3 });
   });
 
+  it.each([
+    { location: "file:///repo/pressure%20check.mjs:7:3", file: "/repo/pressure check.mjs" },
+    { location: "file:///repo/%C3%BCberhitzung.mjs:7", file: "/repo/überhitzung.mjs" },
+    { location: "file://localhost/repo/pressure%20check.mjs:7", file: "/repo/pressure check.mjs" },
+    { location: "file:///repo/pressure%2520check.mjs:7", file: "/repo/pressure%20check.mjs" },
+    { location: "src/pressure%20check.mjs:7", file: "src/pressure%20check.mjs" },
+  ])("preserves one-pass runtime location identity $location", ({ location, file }) => {
+    expect(parseFailureEvidence({ stackTrace: `    at run (${location})` }).frames).toEqual([
+      { file, line: 7 },
+    ]);
+  });
+
+  it.each([
+    "file://remote.invalid/repo/guard.mjs:7",
+    "file:///repo/bad%ZZ.mjs:7",
+    "file:///repo/a%2Fguard.mjs:7",
+    "file:///repo/a%00guard.mjs:7",
+  ])("does not turn an invalid URL into a different filesystem frame: %s", (location) => {
+    expect(parseFailureEvidence({ stackTrace: `    at run (${location})` }).frames).toEqual([]);
+  });
+
   it("extracts a vitest-style bare `path:line:col` from failing output", () => {
     const out = parseFailureEvidence({
       failingOutput: " FAIL  tests/buggy.test.ts > half halves\nsrc/buggy.ts:3:10",
