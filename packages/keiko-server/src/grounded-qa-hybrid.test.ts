@@ -738,6 +738,43 @@ describe("hybrid grounded ask — folder evidence the window fit left out", () =
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
+  it("forwards validated assistant continuity hints to hybrid folder retrieval", async () => {
+    const { capsuleId } = await seedReadyCapsule("Continuity Docs");
+    const folder: ChatConnectedScope = {
+      kind: "directory",
+      root: tempRoot("continuity"),
+      relativePaths: ["src/read.ts"],
+      connectedAtMs: NOW,
+    };
+    const chat = store.findChatById(
+      makeHybridChat([folder], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]),
+    );
+    if (chat === undefined) throw new TypeError("expected chat");
+    const continuity = {
+      assistantReferents: [{ path: "src/read.ts", line: 4, origin: "assistant" as const }],
+      previousRetrievalIntent: "targeted-code-search" as const,
+      continuityReferentSource: "assistant-paths" as const,
+    };
+    const folderRetriever = vi.fn(
+      folderRetrieverFor(new Map([["src/read.ts", folderPack("src/read.ts", 0.5, "read")]])),
+    );
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "What about now?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: hybridDeps(),
+      signal: new AbortController().signal,
+      folderRetriever,
+      connectorRetrieve: singleConnectorRetrieve(capsuleId),
+      answer: () => Promise.resolve("ok"),
+      ...continuity,
+    });
+    expect(result.status).toBe(200);
+    expect(folderRetriever).toHaveBeenCalledTimes(1);
+    expect(folderRetriever.mock.calls[0]?.[0]).toMatchObject(continuity);
+  });
+
   it.each([
     ["please paste validation.ts", "clarification", false],
     ["Missing evidence: [src/unread.ts]", "insufficiency", false],
@@ -1032,14 +1069,20 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       answer: sentinelAnswerer(HYBRID_ANSWER_SENTINEL, answererSeen),
     };
     const evidenceRunIds: string[] = [];
+    const folderFingerprints: (string | undefined)[] = [];
 
     // Act
     const result = await handleGroundedAsk(
       routeCtx(JSON.stringify({ chatId, content: "What is alpha?" })),
       hybridDeps({
         evidenceStore: {
-          put: (runId: string): string => {
+          put: (runId: string, json: string): string => {
             evidenceRunIds.push(runId);
+            const manifest = JSON.parse(json) as {
+              connectedContext?: { scope: { sourceScopeFingerprint?: string } };
+            };
+            if (manifest.connectedContext !== undefined)
+              folderFingerprints.push(manifest.connectedContext.scope.sourceScopeFingerprint);
             return runId;
           },
           list: () => [],
@@ -1103,6 +1146,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(promptContext?.sentReferenceCount).toBe(
       answer.citations.length + answer.knowledgeCitations.length,
     );
+    expect(folderFingerprints).toEqual([answer.citations[0]?.sourceScopeFingerprint]);
     expect(answer.evidenceRunId).toBe(evidenceRunIds[0]);
     expect(answer.evidenceRunIds).toEqual(evidenceRunIds);
 
