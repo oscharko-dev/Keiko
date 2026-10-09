@@ -245,7 +245,7 @@ function rejectPath(
   if (path === undefined) return;
   state.rejectedPaths.add(path);
   // Missing and denied paths are not corpus entries, and never become manifest paths.
-  if (reason === "missing" || reason === "denied") return;
+  if (reason === "missing" || reason === "denied" || reason === "outside-scope") return;
   state.omitted.push({ scopePath: path, reason, omittedAtMs: nowMs });
 }
 

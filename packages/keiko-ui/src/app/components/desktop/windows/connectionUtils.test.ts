@@ -17,6 +17,8 @@ import {
   subText,
   type WinSnapshot,
 } from "./connectionUtils";
+import { loadLocaleMessages, translate } from "@/lib/i18n";
+import type { ChatConnectedScope } from "@/lib/types";
 import { TYPE_ORDER, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 
 function snap(type: WinSnapshot["type"], cfg: Record<string, unknown> = {}): WinSnapshot {
@@ -368,5 +370,35 @@ describe("receivesFilesContext / receivesFocusedFileContext", () => {
     for (const type of Object.keys(WIN_TYPES) as WindowType[]) {
       if (receivesFocusedFileContext(type)) expect(receivesFilesContext(type)).toBe(true);
     }
+  });
+});
+
+describe("canonical localized Files edges", () => {
+  const scope: ChatConnectedScope = {
+    kind: "files",
+    root: "/repo",
+    relativePaths: ["src/validation.ts"],
+    connectedAtMs: 1,
+  };
+  it("uses the acknowledged chat scope while Files previews another file", () => {
+    expect(
+      relLabel(snap("files", { root: "/repo", activeFilePath: "other.ts" }), snap("chat"), {
+        scope,
+      }),
+    ).toBe("uses validation.ts");
+  });
+  it("does not revive a disconnected canonical scope from Files config", () => {
+    expect(relLabel(snap("files", { root: "/repo" }), snap("chat"), { scope: null })).toBe(
+      "no folder selected",
+    );
+  });
+  it("localizes canonical file and ordinary relationship labels", async () => {
+    await loadLocaleMessages("de");
+    const t = (
+      key: Parameters<typeof translate>[1],
+      values?: Parameters<typeof translate>[2],
+    ): string => translate("de", key, values);
+    expect(relLabel(snap("files"), snap("chat"), { scope, t })).toBe("verwendet validation.ts");
+    expect(relLabel(snap("browser"), snap("chat"), { t })).toBe("durchsucht");
   });
 });
