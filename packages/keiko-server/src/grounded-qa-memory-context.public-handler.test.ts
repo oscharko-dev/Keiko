@@ -12,6 +12,7 @@ import {
   createDefaultChatCapability,
   parseGatewayConfig,
   type GatewayCallRequest,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
@@ -58,7 +59,7 @@ function seedMemory(vault: MemoryVaultStore): void {
 
 function answerModel(calls: GatewayCallRequest[]): ModelPort {
   return {
-    call: (request) => {
+    call: (request): Promise<NormalizedResponse> => {
       calls.push(request);
       return Promise.resolve({
         modelId: MODEL,
