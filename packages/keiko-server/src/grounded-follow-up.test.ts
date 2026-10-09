@@ -15,7 +15,7 @@ async function scriptedTurn(
   const received: string[][] = [];
   const result = await runConnectedRetrievalEval({
     files,
-    query: "Explain Feature",
+    query: "Explain src/Feature.ts",
     budget: { ...DEFAULT_EXPLORATION_BUDGET, followUpPassesMax },
     answerer: {
       answer: async (_question, pack) => {
@@ -62,7 +62,7 @@ describe("one server-owned follow-up under the original turn budgets", () => {
     let calls = 0;
     const result = await runConnectedRetrievalEval({
       files,
-      query: "Explain Feature",
+      query: "Explain src/Feature.ts",
       budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1, followUpPassesMax: 1 },
       answerer: {
         answer: async () => {
@@ -85,7 +85,7 @@ describe("one server-owned follow-up under the original turn budgets", () => {
       let calls = 0;
       const result = await runConnectedRetrievalEval({
         files: { ...files, ".env": "PRIVATE_CANARY=true", "dist/generated.ts": "PRIVATE_CANARY" },
-        query: "Explain Feature",
+        query: "Explain src/Feature.ts",
         answerer: {
           answer: async () => {
             calls += 1;
@@ -95,7 +95,7 @@ describe("one server-owned follow-up under the original turn budgets", () => {
       });
       expect(calls).toBe(1);
       expect(result.answer?.assistantContent).not.toContain(path);
-      expect(result.answer?.insufficiencyDeclarations).toEqual([]);
+      expect(result.answer?.insufficiencyDeclarations ?? []).toEqual([]);
     },
   );
 });
