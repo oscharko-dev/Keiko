@@ -27043,6 +27043,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["none", "assessment", "assessment-only", "neutralized"],
       },
+      scopeIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      queryIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      phase: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["candidate", "accepted-final"],
+      },
       sourceBackedChars: {
         type: "integer",
         dataClass: "count",
@@ -27083,7 +27101,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["cited", "cited-with-dangling", "dangling-only", "uncited", "refusal"],
+        values: [
+          "cited",
+          "cited-with-dangling",
+          "dangling-only",
+          "uncited",
+          "refusal",
+          "assessment-only",
+        ],
       },
       citationKind: {
         type: "string",

@@ -296,14 +296,17 @@ function providerSequence(sequence: string, cited: string): readonly string[] {
 
 describe("actual configured plural synthesis dispatches", () => {
   it.each(
-    [false, true].flatMap((hybrid) => [
-      { hybrid, sequence: "initial-cited", completed: 1, physical: 1 },
-      { hybrid, sequence: "repair", completed: 2, physical: 2 },
-      { hybrid, sequence: "repair-rejected", completed: 2, physical: 2 },
-      { hybrid, sequence: "overflow-repair", completed: 1, physical: 2 },
-      { hybrid, sequence: "transient-cited", completed: 1, physical: 2 },
-      { hybrid, sequence: "repair-failed", completed: 1, physical: 2 },
-    ]),
+    [false, true].flatMap(
+      (hybrid) =>
+        [
+          { hybrid, sequence: "initial-cited", completed: 1, physical: 1 },
+          { hybrid, sequence: "repair", completed: 2, physical: 2 },
+          { hybrid, sequence: "repair-rejected", completed: 2, physical: 2 },
+          { hybrid, sequence: "overflow-repair", completed: 1, physical: 2 },
+          { hybrid, sequence: "transient-cited", completed: 1, physical: 2 },
+          { hybrid, sequence: "repair-failed", completed: 1, physical: 2 },
+        ] as const,
+    ),
   )(
     "persists completed synthesis calls separately from physical attempts (%j)",
     async ({ hybrid, sequence, completed, physical }) => {

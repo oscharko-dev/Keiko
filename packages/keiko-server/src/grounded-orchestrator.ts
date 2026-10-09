@@ -29,6 +29,14 @@ import {
 } from "./grounded-explicit-paths.js";
 import { declaredInsufficiencyPaths } from "./grounded-faithfulness.js";
 import {
+  splitOwnAssessmentForPolicy,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import {
+  normalizeGroundedAnswerAssessment,
+  isGroundedAssessmentOnly,
+} from "./grounded-answer-assessment.js";
+import {
   repairGroundedAnswer,
   observeGroundedCitationBehaviour,
   type GroundedRepairResult,
@@ -69,6 +77,8 @@ import {
 } from "./grounded-directory-iteration.js";
 import {
   type CitationReconciliationMetadata,
+  logAnswerAssessment,
+  type AnswerAssessmentIdentity,
   reconcileAndLogInlineCitations,
 } from "./grounded-citation-log.js";
 import {
@@ -1136,6 +1146,7 @@ export interface OrchestratorInput {
 }
 
 export interface OrchestratorDeps {
+  readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
   readonly declarationVerificationSignal?: AbortSignal | undefined;
   readonly repoSemanticSearchProviderFor?: GroundedSemanticProviderFactory | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -6625,16 +6636,27 @@ async function groundedSchedulingYield(signal?: AbortSignal): Promise<void> {
   throwIfCancelled(signal);
 }
 
-interface ReadyPlanResult {
+interface GovernedRetrievalPlanResult {
   readonly plan: ExplorationPlan;
-  readonly governor: GovernorState;
+  readonly governor: GovernorState | undefined;
 }
 
-function createReadyGovernedPlan(
+function canAnswerUnanchoredAssessment(
+  plan: ExplorationPlan,
+  policy: OwnAssessmentPolicy | undefined,
+): boolean {
+  return (
+    policy === "allowed" &&
+    (plan.clarification?.reason === "no-anchors" || plan.clarification?.reason === "too-generic")
+  );
+}
+
+function createGovernedRetrievalPlan(
   input: OrchestratorInput,
   nowMs: () => number,
   progress: ConnectedContextProgress,
-): ReadyPlanResult {
+  ownAssessmentPolicy: OwnAssessmentPolicy | undefined,
+): GovernedRetrievalPlanResult {
   const planned = planAndGovern(
     {
       scope: input.scope,
@@ -6650,6 +6672,8 @@ function createReadyGovernedPlan(
   const { plan } = planned;
   progress.plan = plan;
   if (plan.state !== "ready") {
+    if (canAnswerUnanchoredAssessment(plan, ownAssessmentPolicy))
+      return { plan, governor: undefined };
     if (plan.clarification !== undefined) {
       throw new ClarificationNeededError(plan.clarification);
     }
@@ -9768,6 +9792,38 @@ async function retrieveLiveOrDeadlineExhausted(
   );
 }
 
+/** No source lookup is runnable; the accepted assessment uses the same validated empty assembler. */
+async function unanchoredAssessmentRetrieval(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  runtime: ConnectedContextRuntime,
+): Promise<ConnectedContextExecution> {
+  runtime.progress.phase = "empty-pack-assembly";
+  const { pack } = await assembleContextPack(
+    {
+      scope: input.scope,
+      query: input.query,
+      budget: plan.budget,
+      atoms: [],
+      ranked: [],
+      omittedFromRanking: [],
+      excerpts: new Map(),
+    },
+    assembleOptionsFor(deps, runtime.nowMs, false),
+  );
+  throwIfCancelled(deps.signal);
+  return connectedContextExecution(
+    pack,
+    plan,
+    runtime.activity,
+    stoppedRetrievalCompletion(false, false, plan.rings),
+    EMPTY_STRUCTURAL_DIAGNOSTICS,
+    NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
+    runtime.workspaceIoActivity.diagnostics(),
+  );
+}
+
 async function executeConnectedContextRetrieval(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -9775,7 +9831,12 @@ async function executeConnectedContextRetrieval(
 ): Promise<ConnectedContextExecution> {
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "planning";
-  const { plan, governor } = createReadyGovernedPlan(input, runtime.nowMs, runtime.progress);
+  const { plan, governor } = createGovernedRetrievalPlan(
+    input,
+    runtime.nowMs,
+    runtime.progress,
+    deps.ownAssessmentPolicy,
+  );
   runtime.progress.plannedRingCount = plan.rings.length;
   deps.recordPlan?.(plan);
   throwIfCancelled(deps.signal);
@@ -9784,6 +9845,8 @@ async function executeConnectedContextRetrieval(
     ...runtime,
     workspaceRoot: assertGroundedWorkspaceRootAllowed(runtime.fs, input.workspaceRoot, deps),
   };
+  if (governor === undefined)
+    return unanchoredAssessmentRetrieval(input, deps, plan, admittedRuntime);
   runtime.progress.phase = "budget-evaluation";
   const readBudgetBlock = readBudgetStopReason(plan.budget);
   const deadlineAtMs = explorationDeadlineAtMs(runtime.requestStartedAtMs, plan.budget);
@@ -9952,7 +10015,13 @@ async function groundedAnswerForPack(
     deadlineAtMs,
     requiredEvidencePaths,
   });
-  const answer = normalizeGroundedAnswerPayload(payload);
+  const answer = normalizeGroundedAnswerAssessment(
+    normalizeGroundedAnswerPayload(payload),
+    deps.ownAssessmentPolicy ?? "disabled",
+    deps.correlationId,
+    input.currentQuestion ?? input.query.text,
+    { ...connectedContextActivityIdentity(input), phase: "candidate" },
+  );
   return validateSingleAnswerEvidence(
     answer,
     pack,
@@ -9987,13 +10056,25 @@ function answeredContextPack(
       ),
     },
     uncertainty: [
-      ...pack.uncertainty,
-      ...(answer.noEvidence === true ? [noEvidenceMarker(nowMs)] : []),
+      ...answerApplicableUncertainty(pack.uncertainty, answer),
+      ...(answer.noEvidence === true && !isGroundedAssessmentOnly(answer.content)
+        ? [noEvidenceMarker(nowMs)]
+        : []),
       ...(exhausted.length === 0 ? [] : [answerBudgetClipped(exhausted, nowMs)]),
       ...(answer.finishReason === "length" ? [incompleteAnswerMarker(nowMs)] : []),
       ...markers,
     ],
   };
+}
+
+function answerApplicableUncertainty(
+  markers: readonly UncertaintyMarker[],
+  answer: GroundedAnswerResult,
+): readonly UncertaintyMarker[] {
+  if (!isGroundedAssessmentOnly(answer.content)) return markers;
+  return markers.filter(
+    (marker) => marker.kind !== "no-evidence" && marker.kind !== "low-confidence-selection",
+  );
 }
 
 interface RefinedGroundedAnswer extends GroundedRepairResult {
@@ -10008,13 +10089,16 @@ export function logGroundedAnswerForPack(
   repairDisposition: CitationRepairDisposition,
   correlationId: string | undefined,
   failure?: unknown,
+  ownAssessmentPolicy?: OwnAssessmentPolicy,
 ): void {
+  const identity = connectedContextActivityIdentity({
+    scope: pack.scope,
+    query: pack.query,
+    workspaceRoot: pack.scope.workspaceRoot,
+  });
+  logAcceptedGroundedAssessment(answer, ownAssessmentPolicy, correlationId, identity);
   logGroundedAnswerActivity(correlationId, {
-    ...connectedContextActivityIdentity({
-      scope: pack.scope,
-      query: pack.query,
-      workspaceRoot: pack.scope.workspaceRoot,
-    }),
+    ...identity,
     answer,
     repairDisposition,
     failure,
@@ -10025,6 +10109,20 @@ export function logGroundedAnswerForPack(
       outcome: "not-needed",
       firstDeclarations: [],
     },
+  });
+}
+
+function logAcceptedGroundedAssessment(
+  answer: GroundedAnswerResult,
+  policy: OwnAssessmentPolicy | undefined,
+  correlationId: string | undefined,
+  identity: AnswerAssessmentIdentity,
+): void {
+  if (policy === undefined) return;
+  const { grounded, assessment, neutralized } = splitOwnAssessmentForPolicy(answer.content, policy);
+  logAnswerAssessment({ policy, sourceBacked: grounded, assessment, neutralized }, correlationId, {
+    ...identity,
+    phase: "accepted-final",
   });
 }
 
@@ -10121,6 +10219,12 @@ async function answerWithAvailableContext(
     declarationScopeIndexFor,
   );
   const answer = repair.answer;
+  logAcceptedGroundedAssessment(
+    answer,
+    deps.ownAssessmentPolicy,
+    deps.correlationId,
+    connectedContextActivityIdentity(input),
+  );
   logGroundedAnswerActivity(deps.correlationId, {
     ...connectedContextActivityIdentity(input),
     answer,
@@ -10193,7 +10297,11 @@ export async function runGroundedExploration(
   // hallucinated answer is persisted as grounded. The `no-evidence` uncertainty marker is already on
   // the pack (assemblePackFromReads adds it when excerpts are empty).
   const sourceEvidenceAvailable = packHasUsableEvidence(pack);
-  if (!sourceEvidenceAvailable && input.answerOnlyContextAvailable !== true) {
+  if (
+    !sourceEvidenceAvailable &&
+    input.answerOnlyContextAvailable !== true &&
+    deps.ownAssessmentPolicy !== "allowed"
+  ) {
     const elapsedMs = Math.max(0, nowMs() - start);
     return {
       pack,

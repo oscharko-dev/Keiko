@@ -258,6 +258,21 @@ function hybridDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   };
 }
 
+// These legacy pins deliberately exercise the existing source-only operator policy.
+function sourceOnlyDeps(deps: UiHandlerDeps): UiHandlerDeps {
+  const config: NonNullable<UiHandlerDeps["config"]> = deps.config ?? {
+    providers: [],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  };
+  return {
+    ...deps,
+    config: {
+      ...config,
+      groundedAnswers: { ...config.groundedAnswers, ownAssessment: "disabled" },
+    },
+  };
+}
+
 // ─── Capsule seeding helpers ──────────────────────────────────────────────────
 // Seeds a REAL capsule into the on-disk KnowledgeStore (same path openStoreForDeps opens),
 // marks it ready, closes the store. Mirrors how grounded-qa.test.ts seeds capsules.
@@ -2082,7 +2097,7 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
       const result = await handleGroundedAsk(
         routeCtx(JSON.stringify({ chatId, content: question })),
-        hybridDeps(),
+        sourceOnlyDeps(hybridDeps()),
         undefined,
         undefined,
         { connectorRetrieve, answer: throwingHybridAnswerer() },
@@ -2576,7 +2591,7 @@ describe("hybrid model budget and runtime truth", () => {
     const result = await runHybridGroundedAsk({
       ...ctx,
       contextProfile: profile,
-      deps: hybridDeps({ contextProfile: profile }),
+      deps: sourceOnlyDeps(hybridDeps({ contextProfile: profile })),
       folderRetriever: folderRetrieverFor(new Map([["", pack]])),
       answer: (system, user) => {
         prompt = user;
@@ -2864,7 +2879,7 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     const result = await handleGroundedAsk(
       routeCtx(JSON.stringify({ chatId, content: "What do the skipped sources say?" })),
-      hybridDeps(),
+      sourceOnlyDeps(hybridDeps()),
       undefined,
       undefined,
       { connectorRetrieve, answer: throwingHybridAnswerer() },
@@ -4096,7 +4111,7 @@ describe("hybrid model reranker", () => {
 
     const result = await handleGroundedAsk(
       routeCtx(JSON.stringify({ chatId, content: "Anything at all?" })),
-      hybridDeps(),
+      sourceOnlyDeps(hybridDeps()),
       undefined,
       undefined,
       { connectorRetrieve, answer: throwingHybridAnswerer() },
@@ -4206,6 +4221,7 @@ describe("shared byte budget — oversized evidence fails closed", () => {
     const budgetDeps = hybridDeps({
       config: {
         providers: [],
+        groundedAnswers: { ownAssessment: "disabled" },
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
         grounding: {
           maxConnectedSources: 16,

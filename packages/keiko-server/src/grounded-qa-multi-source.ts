@@ -58,7 +58,13 @@ import {
 
 import type { RouteResult } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentContextProfileForModel, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentRedactionSecrets,
+  currentOwnAssessmentPolicy,
+} from "./deps.js";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { normalizeGroundedAnswerAssessment } from "./grounded-answer-assessment.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { Chat, ChatMessage } from "./store/index.js";
@@ -76,7 +82,7 @@ import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
-import { GROUNDED_SYSTEM_PROMPT, sentGroundedFileCount } from "./grounded-prompt.js";
+import { groundedSystemPrompt, sentGroundedFileCount } from "./grounded-prompt.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
@@ -96,6 +102,7 @@ import {
 } from "./grounded-plural-synthesis.js";
 import {
   connectedSearchNoEvidenceAnswer,
+  assessmentAwareUncertainty,
   groundedAnswerEvidenceFields,
   buildInsufficiencyScopeIndex,
   declaredInsufficiencyPaths,
@@ -484,6 +491,7 @@ function buildRawMultiSourceGatewayMessages(
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
   omissionPathBytes?: number,
+  ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
 ): readonly GatewayChatMessage[] {
   const sections = labeledPacks.flatMap((entry, index) =>
     sourceSection(entry, index, redactor, omissionPathBytes),
@@ -498,7 +506,7 @@ function buildRawMultiSourceGatewayMessages(
     ...sections,
   ].join("\n");
   return [
-    { role: "system", content: GROUNDED_SYSTEM_PROMPT },
+    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
     { role: "user", content: userContent },
   ];
 }
@@ -593,6 +601,21 @@ function multiSourcePromptFit(
   };
 }
 
+function multiSourcePromptRenderer(
+  question: string,
+  redactor: Redactor,
+  options: GroundedGatewayPromptOptions,
+): (packs: readonly LabeledPack[], pathBytes?: number) => readonly GatewayChatMessage[] {
+  return (packs, bytes) =>
+    buildRawMultiSourceGatewayMessages(
+      question,
+      packs,
+      redactor,
+      bytes,
+      options.ownAssessmentPolicy,
+    );
+}
+
 function budgetedMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
@@ -600,23 +623,19 @@ function budgetedMultiSourceGatewayMessages(
   options: GroundedGatewayPromptOptions = {},
 ): FittedMultiSourcePrompt {
   const { limit, fits } = multiSourcePromptFit(labeledPacks, options);
-  const fullMessages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
+  const render = multiSourcePromptRenderer(question, redactor, options);
+  const fullMessages = render(labeledPacks);
   if (fits(fullMessages)) return { messages: fullMessages, packs: labeledPacks };
   const metadataFit = fitPromptOmissionMetadata(
-    (bytes) => buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor, bytes),
+    (bytes) => render(labeledPacks, bytes),
     fits,
     limit,
   );
   if (metadataFit !== undefined) return { ...metadataFit, packs: labeledPacks };
-
   const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-  const overheadBytes = promptByteLength(
-    buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
-  );
-  // When overhead alone (system prompt + question + framing for all sources) exceeds the limit,
-  // no amount of excerpt trimming can bring the prompt within budget. Throw instead of sending
-  // an over-limit prompt to the provider which would result in an opaque 400 context-window error.
-  if (!fits(buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0))) {
+  const overhead = render(emptyPacks, 0);
+  const overheadBytes = promptByteLength(overhead);
+  if (!fits(overhead)) {
     throw new ContextOverflowError(
       `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
@@ -624,17 +643,11 @@ function budgetedMultiSourceGatewayMessages(
   let totalExcerptBytes = Math.max(0, limit - overheadBytes);
   while (totalExcerptBytes >= 0) {
     const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes);
-    const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor, 0);
-    if (fits(messages) || totalExcerptBytes === 0) {
-      return { messages, packs, omissionPathBytes: 0 };
-    }
+    const messages = render(packs, 0);
+    if (fits(messages) || totalExcerptBytes === 0) return { messages, packs, omissionPathBytes: 0 };
     totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
   }
-  return {
-    messages: buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
-    packs: emptyPacks,
-    omissionPathBytes: 0,
-  };
+  return { messages: overhead, packs: emptyPacks, omissionPathBytes: 0 };
 }
 
 // The fit decision on the existing `search.prompt.window-fitted` port, like the Knowledge Pod and
@@ -657,7 +670,15 @@ function loggedMultiSourceFit(
   } catch (error) {
     if (error instanceof ContextOverflowError) {
       const empty = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-      const promptTokens = tokens(buildRawMultiSourceGatewayMessages(question, empty, redactor, 0));
+      const promptTokens = tokens(
+        buildRawMultiSourceGatewayMessages(
+          question,
+          empty,
+          redactor,
+          0,
+          options.ownAssessmentPolicy,
+        ),
+      );
       const fit = { referenceCount, sentReferenceCount: 0, promptTokens, inputBudget };
       logPromptWindowFit({ state: "refused", ...fit }, correlationId);
     }
@@ -692,6 +713,7 @@ export function fittedMultiSourcePrompt(
       withMultiSourcePromptExcerptByteLimit(labeledPacks, 0),
       redactor,
       -1,
+      options.ownAssessmentPolicy,
     ),
     sentReferenceCount: promptExcerptCount(fitted.packs.map((entry) => entry.pack)),
     availableReferenceCount: promptExcerptCount(labeledPacks.map((entry) => entry.pack)),
@@ -723,6 +745,7 @@ export function defaultRetriever(
       nowMs,
       signal: childSignal,
       declarationVerificationSignal: signal,
+      ownAssessmentPolicy: deps === undefined ? undefined : currentOwnAssessmentPolicy(deps),
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source
@@ -851,7 +874,11 @@ async function multiSourceGatewayAttempt(
     ctx.correlationId,
   );
   ctx.sent = sent;
-  if (sent.sentReferenceCount === 0 && ctx.answerOptions.answerOnlyContextAvailable !== true)
+  if (
+    sent.sentReferenceCount === 0 &&
+    ctx.answerOptions.answerOnlyContextAvailable !== true &&
+    options.ownAssessmentPolicy !== "allowed"
+  )
     return undefined;
   logGroundedPromptSelection(
     ctx.correlationId,
@@ -926,6 +953,7 @@ function multiSourceRemainingPromptOptions(
   const options = groundedPromptOptions(ctx.deps, ctx.modelId, accounting);
   return {
     ...options,
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
     modelInputTokensMax: Math.min(
       options.modelInputTokensMax ?? Number.MAX_SAFE_INTEGER,
       multiSourceSynthesisGrants(ctx, packs).inputTokensMax -
@@ -951,6 +979,7 @@ function multiSourceRepairPrompt(
       ctx.deps.redactor,
       {
         ...promptOptions,
+        ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
         modelInputTokensMax: Math.min(
           promptOptions.modelInputTokensMax ?? Number.MAX_SAFE_INTEGER,
           options.modelInputTokensMax ?? 0,
@@ -1352,10 +1381,12 @@ function labelAnswerCitations(
   sourceLabel: string,
   redactor: Redactor,
   sourceScopeFingerprint?: string,
+  sourceId?: string,
 ): readonly GroundedEvidenceCitation[] {
   return citations.map((citation) => ({
     ...citation,
     source: redactString(redactor, sourceLabel),
+    ...(sourceId === undefined ? {} : { sourceId }),
     ...(sourceScopeFingerprint === undefined ? {} : { sourceScopeFingerprint }),
   }));
 }
@@ -1395,6 +1426,7 @@ function sourceCitationBundles(
         source.label,
         redactor,
         source.sourceScopeFingerprint,
+        sourceId,
       ),
     };
   });
@@ -1545,11 +1577,11 @@ function assembleMultiSourceAnswer(
     content: redactString(redactor, assistant.content),
     ...groundedAnswerEvidenceFields(assistant),
     citations,
-    uncertainty: [
+    uncertainty: assessmentAwareUncertainty(assistant.content, [
       ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
       ...reconciliationUncertainty,
       ...noSourceAnswerMarkers(assistant, redactor),
-    ],
+    ]),
     omittedCount: sources.reduce((acc, src) => acc + connectedContextOmittedCount(src.pack), 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
     contextPack: withMergedAssistantUsage(mergeContextPackSummaries(summaries), assistant),
@@ -1765,7 +1797,11 @@ async function answerMultiSource(
   startedAtMs: number,
 ): Promise<RepairedMultiSourceAnswer | RouteResult> {
   ensureNotCancelled(ctx.signal);
-  if (abstained && ctx.answerOnlyContextAvailable !== true) {
+  if (
+    abstained &&
+    ctx.answerOnlyContextAvailable !== true &&
+    currentOwnAssessmentPolicy(ctx.deps) !== "allowed"
+  ) {
     return {
       content: connectedSearchNoEvidenceAnswer(ctx.content),
       answerKind: "refusal",
@@ -1778,12 +1814,7 @@ async function answerMultiSource(
     ctx.correlationId,
   );
   try {
-    const assistant = normalizeGroundedAnswerPayload(
-      await ctx.answerer(
-        ctx.answerContent ?? ctx.content,
-        retrieved.map((s) => ({ label: s.label, pack: s.pack })),
-      ),
-    );
+    const assistant = await normalizedMultiSourceAnswer(ctx, retrieved);
     ensureNotCancelled(ctx.signal);
     const scopeIndex = verifiedPluralInsufficiencyScopeIndex(
       retrieved,
@@ -1806,6 +1837,24 @@ async function answerMultiSource(
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
   }
+}
+
+async function normalizedMultiSourceAnswer(
+  ctx: MultiSourceAskInput,
+  retrieved: readonly RetrievedSource[],
+): Promise<GroundedAnswerResult> {
+  const answer = normalizeGroundedAnswerPayload(
+    await ctx.answerer(
+      ctx.answerContent ?? ctx.content,
+      retrieved.map((source) => ({ label: source.label, pack: source.pack })),
+    ),
+  );
+  return normalizeGroundedAnswerAssessment(
+    answer,
+    currentOwnAssessmentPolicy(ctx.deps),
+    ctx.correlationId,
+    ctx.content,
+  );
 }
 
 interface RepairedMultiSourceAnswer extends GroundedAnswerResult {
@@ -1907,22 +1956,23 @@ async function repairMultiSourceAnswer(
   };
   const repaired = await repairGroundedAnswer(repairContext);
   const finalAnswer = finalPluralRepairAnswer(repairContext, repaired, budgetRefused);
-  recordMultiSourceRepair(sources, finalAnswer, ctx.correlationId, repaired.failure);
+  recordMultiSourceRepair(ctx, sources, finalAnswer, repaired.failure);
   return finalAnswer;
 }
 
 function recordMultiSourceRepair(
+  ctx: Pick<MultiSourceAskInput, "deps" | "correlationId">,
   sources: readonly RetrievedSource[],
   answer: GroundedAnswerResult & { readonly citationRepairDisposition: CitationRepairDisposition },
-  correlationId: string | undefined,
   failure: unknown,
 ): void {
   recordPluralGroundedAnswer(
     sources.map((source) => source.pack),
     answer,
     answer.citationRepairDisposition,
-    correlationId,
+    ctx.correlationId,
     failure,
+    currentOwnAssessmentPolicy(ctx.deps),
   );
 }
 
@@ -1983,6 +2033,7 @@ export function recordPluralGroundedAnswer(
   disposition: CitationRepairDisposition,
   correlationId: string | undefined,
   failure?: unknown,
+  ownAssessmentPolicy?: OwnAssessmentPolicy,
 ): void {
   for (const pack of packs)
     logGroundedAnswerForPack(
@@ -1991,6 +2042,7 @@ export function recordPluralGroundedAnswer(
       disposition,
       correlationId,
       failure,
+      ownAssessmentPolicy,
     );
 }
 
