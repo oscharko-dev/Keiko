@@ -27590,19 +27590,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
-      augmentationSkipReason: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: false,
-        values: [
-          "no-git-metadata",
-          "ordinary-document",
-          "literal-absence",
-          "complete-exact-lookup",
-          "verified-target-context",
-          "budget-exhausted",
-        ],
-      },
       usageSearchCalls: {
         type: "integer",
         dataClass: "count",
@@ -27819,6 +27806,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: true,
         maxLength: 64,
+      },
+      metadataRetentionLimit: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      augmentationSkipReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "no-git-metadata",
+          "ordinary-document",
+          "literal-absence",
+          "complete-exact-lookup",
+          "verified-target-context",
+          "budget-exhausted",
+        ],
       },
       activityDetailStatus: {
         type: "string",
@@ -28846,11 +28851,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       metadataOmittedDetailCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      metadataRetentionLimit: {
         type: "integer",
         dataClass: "count",
         required: false,

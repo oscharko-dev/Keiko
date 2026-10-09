@@ -171,11 +171,13 @@ async function executeFollowUp(
   const retrieved = await ctx.retrieve(input);
   const admitted = retrieved.pack.files.filter((file) => paths.includes(file.scopePath)).length;
   const pack = combinedAuditPack(ctx.pack, retrieved.pack);
-  if (admitted === 0) return { ...originalResult(ctx, "budget-refused"), pack };
-  if (ctx.nowMs() >= ctx.deadlineAtMs) return { ...originalResult(ctx, "elapsed-refused"), pack };
+  if (admitted === 0) return completedRetrievalRefusal(ctx, pack, "budget-refused", admitted);
+  if (ctx.nowMs() >= ctx.deadlineAtMs)
+    return completedRetrievalRefusal(ctx, pack, "elapsed-refused", admitted);
   const answered = await answerFollowUp(ctx, input, retrieved, pack, admitted);
   if ("observation" in answered) return answered;
-  if (answered.modelInvoked === false) return { ...originalResult(ctx, "budget-refused"), pack };
+  if (answered.modelInvoked === false)
+    return completedRetrievalRefusal(ctx, pack, "budget-refused", admitted);
   if (!followUpTargetsSent(answered, retrieved.pack, paths))
     return unsentFollowUpResult(ctx, pack, answered, admitted);
   return {
@@ -194,6 +196,21 @@ async function executeFollowUp(
       outcome: answered.answerKind === "answer" ? "answered" : "still-insufficient",
       firstDeclarations: ctx.initial.insufficiencyDeclarations ?? [],
     },
+  };
+}
+
+/** Pass count observes the completed retrieval pass, independently of additional model dispatch. */
+function completedRetrievalRefusal(
+  ctx: FollowUpContext,
+  pack: ConnectedContextPack,
+  outcome: FollowUpOutcome,
+  admitted: number,
+): FollowUpResult {
+  const retained = originalResult(ctx, outcome);
+  return {
+    ...retained,
+    pack,
+    observation: { ...retained.observation, passCount: 1, admittedPathCount: admitted },
   };
 }
 

@@ -400,6 +400,9 @@ reference-channel, and closed metadata-injection observations. Total/external fr
 registered `search.connected-context.selection-details` sibling on the same log port and
 correlation. This companion accommodates later selection observations without dropping existing
 fields or expanding the formatter's contextual-field cap.
+Optional augmentation skip reason and metadata retention capacity reside on completion-details.
+Completed and source-details each retain their full emitted observations within 48 context fields;
+the strict writer and reader caps remain unchanged, including metadata-evaluated follow-up cases.
 The registered `search.connected-context.answer-details` companion uses the same canonical
 scope/query digests and correlation to reconstruct answer kind, observed citation behaviour,
 actual final-prompt file count, bounded declared/unread counts, citation-repair disposition, and
@@ -415,6 +418,8 @@ Declared unread targets receive priority during final prompt fitting;
 the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
 fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
 against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
+Follow-up pass count observes a completed retrieval pass even if its additional synthesis is refused;
+admitted-path count records physical target reads, separately from final sent membership.
 A file already physically read does not acquire another read through an unread-in-prompt declaration.
 The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
 from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
