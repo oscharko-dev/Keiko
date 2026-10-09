@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "489c9f90cb29bbe88af4231dda49e90f36d4b51f2274dea1cb1a902e95a74541" as const;
+  "54c0e11d916b811276d5b567743f5ce1bcf0b83517e03f92adc90b250f9d2b2a" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -12359,12 +12359,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
-              name: "augmentationSkipReason",
-              type: "string",
-              dataClass: "closed-enum",
-              required: false,
-            },
-            {
               name: "augmentationSkipped",
               type: "boolean",
               dataClass: "closed-enum",
@@ -12660,6 +12654,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "augmentationSkipReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "excerptOmittedRangeCount",
               type: "integer",
               dataClass: "count",
@@ -12757,6 +12757,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "indexStaleRecords",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "metadataRetentionLimit",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -13631,12 +13637,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "metadataRetainedCount",
-              type: "integer",
-              dataClass: "count",
-              required: false,
-            },
-            {
-              name: "metadataRetentionLimit",
               type: "integer",
               dataClass: "count",
               required: false,

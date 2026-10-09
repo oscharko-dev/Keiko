@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "489c9f90cb29bbe88af4231dda49e90f36d4b51f2274dea1cb1a902e95a74541"
+    "catalogDigest": "54c0e11d916b811276d5b567743f5ce1bcf0b83517e03f92adc90b250f9d2b2a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2270,7 +2270,8 @@
     ],
     "search.connected-context.completion-details.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
-      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts"
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts"
     ],
     "search.connected-context.failed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
@@ -2282,7 +2283,8 @@
       "packages/keiko-server/src/grounded-metadata-failure.activity-log.test.ts"
     ],
     "search.connected-context.selection-details.line": [
-      "packages/keiko-server/src/grounded-diagnostic-references.activity-log.test.ts"
+      "packages/keiko-server/src/grounded-diagnostic-references.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-semantic-budget.test.ts"
     ],
     "search.connected-context.path-ranking.line": [
       "packages/keiko-server/src/grounded-path-ranking.activity-log.test.ts"

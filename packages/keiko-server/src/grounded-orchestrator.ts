@@ -421,19 +421,6 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       ],
     },
     augmentationSkipped: { type: "boolean", dataClass: "closed-enum", required: false },
-    augmentationSkipReason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "no-git-metadata",
-        "ordinary-document",
-        "literal-absence",
-        "complete-exact-lookup",
-        "verified-target-context",
-        "budget-exhausted",
-      ],
-    },
     usageSearchCalls: { type: "integer", dataClass: "count", required: false },
     usageFilesRead: { type: "integer", dataClass: "count", required: false },
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
@@ -517,6 +504,20 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
   fields: {
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
+    augmentationSkipReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "no-git-metadata",
+        "ordinary-document",
+        "literal-absence",
+        "complete-exact-lookup",
+        "verified-target-context",
+        "budget-exhausted",
+      ],
+    },
     activityDetailStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -801,7 +802,6 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
     metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
     metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
     metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
-    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
     omittedDetailRetainedCount: { type: "integer", dataClass: "count", required: false },
     omittedDetailsClipped: { type: "boolean", dataClass: "closed-enum", required: false },
     omittedOutsideScopeCount: { type: "integer", dataClass: "count", required: false },
@@ -8100,7 +8100,6 @@ function metadataRetentionActivityExtra(
           metadataRetainedCount: metadata.retainedCount,
           metadataDiscardedCount: metadata.discardedCount,
           metadataOmittedDetailCount: metadata.omittedDetailCount,
-          metadataRetentionLimit: metadata.limit,
         }),
   };
 }
@@ -8137,7 +8136,7 @@ function completionActivityExtra(
           retrievalTargetCount: plan.targetDecision.targets.length,
         }),
     retrievalAnchorCount: plan.anchors.length,
-    ...execution.status.decisions,
+    ...completedRingDecisions(execution.status.decisions),
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,
     usageExcerptBytes: pack.usage.excerptBytes,
@@ -8167,6 +8166,13 @@ function completionActivityExtra(
     completeness: "complete",
     loss: "none",
   };
+}
+
+function completedRingDecisions(
+  decisions: RingDecisionAudit | undefined,
+): Partial<Omit<RingDecisionAudit, "augmentationSkipReason">> {
+  const { augmentationSkipReason: _reason, ...completed } = decisions ?? {};
+  return completed;
 }
 
 function omissionTotalsActivityExtra(
@@ -8201,6 +8207,12 @@ function completionDetailsActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
+    ...(execution.status.decisions?.augmentationSkipReason === undefined
+      ? {}
+      : { augmentationSkipReason: execution.status.decisions.augmentationSkipReason }),
+    ...(execution.status.metadataRetention === undefined
+      ? {}
+      : { metadataRetentionLimit: execution.status.metadataRetention.limit }),
     ...retrievalLossActivityExtra(execution.status),
     ...structuralActivityExtra(execution.structural),
     ...workspaceIndexActivityExtra(execution.workspaceIndex),

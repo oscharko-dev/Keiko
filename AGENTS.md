@@ -442,6 +442,8 @@ system that exists, never beside it:
   selection uses the final six available source-detail fields. Additional selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
+  Optional augmentation skip detail and metadata retention capacity use completion-details;
+  the completed and source-details emitters each retain at most 48 registered context fields.
   Selection-details records calibrated absolute/ordinary relative floors, the low-confidence
   keep-one state, and pre-cut reranker disposition/failed-call counts. Addressed-file demotion
   remains separate from healthy unaddressed basename diversity; safe reranker failure frames and
@@ -464,8 +466,11 @@ system that exists, never beside it:
   The typed `search.connected-context.answer-details` sibling joins the same scope/query digests
   and correlation. It records actual final-prompt file counts, answer kind, observed citation
   behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,
-  pass/admission counts, outcome, and configuration disposition. Technical failures use the
-  existing closed error header, body-free frames and causes; declaration paths remain outside logs.
+  pass/admission counts, outcome, and configuration disposition.
+  Pass count records a completed follow-up retrieval even when fitting refuses its synthesis;
+  admission count retains its actual physical target reads and never implies final sent membership.
+  Technical failures use the existing closed error header, body-free frames and causes;
+  declaration paths remain outside logs.
   Connected synthesis buffers normalized output before publication so rejected declaration lines
   cannot escape through streamed chunks. Initial synthesis plus either marker repair or an
   insufficiency follow-up shares two synthesis slots and the original remaining budgets; gateway
