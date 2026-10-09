@@ -45,6 +45,7 @@ import {
 import styles from "./ChatChoiceNotice.module.css";
 import { NATIVE_FIELDSET_RESET_STYLE } from "../native-element-styles";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import { effectiveScopes } from "../hooks/workspaceActions";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
@@ -1411,7 +1412,11 @@ function useBoundChatWindowRuntime(
     }
     const activeTarget = routing.activeTarget;
     if (activeTarget !== undefined && activeTarget.id === chatId) {
-      return { conversationId: activeTarget.id, projectPath: activeTarget.projectPath };
+      return {
+        conversationId: activeTarget.id,
+        projectPath: activeTarget.projectPath,
+        connectedScopes: effectiveScopes(activeTarget),
+      };
     }
     return chatId === undefined || projectPath === undefined
       ? undefined

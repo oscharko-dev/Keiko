@@ -176,3 +176,34 @@ describe("groundingIntensity", () => {
     ).toBe("heavy");
   });
 });
+
+describe("canonical scope cache invalidation", () => {
+  it("updates the badge from the registered canonical scope without window identity changes", () => {
+    const cache: Parameters<typeof resolveConnectionsCached>[0] = new Map();
+    const wins = [
+      appWindow({ id: "files-1", type: "files", cfg: { root: "/repo" } }),
+      appWindow({ id: "chat-1", type: "chat" }),
+    ];
+    const conns = [{ id: "c", a: "files-1", b: "chat-1", boundRoot: "/repo" }];
+    const folder = {
+      kind: "directory" as const,
+      root: "/repo",
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    };
+    const file = { ...folder, kind: "files" as const, relativePaths: ["src/validation.ts"] };
+    const first = resolveConnectionsCached(cache, wins, conns, {
+      runtimes: new Map([
+        ["chat-1", { conversationId: "chat-a", projectPath: "/repo", connectedScopes: [folder] }],
+      ]),
+    });
+    const second = resolveConnectionsCached(cache, wins, conns, {
+      runtimes: new Map([
+        ["chat-1", { conversationId: "chat-a", projectPath: "/repo", connectedScopes: [file] }],
+      ]),
+    });
+    expect(first[0]?.label).toBe("uses src/");
+    expect(second[0]?.label).toBe("uses validation.ts");
+    expect(second[0]).not.toBe(first[0]);
+  });
+});
