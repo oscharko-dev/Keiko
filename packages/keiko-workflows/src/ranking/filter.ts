@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 // Negative-context filter for the ranker (Epic #177, Issue #182). Converts annotated
 // candidates into a kept/omitted partition with explicit CandidateOmissionReason values.
 // Priority is fixed (pre-set reason > generated > low-relevance > duplicate); a hard maxKept
@@ -70,17 +71,18 @@ function classifyReason(
   return undefined;
 }
 
+function signal(candidate: CandidateFile, name: string): number {
+  return candidate.signals.find((entry) => entry.name === name)?.value ?? 0;
+}
+
 function compareKept(a: CandidateFile, b: CandidateFile): number {
-  if (b.score !== a.score) {
-    return b.score - a.score;
-  }
-  if (a.scopePath < b.scopePath) {
-    return -1;
-  }
-  if (a.scopePath > b.scopePath) {
-    return 1;
-  }
-  return 0;
+  return (
+    b.score - a.score ||
+    signal(b, "exact-path-match") - signal(a, "exact-path-match") ||
+    signal(b, "path-segment-affinity") - signal(a, "path-segment-affinity") ||
+    a.scopePath.split("/").length - b.scopePath.split("/").length ||
+    compareStrings(a.scopePath, b.scopePath)
+  );
 }
 
 function compareOmitted(a: OmittedContextEntry, b: OmittedContextEntry): number {
