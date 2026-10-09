@@ -367,7 +367,10 @@ preserve complete anchors when their combined required bytes fit, and zero-byte 
 Selected files retain every distinct, already-admitted evidence range rather than independent
 per-file atom or window quotas. The existing safe excerpt reader batches those ranges from one
 freshly classified, decoded and redacted file snapshot, preserves original line coordinates, and
-charges every returned fragment against the accepted cumulative byte grant. Remaining ranges are
+charges every returned fragment against the accepted cumulative byte grant. A stale location beyond
+physical EOF is an omitted range and cannot discard another valid requested window from that same
+snapshot. The ordinary default-window fallback applies only when every requested location is invalid.
+Remaining ranges are
 reported when that grant is spent; cancellation or a changed source prevents publication. Global
 retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
