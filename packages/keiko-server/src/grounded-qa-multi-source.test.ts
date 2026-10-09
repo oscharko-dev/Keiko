@@ -1,3 +1,5 @@
+import { reliableCitationRuntime } from "../../../tests/support/reliable-citation-runtime.js";
+import { citationBehaviourFor } from "./grounded-citation-capability.js";
 // Tests for the multi-source (1+N) grounded path (Epic #532). Pure helpers are exercised directly;
 // the handler branch is driven through handleGroundedAsk with an injected MultiSourceSeam (a
 // deterministic retriever + answerer) so no real workspace is spun up. AC5 — a single connected
@@ -283,6 +285,16 @@ function coverageDiagnostics(
   };
 }
 
+function projectedBudget(
+  budget: ConnectedContextPack["budget"],
+): GroundedAnswerContextSummary["budget"] {
+  return buildGroundedAnswerContextPackSummary(
+    { ...scopePack("src/fixture.ts", 1, "budget"), budget },
+    0,
+    0,
+  ).budget;
+}
+
 function budgetSum(
   budgets: readonly ConnectedContextPack["budget"][],
 ): ConnectedContextPack["budget"] {
@@ -441,7 +453,7 @@ describe("splitExplorationBudget", () => {
     const budgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, scopes, query);
 
     expect(budgets).toHaveLength(3);
-    expect(budgetSum(budgets)).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
+    expect(budgetSum(budgets)).toStrictEqual(projectedBudget(DEFAULT_EXPLORATION_BUDGET));
     expect(budgets.every((budget) => budget.filesReadMax === null)).toBe(true);
     expect(budgets[0]?.excerptBytesMax).toBeGreaterThan(budgets[1]?.excerptBytesMax ?? 0);
     expect(budgets[1]?.excerptBytesMax).toBeGreaterThanOrEqual(budgets[2]?.excerptBytesMax ?? 0);
@@ -1171,7 +1183,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       const chat = store.findChatById(makeChat(scopes));
       if (chat === undefined) throw new Error("Expected a fixture chat");
       const deps = modelBudgetDeps(configured);
-      const expected = modelWindowAwareBudget(deps, CHAT_MODEL);
+      const expected = projectedBudget(modelWindowAwareBudget(deps, CHAT_MODEL));
       const observed: ConnectedContextPack["budget"][] = [];
       const result = await runMultiSourceAsk({
         chat,
@@ -1875,7 +1887,9 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(budgetSum([...seenBudgets.values()])).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
+    expect(budgetSum([...seenBudgets.values()])).toStrictEqual(
+      projectedBudget(DEFAULT_EXPLORATION_BUDGET),
+    );
     expect(seenBudgets.get("services/payments-api")?.excerptBytesMax).toBeGreaterThan(
       seenBudgets.get("apps/web")?.excerptBytesMax ?? 0,
     );
@@ -2607,26 +2621,35 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
 });
 
 describe("multi-source bounded citation repair", () => {
-  async function repairAsk(repaired: string, original = "The implementation works.") {
-    const calls: GatewayCallRequest[] = [];
-    const puts: PutCall[] = [];
-    const packs = ["alpha", "beta"].map((name) => {
-      const pack = scopePack(`src/${name}.ts`, 0.8, name);
-      return { ...pack, usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 } };
-    });
-    const scopes = packs.map((pack, index) => ({
-      kind: "files" as const,
-      relativePaths: [pack.files[0]?.scopePath ?? ""],
-      connectedAtMs: NOW,
-      root: tempRoot(`repair-${String(index)}`),
-    }));
-    const chat = store.findChatById(makeChat(scopes));
-    if (chat === undefined) throw new TypeError("Missing repair chat");
-    const deps = recordingDeps(puts);
-    const signal = new AbortController().signal;
-    const model: ModelPort = {
+  afterEach(resetServerLogger);
+  interface RepairControls {
+    readonly failure?: unknown;
+    readonly inputMax?: number;
+    readonly outputMax?: number;
+    readonly promptTokens?: number;
+    readonly completionTokens?: number;
+    readonly gatewayConfig?: UiHandlerDeps["gatewayConfig"];
+  }
+
+  interface RepairProof {
+    readonly calls: GatewayCallRequest[];
+    readonly puts: PutCall[];
+    readonly diagnostics: ServerDiagnosticRecord[];
+    readonly answer: ReturnType<typeof asConnectedAnswer>;
+    readonly logLines: readonly string[];
+  }
+
+  function repairModel(
+    calls: GatewayCallRequest[],
+    repaired: string,
+    original: string,
+    controls: RepairControls,
+  ): ModelPort {
+    return {
       call: (request) => {
         calls.push(request);
+        if (calls.length > 1 && controls.failure !== undefined)
+          return Promise.reject(controls.failure);
         return Promise.resolve({
           modelId: CHAT_MODEL,
           content: calls.length === 1 ? original : repaired,
@@ -2635,14 +2658,80 @@ describe("multi-source bounded citation repair", () => {
           structuredOutput: null,
           usage: {
             requestId: "bounded-repair",
-            promptTokens: 10,
-            completionTokens: 4,
+            promptTokens: controls.promptTokens ?? 10,
+            completionTokens: controls.completionTokens ?? 4,
             latencyMs: 1,
             costClass: "medium",
           },
         });
       },
     };
+  }
+
+  function repairSources(controls: RepairControls): {
+    readonly scopes: readonly ChatConnectedScope[];
+    readonly retriever: GroundedRetriever;
+  } {
+    const packs = ["alpha", "beta"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.8, name);
+      return {
+        ...pack,
+        omitted: [],
+        usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 },
+      };
+    });
+    const scopes = packs.map((pack, index) => ({
+      kind: "files" as const,
+      relativePaths: [pack.files[0]?.scopePath ?? ""],
+      connectedAtMs: NOW,
+      root: tempRoot(`repair-${String(index)}`),
+    }));
+    const first = packs[0];
+    if (first === undefined) throw new TypeError("Missing repair source");
+    const allocations = splitExplorationBudgets(
+      {
+        ...DEFAULT_EXPLORATION_BUDGET,
+        modelInputTokensMax: controls.inputMax ?? DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+        modelOutputTokensMax: controls.outputMax ?? DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
+      },
+      scopes,
+      first.query,
+    );
+    const allocatedPacks = packs.map((pack, index) => {
+      const budget = allocations[index];
+      if (budget === undefined) throw new TypeError("Missing repair allocation");
+      return { ...pack, budget };
+    });
+    return {
+      scopes,
+      retriever: async (input) => {
+        const retrieved = await packPerScope(
+          new Map(allocatedPacks.map((pack) => [pack.files[0]?.scopePath ?? "", pack])),
+        )(input);
+        return { ...retrieved, pack: { ...retrieved.pack, scope: input.scope } };
+      },
+    };
+  }
+
+  async function repairAsk(
+    repaired: string,
+    original = "The implementation works.",
+    controls: RepairControls = {},
+  ): Promise<RepairProof> {
+    const calls: GatewayCallRequest[] = [];
+    const puts: PutCall[] = [];
+    const { scopes, retriever } = repairSources(controls);
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("Missing repair chat");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const deps = recordingDeps(puts, {
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      ...(controls.gatewayConfig === undefined ? {} : { gatewayConfig: controls.gatewayConfig }),
+    });
+    const signal = new AbortController().signal;
+    const model = repairModel(calls, repaired, original, controls);
     const result = await runMultiSourceAsk({
       chat,
       scopes,
@@ -2652,17 +2741,35 @@ describe("multi-source bounded citation repair", () => {
       deps,
       signal,
       correlationId: "corr-multi-repair",
-      retriever: packPerScope(new Map(packs.map((pack) => [pack.files[0]?.scopePath ?? "", pack]))),
+      retriever,
       answerer: createMultiSourceAnswerer(deps, model, CHAT_MODEL, signal, "corr-multi-repair"),
     });
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    return { calls, puts, answer: asConnectedAnswer(result.body as GroundedAnswer) };
+    return {
+      calls,
+      puts,
+      diagnostics,
+      answer: asConnectedAnswer(result.body as GroundedAnswer),
+      logLines: sink.events.map(formatActivityLogProofLine),
+    };
   }
 
   it("adds only supported source-two markers in one remaining-budget call", async () => {
     const repaired = "The implementation works [source:2|src/beta.ts:1-5].";
-    const { calls, puts, answer } = await repairAsk(repaired);
+    const { calls, puts, answer, logLines } = await repairAsk(repaired);
     expect(calls).toHaveLength(2);
+    const promptLines = logLines.filter((line) => line.includes('"op":"chat.context.selected"'));
+    expect(promptLines).toHaveLength(2);
+    const prompts = promptLines.map((line) =>
+      expectActivityLogProof("chat.context.selected.budget", line),
+    );
+    expect(prompts[1]).toMatchObject({
+      correlationId: "corr-multi-repair",
+      inputBudget: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax - 10,
+    });
+    expect(prompts[1]?.promptTokens).toBe(
+      countGatewayPromptTokens({ messages: calls[1]?.messages ?? [] }),
+    );
     const repairPrompt = calls[1]?.messages.map((message) => message.content).join("\n");
     expect(repairPrompt).toContain("body of src/alpha.ts");
     expect(repairPrompt).toContain("body of src/beta.ts");
@@ -2673,6 +2780,34 @@ describe("multi-source bounded citation repair", () => {
     expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
     expect(answer.contextPack.usage.modelInputTokens).toBe(20);
     expect(answer.contextPack.usage.modelOutputTokens).toBe(8);
+    const details = logLines.filter((line) =>
+      line.includes('"op":"search.connected-context.answer-details"'),
+    );
+    expect(
+      details.map(
+        (line) =>
+          expectActivityLogProof("search.connected-context.answer-details.line", line)
+            .filesInPrompt,
+      ),
+    ).toEqual([1, 1]);
+  });
+
+  it("attributes verified declaration counts only to their actual folder identity", async () => {
+    const { calls, logLines } = await repairAsk("unused", "Missing evidence: [src/beta.ts]");
+    expect(calls).toHaveLength(1);
+    const details = logLines.filter((line) =>
+      line.includes('"op":"search.connected-context.answer-details"'),
+    );
+    const observations = details.map((line) =>
+      expectActivityLogProof("search.connected-context.answer-details.line", line),
+    );
+    expect(observations.map((observation) => observation.insufficiencyDeclaredCount)).toEqual([
+      0, 1,
+    ]);
+    expect(observations.map((observation) => observation.declaredUnreadInScopeCount)).toEqual([
+      0, 0,
+    ]);
+    expect(details.join("\n")).not.toContain("src/beta.ts");
   });
 
   it("retains original prose after a repair changes its claim and never attempts a third call", async () => {
@@ -2696,6 +2831,68 @@ describe("multi-source bounded citation repair", () => {
       expect(answer.citationBehaviour).toBeUndefined();
     },
   );
+  it.each([
+    { inputMax: 1600, promptTokens: 1500 },
+    { outputMax: 10, completionTokens: 10 },
+  ])(
+    "retains the original response when the shared remaining budget is exhausted: %j",
+    async (controls) => {
+      const { calls, answer } = await repairAsk(
+        "The implementation works [source:2|src/beta.ts:1-5].",
+        "The implementation works.",
+        controls,
+      );
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe("The implementation works.");
+      expect(answer.citationBehaviour).toBe("never");
+      expect(answer.citations).toEqual([]);
+    },
+  );
+  it("skips repair only for three current reliable citation observations", async () => {
+    const configured = reliableCitationRuntime(tmp, CHAT_MODEL);
+    try {
+      expect(citationBehaviourFor(configured, CHAT_MODEL)).toBe("cites");
+      const { calls, answer } = await repairAsk(
+        "The implementation works [source:2|src/beta.ts:1-5].",
+        "The implementation works.",
+        { gatewayConfig: configured.gatewayConfig },
+      );
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe("The implementation works.");
+      expect(answer.citationBehaviour).toBe("never");
+      expect(citationBehaviourFor(configured, CHAT_MODEL)).toBeUndefined();
+    } finally {
+      await configured.dispose?.();
+    }
+  });
+
+  it("preserves a failed repair's body-free error frames and cause chain", async () => {
+    const failure = new TypeError("private-model-response", {
+      cause: new Error("private-provider-detail"),
+    });
+    const { calls, answer, logLines } = await repairAsk("", "The implementation works.", {
+      failure,
+    });
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    const failures = logLines.filter((line) =>
+      line.includes('"op":"search.connected-context.answer-details"'),
+    );
+    expect(failures).toHaveLength(2);
+    for (const line of failures) {
+      const proof = expectActivityLogProof("search.connected-context.answer-details.line", line);
+      expect(proof).toMatchObject({
+        correlationId: "corr-multi-repair",
+        level: "warn",
+        errorKind: "internal",
+        failureKind: "TypeError",
+      });
+      expect(proof.frames).toEqual(expect.arrayContaining([expect.any(String)]));
+      expect(proof.causeChain).toEqual(["Error"]);
+    }
+    expect(logLines.join("\n")).not.toContain("private-model-response");
+    expect(logLines.join("\n")).not.toContain("private-provider-detail");
+  });
 });
 
 describe("multi-source final fitted citation authority", () => {
@@ -2832,6 +3029,56 @@ describe("multi-source final fitted citation authority", () => {
 // createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
 // MultiSourceSeam.answerer; unit-test it directly against a fake ModelPort that records the request.
 describe("createMultiSourceAnswerer correlation threading", () => {
+  it("refuses a repair deadline that expires between timeout setup and actual dispatch", async () => {
+    const call = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve({
+        modelId: CHAT_MODEL,
+        content: "The implementation works.",
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "deadline-race",
+          promptTokens: 10,
+          completionTokens: 4,
+          latencyMs: 1,
+          costClass: "medium",
+        },
+      }),
+    );
+    const packs = ["alpha", "beta"].map((name) => ({
+      label: name,
+      pack: scopePack(`src/${name}.ts`, 1, name),
+    }));
+    const answerer = createMultiSourceAnswerer(
+      recordingDeps([]),
+      { call },
+      CHAT_MODEL,
+      new AbortController().signal,
+      "multi-repair-deadline",
+    );
+    const main = normalizeGroundedAnswerPayload(
+      await answerer("Explain the implementation", packs),
+    );
+    const repair = answerer.repair;
+    const first = packs[0]?.pack;
+    if (repair === undefined || first === undefined) throw new TypeError("Missing repair callback");
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(99).mockReturnValue(100);
+    try {
+      const result = normalizeGroundedAnswerPayload(
+        await repair("Explain the implementation", first, main.content, {
+          modelInputTokensMax: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+          modelOutputTokensMax: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
+          deadlineAtMs: 100,
+        }),
+      );
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(result.modelInvoked).toBe(false);
+      expect(result.usage).toEqual({ promptTokens: 0, completionTokens: 0 });
+    } finally {
+      now.mockRestore();
+    }
+  });
   it.each([false, true])(
     "avoids an empty fitted model call unless memory context is available (%s)",
     async (memory) => {

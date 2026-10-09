@@ -70,6 +70,7 @@ import {
   type GroundedAnswerOptions,
   type GroundedAnswerer,
   type RetrievalOnlyOutput,
+  logGroundedAnswerForPack,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
@@ -86,6 +87,7 @@ import {
 } from "./grounded-answer.js";
 import {
   connectedSearchNoEvidenceAnswer,
+  groundedAnswerEvidenceFields,
   buildInsufficiencyScopeIndex,
   validateGroundedAnswerEvidence,
   buildPackCitationIndex,
@@ -139,11 +141,16 @@ import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
 import {
   repairGroundedAnswer,
   observeGroundedCitationBehaviour,
+  type GroundedRepairContext,
+  type GroundedRepairResult,
 } from "./grounded-answer-repair.js";
 import {
   citationBehaviourFor,
   citationBehaviourObserverFor,
 } from "./grounded-citation-capability.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import { logGroundedPromptSelection } from "./chat-activity.js";
 
 export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 
@@ -791,14 +798,20 @@ async function multiSourceGatewayAnswer(
       sent = fittedMultiSourcePrompt(question, labeledPacks, deps.redactor, options, correlationId);
       if (sent.sentReferenceCount === 0 && answerOptions.answerOnlyContextAvailable !== true)
         return undefined;
+      logGroundedPromptSelection(
+        correlationId,
+        sent,
+        multiSourceInputTokens(labeledPacks, options),
+        tokenAccounting,
+      );
       return model.call(
         {
           modelId,
           messages: sent.messages,
           stream: false,
-          maxOutputTokens: labeledPacks.reduce(
-            (sum, entry) => sum + entry.pack.budget.modelOutputTokensMax,
-            0,
+          maxOutputTokens: Math.min(
+            modelWindowAwareBudget(deps, modelId).modelOutputTokensMax,
+            labeledPacks.reduce((sum, entry) => sum + entry.pack.budget.modelOutputTokensMax, 0),
           ),
           logContext: { correlationId },
         },
@@ -855,16 +868,24 @@ async function multiSourceGatewayRepair(
   options: GroundedAnswerOptions,
 ): Promise<GroundedAnswerResult> {
   const sent = multiSourceRepairPrompt(ctx, question, original, options);
-  if (sent === undefined)
-    return {
-      content: original,
-      modelInvoked: false,
-      usage: { promptTokens: 0, completionTokens: 0 },
-    };
-  const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
-  if (options.deadlineAtMs !== undefined)
-    signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
-  const signal = AbortSignal.any(signals);
+  if (sent === undefined) return uninvokedCitationRepair(original);
+  const signal = multiSourceRepairSignal(ctx.signal, options);
+  if (
+    signal === undefined ||
+    (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
+  )
+    return uninvokedCitationRepair(original);
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    sent,
+    Math.min(
+      options.modelInputTokensMax ?? 0,
+      multiSourceInputTokens(sent.packs, groundedPromptOptions(ctx.deps, ctx.modelId, undefined)),
+    ),
+    currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
+  );
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
+    return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await ctx.model.call(
     {
@@ -886,6 +907,22 @@ async function multiSourceGatewayRepair(
     sentEvidencePacks: sent.packs.map((entry) => entry.pack),
     modelInvoked: true,
   };
+}
+
+export function uninvokedCitationRepair(content: string): GroundedAnswerResult {
+  return { content, modelInvoked: false, usage: { promptTokens: 0, completionTokens: 0 } };
+}
+
+function multiSourceRepairSignal(
+  parent: AbortSignal,
+  options: GroundedAnswerOptions,
+): AbortSignal | undefined {
+  const remainingMs =
+    options.deadlineAtMs === undefined ? undefined : options.deadlineAtMs - Date.now();
+  if (remainingMs !== undefined && remainingMs <= 0) return undefined;
+  const signals = [parent, ...(options.signal === undefined ? [] : [options.signal])];
+  if (remainingMs !== undefined) signals.push(AbortSignal.timeout(Math.ceil(remainingMs)));
+  return AbortSignal.any(signals);
 }
 
 function multiSourceAnswerResult(
@@ -1311,6 +1348,21 @@ function noSourceAnswerMarkers(
   return [{ kind: marker.kind, claim: redactString(redactor, marker.claim) }];
 }
 
+function multiSourceAnswerSummaries(
+  ctx: MultiSourceAskInput,
+  bundles: ReturnType<typeof sourceCitationBundles>,
+  modelInvoked: boolean,
+): readonly GroundedAnswerContextPackSummary[] {
+  return bundles.map(({ source: src, citations }) =>
+    buildGroundedAnswerContextPackSummary(
+      src.pack,
+      modelInvoked ? citations.length : 0,
+      src.elapsedMs,
+      groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
+    ),
+  );
+}
+
 function assembleMultiSourceAnswer(
   ctx: MultiSourceAskInput,
   sources: readonly RetrievedSource[],
@@ -1334,15 +1386,7 @@ function assembleMultiSourceAnswer(
     finalMultiSourceEvidence(assistant, sources),
   );
   const citations = modelInvoked ? mergedCitations(citationBundles) : [];
-  const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
-    buildGroundedAnswerContextPackSummary(
-      src.pack,
-      modelInvoked ? sourceCitations.length : 0,
-      src.elapsedMs,
-      groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
-    ),
-  );
-  const mergedSummary = mergeContextPackSummaries(summaries);
+  const summaries = multiSourceAnswerSummaries(ctx, citationBundles, modelInvoked);
   const { firstRunId, runIds } = ids.abstained
     ? { firstRunId: undefined, runIds: [] as readonly string[] }
     : persistPerSourceEvidence(ctx, citationBundles);
@@ -1358,13 +1402,7 @@ function assembleMultiSourceAnswer(
     ...(firstRunId === undefined ? {} : { evidenceRunId: firstRunId }),
     evidenceRunIds: runIds,
     content: redactString(redactor, assistant.content),
-    answerKind: assistant.answerKind,
-    ...(assistant.citationBehaviour === undefined
-      ? {}
-      : { citationBehaviour: assistant.citationBehaviour }),
-    ...(assistant.insufficiencyDeclarations === undefined
-      ? {}
-      : { insufficiencyDeclarations: assistant.insufficiencyDeclarations }),
+    ...groundedAnswerEvidenceFields(assistant),
     citations,
     uncertainty: [
       ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
@@ -1373,7 +1411,7 @@ function assembleMultiSourceAnswer(
     ],
     omittedCount: sources.reduce((acc, src) => acc + connectedContextOmittedCount(src.pack), 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
-    contextPack: withMergedAssistantUsage(mergedSummary, assistant),
+    contextPack: withMergedAssistantUsage(mergeContextPackSummaries(summaries), assistant),
     ...(modelInvoked && assistant.promptContext !== undefined
       ? { promptContext: assistant.promptContext }
       : {}),
@@ -1722,10 +1760,100 @@ async function repairMultiSourceAnswer(
     },
   };
   const repaired = await repairGroundedAnswer(repairContext);
+  const finalAnswer = finalPluralRepairAnswer(repairContext, repaired, budgetRefused);
+  recordPluralGroundedAnswer(
+    sources.map((source) => source.pack),
+    finalAnswer,
+    finalAnswer.citationRepairDisposition,
+    ctx.correlationId,
+    repaired.failure,
+  );
+  return finalAnswer;
+}
+
+export function finalPluralRepairAnswer(
+  context: GroundedRepairContext,
+  repaired: GroundedRepairResult,
+  budgetRefused: boolean,
+): GroundedAnswerResult & { readonly citationRepairDisposition: CitationRepairDisposition } {
   return {
-    ...observeGroundedCitationBehaviour({ ...repairContext, answer: repaired.answer }),
+    ...observeGroundedCitationBehaviour({ ...context, answer: repaired.answer }),
     citationRepairDisposition: budgetRefused ? "skipped-budget" : repaired.disposition,
   };
+}
+
+function declarationMatchesScope(path: string, scope: SelectedScope): boolean {
+  if (scope.kind === "workspace-root") return true;
+  return scope.relativePaths.some(
+    (selected) =>
+      path === selected || (scope.kind === "directory" && path.startsWith(`${selected}/`)),
+  );
+}
+
+function pluralAnswerForPack(
+  pack: ConnectedContextPack,
+  packs: readonly ConnectedContextPack[],
+  answer: GroundedAnswerResult,
+): GroundedAnswerResult {
+  const sent = (answer.sentEvidencePacks ?? []).filter(
+    (entry) =>
+      entry.scope.scopeId === pack.scope.scopeId &&
+      entry.scope.workspaceRoot === pack.scope.workspaceRoot,
+  );
+  const declarations = (answer.insufficiencyDeclarations ?? []).filter((declaration) => {
+    const matches = packs.filter((entry) =>
+      declarationMatchesScope(declaration.scopePath, entry.scope),
+    );
+    return matches.length === 1 && matches[0] === pack;
+  });
+  return {
+    ...answer,
+    sentEvidencePacks: sent,
+    filesInPrompt: sentGroundedFileCount(sent),
+    insufficiencyDeclarations: declarations,
+    insufficiencyObservation: {
+      declaredCount: declarations.length,
+      inScopeCount: declarations.length,
+      unreadInScopeCount: declarations.filter(
+        (declaration) => declaration.state === "unread-in-scope",
+      ).length,
+      notInScopeCount: 0,
+    },
+  };
+}
+
+export function recordPluralGroundedAnswer(
+  packs: readonly ConnectedContextPack[],
+  answer: GroundedAnswerResult,
+  disposition: CitationRepairDisposition,
+  correlationId: string | undefined,
+  failure?: unknown,
+): void {
+  for (const pack of packs)
+    logGroundedAnswerForPack(
+      pack,
+      pluralAnswerForPack(pack, packs, answer),
+      disposition,
+      correlationId,
+      failure,
+    );
+}
+
+export function recordPluralCitationRepairFailure(
+  deps: Pick<UiHandlerDeps, "diagnostics" | "redactor">,
+  correlationId: string | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "POST /api/chats/messages/grounded",
+      source: "grounded.qa.citation-repair",
+      error,
+      redact: (message): string => deps.redactor(message) as string,
+    }),
+    code: "GROUNDED_CITATION_REPAIR_FAILED",
+  });
 }
 
 function mapMultiSourceError(
