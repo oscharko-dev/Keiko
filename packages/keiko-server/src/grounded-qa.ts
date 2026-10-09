@@ -1378,7 +1378,7 @@ function groundedAnswerContextSignal(
   options: GroundedAnswerOptions,
 ): GroundedGatewayAnswerContext {
   const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
-  if (options.deadlineAtMs !== undefined) {
+  if (options.deadlineAtMs !== undefined && Number.isFinite(options.deadlineAtMs)) {
     signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
   }
   return { ...ctx, signal: AbortSignal.any(signals) };

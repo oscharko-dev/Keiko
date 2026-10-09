@@ -4,13 +4,13 @@ import { runConnectedRetrievalEval } from "./grounded-eval-support.js";
 
 const files = {
   "src/Feature.ts": "export function Feature() { return true; }\n",
-  "src/Companion.ts": "export const companion = 42;\n",
+  "lib/Companion.ts": "42;\n",
 };
-const first = "I need more evidence.\nMissing evidence: [src/Companion.ts]";
+const first = "I need more evidence.\nMissing evidence: [lib/Companion.ts]";
 
 async function scriptedTurn(
   followUpPassesMax: 0 | 1,
-  second = "Companion is 42 [src/Companion.ts:1].",
+  second = "Companion is 42 [lib/Companion.ts:1].",
 ) {
   const received: string[][] = [];
   const result = await runConnectedRetrievalEval({
@@ -30,11 +30,11 @@ async function scriptedTurn(
 describe("one server-owned follow-up under the original turn budgets", () => {
   it("reads a genuinely unselected in-scope declaration and returns only the second answer", async () => {
     const { result, received } = await scriptedTurn(1);
-    expect(received[0]).not.toContain("src/Companion.ts");
+    expect(received[0]).not.toContain("lib/Companion.ts");
     expect(received).toHaveLength(2);
-    expect(received[1]).toContain("src/Companion.ts");
+    expect(received[1]).toContain("lib/Companion.ts");
     expect(result.answer).toMatchObject({
-      assistantContent: "Companion is 42 [src/Companion.ts:1].",
+      assistantContent: "Companion is 42 [lib/Companion.ts:1].",
       followUp: { passCount: 1, outcome: "answered", admittedPathCount: 1 },
     });
     expect(result.pack.budget).toEqual({ ...DEFAULT_EXPLORATION_BUDGET, followUpPassesMax: 1 });
@@ -45,7 +45,7 @@ describe("one server-owned follow-up under the original turn budgets", () => {
     expect(received).toHaveLength(1);
     expect(result.answer).toMatchObject({
       followUp: { passCount: 0, outcome: "disabled" },
-      insufficiencyDeclarations: [{ scopePath: "src/Companion.ts", state: "unread-in-scope" }],
+      insufficiencyDeclarations: [{ scopePath: "lib/Companion.ts", state: "unread-in-scope" }],
     });
   });
 

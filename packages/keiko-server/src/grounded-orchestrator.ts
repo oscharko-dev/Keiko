@@ -1,8 +1,10 @@
+import { followUpGroundedAnswer, type FollowUpObservation } from "./grounded-follow-up.js";
 import { admissibleDeclaredScopePath } from "./grounded-explicit-paths.js";
 import { declaredInsufficiencyPaths } from "./grounded-faithfulness.js";
 import {
   repairGroundedAnswer,
   observeGroundedCitationBehaviour,
+  type GroundedRepairResult,
 } from "./grounded-answer-repair.js";
 import type {
   CitationRepairDisposition,
@@ -1128,6 +1130,7 @@ export interface OrchestratorDeps {
 }
 
 export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
+  readonly followUp?: FollowUpObservation | undefined;
   readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
   readonly filesInPrompt?: number | undefined;
@@ -9637,12 +9640,15 @@ async function groundedAnswerForPack(
   deps: OrchestratorDeps,
   pack: ConnectedContextPack,
   declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
+  deadlineAtMs?: number,
 ): Promise<GroundedAnswerResult> {
   const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
     modelInputTokensMax: pack.budget.modelInputTokensMax,
     modelOutputTokensMax: pack.budget.modelOutputTokensMax,
     answerOnlyContextAvailable: input.answerOnlyContextAvailable,
     currentQuestion: input.currentQuestion ?? input.query.text,
+    signal: deps.signal,
+    deadlineAtMs,
   });
   const answer = normalizeGroundedAnswerPayload(payload);
   return validateSingleAnswerEvidence(
@@ -9665,8 +9671,14 @@ function answeredContextPack(
     ...pack,
     usage: {
       ...pack.usage,
-      modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
-      modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
+      modelInputTokens: Math.min(
+        pack.usage.modelInputTokens + answer.usage.promptTokens,
+        pack.budget.modelInputTokensMax,
+      ),
+      modelOutputTokens: Math.min(
+        pack.usage.modelOutputTokens + answer.usage.completionTokens,
+        pack.budget.modelOutputTokensMax,
+      ),
       elapsedMs: Math.min(
         Math.max(pack.usage.elapsedMs, elapsedMs),
         pack.budget.elapsedMsMax ?? Number.POSITIVE_INFINITY,
@@ -9682,6 +9694,11 @@ function answeredContextPack(
   };
 }
 
+interface RefinedGroundedAnswer extends GroundedRepairResult {
+  readonly pack: ConnectedContextPack;
+  readonly followUp: FollowUpObservation;
+}
+
 async function refinedGroundedAnswer(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -9689,19 +9706,57 @@ async function refinedGroundedAnswer(
   start: number,
   nowMs: () => number,
   declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
-): Promise<import("./grounded-answer-repair.js").GroundedRepairResult> {
-  const initial = await groundedAnswerForPack(input, deps, pack, declarationScopeIndexFor);
-  const repairContext = {
-    answer: initial,
+): Promise<RefinedGroundedAnswer> {
+  const deadlineAtMs = explorationDeadlineAtMs(start, pack.budget);
+  const initial = await groundedAnswerForPack(
+    input,
+    deps,
     pack,
+    declarationScopeIndexFor,
+    deadlineAtMs,
+  );
+  if (initial.answerKind === "insufficiency")
+    citationCoverageMarkerFor(
+      initial.content,
+      initial.sentEvidencePacks?.[0] ?? pack,
+      nowMs(),
+      deps.correlationId,
+      citationObservation(input, initial),
+    );
+  const followUp = await followUpGroundedAnswer({
+    input,
+    deps,
+    pack,
+    initial,
+    deadlineAtMs,
+    nowMs,
+    retrieve: (next) => retrieveConnectedContextPack(next, deps),
+    answer: (next, retrieved) =>
+      groundedAnswerForPack(
+        next,
+        deps,
+        retrieved.pack,
+        retrieved.declarationScopeIndexFor,
+        deadlineAtMs,
+      ),
+  });
+  const repairContext = {
+    answer: followUp.answer,
+    pack: followUp.pack,
     deps,
     nowMs,
     question: input.answerQuestion ?? input.query.text,
-    deadlineAtMs: pack.budget.elapsedMsMax === null ? undefined : start + pack.budget.elapsedMsMax,
+    deadlineAtMs,
   };
-  const repair = await repairGroundedAnswer(repairContext);
+  const repair =
+    followUp.observation.passCount === 1
+      ? { answer: followUp.answer, disposition: "not-needed" as const }
+      : await repairGroundedAnswer(repairContext);
   return {
     ...repair,
+    ...(followUp.failure === undefined ? {} : { failure: followUp.failure }),
+    pack: followUp.pack,
+    followUp: followUp.observation,
     answer: observeGroundedCitationBehaviour({ ...repairContext, answer: repair.answer }),
   };
 }
@@ -9732,7 +9787,11 @@ async function answerWithAvailableContext(
     sentPack,
     nowMs(),
     deps.correlationId,
-    { ...citationObservation(input, answer), citationRepairDisposition: repair.disposition },
+    {
+      ...citationObservation(input, answer),
+      followUpPass: repair.followUp.passCount,
+      citationRepairDisposition: repair.disposition,
+    },
   );
   const entailmentMarkers =
     answer.modelInvoked === false
@@ -9743,12 +9802,13 @@ async function answerWithAvailableContext(
     ...entailmentMarkers,
   ];
   return {
-    pack: answeredContextPack(pack, answer, elapsedMs, markers, nowMs()),
+    pack: answeredContextPack(repair.pack, answer, elapsedMs, markers, nowMs()),
     assistantContent: answer.content,
     elapsedMs,
     modelInvoked: answer.modelInvoked ?? true,
     ...answerEvidenceFields(answer),
     citationRepairDisposition: repair.disposition,
+    followUp: repair.followUp,
     ...(plan === undefined ? {} : { plan }),
     ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
   };
