@@ -45,7 +45,7 @@ import {
 import styles from "./ChatChoiceNotice.module.css";
 import { NATIVE_FIELDSET_RESET_STYLE } from "../native-element-styles";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
-import { effectiveScopes } from "../hooks/workspaceActions";
+import { effectiveScopes, KEEP_FILES_FOLDER_CFG_KEY } from "../hooks/workspaceActions";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
@@ -1221,12 +1221,18 @@ function BoundChatBody({
     },
     [activeProjectPath, ctx],
   );
+  const updateCfg = ctx.updateCfg;
+  const keepFolderChange = useCallback(
+    (keep: boolean): void => updateCfg({ [KEEP_FILES_FOLDER_CFG_KEY]: keep }),
+    [updateCfg],
+  );
   if (targetLookupFailed) return null;
   if (targetMissing) return <ChatNotFound choice={choice} />;
   if (waiting) return <ChatBindPending />;
   return (
     <ChatWindow
       windowId={ctx.windowId}
+      onKeepFolderChange={keepFolderChange}
       suspended={ctx.suspended === true}
       mini={ctx.mini === true}
       minimalChat={ctx.minimalChat === true}

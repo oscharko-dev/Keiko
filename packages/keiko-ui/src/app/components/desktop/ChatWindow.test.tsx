@@ -5139,3 +5139,19 @@ function copyTestGroundedAnswer(content: string, sentReferenceCount: number): Gr
     },
   };
 }
+
+it("explains repository grounding whenever a folder scope is connected", () => {
+  renderWindow(
+    makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+        ],
+      }),
+    }),
+  );
+  expect(screen.getByTestId("grounding-help")).toHaveTextContent(
+    "Keiko searches the connected scope before each answer; the model has no file tools.",
+  );
+  expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
+});
