@@ -191,4 +191,26 @@ describe("intentional source-free assessment does not fabricate retrieval incide
       ]),
     ).toEqual(["low-confidence-selection"]);
   });
+  it("does not inherit a completed assessment when a later partial request lost its start event", () => {
+    expect(
+      reasons([
+        line(STARTED),
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment(),
+        line("search.connected-context.answer-details", { followUpOutcome: "not-needed" }),
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        line("search.connected-context.answer-details", { followUpOutcome: "not-needed" }),
+      ]),
+    ).toEqual(["low-confidence-selection"]);
+  });
+
+  it("retains the accepted assessment across its own final answer-details tail", () => {
+    expect(
+      reasons([
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment(),
+        line("search.connected-context.answer-details", { followUpOutcome: "not-needed" }),
+      ]),
+    ).toEqual([]);
+  });
 });
