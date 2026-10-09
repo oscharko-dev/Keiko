@@ -289,7 +289,9 @@ snapshot load, or snapshot save was observed, both completion projections report
 `not-evaluated`, even when an index was injected. Both finite searches and compatible unlimited
 matching reuse retain their actual cold, warm, reconciliation and load/save-failure observations.
 Index failures preserve live source retrieval and its coverage; the observed adapter still records
-the failure. The bypass counter counts logical searches, not physical directory walks. Request
+the failure. A failed load or save with zero retained, indexed and reused records reports
+`live-fallback`; a save failure after actual index work preserves its observed cold or warm mode.
+The bypass counter counts logical searches, not physical directory walks. Request
 abort/deadline controls race delayed index operations and fence every later snapshot chunk, write,
 sync and publication step. Owned descriptor closure and temporary-file cleanup remain permitted.
 Both server wrappers forward the request-active guard alongside the existing generation fence;
