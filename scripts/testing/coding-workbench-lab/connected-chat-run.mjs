@@ -2,7 +2,16 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { REPO_ROOT, UsageError, labBaseUrl, openApiSession, parseCli } from "./lab-common.mjs";
+import { URLSearchParams } from "node:url";
+import { buildDevBffEnv } from "../../lib/dev-bff-env.mjs";
+import {
+  REPO_ROOT,
+  UsageError,
+  importBuilt,
+  labBaseUrl,
+  openApiSession,
+  parseCli,
+} from "./lab-common.mjs";
 import { CONNECTED_CHAT_CAMPAIGNS, materializeManualCases } from "./connected-chat-cases.mjs";
 import {
   connectedChatObservation,
@@ -89,7 +98,23 @@ async function createChat(session, root, runtime, campaign) {
       ],
     }),
   ).chat;
-  return { chatId: bound.id, projectPath: project.path };
+  return {
+    chatId: bound.id,
+    projectPath: project.path,
+    groundingScopeIdentity: bound.groundingScopeIdentity,
+  };
+}
+
+async function currentAcknowledgedChat(session, chat) {
+  const query = new URLSearchParams({ id: chat.chatId, projectPath: chat.projectPath });
+  const current = requireSuccess(await request(session, "GET", `/api/chats?${query}`)).chats?.[0];
+  if (current?.id !== chat.chatId || current.groundingScopeIdentity !== chat.groundingScopeIdentity)
+    throw new UsageError("acknowledged-scope-drift");
+  return current;
+}
+
+function chatAddress(chat) {
+  return { chatId: chat.chatId, projectPath: chat.projectPath };
 }
 
 async function seedUserHistory(session, chat) {
@@ -99,7 +124,7 @@ async function seedUserHistory(session, chat) {
   for (let index = 0; index < HISTORY_COUNT; index += 1)
     requireSuccess(
       await request(session, "POST", "/api/chats/messages", {
-        ...chat,
+        ...chatAddress(chat),
         role: "user",
         content,
         timestamp: Date.now(),
@@ -122,16 +147,19 @@ async function evidenceManifests(session, answer) {
   return manifests;
 }
 
-async function runCase(session, runtime, chat, row) {
+async function runCase(session, runtime, chat, row, evidenceStore) {
   requireHeldHead(runtime);
   const seed = row.seedHistoryBefore === true ? await seedUserHistory(session, chat) : {};
+  const before = await currentAcknowledgedChat(session, chat);
   requireHeldHead(runtime);
   const startedAt = Date.now();
   const result = await request(session, "POST", "/api/chats/messages/grounded", {
-    ...chat,
+    ...chatAddress(chat),
     modelId: runtime.selectedModel,
     content: row.question,
+    expectedGroundingScopeIdentity: before.groundingScopeIdentity,
   });
+  const finishedAt = Date.now();
   requireHeldHead(runtime);
   const manifests = await evidenceManifests(session, result.json);
   const history = await request(
@@ -139,6 +167,24 @@ async function runCase(session, runtime, chat, row) {
     "GET",
     `/api/chats/messages?chatId=${encodeURIComponent(chat.chatId)}&projectPath=${encodeURIComponent(chat.projectPath)}&limit=500`,
   );
+  const after = await currentAcknowledgedChat(session, chat);
+  const contextQuery = new URLSearchParams({
+    ...chatAddress(chat),
+    modelId: runtime.selectedModel,
+  });
+  const context = await request(session, "GET", `/api/chats/context?${contextQuery}`);
+  const binding = {
+    chatId: chat.chatId,
+    question: row.question,
+    startedAt,
+    finishedAt,
+    evidenceStore,
+    modelId: runtime.selectedModel,
+    scopeIdentityBefore: before.groundingScopeIdentity,
+    scopeIdentityAfter: after.groundingScopeIdentity,
+    persistedMessages: history.status === 200 ? history.json.messages : undefined,
+    contextStatus: context.status === 200 ? context.json : undefined,
+  };
   return {
     caseId: row.id,
     testedSha: runtime.testedSha,
@@ -147,7 +193,7 @@ async function runCase(session, runtime, chat, row) {
     elapsedMs: Date.now() - startedAt,
     ...seed,
     persistedMessageCount: history.json.messages?.length,
-    ...(await connectedChatObservation(runtime, result, manifests, row.target)),
+    ...(await connectedChatObservation(runtime, result, manifests, row.target, binding)),
     ...(await expectedSourceFactObservation(result.json.content ?? "", row.expectedFact)),
   };
 }
@@ -205,10 +251,20 @@ async function setupCampaign(parsed) {
   };
   const session = await openApiSession(labBaseUrl(`http://127.0.0.1:${runtime.port}`), env);
   const chat = await createChat(session, root, runtime, parsed.campaign);
-  return { session, runtime, chat, output, cases };
+  const { createNodeEvidenceStore, resolveEvidenceDir } = await importBuilt(
+    "keiko-evidence",
+    "index.js",
+  );
+  const effectiveEnv = buildDevBffEnv({
+    repoRoot: REPO_ROOT,
+    processEnv: process.env,
+    stateDir: runtime.stateDir,
+  });
+  const evidenceStore = createNodeEvidenceStore(resolveEvidenceDir(undefined, effectiveEnv));
+  return { session, runtime, chat, output, cases, evidenceStore };
 }
 
-async function runCampaign({ session, runtime, chat, output, cases }) {
+async function runCampaign({ session, runtime, chat, output, cases, evidenceStore }) {
   for (const row of cases) {
     console.log(
       JSON.stringify({
@@ -218,7 +274,7 @@ async function runCampaign({ session, runtime, chat, output, cases }) {
       }),
     );
     try {
-      const record = await runCase(session, runtime, chat, row);
+      const record = await runCase(session, runtime, chat, row, evidenceStore);
       appendRecord(output, record);
       console.log(
         JSON.stringify({
