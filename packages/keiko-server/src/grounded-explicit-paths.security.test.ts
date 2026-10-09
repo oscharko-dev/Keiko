@@ -140,10 +140,10 @@ function expectPrivateRejection(
   reason: string,
 ): void {
   expect(result.output.pack.files.map((file) => file.scopePath)).not.toContain(path);
-  const completed = result.log.events.find(
-    (event) => event.op === "search.connected-context.completed",
+  const sourceDetails = result.log.events.find(
+    (event) => event.op === "search.connected-context.source-details",
   );
-  expect(completed?.extra).toMatchObject({
+  expect(sourceDetails?.extra).toMatchObject({
     explicitPathRejectedCount: 1,
     explicitPathRejectionReasons: [reason],
   });
@@ -216,7 +216,7 @@ describe("explicit-path trust boundary", () => {
 
   it("classifies binary content without admitting or exposing it", async () => {
     const path = "src/binary.ts";
-    writeFixture(path, new Uint8Array([0, 1, 2, 3, 4, 0, 1, 2]));
+    writeFixture(path, Buffer.from(PRIVATE_BODY + "\u0000".repeat(32)));
     const result = await retrieve(`Explain ${path}`);
     expectPrivateRejection(result, path, "binary");
     expect(result.output.pack.files.flatMap((file) => file.excerpts)).not.toContainEqual(
@@ -252,6 +252,30 @@ describe("explicit-path trust boundary", () => {
 });
 
 describe("bounded explicit basename discovery", () => {
+  it("caps discovery deterministically when more than ninety-six matches exist", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 100 }, (_value, index) => [
+        `src/directory-${String(index).padStart(3, "0")}/probe.ts`,
+        `export const fact${String(index)} = ${String(index)};\n`,
+      ]),
+    );
+    const first = await retrieve("Explain probe.ts", { fs: memFs(root, files) });
+    const second = await retrieve("Explain probe.ts", { fs: memFs(root, files) });
+    for (const result of [first, second]) {
+      expect(
+        result.log.events.find((event) => event.op === "search.connected-context.source-details")
+          ?.extra,
+      ).toMatchObject({
+        basenameDiscoveryTermCount: 1,
+        basenameDiscoveryMatchCount: 96,
+        explicitPathAdmittedCount: 96,
+      });
+    }
+    expect(first.output.pack.files.map((file) => file.scopePath)).toEqual(
+      second.output.pack.files.map((file) => file.scopePath),
+    );
+  });
+
   it("preserves all five incident matches without admitting generated dependencies", async () => {
     const result = await retrieve("Explain validation.ts", {
       fs: memFs(root, INCIDENT_RETRIEVAL_FILES),
@@ -273,7 +297,8 @@ describe("bounded explicit basename discovery", () => {
       [],
     );
     expect(
-      result.log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+      result.log.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra,
     ).toMatchObject({
       basenameDiscoveryTermCount: 1,
       basenameDiscoveryMatchCount: 5,
