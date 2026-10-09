@@ -66,6 +66,7 @@ import {
   planAndGovern,
   rankCandidates,
   isDirectEvidenceLookup,
+  isGeneratedRankingPath,
   requiresRelationshipOrHistoryRings,
   resolveQueryTargetDecision,
   type QueryTargetDecision,
@@ -97,6 +98,7 @@ import {
   gitHistoryAdapter,
   isCanonicalMetadataFile,
   isEcosystemSourceFile,
+  isGeneratedArtifactPath,
   isDenied,
   readExcerpt,
   resolveWithinWorkspace,
@@ -7205,6 +7207,8 @@ async function assembleGroundedPack(
   const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
   const augmentedRings = filterRejectedExplicitPaths(
     await augmentRingsWithDeterministicAtoms(args),
+    input.scope,
+    nowMs(),
   );
   const explicitDetails = explicitAssemblyDetails(augmentedRings);
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs, args.hasGitMetadata);
@@ -9000,25 +9004,66 @@ function withAdmittedExplicitPaths(
   nowMs: () => number,
 ): RingRunSummary {
   const fingerprint = selectedFileQueryFingerprint(input.query);
-  return filterRejectedExplicitPaths({
-    ...rings,
-    explicitAdmission: admission,
-    atoms: [
-      ...admission.selections
-        .filter((selection) => !isConnectedDocumentPath(selection.path))
-        .map((selection) =>
-          selectedFileAtom(input.scope, selection.path, fingerprint, nowMs, selection.line),
-        ),
-      ...rings.atoms,
-    ],
-    omitted: [...rings.omitted, ...admission.omitted],
-  });
+  return filterRejectedExplicitPaths(
+    {
+      ...rings,
+      explicitAdmission: admission,
+      atoms: [
+        ...admission.selections
+          .filter((selection) => !isConnectedDocumentPath(selection.path))
+          .map((selection) =>
+            selectedFileAtom(input.scope, selection.path, fingerprint, nowMs, selection.line),
+          ),
+        ...rings.atoms,
+      ],
+      omitted: [...rings.omitted, ...admission.omitted],
+    },
+    input.scope,
+    nowMs(),
+  );
 }
 
-function filterRejectedExplicitPaths(rings: RingRunSummary): RingRunSummary {
-  const rejected = rings.explicitAdmission?.rejectedPaths;
-  if (rejected === undefined || rejected.size === 0) return rings;
-  return { ...rings, atoms: rings.atoms.filter((atom) => !rejected.has(atom.scopePath)) };
+function filterRejectedExplicitPaths(
+  rings: RingRunSummary,
+  scope: SelectedScope,
+  nowMs: number,
+): RingRunSummary {
+  const admission = rings.explicitAdmission;
+  if (admission === undefined || admission.observation.explicitPathAnchorCount === 0) return rings;
+  const humanPaths = new Set(scope.kind === "files" ? scope.relativePaths : []);
+  const generated = new Set(
+    rings.atoms
+      .filter(
+        (atom) =>
+          !humanPaths.has(atom.scopePath) &&
+          (isGeneratedArtifactPath(atom.scopePath) || isGeneratedRankingPath(atom.scopePath)),
+      )
+      .map((atom) => atom.scopePath),
+  );
+  const omitted = new Set(rings.omitted.map((entry) => entry.scopePath));
+  const retainedOmissions = rings.omitted.filter(
+    (entry) =>
+      !humanPaths.has(entry.scopePath) ||
+      (entry.reason !== "ignored" && entry.reason !== "generated"),
+  );
+  return {
+    ...rings,
+    atoms: rings.atoms.filter(
+      (atom) =>
+        humanPaths.has(atom.scopePath) ||
+        (!admission.rejectedPaths.has(atom.scopePath) && !generated.has(atom.scopePath)),
+    ),
+    omitted: [
+      ...retainedOmissions,
+      ...[...generated]
+        .filter((path) => !omitted.has(path))
+        .map((scopePath) => ({
+          scopePath,
+          reason: "generated" as const,
+          omittedAtMs: nowMs,
+        })),
+    ],
+  };
 }
 
 // Which budget actually stopped the request is reported, not inferred: `readBudgetBlocked` and

@@ -165,9 +165,14 @@ afterEach((): void => {
 });
 
 describe("explicit-path trust boundary", () => {
-  it.each(["escaping", "dangling", "denied-alias", "hard-link"])(
-    "rejects a %s without reading its target or failing the retrieval",
-    async (kind) => {
+  it.each([
+    { kind: "escaping", reason: "outside-scope" },
+    { kind: "dangling", reason: "outside-scope" },
+    { kind: "denied-alias", reason: "denied" },
+    { kind: "hard-link", reason: "outside-scope" },
+  ])(
+    "rejects $kind without reading its target or failing the retrieval",
+    async ({ kind, reason }) => {
       const path = "src/alias.ts";
       writeFileSync(join(outside, "target.ts"), PRIVATE_BODY);
       writeFixture(".env", PRIVATE_BODY);
@@ -181,7 +186,7 @@ describe("explicit-path trust boundary", () => {
         );
       const reads: string[] = [];
       const result = await retrieve(`Explain ${path}`, { fs: watchedFs(reads) });
-      expectPrivateRejection(result, path, "outside-scope");
+      expectPrivateRejection(result, path, reason);
       expect(reads).not.toContain(join(root, path));
       expect(reads).not.toContain(join(root, ".env"));
       expect(reads).not.toContain(join(outside, "target.ts"));
