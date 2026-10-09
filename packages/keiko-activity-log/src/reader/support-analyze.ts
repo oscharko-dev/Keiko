@@ -63,6 +63,7 @@ import {
   type ActivityLogEventEnvelope,
   type ActivityLogLossState,
   type ActivityLogOperationRegistration,
+  type SupportRetrievalMissFinding,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import {
@@ -73,6 +74,7 @@ import {
   type ActivityLogSufficiencyLine,
 } from "./support-analyze-sufficiency.js";
 import { SequenceNumberSet } from "./sequence-number-set.js";
+import { projectRetrievalMisses } from "./support-retrieval-miss.js";
 
 import {
   CURRENT_SUPPORT_REGISTRY,
@@ -150,6 +152,8 @@ export interface LogTimeline {
   // Wave 6: the union of every `frames[]` entry seen across this timeline's lines, occurrence
   // order, capped at `MAX_TIMELINE_FRAMES`. Omitted (never `[]`) when no line carried frames.
   readonly frames?: readonly string[] | undefined;
+  /** Omitted for a healthy timeline or when older evidence cannot establish a miss. */
+  readonly findings?: readonly SupportRetrievalMissFinding[];
 }
 
 export interface UpdateAttemptTimeline extends LogTimeline {
@@ -254,6 +258,7 @@ export interface AnalyzeAllResult {
   // #3532: every observed failure class projected to complete/degraded/insufficient with closed
   // reasons, derived from the registry's failure-class contracts (support-analyze-sufficiency.ts).
   readonly sufficiency: ActivityLogSufficiency;
+  readonly findings?: readonly SupportRetrievalMissFinding[];
 }
 
 export type SourceKind = "bundle" | "raw-log" | "support-report";
@@ -1249,6 +1254,13 @@ function buildTimeline(correlationId: string, group: readonly ParsedLine[]): Log
     views.map((view) => view.errorKind).filter((kind): kind is string => kind !== undefined),
   );
   const frames = aggregateFrames(views);
+  const findings = projectRetrievalMisses(
+    correlationId,
+    group.map((line) => ({
+      ...line.view,
+      correlationId: line.correlationId,
+    })),
+  );
   return {
     correlationId,
     lines: views,
@@ -1257,6 +1269,7 @@ function buildTimeline(correlationId: string, group: readonly ParsedLine[]): Log
     durationMs,
     errorKinds,
     ...(frames.length === 0 ? {} : { frames }),
+    ...(findings.length === 0 ? {} : { findings }),
   };
 }
 
@@ -1721,6 +1734,13 @@ function analyzeParsedLines(
     evidence,
     options.registry,
   );
+  const findings = [
+    ...new Map(
+      timelines
+        .flatMap((timeline) => timeline.findings ?? [])
+        .map((finding) => [JSON.stringify(finding), finding]),
+    ).values(),
+  ];
   return {
     sourceKind: kind,
     ...observation,
@@ -1733,6 +1753,7 @@ function analyzeParsedLines(
     clusters,
     updateAttempts,
     sufficiency,
+    ...(findings.length === 0 ? {} : { findings }),
   };
 }
 
@@ -1798,7 +1819,13 @@ export function renderHumanTimeline(timeline: LogTimeline): string {
   const header = `correlationId=${timeline.correlationId} lines=${String(timeline.lines.length)} durationMs=${String(timeline.durationMs)}\n`;
   if (timeline.lines.length === 0) return header;
   const body = timeline.lines.map((line) => `  ${renderEventLine(line)}`).join("\n");
-  return `${header}${body}\n`;
+  const findings = (timeline.findings ?? [])
+    .map(
+      (finding) =>
+        `  retrieval-miss ${finding.reason} correlationId=${finding.correlationId} fields=${JSON.stringify(finding.fields)}`,
+    )
+    .join("\n");
+  return `${header}${body}\n${findings.length === 0 ? "" : `${findings}\n`}`;
 }
 
 function renderProcessSummary(process: ProcessSummary): string {
@@ -2385,6 +2412,7 @@ export interface ReproductionSeed {
   // (ADR-0173 §10). Never empty in practice: every seed at minimum names the standing
   // by-design gap that no prompt/response body is ever logged.
   readonly warnings: readonly string[];
+  readonly findings?: readonly SupportRetrievalMissFinding[];
 }
 
 const REPRODUCTION_SEED_SCHEMA_VERSION = 1;
@@ -2571,10 +2599,12 @@ export function buildReproductionSeedFromAnalysis(
     },
     correlationId,
     timeline: timeline.lines,
+    ...(timeline.findings === undefined ? {} : { findings: timeline.findings }),
     ...optionalSeedFields(fields),
     ...toolCatalogSeed(fields.toolCatalog),
     sufficiency: timelineSufficiency(analysis, timeline, options.registry),
     warnings: [
+      ...retrievalSeedWarnings(timeline),
       ...toolCatalogWarnings(fields.toolCatalog),
       ...buildSeedWarnings({
         kind: fields.kind,
@@ -2586,6 +2616,14 @@ export function buildReproductionSeedFromAnalysis(
       }),
     ],
   };
+}
+
+function retrievalSeedWarnings(timeline: LogTimeline): readonly string[] {
+  return timeline.lines.some((line) => line.op.startsWith("search.connected-context."))
+    ? [
+        "retrieval inputs and file bodies were not logged; replay needs a separately supplied allowed fixture",
+      ]
+    : [];
 }
 
 // ─── Wave 6: `--emit-fixture` ───────────────────────────────────────────────────────────────────
