@@ -13,7 +13,7 @@ import {
 import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
-import type { RouteContext } from "./routes.js";
+import type { RouteContext, RouteResult } from "./routes.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -30,6 +30,8 @@ const OVERFLOW = "context-overflow";
 const TRANSIENT = "transient-provider-fault";
 const PARTIAL_USAGE_FAULT = "transport-after-reported-usage";
 const UNMEASURED_PARTIAL_FAULT = "transport-after-unmeasured-output";
+const UNSUPPORTED_USAGE = "unsupported-stream-options";
+const UNSUPPORTED_OUTPUT = "unsupported-max-tokens";
 let root = "";
 let stateDir = "";
 const disposals: UiHandlerDeps[] = [];
@@ -60,6 +62,12 @@ afterEach(async () => {
 });
 
 function providerResponse(content: string): Response {
+  const rejectedField = compatibilityRejectedField(content);
+  if (rejectedField !== undefined)
+    return Response.json(
+      { error: { param: rejectedField, code: "unsupported_parameter" } },
+      { status: 400 },
+    );
   if (content === UNMEASURED_PARTIAL_FAULT)
     return responseWithUnmeasuredOutputThenTransportFailure();
   if (content === PARTIAL_USAGE_FAULT) return responseWithReportedUsageThenTransportFailure();
@@ -91,6 +99,12 @@ function providerResponse(content: string): Response {
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+}
+
+function compatibilityRejectedField(content: string): string | undefined {
+  if (content === UNSUPPORTED_USAGE) return "stream_options";
+  if (content === UNSUPPORTED_OUTPUT) return "max_tokens";
+  return undefined;
 }
 
 function responseWithUnmeasuredOutputThenTransportFailure(): Response {
@@ -230,27 +244,35 @@ async function scriptedProviderTurn(
   readonly spendReservations: number;
   readonly usage: { readonly modelInputTokens: number; readonly modelOutputTokens: number };
 }> {
+  const turn = await configuredProviderTurn(answers, maxRetries);
+  expect(turn.result.status).toBe(200);
+  const answer = turn.result.body as GroundedAnswer;
+  if (answer.groundingKind !== "connected-context")
+    throw new TypeError("Expected folder grounding");
+  return { ...turn, usage: answer.contextPack.usage };
+}
+
+async function configuredProviderTurn(
+  answers: readonly string[],
+  maxRetries = 0,
+): Promise<{
+  readonly result: RouteResult;
+  readonly requests: readonly string[];
+  readonly records: readonly Record<string, unknown>[];
+  readonly spendReservations: number;
+}> {
   const requests = installProvider(answers);
   const { deps, chatId } = configuredRuntime(maxRetries);
   const budget = deps.gatewayConfig?.spendBudget;
   if (budget === undefined) throw new TypeError("Expected the real durable spend budget");
   const reserve = vi.spyOn(budget, "reserve");
   const result = await handleGroundedAsk(route(chatId), deps);
-  expect(result.status).toBe(200);
-  const answer = result.body as GroundedAnswer;
-  if (answer.groundingKind !== "connected-context")
-    throw new TypeError("Expected folder grounding");
   const records = readPersistedActivityLog(stateDir)
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   expect(records.map((record) => record.op)).not.toContain("server-log.write-failed");
-  return {
-    requests,
-    records,
-    spendReservations: reserve.mock.calls.length,
-    usage: answer.contextPack.usage,
-  };
+  return { result, requests, records, spendReservations: reserve.mock.calls.length };
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
@@ -337,5 +359,64 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(turn.records.some((record) => record.op === "gateway.retry.scheduled")).toBe(true);
     expect(turn.spendReservations).toBe(turn.requests.length);
     expect(turn.requests.length).toBeLessThanOrEqual(2);
+  });
+
+  it.each([UNSUPPORTED_USAGE, UNSUPPORTED_OUTPUT])(
+    "preserves a healthy cited answer after the actual %s shape retry",
+    async (rejection) => {
+      const turn = await scriptedProviderTurn([rejection, CITED]);
+      expect(turn.requests).toHaveLength(2);
+      expect(turn.records.some((record) => record.op === "chat.request.compatibility-retry")).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each([
+    ["optional usage fallback followed by marker repair", [UNSUPPORTED_USAGE, UNCITED, CITED]],
+    ["output field fallback followed by marker repair", [UNSUPPORTED_OUTPUT, UNCITED, CITED]],
+    [
+      "optional usage fallback followed by unread declaration",
+      [UNSUPPORTED_USAGE, MISSING, FOLLOW_UP],
+    ],
+    [
+      "output field fallback followed by unread declaration",
+      [UNSUPPORTED_OUTPUT, MISSING, FOLLOW_UP],
+    ],
+    ["two nested shape fallbacks", [UNSUPPORTED_USAGE, UNSUPPORTED_USAGE, CITED]],
+    [
+      "whole-body fallback followed by marker repair",
+      [UNSUPPORTED_USAGE, UNSUPPORTED_USAGE, UNCITED, CITED],
+    ],
+    [
+      "whole-body fallback followed by unread declaration",
+      [UNSUPPORTED_USAGE, UNSUPPORTED_USAGE, MISSING, FOLLOW_UP],
+    ],
+  ] as const)("never dispatches a third synthesis after %s", async (_label, answers) => {
+    const turn = await configuredProviderTurn(answers);
+    expect(turn.records.some((record) => record.op === "chat.request.compatibility-retry")).toBe(
+      true,
+    );
+    expect(turn.requests.length).toBeLessThanOrEqual(2);
+    expect(turn.spendReservations).toBe(turn.requests.length);
+    if (turn.result.status !== 200) {
+      expect(turn.result.status).toBe(502);
+      expect(turn.result.body).toMatchObject({ error: { code: "GATEWAY_CONTEXT_OVERFLOW" } });
+    }
+  });
+
+  it("preserves unrelated buffered gateway compatibility recovery", async () => {
+    const requests = installProvider([UNSUPPORTED_USAGE, UNSUPPORTED_USAGE, CITED]);
+    const { deps } = configuredRuntime();
+    const port = deps.modelPortFactory(MODEL);
+    if (port === undefined) throw new TypeError("Expected configured gateway");
+    const answer = await port.call({
+      modelId: MODEL,
+      messages: [{ role: "user", content: "File: src/Feature.ts" }],
+      stream: false,
+      maxOutputTokens: 1024,
+    });
+    expect(answer.content).toBe(CITED);
+    expect(requests).toHaveLength(3);
   });
 });

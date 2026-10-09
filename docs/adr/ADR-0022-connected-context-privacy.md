@@ -739,3 +739,9 @@ Input charges use the canonical sent-prompt estimate as a floor and retain large
 Reported partial output is charged; an uncertain interrupted stream retains its requested output
 upper reservation. A definitive HTTP rejection before generation leaves the spare output grant
 available for bounded recovery. These admission charges do not claim exact measured consumption.
+
+OpenAI-compatible adapters invoke the same optional caller admission and durable spend lifecycle
+for each physical synthesis HTTP POST, including stream-shape and output-token-field compatibility
+fallbacks. This avoids double-reserving the first request at both gateway and adapter boundaries.
+Other adapters retain the gateway-owned attempt boundary. Each reservation settles once; early
+iterator close and aborted reads without terminal usage retain uncertain output exposure.

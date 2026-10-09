@@ -1,3 +1,10 @@
+import type { GatewayCallRequest } from "./gateway.js";
+import {
+  callerAdmittedRequest,
+  onceCallerReservation,
+  settleCallerAttempt,
+  settleFailedCallerAttempt,
+} from "./gateway-attempt-admission.js";
 // Zero-dependency OpenAI-compatible HTTP adapter built on globalThis.fetch and
 // AbortSignal. fetch, clock, request-id, and cost class are injected so tests run
 // with no network I/O and no real time. The raw provider body is never echoed into
@@ -64,6 +71,7 @@ import {
   type OutputTokenField,
 } from "./output-token-limit.js";
 import {
+  countGatewayPromptTokens,
   openAiCompatiblePromptMessage,
   openAiCompatiblePromptTools,
   type OpenAiCompatiblePromptMessage,
@@ -471,6 +479,7 @@ interface ChatRequestBody {
 }
 
 interface DispatchedResponse {
+  readonly reservation?: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
   readonly response: Response;
   readonly signal: AbortSignal;
   // Clears the timers of the request's deadline; every dispatched request ends with one call.
@@ -583,7 +592,7 @@ function chatCompletionsUrl(config: ModelProviderConfig): string {
 
 // Always returns the array shape: the plain-string case is handled at the call site so this
 // helper itself never mixes return types (sonarjs/function-return-type).
-type ProviderGatewayRequest = GatewayRequest & {
+type ProviderGatewayRequest = GatewayCallRequest & {
   readonly tools?: readonly ToolDefinition[] | undefined;
 };
 
@@ -1599,6 +1608,7 @@ function* flushedLanes(
 }
 
 export class OpenAiAdapter implements ProviderAdapter {
+  readonly attemptAdmissionBoundary = "transport";
   private readonly now: () => number;
   private readonly log: ModelGatewayLogSink;
 
@@ -1611,7 +1621,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   }
 
   call = async (
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     config: ModelProviderConfig,
   ): Promise<NormalizedResponse> => {
     const secrets = [config.apiKey, config.baseUrl];
@@ -1639,7 +1649,12 @@ export class OpenAiAdapter implements ProviderAdapter {
         mapHttpError(response, config.modelId, secrets, errorPayload);
       }
       const payload = await this.readBody(response, config, secrets, dispatched.signal);
-      return this.finishedResponse(payload, request, config, secrets, catalog, start);
+      const answer = this.finishedResponse(payload, request, config, secrets, catalog, start);
+      settleCallerAttempt(dispatched.reservation, answer.usage, true);
+      return answer;
+    } catch (failure) {
+      settleFailedCallerAttempt(dispatched.reservation, failure, true);
+      throw failure;
     } finally {
       dispatched.dispose();
     }
@@ -1654,7 +1669,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   // (ADR-0003): their silence and budget bound the read instead of one `timeoutMs`.
   callStream = async function* (
     this: OpenAiAdapter,
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     config: ModelProviderConfig,
     bounds?: StreamReadBounds,
   ): AsyncGenerator<GatewayStreamChunk> {
@@ -1690,13 +1705,28 @@ export class OpenAiAdapter implements ProviderAdapter {
         catalog,
         start,
       };
-      yield* answeredWholeBody(response)
-        ? this.wholeBodyChunks(response, read)
-        : this.streamedChunks(response, read);
+      yield* this.admittedResponseChunks(dispatched, read);
+    } catch (failure) {
+      settleFailedCallerAttempt(dispatched.reservation, failure, true);
+      throw failure;
     } finally {
       dispatched.dispose();
     }
   };
+
+  private async *admittedResponseChunks(
+    dispatched: DispatchedResponse,
+    read: StreamRead,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    const chunks = answeredWholeBody(dispatched.response)
+      ? this.wholeBodyChunks(dispatched.response, read)
+      : this.streamedChunks(dispatched.response, read);
+    for await (const chunk of chunks) {
+      if (chunk.type === "done")
+        settleCallerAttempt(dispatched.reservation, chunk.response.usage, true);
+      yield chunk;
+    }
+  }
 
   // Reads the SSE stream into `acc`, yielding redacted answer tokens as `delta` chunks and the
   // model's reasoning as `reasoning` chunks (#3878). A suffix that matches the start of a
@@ -1913,13 +1943,11 @@ export class OpenAiAdapter implements ProviderAdapter {
     includeUsage = true,
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
+    const reservation = this.transportReservation(request, config);
+    request = callerAdmittedRequest(request, reservation);
     const body = JSON.stringify(
       stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
     );
-    const headers = {
-      "content-type": "application/json",
-      ...apiKeyHeaders(config),
-    };
     const readBounds = dispatchedReadBounds(stream, bounds);
     logChatDispatch(
       this.log,
@@ -1929,7 +1957,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     try {
       const response = await gatewayFetch(url, {
         method: "POST",
-        headers,
+        headers: { "content-type": "application/json", ...apiKeyHeaders(config) },
         body,
         signal: deadline.signal,
         fetchImpl: this.deps.fetchImpl,
@@ -1937,11 +1965,38 @@ export class OpenAiAdapter implements ProviderAdapter {
         ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
       deadline.responseStarted();
-      return { response, signal: deadline.signal, dispose: deadline.dispose };
+      return {
+        response,
+        reservation,
+        signal: deadline.signal,
+        dispose: (): void => {
+          settleCallerAttempt(reservation, undefined, true, response.ok ? "unknown" : "none");
+          deadline.dispose();
+        },
+      };
     } catch (error) {
       deadline.dispose();
-      throw this.mapDispatchError(error, config, deadline.signal, secrets);
+      const failure = this.mapDispatchError(error, config, deadline.signal, secrets);
+      settleFailedCallerAttempt(reservation, failure, true);
+      throw failure;
     }
+  }
+
+  private transportReservation(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+  ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
+    const admit = request.attemptAdmission;
+    if (admit === undefined) return undefined;
+    const reservation = admit({
+      promptTokens: countGatewayPromptTokens(request),
+      maxOutputTokens: dispatchedMaxOutputTokens(request, config) ?? 0,
+    });
+    if (reservation === undefined)
+      throw new ContextOverflowError(
+        "Caller synthesis attempt grant exhausted before HTTP dispatch",
+      );
+    return onceCallerReservation(reservation);
   }
 
   private async dispatchCompatibleStream(
