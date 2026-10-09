@@ -1819,6 +1819,7 @@ function persistGroundedAuditEvidence(
       // the real grounding root so the audit trail is honest about which tree produced the answer.
       workspaceRoot: workerCtx.scope.workspaceRoot,
       chatId: workerCtx.chat.id,
+      sourceScopeFingerprint: groundedSourceScopeFingerprint(output.pack.scope),
       plan: output.plan,
       pack: output.pack,
       citationCount,
