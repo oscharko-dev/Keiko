@@ -13,7 +13,8 @@ export const EN_MESSAGES = {
     "Relevance refinement was unavailable; the initial ranking was used.",
   "grounded.retrieval.scopeApplied": "Folder context was included.",
   "grounded.retrieval.scopeOverflow": "The folder context exceeded the request capacity.",
-  "grounded.retrieval.scopeRefused": "Folder context was refused by its safety gate.",
+  "grounded.retrieval.scopeRefused":
+    "Additional whole-folder context was not used for this request.",
   "grounded.retrieval.scopeIncomplete": "The folder could not be fully inspected.",
   "grounded.retrieval.lowConfidence": "No confident evidence match was found.",
   "grounded.files.inspection": "Connected evidence inspection",

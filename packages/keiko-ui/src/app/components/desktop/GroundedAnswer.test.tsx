@@ -2189,6 +2189,37 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     );
   }
 
+  it.each([
+    ["en", "Additional whole-folder context was not used for this request."],
+    ["de", "Zusätzlicher Kontext aus dem gesamten Ordner wurde für diese Anfrage nicht verwendet."],
+  ] as const)(
+    "distinguishes optional whole-folder enrichment from refusal of cited evidence in %s",
+    async (locale, notice) => {
+      renderInLocale(
+        locale,
+        answer({
+          content: "Source statement [src/foo.ts:10-25].",
+          contextPack: contextPack({
+            scopeKind: "workspace-root",
+            fileCount: 11,
+            filesInPrompt: 11,
+            scopeContextState: "gate-refused",
+            semanticProviderDisposition: "unavailable",
+            omittedCounts: { ...OMITTED_COUNTS_ZERO, ignored: 1 },
+          }),
+        }),
+      );
+      expect(await screen.findByText(notice, { exact: false })).toHaveAttribute("title");
+      expect(screen.getByText(/11 (?:files in prompt|Dateien im Prompt)/u)).toBeInTheDocument();
+      expect(
+        screen.getByTitle("Evidence citation in src/foo.ts at lines 10-25"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/refused by its safety gate|Sicherheitsprüfung abgelehnt/u),
+      ).toBeNull();
+    },
+  );
+
   it.each(["en", "de"] as const)(
     "uses the %s locale for inspection counts and file singulars",
     async (locale) => {

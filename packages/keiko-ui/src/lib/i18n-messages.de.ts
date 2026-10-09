@@ -15,7 +15,7 @@ export const DE_MESSAGES = {
   "grounded.retrieval.scopeApplied": "Der Ordnerkontext wurde einbezogen.",
   "grounded.retrieval.scopeOverflow": "Der Ordnerkontext überschritt die Kapazität der Anfrage.",
   "grounded.retrieval.scopeRefused":
-    "Der Ordnerkontext wurde durch seine Sicherheitsprüfung abgelehnt.",
+    "Zusätzlicher Kontext aus dem gesamten Ordner wurde für diese Anfrage nicht verwendet.",
   "grounded.retrieval.scopeIncomplete": "Der Ordner konnte nicht vollständig untersucht werden.",
   "grounded.retrieval.lowConfidence": "Es wurde kein verlässlicher Belegtreffer gefunden.",
   "grounded.files.inspection": "Verbundene Belege prüfen",
