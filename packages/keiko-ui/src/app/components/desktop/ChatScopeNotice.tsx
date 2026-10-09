@@ -56,6 +56,21 @@ function changedScope(
   );
 }
 
+function replacedScope(
+  previous: readonly ChatConnectedScope[],
+  next: readonly ChatConnectedScope[],
+  scope: ChatConnectedScope,
+): ChatConnectedScope | undefined {
+  const removed = previous.filter(
+    (candidate) =>
+      candidate.root === scope.root &&
+      !next.some(
+        (current) => connectedScopeSignature([candidate]) === connectedScopeSignature([current]),
+      ),
+  );
+  return removed.length === 1 ? removed[0] : undefined;
+}
+
 interface ScopeTransitionHistory {
   id: string;
   scopes: readonly ChatConnectedScope[];
@@ -97,7 +112,7 @@ function evaluateScopeTransition(
   const scope = changedScope(oldScopes, history.scopes);
   if (scope === undefined)
     return trackedScopeRemoved(history) ? resetScopeHistory(history, releasePin) : undefined;
-  const prior = oldScopes.find((candidate) => candidate.root === scope.root);
+  const prior = replacedScope(oldScopes, history.scopes, scope);
   if (prior === undefined) resetScopeHistory(history, releasePin);
   else if (prior.kind !== "files") history.folder = prior;
   history.represented = scope;
