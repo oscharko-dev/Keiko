@@ -20,9 +20,9 @@ describe("grounded retrieval eval (RB-5, GEN-AI-RELEASE-GATE-001)", () => {
       DEFAULT_GROUNDED_RETRIEVAL_BUDGET.minRecallAtK,
     );
     expect(scorecard.semanticProviderName).toBe("configured-repo-semantic-search");
-    expect(scorecard.fingerprintCount).toBe(10);
-    expect(scorecard.indexedPathCount).toBe(10);
-    expect(scorecard.alignedVectorCount).toBe(10);
+    expect(scorecard.fingerprintCount).toBe(12);
+    expect(scorecard.indexedPathCount).toBe(12);
+    expect(scorecard.alignedVectorCount).toBe(12);
     expect(scorecard.askTimeDocumentEmbeddingCount).toBe(0);
   });
 
@@ -51,6 +51,14 @@ describe("grounded retrieval eval (RB-5, GEN-AI-RELEASE-GATE-001)", () => {
     const scorecard = await runGroundedRetrievalQualityEval("embedding-flat");
     const result = evaluateGroundedRetrievalBudget(scorecard);
     expect(result.ok).toBe(false);
+  });
+
+  it("detects an alphabetical basename tie that ignores directory evidence", async () => {
+    const baseline = await runGroundedRetrievalQualityEval("baseline");
+    expect(baseline.failedCases).not.toContain("featureconditions");
+    const regressed = await runGroundedRetrievalQualityEval("basename-tie-alphabetical");
+    expect(regressed.failedCases).toContain("featureconditions");
+    expect(evaluateGroundedRetrievalBudget(regressed).ok).toBe(false);
   });
 
   it("every injected regression mode drops the gate below its floors", async () => {

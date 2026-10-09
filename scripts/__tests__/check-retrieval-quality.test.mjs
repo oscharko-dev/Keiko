@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { binaryNdcgAtK } from "@oscharko-dev/keiko-contracts/runtime/eval-metrics";
 import {
   evaluateQualityBudget,
+  evaluateCase,
+  INCIDENT_RETRIEVAL_CASES,
+  INCIDENT_RETRIEVAL_FILES,
+  INCIDENT_TEST_PATH,
+  WORKSPACE_QUALITY_CASES,
   recallAtK,
   reciprocalRank,
   runLocalKnowledgeQualityCheck,
@@ -346,5 +351,42 @@ describe("check-retrieval-quality regression probes", () => {
     expect(failures).toEqual([
       "local knowledge regression probes were tautological: exact-technical",
     ]);
+  });
+});
+
+describe("incident retrieval fixture schema (#3882)", () => {
+  it("contains every required incident family with the known assertion on line 26", () => {
+    const prefixes = new Set(
+      INCIDENT_RETRIEVAL_CASES.map((fixture) => fixture.id.replace(/-(?:de|en)$/u, "")),
+    );
+    expect([...prefixes]).toEqual([
+      "explicit-relative-path",
+      "bare-basename-collision",
+      "vitest-stack-trace-node-modules",
+      "path-only-in-previous-assistant-answer",
+      "conversational-orientation-follow-up",
+      "floor-outlier-explicit-file",
+      "generated-and-node-modules-ignored",
+    ]);
+    expect(INCIDENT_RETRIEVAL_FILES[INCIDENT_TEST_PATH].split("\n")[25]).toContain("toBe(true)");
+    expect(Object.keys(INCIDENT_RETRIEVAL_FILES)).toContain(
+      "node_modules/@vitest/runner/dist/chunk-hooks.js",
+    );
+  });
+
+  it("preserves the historical lexical behavior when history is absent or empty", async () => {
+    const fixture = WORKSPACE_QUALITY_CASES[0];
+    const original = await evaluateCase(fixture);
+    expect(await evaluateCase({ ...fixture, history: [] })).toEqual(original);
+  });
+
+  it("keeps the generated-file exclusion as a reachable healthy control", async () => {
+    const fixture = INCIDENT_RETRIEVAL_CASES.find(
+      (entry) => entry.id === "generated-and-node-modules-ignored",
+    );
+    const result = await evaluateCase(fixture);
+    expect(result.generatedLeakCount).toBe(0);
+    expect(result.topHit).toBe(true);
+    expect(result.lineHit).toBe(true);
   });
 });
