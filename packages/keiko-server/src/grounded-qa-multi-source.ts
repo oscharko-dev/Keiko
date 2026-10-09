@@ -68,7 +68,7 @@ import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { GROUNDED_SYSTEM_PROMPT, sentGroundedFileCount } from "./grounded-prompt.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
@@ -755,6 +755,8 @@ export function createMultiSourceAnswerer(
         : {
             promptContext: sentPromptContext(sent, promptTokens, profile),
             evidenceScopeIndex: buildInsufficiencyScopeIndex(sent.packs.map((entry) => entry.pack)),
+            sentEvidencePacks: sent.packs.map((entry) => entry.pack),
+            filesInPrompt: sentGroundedFileCount(sent.packs.map((entry) => entry.pack)),
           }),
     };
   };
@@ -1046,11 +1048,10 @@ function sourceCitationBundles(
   sources: readonly RetrievedSource[],
   redactor: Redactor,
   assistantContent: string,
+  sentPacks: readonly ConnectedContextPack[],
 ): readonly SourceCitationBundle[] {
-  const projected = buildSourcedAnswerCitations(
-    sources.map((source) => source.pack),
-    assistantContent,
-    (value) => redactString(redactor, value),
+  const projected = buildSourcedAnswerCitations(sentPacks, assistantContent, (value) =>
+    redactString(redactor, value),
   );
   return sources.map((source, index) => {
     const sourceId = citationSourceIdForIndex(index);
@@ -1163,7 +1164,12 @@ function assembleMultiSourceAnswer(
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
   const modelInvoked = !ids.abstained || ctx.answerOnlyContextAvailable === true;
-  const citationBundles = sourceCitationBundles(sources, redactor, assistant.content);
+  const citationBundles = sourceCitationBundles(
+    sources,
+    redactor,
+    assistant.content,
+    finalMultiSourceEvidence(assistant, sources),
+  );
   const citations = modelInvoked ? mergedCitations(citationBundles) : [];
   const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
@@ -1217,12 +1223,20 @@ function withMergedAssistantUsage(
 ): ReturnType<typeof mergeContextPackSummaries> {
   return {
     ...mergedSummary,
+    ...(assistant.filesInPrompt === undefined ? {} : { filesInPrompt: assistant.filesInPrompt }),
     usage: {
       ...mergedSummary.usage,
       modelInputTokens: mergedSummary.usage.modelInputTokens + assistant.usage.promptTokens,
       modelOutputTokens: mergedSummary.usage.modelOutputTokens + assistant.usage.completionTokens,
     },
   };
+}
+
+function finalMultiSourceEvidence(
+  assistant: GroundedAnswerResult,
+  sources: readonly RetrievedSource[],
+): readonly ConnectedContextPack[] {
+  return assistant.sentEvidencePacks ?? sources.map((source) => source.pack);
 }
 
 // Wire-projected reconciliation markers (unsupported-citation + incomplete-answer) for the
@@ -1236,7 +1250,7 @@ function buildMultiSourceReconciliationUncertainty(
   const nowMs = Date.now();
   const reconciliation = reconcileAndLogInlineCitations(
     assistant.content,
-    buildPackCitationIndex(sources.map((s) => s.pack)),
+    buildPackCitationIndex(finalMultiSourceEvidence(assistant, sources)),
     correlationId,
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
@@ -1282,7 +1296,7 @@ async function applyMultiSourceEntailment(
     assembled,
     stage,
     assistant.content,
-    retrieved.map((source) => source.pack),
+    finalMultiSourceEvidence(assistant, retrieved),
     ctx.deps.redactor,
   );
 }

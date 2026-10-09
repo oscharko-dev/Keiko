@@ -55,6 +55,7 @@ import {
   handleGroundedAsk,
   modelWindowAwareBudget,
   sizeExclusionLines,
+  withPromptExcerptByteLimit,
   type GroundedRunner,
   type HybridSeam,
 } from "./grounded-qa.js";
@@ -671,6 +672,61 @@ function asLocalKnowledge(answer: GroundedAnswer): LocalKnowledgeGroundedAnswer 
 // ─── Window fit: a folder path the prompt left out supports nothing ───────────
 
 describe("hybrid grounded ask — folder evidence the window fit left out", () => {
+  it.each([1, 5])(
+    "authenticates only a sent partial folder range (cited line %s)",
+    async (line) => {
+      const { capsuleId } = await seedReadyCapsule("Partial Folder Docs");
+      const original = folderPack("src/partial.ts", 0.9, "partial-window");
+      const content = "first line\nsecond line\nthird line\nfourth line\nfifth line";
+      const pack = {
+        ...original,
+        usage: { ...original.usage, excerptBytes: Buffer.byteLength(content) },
+        files: original.files.map((file) => ({
+          ...file,
+          excerpts: file.excerpts.map((excerpt) => ({
+            ...excerpt,
+            content,
+            contentBytes: Buffer.byteLength(content),
+          })),
+        })),
+      };
+      const sent = withPromptExcerptByteLimit(pack, 11);
+      expect(sent.files[0]?.excerpts[0]?.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+      const chatId = makeHybridChat(
+        [
+          {
+            kind: "files",
+            relativePaths: ["src/partial.ts"],
+            connectedAtMs: NOW,
+            root: tempRoot("partial-window"),
+          },
+        ],
+        [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+      );
+      const result = await handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId, content: "Explain the implementation" })),
+        hybridDeps(),
+        undefined,
+        undefined,
+        {
+          folderRetriever: folderRetrieverFor(new Map([["src/partial.ts", sent]])),
+          connectorRetrieve: singleConnectorRetrieve(capsuleId),
+          answer: (_system, user) => {
+            expect(user).toContain("first line");
+            expect(user).not.toContain("fifth line");
+            return Promise.resolve(`Implementation [src/partial.ts:${String(line)}].`);
+          },
+        },
+      );
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+        line === 5,
+      );
+      expect(answer.contextPack.folder.filesInPrompt).toBe(1);
+    },
+  );
+
   // PR #3678 review: path citations and their judgment used every retrieved folder excerpt, so a
   // `[path:line]` could cite an excerpt the fitted prompt never carried and raise no warning.
   it("reports a path citation to a folder excerpt the fitted prompt did not carry", async () => {
