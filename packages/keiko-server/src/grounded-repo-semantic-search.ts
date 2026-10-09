@@ -407,8 +407,7 @@ function liveFingerprintFile(
 
 async function readLiveFingerprintBytes(
   ctx: EmbeddingContext,
-  pod: ResolvedRepositoryPod,
-  scopePath: string,
+  file: LiveFingerprintFile,
   fingerprint: RepositoryFileFingerprint,
 ): Promise<Uint8Array | undefined> {
   const byteLength = fingerprintByteLength(fingerprint);
@@ -419,8 +418,7 @@ async function readLiveFingerprintBytes(
   )
     return undefined;
   try {
-    const file = liveFingerprintFile(ctx, pod, scopePath);
-    if (file?.before.size !== byteLength) return undefined;
+    if (file.before.size !== byteLength) return undefined;
     const bytes = await readSemanticFileBytes(ctx, file, byteLength + 1);
     return verifiedLiveBytes(ctx, file, bytes, byteLength);
   } catch {
@@ -468,8 +466,10 @@ async function podDocumentFreshness(
   if (fingerprint === undefined || fingerprintByteLength(fingerprint) === undefined)
     return "unavailable";
   const preflight = fingerprintPreflight(ctx, pod, document.scopePath, fingerprint);
-  if (preflight !== undefined) return preflight;
-  const bytes = await readLiveFingerprintBytes(ctx, pod, document.scopePath, fingerprint);
+  if (preflight.kind !== "ready") return preflight.kind;
+  // Reuse this validated snapshot. The descriptor reader and post-read pathname/metadata check
+  // still reject replacement; reconstructing the same preflight would add metadata I/O only.
+  const bytes = await readLiveFingerprintBytes(ctx, preflight.file, fingerprint);
   if (bytes === undefined || semanticOperationStopped(ctx)) return "unavailable";
   return repositoryContentFingerprint(bytes, fingerprint.fingerprintKind) ===
     fingerprint.contentFingerprint
@@ -477,12 +477,16 @@ async function podDocumentFreshness(
     : "stale";
 }
 
+type FingerprintPreflight =
+  | { readonly kind: "ready"; readonly file: LiveFingerprintFile }
+  | { readonly kind: "stale" | "unavailable" };
+
 function fingerprintPreflight(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   scopePath: string,
   fingerprint: RepositoryFileFingerprint,
-): "stale" | "unavailable" | undefined {
+): FingerprintPreflight {
   try {
     const file = liveFingerprintFile(ctx, pod, scopePath);
     if (
@@ -490,12 +494,12 @@ function fingerprintPreflight(
       semanticOperationStopped(ctx) ||
       !isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
     )
-      return "unavailable";
-    if (file.before.size !== fingerprint.byteLength) return "stale";
+      return { kind: "unavailable" };
+    if (file.before.size !== fingerprint.byteLength) return { kind: "stale" };
+    return { kind: "ready", file };
   } catch {
-    return "unavailable";
+    return { kind: "unavailable" };
   }
-  return undefined;
 }
 
 interface ClassifiedPodDocuments {

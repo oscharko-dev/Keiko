@@ -443,7 +443,7 @@ async function leaseFixture(): Promise<{
   };
 }
 
-async function realFingerprintFixture(): Promise<{
+async function realFingerprintFixture(fileCount = 8): Promise<{
   readonly root: string;
   readonly files: Record<string, string>;
   readonly deps: UiHandlerDeps;
@@ -452,7 +452,7 @@ async function realFingerprintFixture(): Promise<{
 }> {
   const root = mkdtempSync(join(tmpdir(), "keiko-semantic-cancellation-"));
   const files = Object.fromEntries(
-    Array.from({ length: 8 }, (_, index) => [
+    Array.from({ length: fileCount }, (_, index) => [
       `src/file-${String(index)}.ts`,
       `export const sessionRenewal${String(index)} = true;\n`,
     ]),
@@ -1269,6 +1269,40 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
       expect(await searchStaleFixture(fixture, provider)).toEqual([]);
       expect(fixture.embedding).toHaveBeenCalledTimes(1);
       expect(readFileBytes).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("reuses a validated freshness preflight with bounded pre/post-read metadata checks", async () => {
+    const fixture = await realFingerprintFixture(32);
+    const read = nodeWorkspaceFs.readFileBytes;
+    if (read === undefined) throw new TypeError("Expected the bounded node reader");
+    const readFileBytes = vi.fn(read);
+    const stat = vi.fn(nodeWorkspaceFs.stat);
+    const realPath = vi.fn(nodeWorkspaceFs.realPath);
+    try {
+      const provider = configuredRepoSemanticSearchProviderFor(fixture.deps, undefined, {
+        fs: { ...nodeWorkspaceFs, readFileBytes, stat, realPath },
+        repositoryPod: { store: fixture.pod.store, repositoryRoot: fixture.root },
+      });
+      if (provider === undefined) throw new TypeError("Expected the configured provider");
+      stat.mockClear();
+      realPath.mockClear();
+      const documents = Object.entries(fixture.files).map(([scopePath, text]) => ({
+        scopePath,
+        text,
+      }));
+      const result = await provider.search({ query: { ...QUERY, maxResults: 32 }, documents });
+      expect(result).toHaveLength(documents.length);
+      expect(readFileBytes).toHaveBeenCalledTimes(documents.length);
+      expect.soft(realPath.mock.calls.length).toBeLessThanOrEqual(128);
+      expect.soft(stat.mock.calls.length).toBeLessThanOrEqual(96);
+      for (const call of readFileBytes.mock.calls) {
+        expect(call[2]).toBe("reject");
+        expect(call[3].fileIdentity).toBeDefined();
+        expect(call[3].size).toBeGreaterThan(0);
+      }
     } finally {
       fixture.close();
     }
