@@ -20,7 +20,9 @@ export interface ConnectedEvidenceInspectionProps {
   readonly runIds: readonly string[];
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   readonly attachedCitationCount?: number | undefined;
-  readonly onReadPaths?: ((runId: string, paths: readonly string[]) => void) | undefined;
+  readonly onReadPaths?:
+    | ((runId: string, paths: readonly string[], selectedPaths: readonly string[]) => void)
+    | undefined;
 }
 
 export function reportEvidenceInspection(
@@ -54,6 +56,7 @@ function useManifestInspection(
   useEffect(() => {
     if (!open) return;
     let current = true;
+    const notifyRead = onRead.current;
     setState({ kind: "pending" });
     void fetchEvidenceManifest(runId)
       .then((response) => {
@@ -62,9 +65,10 @@ function useManifestInspection(
         if (response.manifest.run.runId !== runId || audit === undefined)
           throw new TypeError("INVALID_CONNECTED_EVIDENCE_MANIFEST");
         setState({ kind: "loaded", audit });
-        onRead.current?.(
+        notifyRead?.(
           runId,
           audit.files.map((file) => file.scopePath).filter(isRootRelativeFileIdentifier),
+          audit.scope.selectedPaths,
         );
         reportEvidenceInspection({
           reason: "file-table-opened",
