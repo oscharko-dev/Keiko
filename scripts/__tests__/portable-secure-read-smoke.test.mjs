@@ -14,7 +14,11 @@ import { URL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runBounded, smokePortableSecureRead } from "../portable-secure-read-smoke.mjs";
+import {
+  runBounded,
+  smokePortableSecureRead,
+  smokeSecureReadExecutable,
+} from "../portable-secure-read-smoke.mjs";
 import { PORTABLE_TARGETS, validatePortableStagingManifest } from "../portable-runtime.mjs";
 
 describe("portable secure-read bounded load runner", () => {
@@ -83,6 +87,18 @@ header.writeUInt16LE(1, 4);
 header.writeUInt16LE(safe ? 0 : 1, 6);
 header.writeUInt32LE(payload.length, 8);
 process.stdout.write(Buffer.concat([header, payload]));
+`;
+
+const ESCAPING_HELPER = `
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+${FAITHFUL_HELPER.replace(
+  'request.relativePath === "src/safe.txt"',
+  '(request.relativePath === "src/safe.txt" || request.relativePath === "../outside.txt")',
+).replace(
+  `Buffer.from(${JSON.stringify(SAFE_CONTENT)}, "utf8")`,
+  "readFileSync(resolve(request.root, request.relativePath))",
+)}
 `;
 
 const MALFORMED_HELPER = `
@@ -437,6 +453,17 @@ describe("portable secure-read smoke qualification", () => {
     const stageRoot = stageWithHelper(FAITHFUL_HELPER);
     await expect(smokePortableSecureRead(stageRoot, "windows-x64")).resolves.toBeUndefined();
   });
+
+  it.each(["linux", "darwin", "win32"])(
+    "rejects a helper that reads an accessible file outside its root on %s",
+    async (nodePlatform) => {
+      const stageRoot = stageWithHelper(ESCAPING_HELPER);
+      const executable = join(stageRoot, "payload", "Keiko", ...HELPER_RELATIVE_PATH.split("/"));
+      await expect(smokeSecureReadExecutable(executable, nodePlatform)).rejects.toThrow(
+        "portable-secure-read-smoke: workspace escape did not fail closed",
+      );
+    },
+  );
 
   it("resolves a schema 2 helper only from its bound Windows generation", async () => {
     const stageRoot = stageWithHelper(FAITHFUL_HELPER, { generationLayout: true });

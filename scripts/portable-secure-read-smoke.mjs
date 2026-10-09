@@ -100,14 +100,19 @@ function secureReadHelper(manifest) {
 
 export async function smokeSecureReadExecutable(executable, nodePlatform, load = false) {
   const fixture = await mkdtemp(join(tmpdir(), "keiko-portable-secure-read-"));
+  const root = join(fixture, "workspace");
   try {
-    await mkdir(join(fixture, "src"));
-    await writeFile(join(fixture, "src", "safe.txt"), "portable secure read\n");
-    const normal = await runDecoded(executable, request(fixture, "src/safe.txt"));
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "src", "safe.txt"), "portable secure read\n");
+    await writeFile(join(fixture, "outside.txt"), "outside workspace\n");
+    const normal = await runDecoded(executable, request(root, "src/safe.txt"));
     if (normal.status !== 0 || normal.content.toString("utf8") !== "portable secure read\n")
       fail("normal read failed");
-    if (nodePlatform === "win32") await smokeWindowsDeniedNames(executable, fixture);
-    if (load) await smokeLoad(executable, fixture, nodePlatform);
+    const escaped = await runDecoded(executable, request(root, "../outside.txt"));
+    if (escaped.status === 0 || escaped.content.length !== 0)
+      fail("workspace escape did not fail closed");
+    if (nodePlatform === "win32") await smokeWindowsDeniedNames(executable, root);
+    if (load) await smokeLoad(executable, root, nodePlatform);
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
