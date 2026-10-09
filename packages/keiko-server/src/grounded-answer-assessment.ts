@@ -5,7 +5,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
-import { logAnswerAssessment } from "./grounded-citation-log.js";
+import { logAnswerAssessment, type AnswerAssessmentIdentity } from "./grounded-citation-log.js";
 export { isGroundedAssessmentOnly } from "./grounded-faithfulness.js";
 
 /** Canonical assessment authority before source validation; the existing log stores sizes only. */
@@ -14,9 +14,14 @@ export function normalizeGroundedAnswerAssessment(
   policy: OwnAssessmentPolicy,
   correlationId: string | undefined,
   question = "",
+  identity?: AnswerAssessmentIdentity,
 ): GroundedAnswerResult {
   const { grounded, assessment, neutralized } = splitOwnAssessmentForPolicy(answer.content, policy);
-  logAnswerAssessment({ policy, sourceBacked: grounded, assessment, neutralized }, correlationId);
+  logAnswerAssessment(
+    { policy, sourceBacked: grounded, assessment, neutralized },
+    correlationId,
+    identity,
+  );
   const content = composeOwnAssessment(grounded, assessment, true);
   return {
     ...answer,
