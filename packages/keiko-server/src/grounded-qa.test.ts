@@ -1467,6 +1467,20 @@ describe("folder prompt share", () => {
 });
 
 describe("modelWindowAwareBudget", () => {
+  it.each([
+    [undefined, 1],
+    ["1", 1],
+    ["0", 0],
+    ["invalid", 0],
+  ] as const)("binds the real server follow-up deployment value %s", (value, expected) => {
+    expect(
+      modelWindowAwareBudget(
+        deps(undefined, { KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX: value }),
+        CHAT_MODEL,
+      ).followUpPassesMax,
+    ).toBe(expected);
+  });
+
   it("uses the configured model context profile instead of a fixed grounded prompt ceiling", () => {
     const longContextDeps = deps(
       undefined,
@@ -4269,7 +4283,7 @@ describe("handleGroundedAsk", () => {
       );
       expect(answerOnlyContextAvailable).toBe(true);
       expect(answer.uncertainty).toContainEqual({
-        kind: "uncited-answer",
+        kind: "uncited-memory-context",
         claim:
           "The answer received governed memory context outside retrieved evidence. Treat claims " +
           "derived from that memory as uncited and unverified.",
@@ -5381,6 +5395,77 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
 });
 
 describe("actual fitted repository evidence authority", () => {
+  it("publishes only the bounded second answer and persists its validated first declarations", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    mkdirSync(join(tmp, "lib"), { recursive: true });
+    writeFileSync(join(tmp, "src/Feature.ts"), "export function Feature() { return true; }\n");
+    writeFileSync(join(tmp, "lib/Companion.ts"), "42;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    const evidenceStore = createInMemoryEvidenceStore();
+    let calls = 0;
+    const model: ModelPort = {
+      call: (request) => {
+        calls += 1;
+        return fakeModel(
+          calls === 1
+            ? "I need more evidence.\nMissing evidence: [lib/Companion.ts]\nMissing evidence: [../PRIVATE_CANARY.ts]"
+            : "Companion is 42 [lib/Companion.ts:1].",
+          requests,
+        ).call(request);
+      },
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain src/Feature.ts" })),
+      deps(model, {}, { evidenceStore }),
+    );
+    expect(result.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(requests.every((request) => request.stream === false)).toBe(true);
+    expect(result.body).toMatchObject({ content: "Companion is 42 [lib/Companion.ts:1]." });
+    expect(JSON.stringify(result.body)).not.toContain("PRIVATE_CANARY");
+    expect(
+      store
+        .listMessages(chatId)
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.content),
+    ).toEqual(["Companion is 42 [lib/Companion.ts:1]."]);
+    const manifest = loadEvidence(evidenceStore, evidenceStore.list()[0] ?? "");
+    expect(manifest?.connectedContext?.followUp).toMatchObject({
+      passCount: 1,
+      outcome: "answered",
+      firstDeclarations: [{ scopePath: "lib/Companion.ts", state: "unread-in-scope" }],
+    });
+  });
+  it("rejects numeric-token splitting from the actual second grounded gateway answer", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    let calls = 0;
+    const model: ModelPort = {
+      call: (request) => {
+        calls += 1;
+        return fakeModel(
+          calls === 1 ? "The threshold is 1000." : "The threshold is 10 [src/validation.ts:1] 00.",
+          requests,
+        ).call(request);
+      },
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+      deps(model),
+    );
+    expect(calls).toBe(2);
+    expect(result.body).toMatchObject({ content: "The threshold is 1000.", citations: [] });
+    expect(result.body).not.toMatchObject({ citationBehaviour: "cites-after-repair" });
+  });
   it("abstains when a 970-token input ceiling fits away every source excerpt", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });

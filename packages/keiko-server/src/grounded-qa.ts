@@ -1,3 +1,4 @@
+import { connectedFollowUpConfiguration } from "./grounded-answer-activity.js";
 import { logGroundedPromptSelection } from "./chat-activity.js";
 import {
   citationBehaviourFor,
@@ -798,9 +799,13 @@ function contextProfileForGroundedModel(
 
 export function modelWindowAwareBudget(deps: UiHandlerDeps, modelId: string): ExplorationBudget {
   const profile = contextProfileForGroundedModel(deps, modelId);
-  if (profile === undefined) return DEFAULT_EXPLORATION_BUDGET;
+  const followUpPassesMax = connectedFollowUpConfiguration(
+    deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+  ).passesMax;
+  if (profile === undefined) return { ...DEFAULT_EXPLORATION_BUDGET, followUpPassesMax };
   return {
     ...DEFAULT_EXPLORATION_BUDGET,
+    followUpPassesMax,
     modelInputTokensMax: profile.effectiveInputBudget,
     modelOutputTokensMax: profile.reservedOutputTokens,
   };
@@ -1532,6 +1537,9 @@ function runDefaultGroundedExploration(
     budgetedInput.workspaceRoot,
   );
   return runGroundedExploration(budgetedInput, {
+    followUpConfigurationDisposition: connectedFollowUpConfiguration(
+      deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+    ).disposition,
     reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
     observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
     answerer: createGatewayAnswerer(
@@ -1933,6 +1941,7 @@ function persistGroundedAuditEvidence(
       workspaceRoot: workerCtx.scope.workspaceRoot,
       chatId: workerCtx.chat.id,
       sourceScopeFingerprint: groundedSourceScopeFingerprint(output.pack.scope),
+      followUp: output.followUp,
       plan: output.plan,
       pack: output.pack,
       citationCount,

@@ -138,6 +138,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     emitterPrefix: "grounded-entailment-stage",
     surface: "memory-knowledge",
   },
+  { owner: "keiko-server", emitterPrefix: "grounded-answer-activity", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "grounded-orchestrator", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "grounded-rerank-facade", surface: "memory-knowledge" },
   {

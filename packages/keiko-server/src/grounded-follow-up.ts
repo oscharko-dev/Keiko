@@ -1,4 +1,4 @@
-import type { GroundedInsufficiencyDeclaration } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { EvidenceConnectedContextFollowUp } from "@oscharko-dev/keiko-contracts/evidence";
 import type {
   ConnectedContextPack,
   ExplorationBudget,
@@ -10,20 +10,8 @@ import type {
   RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 
-export type FollowUpOutcome =
-  | "not-needed"
-  | "answered"
-  | "still-insufficient"
-  | "budget-refused"
-  | "elapsed-refused"
-  | "disabled";
-export interface FollowUpObservation {
-  readonly passCount: 0 | 1;
-  readonly admittedPathCount: number;
-  readonly trigger: "none" | "insufficiency-declared";
-  readonly outcome: FollowUpOutcome;
-  readonly firstDeclarations: readonly GroundedInsufficiencyDeclaration[];
-}
+export type FollowUpOutcome = EvidenceConnectedContextFollowUp["outcome"];
+export type FollowUpObservation = EvidenceConnectedContextFollowUp;
 export interface FollowUpResult {
   readonly answer: GroundedAnswerResult;
   readonly pack: ConnectedContextPack;
@@ -108,7 +96,11 @@ function followUpRefusal(
     return "elapsed-refused";
   if (paths.length === 0) return "not-needed";
   if (ctx.pack.budget.followUpPassesMax === 0) return "disabled";
-  const budget = remainingTurnBudget(ctx);
+  if (followUpBudgetExhausted(remainingTurnBudget(ctx))) return "budget-refused";
+  return undefined;
+}
+
+function followUpBudgetExhausted(budget: ExplorationBudget): boolean {
   if (
     budget.searchCallsMax <= 0 ||
     budget.filesReadMax === 0 ||
@@ -116,8 +108,8 @@ function followUpRefusal(
     budget.modelInputTokensMax <= 0 ||
     budget.modelOutputTokensMax <= 0
   )
-    return "budget-refused";
-  return undefined;
+    return true;
+  return false;
 }
 
 function followUpInput(ctx: FollowUpContext, paths: readonly string[]): OrchestratorInput {
@@ -171,7 +163,8 @@ async function executeFollowUp(
   const pack = combinedAuditPack(ctx.pack, retrieved.pack);
   if (admitted === 0) return { ...originalResult(ctx, "budget-refused"), pack };
   if (ctx.nowMs() >= ctx.deadlineAtMs) return { ...originalResult(ctx, "elapsed-refused"), pack };
-  const answered = await ctx.answer(input, retrieved);
+  const answered = await answerFollowUp(ctx, input, retrieved, pack, admitted);
+  if ("observation" in answered) return answered;
   if (answered.modelInvoked === false) return { ...originalResult(ctx, "budget-refused"), pack };
   return {
     pack,
@@ -190,6 +183,30 @@ async function executeFollowUp(
       firstDeclarations: ctx.initial.insufficiencyDeclarations ?? [],
     },
   };
+}
+
+async function answerFollowUp(
+  ctx: FollowUpContext,
+  input: OrchestratorInput,
+  retrieved: RetrievalOnlyOutput,
+  pack: ConnectedContextPack,
+  admitted: number,
+): Promise<GroundedAnswerResult | FollowUpResult> {
+  try {
+    return await ctx.answer(input, retrieved);
+  } catch (failure) {
+    if (ctx.deps.signal?.aborted === true) throw failure;
+    const retained = originalResult(
+      ctx,
+      ctx.nowMs() >= ctx.deadlineAtMs ? "elapsed-refused" : "budget-refused",
+      failure,
+    );
+    return {
+      ...retained,
+      pack,
+      observation: { ...retained.observation, passCount: 1, admittedPathCount: admitted },
+    };
+  }
 }
 
 export async function followUpGroundedAnswer(ctx: FollowUpContext): Promise<FollowUpResult> {
