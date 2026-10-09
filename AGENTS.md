@@ -449,6 +449,8 @@ system that exists, never beside it:
   remains separate from healthy unaddressed basename diversity; safe reranker failure frames and
   causes use the existing failure-class contract. Pack, prompt, wire, and log share the same
   high/low selection vocabulary and actual observed scope/semantic dispositions.
+  Workspace-index failures with no retained, indexed or reused records report live fallback;
+  actual cold or warm request work remains visible even when saving its snapshot fails.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
   Leading `./` reference spellings are canonicalized before strict path admission; parent and
@@ -456,7 +458,9 @@ system that exists, never beside it:
   Complete document path references are data when classifying relationship/history requests;
   directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
   factual lookup focuses discovery on canonically admitted named documents with a scope-bound
-  request context only when the planner has no independent non-path target. Its source/read/ring
+  request context only when every meaningful request clause stays bound to a named document.
+  Independent prose topics retain recursive discovery even without a strong planner target.
+  Its source/read/ring
   observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
   canonical web/text-document extension groups, alongside XML and bounded document extraction.
   Quoted targets use the same canonical reference identity. When every complete factual document
@@ -468,6 +472,8 @@ system that exists, never beside it:
   into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
   observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
   private status digest stay outside logs; observation cannot admit evidence or bypass a floor.
+  Directly connected deep Git subfolders check ancestor metadata until the filesystem root under
+  the original deadline and abort guard; this hint never expands the selected evidence root.
   Optional semantic live refresh reuses the original exploration governor and gateway spend ledger.
   Each new read reserves a file and its observed byte upper bound; each embedding attempt reserves
   a UTF-8 input-token upper bound before dispatch. Selection-details distinguishes actual read/call
@@ -481,7 +487,8 @@ system that exists, never beside it:
   behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,
   pass/admission counts, outcome, and configuration disposition.
   Pass count records a completed follow-up retrieval even when fitting refuses its synthesis;
-  admission count retains its actual physical target reads and never implies final sent membership.
+  admission count records targets retained by follow-up retrieval, independently of physical
+  read/byte accounting and final sent membership.
   Technical failures use the existing closed error header, body-free frames and causes;
   declaration paths remain outside logs.
   Connected synthesis buffers normalized output before publication so rejected declaration lines

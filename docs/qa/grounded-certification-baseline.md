@@ -117,6 +117,20 @@ diagnostics live.
 
 ## Connected-folder retrieval incident (#3881 / #3882)
 
+The owner's later ordinary-folder scale requirement is recorded in the
+[delivery plan](connected-chat-retrieval-plan.md). Pointed same-port observations at
+`70bbffe82f13b7b855c4ce62262cd3493797a786` over 100,000 synthetic non-Git files are preserved in
+[body-free evidence](evidence/3881/ordinary-folder-query-match-scale.json). Cold matching read
+100,000 bodies (73,365,218 bytes) in 39,172 ms; unchanged warm matching read zero bodies in
+17,026 ms. One changed target required one fresh scan read in 17,047 ms; a novel query required
+100,000 scan reads in 35,043 ms. Every unrestricted mode freshly enumerated all 100,000 files,
+but retained only the unchanged 200-hit cap and therefore reported `match-cap` incomplete coverage.
+Separate real evidence reads verified the original or changed synthetic fact. Public known-fit
+observation and final excerpts remain live; these counts do not imply a zero-read grounded answer.
+The two 50 ms deadline/cancel controls retained truthful incomplete reasons and settled all readers
+and iterators. These are single-sample workspace observations, not a latency floor, complete model
+qualification, or a substitute for the unchanged certification gates below.
+
 The incident cases extend the existing retrieval gates without changing their floors. Historical
 workspace cases still exercise `searchText` with the sanctioned `memFs` adapter. Incident cases
 materialize the inline synthetic repository and exercise the production conversation-continuity

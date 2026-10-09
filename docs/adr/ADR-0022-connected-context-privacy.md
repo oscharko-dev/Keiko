@@ -65,7 +65,9 @@ is included before prompt fitting. Assessment text never authenticates source ci
 file declarations or entailment, and operator-disabled blocks are dropped. Source-only marker
 repair preserves the assessment verbatim. General requests with no runnable retrieval anchors may
 use the validated empty assembler under the same original token, spend, time and two-physical-
-attempt envelope; they do not invent repository facts or bypass scope validation. Existing
+attempt envelope; they do not invent repository facts or bypass scope validation. An assessment-only
+second pass does not resolve a source insufficiency, even when the declared file was sent; the
+substantive uncited source-answer case retains its separate successful retrieval outcome. Existing
 `search.answer.assessed` events distinguish early `candidate` from `accepted-final` observations
 and bind final source-warning decisions to canonical scope/query digests. Unknown or candidate
 observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
@@ -242,8 +244,25 @@ still honor an explicit caller deadline or cancellation. Directory entries strea
 source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
 summaries survive the scan. These shared defaults also apply to manual Editor find-in-files, replace
 preview and symbol lookup, coding context lookups, and grounded symbol trace; explicit finite callers retain their
-bounds. An unlimited default lookup uses the live traversal rather than treating a finite workspace
-index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
+bounds. An unlimited default lookup uses fresh live traversal rather than treating a finite workspace
+index as complete coverage. It may reuse completed matching metadata from that same bounded index
+after fresh canonical-path, hard-link, file-identity and high-resolution modification/change-time
+validation. Each file retains at most one full-query-identity record containing physical line ranges,
+scores and definition status; bodies and previews are absent. The full identity reuses the diagnostic
+fingerprint producer and includes matching interpretation, effective result/line limits and policy
+intent. Snapshot identity additionally binds scope, ignore/candidate policy, byte grant and algorithm
+version. Partial, cancelled, timed-out, corrupt or incompatible records require live matching.
+Sixteen lazily loaded query shards retain the existing encrypted store's snapshot and entry bounds,
+an 8 KiB record bound and a 64 MiB aggregate request-record bound. They are partial acceleration
+metadata, never discovery authority. Capacity refusals remain visible as dropped records; retained
+and reused counts describe actual guarded index records, independently of source coverage counts.
+An active request may evict unseen advisory records even when capacity refused every new record.
+This releases bounded reuse capacity without claiming source-file deletion or complete enumeration;
+the next uncached lookup still requires live matching under the existing guards.
+Positive evidence excerpts are still freshly read. Active known-fit observers, semantic/document
+inspection and Editor lanes retain their live content behavior; an observer may release this need
+only after it irrevocably stops. Thus a warm workspace search with no body reads does not imply that
+a grounded answer performs no known-fit or evidence reads. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary-folder recursive content searches do not inherit Git-oriented generated-directory
 exclusions merely from names such as `build` or `dist`. Query-named ordinary-folder documents use
 that same eligibility distinction; repository generated code remains excluded before unconditional
@@ -267,12 +286,21 @@ facts. They do not substitute another same-basename file or enumerate its conten
 source target or a requested relationship retains its existing retrieval flow.
 Existing correlated admission, skipped-ring, read and budget observations describe this path;
 non-Git folders cannot dispatch the Git-history ring, even when history was requested.
-An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
+An intentional index bypass is reported as `live-scan`, with its own count of completed
 text-search calls. It is not an index failure or evidence of index reuse. If no indexed result,
 snapshot load, or snapshot save was observed, both completion projections report the provider as
-`not-evaluated`, even when an index was injected. Actual finite indexed searches retain their
-cold, warm, reconciliation, and load/save-failure observations; the finite workspace-index tests
-own those guarantees. The bypass counter counts logical searches, not physical directory walks.
+`not-evaluated`, even when an index was injected. Both finite searches and compatible unlimited
+matching reuse retain their actual cold, warm, reconciliation and load/save-failure observations.
+Index failures preserve live source retrieval and its coverage; the observed adapter still records
+the failure. A failed load or save with zero retained, indexed and reused records reports
+`live-fallback`; a save failure after actual index work preserves its observed cold or warm mode.
+The bypass counter counts logical searches, not physical directory walks. Request
+abort/deadline controls race delayed index operations and fence every later snapshot chunk, write,
+sync and publication step. Owned descriptor closure and temporary-file cleanup remain permitted.
+Both server wrappers forward the request-active guard alongside the existing generation fence;
+late operations cannot publish or populate a reusable cache after request cancellation. Reported
+elapsed time includes finalization, and a deadline consumed there remains visible as incomplete
+coverage rather than disappearing from the request's time accounting.
 Raw directory entries must also satisfy the shared portable scope-path contract before resolution;
 unsupported names are never normalized into a different file or traversed. Unlike a sensitive-path
 policy denial, this exclusion means the requested tree could not be fully examined. Search reports
@@ -447,6 +475,9 @@ body-free frames, and causes. Normalized synthesis output is buffered before pub
 unknown, or excess declaration lines are removed before client delivery and history persistence.
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+An explicitly empty sent-pack inventory grants no source support; only absent legacy metadata may
+fall back to assembled evidence. Zero sent files retain physical read usage without producing a
+grounded source manifest.
 After governed memory attachment, final publication records optional memory observations on the
 existing `chat.response.message` operation: the actual structured
 `uncitedMemoryContextMarkerCount` and closed `memoryContextDisposition`
@@ -461,10 +492,13 @@ the actual sent pack must retain each admitted target before a second gateway di
 fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
 against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
 Follow-up pass count observes a completed retrieval pass even if its additional synthesis is refused;
-admitted-path count records physical target reads, separately from final sent membership.
+admitted-path count records targets retained by follow-up retrieval, independently of physical
+read/byte accounting and final sent membership.
 A file already physically read does not acquire another read through an unread-in-prompt declaration.
-The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
-from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
+The existing allocator's high/exceeded context pressure refuses follow-up; refusal, clarification,
+or assessment-only content from a second answer remains still-insufficient. Permitted learned
+knowledge may still be returned, but it cannot claim that the unresolved source question was answered.
+A substantive second source answer can resolve retrieval
 while retaining an honest uncited warning, and never obtains a third synthesis slot. Gateway and context-window retries consume the same physical attempt slots. Separately
 bounded entailment verification cannot grant another synthesis attempt.
 `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` is default-enabled with one follow-up pass: absent means `1`,
@@ -472,8 +506,9 @@ explicit `1` enables, explicit `0` disables, and every other explicit value fail
 passes with a body-free invalid configuration observation (ADR-0180).
 Working-tree recency uses one scope-bound request-local snapshot from the existing observed Git
 runner, capped at 64 admitted paths and a shared 1.5-second ceiling further bounded by the remaining
-request deadline. A directly connected repository subfolder uses a bounded ancestor metadata check
-only as the Git-discovery hint; hardened Git membership still executes in that selected cwd, and
+request deadline. A directly connected repository subfolder checks ancestor metadata through the
+filesystem root under the original request deadline and abort guard, without an arbitrary depth
+cutoff. This remains only the Git-discovery hint; hardened Git membership executes in that selected cwd, and
 the selected evidence root never expands to the repository parent. Ordinary folders spawn no process;
 exhausted grants and elapsed deadlines refuse
 observation. Allowed paths feed the existing recent-path search policy and a small targeted/diagnostic
@@ -494,7 +529,12 @@ Language source inspection is an explicit trusted grounded-caller hint, rather t
 reinterpretation inside shared lexical search. Coding tool and context-provider lexical requests
 retain content-match semantics and cannot receive synthetic nonmatching inspection windows.
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
-filename batches; they do not schedule unrelated graph or history traversal. Explicit relationship,
+filename batches; they do not schedule unrelated graph or history traversal. Ordinary-folder
+named-document focus additionally requires every meaningful request clause to stay bound to a named
+document. The canonical anchor producer removes presentation-only clauses; an independent prose
+topic, even without a quoted or typed identifier, retains recursive discovery. A rejected named
+document cannot stop discovery for that independent topic. Sole named-document requests retain
+focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
@@ -618,6 +658,12 @@ seconds; it never mutates the persisted pod. Selection-details records actual em
 attempt counts separately from byte/input-token upper reservations. Refreshed-file counts include
 only usable files retained in the assembled pack; stale retained files receive the canonical
 `stale-evidence` marker with a `stale-semantic:` count-only claim and keep current lexical evidence.
+Mixed fresh and stale candidates reuse a successful query vector only within the current request,
+with the same adapter, query, and validated pod embedding identity. The existing scoped query cache
+and identity preflight remain authoritative; a copied request-private observation cannot mutate
+their cached vectors. Live document refresh still requires its own read, token, deadline, and spend
+admission. Reused query work is not charged as another embedding attempt, and query vectors are
+never persisted or logged.
 Addressed-file demotion is recorded separately from legitimate unaddressed basename diversity;
 an unaddressed collision cannot by itself diagnose a missed explicit target.
 The active-intent absolute floor derives from the scoring weight table: ninety percent of a

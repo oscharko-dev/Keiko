@@ -5440,6 +5440,50 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
 });
 
 describe("actual fitted repository evidence authority", () => {
+  it("does not substitute assembled evidence for an explicitly empty sent inventory", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const execute = groundedOrchestrator.runGroundedExploration;
+    const spy = vi
+      .spyOn(groundedOrchestrator, "runGroundedExploration")
+      .mockImplementation((input, ports) =>
+        execute(input, {
+          ...ports,
+          answerer: {
+            answer: (_question, pack) => {
+              expect(pack.files.some((file) => file.scopePath === "src/validation.ts")).toBe(true);
+              return Promise.resolve({
+                content: "Threshold is 1000 [src/validation.ts:1].",
+                usage: { promptTokens: 1, completionTokens: 1 },
+                modelInvoked: true,
+                sentEvidencePacks: [],
+              });
+            },
+          },
+        }),
+      );
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+        deps(fakeModel("unused", [])),
+      );
+      expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.contextPack.filesInPrompt).toBe(0);
+      expect(answer.contextPack.usage.filesRead).toBeGreaterThan(0);
+      expect(answer.citations).toHaveLength(0);
+      expect(answer.evidenceRunId).toBeUndefined();
+      expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+        true,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it("keeps a newly declared follow-up source in the actual second prompt under cumulative tokens", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });
@@ -5682,11 +5726,15 @@ describe("actual fitted repository evidence authority", () => {
           { call },
           {},
           {
-            config: customModelConfig(CHAT_MODEL, {
-              contextWindow: 4096,
-              maxInputTokens: 970,
-              maxOutputTokens: 1024,
-            }),
+            config: {
+              ...customModelConfig(CHAT_MODEL, {
+                contextWindow: 4096,
+                maxInputTokens: 970,
+                maxOutputTokens: 1024,
+              }),
+              // This retained pin owns source-only abstention; learned knowledge has its own proofs.
+              groundedAnswers: { ownAssessment: "disabled" },
+            },
             evidenceStore: createInMemoryEvidenceStore(),
           },
         ),

@@ -46,8 +46,10 @@ import {
   compileGlob,
   type CompiledFilenameGlob,
   fingerprintFor,
+  queryIdentityFor,
   type LiteralQueryInterpretation,
 } from "./repoSearchMatchers.js";
+import { StreamingWorkspaceIndex } from "./workspaceIndexStreaming.js";
 import {
   cachedLexicalRecordRequiresLiveMatch,
   prepareCachedLexicalQuery,
@@ -601,6 +603,7 @@ function buildSearchTextRunner(
 ): SearchTextRunner {
   const semanticBounds =
     limits.maxFilesScanned === null ? DEFAULT_STREAMED_SEMANTIC_BOUNDS : undefined;
+  const policy = resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints);
   return {
     scope,
     limits: {
@@ -617,7 +620,11 @@ function buildSearchTextRunner(
       ? {}
       : { literalTerms: deps.queryInterpretation.terms }),
     fingerprint: fingerprintFor(query, deps.queryInterpretation),
-    policy: resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints),
+    queryIdentitySha256: queryIdentityFor(query, deps.queryInterpretation, {
+      effectiveMaxMatchesReturned: Math.min(limits.maxMatchesReturned, query.maxResults),
+      policyIntent: policy.intent,
+    }),
+    policy,
     query,
     ...sourceInspectionCandidateSelection(query, deps),
     contentLane: deps.contentLane ?? "evidence",
@@ -2680,7 +2687,7 @@ async function executeSearchText(
   deps: FacadeDeps,
   runner: SearchTextRunner,
 ): Promise<SearchResult> {
-  if (runner.limits.maxFilesScanned === null) return executeStreamedSearchText(runner);
+  if (runner.limits.maxFilesScanned === null) return executeIndexedStreamedSearchText(runner, deps);
   const workspaceIndexSession =
     deps.workspaceIndex === undefined || !workspaceIndexCompatibleRun(runner)
       ? undefined
@@ -2693,6 +2700,54 @@ async function executeSearchText(
           deps.candidateSetFor,
         );
   return executeSearchTextWithSession(scope, query, limits, deps, runner, workspaceIndexSession);
+}
+
+async function executeIndexedStreamedSearchText(
+  runner: SearchTextRunner,
+  deps: FacadeDeps,
+): Promise<SearchResult> {
+  if (
+    deps.workspaceIndex === undefined ||
+    runner.contentLane !== "evidence" ||
+    runner.sourceInspection === true ||
+    runner.semantic !== undefined ||
+    runner.candidateContentFor !== undefined ||
+    runner.queryIdentitySha256 === undefined
+  )
+    return executeStreamedSearchText(runner);
+  const session = new StreamingWorkspaceIndex(
+    deps.workspaceIndex,
+    runner,
+    runner.queryIdentitySha256,
+    runnerExecutionControl(runner),
+  );
+  const result = await executeStreamedSearchText({ ...runner, streamingWorkspaceIndex: session });
+  await session.finalize();
+  return finalizedStreamedIndexResult(runner, result, session.report());
+}
+
+function finalizedStreamedIndexResult(
+  runner: SearchTextRunner,
+  result: SearchResult,
+  report: WorkspaceIndexPreparationReport,
+): SearchResult {
+  const elapsedMs = elapsed(runner);
+  const reason = runnerStopReason(runner);
+  const reasons = new Set(result.coverage.reasons);
+  if (reason !== undefined) reasons.add(reason);
+  return {
+    ...result,
+    elapsedMs,
+    truncated: result.truncated || reason !== undefined,
+    coverage: {
+      ...result.coverage,
+      elapsedMs,
+      incomplete: result.coverage.incomplete || reason !== undefined,
+      truncated: result.coverage.truncated || reason !== undefined,
+      reasons: coverageReasons(reasons),
+    },
+    workspaceIndex: report,
+  };
 }
 
 interface SerializedWorkspaceIndexSession {

@@ -10,7 +10,12 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 import { isGeneratedRankingPath } from "../ranking/signals.js";
-import { extractAnchors, type AnchorExtractionResult, type SearchAnchor } from "./anchors.js";
+import {
+  extractAnchors,
+  normalizeUnquotedFilePathToken,
+  type AnchorExtractionResult,
+  type SearchAnchor,
+} from "./anchors.js";
 
 export interface SearchReference {
   readonly path: string;
@@ -43,8 +48,10 @@ function filenameReference(path: string): boolean {
 }
 
 function parsePathReference(term: string): SearchReference {
-  const located = /^(.*?):(\d{1,9})(?::\d{1,9})?$/.exec(term);
+  const located = /^(.*?):(\d{1,9})(?::\d{1,9}|-(\d{1,9}))?$/.exec(term);
   const line = Number(located?.[2]);
+  const end = located?.[3] === undefined ? line : Number(located[3]);
+  if (end < line || end < 1) return { path: term, origin: "query" };
   return {
     path: located?.[1] ?? term,
     ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}),
@@ -62,6 +69,10 @@ function referenceAnchor(anchor: SearchAnchor): boolean {
 
 function bracketReferenceTerm(raw: string): string {
   const token = raw.endsWith(".") ? raw.slice(0, -1) : raw;
+  if (token.startsWith("[") && token.endsWith("]")) {
+    const inner = token.slice(1, -1);
+    if (filenameReference(parsePathReference(inner).path)) return inner;
+  }
   return token.startsWith("(") && token.endsWith(")") ? token.slice(1, -1) : token;
 }
 
@@ -74,11 +85,13 @@ function bracketPath(term: string): boolean {
 function bracketReferenceAnchorText(text: string): string {
   return text.replace(REFERENCE_TOKEN_RE, (raw: string, offset: number) => {
     const term = bracketReferenceTerm(raw);
-    if (!bracketPath(term)) return raw;
+    const located = parsePathReference(term);
+    const locatedPath = located.line !== undefined && filenameReference(located.path);
+    if (!bracketPath(term) && !locatedPath) return raw;
     const quote = text.charAt(offset - 1);
-    return PATH_QUOTE_CHARACTERS.has(quote) && quote === text.charAt(offset + raw.length)
-      ? raw
-      : `\`${term}\``;
+    if (PATH_QUOTE_CHARACTERS.has(quote) && quote === text.charAt(offset + raw.length)) return raw;
+    const canonical = locatedPath ? `${located.path}:${String(located.line)}` : term;
+    return `\`${normalizeUnquotedFilePathToken(canonical)}\``;
   });
 }
 

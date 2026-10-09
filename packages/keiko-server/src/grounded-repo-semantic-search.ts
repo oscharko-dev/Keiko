@@ -60,6 +60,9 @@ const SEMANTIC_CANDIDATE_RESULT_MULTIPLIER = 4;
 const POD_FRESHNESS_MAX_BYTES = 64 * 1024 * 1024;
 const SEMANTIC_REFRESH_FILE_CAP = 8;
 const SEMANTIC_REFRESH_FRAGMENT_BYTES = 16_384;
+type QueryEmbeddingObserver = NonNullable<
+  Parameters<typeof searchVectorsForScope>[4]["observeQueryEmbedding"]
+>;
 
 export interface RepositorySemanticFreshnessObservation {
   // Request-private paths, never activity-log fields. The orchestrator projects counts only.
@@ -641,6 +644,7 @@ async function repositoryPodHits(
   queryTerms: readonly string[],
   signal: AbortSignal | undefined,
   maxResults: number,
+  observeQueryEmbedding?: QueryEmbeddingObserver,
 ): Promise<RepositoryPodHitOutcome> {
   const chunkFilter = candidateChunkIds(pod, documents);
   if (chunkFilter.length === 0) return { matches: [] };
@@ -659,6 +663,7 @@ async function repositoryPodHits(
       chunkFilter,
       ...(signal === undefined ? {} : { signal }),
       ...(pod.context.vectorIndex === undefined ? {} : { vectorIndex: pod.context.vectorIndex }),
+      ...(observeQueryEmbedding === undefined ? {} : { observeQueryEmbedding }),
     },
   );
   ctx.observePodRetrieval?.({
@@ -744,7 +749,9 @@ async function podRankedHits(
   pod: ResolvedRepositoryPod,
   prepared: PreparedSemanticSearch,
   freshDocuments: readonly CandidateDocument[],
+  observeQueryEmbedding?: QueryEmbeddingObserver,
 ): Promise<readonly SemanticSearchMatch[]> {
+  if (freshDocuments.length === 0) return [];
   const { documents, maxResults, queryTerms, queryText, signal } = prepared;
   const podOutcome = await repositoryPodHits(
     ctx,
@@ -754,6 +761,7 @@ async function podRankedHits(
     queryTerms,
     signal,
     maxResults,
+    observeQueryEmbedding,
   );
   return rankHits(podOutcome.matches, documents, maxResults);
 }
@@ -771,14 +779,20 @@ async function semanticSearch(
     refreshUsage: { embeddingCallCount: 0, readFileCount: 0, readBytes: 0, inputTokens: 0 },
   };
   const classified = await freshPodDocuments(active, active.repositoryPod, documents);
+  const queryCapture = reusableSemanticQuery(active, prepared, classified.stale.length);
   const refreshed: SemanticSearchMatch[] = [];
   try {
     if (semanticOperationStopped(active, signal)) return [];
-    const hits =
-      classified.fresh.length === 0
-        ? []
-        : await podRankedHits(active, active.repositoryPod, prepared, classified.fresh);
-    refreshed.push(...(await refreshedSemanticHits(active, prepared, classified.stale)));
+    const hits = await podRankedHits(
+      active,
+      active.repositoryPod,
+      prepared,
+      classified.fresh,
+      queryCapture?.observe,
+    );
+    refreshed.push(
+      ...(await refreshedSemanticHits(active, prepared, classified.stale, queryCapture?.vector())),
+    );
     if (classified.fresh.length === 0) observePodDegradation(ctx, "pod-no-fresh-candidates");
     return rankHits([...hits, ...refreshed], documents, prepared.maxResults);
   } catch {
@@ -794,6 +808,34 @@ async function semanticSearch(
         : { refreshUsage: { ...active.refreshUsage } }),
     });
   }
+}
+
+function reusableSemanticQuery(
+  ctx: EmbeddingContext,
+  prepared: PreparedSemanticSearch,
+  staleCount: number,
+):
+  | { readonly observe: QueryEmbeddingObserver; readonly vector: () => Float32Array | undefined }
+  | undefined {
+  if (!refreshAllowed(ctx, prepared, staleCount, refreshFileLimit(ctx), refreshDeadline(ctx)))
+    return undefined;
+  const expected = ctx.repositoryPod.capsule.embeddingModelIdentity;
+  let captured: Float32Array | undefined;
+  return {
+    vector: (): Float32Array | undefined => captured,
+    observe: (observation): void => {
+      if (
+        semanticOperationStopped(ctx, prepared.signal) ||
+        observation.query !== prepared.queryText ||
+        observation.identity.modelId !== expected.modelId ||
+        !assertCompatibleEmbeddingIdentity(expected, observation.identity).ok ||
+        observation.vector.length !== expected.vectorDimensions ||
+        !observation.vector.every(Number.isFinite)
+      )
+        return;
+      captured = Float32Array.from(observation.vector);
+    },
+  };
 }
 
 function refreshFileLimit(ctx: SemanticRefreshOptions): number {
@@ -991,6 +1033,7 @@ async function refreshedSemanticHits(
   ctx: EmbeddingContext,
   prepared: PreparedSemanticSearch,
   stale: readonly CandidateDocument[],
+  queryVector?: Float32Array,
 ): Promise<readonly SemanticSearchMatch[]> {
   const limit = refreshFileLimit(ctx);
   const deadlineAtMs = refreshDeadline(ctx);
@@ -998,12 +1041,14 @@ async function refreshedSemanticHits(
   const hits: SemanticSearchMatch[] = [];
   try {
     const identity = ctx.repositoryPod.capsule.embeddingModelIdentity;
-    const query = await refreshEmbedding(
-      ctx,
-      shapeEmbeddingQuery(identity, prepared.queryText),
-      prepared.signal,
-      deadlineAtMs,
-    );
+    const query =
+      queryVector ??
+      (await refreshEmbedding(
+        ctx,
+        shapeEmbeddingQuery(identity, prepared.queryText),
+        prepared.signal,
+        deadlineAtMs,
+      ));
     if (query === undefined) return [];
     for (const document of stale.slice(0, limit)) {
       if (refreshStopped(ctx, prepared.signal, deadlineAtMs)) break;

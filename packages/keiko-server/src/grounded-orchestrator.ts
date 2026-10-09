@@ -46,7 +46,10 @@ import type {
   GroundedCitationBehaviour,
   GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { validateSingleAnswerEvidence } from "./grounded-answer-evidence.js";
+import {
+  singleSentEvidencePack,
+  validateSingleAnswerEvidence,
+} from "./grounded-answer-evidence.js";
 import {
   rerankGroundedCandidates,
   type PreselectionRerankerResult,
@@ -1188,8 +1191,8 @@ export interface OrchestratorDeps {
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
   // ContextBudget to pack.diagnostics.contextBudget? — an additive field no prompt builder reads.
   readonly contextProfile?: ContextProfile | undefined;
-  // Issue #1736 — optional production index provider for compatible finite searches. Uncapped
-  // searches deliberately use live traversal without consulting this finite index.
+  // Issue #1736 — optional production index provider. Uncapped searches keep live discovery
+  // authoritative while completed query matches may reuse the existing bounded index.
   readonly workspaceIndexForRoot?:
     ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
@@ -1515,6 +1518,13 @@ function unindexedWorkspaceSearchMode(
   return counters.bypassedSearchCount > 0 ? "live-scan" : "unused";
 }
 
+function failedUnusedWorkspaceIndex(counters: MutableWorkspaceIndexActivityCounters): boolean {
+  return (
+    counters.loadFailures + counters.saveFailures > 0 &&
+    counters.retainedEntries + counters.indexedRecords + counters.reusedRecords === 0
+  );
+}
+
 function workspaceIndexSearchMode(
   providerStatus: WorkspaceIndexProviderStatus,
   counters: MutableWorkspaceIndexActivityCounters,
@@ -1522,6 +1532,7 @@ function workspaceIndexSearchMode(
   if (providerStatus === "not-evaluated") return "not-evaluated";
   if (counters.searchCount === 0) return "unused";
   if (counters.reportCount === 0) return unindexedWorkspaceSearchMode(counters);
+  if (failedUnusedWorkspaceIndex(counters)) return "live-fallback";
   const reconciled = counters.staleRecords + counters.deletedEntries + counters.droppedRecords > 0;
   const persistent = workspaceIndexPersistenceSucceeded(providerStatus, counters);
   if (reconciled) return persistent ? "persistent-reconciled" : "request-local-reconciled";
@@ -1568,10 +1579,10 @@ function observedWorkspaceIndex(
   counters: MutableWorkspaceIndexActivityCounters,
 ): WorkspaceIndex {
   return {
-    loadSnapshot: async (scopeKey): ReturnType<WorkspaceIndex["loadSnapshot"]> => {
+    loadSnapshot: async (scopeKey, isActive): ReturnType<WorkspaceIndex["loadSnapshot"]> => {
       counters.loadAttempts += 1;
       try {
-        const snapshot = await source.loadSnapshot(scopeKey);
+        const snapshot = await source.loadSnapshot(scopeKey, isActive);
         if (snapshot === undefined) counters.loadMisses += 1;
         else counters.loadHits += 1;
         return snapshot;
@@ -1580,10 +1591,10 @@ function observedWorkspaceIndex(
         throw error;
       }
     },
-    saveSnapshot: async (scopeKey, snapshot): Promise<void> => {
+    saveSnapshot: async (scopeKey, snapshot, isActive): Promise<void> => {
       counters.saveAttempts += 1;
       try {
-        await source.saveSnapshot(scopeKey, snapshot);
+        await source.saveSnapshot(scopeKey, snapshot, isActive);
         counters.saveSuccesses += 1;
       } catch (error) {
         counters.saveFailures += 1;
@@ -7602,6 +7613,7 @@ interface ConnectedContextExecution {
 }
 
 interface ConnectedContextActivity {
+  readonly sink?: ServerLogSink;
   readonly symbolReadFailure: SymbolReadFailureObserver;
   readonly metadataUnavailable: MetadataFailureObserver;
   readonly clarification: (plan: ExplorationPlan) => void;
@@ -8651,8 +8663,9 @@ function createConnectedContextActivity(
   nowMs: () => number,
   logicalStartMs: number,
 ): ConnectedContextActivity {
+  const sink = deps.activityLog ?? processServerLogSink();
   const logger = createServerLogger({
-    sink: deps.activityLog ?? processServerLogSink(),
+    sink,
     level: "debug",
   });
   const correlationId = correlationIdOrUnknown(deps.correlationId);
@@ -8660,6 +8673,7 @@ function createConnectedContextActivity(
   const logElapsed = startLogTimer();
   let metadataUnavailableInspectionCount = 0;
   return {
+    sink,
     symbolReadFailure: createSymbolReadFailureObserver(logger, correlationId),
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
@@ -8791,6 +8805,36 @@ function connectedContextSearchInputs(
   };
 }
 
+/** Each meaningful request clause must still bind a named document; weak topics are real targets. */
+function onlyNamedDocumentRequestClauses(
+  question: string,
+  references: readonly SearchReference[],
+): boolean {
+  const shape = references.reduce(
+    (remaining, reference) => remaining.replaceAll(reference.path.toLowerCase(), "\0"),
+    question.toLowerCase(),
+  );
+  const clauses = shape.split(/[.!?;\n&]|\b(?:and|und|sowie|then|dann)\b/iu);
+  return (
+    clauses.some((clause) => clause.includes("\0")) &&
+    clauses.every(
+      (clause) =>
+        clause.includes("\0") ||
+        extractAnchors({ text: clause, maxAnchors: 1 }).anchors.length === 0,
+    )
+  );
+}
+
+function eligibleFocusedDocumentReferences(references: readonly SearchReference[]): boolean {
+  return (
+    references.length > 0 &&
+    references.every(
+      (reference) =>
+        reference.path.includes("/") && isOrdinaryFolderDocumentPath(reference.path, false),
+    )
+  );
+}
+
 function isFocusedDocumentQuery(
   input: OrchestratorInput,
   context: LiveRetrievalContext,
@@ -8802,11 +8846,8 @@ function isFocusedDocumentQuery(
     input.query.kind === "natural-language" &&
     !requiresRelationshipOrHistoryRings(input.query) &&
     plan.targetDecision?.definitionRequested === false &&
-    references.length > 0 &&
-    references.every(
-      (reference) =>
-        reference.path.includes("/") && isOrdinaryFolderDocumentPath(reference.path, false),
-    ) &&
+    eligibleFocusedDocumentReferences(references) &&
+    onlyNamedDocumentRequestClauses(input.query.text, references) &&
     plan.targetDecision.targets.every((target) =>
       references.some((reference) => reference.path.toLowerCase() === target.term),
     )
@@ -9361,15 +9402,16 @@ function explorationDeadlineAtMs(startedAtMs: number, budget: ExplorationBudget)
 
 // Metadata only: the existing hardened Git membership resolver still validates ownership in the
 // selected cwd. Finding an ancestor marker never changes the selected evidence root or scope.
+// The original metadata deadline/abort guard bounds each probe; filesystem-root termination keeps
+// legitimate deeply nested selections discoverable without an arbitrary ancestor-depth cutoff.
 function hasConnectedGitMetadata(root: string, fs: WorkspaceFs): boolean {
   let current = root;
-  for (let depth = 0; depth < 32; depth += 1) {
+  for (;;) {
     if (fs.exists(resolve(current, ".git"))) return true;
     const parent = parentDirectory(current);
     if (parent === current) return false;
     current = parent;
   }
-  return false;
 }
 
 function prepareLiveRetrievalContext(
@@ -10145,7 +10187,7 @@ async function refinedGroundedAnswer(
   if (initial.answerKind === "insufficiency")
     citationCoverageMarkerFor(
       initial.content,
-      initial.sentEvidencePacks?.[0] ?? pack,
+      singleSentEvidencePack(initial, pack),
       nowMs(),
       deps.correlationId,
       citationObservation(input, initial),
@@ -10255,7 +10297,7 @@ async function refinementMarkers(
   nowMs: () => number,
 ): Promise<readonly UncertaintyMarker[]> {
   const answer = repair.answer;
-  const sentPack = answer.sentEvidencePacks?.[0] ?? repair.pack;
+  const sentPack = singleSentEvidencePack(answer, repair.pack);
   const unsupportedMarker = citationCoverageMarkerFor(
     answer.content,
     sentPack,
@@ -10401,7 +10443,9 @@ async function withLiveWorktreeRecency(
     observationAllowed: plan.budget.searchCallsMax > 0,
     signal: deps.signal,
     gitRunner: deps.worktreeGitRunner,
-    activityLog: deps.activityLog,
+    // Activity setup already captured this port safely. Re-reading a hostile dependency getter
+    // would turn a recorded logging failure into a retrieval failure.
+    activityLog: runtime.activity.sink,
     diagnostics: deps.diagnostics,
     correlationId: deps.correlationId,
   });

@@ -20,6 +20,7 @@ export function htmlEntitySearchText(scopePath: string, text: string): string {
 
 export function htmlEntityLineMatcher(matcher: LineMatcher): LineMatcher {
   return {
+    requiresSourceClassification: matcher.requiresSourceClassification,
     match: (line, sourceLine): number =>
       Math.max(matcher.match(line, sourceLine), matcher.match(projectedLine(line), sourceLine)),
   };

@@ -10,6 +10,7 @@
 // `.*` alternation, so there is no super-linear backtracking surface. Line count and per-line work
 // are both capped. Pure: no IO, no clock, no RNG.
 
+import { fileURLToPath } from "node:url";
 import { toPosix } from "./path-utils.js";
 import type { BugReportInput, FailureEvidence, FailureFrame } from "./types.js";
 
@@ -21,6 +22,7 @@ const MAX_MESSAGE_LENGTH = 200;
 
 const ALL_DIGITS = /^\d+$/;
 const FILE_URL_PREFIX = "file://";
+const MAX_URL_LOCATION_CHARACTERS = 8_192;
 const MESSAGE_MARKERS: readonly string[] = [
   "assertionerror",
   "error:",
@@ -42,22 +44,33 @@ function toLine(token: string | undefined): number | undefined {
   return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
-// Strips a leading `file://` URL prefix from a location token. `file:///repo/x.ts` -> `/repo/x.ts`.
-function stripFileUrl(location: string): string {
+// Runtime URLs retain their identity until their numeric suffix has been peeled. Ordinary
+// filesystem spellings, including literal percent characters, never acquire URL semantics.
+function sourceFile(location: string): string | undefined {
   if (!location.startsWith(FILE_URL_PREFIX)) {
-    return location;
+    return toPosix(location);
   }
-  const afterScheme = location.slice(FILE_URL_PREFIX.length);
-  // file:///path keeps the leading slash of the absolute path; file://host/path is not expected
-  // from runtimes here, so we keep everything after the scheme verbatim.
-  return afterScheme;
+  try {
+    if (location.length > MAX_URL_LOCATION_CHARACTERS) return undefined;
+    const url = new URL(location);
+    if (url.hostname !== "" || url.pathname.toLowerCase().includes("%5c")) return undefined;
+    const file = fileURLToPath(url, { windows: /^\/[A-Za-z]:\//u.test(url.pathname) });
+    return file.includes("\0") ? undefined : toPosix(file);
+  } catch {
+    return undefined;
+  }
+}
+
+function sourceFrame(location: string, line: number): FailureFrame | undefined {
+  const file = sourceFile(location);
+  return file === undefined || file.length === 0 ? undefined : { file, line };
 }
 
 // Peels `:line:col` off the END of a location token using a right-split, returning the file path
 // and the numeric line (when present). `src/x.ts:3:10` -> { file: "src/x.ts", line: 3 }. A token
 // with no numeric `:line` segment yields no frame.
 function peelLocation(rawLocation: string): FailureFrame | undefined {
-  const location = stripFileUrl(rawLocation.trim());
+  const location = rawLocation.trim();
   const lastColon = location.lastIndexOf(":");
   if (lastColon <= 0) {
     return undefined;
@@ -68,14 +81,12 @@ function peelLocation(rawLocation: string): FailureFrame | undefined {
   const lineToken = lineColon <= 0 ? undefined : beforeCol.slice(lineColon + 1);
   const line = toLine(lineToken);
   if (line !== undefined) {
-    const file = toPosix(beforeCol.slice(0, lineColon));
-    return file.length === 0 ? undefined : { file, line };
+    return sourceFrame(beforeCol.slice(0, lineColon), line);
   }
   // Case `file:line` (no col): the token after the last colon is the line.
   const lineOnly = toLine(location.slice(lastColon + 1));
   if (lineOnly !== undefined) {
-    const file = toPosix(beforeCol);
-    return file.length === 0 ? undefined : { file, line: lineOnly };
+    return sourceFrame(beforeCol, lineOnly);
   }
   return undefined;
 }
@@ -173,6 +184,17 @@ function unparsedTraceLine(line: string): boolean {
   );
 }
 
+function diagnosticTraceLine(
+  line: string,
+  frame: FailureFrame | undefined,
+  scanned: number,
+): boolean {
+  return (
+    (frame !== undefined && (hasTracePrefix(line) || !line.includes(" "))) ||
+    (scanned >= MAX_LINES_SCANNED && unparsedTraceLine(line))
+  );
+}
+
 /** Source locations and assertion output stay separate from the human's request terms. */
 export function parseDiagnosticTraceText(text: string): DiagnosticTraceText {
   const acc: Accumulator = { frames: [], messages: [], seen: new Set() };
@@ -187,9 +209,7 @@ export function parseDiagnosticTraceText(text: string): DiagnosticTraceText {
     const line = text.slice(start, end);
     const trimmed = line.trim();
     const frame = scanned < MAX_LINES_SCANNED ? parseFailureFrame(line) : undefined;
-    const traceLine =
-      (frame !== undefined && (hasTracePrefix(trimmed) || !trimmed.includes(" "))) ||
-      (scanned >= MAX_LINES_SCANNED && unparsedTraceLine(trimmed));
+    const traceLine = diagnosticTraceLine(trimmed, frame, scanned);
     if (traceLine) {
       detected = true;
       if (frame !== undefined) pushFrame(acc, frame);
