@@ -3337,7 +3337,7 @@ function diagnosticHistoryInputs(
     return inputs;
   const paths = [
     ...new Set([...(inputs.admittedPaths ?? []), ...evidence.atoms.map((atom) => atom.scopePath)]),
-  ];
+  ].filter((path) => isAdmittedMetadataPath(path, inputs.searchScope, undefined));
   if (paths.length === 0) return inputs;
   // History enriches already admitted/discovered diagnostic candidates. A shared commit is not
   // evidence that another file is relevant to this failure; explicit history requests stay broad.

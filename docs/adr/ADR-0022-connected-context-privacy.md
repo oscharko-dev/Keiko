@@ -462,7 +462,8 @@ search uses the independent question channel; the original trace remains model c
 identity, while external runtime frames cannot introduce ordinary search terms. Tool names inside
 trace bodies never request project metadata. For a diagnostic question with admitted or discovered
 source candidates, optional Git history is restricted to those candidates and their discovered
-dependencies. Sharing a commit cannot independently nominate unrelated source or metadata files;
+dependencies within the original selected scope. Advisory atoms cannot enlarge directory or file
+membership. Sharing a commit cannot independently nominate unrelated source or metadata files;
 explicit relationship/history requests retain their existing broader lane. Metadata injection follows the independent user
 question and the effective retrieval intent. Manifest inventory routing requires a complete
 enumeration request; mentioning manifests while asking about validation, loading, or combined
