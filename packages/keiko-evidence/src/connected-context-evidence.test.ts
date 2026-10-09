@@ -555,3 +555,25 @@ describe("connected-context evidence", () => {
     expect(manifestWithoutAccounting.contextAssembly?.profile.tokenAccounting).toBeUndefined();
   });
 });
+
+describe("canonical connected source attribution", () => {
+  it("preserves an authoritative fingerprint without reconstructing a root digest", () => {
+    const store = createInMemoryEvidenceStore();
+    const sourceScopeFingerprint = "a".repeat(64);
+    const result = persistConnectedContextEvidence(
+      {
+        runId: "canonical-source-attribution",
+        modelId: "fixture",
+        workspaceRoot: "/repo",
+        pack: pack(),
+        citationCount: 0,
+        elapsedMs: 0,
+        startedAt: NOW,
+        finishedAt: NOW,
+        sourceScopeFingerprint,
+      },
+      { store, env: {} },
+    );
+    expect(result.manifest.connectedContext?.scope).toMatchObject({ sourceScopeFingerprint });
+  });
+});
