@@ -691,14 +691,13 @@ function isValidBudgetUsage(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function isValidFollowUpPassCap(value: unknown): boolean {
+  return value === undefined || value === 0 || value === 1;
+}
+
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
   if (!isRecord(usage) || !isRecord(budget)) return false;
-  if (
-    budget.followUpPassesMax !== undefined &&
-    budget.followUpPassesMax !== 0 &&
-    budget.followUpPassesMax !== 1
-  )
-    return false;
+  if (!isValidFollowUpPassCap(budget.followUpPassesMax)) return false;
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
     const field = `${dimension}Max` as const;
     const cap = budget[field];
@@ -1387,9 +1386,7 @@ function validatePackBudget(
   }
   pushIf(
     reasons,
-    pack.budget.followUpPassesMax !== undefined &&
-      pack.budget.followUpPassesMax !== 0 &&
-      pack.budget.followUpPassesMax !== 1,
+    !isValidFollowUpPassCap(pack.budget.followUpPassesMax),
     "budget.followUpPassesMax invalid",
   );
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
