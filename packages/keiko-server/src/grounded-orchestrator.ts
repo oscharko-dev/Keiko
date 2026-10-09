@@ -9711,6 +9711,33 @@ interface RefinedGroundedAnswer extends GroundedRepairResult {
   readonly followUp: FollowUpObservation;
 }
 
+/** Plural callers reuse the exact retrieval identity of each actual folder pack. */
+export function logGroundedAnswerForPack(
+  pack: ConnectedContextPack,
+  answer: GroundedAnswerResult,
+  repairDisposition: CitationRepairDisposition,
+  correlationId: string | undefined,
+  failure?: unknown,
+): void {
+  logGroundedAnswerActivity(correlationId, {
+    ...connectedContextActivityIdentity({
+      scope: pack.scope,
+      query: pack.query,
+      workspaceRoot: pack.scope.workspaceRoot,
+    }),
+    answer,
+    repairDisposition,
+    failure,
+    followUp: {
+      passCount: 0,
+      admittedPathCount: 0,
+      trigger: "none",
+      outcome: "not-needed",
+      firstDeclarations: [],
+    },
+  });
+}
+
 async function refinedGroundedAnswer(
   input: OrchestratorInput,
   deps: OrchestratorDeps,

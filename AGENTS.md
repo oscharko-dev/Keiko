@@ -449,6 +449,19 @@ system that exists, never beside it:
   high/low selection vocabulary and actual observed scope/semantic dispositions.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  The typed `search.connected-context.answer-details` sibling joins the same scope/query digests
+  and correlation. It records actual final-prompt file counts, answer kind, observed citation
+  behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,
+  pass/admission counts, outcome, and configuration disposition. Technical failures use the
+  existing closed error header, body-free frames and causes; declaration paths remain outside logs.
+  Connected synthesis buffers normalized output before publication so rejected declaration lines
+  cannot escape through streamed chunks. Initial synthesis plus either marker repair or an
+  insufficiency follow-up shares two synthesis slots and the original remaining budgets; gateway
+  retries and the separately bounded entailment stage retain their own contracts. The existing
+  context allocator's high/exceeded pressure refuses follow-up. `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX`
+  defaults to `1`; only explicit `1` enables and `0` disables it, and other explicit values fail
+  closed to zero passes with an invalid configuration observation. Final sent packs and ranges
+  authenticate citations; assembled reads remain separate physical-usage and audit evidence.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or

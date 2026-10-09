@@ -430,7 +430,7 @@ export function logChatContextSelection(
 /** Grounded prompts have no history-message or image lane; log the actual fitted dispatch. */
 export function logGroundedPromptSelection(
   correlationId: string | undefined,
-  prompt: SentGroundedPrompt,
+  prompt: Pick<SentGroundedPrompt, "messages">,
   inputBudget: number,
   accounting?: ContextProfile["tokenAccounting"],
 ): void {
