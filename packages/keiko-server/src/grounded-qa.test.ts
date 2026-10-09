@@ -1,3 +1,4 @@
+import { buildPackCitationIndex, reconcileInlineCitations } from "./grounded-faithfulness.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 import {
@@ -278,7 +279,11 @@ async function assertPairedAdmissionReport(stateDir: string, correlationId: stri
 
 function customModelConfig(
   modelId = CHAT_MODEL,
-  capability: { readonly contextWindow?: number; readonly maxOutputTokens?: number } = {},
+  capability: {
+    readonly contextWindow?: number;
+    readonly maxInputTokens?: number;
+    readonly maxOutputTokens?: number;
+  } = {},
 ): GatewayConfig {
   return {
     providers: [
@@ -305,6 +310,9 @@ function customModelConfig(
         id: modelId,
         kind: "chat",
         contextWindow: capability.contextWindow ?? 64_000,
+        ...(capability.maxInputTokens === undefined
+          ? {}
+          : { maxInputTokens: capability.maxInputTokens }),
         maxOutputTokens: capability.maxOutputTokens ?? 4_096,
         toolCalling: true,
         structuredOutput: true,
@@ -5370,4 +5378,84 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
       log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
     ).toMatchObject({ retrievalIntent: "diagnostic-search" });
   });
+});
+
+describe("actual fitted repository evidence authority", () => {
+  it("abstains when a 970-token input ceiling fits away every source excerpt", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(
+      join(tmp, "src/validation.ts"),
+      "export function validateFeature() { return true; }\n",
+    );
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const call = vi.fn(() =>
+      Promise.resolve({
+        content: "Validation returns true [src/validation.ts:1].",
+        usage: { promptTokens: 800, completionTokens: 20, totalTokens: 820 },
+        toolCalls: [],
+        finishReason: "stop" as const,
+        structuredOutput: null,
+        modelId: CHAT_MODEL,
+      }),
+    );
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain validation" })),
+      deps(
+        { call },
+        {},
+        {
+          config: customModelConfig(CHAT_MODEL, {
+            contextWindow: 4096,
+            maxInputTokens: 970,
+            maxOutputTokens: 1024,
+          }),
+          evidenceStore: createInMemoryEvidenceStore(),
+        },
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(call).not.toHaveBeenCalled();
+    expect(result.body).toMatchObject({ citations: [], contextPack: { filesInPrompt: 0 } });
+    expect(result.body).not.toHaveProperty("evidenceRunId");
+  });
+});
+
+it("authenticates only actual prefix line ranges after partial prompt fitting", () => {
+  const base = packWithCitations();
+  const { file, excerpt } = requirePackExcerpt(base, 0);
+  const content = Array.from(
+    { length: 100 },
+    (_, i) => `const line${String(i + 1)} = "${"x".repeat(300)}";`,
+  ).join("\n");
+  const pack = {
+    ...base,
+    files: [
+      {
+        ...file,
+        excerpts: [
+          {
+            ...excerpt,
+            content,
+            contentBytes: Buffer.byteLength(content),
+            atom: { ...excerpt.atom, lineRange: { startLine: 1, endLine: 100 } },
+          },
+        ],
+      },
+    ],
+  };
+  const sent = fittedGroundedGatewayPrompt("Explain the implementation", pack, buildRedactor({}), {
+    modelInputTokensMax: 1200,
+  });
+  const actual = sent.sentEvidencePacks?.[0];
+  expect(actual?.files[0]?.excerpts[0]?.content.length).toBeGreaterThan(0);
+  expect(actual?.files[0]?.excerpts[0]?.content.length).toBeLessThan(content.length);
+  const result = reconcileInlineCitations(
+    `The last line declares a value [${file.scopePath}:100].`,
+    buildPackCitationIndex(actual === undefined ? [] : [actual]),
+  );
+  expect(result.citedScopePaths.size).toBe(0);
+  expect(result.unsupported).toHaveLength(1);
 });

@@ -579,6 +579,12 @@ export interface RuntimeGatewayConfig {
     checkedAt: string,
     observedGeneration?: number,
     conversationCheckedAt?: string,
+    citationObservation?: Pick<
+      VerifiedModelCapabilityObservation,
+      | "citationBehaviourWindow"
+      | "citationBehaviourDeploymentSha256"
+      | "citationBehaviourObservationStatus"
+    >,
   ): void;
   readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
@@ -600,6 +606,8 @@ export type VerifiedModelCapabilityFields = Partial<
   >
 >;
 
+export const CITATION_BEHAVIOUR_WINDOW_MAX = 8;
+
 export interface VerifiedModelCapabilityObservation {
   readonly modelId: string;
   readonly generation: number;
@@ -607,6 +615,10 @@ export interface VerifiedModelCapabilityObservation {
   /** Actual chat observation time, separate from retained feature evidence. */
   readonly conversationCheckedAt?: string | undefined;
   readonly fields: VerifiedModelCapabilityFields;
+  /** Body-free, request outcomes owned by this same generation; never readiness or durable config. */
+  readonly citationBehaviourWindow?: readonly NonNullable<ModelCapability["citationBehaviour"]>[];
+  readonly citationBehaviourDeploymentSha256?: string;
+  readonly citationBehaviourObservationStatus?: "applied" | "unavailable";
 }
 
 export interface GatewayDiscoveredModels {
@@ -1688,7 +1700,14 @@ function gatewayCapabilityRecorder(
   generation: () => number,
   admitted: (modelId: string) => boolean,
 ): RuntimeGatewayConfig["recordVerifiedCapability"] {
-  return (modelId, fields, checkedAt, observedGeneration, conversationCheckedAt): void => {
+  return (
+    modelId,
+    fields,
+    checkedAt,
+    observedGeneration,
+    conversationCheckedAt,
+    citationObservation,
+  ): void => {
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
     if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
@@ -1700,7 +1719,44 @@ function gatewayCapabilityRecorder(
         ? {}
         : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
+      ...boundedCitationObservation(
+        citationObservation ?? observations.get(modelId),
+        currentGeneration,
+      ),
     });
+  };
+}
+
+function boundedCitationObservation(
+  observation:
+    | (Pick<
+        VerifiedModelCapabilityObservation,
+        | "citationBehaviourWindow"
+        | "citationBehaviourDeploymentSha256"
+        | "citationBehaviourObservationStatus"
+      > & { readonly generation?: number })
+    | undefined,
+  generation: number,
+): Pick<
+  VerifiedModelCapabilityObservation,
+  | "citationBehaviourWindow"
+  | "citationBehaviourDeploymentSha256"
+  | "citationBehaviourObservationStatus"
+> {
+  if (observation?.generation !== undefined && observation.generation !== generation) return {};
+  if (
+    observation?.citationBehaviourWindow === undefined ||
+    observation.citationBehaviourDeploymentSha256 === undefined
+  )
+    return {};
+  return {
+    citationBehaviourWindow: observation.citationBehaviourWindow.slice(
+      -CITATION_BEHAVIOUR_WINDOW_MAX,
+    ),
+    citationBehaviourDeploymentSha256: observation.citationBehaviourDeploymentSha256,
+    ...(observation.citationBehaviourObservationStatus === undefined
+      ? {}
+      : { citationBehaviourObservationStatus: observation.citationBehaviourObservationStatus }),
   };
 }
 

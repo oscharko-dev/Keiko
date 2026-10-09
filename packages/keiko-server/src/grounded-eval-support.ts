@@ -14,6 +14,8 @@ import {
   retrieveConnectedContextPack,
   runGroundedExploration,
   type OrchestratorDeps,
+  type GroundedAnswerer,
+  type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
@@ -141,6 +143,8 @@ export function buildEvalContextPack(
 
 /** The incident gate drives the real conversation and retrieval composition, with fixture-owned IO. */
 export interface ConnectedRetrievalEvalInput {
+  readonly answerer?: GroundedAnswerer | undefined;
+  readonly budget?: ExplorationBudget | undefined;
   readonly files: Readonly<Record<string, string>>;
   readonly query: string;
   readonly history?: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
@@ -199,7 +203,11 @@ function materializeConnectedFixture(root: string, files: Readonly<Record<string
 /** No private continuity formula is copied into the gate; every history resolves through its owner. */
 export async function runConnectedRetrievalEval(
   fixture: ConnectedRetrievalEvalInput,
-): Promise<{ readonly pack: ConnectedContextPack; readonly retrievalContent: string }> {
+): Promise<{
+  readonly pack: ConnectedContextPack;
+  readonly retrievalContent: string;
+  readonly answer?: OrchestratorOutput;
+}> {
   const root = mkdtempSync(join(tmpdir(), "keiko-connected-retrieval-eval-"));
   const deps = connectedEvalRuntime();
   try {
@@ -221,6 +229,7 @@ export async function runConnectedRetrievalEval(
       },
       query: { ...EVAL_QUERY, text: continuity.retrievalContent, maxResults: 100 },
       currentQuestion: fixture.query,
+      ...(fixture.budget === undefined ? {} : { budget: fixture.budget }),
       assistantReferents: continuity.assistantReferents,
       continuityReferentSource: continuity.continuityReferentSource,
       ...(continuity.previousRetrievalIntent === undefined
@@ -234,13 +243,19 @@ export async function runConnectedRetrievalEval(
       ...(fixture.detectWorkspace === undefined
         ? {}
         : { detectWorkspace: fixture.detectWorkspace }),
-      answerer: { answer: (): Promise<string> => Promise.resolve(fixture.answer ?? "") },
+      answerer: fixture.answerer ?? {
+        answer: (): Promise<string> => Promise.resolve(fixture.answer ?? ""),
+      },
     };
     const result =
-      fixture.answer === undefined
+      fixture.answer === undefined && fixture.answerer === undefined
         ? await retrieveConnectedContextPack(input, retrievalDeps)
         : await runGroundedExploration(input, retrievalDeps);
-    return { pack: result.pack, retrievalContent: continuity.retrievalContent };
+    return {
+      pack: result.pack,
+      retrievalContent: continuity.retrievalContent,
+      ...("assistantContent" in result ? { answer: result } : {}),
+    };
   } finally {
     deps.store.close();
     rmSync(root, { recursive: true, force: true });

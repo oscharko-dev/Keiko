@@ -1,3 +1,7 @@
+import type {
+  GroundedAnswerKind,
+  GroundedCitationBehaviour,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 // Body-free activity-log evidence for how a Knowledge Pod answer's inline citations were
 // reconciled against the retrieved references (ADR-0173).
 //
@@ -12,6 +16,7 @@ import { findCitationMarkerGroups } from "@oscharko-dev/keiko-contracts/runtime/
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -48,6 +53,25 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["numeric", "file"],
     },
+    answerKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["answer", "refusal", "clarification", "insufficiency"],
+    },
+    citationBehaviour: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["cites", "cites-after-repair", "never"],
+    },
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    followUpPass: { type: "integer", dataClass: "count", required: false },
+    insufficiencyDeclaredCount: { type: "integer", dataClass: "count", required: false },
+    declaredInScopeCount: { type: "integer", dataClass: "count", required: false },
+    declaredUnreadInScopeCount: { type: "integer", dataClass: "count", required: false },
+    declaredNotInScopeCount: { type: "integer", dataClass: "count", required: false },
     ambiguousMarkerCount: { type: "integer", dataClass: "count", required: false },
     droppedImplicitCount: { type: "integer", dataClass: "count", required: false },
     referenceCount: { type: "integer", dataClass: "count", required: true },
@@ -61,6 +85,7 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
   diagnosticWhen: [
     { field: "danglingMarkerCount", positive: true },
     { field: "ambiguousMarkerCount", positive: true },
+    { field: "declaredUnreadInScopeCount", positive: true },
   ],
   causal: "correlation",
   lifecycle: "end",
@@ -69,6 +94,48 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
   proofIds: ["search.citations.reconciled.line"],
   releaseImpact: "patch",
 });
+
+export interface CitationReconciliationMetadata {
+  readonly answerKind?: GroundedAnswerKind | undefined;
+  readonly citationBehaviour?: GroundedCitationBehaviour | undefined;
+  readonly scopeIdentitySha256?: string | undefined;
+  readonly queryIdentitySha256?: string | undefined;
+  readonly followUpPass?: 0 | 1 | undefined;
+  readonly insufficiencyDeclaredCount?: number | undefined;
+  readonly declaredInScopeCount?: number | undefined;
+  readonly declaredUnreadInScopeCount?: number | undefined;
+  readonly declaredNotInScopeCount?: number | undefined;
+}
+
+function definedCitationMetadata(
+  metadata: CitationReconciliationMetadata,
+): Partial<ActivityLogFields<typeof SEARCH_CITATIONS_RECONCILED_OPERATION>> {
+  return {
+    ...(metadata.answerKind === undefined ? {} : { answerKind: metadata.answerKind }),
+    ...(metadata.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: metadata.citationBehaviour }),
+    ...(metadata.scopeIdentitySha256 === undefined
+      ? {}
+      : { scopeIdentitySha256: metadata.scopeIdentitySha256 }),
+    ...(metadata.queryIdentitySha256 === undefined
+      ? {}
+      : { queryIdentitySha256: metadata.queryIdentitySha256 }),
+    ...(metadata.followUpPass === undefined ? {} : { followUpPass: metadata.followUpPass }),
+    ...(metadata.insufficiencyDeclaredCount === undefined
+      ? {}
+      : { insufficiencyDeclaredCount: metadata.insufficiencyDeclaredCount }),
+    ...(metadata.declaredInScopeCount === undefined
+      ? {}
+      : { declaredInScopeCount: metadata.declaredInScopeCount }),
+    ...(metadata.declaredUnreadInScopeCount === undefined
+      ? {}
+      : { declaredUnreadInScopeCount: metadata.declaredUnreadInScopeCount }),
+    ...(metadata.declaredNotInScopeCount === undefined
+      ? {}
+      : { declaredNotInScopeCount: metadata.declaredNotInScopeCount }),
+  };
+}
 
 export interface CitationReconciliationEvidence {
   // The answer text the markers were parsed from. Only counts derived from it are ever logged.
@@ -120,6 +187,7 @@ export function summarizeCitationReconciliation(
 export function logCitationReconciliation(
   evidence: CitationReconciliationEvidence,
   correlationId: string | undefined,
+  metadata: CitationReconciliationMetadata = {},
 ): void {
   const summary = summarizeCitationReconciliation(evidence);
   getServerLogger().info(
@@ -127,6 +195,7 @@ export function logCitationReconciliation(
       SEARCH_CITATIONS_RECONCILED_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
+        ...definedCitationMetadata(metadata),
         outcome: summary.outcome,
         citationKind: "numeric",
         referenceCount: evidence.referenceCount,
@@ -148,9 +217,10 @@ export function reconcileAndLogInlineCitations(
   answer: string,
   index: PackCitationIndex,
   correlationId: string | undefined,
+  metadata: CitationReconciliationMetadata = {},
 ): CitationReconciliation {
   return reconcileInlineCitations(answer, index, (summary) => {
-    logInlineCitationSummary(summary, isNoEvidenceAnswerText(answer), correlationId);
+    logInlineCitationSummary(summary, isNoEvidenceAnswerText(answer), correlationId, metadata);
   });
 }
 
@@ -158,6 +228,7 @@ function logInlineCitationSummary(
   summary: InlineCitationReconciliationSummary,
   refusal: boolean,
   correlationId: string | undefined,
+  metadata: CitationReconciliationMetadata,
 ): void {
   getServerLogger().info(
     activityLogEvent(
@@ -165,6 +236,7 @@ function logInlineCitationSummary(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         ...summary,
+        ...definedCitationMetadata(metadata),
         outcome: outcomeFor(refusal, summary.attachedCount, summary.danglingMarkerCount),
         citationKind: "file",
         completeness: "complete",

@@ -1589,9 +1589,8 @@ function packRetrievalDiagnostics(
 }
 
 function retrievalDiagnosticSummary(
-  diagnostics: GroundedAnswerRetrievalDiagnostics | undefined,
+  diagnostics: GroundedAnswerRetrievalDiagnostics,
 ): GroundedAnswerRetrievalDiagnostics {
-  if (diagnostics === undefined) return {};
   return {
     ...(diagnostics.reranker === undefined ? {} : { reranker: diagnostics.reranker }),
     ...(diagnostics.selectionConfidence === undefined
