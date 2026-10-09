@@ -8,6 +8,8 @@
 import { describe, expect, it } from "vitest";
 
 import * as api from "./index.js";
+import { scoreVector } from "./retrieval/vector-scoring.js";
+import { shapeEmbeddingQuery } from "./retrieval/embedding-query-shaping.js";
 import type {
   KnowledgeStoreKeyProvider,
   KnowledgeStoreKeyProviderContext,
@@ -77,6 +79,8 @@ const PUBLIC_EXPORTS = [
   "mediaTypeFor",
   "walkSource",
   "DEFAULT_DISCOVERY_OPTIONS",
+  "scoreVector",
+  "shapeEmbeddingQuery",
 ] as const;
 
 describe("barrel surface", () => {
@@ -95,6 +99,8 @@ describe("barrel surface", () => {
   it("does not expose unscoped chunk/vector readers", () => {
     const names = Object.keys(api);
     const offenders = names.filter((name) => {
+      // The public metric helper is pure and is this exact production function, never a reader.
+      if (name === "scoreVector" && api.scoreVector === scoreVector) return false;
       return (
         /^list(All|Every)/.test(name) ||
         /Vectors?$/.test(name) ||
@@ -106,6 +112,11 @@ describe("barrel surface", () => {
     expect(offenders, `unscoped reader exports leaked: ${offenders.join(", ")}`).toStrictEqual([]);
     expect(api).not.toHaveProperty("scriptedAdapter");
     expect(api).not.toHaveProperty("seedCapsuleWithVectors");
+  });
+
+  it("reuses the existing pure embedding shaping and metric producers", () => {
+    expect(api.scoreVector).toBe(scoreVector);
+    expect(api.shapeEmbeddingQuery).toBe(shapeEmbeddingQuery);
   });
 
   it("each `list*` export takes the capsule (or set) as its scope arg", () => {
