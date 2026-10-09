@@ -126,6 +126,24 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it.each(["app/users/[id]/page.tsx", "app/docs/[...slug]/page.tsx"])(
+    "authenticates the whole literal bracket path %s and strips its complete marker",
+    (path) => {
+      const answer = `The page returns true [${path}:180-182].`;
+      const index = buildPackCitationIndex([
+        packWith([{ scopePath: path, excerpts: [excerpt(path, 180, 182)] }]),
+      ]);
+      expect(parseInlineCitations(answer)).toMatchObject([
+        { scopePath: path, lineRange: { startLine: 180, endLine: 182 } },
+      ]);
+      expect(reconcileInlineCitations(answer, index).unsupported).toEqual([]);
+      expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual([path]);
+      expect(segmentCitedClaims(answer)).toMatchObject([
+        { claimText: "The page returns true .", citations: [{ scopePath: path }] },
+      ]);
+      expect(stripInlineCitations(answer)).toBe("The page returns true .");
+    },
+  );
   it.each([
     "listens on 127.0.0.1:1983",
     "api.example.com:8080",

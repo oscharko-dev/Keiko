@@ -92,6 +92,7 @@ import {
   callPluralGroundedSynthesis,
   pluralSynthesisMetadata,
   withPluralSynthesisUsage,
+  capturePluralSynthesisCounts,
 } from "./grounded-plural-synthesis.js";
 import {
   connectedSearchNoEvidenceAnswer,
@@ -749,6 +750,7 @@ export interface MultiSourceAnswerer {
   readonly pendingSynthesisUsage?: GroundedSynthesisCallBudget["pendingUsage"];
   readonly takeFailedSynthesisUsage?: GroundedSynthesisCallBudget["takeUsage"];
   readonly reservedSynthesisOutputTokens?: GroundedSynthesisCallBudget["reservedOutputTokens"];
+  readonly completedSynthesisCalls?: GroundedSynthesisCallBudget["completed"];
 }
 
 interface MultiSourceGatewayContext {
@@ -799,6 +801,7 @@ export function createMultiSourceAnswerer(
       takeFailedSynthesisUsage: (): ReturnType<GroundedSynthesisCallBudget["takeUsage"]> =>
         ctx.synthesisBudget.takeUsage(),
       reservedSynthesisOutputTokens: (): number => ctx.synthesisBudget.reservedOutputTokens(),
+      completedSynthesisCalls: (): number => ctx.synthesisBudget.completed(),
       repair: (
         question: string,
         _pack: ConnectedContextPack,
@@ -814,8 +817,7 @@ async function multiSourceGatewayAnswer(
   question: string,
   labeledPacks: readonly LabeledPack[],
 ): Promise<GroundedAnswerResult> {
-  const remainingBefore = ctx.synthesisBudget.remaining();
-  const reservedBefore = ctx.synthesisBudget.reservedOutputTokens();
+  const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
   ensureNotCancelled(ctx.signal);
   const response = await withAdoptedContextWindowRetry(
     ctx.deps,
@@ -831,7 +833,7 @@ async function multiSourceGatewayAnswer(
     ctx.modelId,
     currentContextProfileForModel(ctx.deps, ctx.modelId),
   );
-  return withPluralSynthesisUsage(answer, ctx.synthesisBudget, remainingBefore, reservedBefore);
+  return withPluralSynthesisUsage(answer, ctx.synthesisBudget, countsBefore);
 }
 
 async function multiSourceGatewayAttempt(
@@ -969,8 +971,7 @@ async function multiSourceGatewayRepair(
   original: string,
   options: GroundedAnswerOptions,
 ): Promise<GroundedAnswerResult> {
-  const remainingBefore = ctx.synthesisBudget.remaining();
-  const reservedBefore = ctx.synthesisBudget.reservedOutputTokens();
+  const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
   const sent = multiSourceRepairPrompt(ctx, question, original, options);
   if (sent === undefined || ctx.synthesisBudget.remaining() <= 0)
     return uninvokedCitationRepair(original);
@@ -1008,8 +1009,7 @@ async function multiSourceGatewayRepair(
       modelInvoked: true,
     },
     ctx.synthesisBudget,
-    remainingBefore,
-    reservedBefore,
+    countsBefore,
   );
 }
 
@@ -1433,6 +1433,7 @@ function mergedUncertainty(
 function persistPerSourceEvidence(
   ctx: MultiSourceAskInput,
   bundles: readonly SourceCitationBundle[],
+  completedSynthesisCallCount: number | undefined,
 ): {
   readonly firstRunId: string | undefined;
   readonly runIds: readonly string[];
@@ -1459,6 +1460,7 @@ function persistPerSourceEvidence(
         plan: src.plan,
         pack: src.pack,
         citationCount: citations.length,
+        completedSynthesisCallCount,
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
@@ -1528,7 +1530,7 @@ function assembleMultiSourceAnswer(
   const summaries = multiSourceAnswerSummaries(ctx, citationBundles, modelInvoked);
   const { firstRunId, runIds } = ids.abstained
     ? { firstRunId: undefined, runIds: [] as readonly string[] }
-    : persistPerSourceEvidence(ctx, citationBundles);
+    : persistPerSourceEvidence(ctx, citationBundles, assistant.completedSynthesisCallCount);
   // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline citations against the merged
   // evidence packs the model actually received; flag references to un-retrieved files.
   const reconciliationUncertainty = modelInvoked

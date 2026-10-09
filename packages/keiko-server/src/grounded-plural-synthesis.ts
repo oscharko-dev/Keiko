@@ -19,6 +19,7 @@ import type { GroundedAnswerer } from "./grounded-orchestrator.js";
 type PluralSynthesisMetadata = Pick<
   GroundedAnswerer,
   | "remainingSynthesisCalls"
+  | "completedSynthesisCalls"
   | "pendingSynthesisUsage"
   | "takeFailedSynthesisUsage"
   | "reservedSynthesisOutputTokens"
@@ -26,6 +27,9 @@ type PluralSynthesisMetadata = Pick<
 
 export function pluralSynthesisMetadata(source: PluralSynthesisMetadata): PluralSynthesisMetadata {
   return {
+    ...(source.completedSynthesisCalls === undefined
+      ? {}
+      : { completedSynthesisCalls: source.completedSynthesisCalls }),
     ...(source.remainingSynthesisCalls === undefined
       ? {}
       : { remainingSynthesisCalls: source.remainingSynthesisCalls }),
@@ -41,20 +45,37 @@ export function pluralSynthesisMetadata(source: PluralSynthesisMetadata): Plural
   };
 }
 
+export interface PluralSynthesisCounts {
+  readonly remaining: number;
+  readonly reserved: number;
+  readonly completed: number;
+}
+
+export function capturePluralSynthesisCounts(
+  budget: GroundedSynthesisCallBudget,
+): PluralSynthesisCounts {
+  return {
+    remaining: budget.remaining(),
+    reserved: budget.reservedOutputTokens(),
+    completed: budget.completed(),
+  };
+}
+
 export function withPluralSynthesisUsage(
   answer: GroundedAnswerResult,
   budget: GroundedSynthesisCallBudget,
-  remainingBefore: number,
-  reservedBefore: number,
+  before: PluralSynthesisCounts,
 ): GroundedAnswerResult {
   return {
     ...answer,
     usage: budget.takeUsage(),
     ...pluralSynthesisCountFields(
-      remainingBefore,
+      before.remaining,
       budget.remaining(),
-      reservedBefore,
+      before.reserved,
       budget.reservedOutputTokens(),
+      before.completed,
+      budget.completed(),
     ),
   };
 }
@@ -64,8 +85,16 @@ export function pluralSynthesisCountFields(
   remainingAfter: number | undefined,
   reservedBefore: number | undefined,
   reservedAfter: number | undefined,
-): Pick<GroundedAnswerResult, "synthesisCallCount" | "synthesisReservedOutputTokens"> {
+  completedBefore: number | undefined,
+  completedAfter: number | undefined,
+): Pick<
+  GroundedAnswerResult,
+  "synthesisCallCount" | "completedSynthesisCallCount" | "synthesisReservedOutputTokens"
+> {
   return {
+    ...(completedBefore === undefined || completedAfter === undefined
+      ? {}
+      : { completedSynthesisCallCount: completedAfter - completedBefore }),
     ...(remainingBefore === undefined || remainingAfter === undefined
       ? {}
       : { synthesisCallCount: remainingBefore - remainingAfter }),
@@ -106,6 +135,7 @@ export async function callPluralGroundedSynthesis(
       { ...input.request, attemptAdmission: tracker.admission },
       input.signal,
     );
+    input.budget.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
     return response;
   } catch (error) {
