@@ -73,6 +73,7 @@ export interface ExplicitPathAdmission {
 }
 
 interface AdmissionInputs {
+  readonly hasGitMetadata?: boolean | undefined;
   readonly scope: SelectedScope;
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
@@ -84,7 +85,7 @@ interface AdmissionInputs {
   readonly tryReserveSearchCall: () => boolean;
 }
 
-type PathPolicyInputs = Pick<AdmissionInputs, "scope" | "searchScope" | "fs">;
+type PathPolicyInputs = Pick<AdmissionInputs, "scope" | "searchScope" | "fs" | "hasGitMetadata">;
 
 interface ValidatedPathSnapshot {
   readonly absolutePath: string;
@@ -108,6 +109,12 @@ interface AdmissionState {
 
 const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS);
 const BASENAME_MATCH_CAP = 96;
+const TEXT_DOCUMENT_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
+
+/** Ordinary document folders do not infer repository noise from directory names. */
+export function isOrdinaryFolderDocumentPath(path: string, hasGitMetadata: boolean): boolean {
+  return !hasGitMetadata && (TEXT_DOCUMENT_PATH_RE.test(path) || isConnectedDocumentPath(path));
+}
 
 export function explicitPathReferences(text: string): readonly ExplicitPathReference[] {
   return extractPathReferences(text);
@@ -171,6 +178,7 @@ function relativePathPolicyRejection(
   if (isDenied(path)) return "denied";
   if (
     !humanSelectedPath(path, inputs) &&
+    !isOrdinaryFolderDocumentPath(path, inputs.hasGitMetadata !== false) &&
     (isGeneratedArtifactPath(path) || isGeneratedRankingPath(path))
   )
     return "generated";

@@ -451,6 +451,12 @@ system that exists, never beside it:
   high/low selection vocabulary and actual observed scope/semantic dispositions.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  Complete document path references are data when classifying relationship/history requests;
+  directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
+  factual lookup focuses discovery on canonically admitted named documents with a scope-bound
+  request context. Its source/read/ring observations reuse the same registered retrieval siblings.
+  Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
+  generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
   Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
   into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
   observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
