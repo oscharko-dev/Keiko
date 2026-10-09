@@ -231,19 +231,20 @@ describe("fresh multi-range excerpt projection", () => {
     expect(result.omittedRangeCount).toBe(0);
   });
 
-  it("rejects the entire batch if a later admitted range starts beyond the physical EOF", async () => {
+  it("retains a valid window when a later stale location exceeds physical EOF", async () => {
     writeFileSync(join(root, "readings.txt"), "alpha\nbeta");
-    await expect(
-      readExcerpt(scope(), {
-        ...request(),
-        startLine: 1,
-        endLine: 10,
-        ranges: [
-          { startLine: 1, endLine: 1 },
-          { startLine: 8, endLine: 8 },
-        ],
-      }),
-    ).rejects.toThrow("cannot read excerpt outside the file line range");
+    const result = await readExcerpt(scope(), {
+      ...request(),
+      startLine: 1,
+      endLine: 10,
+      ranges: [
+        { startLine: 1, endLine: 1 },
+        { startLine: 8, endLine: 8 },
+      ],
+    });
+    expect(result.content).toBe("alpha");
+    expect(result.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(result.omittedRangeCount).toBe(1);
   });
 
   it("preserves an explicit returned-window limit and its skipped-range count", async (): Promise<void> => {
