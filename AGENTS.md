@@ -435,6 +435,10 @@ system that exists, never beside it:
   [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
   `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
   the catalog. Its legacy literal scan is migration input only and authorizes nothing.
+  Connected-context explicit path admission emits anchor/admitted/rejected/line-hint and bounded
+  basename discovery counts, a closed rejection-reason list, and selected atom counts on the existing
+  `search.connected-context.source-details` operation; the shared correlation joins its completed
+  read-window and budget evidence without exceeding the operation field cap.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
