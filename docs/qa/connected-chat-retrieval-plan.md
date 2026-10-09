@@ -30,6 +30,21 @@ thresholds and merge prerequisites remain unchanged; report unavailable gates tr
 conversations receive a fix reference or evidenced refutation before resolution.
 Never push to `dev`, force-push, weaken a gate, widen authority, or publish private support artifacts.
 
+The owner's additional large-folder requirement covers ordinary folders with no Git metadata,
+including 100,000 small HTML manuals, deep nesting, high fan-out, duplicate basenames, repeated
+navigation, Unicode and entity-encoded distinguishing terms, and cross-file links. Qualify content-only
+questions alongside full relative paths, basenames and same-chat follow-ups, including targets late
+in actual enumeration and paths deeper than historical inventory limits. Ordinary `build`, `dist`
+and `generated` folders retain ordinary-folder policy. Fresh traversal remains coverage authority;
+bounded retained hits and partial index records cannot establish full answer coverage or absence.
+Measure cold, unchanged warm, novel-query and changed-file work with the same adapter and grants,
+plus finite deadline/cancellation and resource cleanup. Existing encrypted workspace-index matching
+metadata may accelerate repeated questions after live freshness/containment checks; positive evidence
+reads remain live. Also qualify the actual large Keiko repository, learned general knowledge, mixed
+source/general questions and persisted compaction transitions on the existing local LiteLLM/Gemma
+route. Report actual tested commits, retained/sent evidence and real model outcomes independently of
+the pointed [workspace scale observations](evidence/3881/ordinary-folder-query-match-scale.json).
+
 ## Current-code corrections
 
 - Runtime admission fields use the existing `source-details` sibling because completed already
