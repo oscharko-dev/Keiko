@@ -703,6 +703,15 @@ export const DE_MESSAGES = {
   "scope.notice.failed": "Der Ordner konnte nicht beibehalten werden.",
   "chat.grounding.help":
     "Keiko durchsucht den verbundenen Bereich vor jeder Antwort; das Modell hat keine Datei-Werkzeuge. Öffne eine Datei in Dateien oder erwähne sie mit @, um sie sicher in den Bereich zu nehmen.",
+  "scope.missing.add": "Datei in den Bereich aufnehmen",
+  "scope.missing.folder": "Verbundener Ordner",
+  "scope.missing.chooseFolder": "Verbundenen Ordner auswählen",
+  "scope.missing.title": "Fehlende Belege",
+  "scope.missing.count": "Keiko hat {count} gemeldete Datei(en) nicht gelesen.",
+  "scope.missing.help": "So funktioniert die Suche in verbundenen Dateien",
+  "scope.missing.followUp":
+    "Bitte prüfe @{path} und beantworte die vorherige Frage mit dieser Datei.",
+  "scope.missing.failed": "Die Datei konnte nicht in den Bereich aufgenommen werden.",
   "scope.pill.filesInFolder": "{count} Dateien in {name}",
   "scope.pill.accessibleWithPath": "{label} ({path})",
   "scope.boundary.noun.repository": "den verbundenen Stammordner",

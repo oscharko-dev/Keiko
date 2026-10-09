@@ -684,6 +684,15 @@ export const EN_MESSAGES = {
   "scope.notice.failed": "The folder could not be kept.",
   "chat.grounding.help":
     "Keiko searches the connected scope before each answer; the model has no file tools. Open a file in Files or mention it with @ to include it reliably.",
+  "scope.missing.add": "Add file to scope",
+  "scope.missing.folder": "Connected folder",
+  "scope.missing.chooseFolder": "Choose the connected folder",
+  "scope.missing.title": "Missing evidence",
+  "scope.missing.count": "Keiko has not read {count} declared file(s).",
+  "scope.missing.help": "How connected-file search works",
+  "scope.missing.followUp":
+    "Please check @{path} and answer the previous question using this file.",
+  "scope.missing.failed": "The file could not be added to the scope.",
   "scope.pill.filesInFolder": "{count} files in {name}",
   "scope.pill.accessibleWithPath": "{label} ({path})",
   "scope.boundary.noun.repository": "the connected root folder",
