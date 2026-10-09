@@ -20,9 +20,11 @@ import {
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import { hasOwnAssessmentTag } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { correlationIdOrUnknown } from "./correlation.js";
 import {
   reconcileNumericCitations,
+  groundedAnswerSourceText,
   reconcileInlineCitations,
   type CitationReconciliation,
   type PackCitationIndex,
@@ -32,7 +34,7 @@ import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no
 import { getServerLogger } from "./observability/index.js";
 
 export type CitationReconciliationOutcome =
-  "cited" | "cited-with-dangling" | "dangling-only" | "uncited" | "refusal";
+  "cited" | "cited-with-dangling" | "dangling-only" | "uncited" | "refusal" | "assessment-only";
 
 const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -46,7 +48,14 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["cited", "cited-with-dangling", "dangling-only", "uncited", "refusal"],
+      values: [
+        "cited",
+        "cited-with-dangling",
+        "dangling-only",
+        "uncited",
+        "refusal",
+        "assessment-only",
+      ],
     },
     citationKind: {
       type: "string",
@@ -192,17 +201,24 @@ function outcomeFor(
   return danglingMarkerCount > 0 ? "dangling-only" : "uncited";
 }
 
+function assessmentOnly(answer: string): boolean {
+  return hasOwnAssessmentTag(answer) && groundedAnswerSourceText(answer).trim().length === 0;
+}
+
 /** The counts and closed outcome that describe how an answer's markers reconciled. */
 export function summarizeCitationReconciliation(
   evidence: CitationReconciliationEvidence,
 ): CitationReconciliationSummary {
-  const numeric = reconcileNumericCitations(evidence.answer, new Set(evidence.attachedIndices));
+  const sourceText = groundedAnswerSourceText(evidence.answer);
+  const numeric = reconcileNumericCitations(sourceText, new Set(evidence.attachedIndices));
   const danglingMarkerCount = numeric.unsupportedMarkers.length;
   const attachedCount = evidence.attachedIndices.length;
   return {
-    outcome: outcomeFor(evidence.refusal, attachedCount, danglingMarkerCount),
+    outcome: assessmentOnly(evidence.answer)
+      ? "assessment-only"
+      : outcomeFor(evidence.refusal, attachedCount, danglingMarkerCount),
     attachedCount,
-    groupedMarkerCount: findCitationMarkerGroups(evidence.answer).filter(
+    groupedMarkerCount: findCitationMarkerGroups(sourceText).filter(
       (group) => group.entries.length > 1,
     ).length,
     danglingMarkerCount,
@@ -246,13 +262,13 @@ export function reconcileAndLogInlineCitations(
   metadata: CitationReconciliationMetadata = {},
 ): CitationReconciliation {
   return reconcileInlineCitations(answer, index, (summary) => {
-    logInlineCitationSummary(summary, isNoEvidenceAnswerText(answer), correlationId, metadata);
+    logInlineCitationSummary(summary, answer, correlationId, metadata);
   });
 }
 
 function logInlineCitationSummary(
   summary: InlineCitationReconciliationSummary,
-  refusal: boolean,
+  answer: string,
   correlationId: string | undefined,
   metadata: CitationReconciliationMetadata,
 ): void {
@@ -263,7 +279,13 @@ function logInlineCitationSummary(
       {
         ...summary,
         ...definedCitationMetadata(metadata),
-        outcome: outcomeFor(refusal, summary.attachedCount, summary.danglingMarkerCount),
+        outcome: assessmentOnly(answer)
+          ? "assessment-only"
+          : outcomeFor(
+              isNoEvidenceAnswerText(answer),
+              summary.attachedCount,
+              summary.danglingMarkerCount,
+            ),
         citationKind: "file",
         completeness: "complete",
         loss: "none",
@@ -344,7 +366,7 @@ export function logCitationSupport(
 //   none            — no assessment block;
 //   assessment      — a source-backed part and an assessment;
 //   assessment-only — the assessment alone (nothing backed by the sources, e.g. no evidence);
-//   neutralized     — the policy disabled it, so a block the model wrote became source-backed text.
+//   neutralized     — the policy disabled it, so a block the model wrote was excluded.
 export type AnswerAssessmentOutcome = "none" | "assessment" | "assessment-only" | "neutralized";
 
 const SEARCH_ANSWER_ASSESSED_OPERATION = defineActivityLogOperation({
@@ -367,6 +389,8 @@ const SEARCH_ANSWER_ASSESSED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["none", "assessment", "assessment-only", "neutralized"],
     },
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     sourceBackedChars: { type: "integer", dataClass: "count", required: true },
     assessmentChars: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -379,6 +403,11 @@ const SEARCH_ANSWER_ASSESSED_OPERATION = defineActivityLogOperation({
   proofIds: ["search.answer.assessed.line"],
   releaseImpact: "patch",
 });
+
+export interface AnswerAssessmentIdentity {
+  readonly scopeIdentitySha256?: string | undefined;
+  readonly queryIdentitySha256?: string | undefined;
+}
 
 export interface AnswerAssessmentEvidence {
   readonly policy: "allowed" | "disabled";
@@ -397,12 +426,19 @@ function assessmentOutcome(evidence: AnswerAssessmentEvidence): AnswerAssessment
 export function logAnswerAssessment(
   evidence: AnswerAssessmentEvidence,
   correlationId: string | undefined,
+  identity: AnswerAssessmentIdentity = {},
 ): void {
   getServerLogger().info(
     activityLogEvent(
       SEARCH_ANSWER_ASSESSED_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
+        ...(identity.scopeIdentitySha256 === undefined
+          ? {}
+          : { scopeIdentitySha256: identity.scopeIdentitySha256 }),
+        ...(identity.queryIdentitySha256 === undefined
+          ? {}
+          : { queryIdentitySha256: identity.queryIdentitySha256 }),
         policy: evidence.policy,
         outcome: assessmentOutcome(evidence),
         sourceBackedChars: evidence.sourceBacked.trim().length,
