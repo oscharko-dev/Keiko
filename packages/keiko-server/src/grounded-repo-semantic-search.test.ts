@@ -60,6 +60,7 @@ import {
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
 import {
   configuredRepoSemanticSearchProviderFor,
   configuredRepoSemanticSearchProviderLeaseFor,
@@ -1441,6 +1442,69 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     } finally {
       lease.close();
       close();
+    }
+  });
+
+  it("composes the actual request factory, configured lease, governor and durable spend", async () => {
+    const { fixture, deps, close } = await leaseFixture();
+    const root = mkdtempSync(join(tmpdir(), "keiko-semantic-request-spend-"));
+    const log = createBufferedServerLogSink();
+    const writer = vi.spyOn(processServerLogSink(), "write").mockImplementation(log.write);
+    const grant = refreshBudgetGrant();
+    const reserve = vi.fn(grant.reserve);
+    const runtime = configuredGroundedSemanticRequest(
+      {
+        ...deps,
+        config: pricedRefreshFixture(fixture).deps.config,
+        env: {
+          ...deps.env,
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "1",
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(root, "spend.db"),
+        },
+      },
+      ROOT,
+    );
+    try {
+      const provider = runtime.providerFor?.({
+        fs: fixture.fs,
+        nowMs: (): number => 1,
+        deadlineAtMs: 1_001,
+        signal: undefined,
+        correlationId: "semantic-request-composition",
+        tryReserveRefreshUsage: reserve,
+        observeSemanticFreshness: fixture.observed,
+      });
+      if (provider === undefined) throw new TypeError("Expected the real request provider");
+      // Existing lease qualification is separate from the optional refresh attempts below.
+      fixture.embedding.mockClear();
+      const hits = await provider.search({
+        query: QUERY,
+        documents: [{ scopePath: "src/auth.ts", text: fixture.files["src/auth.ts"] ?? "" }],
+      });
+      expect(hits.map((hit) => hit.scopePath)).toContain("src/auth.ts");
+      const calls = fixture.embedding.mock.calls.map(([request]) => request);
+      expect(calls).toHaveLength(2);
+      expect(reserve).toHaveBeenCalledTimes(3);
+      expect(grant.usage().filesRead).toBe(1);
+      expect(grant.usage().excerptBytes).toBe(
+        Buffer.byteLength(fixture.files["src/auth.ts"] ?? ""),
+      );
+      expect(grant.usage().modelInputTokens).toBe(
+        calls.reduce((sum, request) => sum + Buffer.byteLength(request.input), 0),
+      );
+      expect(log.events.filter((event) => event.op === "gateway.spend.reserved")).toHaveLength(2);
+      expect(log.events.filter((event) => event.op === "gateway.spend.settled")).toHaveLength(2);
+      expect(fixture.observed.mock.lastCall?.[0]?.refreshUsage).toMatchObject({
+        embeddingCallCount: 2,
+        readFileCount: 1,
+        inputTokens: grant.usage().modelInputTokens,
+        readBytes: grant.usage().excerptBytes,
+      });
+    } finally {
+      runtime.close();
+      writer.mockRestore();
+      close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
