@@ -154,6 +154,7 @@ import {
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   noEvidenceMarker,
+  citationSourceIdForIndex,
   reconcileNumericCitations,
   unsupportedCitationMarker,
   unsupportedNumericCitationMarker,
@@ -343,6 +344,7 @@ interface FolderPayload {
   readonly score: number;
   readonly stableId: string;
   readonly sourceScopeFingerprint: string;
+  readonly sourceId: string;
   readonly provenanceLine: string;
 }
 
@@ -373,7 +375,7 @@ function folderRerankInputs(
   folders: readonly RetrievedFolder[],
   redactor: Redactor,
 ): RerankInput<HybridPayload>[] {
-  return folders.flatMap((src) => {
+  return folders.flatMap((src, index) => {
     const sourceScopeFingerprint = src.sourceScopeFingerprint;
     return src.pack.files.flatMap((file) =>
       file.excerpts.map((excerpt) => ({
@@ -389,6 +391,7 @@ function folderRerankInputs(
           score: excerpt.atom.score,
           stableId: excerpt.atom.stableId,
           sourceScopeFingerprint,
+          sourceId: citationSourceIdForIndex(index),
           provenanceLine: evidenceProvenanceLine(excerpt.atom.provenance, redactor),
         },
       })),
@@ -1245,6 +1248,7 @@ function selectedFolderCitations(
       stableId: redactString(redactor, s.payload.stableId),
       source: s.sourceLabel,
       sourceScopeFingerprint: s.payload.sourceScopeFingerprint,
+      sourceId: s.payload.sourceId,
       marker: s.marker,
     }));
 }

@@ -1786,7 +1786,12 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("Second source [source:2|src/shared.ts:1-5].");
     expect(answer.citations).toMatchObject([
-      { source: "web", stableId: "shared-b", lineRange: { startLine: 1, endLine: 5 } },
+      {
+        source: "web",
+        sourceId: "2",
+        stableId: "shared-b",
+        lineRange: { startLine: 1, endLine: 5 },
+      },
     ]);
     expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(false);
   });

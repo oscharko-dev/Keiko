@@ -1292,6 +1292,8 @@ export interface GroundedEvidenceCitation {
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.
   readonly source?: string;
+  // Original positive canonical source ordinal from the actual sent pack array, never UI order.
+  readonly sourceId?: string;
   // Navigation attribution only, matched against current connected scopes before opening.
   // Missing or ambiguous identity requires the existing explicit source picker.
   readonly sourceScopeFingerprint?: string | undefined;
