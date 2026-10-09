@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "bee96c1a84e105d13ca76c61f86a1d4553c631576af083adee715b3c00cc647e" as const;
+  "e236a3b029d0acdd87e017bfb402bc91696516d716db5202efb42b1f81031c36" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13141,6 +13141,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "basenameCollisionGroupCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "basenameDedupDemotedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "directoryProximityTieBreakCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "exactPathSignalPresentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "pathSegmentSignalPresentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "queryIdentitySha256",
               type: "string",
               dataClass: "digest",
@@ -13170,7 +13200,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             frames: false,
             causeChain: false,
           },
-          proofIds: ["search.connected-context.selection-details.line"],
+          proofIds: [
+            "search.connected-context.selection-details.line",
+            "search.connected-context.path-ranking.line",
+          ],
           replayReferences: [],
           missingObligations: [],
         },

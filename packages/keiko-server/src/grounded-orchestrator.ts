@@ -1,4 +1,8 @@
 import {
+  orderDistinctEvidenceCandidates,
+  type RankingSelectionObservation,
+} from "./grounded-candidate-ordering.js";
+import {
   admitDiagnosticReferences,
   type DiagnosticReferenceObservation,
 } from "./grounded-diagnostic-references.js";
@@ -572,6 +576,11 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   fields: {
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    basenameCollisionGroupCount: { type: "integer", dataClass: "count", required: false },
+    basenameDedupDemotedCount: { type: "integer", dataClass: "count", required: false },
+    exactPathSignalPresentCount: { type: "integer", dataClass: "count", required: false },
+    pathSegmentSignalPresentCount: { type: "integer", dataClass: "count", required: false },
+    directoryProximityTieBreakCount: { type: "integer", dataClass: "count", required: false },
     stackTraceFrameCount: { type: "integer", dataClass: "count", required: false },
     stackTraceExternalFrameCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -581,7 +590,10 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["connected-context-retrieval"],
-  proofIds: ["search.connected-context.selection-details.line"],
+  proofIds: [
+    "search.connected-context.selection-details.line",
+    "search.connected-context.path-ranking.line",
+  ],
   releaseImpact: "patch",
 });
 
@@ -3127,6 +3139,7 @@ export interface ExcerptReadSummary {
 type PackCacheIdentity = readonly string[];
 
 interface CandidateOrdering {
+  readonly rankingObservation?: RankingSelectionObservation | undefined;
   readonly priorityPaths?: ReadonlySet<string>;
   readonly kept: readonly CandidateFile[];
   readonly omitted: readonly OmittedContextEntry[];
@@ -5485,35 +5498,6 @@ function explicitlyTargetsLockfile(
   return queryTerms(queryText, anchors).some((term) => path.includes(term) || name === term);
 }
 
-function orderForDistinctEvidencePaths(
-  kept: readonly CandidateFile[],
-  anchors: readonly SearchAnchor[],
-  priorityPaths: Set<string>,
-): readonly CandidateFile[] {
-  const selected = new Set(kept.slice(0, 1));
-  for (const anchor of anchors) {
-    if (anchor.kind === "literal" || anchor.weight < 0.7) continue;
-    const term = anchor.term.toLowerCase();
-    const candidate =
-      [...selected].find((entry) => entry.scopePath.toLowerCase().includes(term)) ??
-      kept.find((entry) => entry.scopePath.toLowerCase().includes(term));
-    if (candidate !== undefined) {
-      selected.add(candidate);
-      priorityPaths.add(candidate.scopePath);
-    }
-  }
-  const names = new Set(
-    [...selected].map((candidate) => basename(candidate.scopePath).toLowerCase()),
-  );
-  for (const candidate of kept) {
-    const name = basename(candidate.scopePath).toLowerCase();
-    if (names.has(name)) continue;
-    names.add(name);
-    selected.add(candidate);
-  }
-  return [...selected, ...kept.filter((candidate) => !selected.has(candidate))];
-}
-
 function refineCandidateOrdering(
   kept: readonly CandidateFile[],
   omitted: readonly OmittedContextEntry[],
@@ -5521,6 +5505,7 @@ function refineCandidateOrdering(
   anchors: readonly SearchAnchor[],
   diagnostics: ContextPackDiagnostics | undefined,
   nowMs: number,
+  addressedPaths: ReadonlySet<string>,
 ): CandidateOrdering {
   const queryText = query.text;
   const preferred: CandidateFile[] = [];
@@ -5553,11 +5538,15 @@ function refineCandidateOrdering(
   const orderedPreferred = useSearchOrder
     ? orderPreferredCandidates(preferred, diagnostics, priorityPaths)
     : preferred;
+  const distinct = orderDistinctEvidenceCandidates(
+    orderedPreferred,
+    anchors,
+    priorityPaths,
+    addressedPaths,
+  );
   return {
-    kept: [
-      ...orderForDistinctEvidencePaths(orderedPreferred, anchors, priorityPaths),
-      ...lockfiles,
-    ],
+    rankingObservation: distinct.observation,
+    kept: [...distinct.kept, ...lockfiles],
     omitted: nextOmitted,
     priorityPaths,
   };
@@ -6819,7 +6808,8 @@ function preparePackAssembly(
     {
       atoms,
       anchors: primaryRankingAnchors(input, plan),
-      context: { retrievalIntent: plan.retrievalIntent },
+      ...(plan.references === undefined ? {} : { references: plan.references }),
+      context: { retrievalIntent: effectiveRetrievalIntent(plan) },
       ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
     },
     {
@@ -6836,6 +6826,7 @@ function preparePackAssembly(
     planSearchAnchors(plan),
     rings.diagnostics,
     nowMs(),
+    explicitSelectionPaths(rings),
   );
   const ordered = selectGroundedCandidateFiles({
     ...refined,
@@ -6852,7 +6843,7 @@ function preparePackAssembly(
     atoms: selectedAtoms,
     reusedEvidenceAtomCount,
     initialUsage,
-    ordered,
+    ordered: { ...ordered, rankingObservation: refined.rankingObservation },
     atomsByPath: groupEvidenceAtomsByPath(selectedAtoms),
     evidenceUncertainty:
       selectedAtoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [],
@@ -7117,6 +7108,7 @@ interface GroundedAssemblyContext {
 
 interface GroundedPackAssembly {
   readonly explicitObservation?: ExplicitPathObservation | undefined;
+  readonly rankingObservation?: RankingSelectionObservation | undefined;
   readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
   readonly explicitSelectionAtomCount?: number;
   readonly reusedEvidenceAtomCount?: number | undefined;
@@ -7255,6 +7247,7 @@ async function assembleGroundedPack(
     return {
       pack: withGroundedContextDiagnostics(ctx.cached, deps),
       ...explicitDetails,
+      rankingObservation: prepared.ordered.rankingObservation,
       reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
       metadataRetention: augmentedRings.metadataRetention,
       elapsedBudgetBlocked: false,
@@ -7287,6 +7280,7 @@ async function assembleGroundedPack(
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
     ...explicitDetails,
+    rankingObservation: prepared.ordered.rankingObservation,
     reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
     metadataRetention: augmentedRings.metadataRetention,
     excerptObservation: excerptReads.observation,
@@ -7315,6 +7309,7 @@ function explicitAssemblyDetails(
 
 interface ConnectedContextCompletionStatus {
   readonly explicitObservation?: ExplicitPathObservation | undefined;
+  readonly rankingObservation?: RankingSelectionObservation | undefined;
   readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
   readonly explicitSelectionAtomCount?: number | undefined;
   readonly reusedEvidenceAtomCount?: number | undefined;
@@ -7409,6 +7404,7 @@ function liveRetrievalCompletion(
 ): ConnectedContextCompletionStatus {
   return {
     explicitObservation: assembled.explicitObservation,
+    rankingObservation: assembled.rankingObservation,
     referenceObservation: assembled.referenceObservation,
     explicitSelectionAtomCount: assembled.explicitSelectionAtomCount,
     anchoredExcerptWindowCount: assembled.anchoredWindowCount,
@@ -8230,6 +8226,7 @@ function selectionDetailsActivityExtra(
   return {
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
+    ...status.rankingObservation,
     ...(status.referenceObservation === undefined
       ? {}
       : {

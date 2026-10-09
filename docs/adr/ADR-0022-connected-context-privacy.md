@@ -516,7 +516,16 @@ existing broader retrieval behavior. Literal lookup prioritizes actual lexical
 content matches ahead of incidental natural-language path overlap. Files with the same basename
 remain independent evidence candidates: their names alone cannot establish duplicate content or
 facts. Explicit duplicate hints remain supported, and existing output/context budgets bound retained
-evidence. When distinct explicit anchors identify different candidate paths, bounded selection
+evidence. Exact and suffix path evidence and directory-segment affinity contribute named weighted
+composite signals; positive path evidence neutralizes the ordinary depth penalty. Scan ranking
+emits the existing exact-path bucket for explicit multi-segment exact/suffix query matches,
+while generated candidates retain their eligibility policy. Score ties compare exact-path and
+segment signals, depth, then codepoint path spelling. All addressed/selected same-basename
+candidates precede unaddressed alternatives; only unaddressed candidates use basename diversity.
+Their score ties use shared-parent proximity, segment affinity, then path spelling. Collision,
+diversity-demotion, signal, and proximity observations are count-only fields on the same
+correlated selection-details Activity Log operation.
+When distinct explicit anchors identify different candidate paths, bounded selection
 prioritizes coverage of those paths before additional alternatives for an already covered anchor.
 Ordinary-folder factual
 HTML/text lookups and complete literal absences avoid unrelated code-graph augmentation;

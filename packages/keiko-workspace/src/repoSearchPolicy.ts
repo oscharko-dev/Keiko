@@ -907,6 +907,15 @@ interface ScoredCandidate {
 // computation drives both ordering and the explainable ranking diagnostics (a reviewer can see WHY
 // a file was selected: which bucket, the intent-specific bucket weight, the path-term bonus, the
 // depth penalty, and — for a manifest — which ecosystem classified it).
+function queryAwareBucket(scopePath: string, terms: readonly string[]): CandidateBucket {
+  const bucket = bucketByPath(scopePath);
+  if (bucket === "low-value") return bucket;
+  const path = normalizedPath(scopePath);
+  return terms.some((term) => term.includes("/") && (path === term || path.endsWith(`/${term}`)))
+    ? "exact-path"
+    : bucket;
+}
+
 function scoreCandidate(
   file: DiscoveredFile,
   terms: readonly string[],
@@ -915,7 +924,7 @@ function scoreCandidate(
   sourceOverProse: boolean,
 ): ScoredCandidate {
   const path = file.relativePath;
-  const bucket = bucketByPath(path);
+  const bucket = queryAwareBucket(path, terms);
   const lexical = lexicalPathSignals(path, terms);
   const depth = depthPenalty(path);
   const bucketTiebreak = bucketScore(bucket, policy.intent);
