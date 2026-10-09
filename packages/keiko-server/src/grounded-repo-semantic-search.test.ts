@@ -1300,8 +1300,8 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
       expect.soft(stat.mock.calls.length).toBeLessThanOrEqual(96);
       for (const call of readFileBytes.mock.calls) {
         expect(call[2]).toBe("reject");
-        expect(call[3]?.fileIdentity).toBeDefined();
-        expect(call[3]?.size).toBeGreaterThan(0);
+        expect(call[3].fileIdentity).toBeDefined();
+        expect(call[3].size).toBeGreaterThan(0);
       }
     } finally {
       fixture.close();
