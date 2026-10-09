@@ -239,8 +239,12 @@ read admission. Hard denials, containment, ignore, binary, size and budget check
 Complete extracted document paths are target data, so their `reference`, `history` or `caller`
 directory segments cannot request relationship/history rings. Actual relationship/history words
 outside the path retain their routing. An ordinary factual lookup with admitted named document
-paths focuses discovery on those paths and binds its existing structural request context to that
-narrower search scope. It does not enumerate navigation neighbours or widen the human's scope.
+paths focuses discovery on those paths only when its canonical planner decision contains no
+independent non-path target, and binds its existing structural request context to that narrower
+search scope. Mixed document/implementation lookups retain discovery of the independent target.
+Ordinary document eligibility reuses the shared web/text-document extension groups, including
+XHTML and Markdown, alongside XML and existing bounded document extraction. It does not enumerate
+navigation neighbours or widen the human's scope.
 Existing correlated admission, skipped-ring, read and budget observations describe this path;
 non-Git folders cannot dispatch the Git-history ring, even when history was requested.
 An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed

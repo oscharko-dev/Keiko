@@ -454,7 +454,9 @@ system that exists, never beside it:
   Complete document path references are data when classifying relationship/history requests;
   directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
   factual lookup focuses discovery on canonically admitted named documents with a scope-bound
-  request context. Its source/read/ring observations reuse the same registered retrieval siblings.
+  request context only when the planner has no independent non-path target. Its source/read/ring
+  observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
+  canonical web/text-document extension groups, alongside XML and bounded document extraction.
   Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
   generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
   Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
