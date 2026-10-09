@@ -114,3 +114,43 @@ The gate emits evidence only when all six proof areas pass together. Its negativ
 the ≥ 0.95 ANN recall floor, reranker-reversed and embedding-flat regressions, the tautological
 evaluation control, neutral-purpose rejection for editor assembly, and fail-closed ANN fallback
 diagnostics live.
+
+## Connected-folder retrieval incident (#3881 / #3882)
+
+The incident cases extend the existing retrieval gates without changing their floors. Historical
+workspace cases still exercise `searchText` with the sanctioned `memFs` adapter. Incident cases
+materialize the inline synthetic repository and exercise the production conversation-continuity
+entry point and connected-context orchestrator. They therefore observe admission, excerpt windows,
+selection floors and the actual files retained for the answer. Neutral oversized documentation
+forces the known-fit folder context to report over-capacity rather than concealing a retrieval miss
+by supplying the entire tiny fixture. The repository metadata marker preserves the existing
+generated-file exclusion policy; an ordinary folder's generated-directory text remains covered by
+its separate historical positive control.
+
+| Case family                              | Languages       | Baseline at `3d46ff9ac`                        |
+| ---------------------------------------- | --------------- | ---------------------------------------------- |
+| `explicit-relative-path`                 | English, German | green                                          |
+| `bare-basename-collision`                | English, German | green                                          |
+| `vitest-stack-trace-node-modules`        | English, German | green                                          |
+| `path-only-in-previous-assistant-answer` | English, German | red: no selected evidence                      |
+| `conversational-orientation-follow-up`   | English, German | red: metadata selected instead of the referent |
+| `floor-outlier-explicit-file`            | English, German | green                                          |
+| `generated-and-node-modules-ignored`     | shared control  | green: zero generated leaks                    |
+
+The current target already satisfies several literal incident cases. The recorded baseline does
+not label those cases red or manufacture a failure; each owning implementation child must prove
+its remaining acceptance boundary with focused failing-first tests. Both assistant-referent and
+orientation variants fail the unchanged lexical gate on the current target.
+
+Body-free output from `npm run check:retrieval-quality` before the product fixes:
+
+```text
+retrieval-quality: cases=29 top1=86.2% recall@5=86.2% mrr=0.862 ndcg@5=0.859 line-hit=86.2% generated-leaks=0.
+```
+
+The grounded semantic corpus additionally contains two identically named files in different
+directories, with path-discriminating questions. `basename-tie-alphabetical` flattens candidate
+scores before production fusion and disables the scripted reranker, so production tie resolution
+must fail the unchanged grounded floors. The shared regression probe runner checks that this
+injected ranking defect cannot pass unnoticed. Existing `reranker-off`, `reranker-reversed` and
+`embedding-flat` controls remain in place.
