@@ -2355,6 +2355,21 @@ export function filesChatBindScope(
   return filesVisibleScope(files, connectedAtMs);
 }
 
+export const KEEP_FILES_FOLDER_CFG_KEY = "keepFilesFolder";
+
+export function pinnedFilesScope(
+  next: ChatConnectedScope,
+  canonical: readonly ChatConnectedScope[] | undefined,
+  keepFolder: boolean,
+): ChatConnectedScope | null {
+  if (!keepFolder || next.kind !== "files") return next;
+  if (canonical === undefined) return null;
+  const sameRoot = canonical.filter((scope) => scope.root === next.root);
+  if (sameRoot.length === 0) return next;
+  const folders = sameRoot.filter((scope) => scope.kind !== "files");
+  return folders.length === 1 ? (folders[0] ?? null) : null;
+}
+
 export function boundScopeOf(conn: {
   readonly boundRoot?: string;
   readonly boundScopeKind?: string;
