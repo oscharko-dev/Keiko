@@ -264,7 +264,7 @@ export function ChatScopeNotice(props: ChatScopeNoticeProps): ReactNode {
   const restoration = useFolderRestoration(props, notice, dismiss);
   if (notice === null) return null;
   return (
-    <div className={styles.notice}>
+    <div className={styles.cmpNotice}>
       <span role="status" aria-live="polite">
         {t(notice.reason === "widened" ? "scope.notice.widened" : "scope.notice.narrowed", {
           scope: connectedScopeLabel(notice.scope, t),

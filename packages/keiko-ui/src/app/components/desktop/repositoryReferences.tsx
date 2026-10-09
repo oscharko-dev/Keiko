@@ -89,9 +89,9 @@ export interface RepositoryReferenceEvidence {
 }
 
 const EVIDENCE_CLASSES = {
-  cited: "cited",
-  "read-uncited": "readUncited",
-  unread: "unread",
+  cited: "cmpCited",
+  "read-uncited": "cmpReadUncited",
+  unread: "cmpUnread",
 } as const;
 const EVIDENCE_LABELS = {
   cited: "grounded.reference.cited",
