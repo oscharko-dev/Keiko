@@ -29,6 +29,7 @@ export interface RankingContext {
 }
 
 export interface RankingHints {
+  readonly recentPaths?: readonly string[];
   readonly generatedPathPatterns?: readonly string[];
   readonly duplicateOf?: ReadonlyMap<string, string>;
 }
@@ -393,7 +394,7 @@ function baseSignalScore(signals: readonly CandidateSignal[], generated: boolean
 export function extractSignals(
   atomsForPath: readonly EvidenceAtom[],
   anchors: readonly SearchAnchor[],
-  hints: Required<RankingHints>,
+  hints: Required<Omit<RankingHints, "recentPaths">> & Pick<RankingHints, "recentPaths">,
   context?: RankingContext,
   references: readonly SearchReference[] = [],
 ): ExtractedSignals {
@@ -424,7 +425,24 @@ export function extractSignals(
       { name: "git-churn", value: gitChurn },
     );
   }
+  appendWorktreeRecency(baseSignals, scopePath, atomsForPath, hints, context);
   appendIntentSignals(baseSignals, scopePath, atomsForPath, context);
   const baseScore = baseSignalScore(baseSignals, generatedHint);
   return { scopePath, signals: baseSignals, baseScore, generatedHint };
+}
+
+function appendWorktreeRecency(
+  signals: CandidateSignal[],
+  scopePath: string,
+  atoms: readonly EvidenceAtom[],
+  hints: Pick<RankingHints, "recentPaths">,
+  context: RankingContext | undefined,
+): void {
+  if (
+    context?.retrievalIntent !== "targeted-code-search" &&
+    context?.retrievalIntent !== "diagnostic-search"
+  )
+    return;
+  if (!hints.recentPaths?.includes(scopePath) || bestLexicalScore(atoms) <= 0) return;
+  signals.push({ name: "git-worktree-recency", value: 1 });
 }

@@ -449,6 +449,10 @@ system that exists, never beside it:
   high/low selection vocabulary and actual observed scope/semantic dispositions.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
+  into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
+  observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
+  private status digest stay outside logs; observation cannot admit evidence or bypass a floor.
   The typed `search.connected-context.answer-details` sibling joins the same scope/query digests
   and correlation. It records actual final-prompt file counts, answer kind, observed citation
   behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,
