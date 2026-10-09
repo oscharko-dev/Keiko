@@ -5,7 +5,10 @@ import {
   type ExplorationUsage,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RerankerSeam } from "@oscharko-dev/keiko-workflows";
-import { rerankGroundedCandidates } from "./grounded-preselection-reranker.js";
+import {
+  rerankGroundedCandidates,
+  type PreselectionRerankerInput,
+} from "./grounded-preselection-reranker.js";
 
 const USAGE: ExplorationUsage = {
   searchCalls: 0,
@@ -21,7 +24,7 @@ const CANDIDATES: readonly CandidateFile[] = [
   { scopePath: "second.ts", score: 0.1, signals: [], omitted: undefined },
 ];
 
-function fixtureInput(reranker: RerankerSeam) {
+function fixtureInput(reranker: RerankerSeam): PreselectionRerankerInput {
   return {
     reranker,
     candidates: CANDIDATES,

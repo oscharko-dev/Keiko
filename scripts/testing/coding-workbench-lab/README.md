@@ -154,24 +154,27 @@ node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits> --ledger-
 
 ## Scripts
 
-| Script                    | What it does                                                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `tasks.json`              | The task catalog: ids T1 to T13 and C1, their exact texts, modes and baselines                                            |
-| `wb-ui.mjs`               | Runs one task through the real Workbench UI in headless Chromium (`--headed` to watch); the driver for every editing task |
-| `wb-run.mjs`              | Runs one task over the HTTP API; read-only tasks only, because edits need the live editor bridge (finding F4)             |
-| `wb-stop.mjs`             | Stops a run                                                                                                               |
-| `wb-trust.mjs`            | Grants or revokes package-script trust for a lab repository (`grant` or `revoke`, no default); registers the copy first   |
-| `pair.mjs`                | Prints a one-time pairing URL (or the attestation JSON); valid about 30 seconds, usable once                              |
-| `run-summary.mjs`         | Body-free run summary and, with `--ledger-row`, a draft ledger row that names the driver and the approval policy          |
-| `turn-profile.mjs`        | Body-free per-turn timing profile of a run (model, operator pauses, tools, gaps), bounded at the run's settlement         |
-| `rawtl.mjs`               | Body-free raw timeline of a run and its child requests, optionally filtered by operation                                  |
-| `chaos-proxy.mjs`         | Fault-injecting proxy between LiteLLM and the model server (503 bursts, outage, latency, drop, stall, hang)               |
-| `chaos-suite.mjs`         | Runs the scenarios S1 to S7 against task C1, one summary line each; exits 1 if one started no run                         |
-| `verify-latency.mjs`      | Times the server's enforced verification path on the lab repository (finding F14)                                         |
-| `lab-common.mjs`          | Shared helpers: option parsing, approval policy, lab-repository check, loopback-only base URL, pairing, task catalog      |
-| `activity-log-events.mjs` | Reads the Activity Log through the file grammar in `keiko-contracts` (a library, not a command)                           |
-| `op-contract.mjs`         | Compares the operation and field names a tool reads with the generated op catalog (a library, not a command)              |
-| `intervals.mjs`           | Interval algebra behind the non-overlapping slices of the turn profile (a library, not a command)                         |
+| Script                      | What it does                                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `tasks.json`                | The task catalog: ids T1 to T13 and C1, their exact texts, modes and baselines                                                       |
+| `wb-ui.mjs`                 | Runs one task through the real Workbench UI in headless Chromium (`--headed` to watch); the driver for every editing task            |
+| `wb-run.mjs`                | Runs one task over the HTTP API; read-only tasks only, because edits need the live editor bridge (finding F4)                        |
+| `wb-stop.mjs`               | Stops a run                                                                                                                          |
+| `wb-trust.mjs`              | Grants or revokes package-script trust for a lab repository (`grant` or `revoke`, no default); registers the copy first              |
+| `pair.mjs`                  | Prints a one-time pairing URL (or the attestation JSON); valid about 30 seconds, usable once                                         |
+| `run-summary.mjs`           | Body-free run summary and, with `--ledger-row`, a draft ledger row that names the driver and the approval policy                     |
+| `turn-profile.mjs`          | Body-free per-turn timing profile of a run (model, operator pauses, tools, gaps), bounded at the run's settlement                    |
+| `rawtl.mjs`                 | Body-free raw timeline of a run and its child requests, optionally filtered by operation                                             |
+| `chaos-proxy.mjs`           | Fault-injecting proxy between LiteLLM and the model server (503 bursts, outage, latency, drop, stall, hang)                          |
+| `chaos-suite.mjs`           | Runs the scenarios S1 to S7 against task C1, one summary line each; exits 1 if one started no run                                    |
+| `verify-latency.mjs`        | Times the server's enforced verification path on the lab repository (finding F14)                                                    |
+| `lab-common.mjs`            | Shared helpers: option parsing, approval policy, lab-repository check, loopback-only base URL, pairing, task catalog                 |
+| `activity-log-events.mjs`   | Reads the Activity Log through the file grammar in `keiko-contracts` (a library, not a command)                                      |
+| `op-contract.mjs`           | Compares the operation and field names a tool reads with the generated op catalog (a library, not a command)                         |
+| `intervals.mjs`             | Interval algebra behind the non-overlapping slices of the turn profile (a library, not a command)                                    |
+| `connected-chat-cases.mjs`  | Connected-chat campaign questions and ordinary-folder manual fixture bindings (a library, not a command)                             |
+| `connected-chat-run.mjs`    | Runs an explicit connected-chat campaign against a held checkout and owner-only runtime metadata; `--prepare` makes no model request |
+| `connected-chat-record.mjs` | Produces body-free connected-chat answer, citation, source-authority and Activity Log observations (a library, not a command)        |
 
 The pure logic of these scripts (option parsing, the turn-profile pairing and slices, the proxy's
 fault handling, the catalog and fixture consistency) is covered by
