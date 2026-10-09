@@ -1459,16 +1459,14 @@ async function groundedGatewayAttempt(
   });
   if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
   if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
-  ensureNotCancelled(ctx.signal);
-  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) {
-    throw new TimeoutError("Grounded synthesis deadline elapsed before gateway admission");
-  }
+  assertGroundedGatewayDispatchActive(ctx, options);
   logGroundedPromptSelection(
     ctx.correlationId,
     sent,
     options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
     ctx.tokenAccounting,
   );
+  assertGroundedGatewayDispatchActive(ctx, options);
   const response = await ctx.model.call(
     {
       modelId: ctx.modelId,
@@ -1480,6 +1478,16 @@ async function groundedGatewayAttempt(
     ctx.signal,
   );
   return { sent, response };
+}
+
+function assertGroundedGatewayDispatchActive(
+  ctx: GroundedGatewayAnswerContext,
+  options: GroundedAnswerOptions,
+): void {
+  ensureNotCancelled(ctx.signal);
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) {
+    throw new TimeoutError("Grounded synthesis deadline elapsed before gateway admission");
+  }
 }
 
 function requiredEvidenceSent(sent: SentGroundedPrompt, paths: readonly string[] = []): boolean {

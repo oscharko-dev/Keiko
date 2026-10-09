@@ -113,6 +113,33 @@ describe("production working-tree retrieval hints", () => {
     ).toMatchObject({ worktreeStatusDisposition: "not-git", recentPathHintCount: 0 });
   });
 
+  it("observes Git changes in a directly connected repository subfolder without widening its root", async () => {
+    await repository();
+    const selectedRoot = join(root, "z");
+    writeFileSync(join(selectedRoot, "validation.ts"), "export const validation = 42;\n");
+    const original = input();
+    const selected = {
+      ...original,
+      workspaceRoot: selectedRoot,
+      scope: { ...original.scope, workspaceRoot: selectedRoot },
+    };
+    const runner = vi.fn<GitProcessRunner>(defaultGitProcessRunner);
+    const log = captureActivityLog();
+    const retrieved = await retrieveConnectedContextPack(selected, {
+      answerer: { answer: () => Promise.resolve("") },
+      correlationId: "worktree-subfolder",
+      worktreeGitRunner: runner,
+      activityLog: log.sink,
+    });
+    expect(retrieved.pack.scope.workspaceRoot).toBe(selectedRoot);
+    expect(retrieved.pack.files.map((file) => file.scopePath)).toEqual(["validation.ts"]);
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.selection-details")?.extra,
+    ).toMatchObject({ worktreeStatusDisposition: "applied", recentPathHintCount: 1 });
+    expect(runner).toHaveBeenCalled();
+    expect(runner.mock.calls.every(([, options]) => options.cwd === selectedRoot)).toBe(true);
+  });
+
   it("keeps retrieval available after a structured worktree dependency failure", async () => {
     await repository();
     const runner = vi.fn<GitProcessRunner>(() =>
