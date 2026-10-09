@@ -31,6 +31,10 @@ export type GroundedSemanticProviderFactory = (
 export interface GroundedSemanticFreshnessSummary {
   readonly semanticStaleFallbackCount: number;
   readonly semanticRefreshedFileCount: number;
+  readonly semanticRefreshEmbeddingCallCount?: number;
+  readonly semanticRefreshReadFileCount?: number;
+  readonly semanticRefreshReadBytesUpperBound?: number;
+  readonly semanticRefreshInputTokenUpperBound?: number;
 }
 
 export function groundedSemanticFreshnessSummary(
@@ -46,6 +50,25 @@ export function groundedSemanticFreshnessSummary(
       (file) => stale.has(file.scopePath) && !refreshed.has(file.scopePath),
     ).length,
     semanticRefreshedFileCount: sent.filter((file) => refreshed.has(file.scopePath)).length,
+    ...refreshUsageSummary(observations),
+  };
+}
+
+function refreshUsageSummary(
+  observations: readonly RepositorySemanticFreshnessObservation[],
+): Partial<GroundedSemanticFreshnessSummary> {
+  const usage = observations.flatMap((observation) =>
+    observation.refreshUsage === undefined ? [] : [observation.refreshUsage],
+  );
+  if (usage.length === 0) return {};
+  return {
+    semanticRefreshEmbeddingCallCount: usage.reduce(
+      (sum, item) => sum + item.embeddingCallCount,
+      0,
+    ),
+    semanticRefreshReadFileCount: usage.reduce((sum, item) => sum + item.readFileCount, 0),
+    semanticRefreshReadBytesUpperBound: usage.reduce((sum, item) => sum + item.readBytes, 0),
+    semanticRefreshInputTokenUpperBound: usage.reduce((sum, item) => sum + item.inputTokens, 0),
   };
 }
 

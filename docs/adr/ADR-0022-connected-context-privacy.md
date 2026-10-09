@@ -552,6 +552,18 @@ candidates precede unaddressed alternatives; only unaddressed candidates use bas
 Their score ties use shared-parent proximity, segment affinity, then path spelling. Collision,
 diversity-demotion, signal, and proximity observations are count-only fields on the same
 correlated selection-details Activity Log operation.
+Request-local semantic leases open only for an admitted semantic lookup. Existing index fingerprint
+verification is part of that bounded logical search, while optional new live refresh consumes the
+same exploration governor's remaining file, excerpt-byte, and model-input grants. Each new read
+reserves the validated observed file size; each embedding reserves a conservative UTF-8-byte input
+token bound and uses the existing gateway spend reservation with exactly-once settlement. Rejected
+grants do not charge an attempt or start new refresh I/O. `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX`
+defaults to zero, invalid explicit values remain zero, and enabled integer values are capped at
+eight. Refresh shares the original request signal and remaining deadline, capped again at five
+seconds; it never mutates the persisted pod. Selection-details records actual embedding/read
+attempt counts separately from byte/input-token upper reservations. Refreshed-file counts include
+only usable files retained in the assembled pack; stale retained files receive the canonical
+`stale-evidence` marker with a `stale-semantic:` count-only claim and keep current lexical evidence.
 Addressed-file demotion is recorded separately from legitimate unaddressed basename diversity;
 an unaddressed collision cannot by itself diagnose a missed explicit target.
 The active-intent absolute floor derives from the scoring weight table: ninety percent of a
