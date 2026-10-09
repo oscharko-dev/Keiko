@@ -630,6 +630,12 @@ seconds; it never mutates the persisted pod. Selection-details records actual em
 attempt counts separately from byte/input-token upper reservations. Refreshed-file counts include
 only usable files retained in the assembled pack; stale retained files receive the canonical
 `stale-evidence` marker with a `stale-semantic:` count-only claim and keep current lexical evidence.
+Mixed fresh and stale candidates reuse a successful query vector only within the current request,
+with the same adapter, query, and validated pod embedding identity. The existing scoped query cache
+and identity preflight remain authoritative; a copied request-private observation cannot mutate
+their cached vectors. Live document refresh still requires its own read, token, deadline, and spend
+admission. Reused query work is not charged as another embedding attempt, and query vectors are
+never persisted or logged.
 Addressed-file demotion is recorded separately from legitimate unaddressed basename diversity;
 an unaddressed collision cannot by itself diagnose a missed explicit target.
 The active-intent absolute floor derives from the scoring weight table: ninety percent of a
