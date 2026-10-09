@@ -21,6 +21,8 @@ import {
 } from "./repoSearchSourceClassification.js";
 
 export interface LineMatcher {
+  /** Only explicit false skips structural preparation; unknown injected matchers stay conservative. */
+  readonly requiresSourceClassification?: boolean | undefined;
   readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
 }
 
@@ -748,6 +750,7 @@ function buildLiteralMatcher(
   const targets = boundedLiteralTargets(terms);
   const needles = targets.map((term) => (query.caseSensitive ? term : term.toLowerCase()));
   return {
+    requiresSourceClassification: false,
     match: (line: string): number => {
       const haystack = query.caseSensitive ? line : line.toLowerCase();
       return needles.some((needle) => haystack.includes(needle)) ? 1 : 0;

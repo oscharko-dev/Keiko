@@ -700,7 +700,10 @@ export function scoreContentForSearch(
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
   const tokens = contentTokenSet(text, query.caseSensitive);
-  const sourceLines = repositorySourceLines(text, scopePath);
+  const sourceLines =
+    routeQueryTermsForSearch(query) === undefined && symbolDefinitionQueryTerms(query).length === 0
+      ? []
+      : repositorySourceLines(text, scopePath);
   return scoreContentHitsForSearch(
     policy,
     groups.length,

@@ -236,6 +236,9 @@ images, binary content, unsafe aliases, and larger files are excluded. Ordinary-
 exclusions merely from names such as `build` or `dist`. Query-named ordinary-folder documents use
 that same eligibility distinction; repository generated code remains excluded before unconditional
 read admission. Hard denials, containment, ignore, binary, size and budget checks still apply.
+Leading `./` in a query reference denotes the same scope-relative target and is removed before
+strict canonical validation. Parent traversal and interior dot segments are not normalized away;
+canonical sensitive names still pass through the existing hard-denial policy.
 Complete extracted document paths are target data, so their `reference`, `history` or `caller`
 directory segments cannot request relationship/history rings. Actual relationship/history words
 outside the path retain their routing. An ordinary factual lookup with admitted named document
