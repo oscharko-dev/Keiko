@@ -457,6 +457,9 @@ system that exists, never beside it:
   request context only when the planner has no independent non-path target. Its source/read/ring
   observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
   canonical web/text-document extension groups, alongside XML and bounded document extraction.
+  Quoted targets use the same canonical reference identity. When every complete factual document
+  target is rejected, `explicit-target-unavailable` records skipped rings and augmentation; other
+  same-basename files cannot substitute for the unavailable target.
   Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
   generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
   Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
