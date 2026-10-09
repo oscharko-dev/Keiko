@@ -385,7 +385,27 @@ bounded shared filename discovery, retaining every eligible match independently.
 Admission counters and the closed reason list are projected on the existing
 `search.connected-context.source-details` sibling because the completed operation already occupies
 its bounded field contract. Its correlation joins the unchanged completion/read-budget evidence;
-the field cap and existing completed fields remain authoritative.
+the field cap and existing completed fields remain authoritative. Diagnostic traces reuse the
+bounded failure parser and an independent six-reference channel, leaving eight user-term anchors
+available. External runtime/generated frames are removed before the reference cap. Original path
+casing and numeric source locations survive admission; the primary frame and its existing
+structural test/source pair receive the same eligibility and read-budget checks. Tool names inside
+trace bodies never request project metadata. Metadata injection follows the independent user
+question and the effective retrieval intent. Only an anaphoric follow-up with a previous targeted
+or diagnostic intent may inherit that intent; independently named targets and new traces classify
+on their own. Supplied reference paths, lines, origins, and inherited effective intent participate
+in plan identity without changing the historical no-reference identity.
+The final six source-detail slots hold detected/in-scope/admitted-frame, test/source-pair,
+reference-channel, and closed metadata-injection observations. Total/external frame counts use the
+registered `search.connected-context.selection-details` sibling on the same log port and
+correlation. This companion accommodates later selection observations without dropping existing
+fields or expanding the formatter's contextual-field cap.
+Supported document basenames use the existing bounded path-only discovery port, then the same
+admission and document-extraction boundaries; ZIP containers never require text classification.
+Only extraction-owned files are removed from ordinary code evidence. An ordinary text file with
+a legacy document suffix remains text evidence unless explicitly selected for document handling.
+Expected file disappearance/access races record closed missing/denied rejections and preserve
+other candidates; cancellation and unexpected dependency failures remain observable failures.
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,
 not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
 continue to report incomplete scope coverage; omitted evidence never proves a fact absent.
