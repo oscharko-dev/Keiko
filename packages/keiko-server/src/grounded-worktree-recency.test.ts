@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
+import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import type { SearchScope } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { captureActivityLog } from "./activityLogCapture.test-support.js";
-import { observeWorktreeRecency } from "./grounded-worktree-recency.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { observeWorktreeRecency, type WorktreeRecencyInputs } from "./grounded-worktree-recency.js";
 
 const NOW = 1_700_000_000_000;
 let root = "";
@@ -42,7 +44,7 @@ function searchScope(scope: SelectedScope, ignoreLines: readonly string[] = []):
       selectedRoot: root,
       name: undefined,
       version: undefined,
-      testFramework: "none",
+      testFramework: "unknown",
       sourceDirs: [],
       testDirs: [],
       languages: [],
@@ -61,13 +63,13 @@ function runnerFor(records: readonly string[]): ReturnType<typeof vi.fn<GitProce
   );
 }
 
-function inputs(gitRunner: GitProcessRunner, scope = selected()) {
+function inputs(gitRunner: GitProcessRunner, scope = selected()): WorktreeRecencyInputs {
   return {
     scope,
     searchScope: searchScope(scope),
     workspaceKind: "git-repository" as const,
     fs: nodeWorkspaceFs,
-    nowMs: () => NOW,
+    nowMs: (): number => NOW,
     deadlineAtMs: NOW + 1_500,
     gitRunner,
   };
@@ -78,7 +80,7 @@ function modified(path: string): string {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "keiko-worktree-recency-"));
+  root = nodeWorkspaceFs.realPath(mkdtempSync(join(tmpdir(), "keiko-worktree-recency-")));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -110,6 +112,53 @@ describe("observeWorktreeRecency", () => {
     expect(observed.observation.worktreeStatusDisposition).toBe("skipped-budget");
     expect(runner).not.toHaveBeenCalled();
     expect(realPath).not.toHaveBeenCalled();
+  });
+
+  it("does no I/O when admission has exhausted its observation allowance", async () => {
+    const runner = runnerFor([]);
+    const realPath = vi.fn(nodeWorkspaceFs.realPath);
+    const observed = await observeWorktreeRecency({
+      ...inputs(runner),
+      observationAllowed: false,
+      fs: { ...nodeWorkspaceFs, realPath },
+    });
+    expect(observed.observation.worktreeStatusDisposition).toBe("skipped-budget");
+    expect(runner).not.toHaveBeenCalled();
+    expect(realPath).not.toHaveBeenCalled();
+  });
+
+  it("stops metadata observation when the root lookup consumes the remaining deadline", async () => {
+    let now = NOW;
+    const runner = runnerFor([]);
+    const realPath = vi.fn((path: string): string => {
+      now = NOW + 1_500;
+      return nodeWorkspaceFs.realPath(path);
+    });
+    const observed = await observeWorktreeRecency({
+      ...inputs(runner),
+      nowMs: (): number => now,
+      fs: { ...nodeWorkspaceFs, realPath },
+    });
+    expect(observed.observation.worktreeStatusDisposition).toBe("skipped-budget");
+    expect(realPath).toHaveBeenCalledTimes(1);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("uses the hardened production runner in a real repository", async () => {
+    const initialized = await defaultGitProcessRunner(["init", "--quiet", root], {
+      cwd: root,
+      maxBytes: 16_384,
+      timeoutMs: 1_500,
+    });
+    expect(initialized.exitCode).toBe(0);
+    file("src/live.ts");
+    file("elsewhere.ts");
+    const observed = await observeWorktreeRecency({
+      ...inputs(defaultGitProcessRunner, selected("directory", ["src"])),
+      deadlineAtMs: Infinity,
+    });
+    expect(observed.paths).toEqual([{ path: "src/live.ts", status: "untracked" }]);
+    expect(observed.statusDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("admits changed existing files and counts deleted files without hinting them", async () => {
@@ -230,5 +279,41 @@ describe("observeWorktreeRecency", () => {
     const observed = await observeWorktreeRecency(inputs(runner));
     expect(observed.paths).toEqual([]);
     expect(observed.observation.worktreeStatusDisposition).toBe("unavailable");
+  });
+
+  it("rejects a truncated membership response before spawning status", async () => {
+    const runner = vi.fn<GitProcessRunner>(() =>
+      Promise.resolve({
+        ...result(`${root}\n\n`),
+        truncated: true,
+      }),
+    );
+    const observed = await observeWorktreeRecency(inputs(runner));
+    expect(observed.observation.worktreeStatusDisposition).toBe("unavailable");
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("soft-fails a thrown runner defect with canonical body-free diagnostic evidence", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const runner: GitProcessRunner = (): Promise<GitProcessResult> => {
+      throw new TypeError("untrusted /private/owner message");
+    };
+    const observed = await observeWorktreeRecency({
+      ...inputs(runner),
+      correlationId: "worktree-thrown-ask",
+      diagnostics: {
+        record: (record): void => {
+          diagnostics.push(record);
+        },
+      },
+    });
+    expect(observed.observation.worktreeStatusDisposition).toBe("unavailable");
+    expect(diagnostics[0]).toMatchObject({
+      correlationId: "worktree-thrown-ask",
+      errorClass: "TypeError",
+      diagnosticOutcome: "source-skipped",
+    });
+    expect(diagnostics[0]?.frames?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(diagnostics)).not.toContain("/private/owner");
   });
 });
