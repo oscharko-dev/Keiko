@@ -1556,6 +1556,8 @@ async function streamingCachedMatches(
     !isWorkspaceIndexFileMetadataCurrent(policy.metadata, current.metadata)
   )
     return undefined;
+  await cache.observeReuse(file.relativePath);
+  if (abortScanFile(runner, state)) return undefined;
   return { relativePath: file.relativePath, order, ...cached };
 }
 

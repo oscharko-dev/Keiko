@@ -347,8 +347,9 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
       const { scope, fs } = fixture();
       const workspaceIndex = createWorkspaceIndex();
       let now = 0;
-      const save = vi.fn(async (): Promise<void> => {
+      const save = vi.fn((): Promise<void> => {
         now = 20;
+        return Promise.resolve();
       });
       const result = await searchText(scope, QUERY, LIMITS, {
         fs,

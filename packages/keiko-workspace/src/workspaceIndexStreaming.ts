@@ -40,6 +40,7 @@ export interface StreamingWorkspaceIndexSession {
   readonly lookup: (
     metadata: WorkspaceIndexDiscoveredFile,
   ) => Promise<WorkspaceIndexQueryMatch | undefined>;
+  readonly observeReuse: (path: string) => Promise<void>;
   readonly observeRead: (metadata: WorkspaceIndexDiscoveredFile) => void;
   readonly observeMatch: (
     path: string,
@@ -62,6 +63,10 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
   private staleRecords = 0;
   private indexedRecords = 0;
   private discoveredEntries = 0;
+  private retainedEntries = 0;
+  private skippedEntries = 0;
+  private droppedRecords = 0;
+  private available = true;
 
   public constructor(
     private readonly index: WorkspaceIndex,
@@ -72,6 +77,10 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
 
   private active(): boolean {
     return !structuralExecutionStopped(this.control);
+  }
+
+  private usable(): boolean {
+    return this.active() && this.available;
   }
 
   private scopeKey(shard: number): WorkspaceIndexScopeKey {
@@ -91,14 +100,26 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     const key = this.scopeKey(shard);
     const result: QueryShard = { key, records: new Map(), seen: new Set(), bytes: 0, dirty: false };
     if (!this.active()) return result;
-    const snapshot = await this.index.loadSnapshot(key, () => this.active());
-    if (!this.active() || snapshot === undefined) return result;
+    const snapshot = await this.loadSnapshot(key);
+    if (!this.usable() || snapshot === undefined) return result;
     for (const record of snapshot.records) {
       if (!this.active()) break;
       if (record.queryMatch === undefined) continue;
       this.retain(result, record);
     }
     return result;
+  }
+
+  private async loadSnapshot(
+    key: WorkspaceIndexScopeKey,
+  ): Promise<Awaited<ReturnType<WorkspaceIndex["loadSnapshot"]>>> {
+    try {
+      return await this.index.loadSnapshot(key, () => this.active());
+    } catch {
+      // The observed owning adapter records the failure; source search remains independent of storage.
+      this.available = false;
+      return undefined;
+    }
   }
 
   private async shard(path: string): Promise<QueryShard> {
@@ -117,40 +138,57 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     const oldSize =
       previous === undefined ? 0 : Buffer.byteLength(JSON.stringify(previous), "utf8");
     if (size > MAX_RECORD_BYTES || this.bytes - oldSize + size > MAX_REQUEST_RECORD_BYTES)
-      return false;
+      return this.dropRecord();
     if (shard.bytes - oldSize + size > DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES / 4)
-      return false;
+      return this.dropRecord();
     if (
       previous === undefined &&
       shard.records.size >= MAX_SHARD_RECORDS - shard.key.relativePaths.length
     )
-      return false;
+      return this.dropRecord();
     shard.records.set(record.scopePath, record);
     shard.bytes += size - oldSize;
     this.bytes += size - oldSize;
     return true;
   }
 
+  private dropRecord(): false {
+    this.droppedRecords += 1;
+    return false;
+  }
+
+  private markSeen(shard: QueryShard, path: string): void {
+    if (!shard.seen.has(path)) this.retainedEntries += 1;
+    shard.seen.add(path);
+  }
+
   public async lookup(
     metadata: WorkspaceIndexDiscoveredFile,
   ): Promise<WorkspaceIndexQueryMatch | undefined> {
-    if (!this.active()) return undefined;
-    const shard = await this.shard(metadata.scopePath);
-    if (!this.active()) return undefined;
+    if (!this.usable()) return undefined;
     this.discoveredEntries += 1;
+    const shard = await this.shard(metadata.scopePath);
+    if (!this.usable()) return undefined;
     const record = shard.records.get(metadata.scopePath);
-    if (record !== undefined) shard.seen.add(metadata.scopePath);
     if (!isWorkspaceIndexRecordCurrent(record, metadata)) {
       if (record !== undefined) this.staleRecords += 1;
       return undefined;
     }
     if (record?.queryMatch?.queryIdentitySha256 !== this.queryIdentitySha256) return undefined;
-    this.reusedRecords += 1;
     return record.queryMatch;
   }
 
+  public async observeReuse(path: string): Promise<void> {
+    const pending = this.shards.get(shardFor(path));
+    if (pending === undefined) return;
+    const shard = await pending;
+    if (!this.usable()) return;
+    this.markSeen(shard, path);
+    this.reusedRecords += 1;
+  }
+
   public observeRead(metadata: WorkspaceIndexDiscoveredFile): void {
-    if (this.active()) this.pendingReads.set(metadata.scopePath, metadata);
+    if (this.usable()) this.pendingReads.set(metadata.scopePath, metadata);
   }
 
   public async observeMatch(
@@ -160,15 +198,22 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
   ): Promise<void> {
     const metadata = this.pendingReads.get(path);
     this.pendingReads.delete(path);
-    if (!this.active() || metadata === undefined || !complete) return;
+    if (!this.usable() || metadata === undefined) return;
+    if (!complete) {
+      this.skippedEntries += 1;
+      return;
+    }
     const queryMatch = matchingRecord(this.queryIdentitySha256, matches);
-    if (queryMatch === undefined) return;
+    if (queryMatch === undefined) {
+      this.dropRecord();
+      return;
+    }
     const pending = this.shards.get(shardFor(path));
     if (pending === undefined) return;
     const shard = await pending;
-    if (!this.active()) return;
+    if (!this.usable()) return;
     if (!this.retain(shard, { ...metadata, kind: "text", queryMatch })) return;
-    shard.seen.add(path);
+    this.markSeen(shard, path);
     shard.dirty = true;
     this.indexedRecords += 1;
   }
@@ -199,7 +244,7 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
   public async finalize(): Promise<void> {
     this.pendingReads.clear();
     for (const pending of this.shards.values()) {
-      if (!this.active()) return;
+      if (!this.usable()) return;
       const shard = await pending;
       if (!this.active()) return;
       if (!shard.dirty) continue;
@@ -207,8 +252,9 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
       if (!this.active()) return;
       try {
         await this.index.saveSnapshot(shard.key, snapshot, () => this.active());
-      } catch (error) {
-        if (this.active()) throw error;
+      } catch {
+        this.available = false;
+        return;
       }
     }
   }
@@ -216,13 +262,13 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
   public report(): WorkspaceIndexPreparationReport {
     return {
       discoveredEntries: this.discoveredEntries,
-      retainedEntries: this.discoveredEntries,
+      retainedEntries: this.retainedEntries,
       indexedRecords: this.indexedRecords,
       reusedRecords: this.reusedRecords,
       staleRecords: this.staleRecords,
-      skippedEntries: 0,
+      skippedEntries: this.skippedEntries,
       deletedEntries: 0,
-      droppedRecords: 0,
+      droppedRecords: this.droppedRecords,
     };
   }
 }

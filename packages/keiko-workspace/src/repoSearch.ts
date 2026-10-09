@@ -2723,7 +2723,31 @@ async function executeIndexedStreamedSearchText(
   );
   const result = await executeStreamedSearchText({ ...runner, streamingWorkspaceIndex: session });
   await session.finalize();
-  return { ...result, workspaceIndex: session.report() };
+  return finalizedStreamedIndexResult(runner, result, session.report());
+}
+
+function finalizedStreamedIndexResult(
+  runner: SearchTextRunner,
+  result: SearchResult,
+  report: WorkspaceIndexPreparationReport,
+): SearchResult {
+  const elapsedMs = elapsed(runner);
+  const reason = runnerStopReason(runner);
+  const reasons = new Set(result.coverage.reasons);
+  if (reason !== undefined) reasons.add(reason);
+  return {
+    ...result,
+    elapsedMs,
+    truncated: result.truncated || reason !== undefined,
+    coverage: {
+      ...result.coverage,
+      elapsedMs,
+      incomplete: result.coverage.incomplete || reason !== undefined,
+      truncated: result.coverage.truncated || reason !== undefined,
+      reasons: coverageReasons(reasons),
+    },
+    workspaceIndex: report,
+  };
 }
 
 interface SerializedWorkspaceIndexSession {
