@@ -123,8 +123,8 @@ materialize the inline synthetic repository and exercise the production conversa
 entry point and connected-context orchestrator. They therefore observe admission, excerpt windows,
 selection floors and the actual files retained for the answer. Neutral oversized documentation
 forces the known-fit folder context to report over-capacity rather than concealing a retrieval miss
-by supplying the entire tiny fixture. The repository metadata marker preserves the existing
-generated-file exclusion policy; an ordinary folder's generated-directory text remains covered by
+by supplying the entire tiny fixture. A bounded, safely initialized fixture Git repository preserves
+the existing generated-file exclusion policy; an ordinary folder's generated-directory text remains covered by
 its separate historical positive control.
 
 | Case family                              | Languages       | Archived fixture discovery at `3d46ff9ac`    |
@@ -195,3 +195,26 @@ dependency-failure scenario remains separate. `3893-healthy-unborn-git-before.js
 `3893-healthy-selection-probe.log`, `3893-healthy-git-fixture-after.log` and the unchanged four-row
 `3884-valid-git-history-after.log` retain the body-free setup correction evidence; no privacy
 projection, operation registry or correctness threshold was weakened.
+
+The current-instrumentation customer-shape replay adds the four German incident turns in order:
+stack trace, assistant-referent question, explicit relative path, and basename collision. Each turn
+uses the canonical production eval and receives the preceding normalized answers as an eligible
+exchange. This is a reconstructed-history replay; each eval materializes its own fixture repository,
+so it does not claim to replace the separate same-chat, real-model lab journey. Both variants keep
+the ordinary exploration ceilings and differ only in `followUpPassesMax` (0 or 1).
+
+The explicit-path turn first declares a genuinely unread in-scope companion file. With follow-up
+disabled, the canonical persisted reader and private support report retain
+`declared-unread-in-scope` and the secondary `semantic-unavailable-with-miss` finding: the fixture's
+semantic provider is unavailable and this turn actually missed evidence. With follow-up enabled,
+the production second pass admits the companion, returns its cited answer with two synthesis calls,
+and disposes both findings across the original correlation and source identity. The healthy lexical
+control still produces no retrieval finding. All four pointed scenarios report supported, complete
+analysis, and retain only body-free counters and closed dispositions in the log.
+
+`3893-current-producer-customer-shape-valid-red.log` preserves the pre-follow-up producer's two
+failures beside the two historical passing controls. `3893-current-producer-customer-shape-after.log`
+records the actual two-reason disabled result that corrected the initial one-reason fixture
+expectation; `3893-current-producer-customer-shape-green.log` records the unchanged behavior after
+that truthful expectation refinement. This pointed evidence does not claim the final gate matrix or
+the real-model lab journey is complete.
