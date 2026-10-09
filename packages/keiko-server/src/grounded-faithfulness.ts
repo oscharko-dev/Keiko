@@ -87,12 +87,23 @@ function insufficiencyLines(text: string): readonly InsufficiencyLine[] {
       (code[codeCursor]?.start ?? Number.POSITIVE_INFINITY) >= offset + line.length;
     if (outsideCode && line.startsWith(DECLARATION_PREFIX) && line.endsWith("]")) {
       const path = line.slice(DECLARATION_PREFIX.length, -1);
-      if (path.length > 0 && !/[\[\],]/u.test(path))
+      if (path.length > 0 && balancedDeclarationPath(path))
         lines.push({ start: offset, end: offset + line.length, path });
     }
     offset += raw.length + 1;
   }
   return lines;
+}
+
+function balancedDeclarationPath(path: string): boolean {
+  if (path.includes(",")) return false;
+  let depth = 0;
+  for (const character of path) {
+    if (character === "[") depth += 1;
+    else if (character === "]") depth -= 1;
+    if (depth < 0) return false;
+  }
+  return depth === 0;
 }
 
 /** Declaration syntax is metadata, even when its path is unknown or unsafe. */
