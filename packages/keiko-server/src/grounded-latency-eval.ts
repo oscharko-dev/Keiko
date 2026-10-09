@@ -18,8 +18,16 @@
 // latency instead of catching regressions. `DEFAULT_ENTAILMENT_OPTIONS.maxTotalMs` (20s) is a
 // per-request safety ceiling, not a performance target, and is deliberately not the budget.
 
-import type { ConnectedContextPack, ContextExcerpt } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConnectedContextPack,
+  ContextExcerpt,
+  ExplorationUsage,
+} from "@oscharko-dev/keiko-contracts";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import {
+  DEFAULT_EXPLORATION_BUDGET,
+  isWithinBudget,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 
 import {
   DEFAULT_ENTAILMENT_OPTIONS,
@@ -30,6 +38,8 @@ import {
   type EntailmentJudge,
 } from "./grounded-faithfulness.js";
 import { runGroundedRetrievalQualityEval } from "./grounded-retrieval-eval.js";
+import { runConnectedRetrievalEval } from "./grounded-eval-support.js";
+import type { GroundedAnswerer, OrchestratorOutput } from "./grounded-orchestrator.js";
 
 const FIXTURE_NOW_MS = 1_700_000_000_000;
 
@@ -42,7 +52,7 @@ const FIXTURE_NOW_MS = 1_700_000_000_000;
 export const FIXTURE_ANSWER_CLAIMS = 8;
 
 export interface GroundedLatencySample {
-  /** Real semantic + RRF + model-rerank path over the distractor-dense eval corpus. */
+  /** Real retrieval path; the follow-up scenario also includes its actual two syntheses. */
   readonly retrievalMs: number;
   /** Real citation reconciliation + claim-entailment pass over the answer the model returned. */
   readonly entailmentMs: number;
@@ -55,9 +65,7 @@ export interface GroundedLatencySample {
     readonly admittedPathCount: number;
     readonly synthesisCalls: number;
     readonly synthesisMs: number;
-    readonly filesRead: number;
-    readonly searchCalls: number;
-    readonly excerptBytes: number;
+    readonly usage: ExplorationUsage;
   };
 }
 
@@ -207,14 +215,98 @@ async function measureEntailment(
   return { entailmentMs: performance.now() - started, judgedClaims };
 }
 
+interface FollowUpMeasurement {
+  synthesisCalls: number;
+  synthesisMs: number;
+}
+
+const FOLLOW_UP_COMPANION_PATH = "lib/Companion.ts";
+
+function followUpAnswerer(
+  measurement: FollowUpMeasurement,
+  injectedDelayMs: number,
+): GroundedAnswerer {
+  return {
+    async answer(_question, pack): Promise<string> {
+      measurement.synthesisCalls += 1;
+      const companion = pack.files.find((file) => file.scopePath === FOLLOW_UP_COMPANION_PATH);
+      if (measurement.synthesisCalls === 1) {
+        if (companion !== undefined)
+          throw new Error("Latency fixture must initially lack evidence");
+        return `I need more evidence.\nMissing evidence: [${FOLLOW_UP_COMPANION_PATH}]`;
+      }
+      if (
+        measurement.synthesisCalls !== 2 ||
+        !companion?.excerpts.some((excerpt) => excerpt.content.trim() === "42;")
+      )
+        throw new Error("Latency fixture requires one actual follow-up with current evidence");
+      const started = performance.now();
+      if (injectedDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, injectedDelayMs));
+      measurement.synthesisMs = performance.now() - started;
+      return `The auxiliary value is 42. [${FOLLOW_UP_COMPANION_PATH}:1]`;
+    },
+  };
+}
+
+function measuredFollowUp(
+  answer: OrchestratorOutput | undefined,
+  synthesisCalls: number,
+): NonNullable<OrchestratorOutput["followUp"]> {
+  const followUp = answer?.followUp;
+  if (
+    followUp?.passCount !== 1 ||
+    followUp.admittedPathCount !== 1 ||
+    followUp.outcome !== "answered" ||
+    answer?.answerKind !== "answer" ||
+    synthesisCalls !== 2 ||
+    !answer.assistantContent.includes(`[${FOLLOW_UP_COMPANION_PATH}:1]`)
+  )
+    throw new Error("Latency sample did not complete the actual bounded follow-up");
+  return followUp;
+}
+
+async function measureBoundedFollowUp(injectedDelayMs: number): Promise<GroundedLatencySample> {
+  const measurement: FollowUpMeasurement = { synthesisCalls: 0, synthesisMs: 0 };
+  const started = performance.now();
+  const { pack, answer } = await runConnectedRetrievalEval({
+    files: {
+      "src/Feature.ts": "export const Feature = true;\n",
+      [FOLLOW_UP_COMPANION_PATH]: "42;\n",
+    },
+    query: "Explain src/Feature.ts",
+    budget: { ...DEFAULT_EXPLORATION_BUDGET, followUpPassesMax: 1 },
+    answerer: followUpAnswerer(measurement, injectedDelayMs),
+  });
+  const followUp = measuredFollowUp(answer, measurement.synthesisCalls);
+  if (!isWithinBudget(pack.usage, pack.budget))
+    throw new Error("Latency sample exceeded its actual exploration budget");
+  const totalMs = performance.now() - started;
+  return {
+    retrievalMs: totalMs,
+    entailmentMs: 0,
+    judgedClaims: 0,
+    totalMs,
+    followUp: {
+      passCount: followUp.passCount,
+      admittedPathCount: followUp.admittedPathCount,
+      ...measurement,
+      usage: pack.usage,
+    },
+  };
+}
+
 /**
  * One end-to-end sample of the grounded answer path's measurable cost: the real retrieval stack
  * (embedding + RRF fusion + model rerank over the eval corpus) followed by the real citation
- * reconciliation and claim-entailment pass.
+ * reconciliation and claim-entailment pass. The additive bounded-follow-up scenario instead times
+ * the canonical connected-folder eval with actual unread-file admission and two synthesis calls.
+ * It has no entailment judge and reports zero judged claims rather than inventing stage work.
  */
 export async function runGroundedRetrievalLatencyEval(
   options: GroundedLatencyEvalOptions = {},
 ): Promise<GroundedLatencySample> {
+  if (options.scenario === "bounded-follow-up")
+    return measureBoundedFollowUp(options.injectedFollowUpDelayMs ?? 0);
   const retrievalStarted = performance.now();
   await runGroundedRetrievalQualityEval("baseline");
   const retrievalMs = performance.now() - retrievalStarted;

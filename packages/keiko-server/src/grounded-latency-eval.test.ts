@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  DEFAULT_EXPLORATION_BUDGET,
+  isWithinBudget,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 
 import { FIXTURE_ANSWER_CLAIMS, runGroundedRetrievalLatencyEval } from "./grounded-latency-eval.js";
 
@@ -14,6 +17,7 @@ describe("runGroundedRetrievalLatencyEval", () => {
     expect(sample.retrievalMs).toBeGreaterThan(0);
     expect(sample.entailmentMs).toBeGreaterThan(0);
     expect(sample.totalMs).toBeCloseTo(sample.retrievalMs + sample.entailmentMs, 6);
+    expect(sample.followUp).toBeUndefined();
   });
 
   // The entailment stage short-circuits a claim to `unavailable` WITHOUT calling the judge when the
@@ -54,15 +58,17 @@ describe("runGroundedRetrievalLatencyEval", () => {
     expect(sample.retrievalMs).toBe(sample.totalMs);
     expect(sample.entailmentMs).toBe(0);
     expect(sample.judgedClaims).toBe(0);
-    expect(sample.followUp).toMatchObject({ passCount: 1, admittedPathCount: 1, synthesisCalls: 2 });
-    expect(sample.followUp?.filesRead).toBeGreaterThan(0);
-    expect(sample.followUp?.filesRead).toBeLessThanOrEqual(DEFAULT_EXPLORATION_BUDGET.filesReadMax);
-    expect(sample.followUp?.searchCalls).toBeGreaterThan(0);
-    expect(sample.followUp?.searchCalls).toBeLessThanOrEqual(DEFAULT_EXPLORATION_BUDGET.searchCallsMax);
-    expect(sample.followUp?.excerptBytes).toBeGreaterThan(0);
-    expect(sample.followUp?.excerptBytes).toBeLessThanOrEqual(
-      DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
-    );
+    expect(sample.followUp).toMatchObject({
+      passCount: 1,
+      admittedPathCount: 1,
+      synthesisCalls: 2,
+    });
+    const usage = sample.followUp?.usage;
+    if (usage === undefined) throw new TypeError("Expected the actual follow-up usage");
+    expect(usage.filesRead).toBeGreaterThan(0);
+    expect(usage.searchCalls).toBeGreaterThan(0);
+    expect(usage.excerptBytes).toBeGreaterThan(0);
+    expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(true);
   });
 
   it("injects the follow-up regression into the actual second synthesis", async () => {

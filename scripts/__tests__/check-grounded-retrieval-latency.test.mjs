@@ -184,6 +184,27 @@ describe("assertMeasurableBudget", () => {
     delete missing.boundedFollowUp;
     expect(() => assertMeasurableBudget(missing)).toThrow(/boundedFollowUp/u);
   });
+
+  it.each([undefined, 0, -1, "1300", Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects a bounded follow-up probe whose followUpDelayMs is %p",
+    (followUpDelayMs) => {
+      expect(() =>
+        assertMeasurableBudget({
+          ...budget,
+          boundedFollowUp: { ...budget.boundedFollowUp, regressionProbe: { followUpDelayMs } },
+        }),
+      ).toThrow(/boundedFollowUp.regressionProbe.followUpDelayMs/u);
+    },
+  );
+
+  it("rejects an incoherent bounded follow-up p95 ceiling", () => {
+    expect(() =>
+      assertMeasurableBudget({
+        ...budget,
+        boundedFollowUp: { ...budget.boundedFollowUp, p50BudgetMs: 800, p95BudgetMs: 400 },
+      }),
+    ).toThrow(/boundedFollowUp.p95BudgetMs/u);
+  });
 });
 
 // The runner, driven end to end over the REAL pipeline with a one-iteration budget so the suite pays
@@ -209,7 +230,12 @@ describe("runGroundedRetrievalLatencyGate", () => {
     }
   }
 
-  const FAST = { warmupIterations: 0, iterations: 1, regressionProbe: { judgeDelayMs: 1300 } };
+  const FAST = {
+    warmupIterations: 0,
+    iterations: 1,
+    regressionProbe: { judgeDelayMs: 1300 },
+    boundedFollowUp: { ...budget.boundedFollowUp, warmupIterations: 0, iterations: 1 },
+  };
 
   it("measures the real pipeline, reports both percentiles, and proves the probe fires", async () => {
     await withBudgetFile(FAST, async (budgetPath) => {
@@ -227,6 +253,11 @@ describe("runGroundedRetrievalLatencyGate", () => {
       expect(result.probe.detected).toBe(true);
       expect(logs[0]).toContain("grounded-retrieval-latency: p50=");
       expect(logs[1]).toContain("regression probe:");
+      expect(result.boundedFollowUp.ok).toBe(true);
+      expect(result.boundedFollowUp.p50).toBeGreaterThan(0);
+      expect(result.boundedFollowUp.probe.detected).toBe(true);
+      expect(logs[2]).toContain("bounded-follow-up: p50=");
+      expect(logs[3]).toContain("ms/second-synthesis");
     });
   }, 180_000);
 
@@ -290,7 +321,56 @@ describe("runGroundedRetrievalLatencyGate", () => {
         });
 
         expect(result.probe.detected).toBe(false);
+        expect(result.ok).toBe(false);
         expect(failures.join(" ")).toContain("tautological gate");
+      },
+    );
+  }, 180_000);
+
+  it("fails the complete gate when only the bounded follow-up ceiling is breached", async () => {
+    await withBudgetFile(
+      {
+        ...FAST,
+        boundedFollowUp: { ...FAST.boundedFollowUp, p50BudgetMs: 0.001, p95BudgetMs: 0.001 },
+      },
+      async (budgetPath) => {
+        const failures = [];
+        const result = await runGroundedRetrievalLatencyGate({
+          budgetPath,
+          log: () => discard(),
+          fail: (message) => failures.push(message),
+        });
+        expect(result.probe.detected).toBe(true);
+        expect(result.boundedFollowUp.ok).toBe(false);
+        expect(result.ok).toBe(false);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toContain("bounded-follow-up: p50");
+        expect(failures[0]).toContain("bounded-follow-up: p95");
+      },
+    );
+  }, 180_000);
+
+  it("fails closed when only the follow-up regression is absorbed", async () => {
+    await withBudgetFile(
+      {
+        ...FAST,
+        boundedFollowUp: { ...FAST.boundedFollowUp, p50BudgetMs: 600_000, p95BudgetMs: 600_000 },
+      },
+      async (budgetPath) => {
+        const failures = [];
+        const result = await runGroundedRetrievalLatencyGate({
+          budgetPath,
+          log: () => discard(),
+          fail: (message) => failures.push(message),
+        });
+        expect(result.probe.detected).toBe(true);
+        expect(result.boundedFollowUp.probe.detected).toBe(false);
+        expect(result.ok).toBe(false);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toContain(
+          "bounded-follow-up: injected 1300ms follow-up synthesis delay",
+        );
+        expect(failures[0]).toContain("tautological gate");
       },
     );
   }, 180_000);
