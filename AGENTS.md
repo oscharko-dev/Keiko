@@ -470,6 +470,8 @@ system that exists, never beside it:
   into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
   observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
   private status digest stay outside logs; observation cannot admit evidence or bypass a floor.
+  Directly connected deep Git subfolders check ancestor metadata until the filesystem root under
+  the original deadline and abort guard; this hint never expands the selected evidence root.
   Optional semantic live refresh reuses the original exploration governor and gateway spend ledger.
   Each new read reserves a file and its observed byte upper bound; each embedding attempt reserves
   a UTF-8 input-token upper bound before dispatch. Selection-details distinguishes actual read/call
