@@ -43,6 +43,7 @@ interface TurnObservation {
   readonly queries: Map<string, QueryObservation>;
   answered: boolean;
   closed: boolean;
+  ambiguousLifecycle: boolean;
   readonly started: boolean;
 }
 
@@ -223,7 +224,12 @@ function confirmedAssessment(extra: Readonly<Record<string, unknown>>): boolean 
 
 function observeAssessment(turn: TurnObservation | undefined, line: RetrievalLine): void {
   const extra = line.extra;
-  if (turn?.started !== true || extra?.phase !== "accepted-final" || turn.process === undefined)
+  if (
+    turn?.started !== true ||
+    turn.ambiguousLifecycle ||
+    extra?.phase !== "accepted-final" ||
+    turn.process === undefined
+  )
     return;
   if (!isActivityLogIdentityDigest(extra.queryIdentitySha256)) return;
   const query = turn.queries.get(extra.queryIdentitySha256);
@@ -245,6 +251,7 @@ function createTurn(
     queries: new Map(),
     answered: false,
     closed: false,
+    ambiguousLifecycle: false,
     started,
   };
 }
@@ -262,7 +269,9 @@ function observeLifecycle(
   key: string,
 ): boolean {
   if (line.op === "search.connected-context.started") {
-    if (state.latest.get(key)?.closed === true) state.latest.delete(key);
+    const previous = state.latest.get(key);
+    if (previous?.closed === true) state.latest.delete(key);
+    else if (previous !== undefined) previous.ambiguousLifecycle = true;
     state.started.add(key);
     return true;
   }
