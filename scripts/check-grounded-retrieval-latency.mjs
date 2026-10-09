@@ -15,6 +15,8 @@
 // Non-tautology: like check-grounded-retrieval-quality.mjs, the gate proves it can fail. It runs
 // one extra sample with an artificial per-judge-call delay and asserts that sample breaches the
 // budget. If an injected regression ever passes, the gate itself is broken and this fails closed.
+// Epic #3881/#3889 adds an independently budgeted actual bounded follow-up through that same
+// exported eval. Its probe delays the second synthesis; all historical measurements remain active.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -62,7 +64,12 @@ export function evaluateGroundedLatency({ samples, budget }) {
  * per-judge-call delay; it MUST breach the p95 ceiling, or the budget is loose enough to absorb a
  * real regression and the gate proves nothing.
  */
-export function evaluateRegressionProbe({ regressedMs, budget }) {
+export function evaluateRegressionProbe({
+  regressedMs,
+  budget,
+  stage = "judge",
+  delayMs = budget.regressionProbe.judgeDelayMs,
+}) {
   const detected = regressedMs > budget.p95BudgetMs;
   return {
     detected,
@@ -70,7 +77,7 @@ export function evaluateRegressionProbe({ regressedMs, budget }) {
     failures: detected
       ? []
       : [
-          `injected ${String(budget.regressionProbe.judgeDelayMs)}ms judge delay produced ` +
+          `injected ${String(delayMs)}ms ${stage} delay produced ` +
             `${regressedMs.toFixed(1)}ms, still within the ${String(budget.p95BudgetMs)}ms p95 ` +
             "budget (tautological gate)",
         ],
@@ -109,27 +116,69 @@ function assertFinitePositive(field, value) {
   }
 }
 
-export function assertMeasurableBudget(budget) {
-  assertIntegerAtLeast("warmupIterations", budget.warmupIterations, 0);
-  assertIntegerAtLeast("iterations", budget.iterations, 1);
-  assertFinitePositive("p50BudgetMs", budget.p50BudgetMs);
-  assertFinitePositive("p95BudgetMs", budget.p95BudgetMs);
+function assertScenarioBudget(budget, prefix, delayField) {
+  assertIntegerAtLeast(`${prefix}warmupIterations`, budget.warmupIterations, 0);
+  assertIntegerAtLeast(`${prefix}iterations`, budget.iterations, 1);
+  assertFinitePositive(`${prefix}p50BudgetMs`, budget.p50BudgetMs);
+  assertFinitePositive(`${prefix}p95BudgetMs`, budget.p95BudgetMs);
   if (budget.p95BudgetMs < budget.p50BudgetMs) {
-    rejectBudgetField("p95BudgetMs", budget.p95BudgetMs, "at least budget.p50BudgetMs");
+    rejectBudgetField(
+      `${prefix}p95BudgetMs`,
+      budget.p95BudgetMs,
+      `at least budget.${prefix}p50BudgetMs`,
+    );
   }
-  assertFinitePositive("regressionProbe.judgeDelayMs", budget.regressionProbe?.judgeDelayMs);
+  assertFinitePositive(
+    `${prefix}regressionProbe.${delayField}`,
+    budget.regressionProbe?.[delayField],
+  );
+}
+
+export function assertMeasurableBudget(budget) {
+  assertScenarioBudget(budget, "", "judgeDelayMs");
+  if (typeof budget.boundedFollowUp !== "object" || budget.boundedFollowUp === null)
+    rejectBudgetField("boundedFollowUp", budget.boundedFollowUp, "an object");
+  assertScenarioBudget(budget.boundedFollowUp, "boundedFollowUp.", "followUpDelayMs");
   return budget;
 }
 
-async function collectSamples(budget) {
+async function collectSamples(budget, options = {}) {
   for (let i = 0; i < budget.warmupIterations; i += 1) {
-    await runGroundedRetrievalLatencyEval();
+    await runGroundedRetrievalLatencyEval(options);
   }
   const samples = [];
   for (let i = 0; i < budget.iterations; i += 1) {
-    samples.push((await runGroundedRetrievalLatencyEval()).totalMs);
+    samples.push((await runGroundedRetrievalLatencyEval(options)).totalMs);
   }
   return samples;
+}
+
+async function runFollowUpLatencyScenario(budget, onLog) {
+  const samples = await collectSamples(budget, { scenario: "bounded-follow-up" });
+  const result = evaluateGroundedLatency({ samples, budget });
+  onLog(
+    `grounded-retrieval-latency bounded-follow-up: p50=${result.p50.toFixed(1)}ms ` +
+      `p95=${result.p95.toFixed(1)}ms over ${String(budget.iterations)} iterations ` +
+      `(budgets ${String(budget.p50BudgetMs)}ms / ${String(budget.p95BudgetMs)}ms).`,
+  );
+  const delayMs = budget.regressionProbe.followUpDelayMs;
+  const regressed = await runGroundedRetrievalLatencyEval({
+    scenario: "bounded-follow-up",
+    injectedFollowUpDelayMs: delayMs,
+  });
+  const probe = evaluateRegressionProbe({
+    regressedMs: regressed.totalMs,
+    budget,
+    stage: "follow-up synthesis",
+    delayMs,
+  });
+  onLog(
+    `grounded-retrieval-latency bounded-follow-up regression probe: ` +
+      `+${String(delayMs)}ms/second-synthesis -> ${regressed.totalMs.toFixed(1)}ms, ` +
+      `detected=${String(probe.detected)}.`,
+  );
+  const failures = [...result.failures, ...probe.failures];
+  return { ...result, ok: failures.length === 0, probe, failures };
 }
 
 export async function runGroundedRetrievalLatencyGate({
@@ -174,9 +223,14 @@ export async function runGroundedRetrievalLatencyGate({
     )}ms/judge-call -> ${regressed.totalMs.toFixed(1)}ms, detected=${String(probe.detected)}.`,
   );
 
-  const failures = [...result.failures, ...probe.failures];
+  const boundedFollowUp = await runFollowUpLatencyScenario(budget.boundedFollowUp, onLog);
+  const failures = [
+    ...result.failures,
+    ...probe.failures,
+    ...boundedFollowUp.failures.map((failure) => `bounded-follow-up: ${failure}`),
+  ];
   if (failures.length > 0) onFail(failures.join("; "));
-  return { ...result, probe, failures };
+  return { ...result, ok: failures.length === 0, probe, boundedFollowUp, failures };
 }
 
 // Run when invoked directly, not when imported by a test.

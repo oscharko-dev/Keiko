@@ -646,6 +646,27 @@ siblings within the same process, correlation, and scope. Query-specific ranking
 stay separate; an answered follow-up disposes the initial unread declaration even when its query
 or selection fingerprint changes.
 
+These facts are distributed across typed siblings to retain the contextual-field bound.
+`search.connected-context.source-details` carries admission and reference counts;
+`selection-details` carries calibrated floors, confidence, addressed-file demotion, reranker
+disposition, continuity, worktree and semantic freshness observations. `completion-details` and
+the completed operation retain their actual retrieval accounting. `answer-details` carries the
+final sent file count (`filesInPrompt`), answer kind, observed citation behaviour, declaration
+counts, repair disposition, and the actual follow-up trigger, pass/admission counts, outcome and
+configuration disposition. Each joins the original correlation and source/query digests;
+`followUpPass` distinguishes the first and second prompt. Changed selection fingerprints do not
+erase the first declaration. Assembled file reads remain audit and physical-usage facts and must
+not be presented as proof that every excerpt reached the model.
+
+Follow-up outcomes are `not-needed`, `answered`, `still-insufficient`, `budget-refused`,
+`elapsed-refused`, or `disabled`. A substantive second answer can be `answered` while retaining an
+uncited-answer warning; this never opens a third synthesis slot. Technical failures retain a closed
+error header with reduced frames and causes, without provider messages or declaration paths. The
+normal installation enables one follow-up; `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX=0` disables it,
+and invalid explicit values fail closed with an invalid configuration observation. Initial
+synthesis shares its one extra slot with either marker repair or follow-up, within the original
+remaining budgets. See [ADR-0180](../adr/ADR-0180-bounded-connected-folder-follow-up.md).
+
 | Reason                            | Triggering evidence                                                                                              |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `declared-unread-in-scope`        | Positive `declaredUnreadInScopeCount` without a confirmed answered follow-up.                                    |
