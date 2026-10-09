@@ -2203,3 +2203,87 @@ describe("CodingRuntimeAuthorityService.bindPublishedPullRequest", () => {
     ).toBe(false);
   });
 });
+
+describe("accepted pending-spawn authority", () => {
+  it("admits only the exact starting capability without admitting a tool mutation", () => {
+    const authority = service();
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("expected mint");
+    const recheck = {
+      capability: minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar" as const,
+      liveFacts: facts(),
+      workspaceRoot: ROOT,
+      deploymentCeiling: "autonomous-delivery" as const,
+      nowIso: NOW,
+    };
+    expect(authority.revalidateCapabilityForPendingSpawn(recheck)).toMatchObject({ ok: true });
+    expect(authority.revalidateCapabilityForMutation(recheck)).toMatchObject({ ok: false });
+    expect(authority.revalidateCapabilityForOperatorAdmission(recheck)).toMatchObject({
+      ok: false,
+    });
+    expect(
+      authority.revalidateCapabilityForPendingSpawn({
+        ...recheck,
+        capability: `${minted.toolFacadeCapability}invalid`,
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      authority.revalidateCapabilityForPendingSpawn({
+        ...recheck,
+        workspaceRoot: `${ROOT}-foreign`,
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      authority.revalidateCapabilityForPendingSpawn({
+        ...recheck,
+        deploymentCeiling: "governed-assist",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(authority.transition(minted.authorityRef.runId, "ready", NOW)).toBe(true);
+    expect(authority.revalidateCapabilityForPendingSpawn(recheck)).toMatchObject({ ok: false });
+  });
+
+  it.each(["revoked", "expired", "workspace-drift"] as const)(
+    "refuses %s before spawn with existing authority evidence",
+    (kind) => {
+      const activity: ServerLogEvent[] = [];
+      const authority = mintFailureService(activity);
+      const minted = mint(authority, intent, false);
+      if (!minted.ok) throw new Error("expected mint");
+      if (kind === "revoked") authority.revokeBeforeTerminate(minted.authorityRef.runId);
+      const recheck = {
+        capability: minted.toolFacadeCapability,
+        adapterKind: "model-gateway-sidecar" as const,
+        liveFacts: facts(),
+        workspaceRoot: ROOT,
+        deploymentCeiling: "autonomous-delivery" as const,
+        nowIso: kind === "expired" ? "2026-07-11T13:01:00.000Z" : NOW,
+      };
+      const drifted =
+        kind === "workspace-drift"
+          ? {
+              ...recheck,
+              liveFacts: {
+                ...recheck.liveFacts,
+                binding: { ...recheck.liveFacts.binding, workspaceId: "foreign-workspace" },
+              },
+            }
+          : recheck;
+      expect(authority.revalidateCapabilityForPendingSpawn(drifted)).toMatchObject({ ok: false });
+      const refusal = activity.find(
+        (event) => event.op === "coding-runtime.authority.revalidation-refused",
+      );
+      expect(refusal?.extra).toMatchObject({
+        runtimeState: "starting",
+        admissibleStates: ["starting"],
+      });
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.authority.revalidation-refused.emitted-line",
+          formatActivityLogProofLine(refusal ?? {}),
+        ),
+      ).toMatchObject({ runtimeState: "starting" });
+    },
+  );
+});

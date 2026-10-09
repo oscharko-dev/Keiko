@@ -1,17 +1,27 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { Buffer } from "node:buffer";
 import {
+  chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { pathToFileURL, URL } from "node:url";
+import { delimiter, dirname, join, relative } from "node:path";
+import ts from "typescript";
 
 import { afterEach, describe, expect, it } from "vitest";
+import * as builder from "../build-coding-runtime-npm-package.mjs";
 
 import {
   buildCodingRuntimeNpmPackage,
@@ -19,7 +29,12 @@ import {
   codingRuntimePackageName,
   main,
   NPM_RUNTIME_PACKAGE_TARGETS,
+  packCodingRuntimeNpmCandidate,
+  verifyCodingRuntimeNpmCandidate,
 } from "../build-coding-runtime-npm-package.mjs";
+import { computePortableSidecarPayloadTreeDigest } from "../../packages/keiko-server/dist/coding-runtime/devLanePortableCodingRuntime.js";
+import { hashHelperSourceTree } from "../stage-dev-coding-runtime.mjs";
+import { resolveHostExecutable } from "../lib/host-executable.mjs";
 
 // #3577. The runtime packages are what lets an npm-installed Keiko run the Coding Workbench. The
 // server verifies their content against digests compiled into it, so the builder's two promises are
@@ -41,6 +56,72 @@ function write(path, body) {
 }
 
 const HELPER = "built-helper";
+
+async function releaseFixture() {
+  const root = scratch();
+  const packageDir = join(root, "package");
+  const artifactDir = join(root, "artifacts");
+  const target = "macos-arm64";
+  const built = await buildCodingRuntimeNpmPackage({
+    target,
+    version: "1.2.3",
+    outDir: packageDir,
+    deps: fakeDeps().deps,
+  });
+  const payload = join(packageDir, "runtime/opencode-compatible/payload");
+  chmodSync(join(payload, "bin/opencode"), 0o755);
+  chmodSync(join(packageDir, "runtime/native/keiko-secure-workspace-read"), 0o755);
+  const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+  const approval = {
+    packageName: built.name,
+    upstreamVersion: "2.0.10",
+    helperSha256: built.helperSha256,
+    helperSizeBytes: built.helperSizeBytes,
+    helperSourceCommit: "a".repeat(40),
+    helperSourceTreeSha256: hashHelperSourceTree(
+      join(process.cwd(), "native/secure-workspace-read"),
+    ),
+    helperMaxBytes: 1_048_576,
+    executableTreeSha256: computePortableSidecarPayloadTreeDigest([
+      { relativePath: "bin/opencode", sha256: digest(join(payload, "bin/opencode")) },
+    ]),
+    licenseSha256: digest(join(payload, "evidence/LICENSE")),
+    sbomSha256: digest(join(payload, "evidence/sbom.cdx.json")),
+  };
+  const calls = [];
+  const deps = {
+    loadApproval: async () => approval,
+    verifySourceCommit: (commit) => calls.push(commit),
+    verifyPackedContents: () => calls.push("packed-content-verification"),
+    pack: (packageDir, output) => {
+      const filename = "fixture-runtime-1.2.3.tgz";
+      write(join(output, filename), "immutable packed candidate");
+      const files = readdirSync(packageDir, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => {
+          const full = join(entry.parentPath, entry.name);
+          const status = statSync(full);
+          return {
+            path: relative(packageDir, full).split("\\").join("/"),
+            size: status.size,
+            mode: status.mode & 0o777,
+          };
+        })
+        .sort((left, right) => left.path.localeCompare(right.path));
+      return { name: built.name, version: "1.2.3", filename, files };
+    },
+  };
+  return { packageDir, artifactDir, target, approval, calls, deps };
+}
+
+function releaseInput(fixture) {
+  return {
+    target: fixture.target,
+    version: "1.2.3",
+    packageDir: fixture.packageDir,
+    artifactDir: fixture.artifactDir,
+  };
+}
 
 function fakeDeps(overrides = {}) {
   const calls = { prepare: [], build: [] };
@@ -71,6 +152,219 @@ afterEach(() => {
 });
 
 describe("coding runtime npm package", () => {
+  it("packs the existing candidate and records its approved source rather than today's HEAD", async () => {
+    const fixture = await releaseFixture();
+    const lines = [];
+    const errors = [];
+    const result = await main(
+      ["--pack", fixture.target, "1.2.3", fixture.packageDir, fixture.artifactDir],
+      {
+        releaseDeps: fixture.deps,
+        write: { log: (line) => lines.push(line), error: (line) => errors.push(line) },
+      },
+    );
+    expect(result).toBe(0);
+    const receipt = JSON.parse(readFileSync(join(fixture.artifactDir, "receipt.json"), "utf8"));
+    expect(receipt.helper.sourceCommit).toBe(fixture.approval.helperSourceCommit);
+    expect(receipt.helper.sourceTreeSha256).toBe(fixture.approval.helperSourceTreeSha256);
+    expect(receipt.tarball.integrity).toMatch(/^sha512-/u);
+    expect(existsSync(join(fixture.artifactDir, receipt.tarball.filename))).toBe(true);
+    expect(JSON.parse(lines[0]).receipt).toStrictEqual(receipt);
+    expect(fixture.calls).toContain(fixture.approval.helperSourceCommit);
+    expect(errors).toHaveLength(0);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "produces and rechecks an actual npm tarball without lifecycle scripts",
+    async () => {
+      const fixture = await releaseFixture();
+      const deps = {
+        loadApproval: fixture.deps.loadApproval,
+        verifySourceCommit: fixture.deps.verifySourceCommit,
+      };
+      const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
+      expect(
+        (await verifyCodingRuntimeNpmCandidate(releaseInput(fixture), deps)).receipt,
+      ).toStrictEqual(prepared.receipt);
+      expect(readFileSync(prepared.tarballPath).subarray(0, 2)).toStrictEqual(
+        Buffer.from([0x1f, 0x8b]),
+      );
+      expect(prepared.receipt.files).toHaveLength(6);
+      expect(statSync(prepared.tarballPath).mode & 0o222).toBe(0);
+      expect(statSync(prepared.receiptPath).mode & 0o222).toBe(0);
+    },
+  );
+
+  it.each([
+    ["version", { version: "1.1.3" }],
+    ["architecture", { cpu: ["x64"] }],
+    ["platform", { os: ["linux"] }],
+    ["install hook", { scripts: { postinstall: "unapproved-hook" } }],
+  ])("refuses a candidate with a mismatched %s before packing", async (_label, change) => {
+    const fixture = await releaseFixture();
+    const path = join(fixture.packageDir, "package.json");
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    write(path, JSON.stringify({ ...manifest, ...change }));
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("manifest, version or architecture mismatch");
+    expect(existsSync(fixture.artifactDir)).toBe(false);
+  });
+
+  it.each([
+    ["native helper", "runtime/native/keiko-secure-workspace-read", "BUILT-helper"],
+    ["OpenCode", "runtime/opencode-compatible/payload/bin/opencode", "different-executable"],
+    ["license", "runtime/opencode-compatible/payload/evidence/LICENSE", "different-license"],
+    ["SBOM", "runtime/opencode-compatible/payload/evidence/sbom.cdx.json", "different-sbom"],
+  ])("refuses a stale %s against the independently approved pins", async (_label, path, body) => {
+    const fixture = await releaseFixture();
+    writeFileSync(join(fixture.packageDir, path), body);
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("digest mismatch");
+    expect(existsSync(fixture.artifactDir)).toBe(false);
+  });
+
+  it("refuses a stale helper source binding and a commit that cannot bind that source", async () => {
+    const fixture = await releaseFixture();
+    const stale = { ...fixture.approval, helperSourceTreeSha256: "f".repeat(64) };
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), {
+        ...fixture.deps,
+        loadApproval: async () => stale,
+      }),
+    ).rejects.toThrow("helper source is stale");
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), {
+        ...fixture.deps,
+        verifySourceCommit: () => {
+          throw new Error("source commit does not match");
+        },
+      }),
+    ).rejects.toThrow("source commit does not match");
+    expect(existsSync(fixture.artifactDir)).toBe(false);
+  });
+
+  it("requires the actual packed tarball and checks npm's returned integrity", async () => {
+    const fixture = await releaseFixture();
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), {
+        ...fixture.deps,
+        pack: (...args) => {
+          const result = fixture.deps.pack(...args);
+          rmSync(join(args[1], result.filename));
+          return result;
+        },
+      }),
+    ).rejects.toThrow("ENOENT");
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), {
+        ...fixture.deps,
+        pack: (...args) => ({ ...fixture.deps.pack(...args), integrity: "sha512-wrong" }),
+      }),
+    ).rejects.toThrow("tarball integrity mismatch");
+    expect(existsSync(join(fixture.artifactDir, "receipt.json"))).toBe(false);
+  });
+
+  it("does not certify package bytes that change during npm pack", async () => {
+    const fixture = await releaseFixture();
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), {
+        ...fixture.deps,
+        pack: (...args) => {
+          const packed = fixture.deps.pack(...args);
+          writeFileSync(join(fixture.packageDir, "LICENSE.md"), "changed after packing");
+          return packed;
+        },
+      }),
+    ).rejects.toThrow("changed during packing");
+    expect(existsSync(join(fixture.artifactDir, "receipt.json"))).toBe(false);
+  });
+
+  it.each(["receipt", "tarball", "missing-tarball"])(
+    "rejects a changed %s on independent verification",
+    async (changed) => {
+      const fixture = await releaseFixture();
+      const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+      if (changed === "receipt") {
+        chmodSync(prepared.receiptPath, 0o644);
+        writeFileSync(
+          prepared.receiptPath,
+          JSON.stringify({
+            ...prepared.receipt,
+            helper: { ...prepared.receipt.helper, sourceCommit: "b".repeat(40) },
+          }),
+        );
+      } else if (changed === "tarball") {
+        chmodSync(prepared.tarballPath, 0o644);
+        writeFileSync(prepared.tarballPath, "different packed bytes");
+      } else {
+        rmSync(prepared.tarballPath);
+      }
+      await expect(
+        verifyCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+      ).rejects.toThrow(changed === "missing-tarball" ? "ENOENT" : "receipt mismatch");
+    },
+  );
+
+  it("does not overwrite an existing candidate receipt", async () => {
+    const fixture = await releaseFixture();
+    const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+    const receiptBytes = readFileSync(prepared.receiptPath);
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("artifactDir must not exist");
+    expect(readFileSync(prepared.receiptPath)).toStrictEqual(receiptBytes);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses unapproved packed bytes even when their receipt integrity was recomputed",
+    async () => {
+      const fixture = await releaseFixture();
+      const deps = {
+        loadApproval: fixture.deps.loadApproval,
+        verifySourceCommit: fixture.deps.verifySourceCommit,
+      };
+      const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
+      const changedDir = join(scratch(), "changed-package");
+      cpSync(fixture.packageDir, changedDir, { recursive: true });
+      writeFileSync(join(changedDir, "runtime/native/keiko-secure-workspace-read"), "evil!-helper");
+      const packed = JSON.parse(
+        execFileSync(
+          resolveHostExecutable("npm"),
+          [
+            "pack",
+            changedDir,
+            "--ignore-scripts",
+            "--json",
+            "--pack-destination",
+            dirname(changedDir),
+          ],
+          { encoding: "utf8" },
+        ),
+      ).at(0);
+      const changedBytes = readFileSync(join(dirname(changedDir), packed.filename));
+      chmodSync(prepared.tarballPath, 0o644);
+      writeFileSync(prepared.tarballPath, changedBytes);
+      chmodSync(prepared.receiptPath, 0o644);
+      writeFileSync(
+        prepared.receiptPath,
+        JSON.stringify({
+          ...prepared.receipt,
+          tarball: {
+            ...prepared.receipt.tarball,
+            sizeBytes: changedBytes.length,
+            sha256: createHash("sha256").update(changedBytes).digest("hex"),
+            integrity: packed.integrity,
+          },
+        }),
+      );
+      await expect(verifyCodingRuntimeNpmCandidate(releaseInput(fixture), deps)).rejects.toThrow(
+        "packed contents",
+      );
+    },
+  );
+
   it.each(Object.entries(NPM_RUNTIME_PACKAGE_TARGETS))(
     "%s declares the platform npm selects it by, a valid SPDX license and no install hook",
     (target, { cpu, os, suffix }) => {
@@ -185,4 +479,305 @@ describe("coding runtime npm package", () => {
     expect(built).toStrictEqual([{ target: "macos-arm64", version: "1.2.3", outDir: "/abs/out" }]);
     expect(JSON.parse(lines.log[0])).toMatchObject({ target: "macos-arm64" });
   });
+});
+
+describe.skipIf(process.platform === "win32")("inactive original service package candidate", () => {
+  it("declares each actual original host import in its private locked dependencies", async () => {
+    const root = await builtServicePayload();
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    const imports = hostStaticImports(root).filter(
+      (specifier) => !specifier.startsWith(".") && !specifier.startsWith("node:"),
+    );
+    for (const specifier of imports) {
+      const packageName = specifier.startsWith("@")
+        ? specifier.split("/").slice(0, 2).join("/")
+        : specifier.split("/")[0];
+      expect(manifest.dependencies[packageName], specifier).toBeDefined();
+      expect(lock.packages[""].dependencies[packageName]).toBe(manifest.dependencies[packageName]);
+      expect(lock.packages[`node_modules/${packageName}`].version).toBe(
+        manifest.dependencies[packageName],
+      );
+    }
+    expect(manifest.private).toBe(true);
+  });
+
+  it("limits unresolved declarations to exact provenance-checked generated siblings", async () => {
+    const root = await builtServicePayload();
+    const config = JSON.parse(readFileSync(new URL("../../knip.json", import.meta.url), "utf8"));
+    const patterns = config.workspaces["native/opencode-service-host"]?.ignoreUnresolved ?? [];
+    const provenance = JSON.parse(
+      readFileSync(join(root, "evidence/build-provenance.json"), "utf8"),
+    );
+    const generated = new Map(provenance.generatedFiles.map((entry) => [entry.path, entry.sha256]));
+    const imports = [...new Set(hostStaticImports(root))].filter(
+      (specifier) => specifier.startsWith("./") && generated.has(specifier.slice(2)),
+    );
+
+    expect(imports.length).toBeGreaterThan(0);
+    for (const specifier of imports) {
+      expect(patterns.filter((pattern) => new RegExp(pattern, "u").test(specifier))).toHaveLength(
+        1,
+      );
+      const actual = createHash("sha256")
+        .update(readFileSync(join(root, specifier)))
+        .digest("hex");
+      expect(actual).toBe(generated.get(specifier.slice(2)));
+    }
+    for (const pattern of patterns) {
+      expect(pattern.startsWith("^") && pattern.endsWith("$")).toBe(true);
+      expect(imports.filter((specifier) => new RegExp(pattern, "u").test(specifier))).toHaveLength(
+        1,
+      );
+      expect(new RegExp(pattern, "u").test("./keiko-unowned.mjs")).toBe(false);
+    }
+    expect(patterns).toHaveLength(imports.length);
+  });
+
+  it("binds current static source/producer assets, npm metadata omissions, and full license refusal", async () => {
+    const outDir = join(scratch(), "package");
+    const result = await builder.buildCodingRuntimeNpmServiceHostCandidate({
+      target: "macos-arm64",
+      version: "1.2.3",
+      outDir,
+      deps: serviceFixtureDeps(),
+    });
+    const root = join(outDir, "runtime/opencode-compatible/service-host/payload");
+    const adapter =
+      await import("../../packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js");
+    const artifact =
+      await import("../../packages/keiko-server/dist/coding-runtime/opencodeServiceHostArtifact.js");
+    expect(readFileSync(join(root, "keiko-governed-tools.mjs"), "utf8")).toBe(
+      adapter.createGeneratedOpenCodeV2HostFactory("direct"),
+    );
+    expect(readFileSync(join(root, "keiko-governed-tools-code-mode.mjs"), "utf8")).toBe(
+      adapter.createGeneratedOpenCodeV2HostFactory("code-mode"),
+    );
+    expect(readFileSync(join(root, "keiko-host-packet-data.mjs"), "utf8")).toBe(
+      artifact.createOpenCodeServiceHostPacketDataAsset(),
+    );
+    const manifest = JSON.parse(readFileSync(join(outDir, "package.json"), "utf8"));
+    expect(manifest.private).toBe(true);
+    expect(manifest.publishConfig).toBeUndefined();
+    expect(result.license).toEqual({
+      status: "blocked",
+      offenders: [{ id: "spdx-exceptions@2.5.0", license: "CC-BY-3.0" }],
+    });
+    expect(result.excludedNpmMetadata).toContain(
+      "runtime/opencode-compatible/service-host/payload/node_modules/spdx-exceptions/.npmignore",
+    );
+    expect(result.files.some(({ path }) => path.endsWith("/.npmignore"))).toBe(false);
+    const sbom = JSON.parse(readFileSync(join(root, "evidence/sbom.cdx.json"), "utf8"));
+    const refs = [
+      sbom.metadata.component["bom-ref"],
+      ...sbom.components.map((component) => component["bom-ref"]),
+    ];
+    expect(new Set(refs).size).toBe(refs.length);
+    expect(
+      sbom.dependencies.find((entry) => entry.ref === sbom.metadata.component["bom-ref"]).dependsOn,
+    ).toContain("node@24.18.0");
+    const provenance = JSON.parse(
+      readFileSync(join(root, "evidence/build-provenance.json"), "utf8"),
+    );
+    expect(provenance.sourceBuildProvenance).toBe("reference-only");
+    expect(
+      provenance.lockedInputs.find(({ path }) => path === "node_modules/spdx-exceptions").integrity,
+    ).toMatch(/^sha512-/u);
+    expect(result.finalPayload.treeSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(readFileSync(join(root, "evidence/THIRD-PARTY-NOTICES.md"), "utf8")).toContain(
+      "https://creativecommons.org/licenses/by/3.0/",
+    );
+    await expect(
+      packCodingRuntimeNpmCandidate(
+        {
+          target: "macos-arm64",
+          version: "1.2.3",
+          packageDir: outDir,
+          artifactDir: join(scratch(), "release"),
+        },
+        { loadApproval: async () => ({ packageName: result.name }) },
+      ),
+    ).rejects.toThrow("manifest, version or architecture mismatch");
+  });
+
+  it("refuses links in the installed module tree without issuing a private receipt", async () => {
+    const outDir = join(scratch(), "package");
+    const deps = serviceFixtureDeps();
+    const install = deps.installHost;
+    deps.installHost = async (root) => {
+      await install(root);
+      symlinkSync("README.md", join(root, "node_modules/spdx-exceptions/leak"));
+    };
+    await expect(
+      builder.buildCodingRuntimeNpmServiceHostCandidate({
+        target: "macos-arm64",
+        version: "1.2.3",
+        outDir,
+        deps,
+      }),
+    ).rejects.toThrow("ordinary single-link files");
+    expect(existsSync(join(dirname(outDir), "artifacts/service-host-private-receipt.json"))).toBe(
+      false,
+    );
+  });
+
+  it("retains the original six CLI members and adds the actual fixed original host", async () => {
+    const outDir = join(scratch(), "package");
+    const build = builder.buildCodingRuntimeNpmServiceHostCandidate ?? buildCodingRuntimeNpmPackage;
+    const result = await build({
+      target: "macos-arm64",
+      version: "1.2.3",
+      outDir,
+      deps: serviceFixtureDeps(),
+    });
+    expect(existsSync(join(outDir, "runtime/opencode-compatible/payload/bin/opencode"))).toBe(true);
+    expect(
+      existsSync(join(outDir, "runtime/opencode-compatible/service-host/payload/host.mjs")),
+    ).toBe(true);
+    expect(
+      existsSync(join(outDir, "runtime/opencode-compatible/service-host/payload/runtime/node")),
+    ).toBe(true);
+    const artifact =
+      await import("../../packages/keiko-server/dist/coding-runtime/opencodeServiceHostArtifact.js");
+    const codec = artifact.createOpenCodeServiceHostNativeCodecAsset();
+    const payload = join(outDir, "runtime/opencode-compatible/service-host/payload");
+    for (const asset of artifact.createOpenCodeServiceHostNativePolicyAssets()) {
+      expect(readFileSync(join(payload, asset.filename))).toEqual(readFileSync(asset.source));
+    }
+    const policy = await import(
+      pathToFileURL(join(payload, "keiko-workspace-path-policy/ignore.js")).href
+    );
+    expect(policy.isDenied("nested/.env")).toBe(true);
+    expect(policy.isDenied("nested/AGENTS.md")).toBe(false);
+    const stagedCodec = readFileSync(join(payload, codec.filename));
+    expect(stagedCodec).toEqual(readFileSync(codec.source));
+    const loaded = await import("data:text/javascript;base64," + stagedCodec.toString("base64"));
+    const frame = loaded.encodeSecureWorkspaceNativeResponse({
+      status: "ok",
+      info: { type: "file", size: 3, mtimeMs: 0 },
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    expect([...loaded.decodeSecureWorkspaceNativeResponse(frame).bytes]).toEqual([1, 2, 3]);
+    const provenance = JSON.parse(
+      readFileSync(join(payload, "evidence/build-provenance.json"), "utf8"),
+    );
+    expect(provenance.generatedFiles).toContainEqual({
+      path: codec.filename,
+      sha256: createHash("sha256").update(stagedCodec).digest("hex"),
+    });
+    expect(result.qualification).toBe("private-functional-unapproved");
+    expect(result.license.status).toBe("blocked");
+  });
+});
+
+async function builtServicePayload() {
+  const outDir = join(scratch(), "package");
+  await builder.buildCodingRuntimeNpmServiceHostCandidate({
+    target: "macos-arm64",
+    version: "1.2.3",
+    outDir,
+    deps: serviceFixtureDeps(),
+  });
+  return join(outDir, "runtime/opencode-compatible/service-host/payload");
+}
+
+function hostStaticImports(root) {
+  return ["host.mjs", "entry.mjs", "guard-seams.mjs"].flatMap((name) => {
+    const source = ts.createSourceFile(
+      name,
+      readFileSync(join(root, name), "utf8"),
+      ts.ScriptTarget.Latest,
+    );
+    return source.statements
+      .filter(ts.isImportDeclaration)
+      .map((statement) => statement.moduleSpecifier)
+      .filter(ts.isStringLiteral)
+      .map((specifier) => specifier.text);
+  });
+}
+
+function serviceFixtureDeps() {
+  return {
+    ...fakeDeps().deps,
+    installHost: async (root) => {
+      write(
+        join(root, "node_modules/spdx-exceptions/package.json"),
+        JSON.stringify({ name: "spdx-exceptions", version: "2.5.0", license: "CC-BY-3.0" }),
+      );
+      write(join(root, "node_modules/spdx-exceptions/README.md"), "upstream notice");
+      write(join(root, "node_modules/spdx-exceptions/index.json"), "[]");
+      write(join(root, "node_modules/spdx-exceptions/.npmignore"), "ignored metadata");
+    },
+    stageNode: async (_options, _target, staging) => {
+      write(join(staging, "runtime/node/bin/node"), "node executable");
+      chmodSync(join(staging, "runtime/node/bin/node"), 0o755);
+      write(join(staging, "runtime/node/LICENSE"), "Node license");
+      write(join(staging, "runtime/node/NOTICE"), "Node notice");
+      return "a".repeat(64);
+    },
+    hostSbom: () => ({
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      version: 1,
+      metadata: {
+        component: {
+          name: "keiko-opencode-service-host",
+          version: "0.0.0-private",
+          "bom-ref": "keiko-opencode-service-host@0.0.0-private",
+          licenses: [{ license: { id: "Apache-2.0" } }],
+        },
+      },
+      dependencies: [
+        { ref: "keiko-opencode-service-host@0.0.0-private", dependsOn: ["spdx-exceptions@2.5.0"] },
+      ],
+      components: [
+        {
+          type: "library",
+          name: "spdx-exceptions",
+          version: "2.5.0",
+          "bom-ref": "spdx-exceptions@2.5.0",
+          licenses: [{ license: { id: "CC-BY-3.0" } }],
+        },
+      ],
+    }),
+  };
+}
+
+function shellQuotedPath(path) {
+  return "'" + path.replaceAll("'", "'\"'\"'") + "'";
+}
+
+describe("trusted archive tool in actual npm candidate verification", () => {
+  it.skipIf(process.platform === "win32")(
+    "ignores a workspace tar canary during real npm pack and default content verification",
+    async () => {
+      const fixture = await releaseFixture();
+      const workspace = mkdtempSync(join(process.cwd(), ".keiko-tar-canary-"));
+      const marker = join(workspace, "invocations");
+      const tar = resolveHostExecutable("tar");
+      writeFileSync(
+        join(workspace, "tar"),
+        `#!/bin/sh\nprintf 'called\n' >> ${shellQuotedPath(marker)}\nexec ${shellQuotedPath(tar)} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const previousPath = process.env.PATH;
+      process.env.PATH = workspace + delimiter + (previousPath ?? "");
+      try {
+        expect(resolveHostExecutable("tar")).toBe(tar);
+        const deps = {
+          loadApproval: fixture.deps.loadApproval,
+          verifySourceCommit: fixture.deps.verifySourceCommit,
+        };
+        const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
+        const verified = await verifyCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
+        expect(prepared.receipt.files).toHaveLength(6);
+        expect(verified.receipt).toStrictEqual(prepared.receipt);
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 });

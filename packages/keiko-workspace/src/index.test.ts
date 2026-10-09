@@ -22,6 +22,12 @@ describe("keiko-workspace public surface", () => {
     expect(typeof workspace.detectWorkspace).toBe("function");
     expect(typeof workspace.discoverFiles).toBe("function");
     expect(typeof workspace.discoverWithStats).toBe("function");
+    expect(typeof workspace.discoverWorkspacePaths).toBe("function");
+    expect(typeof workspace.executionControlledWorkspaceFs).toBe("function");
+    expect(typeof workspace.StructuralExecutionStoppedError).toBe("function");
+    expect(workspace.WORKSPACE_PATH_DISCOVERY_MODES).toBeDefined();
+    expect(workspace.WORKSPACE_PATH_DISCOVERY_LIMITS).toBeDefined();
+    expect(workspace.WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS).toBeDefined();
     expect(typeof workspace.readWorkspaceFile).toBe("function");
     expect(typeof workspace.buildContextPack).toBe("function");
     expect(typeof workspace.buildContextPackFromFiles).toBe("function");

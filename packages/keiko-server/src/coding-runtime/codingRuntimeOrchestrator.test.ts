@@ -4,7 +4,9 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
+import { codingVerificationTargetDigest } from "./productionManagedWorktreeTools.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -21,6 +23,7 @@ import {
 import type {
   CodingRuntimeTaskDispatcher,
   CodingRuntimeTaskOutcome,
+  CodingRuntimeTaskDispatchResult,
 } from "./productionCodingRuntimeHost.js";
 import {
   createCodingRuntimeOrchestrator,
@@ -35,6 +38,10 @@ import {
   DELIVERY_CONTINUATION_INTENT,
   DELIVERY_CONTINUATION_MAX,
 } from "./codingRuntimeOrchestrator.js";
+import {
+  VERIFICATION_CONTINUATION_INTENT,
+  VERIFICATION_CONTINUATION_MAX,
+} from "./codingRuntimeVerificationContinuation.js";
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
 import {
   composeCodingRuntimeInitialContext,
@@ -190,6 +197,22 @@ function firstTaskDispatchRequest(
   const request = calls[0]?.[0];
   if (request === undefined) throw new Error("expected initial turn dispatch");
   return request;
+}
+
+function deferredRuntimeStart(f: ReturnType<typeof fixture>) {
+  type Result = Awaited<ReturnType<CodingRuntimeManager["start"]>>;
+  let resolve: (value: Result) => void = () => {
+    throw new Error("start resolver unavailable");
+  };
+  let reject: (error: Error) => void = () => {
+    throw new Error("start rejector unavailable");
+  };
+  const pending = new Promise<Result>((success, failure) => {
+    resolve = success;
+    reject = failure;
+  });
+  f.manager.start.mockImplementationOnce(() => pending);
+  return { resolve, reject };
 }
 
 function expectProjectMemoryLog(
@@ -971,6 +994,24 @@ function expectedRefusalCode(failure: CodingWorkbenchIssueBindingFailure): strin
 }
 
 describe("CodingRuntimeOrchestrator", () => {
+  it("records the exact accepted operator task digest independently of hidden launch context (#3877)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    const taskIntent = "  PRIVATE_ACCEPTED_TASK_CANARY\n";
+    await f.orchestrator.start({ ...start, taskIntent });
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra?.taskIntentDigest).toBe(sha256Hex(taskIntent));
+    expect(event.extra?.taskIntentDigest).not.toBe(sha256Hex(taskIntent.trim()));
+    expect(event.extra?.taskIntentDigest).not.toBe(rowFor(f.rows, "run-1").taskDigest);
+    expectActivityLogProof(
+      "coding-runtime.run.started.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
+  });
   it("records body-free activity log lines for run start and settlement", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
@@ -1283,6 +1324,157 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(loadForRun).toHaveBeenCalledTimes(1);
     const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
     expect(dispatchRequest).not.toHaveProperty("initialContext");
+  });
+
+  it.each(["ready", "aborted", "rejected"] as const)(
+    "cancels a starting run at shutdown without dispatching its late %s outcome",
+    async (outcome) => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      const pending = deferredRuntimeStart(f);
+      const started = f.orchestrator.start(start);
+      await vi.waitFor(() => {
+        expect(f.manager.start).toHaveBeenCalledTimes(1);
+      });
+      const request = f.manager.start.mock.calls[0]?.[0];
+
+      const ended = await f.orchestrator.shutdown();
+      if (outcome === "rejected") pending.reject(new Error("private delayed start failure"));
+      else
+        pending.resolve(
+          outcome === "ready"
+            ? { ok: true, status: "ready", runId: "run-1" }
+            : { ok: false, failureCode: "start-aborted", retryable: true },
+        );
+      const late = await started;
+
+      expect(successfulSnapshot(ended).state).toBe("cancelled");
+      expect(successfulSnapshot(late).state).toBe("cancelled");
+      expect(request?.signal?.aborted).toBe(true);
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(f.orchestrator.hasLiveRun()).toBe(false);
+      expect(
+        captured.records.find((event) => event.op === "coding-runtime.run.shutdown"),
+      ).toMatchObject({ extra: { stateBefore: "starting", outcome: "ended" } });
+      expect(JSON.stringify(captured.records)).not.toContain("private delayed start failure");
+    },
+  );
+
+  it("retains unproven startup containment after a late ready result", async () => {
+    const f = fixture();
+    const pending = deferredRuntimeStart(f);
+    f.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    const started = f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.manager.start).toHaveBeenCalledTimes(1);
+    });
+    const ended = await f.orchestrator.shutdown();
+    pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+    const late = await started;
+
+    expect(successfulSnapshot(ended).state).toBe("recovery-required");
+    expect(successfulSnapshot(late).state).toBe("recovery-required");
+    expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(f.orchestrator.hasLiveRun()).toBe(true);
+  });
+
+  it.each([
+    [false, "stopped", true],
+    [true, "stopped", false],
+    [true, "recovery-required", true],
+  ] as const)(
+    "keeps workspace selection bounded by acknowledgement=%s and host=%s",
+    (acknowledged, status, blocked) => {
+      const prior: CodingRuntimeSnapshot = {
+        ...settledRow("run-1", "2026-01-01T00:00:00.000Z", 2),
+        state: "recovery-required",
+        terminalAt: undefined,
+        result: undefined,
+        ...(acknowledged ? { recoveryAcknowledgedAt: "2026-01-01T00:00:01.000Z" } : {}),
+      };
+      const f = fixture(undefined, undefined, [prior]);
+      f.manager.health.mockReturnValue(
+        status === "stopped"
+          ? { status }
+          : {
+              status,
+              activeRunId: "run-1",
+              failureCode: "runtime-reap-unproven",
+              restartDenied: true,
+            },
+      );
+
+      expect(f.orchestrator.hasLiveRun()).toBe(true);
+      expect(f.orchestrator.blocksWorkspaceSelection()).toBe(blocked);
+      expect(f.orchestrator.snapshot().state).toBe("recovery-required");
+    },
+  );
+
+  it.each(["stop", "takeover"] as const)(
+    "aborts preparation on operator %s and never dispatches a late ready result",
+    async (kind) => {
+      const f = fixture();
+      const pending = deferredRuntimeStart(f);
+      const started = f.orchestrator.start(start);
+      await vi.waitFor(() => {
+        expect(f.manager.start).toHaveBeenCalledTimes(1);
+      });
+
+      const ended = await f.orchestrator[kind]("run-1", { requestId: "run-1" });
+      pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+      const late = await started;
+
+      const expected = kind === "stop" ? "cancelled" : "taken-over";
+      expect(successfulSnapshot(ended).state).toBe(expected);
+      expect(successfulSnapshot(late).state).toBe(expected);
+      expect(f.manager.start.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(f.orchestrator.hasLiveRun()).toBe(false);
+    },
+  );
+
+  it("refuses a late startup success when reconciliation cannot prove the host stopped", async () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createCodingRuntimeSnapshotStore(db),
+    );
+    const pending = deferredRuntimeStart(f);
+    const started = f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.manager.start).toHaveBeenCalledTimes(1);
+    });
+    await f.orchestrator.shutdown();
+    f.manager.health.mockReturnValue({ status: "ready", activeRunId: "run-1" });
+    f.manager.reconcile.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+
+    const late = await started;
+
+    expect(successfulSnapshot(late).state).toBe("recovery-required");
+    expect(f.manager.reconcile).toHaveBeenCalledWith("run-1");
+    expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(f.orchestrator.hasLiveRun()).toBe(true);
+    expect(f.orchestrator.snapshot()).toMatchObject({ state: "recovery-required", runId: "run-1" });
+    expect(f.orchestrator.snapshot().result).toBeUndefined();
+    db.close();
   });
 
   // Run 9 (2026-09-10): a server shutdown ends the live run through the same stop path an operator
@@ -2590,6 +2782,14 @@ describe("CodingRuntimeOrchestrator", () => {
         kind: "verification-summarized",
         verificationKind: "targeted-test",
         verificationStatus,
+        verificationSummary: {
+          verifierId: "targeted-test",
+          status: verificationStatus,
+          passedCount,
+          failedCount,
+          skippedCount: 0,
+          durationMs: 1240.5,
+        },
         passedCount,
         failedCount,
         skippedCount: 0,
@@ -2597,6 +2797,20 @@ describe("CodingRuntimeOrchestrator", () => {
         failureLocationsTruncated: verificationStatus === "failed",
         verificationTargetDigest,
       });
+      expect(f.eventHub.publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          kind: "runtime-event",
+          eventKind: "verification-summarized",
+          verificationSummary: {
+            verifierId: "targeted-test",
+            status: verificationStatus,
+            passedCount,
+            failedCount,
+            skippedCount: 0,
+            durationMs: 1240.5,
+          },
+        }),
+      );
     }
 
     const verificationLines = captured.records.filter(
@@ -2614,6 +2828,8 @@ describe("CodingRuntimeOrchestrator", () => {
           runId,
           verificationEventId: "verification-1",
           verificationKind: "targeted-test",
+          verifierId: "targeted-test",
+          durationMs: 1240.5,
           verificationStatus: "failed",
           passedCount: 0,
           failedCount: 1,
@@ -2633,6 +2849,8 @@ describe("CodingRuntimeOrchestrator", () => {
           runId,
           verificationEventId: "verification-2",
           verificationKind: "targeted-test",
+          verifierId: "targeted-test",
+          durationMs: 1240.5,
           verificationStatus: "passed",
           passedCount: 4,
           failedCount: 0,
@@ -6789,6 +7007,7 @@ describe("run effort roll-up (#3873)", () => {
       occurredAt: "2026-10-06T10:00:08.000Z",
       kind: "verification-summarized" as const,
       verificationKind: "targeted-test" as const,
+      verificationTargetDigest: codingVerificationTargetDigest("targeted-test"),
       verificationStatus: "passed" as const,
       passedCount: 4,
       failedCount: 0,
@@ -6931,5 +7150,520 @@ describe("run effort roll-up (#3873)", () => {
 
     const settled = await settledRunLine(f, log.records, "succeeded");
     expect(settled.extra).toMatchObject({ operatorDecisionCount: 0, operatorWaitMs: 15_000 });
+  });
+});
+
+describe("verification truth at task settlement", () => {
+  async function runningTask() {
+    const log = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, log.activityLog);
+    let finish: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
+    const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+      finish = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    // A refused continuation must settle truthfully rather than guessing success.
+    f.taskDispatcher.dispatch.mockResolvedValue({ ok: false });
+    await f.orchestrator.start(start);
+    return { f, log, finish: (): void => finish?.("succeeded") };
+  }
+
+  async function verification(
+    f: ReturnType<typeof fixture>,
+    status: "passed" | "failed" | "partial",
+    counts = {
+      passed: status === "passed" ? 1 : 0,
+      failed: status === "failed" ? 1 : 0,
+      skipped: 0,
+    },
+    targetDigest: string | null = codingVerificationTargetDigest("targeted-test"),
+    editRevision = f.orchestrator.verificationRevision("run-1"),
+  ): Promise<void> {
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: `verification-${String(f.orchestrator.status().revision)}`,
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "verification-summarized",
+      verificationKind: "targeted-test",
+      verificationStatus: status,
+      passedCount: counts.passed,
+      failedCount: counts.failed,
+      skippedCount: counts.skipped,
+      verificationEditRevision: editRevision,
+      ...(targetDigest === null ? {} : { verificationTargetDigest: targetDigest }),
+    });
+  }
+
+  it.each(["failed", "partial"] as const)(
+    "completes a read-only %s diagnosis without initiating a repair",
+    async (status) => {
+      const { f, finish } = await runningTask();
+      await verification(f, status);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+      });
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not dispatch repair after the human denied the verification command", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const waiting = successfulSnapshot(
+      await f.orchestrator.ingest(verificationPermission("verification-denied")),
+    );
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "verification-denied",
+      decision: "denied",
+      expectedRevision: waiting.revision,
+    });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: "verification-denied",
+      decision: "denied",
+    });
+  });
+
+  it("retains human denial when an already admitted verifier completes afterwards", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const admission: Partial<
+      Pick<ReturnType<typeof fixture>["orchestrator"], "verificationAdmitted">
+    > = f.orchestrator;
+    const complete = admission.verificationAdmitted?.("run-1");
+    const target = "a".repeat(64);
+    const waiting = successfulSnapshot(
+      await f.orchestrator.ingest(verificationPermission("permission-2")),
+    );
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-2",
+      decision: "denied",
+      expectedRevision: waiting.revision,
+    });
+    complete?.(target);
+    await verification(f, "failed", undefined, target);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repair an impossible selected verifier", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const target = "a".repeat(64);
+    await verification(f, "failed", undefined, target);
+    f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", target);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed", undefined, "a".repeat(64));
+    f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("records an edit that applied during a script-trust decision wait", async () => {
+    const { f, finish } = await runningTask();
+    await f.orchestrator.ingest(taskSubmitted());
+    await f.orchestrator.ingest(operatorDecisionEvent());
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("paused");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await f.orchestrator.ingest(operatorDecisionEvent("limit-reached"));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it("counts a genuine passing summary during a script-trust decision wait", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await f.orchestrator.ingest(taskSubmitted());
+    await f.orchestrator.ingest(operatorDecisionEvent());
+    await verification(f, "passed");
+    await f.orchestrator.ingest(operatorDecisionEvent("accepted"));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(log.records.some((event) => event.op === "coding-runtime.verification-summarized")).toBe(
+      true,
+    );
+  });
+
+  it("keeps a real post-edit pass when another verifier is unavailable", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const revision = f.orchestrator.verificationRevision("run-1");
+    await verification(f, "passed", undefined, "a".repeat(64));
+    await verification(f, "partial", { passed: 0, failed: 0, skipped: 1 }, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    const summary = requireLoggedEvent(
+      log.records.find((entry) => entry.op === "coding-runtime.verification-summarized"),
+      "Expected revision-bound verification evidence",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification-summarized.emitted-line",
+        formatActivityLogProofLine(summary),
+      ),
+    ).toMatchObject({ verificationEditRevision: revision });
+  });
+
+  it("accepts actual passing checks alongside skipped checks without weakening a failed target", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "partial", { passed: 1, failed: 0, skipped: 1 }, "a".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a passing completion from a verifier admitted before the final edit", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const admittedRevision = f.orchestrator.verificationRevision("run-1");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed", undefined, "a".repeat(64), admittedRevision);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it("never clears a failed target merely because its next attempt was skipped", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed", undefined, "a".repeat(64));
+    await verification(f, "partial", { passed: 0, failed: 0, skipped: 1 }, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
+  it.each(["both", "pass-only"] as const)(
+    "does not let digest-less targeted summaries erase a distinct failed verification (%s)",
+    async (unidentified) => {
+      const { f, finish } = await runningTask();
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+      await verification(f, "failed", undefined, unidentified === "both" ? null : "a".repeat(64));
+      await verification(f, "passed", undefined, null);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+          state: "failed",
+          failureCode: "verification-not-evidenced",
+        });
+      });
+    },
+  );
+
+  it("does not let a different passing target clear a failed test", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it("requires the selected checks to pass again after a later edit", async () => {
+    const { f, finish } = await runningTask();
+    await verification(f, "passed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
+  it("accepts fresh passes for all selected targets after the repair", async () => {
+    const { f, finish } = await runningTask();
+    await verification(f, "failed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["failed", "partial"] as const)(
+    "does not report success after a %s verification",
+    async (status) => {
+      const { f, log, finish } = await runningTask();
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+      await verification(f, status);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+          state: "failed",
+          failureCode: "verification-not-evidenced",
+        });
+      });
+      const refused = requireLoggedEvent(
+        log.records.find(
+          (event) =>
+            event.op === "coding-runtime.run.verification-continuation" &&
+            event.extra?.state === "dispatch-refused",
+        ),
+        "Expected refused continuation dispatch",
+      );
+      expect(refused.errorKind).toBe("unavailable");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.verification-continuation.emitted-line",
+          formatActivityLogProofLine(refused),
+        ),
+      ).toMatchObject({ state: "dispatch-refused", attempt: 1 });
+      const line = requireLoggedEvent(
+        log.records.find(
+          (event) =>
+            event.op === "coding-runtime.run.verification-continuation" &&
+            event.extra?.state === "not-evidenced",
+        ),
+        "Expected an unevidenced verification settlement.",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.verification-continuation.emitted-line",
+          formatActivityLogProofLine(line),
+        ),
+      ).toMatchObject({ state: "not-evidenced", runId: "run-1" });
+    },
+  );
+
+  it("does not count a pass from before the final edit", async () => {
+    const { f, finish } = await runningTask();
+    await verification(f, "passed");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
+  it("does not count a passing summary with no executed checks", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed", { passed: 0, failed: 0, skipped: 0 });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
+  it("accepts the failed-test, repair, passing-test loop", async () => {
+    const { f, finish } = await runningTask();
+    await verification(f, "failed");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a read-only task to complete without inventing verification work", async () => {
+    const { f, finish } = await runningTask();
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  });
+
+  it("continues a premature completion in the same run and succeeds after repair and retest", async () => {
+    const { f, log, finish } = await runningTask();
+    let finishRepair: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
+    const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+      finishRepair = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        taskIntent: VERIFICATION_CONTINUATION_INTENT,
+      }),
+    );
+    const continued = requireLoggedEvent(
+      log.records.find(
+        (line) =>
+          line.op === "coding-runtime.run.verification-continuation" &&
+          line.extra?.state === "continued",
+      ),
+      "Expected actual continued turn",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(continued),
+      ),
+    ).toMatchObject({ state: "continued", attempt: 1 });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed");
+    finishRepair?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  });
+
+  it("keeps the attempted ordinal and actual cause when verification continuation transport throws", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const error = Object.assign(
+      new Error("PRIVATE_CONTINUATION_CANARY", { cause: new TypeError("PRIVATE_CAUSE_CANARY") }),
+      { code: "TRANSPORT_UNAVAILABLE" },
+    );
+    f.taskDispatcher.dispatch.mockRejectedValueOnce(error);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    const thrown = requireLoggedEvent(
+      log.records.find(
+        (line) =>
+          line.op === "coding-runtime.run.verification-continuation" &&
+          line.extra?.state === "dispatch-threw",
+      ),
+      "Expected actual dispatch failure",
+    );
+    expect(thrown.errorKind).toBe("unavailable");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(thrown),
+      ),
+    ).toMatchObject({
+      attempt: 1,
+      errorClass: "Error",
+      code: "TRANSPORT_UNAVAILABLE",
+      causeChain: ["TypeError"],
+      frames: expect.any(Array) as unknown,
+    });
+    const terminal = requireLoggedEvent(
+      log.records.find(
+        (line) =>
+          line.op === "coding-runtime.run.verification-continuation" &&
+          line.extra?.state === "not-evidenced",
+      ),
+      "Expected final verification disposition",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(terminal),
+      ),
+    ).toMatchObject({ attempt: 1, state: "not-evidenced" });
+  });
+
+  it("records an actual operator stop that supersedes verification continuation dispatch", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    let release: ((result: CodingRuntimeTaskDispatchResult) => void) | undefined;
+    f.taskDispatcher.dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    release?.({ ok: true, completion: new Promise(() => undefined) });
+    await vi.waitFor(() => {
+      expect(log.records.some((line) => line.extra?.state === "run-superseded")).toBe(true);
+    });
+    const line = requireLoggedEvent(
+      log.records.find(
+        (entry) =>
+          entry.op === "coding-runtime.run.verification-continuation" &&
+          entry.extra?.state === "run-superseded",
+      ),
+      "Expected superseded dispatch",
+    );
+    expect(line.errorKind).toBe("conflict");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ state: "run-superseded", attempt: 1 });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("cancelled");
+  });
+
+  it("bounds repeated premature completion without reporting a false success", async () => {
+    const { f, finish } = await runningTask();
+    f.taskDispatcher.dispatch.mockResolvedValue({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1 + VERIFICATION_CONTINUATION_MAX);
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 });

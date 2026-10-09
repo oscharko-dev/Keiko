@@ -57,7 +57,10 @@ type ScriptCloseOptions = Parameters<typeof scriptChildClose>[1];
 
 interface SequencedSpawn {
   readonly fn: SpawnFn;
-  readonly calls: () => readonly { readonly command: string; readonly args: readonly string[] }[];
+  readonly calls: () => readonly {
+    readonly command: string;
+    readonly args: readonly string[];
+  }[];
 }
 
 // Each call to `spawn()` creates and schedules the close of its OWN fresh fake child at the moment
@@ -90,7 +93,10 @@ function writeInstalledTree(root: string): void {
   };
   writeFileSync(
     join(root, "node_modules", ".package-lock.json"),
-    JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/left-pad": entry } }),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/left-pad": entry },
+    }),
     "utf8",
   );
 }
@@ -154,7 +160,10 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
   });
 
   it("never runs scripts when npm leaves node_modules linked outside the workspace", async () => {
-    const workspace = makeDependencyWorkspace({ test: "vitest run", lint: "eslint ." });
+    const workspace = makeDependencyWorkspace({
+      test: "vitest run",
+      lint: "eslint .",
+    });
     const outside = makeDependencyWorkspace({});
     writeInstalledTree(outside.root);
     const scripts = { test: "vitest run", lint: "eslint ." };
@@ -189,12 +198,17 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     // Two script kinds (SCRIPT_KINDS orders lint before test, as the later "forwards
     // onStepOutput" test in this file also relies on) so this proves the skip applies to every
     // planned step, not just a single one.
-    const workspace = makeDependencyWorkspace({ test: "vitest run", lint: "eslint ." });
+    const workspace = makeDependencyWorkspace({
+      test: "vitest run",
+      lint: "eslint .",
+    });
     const catalog = {
       scripts: { test: "vitest run", lint: "eslint ." },
       mapping: classifyScripts({ test: "vitest run", lint: "eslint ." }),
     };
-    const plan = buildVerificationPlan(workspace, catalog, { only: ["test", "lint"] });
+    const plan = buildVerificationPlan(workspace, catalog, {
+      only: ["test", "lint"],
+    });
 
     const spawn = sequencedSpawn([{ stderr: "npm ERR! network failure\n", exitCode: 1 }]);
     const outputs: VerificationStepOutput[] = [];
@@ -235,20 +249,27 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
   });
 
   it("forwards onStepOutput for a failing script step and stays silent for a passing one", async () => {
-    const workspace = makeDependencyWorkspace({ test: "vitest run", lint: "eslint ." });
+    const workspace = makeDependencyWorkspace({
+      test: "vitest run",
+      lint: "eslint .",
+    });
     const catalog = {
       scripts: { test: "vitest run", lint: "eslint ." },
       mapping: classifyScripts({ test: "vitest run", lint: "eslint ." }),
     };
     // SCRIPT_KINDS orders lint before test, so the plan (and spawn order) runs lint first.
-    const plan = buildVerificationPlan(workspace, catalog, { only: ["test", "lint"] });
+    const plan = buildVerificationPlan(workspace, catalog, {
+      only: ["test", "lint"],
+    });
 
     const spawn = sequencedSpawn([
       { stderr: "problem at src/a.ts\n", exitCode: 1 }, // lint fails
       { stdout: "1 passed\n", exitCode: 0 }, // test passes
     ]);
     const outputs: VerificationStepOutput[] = [];
-    const deps = testDeps(workspace, spawn.fn, { onStepOutput: (output) => outputs.push(output) });
+    const deps = testDeps(workspace, spawn.fn, {
+      onStepOutput: (output) => outputs.push(output),
+    });
     const report = await runVerification(plan, deps);
 
     expect(report.results[0]?.kind).toBe("lint");
@@ -258,5 +279,126 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     expect(outputs).toHaveLength(1);
     expect(outputs[0]?.step).toBe("lint");
     expect(outputs[0]?.excerpt).toContain("problem at src/a.ts");
+  });
+});
+
+const TARGET_RUNTIME: NonNullable<VerificationDeps["dependencyInstallTarget"]> = {
+  os: "linux",
+  cpu: "arm64",
+  libc: "glibc",
+  nodeVersion: "v24.18.0",
+  nodeAbi: "137",
+  napiVersion: "10",
+  runtimeIdentitySha256: "a".repeat(64),
+};
+
+function dependencyTestPlan(workspace: WorkspaceInfo): ReturnType<typeof buildVerificationPlan> {
+  const scripts = { test: "vitest run" };
+  return buildVerificationPlan(
+    workspace,
+    { scripts, mapping: classifyScripts(scripts) },
+    { only: ["test"] },
+  );
+}
+
+describe("runVerification measured dependency target", () => {
+  it("forwards the lazy server resolver to the canonical bootstrap", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const spawn = sequencedSpawn([{ exitCode: 0 }, { exitCode: 0 }]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, npm, {
+        dependencyBootstrap: "auto",
+        resolveDependencyInstallTarget: () => Promise.resolve(TARGET_RUNTIME),
+      }),
+    );
+    expect(report.overallStatus).toBe("passed");
+    expect(spawn.calls()[0]?.args).toContain("--os=linux");
+    expect(spawn.calls()[0]?.args).toContain("--libc=glibc");
+  });
+
+  it("does not spawn install or test commands when the selected runtime probe fails", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const spawn = sequencedSpawn([]);
+    const failures: string[] = [];
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, {
+        dependencyBootstrap: "auto",
+        resolveDependencyInstallTarget: () => Promise.reject(new Error("probe unavailable")),
+        onDependencyBootstrapFailure: (failure) => {
+          failures.push(failure.stage);
+        },
+      }),
+    );
+    expect(report.dependencies?.state).toBe("failed");
+    expect(report.overallStatus).toBe("failed");
+    expect(report.results[0]?.status).toBe("skipped");
+    expect(failures).toEqual(["target-probe"]);
+    expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it.each(["off", "none", "refused", "skipped"] as const)(
+    "does not measure a %s bootstrap",
+    async (kind) => {
+      const workspace = makeDependencyWorkspace({ test: "vitest run" });
+      if (kind === "none")
+        writeFileSync(
+          join(workspace.root, "package.json"),
+          JSON.stringify({ scripts: { test: "vitest run" } }),
+        );
+      if (kind === "refused")
+        writeFileSync(join(workspace.root, ".npmrc"), "registry=https://example.invalid");
+      let probes = 0;
+      const spawn = sequencedSpawn([{ exitCode: 0 }]);
+      const plan = dependencyTestPlan(workspace);
+      const selected =
+        kind === "skipped"
+          ? {
+              ...plan,
+              steps: plan.steps.map((step) => ({
+                ...step,
+                skipReason: "not selected",
+              })),
+            }
+          : plan;
+      await runVerification(
+        selected,
+        testDeps(workspace, spawn.fn, {
+          dependencyBootstrap: kind === "off" ? "off" : "auto",
+          resolveDependencyInstallTarget: () => {
+            probes += 1;
+            return Promise.resolve(TARGET_RUNTIME);
+          },
+        }),
+      );
+      expect(probes).toBe(0);
+    },
+  );
+});
+
+describe("runVerification static measured dependency target", () => {
+  it("reuses the same validated static target after the canonical initial plan", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const spawn = sequencedSpawn([{ exitCode: 0 }, { exitCode: 0 }, { exitCode: 0 }]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
+    const deps = testDeps(workspace, npm, {
+      dependencyBootstrap: "auto",
+      dependencyInstallTarget: TARGET_RUNTIME,
+    });
+    const first = await runVerification(dependencyTestPlan(workspace), deps);
+    const second = await runVerification(dependencyTestPlan(workspace), deps);
+    expect(first.dependencies?.state).toBe("installed");
+    expect(spawn.calls()[0]?.args).toContain("--os=linux");
+    expect(second.dependencies?.state).toBe("current");
+    expect(second.overallStatus).toBe("passed");
+    expect(spawn.calls()).toHaveLength(3);
   });
 });

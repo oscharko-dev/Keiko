@@ -1,3 +1,5 @@
+import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
+
 // Cross-window bus (intentionally outside React) that lets the Figma Snapshot window ask the
 // Settings panel to open the gateway-setup dialog on its Figma access-token section. The token is
 // resolved server-side and can only be entered in that dialog, so the PAT error in the Snapshot
@@ -32,6 +34,9 @@ export const GATEWAY_CONFIG_UPDATED_EVENT = "keiko:gateway-config-updated";
  * configuration generation.
  */
 export const GATEWAY_MODEL_READINESS_UPDATED_EVENT = "keiko:gateway-model-readiness-updated";
+
+/** A background read has already adopted a changed catalog; consumers can refresh their posture. */
+export const GATEWAY_MODEL_CATALOG_UPDATED_EVENT = "keiko:gateway-model-catalog-updated";
 
 /**
  * Requested when a visible model picker is opened. This is deliberately separate from
@@ -79,8 +84,24 @@ export function notifyGatewayModelReadinessUpdated(): void {
   window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_READINESS_UPDATED_EVENT));
 }
 
+export function notifyGatewayModelCatalogUpdated(correlationId?: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(GATEWAY_MODEL_CATALOG_UPDATED_EVENT, { detail: { correlationId } }),
+  );
+}
+
 /** Request a fresh gateway model catalog without changing configuration-readiness state. */
 export function requestGatewayModelCatalogRefresh(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT));
+}
+
+/** Only the actual catalog request can parent a consumer refresh; malformed event details carry none. */
+export function gatewayModelCatalogCorrelationId(event: Event): string | undefined {
+  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  if (typeof detail !== "object" || detail === null) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(detail, "correlationId");
+  const value: unknown = descriptor?.value;
+  return isActivityLogCorrelationId(value) ? value : undefined;
 }

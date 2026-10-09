@@ -204,6 +204,33 @@ describe("useCodingWorkbenchRuntimeResources profile refresh", () => {
 });
 
 describe("useCodingWorkbenchRuntimeResources source refresh", () => {
+  it("does not rediscover the catalog on repeated pending verification timer reads", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const catalogRefresh = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile)
+        .mockResolvedValueOnce({ status: "unavailable", reason: "model-verification-pending" })
+        .mockResolvedValueOnce({ status: "unavailable", reason: "model-verification-pending" })
+        .mockResolvedValueOnce({ status: "available" } as CodingWorkbenchSidecarGatewayResult);
+      const { resources, dispatch, unmount } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 2);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(3);
+      expect(catalogRefresh).toHaveBeenCalledOnce();
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({ available: true }),
+      });
+      unmount();
+    } finally {
+      window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+      vi.useRealTimers();
+    }
+  });
+
   it("projects the managed gateway source truth", async () => {
     vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
       status: "available",
@@ -226,6 +253,66 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
       },
     });
   });
+
+  it("adopts a background catalog update without requesting another catalog refresh", async () => {
+    vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+      status: "available",
+    } as CodingWorkbenchSidecarGatewayResult);
+    const { resources, dispatch } = renderResources(runtimeState());
+    const requested = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", requested);
+    try {
+      await act(() => resources.refreshSource(true));
+      expect(requested).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({ available: true }),
+      });
+    } finally {
+      window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", requested);
+    }
+  });
+
+  it.each(["unmounted", "superseded"] as const)(
+    "does not refresh the global catalog when a %s source read finally lands",
+    async (obsolete) => {
+      const available = { status: "available" } as CodingWorkbenchSidecarGatewayResult;
+      let release: (profile: CodingWorkbenchSidecarGatewayResult) => void = () => undefined;
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile)
+        .mockReset()
+        .mockImplementationOnce(() => new Promise((resolve) => void (release = resolve)))
+        .mockResolvedValue(available);
+      const { resources, dispatch, unmount } = renderResources(runtimeState());
+      const catalogRefresh = vi.fn();
+      window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+      try {
+        let stale: Promise<void> = Promise.resolve();
+        act(() => {
+          stale = resources.refreshSource();
+        });
+        if (obsolete === "unmounted") unmount();
+        else {
+          await act(() => resources.refreshSource());
+          expect(catalogRefresh).toHaveBeenCalledTimes(1);
+          expect(dispatch).toHaveBeenLastCalledWith({
+            kind: "source-set",
+            source: expect.objectContaining({ available: true }),
+          });
+        }
+        catalogRefresh.mockClear();
+        dispatch.mockClear();
+        await act(async () => {
+          release(available);
+          await stale;
+        });
+
+        expect(catalogRefresh).not.toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+      }
+    },
+  );
 
   // #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway
   // it answers `model-verification-pending`; the Workbench reads again after the pause instead
@@ -578,4 +665,39 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     });
     expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
   });
+});
+
+it("records the actual current profile read, elapsed outcome and original catalog parent", async () => {
+  const received: (import("./client-diagnostics").ClientDiagnosticMeta | undefined)[] = [];
+  const { setClientDiagnosticWriter, resetClientDiagnosticWriter } =
+    await import("./client-diagnostics");
+  setClientDiagnosticWriter((_message, meta) => received.push(meta));
+  vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+    status: "unavailable",
+    reason: "model-verification-pending",
+  });
+  const { resources, unmount } = renderResources(runtimeState());
+  try {
+    await act(() => resources.refreshSource(true, "actual-catalog-123"));
+    const sent = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.at(-1)?.[0];
+    expect(sent).toEqual(expect.any(String));
+    const stages = received.filter(
+      (meta) => meta?.stageReport?.stage === "gateway profile refresh",
+    );
+    expect(stages).toHaveLength(2);
+    expect(stages[0]?.correlationId).toBe(sent);
+    expect(stages[1]?.correlationId).toBe(sent);
+    expect(stages[1]).toMatchObject({
+      parentCorrelationId: "actual-catalog-123",
+      stageReport: {
+        phase: "settled",
+        durationMs: expect.any(Number),
+        gatewayProfile: { outcome: "unavailable", catalogReread: "skipped" },
+      },
+    });
+    expect(JSON.stringify(stages)).not.toContain("modelAlias");
+  } finally {
+    unmount();
+    resetClientDiagnosticWriter();
+  }
 });

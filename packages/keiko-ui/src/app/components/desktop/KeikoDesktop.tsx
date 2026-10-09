@@ -2,7 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import {
   redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,

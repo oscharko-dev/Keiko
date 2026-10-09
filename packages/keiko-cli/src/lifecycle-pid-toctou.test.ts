@@ -110,6 +110,7 @@ describe("keiko start — ui.pid write-side TOCTOU (KEIKO-0886 follow-up, #2906 
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
+        openExternal: vi.fn(),
         sleep: () => Promise.resolve(),
       },
     ).catch(() => undefined);

@@ -428,15 +428,17 @@ async function collectPrimaryStream(
       runner.policy.applyGitignore,
       runner.fs,
       control,
-      async (file): Promise<void> => {
-        for await (const _admission of collectorAdmissions(collectors, file)) {
-          // Admission backpressure completes before discovery advances to another file.
-        }
-      },
-      (stats): void => {
-        ignored = stats.ignored;
-        denied = stats.denied;
-        for (const collector of collectors) collector.recordDiscoveryStats(stats);
+      {
+        onFile: async (file): Promise<void> => {
+          for await (const _admission of collectorAdmissions(collectors, file)) {
+            // Admission backpressure completes before discovery advances to another file.
+          }
+        },
+        onStats: (stats): void => {
+          ignored = stats.ignored;
+          denied = stats.denied;
+          for (const collector of collectors) collector.recordDiscoveryStats(stats);
+        },
       },
     );
     await Promise.all(collectors.map((collector) => collector.settle()));
@@ -477,12 +479,14 @@ async function collectRescueStream(
       runner.policy.applyGitignore,
       runner.fs,
       control,
-      async (file): Promise<void> => {
-        if (policyOmissionReason(file.relativePath, runner.policy) !== undefined)
-          await rescue.enqueue(file);
-      },
-      (stats): void => {
-        rescue.recordDiscoveryStats(stats);
+      {
+        onFile: async (file): Promise<void> => {
+          if (policyOmissionReason(file.relativePath, runner.policy) !== undefined)
+            await rescue.enqueue(file);
+        },
+        onStats: (stats): void => {
+          rescue.recordDiscoveryStats(stats);
+        },
       },
     );
     await rescue.settle();

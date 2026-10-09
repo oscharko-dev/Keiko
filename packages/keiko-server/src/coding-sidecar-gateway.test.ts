@@ -3,7 +3,10 @@ import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
-import { resetCodingWorkbenchContextWindowProbesForTests } from "./gateway-readiness.js";
+import {
+  initializeLiteLlmCodingReadiness,
+  resetCodingWorkbenchContextWindowProbesForTests,
+} from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -49,7 +52,10 @@ import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contrac
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { buildRedactor, CONVERSATION_READINESS_MAX_AGE_MS, type UiHandlerDeps } from "./deps.js";
+import type { VerifiedModelCapabilityObservation } from "./deps.js";
+import { runGatewayReadiness } from "./gateway-readiness.js";
+import { handleModels } from "./read-handlers.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
@@ -149,6 +155,26 @@ function configValue(
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
     capabilities: [capabilityValue],
   };
+}
+
+function freshServingHolder(config: GatewayConfig): NonNullable<UiHandlerDeps["gatewayConfig"]> {
+  const holder = probeVerifiedGatewayConfig(config);
+  holder.recordVerification("unverified");
+  for (const provider of config.providers) {
+    holder.recordVerifiedCapability(
+      provider.modelId,
+      { conversationReady: true },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+  }
+  return holder;
+}
+
+function freshProfileDeps(deps: UiHandlerDeps): UiHandlerDeps {
+  return deps.config === undefined
+    ? deps
+    : { ...deps, gatewayConfig: freshServingHolder(deps.config) };
 }
 
 function depsValue(
@@ -963,6 +989,8 @@ describe("coding-sidecar gateway", () => {
     ).toEqual([
       // #3873 follow-up: deletions and renames joined the replacement changeset (regenerated from
       // the producer with projectedGatewaySchema; a schema change here is deliberate, never typed).
+      // Discovery now requires explicit mode/directory; its pin comes from the actual captured
+      // OpenCode request fixture, with the canonical trust check below still exercised.
       ["keiko_changeset_edit", "a88e907c1c4f7f955dccfa4d960e10f315a59a1f94b16cedc223f2a47bf4abf6"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
@@ -983,7 +1011,7 @@ describe("coding-sidecar gateway", () => {
       ["keiko_verification", "8cbb4582b87ff37f13040c8f064d1080b848bcfe7b6ff2159adf682acd41c35f"],
       [
         "keiko_workspace_discover",
-        "fdc3bd7f51fd0a7c913909fee514aa0c0f31127b9b4e10324c569fbfcdf4df6c",
+        "908a32e65f39462dc43df60ccccbf6e0dee4740b9421a84e7e145c485a4e2da4",
       ],
       ["keiko_workspace_read", "29233b25ff1788400500ee0ec33c7ef915a016ea8646c5d9884bac699a618503"],
       ["question", "c5e745bc20ee80f7cbad35122b5e3b58db1c6b863821ec26ef203d1e94c451a3"],
@@ -3271,7 +3299,7 @@ describe("coding-sidecar gateway", () => {
         delete: () => undefined,
       },
     });
-    const result = await handleCodingSidecarGatewayProfile(context, deps);
+    const result = await handleCodingSidecarGatewayProfile(context, freshProfileDeps(deps));
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
@@ -3296,24 +3324,18 @@ describe("coding-sidecar gateway", () => {
       correlationId: undefined,
     } satisfies RouteContext;
     const config = configValue(provider(), capability());
-    const unprobed = await handleCodingSidecarGatewayProfile(context, depsValue(config));
+    const holder = freshServingHolder(config);
+    const unprobed = await handleCodingSidecarGatewayProfile(context, {
+      ...depsValue(config),
+      gatewayConfig: holder,
+    });
 
     expect(unprobed.body).toMatchObject({ status: "available", verification: "unverified" });
 
+    holder.recordVerification("verified");
     const verified = await handleCodingSidecarGatewayProfile(context, {
       ...depsValue(config),
-      gatewayConfig: {
-        storagePath: "/dev/null",
-        current: () => config,
-        present: () => true,
-        set: () => undefined,
-        generation: () => 0,
-        verification: () => "verified",
-        recordVerification: () => undefined,
-        verifiedCapability: () => undefined,
-        recordVerifiedCapability: () => undefined,
-        clearVerifiedCapability: () => false,
-      },
+      gatewayConfig: holder,
     });
 
     expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
@@ -3374,23 +3396,27 @@ describe("coding-sidecar gateway", () => {
   // now refuses it with the same rule the readiness projection applies to the default model.
   it("admits a run's model only when its window holds a coding run's prompt", () => {
     const roomy = configValue(provider(), capability({ contextWindow: 128_000 }));
-    expect(admitCodingRunModel(roomy, "azure-coding-model", undefined)).toEqual({
+    expect(
+      admitCodingRunModel(roomy, "azure-coding-model", undefined, freshServingHolder(roomy)),
+    ).toEqual({
       profileId: "azure-coding-model",
     });
     const cramped = configValue(provider(), capability({ contextWindow: 4_096 }));
-    expect(() => admitCodingRunModel(cramped, "azure-coding-model", undefined)).toThrow(
+    expect(() =>
+      admitCodingRunModel(cramped, "azure-coding-model", undefined, freshServingHolder(cramped)),
+    ).toThrow(
       expect.objectContaining({
         name: "CodingRuntimeLaunchRejectedError",
         failureCode: "model-unavailable",
         reason: "model-context-window-insufficient",
       }) as Error,
     );
-    expect(() => admitCodingRunModel(undefined, undefined, undefined)).toThrow(
+    expect(() => admitCodingRunModel(undefined, undefined, undefined, undefined)).toThrow(
       expect.objectContaining({ failureCode: "model-unavailable" }) as Error,
     );
-    expect(() => admitCodingRunModel(roomy, "azure-coding-model", "high")).toThrow(
-      expect.objectContaining({ reason: "reasoning-effort-unavailable" }) as Error,
-    );
+    expect(() =>
+      admitCodingRunModel(roomy, "azure-coding-model", "high", freshServingHolder(roomy)),
+    ).toThrow(expect.objectContaining({ reason: "reasoning-effort-unavailable" }) as Error);
   });
 
   it("names a pending window verification at the start instead of refusing the model outright", async () => {
@@ -3430,9 +3456,9 @@ describe("coding-sidecar gateway", () => {
         },
         deps,
       );
-      expect(() => admitCodingRunModel(config, "azure-coding-model", undefined)).toThrow(
-        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
-      );
+      expect(() =>
+        admitCodingRunModel(config, "azure-coding-model", undefined, freshServingHolder(config)),
+      ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
       await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
       await read;
     } finally {
@@ -3987,6 +4013,7 @@ describe("coding-sidecar gateway", () => {
     expect(validated?.extra).toMatchObject({
       maxRequestBytes: 1_048_576,
       inputMessageCount: 1,
+      offeredToolCount: 0,
       completeness: "complete",
       loss: "none",
     });
@@ -4724,7 +4751,7 @@ describe("coding sidecar gateway turn failure projection", () => {
       routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
       deps,
     );
-    expect(result).toMatchObject({ status: 503 });
+    expect(result).toMatchObject({ status: code === "invalid-tool-call" ? 400 : 503 });
     const replay = eventHub.replay("run-gateway-test");
     expect(replay.ok && replay.events).toMatchObject([{ failureCode: code }]);
     expect(JSON.stringify(replay)).not.toContain(error.message);
@@ -4763,6 +4790,47 @@ describe("coding sidecar gateway turn failure projection", () => {
       events.find((event) => event.op === "coding-sidecar.gateway.turn-failed");
     const rejectionChunk =
       '"error":{"code":400,"type":"invalid_request_error","message":"The model provider rejected this turn."}';
+
+    it("ends a malformed invocation after delivered text without an identical runtime retry", async () => {
+      const sink = captureServerLog("warn");
+      const response = mockResponse({ captureBody: true });
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: "I will search now." };
+        throw new MalformedToolCallError("private-malformed-invocation-canary");
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-malformed" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "synthetic" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        },
+        deps,
+      );
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain("I will search now.");
+      expect(response.body()).toContain(rejectionChunk);
+      expect(response.body()).not.toContain('"finish_reason":"error"');
+      expect(response.body()).not.toContain("private-malformed-invocation-canary");
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+        failureCode: "invalid-tool-call",
+        runtimeRetry: "refused",
+      });
+    });
 
     it.each([
       [rejection, 400, "refused"],
@@ -5911,7 +5979,9 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         reason: "model-context-window-insufficient",
       },
     });
-    expect(() => admitCodingRunModel(config, "azure-coding-model", undefined)).toThrow();
+    expect(() =>
+      admitCodingRunModel(config, "azure-coding-model", undefined, freshServingHolder(config)),
+    ).toThrow();
     const event = sink.events.find(
       (entry) => entry.op === "coding-sidecar.gateway.readiness-insufficient",
     );
@@ -5982,7 +6052,10 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
     const sink = captureServerLog("warn");
     const deps = depsValue(configValue(provider(), capability()));
 
-    const result = await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const result = await handleCodingSidecarGatewayProfile(
+      profileContext(),
+      freshProfileDeps(deps),
+    );
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ status: "available" });
@@ -5995,7 +6068,10 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
       configValue(provider(), capability({ contextWindow: 32_000, maxOutputTokens: 2_048 })),
     );
 
-    const result = await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const result = await handleCodingSidecarGatewayProfile(
+      profileContext(),
+      freshProfileDeps(deps),
+    );
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
@@ -7718,6 +7794,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
     expect(validated?.extra).toMatchObject({
       inputMessageCount: 6,
       droppedReasoningMessageCount: 2,
+      offeredToolCount: OPENCODE_MODEL_VISIBLE_TOOL_NAMES.length,
     });
     expect(
       expectActivityLogProof(
@@ -8856,4 +8933,544 @@ describe("coding sidecar gateway retry facts (#3873 review)", () => {
     expect(JSON.stringify(records)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
     expect(JSON.stringify(records)).not.toContain("exploded");
   });
+});
+
+function nativeCodeModeRequestTools(): ModelVisibleRequestTool[] {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "./coding-runtime/opencodeToolSchemas.opencode-2.0.10-codemode.fixture.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as {
+    readonly tools: readonly {
+      readonly name: string;
+      readonly parameters: Readonly<Record<string, unknown>>;
+    }[];
+  };
+  return modelVisibleTools(fixture.tools);
+}
+
+describe("inactive Code Mode readiness selection", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("admits the exact producer advertisement under a trusted explicit profile", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+    const observed = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+        tools: nativeCodeModeRequestTools(),
+      }),
+      runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } }), undefined, readiness),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(await observed).toBe(true);
+    expect(readiness.isVerified("run-1")).toBe(true);
+    expect(readiness.toolProfile).toBe("code-mode");
+    expect(Reflect.set(readiness, "toolProfile", "direct")).toBe(false);
+  });
+
+  it("never selects Code Mode from incoming tools or a request profile field", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        profile: "code-mode",
+        messages: [{ role: "user", content: "private task" }],
+        tools: nativeCodeModeRequestTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(result).toMatchObject({ status: 403 });
+    expect(chat).not.toHaveBeenCalled();
+    expect(readiness.toolProfile).toBe("direct");
+    expect(readiness.isVerified("run-1")).toBe(false);
+  });
+
+  it("advertises two outer tools and retains the seventeen canonical inner bindings", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+    const chat = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "private task" }],
+        tools: nativeCodeModeRequestTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    const request = chat.mock.calls[0]?.[0];
+    expect(request).not.toHaveProperty("tools");
+    expect(request?.toolCatalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
+      "execute",
+      "question",
+    ]);
+    expect(request?.toolCatalog?.projection.tools).toHaveLength(17);
+    expect(request?.toolCatalog?.offered.toolRefs).toHaveLength(17);
+    expect(request?.toolCatalog?.projection.profile).toEqual({
+      id: "opencode-code-mode",
+      version: 1,
+    });
+  });
+
+  it.each(["direct", "mixed", "drift"])(
+    "refuses %s shape under the selected native profile with body-free evidence",
+    async (kind) => {
+      const sink = captureServerLog("info");
+      const tools = kind === "direct" ? modelVisibleTools() : nativeCodeModeRequestTools();
+      if (kind === "mixed") tools.push(...modelVisibleTools().slice(0, 1));
+      if (kind === "drift") {
+        const execute = tools.find((tool) => tool.function.name === "execute");
+        if (execute === undefined) throw new TypeError("Missing producer execute");
+        const parameters = execute.function.parameters;
+        if (typeof parameters !== "object" || parameters === null)
+          throw new TypeError("Missing producer schema");
+        tools.splice(tools.indexOf(execute), 1, {
+          ...execute,
+          function: {
+            ...execute.function,
+            parameters: { ...parameters, description: "private-customer-schema" },
+          },
+        });
+      }
+      const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+      const pending = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+      const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+          tools,
+        }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-1" } }),
+          () => chat,
+          readiness,
+        ),
+      );
+      expect(result).toMatchObject({ status: 403 });
+      expect(await pending).toBe(false);
+      expect(chat).not.toHaveBeenCalled();
+      expect(readiness.isVerified("run-1")).toBe(false);
+      const event = sink.events.find((entry) => entry.op === "coding-sidecar.gateway.rejected");
+      expect(event?.extra).toMatchObject({ expectedToolCount: 2, reason: "tool-contract-drift" });
+      const persisted = expectActivityLogProof(
+        "coding-sidecar.gateway.rejected.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(persisted).toMatchObject({ expectedToolCount: 2, reason: "tool-contract-drift" });
+      expect(JSON.stringify(sink.events)).not.toContain("private-customer-schema");
+    },
+  );
+
+  it("rejects an unknown server-selected profile", () => {
+    expect(() => {
+      Reflect.apply(createOpenCodeGatewayReadinessRegistry, undefined, ["unknown"]);
+    }).toThrow(TypeError);
+  });
+});
+
+describe("inactive Code Mode run-bound compaction", () => {
+  it("retains the authenticated handshake and clear boundaries", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-1" } }),
+      () => chat,
+      readiness,
+    );
+    const compact = (): Promise<RouteResult | typeof STREAMING> =>
+      handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "coding", messages: [{ role: "user", content: "compact" }] }),
+        deps,
+      );
+    expect(await compact()).toMatchObject({ status: 403 });
+    const pending = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+          tools: nativeCodeModeRequestTools(),
+        }),
+        deps,
+      ),
+    ).toMatchObject({ status: 200 });
+    expect(await pending).toBe(true);
+    expect(await compact()).toMatchObject({ status: 200 });
+    readiness.clear("run-1");
+    expect(await compact()).toMatchObject({ status: 403 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(readiness.toolProfile).toBe("code-mode");
+  });
+});
+
+describe("fresh chat serving for new coding tasks", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetServerLogger();
+  });
+
+  function servingDeps(): UiHandlerDeps {
+    const config = configValue(provider(), capability());
+    const holder = probeVerifiedGatewayConfig(config);
+    holder.recordVerifiedCapability(
+      "azure-coding-model",
+      { toolCalling: true },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    return { ...depsValue(config), gatewayConfig: holder };
+  }
+
+  async function observeChat(
+    deps: UiHandlerDeps,
+    successful: boolean,
+    modelId = "azure-coding-model",
+  ): Promise<void> {
+    await runGatewayReadiness(
+      { modelId, options: { probes: ["chat"] } },
+      {
+        ...deps,
+        gatewayReadinessFetch: () =>
+          Promise.resolve(
+            Response.json({
+              choices: successful ? [{ message: { content: "OK" }, finish_reason: "stop" }] : [],
+            }),
+          ),
+      },
+    );
+  }
+
+  function servingContext(): RouteContext {
+    return {
+      ...routeContext({}),
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: "serving-projection-0001",
+    };
+  }
+
+  function liveAdmission(deps: UiHandlerDeps): unknown {
+    return admitCodingRunModel(
+      deps.gatewayConfig?.current(),
+      "azure-coding-model",
+      undefined,
+      deps.gatewayConfig,
+    );
+  }
+
+  it("refuses an actually failed legacy alias despite a fresh configured tool proof", async () => {
+    const sink = captureServerLog("warn");
+    const deps = servingDeps();
+    try {
+      await observeChat(deps, false);
+      expect(
+        handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps).body,
+      ).toMatchObject({ models: [{ id: "azure-coding-model", conversationReady: false }] });
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({
+          failureCode: "model-unavailable",
+          reason: "conversation-not-ready",
+        }) as Error,
+      );
+      const profile = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+      expect(profile.body).toEqual({ status: "unavailable", reason: "conversation-not-ready" });
+      const event = sink.events.find(
+        (entry) => entry.op === "coding-sidecar.gateway.readiness-insufficient",
+      );
+      const line = expectActivityLogProof(
+        "coding-sidecar.gateway.readiness-insufficient.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(line).toMatchObject({
+        reason: "conversation-not-ready",
+        probeMode: "passive",
+        correlationId: "serving-projection-0001",
+      });
+      expect(JSON.stringify(line)).not.toMatch(
+        /azure-coding-model|provider-secret|baseUrl|apiKey/u,
+      );
+      await observeChat(deps, true);
+      expect((await handleCodingSidecarGatewayProfile(servingContext(), deps)).body).toMatchObject({
+        status: "available",
+        modelAlias: "azure-coding-model",
+      });
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("keeps the actual F73 gateway request serving after only chat freshness expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const model = capability();
+    const featureProof = model.toolCallingVerification;
+    if (featureProof === undefined) throw new Error("missing tool proof fixture");
+    const issuedAtMs = Date.parse(featureProof.checkedAt);
+    vi.setSystemTime(issuedAtMs);
+    const config = configValue(provider(), model);
+    const holder = probeVerifiedGatewayConfig(config);
+    holder.recordVerifiedCapability(
+      "azure-coding-model",
+      { toolCalling: true, conversationReady: true },
+      featureProof.checkedAt,
+      holder.generation(),
+    );
+    const observation = holder.verifiedCapability("azure-coding-model");
+    if (observation === undefined) throw new Error("missing serving observation fixture");
+    // The existing test holder predates the independent chat timestamp. Extend its typed reply,
+    // retaining the producer's feature timestamp and generation rather than re-dating the proof.
+    const liveHolder = {
+      ...holder,
+      verifiedCapability: (id: string): VerifiedModelCapabilityObservation | undefined => {
+        const value = holder.verifiedCapability(id);
+        return value === undefined
+          ? undefined
+          : { ...value, conversationCheckedAt: observation.checkedAt };
+      },
+    };
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({
+          ok: true,
+          binding: { runId: "run-admitted-chat", modelProfileId: "azure-coding-model" },
+          issuedAtMs,
+        }),
+        () => chat,
+      ),
+      gatewayConfig: liveHolder,
+    };
+    const request = (): Promise<RouteResult | typeof STREAMING> =>
+      handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+    try {
+      expect(admitCodingRunModel(config, "azure-coding-model", undefined, liveHolder)).toEqual({
+        profileId: "azure-coding-model",
+      });
+      const before = await request();
+      assertRouteResult(before);
+      expect(before.status).toBe(200);
+      vi.setSystemTime(issuedAtMs + CONVERSATION_READINESS_MAX_AGE_MS);
+      expect(liveHolder.verifiedCapability("azure-coding-model")).toMatchObject({
+        checkedAt: observation.checkedAt,
+        conversationCheckedAt: observation.checkedAt,
+        generation: observation.generation,
+        fields: { toolCalling: true, conversationReady: true },
+      });
+      expect(holder.current()).toBe(config);
+      expect(() =>
+        admitCodingRunModel(config, "azure-coding-model", undefined, liveHolder),
+      ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
+      const after = await request();
+      assertRouteResult(after);
+      expect(after.status).toBe(200);
+      expect(chat).toHaveBeenCalledTimes(2);
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("keeps unobserved new-task admission and passive source pending", async () => {
+    const deps = servingDeps();
+    try {
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+      const profile = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+      expect(profile.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("elects the original fresh default while preserving a freshly healthy explicit choice", async () => {
+    const deps = servingDeps();
+    const first = deps.gatewayConfig?.current();
+    if (first === undefined || deps.gatewayConfig === undefined)
+      throw new Error("missing serving fixture");
+    const config = {
+      ...first,
+      providers: [...first.providers, provider({ modelId: "healthy-alternative" })],
+      capabilities: [
+        ...(first.capabilities ?? []),
+        capability({ id: "healthy-alternative", costClass: "high" }),
+      ],
+    };
+    deps.gatewayConfig.set(config, true);
+    try {
+      await observeChat(deps, true, "healthy-alternative");
+      expect(admitCodingRunModel(config, undefined, undefined, deps.gatewayConfig)).toEqual({
+        profileId: "healthy-alternative",
+      });
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+      await observeChat(deps, true);
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+      expect(
+        admitCodingRunModel(config, "healthy-alternative", undefined, deps.gatewayConfig),
+      ).toEqual({ profileId: "healthy-alternative" });
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("invalidates new admission on removal or rotation without reusing the old observation", async () => {
+    const deps = servingDeps();
+    try {
+      await observeChat(deps, true);
+      const config = deps.gatewayConfig?.current();
+      if (config === undefined || deps.gatewayConfig === undefined)
+        throw new Error("missing serving fixture");
+      deps.gatewayConfig.set(
+        {
+          ...config,
+          providers: config.providers.map((value) => ({ ...value, apiKey: "rotated-test-key" })),
+        },
+        true,
+      );
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+      expect(() =>
+        admitCodingRunModel(config, "azure-coding-model", undefined, deps.gatewayConfig),
+      ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
+      deps.gatewayConfig.set({ ...config, providers: [], capabilities: [] }, true);
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ failureCode: "model-unavailable" }) as Error,
+      );
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it.each(["invalid-time", "2999-01-01T00:00:00.000Z"])(
+    "keeps malformed or future chat observations pending: %s",
+    (checkedAt) => {
+      const deps = servingDeps();
+      try {
+        deps.gatewayConfig?.recordVerifiedCapability(
+          "azure-coding-model",
+          { conversationReady: true },
+          checkedAt,
+          deps.gatewayConfig.generation(),
+        );
+        expect(() => liveAdmission(deps)).toThrow(
+          expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+        );
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
+
+  it("admits a freshly checked explicit configured alias and expires it at the exact boundary", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+    const deps = servingDeps();
+    try {
+      await observeChat(deps, true);
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+      vi.setSystemTime(
+        Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_MAX_AGE_MS - 1,
+      );
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+      vi.setSystemTime(Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_MAX_AGE_MS);
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+    } finally {
+      deps.store.close();
+    }
+  });
+});
+
+describe("pending readiness original cause evidence", () => {
+  afterEach(() => {
+    resetServerLogger();
+    resetCodingWorkbenchContextWindowProbesForTests();
+    vi.useRealTimers();
+  });
+
+  it.each([false, true])(
+    "retains the actual stored tool shortfall while pending: %s",
+    async (declared) => {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      const sink = captureServerLog("warn");
+      const { toolCallingVerification: _verification, ...unverified } = capability();
+      const config = configValue(provider({ tokenCounter: "litellm" }), {
+        ...unverified,
+        toolCalling: declared,
+      });
+      let release: () => void = (): void => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const deps: UiHandlerDeps = {
+        ...freshProfileDeps(depsValue(config)),
+        gatewayReadinessFetch: async (): Promise<Response> => {
+          await held;
+          return Response.json({
+            choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+          });
+        },
+      };
+      const probe = initializeLiteLlmCodingReadiness(deps, "corr-stored-shortfall");
+      try {
+        const read = handleCodingSidecarGatewayProfile(
+          { correlationId: "corr-shortfall-read" } as RouteContext,
+          deps,
+        );
+        await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
+        expect((await read).body).toEqual({
+          status: "unavailable",
+          reason: "model-verification-pending",
+        });
+        const event = sink.events.find(
+          (entry) => entry.op === "coding-sidecar.gateway.readiness-insufficient",
+        );
+        expect(event?.extra).toMatchObject({
+          reason: "model-verification-pending",
+          storedReason: declared ? "tool-calling-unverified" : "no-tool-calling",
+          probeMode: "pending",
+        });
+        const line = expectActivityLogProof(
+          "coding-sidecar.gateway.readiness-insufficient.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+        expect(line.storedReason).toBe(declared ? "tool-calling-unverified" : "no-tool-calling");
+        expect(JSON.stringify(line)).not.toContain("provider-secret");
+        expect(JSON.stringify(line)).not.toContain("provider.example");
+      } finally {
+        release();
+        await probe;
+      }
+    },
+  );
 });

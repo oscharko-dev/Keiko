@@ -1,8 +1,16 @@
+import { Script } from "node:vm";
+import { webcrypto } from "node:crypto";
+import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
+import { openCodeCatalogAliasFor } from "../tool-catalog/catalogToolFacadeBridge.js";
+import { createCodingToolFacade } from "./codingToolFacade.js";
 import * as composition from "./opencodeRuntimeComposition.js";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+
+import type { CodingToolAuthorityPort } from "./codingToolFacadePorts.js";
 import type { CodingToolResult } from "./codingToolIpc.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as gatewayBackend from "./devLaneRuntimeProcessBackend.js";
@@ -41,6 +49,169 @@ import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 
 describe("production OpenCode backend composition", () => {
+  it("captures the trusted registry profile once without changing the default runtime", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-profile-capture-"));
+    try {
+      let selected: "direct" | "code-mode" = "code-mode";
+      const profile = vi.fn(() => selected);
+      const gatewayReadiness = {
+        ...createOpenCodeGatewayReadinessRegistry("code-mode"),
+        get toolProfile(): "direct" | "code-mode" {
+          return profile();
+        },
+      };
+      const backend = createProductionOpenCodeBackend({
+        ...backendInput(root, scriptedFunctionalPortable(root)),
+        gatewayReadiness,
+      });
+      selected = "direct";
+      expect(Reflect.get(backend, "toolProfile")).toBe("code-mode");
+      expect(Reflect.get(backend, "toolProfile")).toBe("code-mode");
+      expect(profile).toHaveBeenCalledOnce();
+      expect(Object.isFrozen(backend)).toBe(true);
+      const direct = createProductionOpenCodeBackend(
+        backendInput(root, scriptedFunctionalPortable(root)),
+      );
+      expect(Reflect.get(direct, "toolProfile")).toBe("direct");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps legacy missing profiles direct and refuses unknown constructor profiles", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-closed-profile-"));
+    try {
+      const input = backendInput(root, scriptedFunctionalPortable(root));
+      const { toolProfile: _profile, ...legacy } = createOpenCodeGatewayReadinessRegistry();
+      const backend = createProductionOpenCodeBackend({ ...input, gatewayReadiness: legacy });
+      expect(Reflect.get(backend, "toolProfile")).toBe("direct");
+      const invalid = { ...createOpenCodeGatewayReadinessRegistry() };
+      Reflect.set(invalid, "toolProfile", "unqualified-profile");
+      expect(() =>
+        createProductionOpenCodeBackend({ ...input, gatewayReadiness: invalid }),
+      ).toThrow(TypeError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["canonical", "alias", "missing"] as const)(
+    "binds native filesystem and launch state to the same %s root",
+    async (kind) => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-service-roots-")));
+      const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      try {
+        const portable = {
+          ...releaseQualifiedNativeRuntime(root),
+          target: "macos-arm64" as const,
+          qualification: {
+            platform: "darwin" as const,
+            arch: "arm64" as const,
+            backend: "macos-app-sandbox" as const,
+            releaseReceipt: `sha256:${"a".repeat(64)}`,
+          },
+        };
+        const stateRoot = join(root, ".keiko");
+        const selectedStateRoot = createNativeStateRoot(root, kind);
+        const input = runInput(root);
+        const run = createProductionOpenCodeBackend({
+          ...backendInput(root, portable),
+          runtimeStateRoot: selectedStateRoot,
+        }).createRun(input);
+        expect(factory.mock.calls[0]?.[0].gatewayConfinement?.filesystem).toEqual({
+          workspaceRoot: input.context.workspaceRoot,
+          workspaceAccess: "read-only",
+          privateStateRoot: join(
+            stateRoot,
+            "coding-runtime",
+            "opencode",
+            input.minted.authorityRef.runId,
+          ),
+          runtimeReadRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+        });
+        expect(
+          join(compose.mock.calls[0]?.[0].stateBaseRoot ?? "", input.minted.authorityRef.runId),
+        ).toBe(factory.mock.calls[0]?.[0].gatewayConfinement?.filesystem?.privateStateRoot);
+        await run.dispose?.();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("owns presented facts when bridge completion arrives before the native call identity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-tool-presentation-race-"));
+    const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+    try {
+      const backend = createProductionOpenCodeBackend(
+        backendInput(root, windowsDevLaneRuntime(root)),
+      );
+      const run = backend.createRun(runInput(root));
+      const activity = compose.mock.calls[0]?.[0].safeActivity;
+      const projection = backend.safeActivityProjection;
+      if (activity === undefined || projection === undefined)
+        throw new Error("Missing activity port");
+      projection.open({
+        runId: "run-windows",
+        workspaceId: "workspace-windows",
+        authorityExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        workspaceIsCurrent: () => true,
+      });
+      activity.arm();
+      const occurredAt = new Date().toISOString();
+      const presentation = {
+        relativePath: "src/ORIGINAL_PATH.ts",
+        readByteCount: 7,
+        totalFileLines: 30,
+        bridgeDurationMs: 15,
+      };
+      const settlement = {
+        actionId: "session:call_presented",
+        state: "succeeded" as const,
+        occurredAt,
+        presentation,
+      };
+      activity.settleTool(settlement);
+      presentation.readByteCount = 999;
+      presentation.relativePath = "src/CHANGED_PATH.ts";
+      activity.ingest({ kind: "message", messageId: "msg_user", role: "user", occurredAt });
+      activity.ingest({
+        kind: "message",
+        messageId: "msg_assistant",
+        role: "assistant",
+        parentMessageId: "msg_user",
+        occurredAt,
+      });
+      activity.ingest({
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId: "call_presented",
+        tool: "keiko_workspace_read",
+        state: "running",
+        occurredAt,
+      });
+      await Promise.resolve();
+      expect(projection.currentContent()).toMatchObject({
+        feed: {
+          turns: [
+            {
+              tools: [
+                {
+                  state: "succeeded",
+                  presentation: { relativePath: "src/ORIGINAL_PATH.ts", readByteCount: 7 },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      await run.dispose?.();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("captures durable native messages only after readiness is armed, independently of display acceptance", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-native-history-port-"));
     const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
@@ -454,6 +625,15 @@ function windowsDevLaneRuntime(root: string): DevLanePortableOpenCodeRuntime {
   return discovery.runtime;
 }
 
+function createNativeStateRoot(root: string, kind: "canonical" | "alias" | "missing"): string {
+  const stateRoot = join(root, ".keiko");
+  if (kind !== "missing") mkdirSync(stateRoot, { mode: 0o700 });
+  if (kind !== "alias") return stateRoot;
+  const alias = join(root, "state-alias");
+  symlinkSync(stateRoot, alias, "dir");
+  return alias;
+}
+
 function backendInput(
   root: string,
   portable: ResolvedPortableOpenCodeRuntime,
@@ -560,3 +740,534 @@ function trustedContext(workspaceRoot: string): CodingRuntimeTrustedContext {
     expiresAt: "2026-09-03T00:00:00.000Z",
   };
 }
+
+function retryActivityFixture(root: string): {
+  readonly activity: NonNullable<composition.OpenCodeRuntimeCompositionInput["safeActivity"]>;
+  readonly projection: NonNullable<
+    ReturnType<typeof createProductionOpenCodeBackend>["safeActivityProjection"]
+  >;
+  readonly events: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimeEvent[];
+  readonly dispose: () => void | Promise<void>;
+} {
+  const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+  const backend = createProductionOpenCodeBackend(backendInput(root, windowsDevLaneRuntime(root)));
+  const events: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimeEvent[] = [];
+  const input = runInput(root);
+  const run = backend.createRun({
+    ...input,
+    request: { ...input.request, runId: "run-1" },
+    minted: { ...input.minted, authorityRef: { ...input.minted.authorityRef, runId: "run-1" } },
+    onRuntimeEvent: (event): void => {
+      events.push(event);
+    },
+  });
+  const activity = compose.mock.calls[0]?.[0].safeActivity;
+  const projection = backend.safeActivityProjection;
+  if (activity === undefined || projection === undefined) throw new Error("Missing activity port");
+  projection.open({
+    runId: "run-1",
+    workspaceId: "workspace-windows",
+    authorityExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    workspaceIsCurrent: () => true,
+  });
+  return { activity, projection, events, dispose: (): void | Promise<void> => run.dispose?.() };
+}
+
+function retryMessage(): Extract<
+  import("./codingSafeActivityProjection.js").CodingSafeActivitySignal,
+  { kind: "message" }
+> {
+  return {
+    kind: "message",
+    messageId: "msg_retry_first",
+    parentMessageId: "msg_retry_user",
+    role: "assistant",
+    occurredAt: new Date().toISOString(),
+    nativeRetry: { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+  };
+}
+
+describe("production native retry projection", () => {
+  it("rejects accessor facts without invoking them at the real backend projection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-retry-record-"));
+    try {
+      const f = retryActivityFixture(root);
+      f.activity.arm();
+      const message = retryMessage();
+      f.activity.ingest({
+        kind: "message",
+        messageId: "msg_retry_user",
+        role: "user",
+        occurredAt: message.occurredAt,
+      });
+      const getter = vi.fn((): number => 2);
+      const nativeRetry = Object.defineProperty(
+        { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+        "attempt",
+        { enumerable: true, get: getter },
+      );
+      expect(f.activity.ingest({ ...message, nativeRetry })).toBe(false);
+      expect(f.events).toEqual([]);
+      expect(getter).not.toHaveBeenCalled();
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears the private observation state when the existing controller is cleared and rearmed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-retry-rearm-"));
+    try {
+      const f = retryActivityFixture(root);
+      const message = retryMessage();
+      f.activity.arm();
+      f.activity.ingest({
+        kind: "message",
+        messageId: "msg_retry_user",
+        role: "user",
+        occurredAt: message.occurredAt,
+      });
+      f.activity.ingest(message);
+      f.activity.clear();
+      f.activity.arm();
+      f.activity.ingest(message);
+      expect(f.events).toHaveLength(2);
+      expect(new Set(f.events.map((event) => event.eventId)).size).toBe(2);
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes only armed accepted retry facts, deduplicates them, and reports native clear", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-retry-"));
+    try {
+      const f = retryActivityFixture(root);
+      const message = retryMessage();
+      f.activity.ingest(message);
+      expect(f.events).toEqual([]);
+      f.activity.arm();
+      f.activity.ingest(message);
+      expect(f.events).toEqual([]);
+      f.activity.ingest({
+        kind: "message",
+        messageId: "msg_retry_user",
+        role: "user",
+        occurredAt: message.occurredAt,
+      });
+      f.activity.ingest(message);
+      f.activity.ingest(message);
+      expect(f.events).toMatchObject([
+        { kind: "native-retry-changed", nativeRetry: message.nativeRetry },
+      ]);
+      const { nativeRetry: _nativeRetry, ...clear } = message;
+      f.activity.ingest(clear);
+      expect(f.events).toMatchObject([{ nativeRetry: message.nativeRetry }, { nativeRetry: null }]);
+      expect(f.events.every((event) => validateCodingWorkbenchRuntimeEvent(event).ok)).toBe(true);
+      expect(f.projection.currentContent()?.feed).not.toHaveProperty("nativeRetry");
+      f.activity.clear();
+      f.activity.ingest(message);
+      expect(f.events).toHaveLength(2);
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+interface ChildFixturePlugin {
+  readonly setup: (context: {
+    readonly tool: {
+      readonly hook: (
+        name: string,
+        callback: (event: Readonly<Record<string, string>>) => void,
+      ) => Promise<unknown>;
+      readonly transform: (
+        register: (editor: {
+          readonly add: (tool: {
+            readonly name: string;
+            readonly execute: (args: object, context: object) => Promise<unknown>;
+          }) => void;
+        }) => void,
+      ) => Promise<unknown>;
+    };
+  }) => Promise<unknown>;
+}
+
+function capturedChildPlugin(actions: string[]): ChildFixturePlugin {
+  const source = createGeneratedOpenCodeV2Plugins().keiko_governed_tools;
+  if (source === undefined) throw new Error("Missing generated owner");
+  return new Script(
+    `${source.replace("export default", "const plugin =")}\nplugin;`,
+  ).runInNewContext({
+    process: {
+      env: {
+        KEIKO_CODING_MODE: "autonomous-delivery",
+        KEIKO_TOOL_FACADE_URL: "http://127.0.0.1/fixture",
+        KEIKO_TOOL_FACADE_CAPABILITY: "fixture",
+      },
+    },
+    crypto: webcrypto,
+    AbortController,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    setTimeout,
+    clearTimeout,
+    fetch: (_url: unknown, input: { readonly body: string }): Promise<Response> => {
+      const request: unknown = JSON.parse(input.body);
+      if (
+        typeof request !== "object" ||
+        request === null ||
+        !("actionId" in request) ||
+        typeof request.actionId !== "string"
+      )
+        throw new Error("Invalid producer request");
+      actions.push(request.actionId);
+      return Promise.resolve(new Response(JSON.stringify({ status: "completed", evidence: [] })));
+    },
+  }) as ChildFixturePlugin;
+}
+
+async function capturedChildActions(count: number): Promise<readonly string[]> {
+  const actions: string[] = [];
+  let before: ((event: Readonly<Record<string, string>>) => void) | undefined;
+  let execute: ((args: object, context: object) => Promise<unknown>) | undefined;
+  await capturedChildPlugin(actions).setup({
+    tool: {
+      hook: (name, callback): Promise<unknown> => {
+        if (name === "execute.before") before = callback;
+        return Promise.resolve();
+      },
+      transform: (register): Promise<unknown> => {
+        register({
+          add: (tool): void => {
+            if (tool.name === "keiko_git_status") execute = tool.execute;
+          },
+        });
+        return Promise.resolve();
+      },
+    },
+  });
+  const context = {
+    sessionID: "ses_child_projection",
+    id: "call_original_parent",
+    messageID: "msg_child_assistant",
+    agent: "build",
+  };
+  if (before === undefined || execute === undefined) throw new Error("Missing native registration");
+  before({ ...context, tool: "execute" });
+  const tool = execute;
+  await Promise.all(
+    Array.from({ length: count }, async (): Promise<unknown> => tool({}, { ...context })),
+  );
+  return actions;
+}
+
+function childParent(f: ReturnType<typeof retryActivityFixture>): void {
+  const occurredAt = new Date().toISOString();
+  f.activity.ingest({ kind: "message", messageId: "msg_child_user", role: "user", occurredAt });
+  f.activity.ingest({
+    kind: "message",
+    messageId: "msg_child_assistant",
+    parentMessageId: "msg_child_user",
+    role: "assistant",
+    occurredAt,
+  });
+  f.activity.ingest({
+    kind: "tool",
+    callId: "call_original_parent",
+    messageId: "msg_child_assistant",
+    tool: "execute",
+    state: "running",
+    occurredAt,
+  });
+}
+
+async function answeredChild(
+  f: ReturnType<typeof retryActivityFixture>,
+  actionId: string,
+  outcome: "completed" | "failed" = "completed",
+): Promise<void> {
+  const subject = createCodingToolFacade({
+    authority: {
+      admit: (): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+        ok: true,
+        mutationGuard: { check: () => true },
+      }),
+    },
+    delegate: {
+      execute: (): Promise<unknown> =>
+        Promise.resolve({
+          outcome,
+          git: {
+            kind: "status",
+            headSha: "a".repeat(40),
+            stagedTreeDigest: "b".repeat(64),
+            branch: "codex/fixture",
+            changes: [],
+            truncated: false,
+          },
+        }),
+    },
+  });
+  const request = {
+    action: "git",
+    operation: "status",
+    actionId,
+    idempotencyKey: actionId,
+  } as const;
+  const alias = openCodeCatalogAliasFor(request);
+  if (alias === undefined) throw new Error("Missing canonical alias");
+  const result = await subject.execute({
+    body: JSON.stringify(request),
+    onDelegateStarted: (): void => {
+      f.activity.beginTool?.({ actionId, tool: alias, occurredAt: new Date().toISOString() });
+    },
+  });
+  f.activity.settleTool({
+    actionId,
+    delegateStarted: true,
+    state: result.status === "completed" ? "succeeded" : "failed",
+    occurredAt: new Date().toISOString(),
+  });
+  await Promise.resolve();
+}
+
+it.each([true, false])(
+  "joins captured admitted child outcomes with original parent arriving first=%s",
+  async (first) => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-child-join-"));
+    try {
+      const f = retryActivityFixture(root);
+      f.activity.arm("ses_child_projection", "code-mode");
+      if (first) childParent(f);
+      const ids = await capturedChildActions(2);
+      const [one, two] = ids;
+      if (one === undefined || two === undefined)
+        throw new Error("Missing actual producer identities");
+      await answeredChild(f, one);
+      await answeredChild(f, two, "failed");
+      if (!first) {
+        childParent(f);
+        await Promise.resolve();
+      }
+      const content = f.projection.currentContent();
+      const feed = content?.feed;
+      const tools = feed?.availability === "available" ? feed.turns[0]?.tools : undefined;
+      expect(tools).toEqual([
+        expect.objectContaining({ callId: "call_original_parent", tool: "execute" }),
+        expect.objectContaining({
+          callId: one.slice(one.indexOf(":") + 1),
+          tool: "keiko_git_status",
+          state: "succeeded",
+        }),
+        expect.objectContaining({
+          callId: two.slice(two.indexOf(":") + 1),
+          tool: "keiko_git_status",
+          state: "failed",
+        }),
+      ]);
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+async function withChildActivity(
+  test: (fixture: ReturnType<typeof retryActivityFixture>, actionId: string) => Promise<void>,
+): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-native-child-controls-"));
+  const fixture = retryActivityFixture(root);
+  try {
+    fixture.activity.arm("ses_child_projection", "code-mode");
+    const actionId = (await capturedChildActions(1))[0];
+    if (actionId === undefined) throw new Error("Missing producer identity");
+    await test(fixture, actionId);
+  } finally {
+    await fixture.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function projectedChildren(f: ReturnType<typeof retryActivityFixture>): readonly {
+  readonly callId: string;
+  readonly state: string;
+}[] {
+  const feed = f.projection.currentContent()?.feed;
+  return feed?.availability === "available"
+    ? (feed.turns[0]?.tools.filter(({ callId }) => callId.startsWith("cm_")) ?? [])
+    : [];
+}
+
+function beginChild(f: ReturnType<typeof retryActivityFixture>, actionId: string): void {
+  f.activity.beginTool?.({
+    actionId,
+    tool: "keiko_git_status",
+    occurredAt: new Date().toISOString(),
+  });
+}
+
+function settleChild(
+  f: ReturnType<typeof retryActivityFixture>,
+  actionId: string,
+  state: "succeeded" | "failed" | "denied" | "cancelled",
+  delegateStarted?: true,
+): void {
+  f.activity.settleTool({
+    actionId,
+    state,
+    occurredAt: new Date().toISOString(),
+    ...(delegateStarted === undefined ? {} : { delegateStarted }),
+  });
+}
+
+it.each([true, false])(
+  "does not let a refused duplicate overwrite the admitted original, parent-first=%s",
+  async (first) => {
+    await withChildActivity(async (f, actionId) => {
+      if (first) childParent(f);
+      beginChild(f, actionId);
+      settleChild(f, actionId, "denied");
+      if (!first) childParent(f);
+      await Promise.resolve();
+      expect(projectedChildren(f)).toEqual([expect.objectContaining({ state: "running" })]);
+      settleChild(f, actionId, "succeeded", true);
+      // A refusal can arrive before the admitted terminal's scheduled projection.
+      settleChild(f, actionId, "denied");
+      await Promise.resolve();
+      expect(projectedChildren(f)).toEqual([expect.objectContaining({ state: "succeeded" })]);
+      // Nor may a replay arriving after the original settled replace its actual result.
+      settleChild(f, actionId, "denied");
+      await Promise.resolve();
+      expect(projectedChildren(f)).toEqual([expect.objectContaining({ state: "succeeded" })]);
+    });
+  },
+);
+
+it("projects genuine admitted cancellation without treating native completed progress as success", async () => {
+  await withChildActivity(async (f, actionId) => {
+    childParent(f);
+    beginChild(f, actionId);
+    settleChild(f, actionId, "cancelled", true);
+    await Promise.resolve();
+    expect(projectedChildren(f)).toEqual([expect.objectContaining({ state: "cancelled" })]);
+  });
+});
+
+it("refuses foreign-session, ordinal, parent and uncovered-alias associations", async () => {
+  await withChildActivity(async (f, actionId) => {
+    childParent(f);
+    const invalid = [
+      actionId.replace("ses_child_projection:", "ses_foreign:"),
+      actionId.replace(/_1$/u, "_0"),
+      actionId.replace(/_1$/u, "_2049"),
+      actionId.replace(/cm_./u, "cm_x"),
+    ];
+    for (const id of invalid) {
+      beginChild(f, id);
+      settleChild(f, id, "succeeded", true);
+    }
+    f.activity.beginTool?.({ actionId, tool: "foreign", occurredAt: new Date().toISOString() });
+    settleChild(f, actionId, "succeeded", true);
+    await Promise.resolve();
+    expect(projectedChildren(f)).toEqual([]);
+    expect(f.projection.currentContent()?.feed.droppedEventCount).toBeGreaterThan(0);
+  });
+});
+
+it("waits for the exact original parent and never joins by progress order", async () => {
+  await withChildActivity(async (f, actionId) => {
+    childParent(f);
+    beginChild(f, actionId.replace(/cm_[a-f0-9]{64}/u, `cm_${"f".repeat(64)}`));
+    settleChild(f, actionId.replace(/cm_[a-f0-9]{64}/u, `cm_${"f".repeat(64)}`), "succeeded", true);
+    await Promise.resolve();
+    expect(projectedChildren(f)).toEqual([]);
+    await answeredChild(f, actionId);
+    expect(projectedChildren(f)).toEqual([expect.objectContaining({ state: "succeeded" })]);
+  });
+});
+
+it.each(["clear", "rebind"] as const)("drops queued old-child facts after %s", async (kind) => {
+  await withChildActivity(async (f, actionId) => {
+    beginChild(f, actionId);
+    settleChild(f, actionId, "succeeded", true);
+    if (kind === "clear") {
+      f.activity.clear();
+      f.activity.arm("ses_child_projection", "code-mode");
+    } else {
+      f.activity.arm("ses_rebound", "code-mode");
+    }
+    childParent(f);
+    await Promise.resolve();
+    expect(projectedChildren(f)).toEqual([]);
+  });
+});
+
+it("retains the captured backend profile through actual run composition", async () => {
+  const root = mkdtempSync(join(tmpdir(), "keiko-profile-child-chain-"));
+  const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+  const base = backendInput(root, windowsDevLaneRuntime(root));
+  let profile: "code-mode" | "direct" = "code-mode";
+  const readProfile = vi.fn(() => profile);
+  const gatewayReadiness = {
+    ...base.gatewayReadiness,
+    get toolProfile(): "code-mode" | "direct" {
+      return readProfile();
+    },
+  };
+  const backend = createProductionOpenCodeBackend({ ...base, gatewayReadiness });
+  profile = "direct";
+  const run = backend.createRun(runInput(root));
+  try {
+    expect(compose.mock.calls[0]?.[0].toolProfile).toBe("code-mode");
+    expect(readProfile).toHaveBeenCalledTimes(1);
+    expect(Object.isFrozen(backend)).toBe(true);
+  } finally {
+    await run.dispose?.();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("bounds delayed child correlations and reports eviction without inventing a native child", async () => {
+  await withChildActivity(async (f) => {
+    const ids = await capturedChildActions(700);
+    for (const actionId of ids) {
+      beginChild(f, actionId);
+      settleChild(f, actionId, "succeeded", true);
+    }
+    childParent(f);
+    await Promise.resolve();
+    const first = ids[0]?.split(":")[1];
+    expect(projectedChildren(f).some(({ callId }) => callId === first)).toBe(false);
+    expect(projectedChildren(f).length).toBeGreaterThan(0);
+    expect(f.projection.currentContent()?.feed.droppedEventCount).toBeGreaterThan(0);
+  });
+});
+
+it("refuses an original parent restated under another actual assistant message", async () => {
+  await withChildActivity(async (f, actionId) => {
+    childParent(f);
+    f.activity.ingest({
+      kind: "message",
+      messageId: "msg_child_other",
+      parentMessageId: "msg_child_user",
+      role: "assistant",
+      occurredAt: new Date().toISOString(),
+    });
+    f.activity.ingest({
+      kind: "tool",
+      callId: "call_original_parent",
+      messageId: "msg_child_other",
+      tool: "execute",
+      state: "running",
+      occurredAt: new Date().toISOString(),
+    });
+    beginChild(f, actionId);
+    settleChild(f, actionId, "succeeded", true);
+    await Promise.resolve();
+    expect(projectedChildren(f)).toEqual([]);
+    expect(f.projection.currentContent()?.feed.droppedEventCount).toBeGreaterThan(0);
+  });
+});

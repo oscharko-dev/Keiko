@@ -5,11 +5,13 @@
 
 import { basename, dirname, extname, join, relative } from "node:path";
 import {
+  assertContainedRealPath,
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { targetedVitestProjects } from "./targeted-project.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   type ScriptCatalog,
@@ -99,7 +101,9 @@ function sourceRelativeDir(workspace: WorkspaceInfo, file: string): string {
 function existsInWorkspace(workspace: WorkspaceInfo, fs: WorkspaceFs, relPath: string): boolean {
   try {
     const abs = resolveWithinWorkspace(workspace.root, relPath);
-    return fs.exists(abs);
+    if (!fs.exists(abs)) return false;
+    const path = assertContainedRealPath(fs, workspace.root, abs, "targeted test file");
+    return fs.stat(path).isFile;
   } catch {
     // A path that escapes the workspace is simply not a resolvable target; skip it.
     return false;
@@ -147,7 +151,30 @@ export function resolveTargetedTests(
   if (resolved.length === 0) {
     return [];
   }
-  const invocation = targetedInvocation(workspace, resolved);
+  return planDirectTargetedTests(workspace, resolved, fs, limits);
+}
+
+function targetedSteps(
+  workspace: WorkspaceInfo,
+  files: readonly string[],
+  fs: WorkspaceFs,
+  limits: VerificationResourceLimits,
+): readonly VerificationStep[] {
+  if (workspace.testFramework === "vitest") {
+    return targetedVitestProjects(workspace, files, fs).map((project) => ({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: [
+        "vitest",
+        "run",
+        ...(project.root === "" ? [] : ["--root", project.root]),
+        ...project.files,
+      ],
+      limits,
+    }));
+  }
+  const invocation = targetedInvocation(workspace, files);
   if (invocation === undefined) {
     return [];
   }
@@ -183,19 +210,7 @@ export function planDirectTargetedTests(
   if (resolved.length === 0) {
     return [];
   }
-  const invocation = targetedInvocation(workspace, resolved);
-  if (invocation === undefined) {
-    return [];
-  }
-  return [
-    {
-      kind: "targeted-test",
-      scriptName: undefined,
-      command: invocation.command,
-      args: invocation.args,
-      limits,
-    },
-  ];
+  return targetedSteps(workspace, resolved, fs, limits);
 }
 
 export function buildVerificationPlan(

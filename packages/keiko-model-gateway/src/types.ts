@@ -92,8 +92,14 @@ export type OutputTokenParameter = "max_tokens" | "max_completion_tokens";
 
 export interface ModelProviderConfig {
   readonly modelId: string;
+  /** Actual setup origin; absent on legacy/configured rows without source evidence. */
+  readonly catalogOrigin?: "discovered" | "explicit" | undefined;
   readonly baseUrl: string;
   readonly apiKey: string;
+  /** Credential source for a discovered alias; never projected to the frontend. */
+  readonly apiKeySourceModelId?: string | undefined;
+  /** Existing durable reference underneath transient env overrides; credential-tier only. */
+  readonly apiKeySecretRef?: string | undefined;
   readonly apiKeyHeaderName?: string | undefined;
   readonly endpointStyle?: ProviderEndpointStyle | undefined;
   readonly apiVersion?: string | undefined;

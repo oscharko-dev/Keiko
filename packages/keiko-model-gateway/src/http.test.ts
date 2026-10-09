@@ -1558,6 +1558,27 @@ function streamingResponse(chunks: readonly string[], status = 200): Response {
 }
 
 describe("readJsonCapped", () => {
+  it.each([
+    { body: "not json", maxBytes: 100, validation: "json-invalid" },
+    { body: "x".repeat(200), maxBytes: 100, validation: "size-exceeded" },
+  ])(
+    "reports producer-typed body validation: $validation",
+    async ({ body, maxBytes, validation }) => {
+      await expect(readJsonCapped(streamingResponse([body]), maxBytes)).rejects.toMatchObject({
+        validation,
+      });
+    },
+  );
+
+  it("preserves an actual reader transport rejection without relabelling it as JSON validation", async () => {
+    const failure = new TypeError("terminated synthetic transport");
+    const body = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.error(failure);
+      },
+    });
+    await expect(readJsonCapped(new Response(body))).rejects.toBe(failure);
+  });
   it("parses a small JSON body delivered in a single chunk", async () => {
     const response = streamingResponse(['{"hello":"world"}']);
     const result = await readJsonCapped(response);

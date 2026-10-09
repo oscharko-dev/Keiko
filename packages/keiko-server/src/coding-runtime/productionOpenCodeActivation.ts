@@ -31,6 +31,7 @@ import {
   type DevLanePortableOpenCodeRuntime,
 } from "./devLanePortableCodingRuntime.js";
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
 import type {
   ProductionOpenCodeBackendInput,
@@ -77,6 +78,12 @@ const CODING_RUNTIME_DEV_LANE_ACTIVATED_OPERATION = defineActivityLogOperation({
       dataClass: "digest",
       required: false,
       maxLength: 64,
+    },
+    secureReadHelperSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    secureReadByteCap: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
     },
   },
   causal: "correlation",
@@ -136,7 +143,7 @@ export interface ProductionOpenCodeActivationInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "verifyObserved" | "clear"
+    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
   >;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
@@ -287,16 +294,19 @@ function resolveRuntime(
   const packaged = discoverQualifiedPortableOpenCode(host);
   if (packaged !== undefined) return { portable: packaged };
   const activityLog = input.activityLog ?? processServerLogSink();
-  // An installed npm runtime package decides the npm installation's outcome, refusal included: a
-  // package that fails verification must surface its reason, not fall through to a dev lane that
-  // an npm installation can never satisfy and that would report `platform-unqualified` instead.
+  // The trusted dev launcher explicitly selected current checkout artifacts. Honor that selection
+  // (including its refusal) before an optional npm dependency left from a released installation.
+  const discovery = discoverDevLaneOpenCode(host);
+  if (discovery.outcome !== "inactive") {
+    recordDevLaneDiscovery(activityLog, discovery, "dev-checkout");
+    return devLaneRuntime(discovery);
+  }
+  // Normal npm installs keep their installed package's outcome, refusal included.
   const npmLane = discoverNpmLaneOpenCode(host);
   if (npmLane.outcome !== "inactive") {
     recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
     return devLaneRuntime(npmLane);
   }
-  const discovery = discoverDevLaneOpenCode(host);
-  recordDevLaneDiscovery(activityLog, discovery, "dev-checkout");
   return devLaneRuntime(discovery);
 }
 
@@ -315,6 +325,9 @@ function recordDevLaneDiscovery(
           lane: discovery.runtime.lane,
           target: discovery.runtime.target,
           evidenceClass: discovery.runtime.evidenceClass,
+          secureReadHelperSha256: discovery.runtime.secureRead.artifact.sha256,
+          secureReadByteCap:
+            discovery.runtime.secureRead.artifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
           ...(discovery.runtime.nativeHelperSha256 === undefined
             ? {}
             : { runtimeSupervisorSha256: discovery.runtime.nativeHelperSha256 }),

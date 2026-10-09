@@ -35,6 +35,153 @@ export const APPROVED_LICENSES = new Set([
   "WTFPL",
 ]);
 
+// Engineering-reviewed component disposition in #3895: exact original npm artifacts and their
+// preserved full notices only; no global license allowance.
+// GitHub's pinned license-exclusion matcher ignores versions. The same decision owner therefore
+// validates both canonical locks before emitting package-wide exclusions to that action.
+const COMPONENT_LICENSE_DECISIONS = new Map([
+  [
+    "pkg:npm/spdx-exceptions@2.5.0",
+    {
+      name: "spdx-exceptions",
+      version: "2.5.0",
+      integrity:
+        "sha512-PiU42r+xO4UbUS1buo3LPJkjlO7430Xn5SVAhdpzzsPHsjbYVflnnFdATgabnLude+Cqu25p6N+g2lw/PFsa4w==",
+      resolved: "https://registry.npmjs.org/spdx-exceptions/-/spdx-exceptions-2.5.0.tgz",
+      declaredLicense: "CC-BY-3.0",
+      licenses: ["CC-BY-3.0"],
+    },
+  ],
+  [
+    "pkg:npm/bowser@2.14.1",
+    {
+      name: "bowser",
+      version: "2.14.1",
+      integrity:
+        "sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==",
+      resolved: "https://registry.npmjs.org/bowser/-/bowser-2.14.1.tgz",
+      declaredLicense: "MIT",
+      licenses: ["MITNFA"],
+    },
+  ],
+  [
+    "pkg:npm/json-schema@0.4.0",
+    {
+      name: "json-schema",
+      version: "0.4.0",
+      integrity:
+        "sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA==",
+      resolved: "https://registry.npmjs.org/json-schema/-/json-schema-0.4.0.tgz",
+      declaredLicense: "(AFL-2.1 OR BSD-3-Clause)",
+      licenses: [],
+    },
+  ],
+]);
+
+function approvedLicensesForComponent(component) {
+  const decision = COMPONENT_LICENSE_DECISIONS.get(component.purl);
+  if (
+    decision === undefined ||
+    decision.name !== component.name ||
+    decision.version !== component.version
+  ) {
+    return APPROVED_LICENSES;
+  }
+  return new Set([...APPROVED_LICENSES, ...decision.licenses]);
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function lockPackageName(path) {
+  return /(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)$/u.exec(path)?.[1];
+}
+
+function recordLicenseDecision(path, entry) {
+  const resolvedName =
+    typeof entry.resolved === "string"
+      ? /^https:\/\/registry\.npmjs\.org\/([^/]+)\/-\//u.exec(entry.resolved)?.[1]
+      : undefined;
+  const names = [lockPackageName(path), entry.name, resolvedName];
+  return [...COMPONENT_LICENSE_DECISIONS.values()].find(
+    (decision) =>
+      names.some((name) => typeof name === "string" && name.toLowerCase() === decision.name) ||
+      entry.resolved === decision.resolved ||
+      entry.integrity === decision.integrity,
+  );
+}
+
+function reviewedRecordMatches(path, entry, decision) {
+  return (
+    lockPackageName(path) === decision.name &&
+    (entry.name === undefined || entry.name === decision.name) &&
+    entry.version === decision.version &&
+    entry.integrity === decision.integrity &&
+    entry.resolved === decision.resolved &&
+    entry.license === decision.declaredLicense &&
+    offendersForComponent({
+      name: decision.name,
+      version: decision.version,
+      purl: `pkg:npm/${decision.name}@${decision.version}`,
+      licenses: [{ expression: entry.license }],
+    }).length === 0
+  );
+}
+
+function reviewedLockFailures(lock, seen) {
+  if (
+    !isRecord(lock) ||
+    lock.lockfileVersion !== 3 ||
+    !isRecord(lock.packages) ||
+    !isRecord(lock.packages[""])
+  ) {
+    return ["malformed canonical npm lock metadata"];
+  }
+  const failures = [];
+  for (const [path, entry] of Object.entries(lock.packages)) {
+    if (!isRecord(entry)) {
+      failures.push("malformed canonical npm package record");
+      continue;
+    }
+    const decision = recordLicenseDecision(path, entry);
+    if (decision === undefined) continue;
+    seen.add(decision.name);
+    if (!reviewedRecordMatches(path, entry, decision)) {
+      failures.push(`${decision.name}: reviewed artifact, identity or license drift`);
+    }
+  }
+  return failures;
+}
+
+export function reviewedDependencyLicenseFailures(lockfiles) {
+  if (!Array.isArray(lockfiles) || lockfiles.length !== 2) {
+    return ["both canonical root and native npm locks are required"];
+  }
+  const seen = new Set();
+  const failures = lockfiles.flatMap((lock) => reviewedLockFailures(lock, seen));
+  for (const { name } of COMPONENT_LICENSE_DECISIONS.values()) {
+    if (!seen.has(name)) failures.push(`${name}: reviewed dependency metadata missing`);
+  }
+  return failures;
+}
+
+function reviewedDependencyLicensePreflight() {
+  let locks;
+  try {
+    locks = ["package-lock.json", "native/opencode-service-host/package-lock.json"].map((path) =>
+      JSON.parse(readFileSync(join(repoRoot, path), "utf8")),
+    );
+  } catch {
+    fail("cannot read both canonical dependency license lockfiles");
+  }
+  const failures = reviewedDependencyLicenseFailures(locks);
+  if (failures.length > 0) fail(failures.join("; "));
+  console.log(
+    [...COMPONENT_LICENSE_DECISIONS.values()].map(({ name }) => `pkg:npm/${name}`).join(", "),
+  );
+}
+
 const REQUIRED_WORKSPACE_LICENSE = "Apache-2.0";
 const repoRoot = process.cwd();
 const sbomDir = join(repoRoot, "sbom");
@@ -113,6 +260,10 @@ function runRootSbom() {
 // precedence-sensitive expression such as `GPL-3.0-only AND (MIT OR ISC)` is never falsely approved
 // by a lone permissive operand.
 export function isLicenseExpressionApproved(expression) {
+  return isLicenseExpressionAllowed(expression, APPROVED_LICENSES);
+}
+
+function isLicenseExpressionAllowed(expression, approvedLicenses) {
   if (typeof expression !== "string" || expression.trim().length === 0) {
     return false;
   }
@@ -137,7 +288,7 @@ export function isLicenseExpressionApproved(expression) {
     if (token === undefined || token === ")" || token === "AND" || token === "OR") {
       return { ok: false, value: false, pos };
     }
-    return { ok: true, value: APPROVED_LICENSES.has(token), pos: pos + 1 };
+    return { ok: true, value: approvedLicenses.has(token), pos: pos + 1 };
   };
 
   const parseBinary = (pos, operator, combine, next) => {
@@ -173,13 +324,13 @@ export function isLicenseExpressionApproved(expression) {
 // license as `{ license: { id | name } }` and a compound license choice as
 // `{ expression: "<SPDX expression>" }`. Returns the offending license string, or null when the
 // entry is acceptable.
-function entryLicenseOffense(entry) {
+function entryLicenseOffense(entry, approvedLicenses) {
   if (typeof entry?.expression === "string") {
-    return isLicenseExpressionApproved(entry.expression) ? null : entry.expression;
+    return isLicenseExpressionAllowed(entry.expression, approvedLicenses) ? null : entry.expression;
   }
   const license = entry?.license ?? {};
   const candidate = license.id ?? license.name ?? "<unknown>";
-  return APPROVED_LICENSES.has(candidate) ? null : candidate;
+  return approvedLicenses.has(candidate) ? null : candidate;
 }
 
 export function offendersForComponent(component) {
@@ -192,7 +343,7 @@ export function offendersForComponent(component) {
   }
   const offenders = [];
   for (const entry of licenses) {
-    const offense = entryLicenseOffense(entry);
+    const offense = entryLicenseOffense(entry, approvedLicensesForComponent(component));
     if (offense !== null) {
       offenders.push({ id, license: offense });
     }
@@ -380,5 +531,9 @@ function main() {
 const invokedDirectly =
   process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
-  main();
+  if (process.argv[2] === "--check-reviewed-dependency-licenses") {
+    reviewedDependencyLicensePreflight();
+  } else {
+    main();
+  }
 }

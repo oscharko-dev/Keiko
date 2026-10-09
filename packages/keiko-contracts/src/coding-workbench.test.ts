@@ -1182,6 +1182,45 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
   });
 });
 
+describe("verification edit revision evidence", () => {
+  const base = baseRuntimeEvent();
+  const event = {
+    schemaVersion: base.schemaVersion,
+    eventId: base.eventId,
+    runId: base.runId,
+    occurredAt: base.occurredAt,
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    verificationStatus: "passed",
+    passedCount: 1,
+    failedCount: 0,
+    skippedCount: 0,
+  };
+  it("admits a producer-owned nonnegative revision only on the summary", () => {
+    expect(validateCodingWorkbenchRuntimeEvent(event).ok).toBe(true);
+    expect(validateCodingWorkbenchRuntimeEvent({ ...event, verificationEditRevision: 0 }).ok).toBe(
+      true,
+    );
+    expect(validateCodingWorkbenchRuntimeEvent({ ...event, verificationEditRevision: 7 }).ok).toBe(
+      true,
+    );
+  });
+  it.each([-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid revision %s",
+    (verificationEditRevision) => {
+      expect(validateCodingWorkbenchRuntimeEvent({ ...event, verificationEditRevision }).ok).toBe(
+        false,
+      );
+    },
+  );
+  it("rejects revision evidence on an unrelated runtime event", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({ ...baseRuntimeEvent(), verificationEditRevision: 0 })
+        .ok,
+    ).toBe(false);
+  });
+});
+
 describe("validateCodingWorkbenchRuntimeEvent", () => {
   it("accepts only a body-free target digest on verification summaries", () => {
     const event = {
@@ -2052,5 +2091,77 @@ describe("coding workbench sidecar gateway readiness — context window floor", 
     };
 
     expect(unavailable.reason).toBe("model-context-window-insufficient");
+  });
+});
+
+describe("canonical Workbench verifier summary agreement", () => {
+  const event = {
+    schemaVersion: "1",
+    eventId: "evt-123",
+    runId: "run-1986",
+    occurredAt: "2026-07-07T12:00:00Z",
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    verificationStatus: "failed",
+    passedCount: 0,
+    failedCount: 1,
+    skippedCount: 0,
+    verificationSummary: {
+      verifierId: "targeted-test",
+      status: "failed",
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 12.5,
+    },
+  };
+
+  it("accepts only summary facts matching the existing canonical counts and status", () => {
+    expect(validateCodingWorkbenchRuntimeEvent(event)).toEqual({ ok: true, value: event });
+  });
+
+  it.each([
+    { status: "passed" },
+    { passedCount: 1 },
+    { failedCount: 0 },
+    { skippedCount: 1 },
+    { stdout: "private command output" },
+  ])("rejects conflicting or content-bearing verifier summaries %j", (invalid) => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...event,
+        verificationSummary: { ...event.verificationSummary, ...invalid },
+      }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("native OpenCode retry runtime facts", () => {
+  function event(nativeRetry: unknown): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      eventId: "event-runtime-status-2",
+      runId: "run-1",
+      occurredAt: "2026-10-07T12:00:00.000Z",
+      kind: "native-retry-changed",
+      nativeRetry,
+    };
+  }
+  it.each([null, { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" }])(
+    "admits only explicit native physical attempt/schedule or authoritative clear",
+    (retry) => {
+      const input = event(retry);
+      expect(validateCodingWorkbenchRuntimeEvent(input)).toEqual({ ok: true, value: input });
+    },
+  );
+  it.each([
+    undefined,
+    { attempt: 0, scheduledAt: "2026-10-07T12:00:02.000Z" },
+    { attempt: 2.5, scheduledAt: "2026-10-07T12:00:02.000Z" },
+    { attempt: 2, scheduledAt: "2026-02-30T12:00:02.000Z" },
+    { attempt: 2, scheduledAt: "2026-10-07T12:00:02Z" },
+    { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z", error: "PRIVATE" },
+  ])("refuses noncanonical or content-bearing native facts: %j", (retry) => {
+    expect(validateCodingWorkbenchRuntimeEvent(event(retry)).ok).toBe(false);
   });
 });

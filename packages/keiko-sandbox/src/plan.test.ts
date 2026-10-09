@@ -18,6 +18,24 @@ const basePlan: IsolatedRunPlan = {
 };
 
 describe("planIsolatedRun", () => {
+  it("does not ignore a gateway filesystem capability on a passthrough request", () => {
+    const decision = planIsolatedRun(
+      {
+        ...basePlan,
+        network: "inherit",
+        gatewayFilesystem: {
+          workspaceRoot: "/accepted/workspace",
+          workspaceAccess: "read-only",
+          privateStateRoot: "/private/state",
+          runtimeReadRoot: "/immutable/runtime",
+        },
+      },
+      NONE,
+      "darwin",
+    );
+    expect(decision.kind).toBe("fail-closed");
+    expect(decision.attestation.filesystemEnforced).toBe(false);
+  });
   it("passes through an inherited-network run with no enforcement", () => {
     const decision = planIsolatedRun({ ...basePlan, network: "inherit" }, NONE, "linux");
     expect(decision.kind).toBe("passthrough");
@@ -105,6 +123,74 @@ describe("planIsolatedRun", () => {
     expect(decision.args).not.toContain("--unshare-net");
     expect(decision.args).not.toContain("--dev-bind");
   });
+
+  it("keeps macOS filesystem confinement when network inheritance is requested", () => {
+    const decision = planIsolatedRun(
+      { ...basePlan, network: "inherit", filesystem: "execution-root" },
+      { ...NONE, seatbelt: true, docker: true },
+      "darwin",
+    );
+    expect(decision.kind).toBe("wrapped");
+    expect(decision.attestation).toMatchObject({
+      backend: "container-docker",
+      networkEnforced: false,
+      filesystemEnforced: true,
+    });
+    if (decision.kind !== "wrapped") throw new Error("expected filesystem wrapper");
+    expect(decision.command).toBe("docker");
+    expect(decision.args).toContain("--read-only");
+    expect(decision.args).toContain("--rm");
+    expect(decision.args).not.toContain("--network=none");
+    expect(decision.args).not.toContain("--network=host");
+  });
+
+  it.each(["none", "inherit"] as const)(
+    "refuses macOS execution-root with only Seatbelt and network:%s",
+    (network) => {
+      const decision = planIsolatedRun(
+        { ...basePlan, network, filesystem: "execution-root" },
+        { ...NONE, seatbelt: true },
+        "darwin",
+      );
+      expect(decision.kind).toBe("fail-closed");
+      expect(decision.attestation).toEqual({
+        backend: "none",
+        networkEnforced: false,
+        filesystemEnforced: false,
+        platform: "darwin",
+      });
+    },
+  );
+
+  it.each([
+    ["docker", "none"],
+    ["docker", "inherit"],
+    ["podman", "none"],
+    ["podman", "inherit"],
+  ] as const)(
+    "preserves %s execution-root network:%s without a host namespace",
+    (backend, network) => {
+      const decision = planIsolatedRun(
+        { ...basePlan, network, filesystem: "execution-root" },
+        { ...NONE, seatbelt: true, [backend]: true },
+        "darwin",
+      );
+      expect(decision.kind).toBe("wrapped");
+      if (decision.kind !== "wrapped") throw new Error("expected container lifetime owner");
+      expect(decision.command).toBe(backend);
+      expect(decision.attestation).toEqual({
+        backend: `container-${backend}`,
+        networkEnforced: network === "none",
+        filesystemEnforced: true,
+        platform: "darwin",
+      });
+      expect(decision.args).toContain("--rm");
+      expect(decision.args).toContain("--read-only");
+      expect(decision.args).not.toContain("--pid=host");
+      expect(decision.args).not.toContain("--network=host");
+      expect(decision.args.includes("--network=none")).toBe(network === "none");
+    },
+  );
 
   it("fails closed when inherited network has no filesystem-capable backend", () => {
     const decision = planIsolatedRun(

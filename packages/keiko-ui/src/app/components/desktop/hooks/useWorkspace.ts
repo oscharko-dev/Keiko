@@ -15,6 +15,7 @@ import {
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
+import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type {
   ConnectionOutcome,
@@ -1188,36 +1189,6 @@ function scheduleWorkspaceConflictRetry(
   putDebounceRef.current?.schedule(() => {
     runServerPutRef.current(false);
   });
-}
-
-// Issue #1580 — poll only while the document is visible; the old fixed interval kept
-// fetching/parsing forever in background tabs. Returning to visible does an immediate
-// catch-up pull so multi-tab convergence is unchanged. Extracted from the sync effect to
-// keep it inside the per-function line ceiling; `sync` is a stable reference so the effect
-// can add and remove the same visibilitychange listener.
-function createVisibilityPoller(
-  pull: () => void,
-  intervalMs: number,
-): { readonly sync: () => void; readonly stop: () => void } {
-  let interval: number | null = null;
-  const start = (): void => {
-    if (interval !== null) return;
-    interval = window.setInterval(pull, intervalMs);
-  };
-  const stop = (): void => {
-    if (interval === null) return;
-    window.clearInterval(interval);
-    interval = null;
-  };
-  const sync = (): void => {
-    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-      stop();
-    } else {
-      pull();
-      start();
-    }
-  };
-  return { sync, stop };
 }
 
 // Dirty-poll branch of the server pull: the payload stays local-authoritative, but the

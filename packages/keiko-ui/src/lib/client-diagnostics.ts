@@ -63,13 +63,17 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type ClientModelCatalogEvidence,
   type HealthDiagnosticsInvalidReason,
   type ClientSourcePreviewCounts,
   type ClientNavigationOutcome,
   type ClientComposerActivity,
+  type ClientComposerSubmission,
   type ClientComposerCodeStage,
+  type ClientGatewayProfileRefreshEvidence,
   type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { newClientCorrelationId } from "./bff-correlation";
 import {
   clientDefectContext,
   type ActivityLogErrorKind,
@@ -91,6 +95,8 @@ export type ClientDiagnosticStageReport = (
       readonly durationMs: number;
       readonly navigationOutcome?: ClientNavigationOutcome | undefined;
       readonly preview?: ClientSourcePreviewCounts | undefined;
+      readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
+      readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
     }
 ) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 
@@ -141,6 +147,7 @@ export interface ClientDiagnosticMeta {
   // UI-only provenance: emitted solely by the browser's uncaught-error listeners.
   readonly globalFailure?: boolean | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly correlationId?: string | undefined;
@@ -355,6 +362,50 @@ export function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefine
 export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
   publishGlobalClientFailure(meta);
   writer(message, meta);
+}
+
+/** One instant adoption/selection decision, not the duration of a held model or network request. */
+export function reportModelCatalogStage(
+  stage: "gateway catalog adoption" | "model selection availability",
+  modelCatalog: ClientModelCatalogEvidence,
+  parentCorrelationId?: string,
+): void {
+  const correlationId = newClientCorrelationId();
+  reportClientDiagnostic("Model catalog decision started.", {
+    correlationId,
+    parentCorrelationId,
+    stageReport: { stage, phase: "started", ordinal: 1 },
+  });
+  reportClientDiagnostic("Model catalog decision settled.", {
+    correlationId,
+    parentCorrelationId,
+    stageReport: { stage, phase: "settled", ordinal: 1, durationMs: 0, modelCatalog },
+  });
+}
+
+/** A profile read uses its actual HTTP correlation; no catalog count can be inferred from it. */
+export function reportGatewayProfileRefresh(
+  correlationId: string,
+  parentCorrelationId: string | undefined,
+  settlement?: {
+    readonly durationMs: number;
+    readonly evidence: ClientGatewayProfileRefreshEvidence;
+  },
+): void {
+  reportClientDiagnostic("Workbench gateway profile refresh.", {
+    correlationId,
+    parentCorrelationId,
+    stageReport:
+      settlement === undefined
+        ? { stage: "gateway profile refresh", phase: "started", ordinal: 1 }
+        : {
+            stage: "gateway profile refresh",
+            phase: "settled",
+            ordinal: 1,
+            durationMs: settlement.durationMs,
+            gatewayProfile: settlement.evidence,
+          },
+  });
 }
 
 /**

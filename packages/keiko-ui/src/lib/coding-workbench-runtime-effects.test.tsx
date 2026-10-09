@@ -210,6 +210,27 @@ describe("useCodingWorkbenchWorkspaceEffect", () => {
 });
 
 describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
+  it("refreshes an open Workbench after a background catalog change without invalidating the catalog", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const refreshRuntime = vi.fn(async () => undefined);
+    const { unmount } = renderHook(() =>
+      useCodingWorkbenchRuntimeRefreshEffects({
+        state: createInitialCodingWorkbenchRuntimeState(),
+        refreshSource,
+        refreshRuntime,
+        refreshRun: vi.fn(async () => undefined),
+      }),
+    );
+    refreshSource.mockClear();
+    refreshRuntime.mockClear();
+    act(() => window.dispatchEvent(new Event("keiko:gateway-model-catalog-updated")));
+    expect(refreshSource).toHaveBeenCalledExactlyOnceWith(true);
+    expect(refreshRuntime).toHaveBeenCalledOnce();
+    unmount();
+    refreshSource.mockClear();
+    act(() => window.dispatchEvent(new Event("keiko:gateway-model-catalog-updated")));
+    expect(refreshSource).not.toHaveBeenCalled();
+  });
   // Settings replaces the gateway configuration and records readiness verdicts without this
   // window knowing; the source stayed "unavailable" after tool calling had just been verified
   // until a reload (workbench end-to-end run, 2026-09-03).
@@ -361,4 +382,27 @@ describe("post-run description refresh (#3390)", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("forwards only the actual validated catalog parent into the profile refresh", () => {
+  const refreshSource = vi.fn().mockResolvedValue(undefined);
+  const refreshRuntime = vi.fn().mockResolvedValue(undefined);
+  const { unmount } = renderHook(() =>
+    useCodingWorkbenchRuntimeRefreshEffects({
+      state: createInitialCodingWorkbenchRuntimeState(),
+      refreshSource,
+      refreshRuntime,
+      refreshRun: vi.fn().mockResolvedValue(undefined),
+    }),
+  );
+  refreshSource.mockClear();
+  act(() =>
+    window.dispatchEvent(
+      new CustomEvent("keiko:gateway-model-catalog-updated", {
+        detail: { correlationId: "actual-catalog-123" },
+      }),
+    ),
+  );
+  expect(refreshSource).toHaveBeenCalledWith(true, "actual-catalog-123");
+  unmount();
 });

@@ -153,6 +153,26 @@ evidence may still refuse a commit because the candidate is unstaged or has drif
 never reclassifies executed checks as unrun and never requires staging for ordinary coding work.
 Staging and fresh commit proof remain mandatory only for an accepted commit/delivery action.
 
+An applied edit invalidates the run's previous verification. Only an edited task requires a
+nonempty verification to pass after the final edit. A read-only diagnostic task can report failed
+or partial checks without Keiko initiating repairs outside the accepted scope. Applied edits and
+completed verification summaries still count while an admitted tool waits on script trust. Each selected verification target retains its own outcome using the
+existing body-free target digest: a different green check cannot erase a failing check, and an edit
+invalidates every selected target's previous pass. The verifier captures the same server-owned edit
+revision at admission; a result from an earlier revision or without that provenance cannot prove an
+edit. A skipped-only or unavailable check supplies no pass or failure and does not erase a prior
+executed result. Actual passing checks remain usable alongside skipped checks. This requires only the checks already selected
+for the task, not a global quality run. A model turn ending normally does not establish that proof. Up to two
+continuations use the existing task dispatcher and unchanged authority to inspect results, repair
+the diagnosed cause, and retest. A refused continuation or exhausted continuation budget settles
+`verification-not-evidenced`; ordinary read-only tasks need no invented verification work.
+A human-denied verification command or an actually unavailable selected verifier stops automatic
+repair continuation without claiming verification. An unavailable unrelated verifier does not
+introduce a new proof obligation or block repair of the selected test. The existing ledger records
+these producer-owned facts. A later actually executed, still-authorized verifier may clear its
+applicable blocker through an invocation-local admission callback; a verifier admitted before a
+subsequent human denial cannot clear that denial by completing later. Edits do not clear denials.
+
 Runtime event contracts are content-free and closed. The shared event family includes:
 
 - runtime start/stop/health,

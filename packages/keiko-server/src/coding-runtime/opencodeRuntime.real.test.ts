@@ -15,9 +15,15 @@ import {
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
+
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
@@ -40,6 +46,12 @@ import { createRunRegistry } from "../runs.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import { OPENCODE_NATIVE_CONTEXT_ADDENDUM } from "./opencodeNativeContext.js";
+import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
+import {
+  createOpenCodeV2HttpClient,
+  parseOpenCodeV2ChildEndpoint,
+} from "./opencodeV2HttpClient.js";
 import { CODING_TOOL_MAX_BODY_BYTES, type CodingToolResult } from "./codingToolIpc.js";
 import {
   createOpenCodeRuntimeComposition,
@@ -52,6 +64,7 @@ import {
   opencodeGatewayOfferLifetimeMs,
 } from "./opencodeToolSchemas.js";
 import {
+  CLOSED_RUNTIME_LAUNCH_PROFILE,
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
   type RuntimeQualificationIdentity,
@@ -119,7 +132,7 @@ interface TestQuestionRunPort {
 }
 
 interface DirectTree extends RuntimeProcessTree {
-  readonly child: ChildProcessByStdio<null, Readable, Readable>;
+  readonly child: ChildProcessByStdio<Writable | null, Readable, Readable>;
   readonly exits: Set<(code: number | null) => void>;
   exited: boolean;
   exitCode: number | null;
@@ -134,22 +147,20 @@ class DirectChildRuntimeBackend implements RuntimeProcessBackend {
   private nextTreeId = 0;
   private lastEnv: Readonly<Record<string, string>> | undefined;
   private stderr = "";
+  private leasedTree: DirectTree | undefined;
+  private leasedEndpoint: string | undefined;
+  private sentSignals = 0;
 
-  public constructor(qualification: RuntimeProcessBackend["identity"]) {
+  public constructor(
+    qualification: RuntimeProcessBackend["identity"],
+    public readonly supportsStdinLifetime?: true,
+  ) {
     this.identity = qualification;
   }
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     this.lastEnv = { ...request.env };
-    const child: ChildProcessByStdio<null, Readable, Readable> = spawn(
-      request.executable,
-      request.args,
-      {
-        cwd: request.cwd,
-        env: request.env,
-        stdio: ["ignore", "pipe", "pipe"] as const,
-      },
-    );
+    const child = spawnFunctionalChild(request);
     const tree: DirectTree = {
       treeId: `functional-opencode-${String(this.nextTreeId++)}`,
       child,
@@ -163,6 +174,7 @@ class DirectChildRuntimeBackend implements RuntimeProcessBackend {
         else tree.exits.add(callback);
       },
     };
+    if (request.parentLifetime === "stdin-eof") this.captureNativeLease(tree);
     const settle = (code: number | null): void => {
       if (tree.exited) return;
       tree.exited = true;
@@ -183,7 +195,9 @@ class DirectChildRuntimeBackend implements RuntimeProcessBackend {
 
   public signalTree(tree: RuntimeProcessTree, signal: RuntimeTreeSignal): void {
     const direct = directTree(tree);
-    if (!direct.exited && !direct.child.kill(signal === "graceful" ? "SIGTERM" : "SIGKILL")) {
+    if (direct.exited) return;
+    this.sentSignals += 1;
+    if (!direct.child.kill(signal === "graceful" ? "SIGTERM" : "SIGKILL")) {
       throw new Error("functional-child-signal-failed");
     }
   }
@@ -216,9 +230,47 @@ class DirectChildRuntimeBackend implements RuntimeProcessBackend {
     return this.lastEnv;
   }
 
+  public terminationSignals(): number {
+    return this.sentSignals;
+  }
+
+  public nativeLeaseReady(): boolean {
+    return this.leasedEndpoint !== undefined;
+  }
+
+  public nativeLease(): {
+    readonly tree: DirectTree;
+    readonly pipe: Writable;
+    readonly endpoint: string;
+  } {
+    const tree = this.leasedTree;
+    if (tree?.child.stdin == null || this.leasedEndpoint === undefined)
+      throw new Error("functional-native-stdin-lease-missing");
+    return { tree, pipe: tree.child.stdin, endpoint: this.leasedEndpoint };
+  }
+
+  private captureNativeLease(tree: DirectTree): void {
+    this.leasedTree = tree;
+    let startup = "";
+    tree.stdout.on("data", (chunk: Buffer | string) => {
+      if (this.leasedEndpoint !== undefined || startup.length >= 1024) return;
+      startup = `${startup}${String(chunk)}`.slice(0, 1024);
+      this.leasedEndpoint = parseOpenCodeV2ChildEndpoint(startup);
+    });
+  }
+
   public redactedStderr(): string {
     return this.stderr.replace(/[A-Za-z0-9_-]{32,}/gu, "[redacted]");
   }
+}
+
+function spawnFunctionalChild(
+  request: RuntimeSupervisorLaunchRequest,
+): ChildProcessByStdio<Writable | null, Readable, Readable> {
+  const options = { cwd: request.cwd, env: request.env };
+  return request.parentLifetime === "stdin-eof"
+    ? spawn(request.executable, request.args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
+    : spawn(request.executable, request.args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 function directTree(tree: RuntimeProcessTree): DirectTree {
@@ -567,7 +619,9 @@ async function createGatewayHarness(
           // Establish the same streaming response lifecycle a real provider does before a
           // scripted final response is deliberately held for the native abort proof.
           yield { type: "delta", token: "" };
-          yield { type: "done", response: await script(request, callIndex) };
+          const response = await script(request, callIndex);
+          if (response.content !== "") yield { type: "delta", token: response.content };
+          yield { type: "done", response };
         },
       }),
     runtimeCapabilityAuthenticator: {
@@ -1008,9 +1062,18 @@ function nativeCompactionResponseScript(state: NativeCompactionState): GatewayRe
     if (requestContainsTitleGeneration(request)) {
       return Promise.resolve({ ...normalResponse(), content: "Compaction proof" });
     }
-    if (request.toolCatalog === undefined) {
+    // The bridge may advertise tools even when the native V2 compactor asks for a summary.
+    if (
+      requestContainsText(
+        request,
+        "You MUST summarize the conversation above into a structured summary",
+      )
+    ) {
       state.compactionMessageCounts.push(request.messages.length);
-      return Promise.resolve({ ...normalResponse(), content: "Retained verified task state." });
+      return Promise.resolve({
+        ...normalResponse(),
+        content: "## Objective\n- Retained verified task state.",
+      });
     }
     if (state.compactionMessageCounts.length > 0) {
       state.recoveryMessageCounts.push(request.messages.length);
@@ -1034,6 +1097,7 @@ interface NativeCompactionHarness {
   readonly toolFacade: ToolFacadeHarness;
   readonly backend: DirectChildRuntimeBackend;
   readonly productiveActions: string[];
+  readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
 }
 
 interface NativeContextGeometry {
@@ -1063,6 +1127,7 @@ async function createNativeCompactionHarness(
   );
   const toolFacade = await createToolFacadeHarness();
   const productiveActions: string[] = [];
+  const activityLog = createBufferedServerLogSink();
   const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification);
   const runtime = createOpenCodeRuntimeComposition({
     portable,
@@ -1076,6 +1141,7 @@ async function createNativeCompactionHarness(
     toolFacade: functionalToolFacade(productiveActions, []),
     governedEventSink: { execute: () => Promise.resolve("applied") },
     gatewayReadiness: gateway.readiness,
+    activityLog,
     fetch: globalThis.fetch,
     supervisor: createRuntimeProcessSupervisor({
       backend,
@@ -1097,7 +1163,41 @@ async function createNativeCompactionHarness(
     toolFacade,
     backend,
     productiveActions,
+    activityLog,
   };
+}
+
+function expectNativeCompactionActivity(harness: NativeCompactionHarness): void {
+  const events = harness.activityLog.events.filter(
+    (event) => event.op === "coding-runtime.compaction",
+  );
+  expect(events.length).toBeGreaterThan(0);
+  const records = events.map((event) =>
+    expectActivityLogProof(
+      "coding-runtime.compaction.emitted-line",
+      formatActivityLogProofLine(event),
+    ),
+  );
+  expect(records.map((record) => record.event)).toEqual(["tail-retained", "completed", "failed"]);
+  expect(records[0]?.compactionIdSha256).toBe(records[1]?.compactionIdSha256);
+  expect(records[2]?.compactionIdSha256).not.toBe(records[0]?.compactionIdSha256);
+  expect(new Set(records.map((record) => record.compactionIdSha256)).size).toBe(2);
+  for (const record of records) {
+    expect(record).not.toHaveProperty("overflow");
+    expect(record).not.toHaveProperty("tailStartIdSha256");
+    expect(record.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+  }
+  expect(
+    new Set(records.map((record) => `${String(record.compactionIdSha256)}:${String(record.event)}`))
+      .size,
+  ).toBe(records.length);
+  expect(records[2]).toMatchObject({
+    compactionErrorKind: "OpenCodeCompactionFailure",
+    finishReason: "error",
+  });
+  expect(JSON.stringify(records)).not.toMatch(
+    /Retained verified task state|Exercise bounded|summary|recent/,
+  );
 }
 
 async function startNativeCompactionHarness(harness: NativeCompactionHarness): Promise<void> {
@@ -1141,7 +1241,141 @@ function requestMessageCount(summary: string): number | undefined {
   return value === undefined ? undefined : Number(value);
 }
 
+interface NativeStdinLeaseHarness {
+  readonly backend: DirectChildRuntimeBackend;
+  readonly tree: RuntimeProcessTree;
+  readonly password: string;
+}
+
+// Isolate the upstream EOF contract from the BFF monitor, which can otherwise send a stop signal
+// when the closing native HTTP server disconnects its SSE stream. This is protocol proof only.
+function createNativeStdinLeaseHarness(root: string): NativeStdinLeaseHarness {
+  const portable = realPortableRuntime(root);
+  const stateRoot = join(root, "state");
+  for (const name of ["home", "config", "state", "tmp"])
+    mkdirSync(join(stateRoot, name), { recursive: true, mode: 0o700 });
+  const profile = buildOpenCodeLaunchProfile({
+    executable: join(portable.resourceRoot, portable.verification.executablePath),
+    stateRoot,
+    contextGeometry: DEFAULT_NATIVE_CONTEXT_GEOMETRY,
+  });
+  if (!profile.ok) throw new Error("functional-native-lease-profile-invalid");
+  const password = profile.env.OPENCODE_SERVER_PASSWORD;
+  if (password === undefined) throw new Error("functional-native-lease-password-missing");
+  const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification, true);
+  const tree = backend.spawnOwnedTree({
+    runId: RUN_ID,
+    recoveryHandle: "0".repeat(32),
+    treeBindingId: TREE_BINDING_ID,
+    executable: profile.executable,
+    args: [...profile.args, "--stdio"],
+    cwd: root,
+    env: {
+      ...profile.env,
+      OPENCODE_CONFIG_CONTENT: profile.config,
+      OPENCODE_DISABLE_MODELS_FETCH: "1",
+    },
+    qualification: functionalPlatform().qualification,
+    launchProfile: CLOSED_RUNTIME_LAUNCH_PROFILE,
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "a".repeat(64),
+    egressPolicy: {
+      kind: "loopback-only",
+      reviewedEgressReceipt: FUNCTIONAL_TEST_QUALIFICATION_RECEIPT,
+    },
+    parentLifetime: "stdin-eof",
+  });
+  return { backend, tree, password };
+}
+
+async function closeNativeStdinLeaseHarness(harness: NativeStdinLeaseHarness): Promise<void> {
+  harness.backend.signalTree(harness.tree, "graceful");
+  if (await harness.backend.waitForCompleteTreeExit(harness.tree, 5_000)) return;
+  harness.backend.signalTree(harness.tree, "force");
+  expect(await harness.backend.waitForCompleteTreeExit(harness.tree, 5_000)).toBe(true);
+}
+
 describe("[functional-only] real staged OpenCode runtime", () => {
+  it.skipIf(!FUNCTIONAL_ENABLED)(
+    "keeps the original native HTTP service alive until its owner's stdin reaches EOF",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-native-stdin-lease-"));
+      let harness: NativeStdinLeaseHarness | undefined;
+      try {
+        harness = createNativeStdinLeaseHarness(root);
+        const backend = harness.backend;
+        expect(
+          await waitForCondition(() => backend.nativeLeaseReady(), AbortSignal.timeout(20_000)),
+        ).toBe(true);
+        const lease = harness.backend.nativeLease();
+        const client = createOpenCodeV2HttpClient({
+          endpoint: lease.endpoint,
+          password: harness.password,
+        });
+        const unauthenticated = await globalThis.fetch(new URL("/api/info", lease.endpoint));
+        expect(unauthenticated.status).toBe(401);
+        await unauthenticated.body?.cancel();
+        await expect(client.info()).resolves.toMatchObject({ version: "2.0.10" });
+        expect(lease.pipe.writableEnded).toBe(false);
+        expect(lease.pipe.destroyed).toBe(false);
+        expect(lease.tree.exited).toBe(false);
+        expect(harness.backend.terminationSignals()).toBe(0);
+        const exited = harness.backend.waitForCompleteTreeExit(lease.tree, 5_000);
+        lease.pipe.end();
+        await expect(exited).resolves.toBe(true);
+        expect(harness.backend.terminationSignals()).toBe(0);
+        await expect(client.info()).rejects.toThrow();
+      } finally {
+        if (harness !== undefined) await closeNativeStdinLeaseHarness(harness);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!FUNCTIONAL_ENABLED)(
+    "retains the native system prompt and appends the governed interface context",
+    async () => {
+      const task = "Explain the available interfaces without editing files or running commands.";
+      const repository =
+        "<repository-instructions 0123456789ab>\nPreserve the fixture conventions.\n</repository-instructions 0123456789ab>";
+      const harness = await createNativeCompactionHarness(() =>
+        Promise.resolve({ ...normalResponse(), content: "The read-only explanation is complete." }),
+      );
+      try {
+        await startNativeCompactionHarness(harness);
+        await expect(harness.runtime.runPort.submitTask(RUN_ID, task, repository)).resolves.toBe(
+          true,
+        );
+        await expect(
+          harness.runtime.runPort.waitForTerminal(RUN_ID, AbortSignal.timeout(20_000)),
+        ).resolves.toBe(true);
+        const request = harness.gateway.requests.find((item) => requestContainsText(item, task));
+        expect(request).toBeDefined();
+        const system = request?.messages
+          .filter((message) => message.role === "system")
+          .map((message) => message.content)
+          .join("\n");
+        expect(
+          system?.includes("You are an AI agent running in OpenCode, a coding agent harness."),
+        ).toBe(true);
+        expect(system?.includes(OPENCODE_NATIVE_CONTEXT_ADDENDUM)).toBe(true);
+        expect(system).toContain(
+          "rerun every verification target previously attempted in this task; all must pass before completion",
+        );
+        expect(system?.includes("Governed workflow, in order")).toBe(false);
+        expect(request?.messages.some((message) => message.content.includes(repository))).toBe(
+          true,
+        );
+        expect(harness.productiveActions).toEqual([]);
+      } finally {
+        await closeNativeCompactionHarness(harness);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it.skipIf(!FUNCTIONAL_ENABLED)(
     "decodes a 513-message overflow, compacts natively, and completes the retry",
     async () => {
@@ -1234,15 +1468,15 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           return count === undefined ? [] : [count];
         });
         expect(Math.max(...messageCounts)).toBeLessThanOrEqual(512);
+        // V2 compacts before its productive request, then permits only one overflow recovery.
         expect(
           harness.gateway.responses().filter((response) => response.endsWith(" 400")),
-        ).toHaveLength(3);
-        expect(state.compactionMessageCounts).toEqual([3]);
+        ).toHaveLength(1);
+        expectNativeCompactionActivity(harness);
+        expect(state.compactionMessageCounts).toHaveLength(1);
         expect(state.recoveryMessageCounts).toEqual([]);
         expect(state.rounds).toBe(0);
-        const databasePath = join(harness.runRoot, "state", "opencode.db");
-        expect(runtimeDatabasePartTypes(databasePath)).toContain("compaction");
-        expect(runtimeDatabaseProjection(databasePath)).toContain("ContextOverflowError");
+        expect(harness.productiveActions).toEqual([]);
         expect(terminal).toBe(false);
       } finally {
         await closeNativeCompactionHarness(harness);

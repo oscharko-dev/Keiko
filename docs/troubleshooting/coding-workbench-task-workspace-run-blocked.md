@@ -65,6 +65,19 @@ run had made remain exactly as they were; only the run's authority ended with th
 shutdowns are unexpected, the `started` lines and their timestamps are the record of how often and
 when the process is going away.
 
+PR #3895 also repairs shutdown during `starting`: the runtime now enters `stopping`, aborts
+preparation and checks that cancellation again before spawning. Delayed startup results retain the
+actual stop result and cannot dispatch work after cancellation. Read the existing
+`coding-runtime.run.shutdown` event's `stateBefore` and `outcome` together with the settlement;
+`stateBefore=starting` is no longer an `invalid-intent` refusal. If teardown cannot prove complete
+tree exit, the honest result remains `recovery-required` rather than a reusable cancelled slot.
+
+After acknowledging a retained recovery entry in the Workbench, repository selection is available
+again only when the runtime manager reports `stopped`. The recovery entry stays visible until its
+successor starts. If selection still reports `LOCK_CONTENTION`, the acknowledgement is absent or
+the host remains active / unreaped; deleting history or repeatedly restarting does not establish
+process containment.
+
 ---
 
 ## Every edit is refused as out of scope, or every verification fails without a reason

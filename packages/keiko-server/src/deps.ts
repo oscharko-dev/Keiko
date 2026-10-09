@@ -1,12 +1,11 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
-import {
-  initializeConfiguredConversationReadiness,
-  stopConfiguredConversationReadiness,
-} from "./gateway-readiness.js";
+import { stopConfiguredConversationReadiness } from "./gateway-readiness.js";
+import { createGatewayStartupChecks } from "./gateway-startup.js";
 import {
   adoptReportedContextWindow,
   stopAssumedContextWindowDiscovery,
@@ -540,6 +539,17 @@ export interface RuntimeGatewayConfig {
   readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
+  /** Accepted connection/source snapshot, retained when its active catalog becomes empty. */
+  readonly configured?: (() => GatewayConfig | undefined) | undefined;
+  /** Apply a persisted metadata-only source update while retaining the current active inventory. */
+  readonly replaceConfigured?:
+    ((configured: GatewayConfig, correlationId?: string) => void) | undefined;
+  /** Merge an active metadata update into the accepted source before durable credential sealing. */
+  readonly forPersistence?: ((active: GatewayConfig) => GatewayConfig) | undefined;
+  /** Apply only a current-generation catalog/update; preserve truly unchanged live observations. */
+  readonly replaceCatalog?:
+    | ((active: GatewayConfig, observedGeneration: number, correlationId?: string) => boolean)
+    | undefined;
   present(): boolean;
   set(config: GatewayConfig | undefined, present: boolean, correlationId?: string): void;
   /**
@@ -547,10 +557,10 @@ export interface RuntimeGatewayConfig {
    * against the unchanged connections, such as a provider-reported context window — WITHOUT
    * advancing the generation: in-flight turns keep their admission and readiness observations stay
    * valid, while every later lookup sees the refined capability. Never use it for a change of
-   * endpoint, credential or model list; that is set().
+   * endpoint, credential or model list; use set() or the source-retaining catalog facet.
    */
   refine?: ((config: GatewayConfig, correlationId?: string) => void) | undefined;
-  /** Monotonic config generation; bumped by every set(). Probes capture it before running. */
+  /** Monotonic config generation; replacement and inventory updates advance it. Probes capture it. */
   generation(): number;
   /**
    * F-01: the last live-probe outcome for the CURRENT configuration generation. Config presence is
@@ -568,6 +578,7 @@ export interface RuntimeGatewayConfig {
     fields: VerifiedModelCapabilityFields,
     checkedAt: string,
     observedGeneration?: number,
+    conversationCheckedAt?: string,
   ): void;
   readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
@@ -593,6 +604,8 @@ export interface VerifiedModelCapabilityObservation {
   readonly modelId: string;
   readonly generation: number;
   readonly checkedAt: string;
+  /** Actual chat observation time, separate from retained feature evidence. */
+  readonly conversationCheckedAt?: string | undefined;
   readonly fields: VerifiedModelCapabilityFields;
 }
 
@@ -980,6 +993,8 @@ export interface UiHandlerDeps {
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
+  /** Starts a shared background catalog check; callers keep reading the current projection. */
+  readonly refreshGatewayCatalog?: ((correlationId?: string) => void) | undefined;
   // Test seam for first-run setup. Production uses the real OpenAI-compatible gateway call.
   readonly gatewaySetupTester?:
     | ((
@@ -1510,6 +1525,117 @@ function contextWindowReporterSlot(): Pick<
   };
 }
 
+interface RuntimeGatewayState {
+  config: GatewayConfig | undefined;
+  configured: GatewayConfig | undefined;
+  present: boolean;
+  verification: GatewayVerificationState;
+  generation: number;
+  readonly observations: Map<string, VerifiedModelCapabilityObservation>;
+  readonly listeners: ReturnType<typeof gatewayConfigListeners>;
+}
+
+function mergeConfiguredGateway(state: RuntimeGatewayState, active: GatewayConfig): GatewayConfig {
+  const accepted = state.configured ?? active;
+  const providers = new Map(accepted.providers.map((provider) => [provider.modelId, provider]));
+  for (const provider of active.providers) providers.set(provider.modelId, provider);
+  const capabilities = new Map(accepted.capabilities?.map((model) => [model.id, model]) ?? []);
+  for (const model of active.capabilities ?? []) capabilities.set(model.id, model);
+  return {
+    ...accepted,
+    ...active,
+    providers: [...providers.values()],
+    ...(capabilities.size === 0 ? {} : { capabilities: [...capabilities.values()] }),
+  };
+}
+
+function setRuntimeGateway(
+  state: RuntimeGatewayState,
+  next: GatewayConfig | undefined,
+  present: boolean,
+  correlationId?: string,
+  configured = next,
+): void {
+  state.config = next;
+  state.configured = configured;
+  state.present = present;
+  state.verification = UNVERIFIED_GATEWAY;
+  state.observations.clear();
+  state.generation++;
+  state.listeners.notify(correlationId);
+}
+
+function replaceRuntimeCatalog(
+  state: RuntimeGatewayState,
+  active: GatewayConfig,
+  observedGeneration: number,
+  correlationId?: string,
+): boolean {
+  if (state.generation !== observedGeneration) return false;
+  const previous = new Map(state.config?.providers.map((provider) => [provider.modelId, provider]));
+  const next = new Map(active.providers.map((provider) => [provider.modelId, provider]));
+  state.configured = mergeConfiguredGateway(state, active);
+  state.config = active;
+  state.generation++;
+  state.verification = UNVERIFIED_GATEWAY;
+  for (const [id, observation] of state.observations) {
+    if (next.has(id) && JSON.stringify(next.get(id)) === JSON.stringify(previous.get(id))) {
+      state.observations.set(id, { ...observation, generation: state.generation });
+    } else state.observations.delete(id);
+  }
+  state.listeners.notify(correlationId);
+  return true;
+}
+
+function replaceConfiguredGateway(
+  state: RuntimeGatewayState,
+  configured: GatewayConfig,
+  correlationId?: string,
+): void {
+  const inactive = new Set(
+    state.configured?.providers
+      .filter(
+        (provider) =>
+          state.config?.providers.some((current) => current.modelId === provider.modelId) !== true,
+      )
+      .map((provider) => provider.modelId),
+  );
+  const providers = configured.providers.filter((provider) => !inactive.has(provider.modelId));
+  const activeIds = new Set(providers.map((provider) => provider.modelId));
+  const active = {
+    ...configured,
+    providers,
+    ...(configured.capabilities === undefined
+      ? {}
+      : {
+          capabilities: configured.capabilities.filter((model) => activeIds.has(model.id)),
+        }),
+  };
+  setRuntimeGateway(state, active, true, correlationId, configured);
+}
+
+function runtimeCatalogFacets(
+  state: RuntimeGatewayState,
+): Pick<
+  RuntimeGatewayConfig,
+  "configured" | "replaceConfigured" | "forPersistence" | "replaceCatalog" | "refine"
+> {
+  return {
+    configured: (): GatewayConfig | undefined => state.configured,
+    replaceConfigured(configured, correlationId): void {
+      replaceConfiguredGateway(state, configured, correlationId);
+    },
+    forPersistence: (active): GatewayConfig => mergeConfiguredGateway(state, active),
+    replaceCatalog: (active, generation, correlationId): boolean =>
+      replaceRuntimeCatalog(state, active, generation, correlationId),
+    refine(next, correlationId): void {
+      state.configured = mergeConfiguredGateway(state, next);
+      state.config = next;
+      state.listeners.notify(correlationId);
+    },
+  };
+}
+
 function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
@@ -1517,65 +1643,62 @@ function createRuntimeGatewayConfig(
   env: EnvSource,
   bootstrapCorrelationId: string,
 ): RuntimeGatewayConfig {
-  let config = initial;
-  let present = initialPresent;
-  // A freshly loaded config has never been probed by this process, so it starts unverified. It is
-  // never seeded from disk: a probe outcome describes a live endpoint at a point in time, not a
-  // stored setting, and reloading one would let a surface claim health nobody observed.
-  let verification: GatewayVerificationState = UNVERIFIED_GATEWAY;
-  const verifiedCapabilities = new Map<string, VerifiedModelCapabilityObservation>();
-  // Bumped on every set(): a probe captures the generation it observed, and a verdict carrying a
-  // stale generation is dropped, so a slow probe of the PREVIOUS config can never stamp the
-  // replacement config with an outcome nobody measured against it (#2847 review).
-  let generation = 0;
-  const listeners = gatewayConfigListeners();
+  const state: RuntimeGatewayState = {
+    config: initial,
+    configured: initial,
+    present: initialPresent,
+    verification: UNVERIFIED_GATEWAY,
+    generation: 0,
+    observations: new Map(),
+    listeners: gatewayConfigListeners(),
+  };
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
     spendBudget: gatewaySpendBudgetForEnv(env),
     ...contextWindowReporterSlot(),
-    current: (): GatewayConfig | undefined => config,
-    present: (): boolean => present,
-    set(next: GatewayConfig | undefined, nextPresent: boolean, correlationId?: string): void {
-      config = next;
-      present = nextPresent;
-      verification = UNVERIFIED_GATEWAY;
-      verifiedCapabilities.clear();
-      generation += 1;
-      listeners.notify(correlationId);
+    current: (): GatewayConfig | undefined => state.config,
+    ...runtimeCatalogFacets(state),
+    present: (): boolean => state.present,
+    set(next, present, correlationId): void {
+      setRuntimeGateway(state, next, present, correlationId);
     },
-    refine(next: GatewayConfig, correlationId?: string): void {
-      config = next;
-      listeners.notify(correlationId);
+    subscribe: state.listeners.subscribe,
+    generation: (): number => state.generation,
+    verification: (): GatewayVerificationState => state.verification,
+    recordVerification(verification, generation): void {
+      if (generation === undefined || generation === state.generation)
+        state.verification = verification;
     },
-    subscribe: listeners.subscribe,
-    generation: (): number => generation,
-    verification: (): GatewayVerificationState => verification,
-    recordVerification(state: GatewayVerificationState, observedGeneration?: number): void {
-      if (observedGeneration !== undefined && observedGeneration !== generation) return;
-      verification = state;
-    },
-    verifiedCapability: (modelId): VerifiedModelCapabilityObservation | undefined =>
-      verifiedCapabilities.get(modelId),
-    recordVerifiedCapability: gatewayCapabilityRecorder(verifiedCapabilities, () => generation),
-    clearVerifiedCapability: (modelId, observedGeneration): boolean => {
-      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
-      return verifiedCapabilities.delete(modelId);
-    },
+    verifiedCapability: (id): VerifiedModelCapabilityObservation | undefined =>
+      state.observations.get(id),
+    recordVerifiedCapability: gatewayCapabilityRecorder(
+      state.observations,
+      () => state.generation,
+      (id) => state.config?.providers.some((provider) => provider.modelId === id) === true,
+    ),
+    clearVerifiedCapability: (id, generation): boolean =>
+      (generation === undefined || generation === state.generation) &&
+      state.observations.delete(id),
   };
 }
 
 function gatewayCapabilityRecorder(
   observations: Map<string, VerifiedModelCapabilityObservation>,
   generation: () => number,
+  admitted: (modelId: string) => boolean,
 ): RuntimeGatewayConfig["recordVerifiedCapability"] {
-  return (modelId, fields, checkedAt, observedGeneration): void => {
+  return (modelId, fields, checkedAt, observedGeneration, conversationCheckedAt): void => {
     const currentGeneration = generation();
+    if (!admitted(modelId)) return;
     if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
     observations.set(modelId, {
       modelId,
       generation: currentGeneration,
       checkedAt,
+      ...(fields.conversationReady === undefined
+        ? {}
+        : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
     });
   };
@@ -1606,23 +1729,27 @@ export function currentGatewayVerification(
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
 }
 
-/** Returns true only for a basic-chat observation bound to the holder's current generation. */
+/** A live success must be renewed; configuration alone cannot keep it ready indefinitely. */
+export const CONVERSATION_READINESS_MAX_AGE_MS = 5 * 60_000;
+
+export function conversationReadinessAgeMs(
+  observation: VerifiedModelCapabilityObservation,
+): number {
+  return Date.now() - Date.parse(observation.conversationCheckedAt ?? observation.checkedAt);
+}
+
+/** Returns true only for a fresh basic-chat success bound to the current generation. */
 export function currentConversationReady(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   modelId: string,
 ): boolean {
-  const holder = deps.gatewayConfig;
-  if (holder === undefined) return false;
-  const observation = holder.verifiedCapability(modelId);
-  return (
-    observation?.generation === holder.generation() && observation.fields.conversationReady === true
-  );
+  return currentConversationReadinessObservation(deps, modelId) === true;
 }
 
 /**
  * Tri-state view for the models wire: `true`/`false` only when the CURRENT generation holds an
- * actual basic-chat observation, `undefined` when this process never probed the model since the
- * configuration was (re)loaded. The observation store is process-local by design, so collapsing
+ * actual basic-chat observation, `undefined` when this process never probed the model or its
+ * successful observation expired. Configuration reloads also invalidate observations. The observation store is process-local by design, so collapsing
  * "unknown" into "not ready" told the UI after every restart that no model was usable until a
  * manual probe plus reload (customer field incident, 0.3.11). Admission guards keep using the
  * strict boolean `currentConversationReady` — unknown never admits, it only defers to the
@@ -1636,7 +1763,9 @@ export function currentConversationReadinessObservation(
   if (holder === undefined) return undefined;
   const observation = holder.verifiedCapability(modelId);
   if (observation?.generation !== holder.generation()) return undefined;
-  return observation.fields.conversationReady;
+  if (observation.fields.conversationReady !== true) return observation.fields.conversationReady;
+  const ageMs = conversationReadinessAgeMs(observation);
+  return ageMs >= 0 && ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? true : undefined;
 }
 
 function configuredChatContextProfile(
@@ -1903,7 +2032,7 @@ function runtimeRedactionSecrets(
   runtimeConfig: RuntimeGatewayConfig,
   egress: GatewayConfig["egress"],
 ): readonly string[] {
-  const config = runtimeConfig.current();
+  const config = runtimeConfig.configured?.() ?? runtimeConfig.current();
   return redactionSecrets(env, config, config?.egress ?? egress);
 }
 
@@ -1940,7 +2069,11 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
 }
 
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
-  return redactionSecrets(deps.env, currentGatewayConfig(deps), currentGatewayEgressConfig(deps));
+  return redactionSecrets(
+    deps.env,
+    deps.gatewayConfig?.configured?.() ?? currentGatewayConfig(deps),
+    currentGatewayEgressConfig(deps),
+  );
 }
 
 /**
@@ -4628,7 +4761,8 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 }
 
 function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
-  initializeConfiguredConversationReadiness(deps);
+  const startup = createGatewayStartupChecks(deps);
+  startup.start(deps.gatewayConfig?.initializationCorrelationId);
   // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
   // answer and in the window probe a conversation starts (customer report on 1.1.13).
   deps.gatewayConfig?.bindContextWindowReporter?.((report) => {
@@ -4638,14 +4772,17 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
     // Setup stamps its successful credential checks synchronously after replacement. Reuse
     // those observations before deciding which models still need startup verification.
     queueMicrotask(() => {
-      initializeConfiguredConversationReadiness(deps, correlationId ?? newCorrelationId());
+      startup.start(correlationId ?? newCorrelationId());
     });
   });
   return {
     ...deps,
+    refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
-      await stopConfiguredConversationReadiness(deps);
+      const conversationShutdown = stopConfiguredConversationReadiness(deps);
+      await startup.stop();
+      await conversationShutdown;
       await stopAssumedContextWindowDiscovery(deps);
       await deps.dispose?.();
     },
@@ -5129,7 +5266,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     egress: args.egress,
     redactor: args.liveRedactor,
     diagnostics: args.options.diagnostics,
-    activityLog: processServerLogSink(),
+    activityLog: args.options.activityLog ?? processServerLogSink(),
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,
@@ -5818,7 +5955,12 @@ function runtimeWorkspaceAuthority(
       modelId,
       reasoningEffort,
     ): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } =>
-      admitCodingRunModel(args.runtimeConfig.current(), modelId, reasoningEffort),
+      admitCodingRunModel(
+        args.runtimeConfig.current(),
+        modelId,
+        reasoningEffort,
+        args.runtimeConfig,
+      ),
   };
 }
 
@@ -5930,6 +6072,15 @@ function qualifiedRuntimeResolver(
       input.envelopeBounds,
     ),
     ...input.ports,
+    serverRuntimeChangeset: createRuntimeChangesetApplyPort({
+      runtimeMutationLease: input.runtimeMutationLeaseBroker,
+      materializedPatches: input.materializedPatches,
+      workspaceRootAccessResolver: resolveWorkspaceRootAccess,
+      workspaceLifecycle: input.workspaceLifecycle,
+      workspaceScriptTrust: args.bundle.workspaceScriptTrust,
+      autonomousDeliveryDeploymentCeiling: input.deploymentCeiling,
+      store: args.bundle.uiStore,
+    }),
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
     // ADR-0147 D3, autonomous-delivery amendment: the same server-owned trust service the runners

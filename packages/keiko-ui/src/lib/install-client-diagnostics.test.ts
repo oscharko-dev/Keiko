@@ -137,6 +137,29 @@ describe("writeToBrowserConsole", () => {
 // `POST /api/diagnostics/client`, fanned out alongside the console so neither call site regresses
 // when the other is added.
 describe("fanOutClientDiagnostic", () => {
+  it("forwards body-free Coding submission facts through the existing composer transport (#3877)", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const composerSubmission = {
+      kind: "start" as const,
+      outcome: "attempted" as const,
+      normalization: "trim" as const,
+      displayedDigest: "a".repeat(64),
+      submittedDigest: "b".repeat(64),
+      draftMatchesInput: false,
+      inputCharacterCount: 42,
+      submittedCharacterCount: 40,
+    };
+    fanOutClientDiagnostic("[keiko] coding task submission attempted", {
+      composerActivity: "coding-task-submission",
+      composerSubmission,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      composerActivity: "coding-task-submission",
+      composerSubmission,
+    });
+  });
   it("keeps healthy Composer, workspace and voice lifecycle evidence out of console warnings", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
@@ -1527,4 +1550,59 @@ it("delivers citation activation as routine closed evidence without consuming fa
     errorKind: "unavailable",
   });
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("transports model selection facts through the existing routine stage owner", () => {
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const modelCatalog = {
+    surface: "chat" as const,
+    source: "background" as const,
+    outcome: "held" as const,
+    configuredModelCount: 2,
+    usableModelCount: 1,
+    selectionProvenance: "human" as const,
+    selectionDigest: "a".repeat(64),
+  };
+  fanOutClientDiagnostic("Model selection stage", {
+    correlationId: "model-decision-123",
+    parentCorrelationId: "catalog-read-123",
+    stageReport: {
+      stage: "model selection availability",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 0,
+      modelCatalog,
+    },
+  });
+  const body = lastPostedBody(fetchMock);
+  expect(body).toMatchObject({
+    kind: "stage",
+    correlationId: "model-decision-123",
+    parentCorrelationId: "catalog-read-123",
+    modelCatalog,
+  });
+  expect(isClientStageIngestRequest(body)).toBe(true);
+});
+
+it("transports the closed profile outcome without inventing catalog counts", async () => {
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  fanOutClientDiagnostic("Profile read settled.", {
+    correlationId: "profile-read-123",
+    parentCorrelationId: "catalog-read-123",
+    stageReport: {
+      stage: "gateway profile refresh",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 5,
+      gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
+    },
+  });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("modelCatalog");
 });

@@ -1,7 +1,17 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1009,5 +1019,141 @@ describe("update portable runtime approvals", () => {
         ),
       );
     }
+  });
+});
+
+describe("separately typed original OpenCode service-host approvals", () => {
+  function inspectApprovalFailure(root) {
+    const script = `
+      import { checkPortableRuntimeApprovals } from "./scripts/check-portable-runtime-approvals.mjs";
+      try {
+        checkPortableRuntimeApprovals();
+        process.exitCode = 2;
+      } catch (error) {
+        process.stdout.write(JSON.stringify({
+          errorClass: error.constructor.name,
+          message: error.message,
+          causeCode: error.cause?.code,
+          causeName: error.cause?.name,
+        }));
+      }
+    `;
+    return JSON.parse(
+      execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+  }
+
+  function unbuiltApprovalsRepo(input = approvedFixture()) {
+    const root = realpathSync(fixtureRepoRoot(input));
+    for (const path of [
+      "scripts/check-portable-runtime-approvals.mjs",
+      "scripts/portable-runtime-approvals.mjs",
+      "scripts/portable-runtime.mjs",
+      "scripts/lib/digest.mjs",
+      "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts",
+    ]) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      copyFileSync(join(repoRoot, path), join(root, path));
+    }
+    const packageRoot = join(root, "node_modules/@oscharko-dev/keiko-contracts");
+    mkdirSync(packageRoot, { recursive: true });
+    copyFileSync(
+      join(repoRoot, "packages/keiko-contracts/package.json"),
+      join(packageRoot, "package.json"),
+    );
+    return root;
+  }
+
+  it("keeps ordinary CLI approval checks usable before workspace packages are built", () => {
+    const root = unbuiltApprovalsRepo();
+    const packageRoot = join(root, "node_modules/@oscharko-dev/keiko-contracts");
+    expect(existsSync(join(packageRoot, "dist"))).toBe(false);
+    const output = execFileSync(
+      process.execPath,
+      [join(root, "scripts/check-portable-runtime-approvals.mjs")],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(output).toContain("portable-approvals: PASS");
+    const supplemental = approvedFixture();
+    supplemental.sidecarRuntimes[0].serviceHost = { "macos-arm64": hostFixture() };
+    writeFileSync(join(root, "portable-runtime-approvals.json"), JSON.stringify(supplemental));
+    const unavailable = spawnSync(
+      process.execPath,
+      [join(root, "scripts/check-portable-runtime-approvals.mjs")],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(unavailable.status).toBe(1);
+    expect(unavailable.stdout).not.toContain("portable-approvals: PASS");
+    expect(unavailable.stderr).toContain("serviceHost requires the built keiko-contracts package");
+    expect(unavailable.stderr).not.toContain(root);
+    expect(inspectApprovalFailure(root)).toMatchObject({
+      errorClass: "ApprovalsError",
+      causeCode: "MODULE_NOT_FOUND",
+    });
+  });
+
+  it("preserves unexpected compiled-validator faults instead of rejecting host metadata", () => {
+    const input = approvedFixture();
+    input.sidecarRuntimes[0].serviceHost = { "macos-arm64": hostFixture() };
+    const root = unbuiltApprovalsRepo(input);
+    const module = join(root, "packages/keiko-contracts/dist/opencode-service-host.js");
+    mkdirSync(dirname(module), { recursive: true });
+    writeFileSync(
+      module,
+      'export function copyOpenCodeServiceHostApprovals() { throw new TypeError("fixture validator fault"); }',
+    );
+    expect(inspectApprovalFailure(root)).toEqual({
+      errorClass: "TypeError",
+      message: "fixture validator fault",
+    });
+  });
+
+  it("retains the original cause when the compiled fixed module fails to initialize", () => {
+    const input = approvedFixture();
+    input.sidecarRuntimes[0].serviceHost = { "macos-arm64": hostFixture() };
+    const root = unbuiltApprovalsRepo(input);
+    const module = join(root, "packages/keiko-contracts/dist/opencode-service-host.js");
+    mkdirSync(dirname(module), { recursive: true });
+    writeFileSync(module, 'throw new TypeError("fixture module fault");');
+    expect(inspectApprovalFailure(root)).toMatchObject({
+      errorClass: "ApprovalsError",
+      causeName: "TypeError",
+    });
+  });
+
+  function hostFixture() {
+    return JSON.parse(
+      readFileSync(
+        join(
+          repoRoot,
+          "packages/keiko-contracts/src/opencode-service-host.private-qualified.fixture.json",
+        ),
+        "utf8",
+      ),
+    ).approval;
+  }
+
+  it("retains separately approved host bytes without replacing the CLI approvals", () => {
+    const input = approvedFixture();
+    const originalArchive = structuredClone(input.sidecarRuntimes[0].archives);
+    input.sidecarRuntimes[0].serviceHost = { "macos-arm64": hostFixture() };
+    const output = validatePortableRuntimeApprovals(input);
+    expect(output.sidecarRuntimes[0].serviceHost).toEqual(input.sidecarRuntimes[0].serviceHost);
+    expect(output.sidecarRuntimes[0].archives).toEqual(originalArchive);
+  });
+
+  it.each([
+    { "macos-x64": hostFixture() },
+    { unsupported: hostFixture() },
+    { "macos-arm64": { ...hostFixture(), sourceBuildAttested: true } },
+    { "macos-arm64": { ...hostFixture(), bootstrapPath: "alternative.mjs" } },
+    {},
+  ])("refuses malformed supplemental host identities", (serviceHost) => {
+    const input = approvedFixture();
+    input.sidecarRuntimes[0].serviceHost = serviceHost;
+    expect(() => validatePortableRuntimeApprovals(input)).toThrow(/serviceHost/u);
   });
 });

@@ -32,6 +32,7 @@
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
+import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "./coding-workbench-runtime.js";
 import {
   ACTIVITY_LOG_COMPLETENESS_STATES,
   ACTIVITY_LOG_LOSS_STATES,
@@ -415,6 +416,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",
   "text-copied",
+  "coding-task-submission",
+  "coding-task-reset",
 ] as const;
 export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
 export const CLIENT_COMPOSER_CODE_STAGES = [
@@ -431,12 +434,75 @@ export type ClientComposerCodeStage = (typeof CLIENT_COMPOSER_CODE_STAGES)[numbe
 const COMPOSER_ACTIVITIES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_ACTIVITIES);
 const COMPOSER_CODE_STAGES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_CODE_STAGES);
 
+/** Captured native input and the immutable payload, never their text or a visibility claim. */
+export interface ClientComposerSubmission {
+  readonly kind: "start" | "follow-up";
+  readonly outcome: "attempted";
+  readonly normalization: "trim";
+  readonly displayedDigest: string;
+  readonly submittedDigest: string;
+  readonly draftMatchesInput: boolean;
+  readonly inputCharacterCount: number;
+  readonly submittedCharacterCount: number;
+}
+
+const COMPOSER_SUBMISSION_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "outcome",
+  "normalization",
+  "displayedDigest",
+  "submittedDigest",
+  "draftMatchesInput",
+  "inputCharacterCount",
+  "submittedCharacterCount",
+]);
+
+function isTaskCharacterCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CODING_WORKBENCH_TASK_INTENT_MAX_CHARS
+  );
+}
+
+function isClientComposerSubmission(value: unknown): value is ClientComposerSubmission {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !COMPOSER_SUBMISSION_KEYS.has(key))) return false;
+  return (
+    (value.kind === "start" || value.kind === "follow-up") &&
+    value.outcome === "attempted" &&
+    value.normalization === "trim" &&
+    isReportDigest(value.displayedDigest) &&
+    isReportDigest(value.submittedDigest) &&
+    typeof value.draftMatchesInput === "boolean" &&
+    hasValidTaskCharacterCounts(value)
+  );
+}
+
+function hasValidTaskCharacterCounts(value: Record<string, unknown>): boolean {
+  return (
+    isTaskCharacterCount(value.inputCharacterCount) &&
+    isTaskCharacterCount(value.submittedCharacterCount) &&
+    value.submittedCharacterCount <= value.inputCharacterCount
+  );
+}
+
+function hasValidComposerSubmission(value: Record<string, unknown>): boolean {
+  if (value.composerActivity !== "coding-task-submission")
+    return value.composerSubmission === undefined;
+  return isClientComposerSubmission(value.composerSubmission);
+}
+
+function hasValidComposerFocus(value: Record<string, unknown>): boolean {
+  return (
+    value.composerFocusIndicator === undefined ||
+    (value.composerFocusIndicator === "keyboard" && value.composerActivity === "initialized")
+  );
+}
+
 function hasValidComposerContext(value: Record<string, unknown>): boolean {
-  if (
-    value.composerFocusIndicator !== undefined &&
-    (value.composerFocusIndicator !== "keyboard" || value.composerActivity !== "initialized")
-  )
-    return false;
+  if (!hasValidComposerSubmission(value) || !hasValidComposerFocus(value)) return false;
   if (!isOptional(value.composerCodeStage, (stage) => COMPOSER_CODE_STAGES.has(stage)))
     return false;
   if (value.composerActivity === undefined) return true;
@@ -499,6 +565,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
@@ -836,6 +903,9 @@ export const CLIENT_STAGE_IDS = [
   "files directory navigation",
   "files project selection",
   "editor project selection",
+  "gateway catalog adoption",
+  "gateway profile refresh",
+  "model selection availability",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -877,6 +947,22 @@ export interface ClientSourcePreviewCounts {
   readonly binaryReason?: "too-large" | "unsupported" | undefined;
 }
 
+export interface ClientModelCatalogEvidence {
+  readonly surface: "chat" | "coding-workbench";
+  readonly source: "bootstrap" | "foreground" | "background" | "workbench";
+  readonly outcome:
+    "unchanged" | "changed" | "adopted" | "held" | "restored" | "fallback" | "refused";
+  readonly configuredModelCount: number;
+  readonly usableModelCount: number;
+  readonly selectionProvenance?: "human" | "elected" | undefined;
+  readonly selectionDigest?: string | undefined;
+}
+
+export interface ClientGatewayProfileRefreshEvidence {
+  readonly outcome: "adopted" | "unavailable" | "failed" | "superseded";
+  readonly catalogReread: "requested" | "skipped" | "none";
+}
+
 export interface ClientStageSettledIngestRequest {
   readonly kind: "stage";
   readonly stage: ClientStageId;
@@ -888,6 +974,8 @@ export interface ClientStageSettledIngestRequest {
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
   readonly navigationOutcome?: ClientNavigationOutcome | undefined;
   readonly preview?: ClientSourcePreviewCounts | undefined;
+  readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
+  readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -906,6 +994,8 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "deletion",
   "navigationOutcome",
   "preview",
+  "modelCatalog",
+  "gatewayProfile",
 ]);
 
 export const CLIENT_NAVIGATION_OUTCOMES = [
@@ -1000,11 +1090,76 @@ function hasValidSourcePreview(value: Record<string, unknown>): boolean {
   );
 }
 
+const MODEL_CATALOG_KEYS = new Set([
+  "surface",
+  "source",
+  "outcome",
+  "configuredModelCount",
+  "usableModelCount",
+  "selectionProvenance",
+  "selectionDigest",
+]);
+const MODEL_CATALOG_STAGES = new Set(["gateway catalog adoption", "model selection availability"]);
+
+function hasValidModelCatalogCounts(value: Record<string, unknown>): boolean {
+  return (
+    isBoundedNonNegativeInteger(value.configuredModelCount, CLIENT_STAGE_ORDINAL_MAX) &&
+    isBoundedNonNegativeInteger(value.usableModelCount, CLIENT_STAGE_ORDINAL_MAX) &&
+    value.usableModelCount <= value.configuredModelCount
+  );
+}
+
+function hasValidModelCatalogOutcome(stage: unknown, value: Record<string, unknown>): boolean {
+  if (stage === "model selection availability")
+    return (
+      isOneOf(value.outcome, ["held", "restored", "fallback", "refused"]) &&
+      isOneOf(value.selectionProvenance, ["human", "elected"])
+    );
+  return (
+    isOneOf(value.outcome, ["unchanged", "changed", "adopted"]) &&
+    value.selectionProvenance === undefined &&
+    value.selectionDigest === undefined
+  );
+}
+
+function hasValidModelCatalogStage(value: Record<string, unknown>): boolean {
+  const isModelStage = typeof value.stage === "string" && MODEL_CATALOG_STAGES.has(value.stage);
+  if (value.modelCatalog === undefined) return !isModelStage || value.phase !== "settled";
+  if (!isModelStage || value.phase !== "settled" || !isRecord(value.modelCatalog)) return false;
+  return hasValidModelCatalogEvidence(value.stage, value.modelCatalog);
+}
+
+function hasValidModelCatalogEvidence(stage: unknown, evidence: Record<string, unknown>): boolean {
+  return (
+    Object.keys(evidence).every((key) => MODEL_CATALOG_KEYS.has(key)) &&
+    isOneOf(evidence.surface, ["chat", "coding-workbench"]) &&
+    isOneOf(evidence.source, ["bootstrap", "foreground", "background", "workbench"]) &&
+    hasValidModelCatalogCounts(evidence) &&
+    hasValidModelCatalogOutcome(stage, evidence) &&
+    isOptional(evidence.selectionDigest, isReportDigest)
+  );
+}
+
+function hasValidGatewayProfileStage(value: Record<string, unknown>): boolean {
+  const applies = value.stage === "gateway profile refresh" && value.phase === "settled";
+  if (value.gatewayProfile === undefined) return !applies;
+  if (!applies || !isRecord(value.gatewayProfile)) return false;
+  const evidence = value.gatewayProfile;
+  if (Object.keys(evidence).some((key) => key !== "outcome" && key !== "catalogReread"))
+    return false;
+  if (!isOneOf(evidence.outcome, ["adopted", "unavailable", "failed", "superseded"])) return false;
+  return evidence.outcome === "failed" || evidence.outcome === "superseded"
+    ? evidence.catalogReread === "none"
+    : isOneOf(evidence.catalogReread, ["requested", "skipped"]);
+}
+
 function hasValidStageContext(value: Record<string, unknown>): boolean {
   return (
     hasValidStageDeletion(value) &&
     hasValidNavigationOutcome(value) &&
     hasValidSourcePreview(value) &&
+    hasValidModelCatalogStage(value) &&
+    hasValidGatewayProfileStage(value) &&
     isOptional(value.parentCorrelationId, isActivityLogCorrelationId)
   );
 }

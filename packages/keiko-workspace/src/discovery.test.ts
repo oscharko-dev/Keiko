@@ -107,9 +107,11 @@ describe("streamed discovery failure propagation", () => {
       false,
       fs,
       createStructuralExecutionControl(null),
-      (entry) => {
-        visited.push(entry.relativePath);
-        return Promise.resolve();
+      {
+        onFile: (entry) => {
+          visited.push(entry.relativePath);
+          return Promise.resolve();
+        },
       },
     );
     expect(visited).toEqual([relative]);
@@ -141,7 +143,7 @@ describe("streamed discovery failure propagation", () => {
         false,
         fs,
         createStructuralExecutionControl(null, Date.now, abort.signal),
-        () => Promise.resolve(),
+        { onFile: () => Promise.resolve() },
       ),
     ).rejects.toMatchObject({ reason: "aborted" });
     expect(opened).toEqual(["/ws"]);
@@ -176,9 +178,11 @@ describe("streamed discovery failure propagation", () => {
       false,
       fs,
       createStructuralExecutionControl(null),
-      (entry) => {
-        visited.push(entry.relativePath);
-        return Promise.resolve();
+      {
+        onFile: (entry) => {
+          visited.push(entry.relativePath);
+          return Promise.resolve();
+        },
       },
     );
     expect(visited).toEqual(["package.json", relative]);
@@ -215,9 +219,11 @@ describe("streamed discovery failure propagation", () => {
         false,
         fs,
         createStructuralExecutionControl(null),
-        (entry): Promise<void> => {
-          visited.push(entry.relativePath);
-          return Promise.resolve();
+        {
+          onFile: (entry): Promise<void> => {
+            visited.push(entry.relativePath);
+            return Promise.resolve();
+          },
         },
       ),
     ).rejects.toBeInstanceOf(WorkspaceReadError);
@@ -245,7 +251,7 @@ describe("streamed discovery failure propagation", () => {
         false,
         fs,
         createStructuralExecutionControl(null),
-        (): Promise<void> => Promise.resolve(),
+        { onFile: (): Promise<void> => Promise.resolve() },
       ),
     ).rejects.toBe(failure);
   });
@@ -1040,6 +1046,61 @@ describe("discoverFiles", () => {
     expect(await discoverWithStatsAsync(workspace, options)).toEqual(
       discoverWithStats(workspace, options),
     );
+  });
+
+  it.each(["root", "nested"] as const)(
+    "lets strict consumers refuse %s read failures while preserving tolerant discovery",
+    async (failedDirectory) => {
+      const root = "/ws";
+      const base = memFs(root, { "good.ts": "fact", "nested/component.tsx": "fact" });
+      const fs: WorkspaceFs = {
+        ...base,
+        readDir: (path, limit) => {
+          if (path === (failedDirectory === "root" ? root : `${root}/nested`)) {
+            throw Object.assign(new Error("directory unavailable"), { code: "EACCES" });
+          }
+          return base.readDir(path, limit);
+        },
+      };
+      const workspace = fakeWorkspace(root);
+      const tolerant = await discoverWithStatsAsync(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
+      expect(tolerant.files.map((entry) => entry.relativePath)).toEqual(
+        failedDirectory === "root" ? [] : ["good.ts"],
+      );
+      await expect(
+        discoverWithStatsAsync(workspace, DEFAULT_DISCOVERY_OPTIONS, fs, undefined, {
+          failOnReadError: true,
+        }),
+      ).rejects.toBeInstanceOf(WorkspaceReadError);
+    },
+  );
+
+  it("keeps deny and gitignore exclusions ordinary under strict discovery", async () => {
+    const root = "/ws";
+    const base = memFs(root, {
+      "src/good.ts": "fact",
+      "ignored/noise.ts": "fact",
+      ".aws/credentials": "fact",
+    });
+    const fs: WorkspaceFs = {
+      ...base,
+      readDir: (path, limit) => {
+        if (path === `${root}/ignored` || path === `${root}/.aws`) {
+          throw new Error("ineligible directory must never be inspected");
+        }
+        return base.readDir(path, limit);
+      },
+    };
+    const result = await discoverWithStatsAsync(
+      { ...fakeWorkspace(root), ignoreLines: ["ignored/"] },
+      DEFAULT_DISCOVERY_OPTIONS,
+      fs,
+      undefined,
+      { failOnReadError: true },
+    );
+
+    expect(result.files.map((entry) => entry.relativePath)).toEqual(["src/good.ts"]);
+    expect(result.stats).toMatchObject({ denied: 1, ignored: 1 });
   });
 });
 

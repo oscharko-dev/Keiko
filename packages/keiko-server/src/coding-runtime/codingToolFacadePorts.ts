@@ -9,6 +9,11 @@ import type {
   CodingToolActionRequest,
   CodingToolResult,
 } from "./codingToolIpc.js";
+import type {
+  GovernedTextSnapshotResult,
+  GovernedNativeFileIO,
+  GovernedNativeFileRequest,
+} from "./codingToolReadEditPorts.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 
 export interface CodingToolProducerBinding {
@@ -163,11 +168,33 @@ export type CodingToolEditOutcome =
       readonly readReason?: EditReadReason | undefined;
     };
 
+/** Actual reasons a governed verifier could not execute, never inferred from model prose. */
+export type CodingVerificationBlockedReason =
+  | "verification-command-denied"
+  | "verification-authority-revoked"
+  | "verification-verifier-unsupported"
+  | "PROJECT_NOT_FOUND"
+  | "WORKSPACE_TRUST_REQUIRED"
+  | "NO_RUNNABLE_STEPS"
+  | "VERIFICATION_RUNNER_UNAVAILABLE"
+  | "VERIFICATION_NOT_RUN";
+
+/** Captured at actual admission; called only after an executed check remains authorized. */
+export type CodingVerificationExecutedObserver = (targetDigest: string) => void;
+
 /** The run-scoped form the run's orchestration receives an edit outcome in (F5, #3873). */
-export type CodingRuntimeEditOutcomeObserver = (
+export type CodingRuntimeEditOutcomeObserver = ((
   runId: string,
   outcome: CodingToolEditOutcome,
-) => void;
+) => void) & {
+  /** Same ledger revision, read synchronously at an admitted verifier's start. */
+  readonly verificationRevision?: ((runId: string) => number | undefined) | undefined;
+  readonly verificationBlocked?:
+    | ((runId: string, reason: CodingVerificationBlockedReason, targetDigest?: string) => void)
+    | undefined;
+  readonly verificationAdmitted?:
+    ((runId: string) => CodingVerificationExecutedObserver | undefined) | undefined;
+};
 
 export interface CodingToolFacadeOptions {
   readonly maxBodyBytes?: number | undefined;
@@ -191,6 +218,8 @@ export interface CodingToolFacadeOptions {
 }
 
 export interface CodingToolFacadeInput {
+  /** Server-owned observation at the actual authorized delegate boundary; never decoded from IPC. */
+  readonly onDelegateStarted?: (() => void) | undefined;
   readonly body: string | Buffer;
   /** Opaque authority material; only the authoritative admission port may inspect its value. */
   readonly capability?: string | undefined;
@@ -198,6 +227,165 @@ export interface CodingToolFacadeInput {
   readonly signal?: AbortSignal | undefined;
 }
 
+export type CodingToolNativeTextSnapshotResult =
+  | GovernedTextSnapshotResult
+  | {
+      readonly ok: false;
+      readonly reason: "invalid-request" | "dispatch-refused";
+    };
+
+export interface CodingToolNativeTextReadFacet {
+  /** Fixed server-only whole-file purpose. Windowed/model requests cannot enter this facet. */
+  readonly readTextSnapshot: (
+    input: CodingToolFacadeInput,
+  ) => Promise<CodingToolNativeTextSnapshotResult>;
+  /** Inactive original-read lifetime; neither model JSON nor HTTP exposes this owner. */
+  readonly invocations?: CodingToolNativeReadInvocations | undefined;
+}
+
+export interface CodingToolNativeReadContext {
+  readonly sessionID: string;
+  readonly messageID: string;
+  readonly id: string;
+  readonly agent: string;
+}
+
+export interface CodingToolNativeReadBeginInput extends CodingToolFacadeInput {
+  readonly context: CodingToolNativeReadContext;
+  readonly offset?: number | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface CodingToolNativeReadIdentity {
+  readonly actionId: string;
+  readonly idempotencyKey: string;
+  readonly invocationId: string;
+}
+
+export interface CodingToolNativeReadFilePacket extends GovernedNativeFileRequest {
+  readonly ordinal: number;
+}
+
+export interface CodingToolNativeInvocationRefusal {
+  readonly ok: false;
+  readonly reason: "invalid-request" | "dispatch-refused" | "cancelled" | "busy";
+}
+
+export type CodingToolNativeReadBytesResult =
+  Awaited<ReturnType<GovernedNativeFileIO["readBytes"]>> | CodingToolNativeInvocationRefusal;
+export type CodingToolNativeReadStatResult =
+  Awaited<ReturnType<GovernedNativeFileIO["stat"]>> | CodingToolNativeInvocationRefusal;
+export type CodingToolNativeReadListResult =
+  Awaited<ReturnType<GovernedNativeFileIO["list"]>> | CodingToolNativeInvocationRefusal;
+
+/** Private primitive transport under an already admitted original Read, never a model call. */
+export interface CodingToolNativeReadFileIO {
+  readonly readBytes: (
+    identity: CodingToolNativeReadIdentity,
+    input: CodingToolNativeReadFilePacket,
+  ) => Promise<CodingToolNativeReadBytesResult>;
+  readonly stat: (
+    identity: CodingToolNativeReadIdentity,
+    input: CodingToolNativeReadFilePacket,
+  ) => Promise<CodingToolNativeReadStatResult>;
+  readonly list: (
+    identity: CodingToolNativeReadIdentity,
+    input: CodingToolNativeReadFilePacket,
+  ) => Promise<CodingToolNativeReadListResult>;
+}
+
+export interface CodingToolNativeReadFileIOOwner {
+  readonly readBytes: (
+    request: GovernedNativeFileRequest,
+  ) => Promise<CodingToolNativeReadBytesResult>;
+  readonly stat: (request: GovernedNativeFileRequest) => Promise<CodingToolNativeReadStatResult>;
+  readonly list: (request: GovernedNativeFileRequest) => Promise<CodingToolNativeReadListResult>;
+}
+
+export type CodingToolNativeReadBeginResult =
+  | {
+      readonly ok: true;
+      readonly identity: CodingToolNativeReadIdentity;
+      readonly settled: Promise<void>;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "invalid-request" | "dispatch-refused" | "busy" | "cancelled" | "timeout";
+    };
+
+export interface CodingToolNativeReadInvocations {
+  readonly fileIO?: CodingToolNativeReadFileIO | undefined;
+  readonly signalFor: (identity: CodingToolNativeReadIdentity) => AbortSignal | undefined;
+  readonly begin: (
+    input: CodingToolNativeReadBeginInput,
+  ) => Promise<CodingToolNativeReadBeginResult>;
+  readonly readTextSnapshot: (
+    identity: CodingToolNativeReadIdentity,
+    input: { readonly ordinal: number; readonly relativePath: string },
+  ) => Promise<CodingToolNativeTextSnapshotResult>;
+  readonly close: (
+    identity: CodingToolNativeReadIdentity,
+    outcome: "completed" | "failed" | "cancelled",
+  ) => Promise<boolean>;
+}
+
+/** Attached only by the actual authorized catalog handler, on its existing claimed record. */
+export interface CodingToolNativeReadOwner {
+  readonly fileIO?: CodingToolNativeReadFileIOOwner | undefined;
+  readonly signal: AbortSignal;
+  readonly invocationId: string;
+  readonly readTextSnapshot: (relativePath: string) => Promise<CodingToolNativeTextSnapshotResult>;
+  readonly close: (outcome: "completed" | "failed" | "cancelled") => Promise<boolean>;
+  readonly revoke: () => void;
+}
+
+/** Server-owned accepted STARTING projection; never populated by a tool or browser request. */
+export interface CodingAcceptedInitializationAuthority {
+  /** Same accepted-run cancellation owner; an additional veto, never an authority grant. */
+  readonly signal: AbortSignal;
+  readonly resolve: (signal?: AbortSignal) => CodingToolMutationGuard | undefined;
+}
+
+export type CodingAcceptedInitializationRequest = Omit<GovernedNativeFileRequest, "purpose">;
+
+export interface CodingAcceptedInitializationReadPort {
+  readonly readBytes: (
+    request: CodingAcceptedInitializationRequest,
+  ) => ReturnType<GovernedNativeFileIO["readBytes"]>;
+  readonly stat: (
+    request: CodingAcceptedInitializationRequest,
+  ) => ReturnType<GovernedNativeFileIO["stat"]>;
+  readonly list: (
+    request: CodingAcceptedInitializationRequest,
+  ) => ReturnType<GovernedNativeFileIO["list"]>;
+}
+
+export type CodingAcceptedInitializationResult<T> =
+  // Completion says the callback settled under current authority, not that native sources exist.
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "initialization-closed"
+        | "initialization-refused"
+        | "initialization-failed"
+        | "cancelled"
+        | "timeout"
+        | "busy";
+    };
+
+export interface CodingAcceptedInitializationFacet {
+  /** One initial acquisition only. Watch refresh cannot reuse this private callback lifetime. */
+  readonly run: <T>(
+    initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+    signal?: AbortSignal,
+  ) => Promise<CodingAcceptedInitializationResult<T>>;
+}
+
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
+  /** Inactive accepted initial acquisition; no model/HTTP dispatch surface. */
+  readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
+  /** Inactive private service prerequisite; neither model IPC nor HTTP routes expose it. */
+  readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
 }

@@ -1,3 +1,8 @@
+import {
+  SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES,
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+} from "./secureWorkspaceTextReadProtocol.js";
+
 // Trust anchor of the npm coding-runtime lane (#3577). An npm installation carries neither
 // portable-runtime-approvals.json nor the helper source tree, so the digests the lane verifies
 // against are compiled into the server: the runtime package can then never vouch for itself.
@@ -24,6 +29,7 @@ export interface NpmLaneRuntimeApproval {
   readonly helperSizeBytes: number;
   readonly helperSourceCommit: string;
   readonly helperSourceTreeSha256: string;
+  readonly helperMaxBytes?: number;
 }
 
 const SHARED = {
@@ -32,8 +38,9 @@ const SHARED = {
   adapterVersion: "2",
   licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
   protocolSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
-  helperSourceCommit: "98b77857ecb39e936269f875f8ade3688870629f",
-  helperSourceTreeSha256: "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa",
+  helperSourceCommit: "330a71436d0d739bac2cfe7f8dd4c577f6344cf9",
+  helperMaxBytes: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  helperSourceTreeSha256: "88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b",
 } as const;
 
 export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
@@ -44,14 +51,40 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
     executableTreeSha256: "3b54ba4d809b06ddcbdd87862593c160ad5d96fffcea944000227a9e0785c8fe",
     sbomSha256: "99a6c65ad998b01362c9f2d1e2412643bf19df8e912a9fac8b31e05e38e0ece5",
-    helperSha256: "d5640f16bfa39433905c9da81614c4256c972f6b0515f0c647dc7ae0946b8e39",
-    helperSizeBytes: 34_504,
+    helperSha256: "1c758e0c05e90daac97ed6615ed4f6cc0a324c0304b5ea0d40417fdeb759b6a7",
+    helperSizeBytes: 34_888,
   }),
   "macos-x64": Object.freeze({
     ...SHARED,
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-x64",
     executableTreeSha256: "df5ade313d45afb848c6ce2f5634c62f47ad0fa8f7c889e9cbd58f6903632710",
     sbomSha256: "e6aec95fa10da6afc27f8116960c80f37ae6fb49be8d908f8fb12139c2795bbf",
+    helperSha256: "2b722685dc1059a9eec75164e8f5157602a7802cf6a5b27da6f2a9fd78e07ac6",
+    helperSizeBytes: 18_160,
+  }),
+});
+
+// The immutable 1.1.3 runtime packages remain usable during an application/runtime upgrade.
+// Only these previously approved bytes are accepted, with their narrower protocol capability;
+// unknown or modified helpers still fail closed. The OpenCode payload uses the current catalog.
+const PREVIOUS_HELPER_SOURCE = {
+  helperSourceCommit: "98b77857ecb39e936269f875f8ade3688870629f",
+  helperSourceTreeSha256: "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa",
+  helperMaxBytes: SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES,
+} as const;
+
+export const NPM_LANE_PREVIOUS_RUNTIME_APPROVALS: Readonly<
+  Record<NpmLaneOpenCodeTarget, NpmLaneRuntimeApproval>
+> = Object.freeze({
+  "macos-arm64": Object.freeze({
+    ...NPM_LANE_RUNTIME_APPROVALS["macos-arm64"],
+    ...PREVIOUS_HELPER_SOURCE,
+    helperSha256: "d5640f16bfa39433905c9da81614c4256c972f6b0515f0c647dc7ae0946b8e39",
+    helperSizeBytes: 34_504,
+  }),
+  "macos-x64": Object.freeze({
+    ...NPM_LANE_RUNTIME_APPROVALS["macos-x64"],
+    ...PREVIOUS_HELPER_SOURCE,
     helperSha256: "65bbbd0af34e44969d17ec70cf0caedbef87de87fb676b4a8c8ef753556444fd",
     helperSizeBytes: 13_664,
   }),

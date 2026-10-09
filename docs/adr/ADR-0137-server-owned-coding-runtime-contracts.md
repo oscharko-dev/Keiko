@@ -38,6 +38,17 @@ model source. Stop, takeover, and recovery requests contain only a request id an
 validation rejects every additional field. Raw task intent is transient model input and is absent
 from durable runtime state, events, failures, and evidence.
 
+The pinned OpenCode 2.0.10 V2 launch configuration does not override `agents.build.system` or
+`agents.compaction.system`. OpenCode owns the Build prompt, model optimizers, planning, native
+iteration and compaction. One generated plugin uses the supported `session.hook("context")` to
+append a separate text part with the Keiko tool/authority interface, truthful verification results
+and repository-instruction framing. It leaves native system parts, messages and tools intact; it
+adds no planner, tool selector or execution loop. The existing readiness operation records only
+the configured addendum's SHA-256 and UTF-8 byte count at config materialization. `configDigest`
+still identifies the configuration JSON; these configured facts do not claim provider receipt.
+An actual request through the pinned executable separately proves native base guidance plus the
+exact additive part. Legacy V1 retains its existing prompt/configuration contract.
+
 Issue #3385 adds an optional raw `issueRef` and accepted-preview digest to that intent. A paired
 local app session and the selected checkout's existing GitHub reader grant admit preview reads.
 The browser receives only the shared preview projection and bounded untrusted excerpts; it cannot
@@ -53,8 +64,10 @@ binding; generic tasks retain their existing behavior. Bounded issue text enters
 model turn through the existing context-pack builder and never enters the durable projections.
 The orchestrator keeps the human task intent unchanged and carries labelled untrusted context in a
 separate server-only `initialContext` dispatch field. Explicit-skill tracking observes only the
-human text. The pinned OpenCode 1.18.30 prompt transport sends context as a separate `synthetic: true`
-text part: it reaches the model but the existing safe-activity projection omits its user-message echo.
+human text. The pinned OpenCode 2.0.10 prompt transport prepends the labelled initial context to the human
+text in the existing bounded prompt and carries `keikoContextPresentationV1` metadata naming the
+human display text and the hidden context digest. The safe-activity projection verifies that
+binding and shows only the human text.
 The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
 only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
 feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.
@@ -89,9 +102,25 @@ line counts, the file's total counts when cut, and the whole-file SHA-256 the re
 the same file; only a genuine read failure is `refused`, recorded at `warn` with its closed reason,
 and it never fails the run. The helper reports a missing root file and a denied one alike, so both
 are `absent` with the helper's own reason retained. The helper delivers whole files up to its
-content ceiling of 65,536 bytes, pinned in its wire protocol and its digest-pinned native binary, so
-a larger `AGENTS.md` is refused as `too-large` until that protocol gains a bounded window; lifting
-the ceiling is a helper-protocol decision, not a loader change.
+content ceiling of 1 MiB, pinned in its wire protocol and its digest-pinned native binary. This
+bounded whole-file read admits ordinary large repository instructions and retains the whole-file
+digest for edit preconditions. The native helper allocates only the observed file size plus one
+growth-detection byte; it still checks final file and directory identity and rejects concurrent
+changes. Model-facing read windows remain capped at 64 KiB, and initial repository instructions
+remain capped at 16 KiB and 800 lines. An oversized requested model window returns the existing
+`workspace-read-too-large` refusal and a body-free failed-read event so the model can request a
+smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
+override the pinned helper ceiling.
+
+An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
+helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain
+refused. The verified artifact, never a tool argument, selects one of the two closed protocol caps.
+A legacy helper response above its own cap is rejected even though the current response codec can
+carry 1 MiB. Current helper approvals are rebuilt from the checked-in native source for both macOS
+architectures. `coding-runtime.dev-lane.activated` records the selected helper digest and byte cap,
+so support can distinguish an old installed helper from the current one. A release that delivers
+large-file reads must also publish and select the rebuilt runtime packages; application-only
+updates keep the legacy bound rather than breaking ordinary reads.
 
 ### D2 — One server aggregate owns runtime authority
 
@@ -115,6 +144,21 @@ positive decimal integers from 1 to 480), from which both `budget.maxRuntimeMs` 
 derive. An invalid value fails the composition closed; neither setting can alter an existing
 envelope or reset its usage, and a run that exhausts either bound still fails closed at its next
 delegation. Native context compaction changes subsequent request size, not cumulative accounting.
+
+The pinned V2 runtime's admitted compaction history projects running, retained-tail, completed, and
+failed facts onto the existing `coding-runtime.compaction` Activity Log operation. Native compaction
+identifiers are hashed; summary text, retained-tail content, model/provider state, and error bodies
+never enter that operational projection. V2's `recent` is serialized content, not a message ID:
+only its presence determines the retained-tail boolean, and its unavailable start-ID digest is
+omitted. Lifecycle metadata, rather than streaming summary text, drives deduplication. V2 does not
+report the V1 overflow boolean: its absence means unavailable and must never be recorded as `false`.
+Unknown lifecycle variants, unexpected top-level fields, and missing or malformed required lifecycle
+fields fail closed. Optional provider and usage payloads are not decoded or projected by this
+observation lane. Compaction failure remains an observation; native execution settlement owns task
+completion, so an answer or summary cannot bypass pending tools or verification repair. Automatic
+compaction configuration and execution ordering remain native-runtime concerns; the historical
+post-answer delay remains open until a reproducible native qualification identifies the cause.
+
 The allowance is the only default per-run token bound: a Model Gateway spend ceiling is enforced
 only where an operator configures one. It therefore counts every prompt the provider processed for
 a turn: the turn's own prompt and, when the gateway discarded attempts on the way to its answer (a
@@ -170,6 +214,17 @@ The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, 
 `recovery-required`. Legal transitions are an explicit total table; unknown states and implicit
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
+
+The additive V2 interface guidance requires requested implementation to use actual edits and
+verification, inspect observed failures and verify the repair without weakening assertions.
+OpenCode owns that coding loop. A text-only native terminal turn is not semantic proof that
+requested work happened (live qualification F29, #3873). Planning-only tasks and read-only answers
+remain valid without invented edits or verification. This guidance does not introduce a keyword
+classifier or execute model prose. The existing post-edit and per-target verification continuation
+currently remains a bounded completion safeguard where the run has observed required verification;
+its removal requires native-loop qualification with truthful settlement preserved. Final
+qualification must independently prove the requested read/edit/test journey. The configured
+addendum digest identifies Keiko's guidance separately from the launch configuration digest.
 
 **A run whose edits keep being refused settles instead of looping** (F5 of the live Gemma
 qualification, #3873). A run whose workspace had no connected Workbench logged eleven
@@ -348,8 +403,246 @@ adapter-internal server concerns deliberately excluded from the public contract.
 
 Long-lived managed runtimes execute only inside the active task-workspace confinement boundary and
 communicate with the BFF over authenticated loopback IPC. Runtime permission observations are never
-authority: every filesystem, command, network, connector, and delivery effect must be mediated by a
-Keiko-owned governed tool boundary.
+authority: filesystem, command, network, connector and delivery effects must remain inside
+Keiko's accepted workspace, authority and evidence boundaries. The native OpenCode service owns
+planning, context and the coding loop. Preserve its original tool implementations where supported
+native hooks plus the process boundary can enforce those contracts; a mapped Keiko tool is an
+integration mechanism, not a requirement to replace every native executor. Production currently
+continues to deny native workspace effect tools while these boundaries are being qualified.
+
+V2 mapped tools share one supported plugin setup and declare canonical structured outputs beside
+their existing model-facing content. Native Code Mode reuses its outer invocation context for
+inner calls, so the adapter captures a distinct bounded identity for each inner invocation before
+permission or effect IO. Permission proof, effect request and idempotency use that same identity;
+direct invocation identities remain unchanged. Completed-parent and supported Scope disposal
+checks reject late calls. Native cancellation does not guarantee an `execute.after` hook; current
+server authority and budget checks remain mandatory for every request. Code Mode activation still
+requires the exact native execute advertisement, permission, network and lifecycle contracts;
+the default direct profile retains `codemode: false`. The captured Code Mode profile registers
+the same governed inner tools with `codemode: true` and explicitly permits original `execute`.
+Its generated source cache is immutable per closed profile; incoming fields cannot select it.
+
+The inactive explicit Code Mode catalog retains the same seventeen governed inner descriptors and
+actual handler coverage, while the original native model advertisement exposes only `question`
+and `execute`. Its exact OpenCode 2.0.10 execute schema and description come from the original
+snapshot/provider producer. The server captures this distinct profile at registry construction;
+an incoming model request cannot select it. Projection and handler identities remain profile-bound,
+and mixed direct/Code Mode offers, hidden direct calls, schema drift and expired offers are refused.
+The ordinary direct profile remains the default with its existing eighteen visible tools. This
+profile prerequisite uses the original native execute producer, but does not activate production
+native workspace effects or select an unqualified service transport.
+
+The backend captures the selected profile once from the server-owned readiness registry and exposes
+an immutable resolver selection. The resolver captures that selection once again when composing its
+run tools; later changes to caller-owned input objects do not change the canonical facade binder.
+The same selected projection supplies prepared binding, expiry evidence and dispatch digests.
+Unknown profiles fail closed and incoming tool fields cannot select a profile. The existing direct
+profile and Chat repository search remain unchanged. The same captured selection reaches native configuration and generated plugin materialization.
+Enabling an original service host remains a separate prerequisite.
+
+Native composition now captures that same profile for history and safe-activity observation.
+Only the explicit Code Mode profile recognizes the original `execute` parent. Each inner action
+joins that parent's actual session/message/call identity through the existing bounded correlation
+maps, with a private admission callback set only when that request reaches its authorized delegate.
+Denied duplicates and replays cannot overwrite the executed child's running or terminal facts.
+This projects real Keiko effect settlement; it does not invent persisted native child history.
+
+The inactive fixed external host factory uses original ServerFetch, RequestExecutor and Tool
+snapshot algorithms through their supported layer decorators. Provider and governed-tool POST
+transports capture separate immutable URL/authentication purposes; ambient model fetch is denied.
+The pinned Effect producer's bounded paired trace headers are preserved. The same generated parent
+owner closes idempotently on native success, typed failure, defect or interruption, including when
+no `execute.after` hook occurs. Original planning, output, progress, native instructions and SQLite
+ownership remain intact. Generated modules are fixed builder assets, not run-packet source paths.
+This factory still grants no production launch or native effect permission. Current authority,
+governed native IO and a freshly attested host launch remain required. The existing facade bridge
+closes admission and cancels approvals immediately, but proves drainage only after every admitted
+actual delegate promise settles. One bounded coalesced drain wait owns cancellation; a timed-out
+attempt retains recovery and authority. Disposal rechecks its cancellation signal and exact run
+generation after each await before removing private state. Future native IO must enter this same
+effect owner before its drainage can be claimed.
+
+The first macOS filesystem foundation composes read-only accepted-workspace access, writable
+private per-run native state and read-only immutable runtime/OS support with the existing exact
+gateway and runtime/attested-Git executable policy. Both direct and supervisor-prepared launches
+use the same policy producer. Accepted workspace resolver identity and Chat search remain unchanged.
+Private per-run state may live in the existing `<workspace>/.keiko` application metadata subtree;
+that exact subtree is the writable exception to workspace reads. Its root must not contain the
+workspace or overlap the immutable runtime. No external state resolver is introduced. The logged
+workspace access fact is `read-only-outside-private-state`.
+The kernel enforces the union of admitted roots, not the caller's intent within that union: native
+runtime state and Git metadata required by the service are also process-readable. A canonical
+native permission hook must separately deny model access to sensitive workspace paths, private
+state and realpath escapes before any production native Read/Search/Edit/Shell admission. This
+foundation is not full native capability parity and grants no workspace write authority.
+
+The optional server-private regular-text snapshot facet reuses the existing governed read's
+preflight, secure helper and postflight. Its additive `KSR2/KSS2` response derives size and
+modification time from the same verified stable file descriptor as the text; a refused read emits
+neither text nor metadata. Both protocol capability and effective byte cap are bound to the
+approved helper identity. Existing `KSR1/KSS1` helpers retain their exact contract and report the
+new snapshot capability unavailable. Existing workspace-read evidence records only closed native
+IO/instruction purposes and refusal reasons. This bounded text prerequisite does not activate a
+native host or qualify original Read paging, directories, media or large-file semantics. Its
+optional facade port binds the private `keiko.native.workspace.text.snapshot@1` descriptor through
+the existing canonical registry, authority, budget and invocation owners. Only the actual completed
+current invocation receives transient text; catalog results contain compact body-free receipts,
+and receipt-only replay cannot recover text. Same-descriptor modification times retain every finite
+value, including dates before 1970. The private profile is never a model selector and leaves public
+direct/Code Mode projections and Chat read/search consumers unchanged.
+
+The inactive original-Read invocation facet attaches one lifetime to the existing claimed catalog
+record. The original session/message/call context, path and pagination facts are captured before
+admission awaits. One actual catalog invocation ID, authority admission, CI lease and effect-gate
+reservation cover the logical Read and its hidden byte/stat/list/instruction IO. Each immutable child ordinal
+and digest is claimed on that same record; duplicate or conflicting packets execute nothing. Closing
+cuts off new child IO immediately, while held raw promises retain the original reservation until
+actual settlement. Canonical terminal confirmation remains separate from physical drainage. This
+facet now forwards the existing logged native IO primitives through that same lifetime. Its exact
+private descriptor and profile bind a server-owned capture codec; the public read-path parser is
+unchanged. Native paths accept up to 4,096 UTF-8 bytes and 64 components, including the accepted root
+for directory/stat operations. Original zero-based pagination facts and zero limits remain intact.
+The physical gate stays reserved until actual helper settlement even after client cancellation.
+Actual original Read output, permission and instruction comparisons cover native bytes, paging,
+directory/root, long paths and Read-level PNG/PDF results; media normalization/provider acceptance,
+the full original Files surface and real service transport require further integration.
+It creates no replay cache of file contents and does not activate a native model-visible tool.
+
+The inactive accepted-initialization callback projects one genuinely accepted STARTING lease
+through the existing pending-spawn revalidation owner. Its captured envelope, workspace binding,
+deadline and cancellation signal remain current before each native instruction read and after
+the callback. It supplies only the existing logged byte/stat/list primitives with the fixed
+`native-instructions` purpose; it neither invents a tool context nor consumes model tool calls.
+The one-shot scope closes when its callback settles or accepted authority is revoked. Pending raw
+IO retains the same physical-work reservation until actual settlement, including when transport
+timeout or cancellation has already answered. Accessor, inherited and extra request fields are
+refused before IO. Technical failures retain the original unavailable instruction state.
+The inactive original service can now enter that callback through the existing authenticated
+`/api/coding-sidecar/tool` route. Closed `native-initialization` begin/byte/stat/list/end packets
+require the actual prepared host while it is STARTING and the same current accepted root. No
+incoming field selects authority, executable, workspace or purpose. Its callback retains the same
+physical gate until real IO settles, including after response cancellation and a refused disposal.
+Native bytes use the existing KSS3 codec over bounded binary HTTP with backpressure, completion and
+buffer wiping; public JSON/text limits retain their contracts. The existing Activity Log records
+body-free initialization-transport begin/end outcomes. A controlled original initial graph matches
+forty ordered instructions through this actual route; synthetic host-byte fixtures do not qualify
+a production host. This prerequisite covers accepted-workspace initial acquisition only. It does
+not authorize global or above-root reads, watcher refresh, a model selector or production host
+activation.
+
+The private original host now wraps the actual builtin `ConfigInstructionPlugin` generation after
+its original service capture, using one per-host Effect reference and the existing initialization
+route. The original FSUtil closures capture the decorated dependency before acquisition; project
+instruction discovery remains enabled while arbitrary project configuration and global instruction
+discovery remain disabled. The scope permanently closes after the first callback, including for
+inherited child fibers. The host copies decoded native bytes before wiping the canonical KSS3 frame.
+The package builder copies the complete canonical codec and workspace deny-policy modules as fixed
+sibling assets; it does not reimplement their formulas or accept an incoming module locator.
+Before the first callback, only the accepted workspace's lexically and canonically contained
+`realPath` metadata and the fixed private-state metadata are available. Fixed approved configuration
+uses its already checked bytes; unexpected JSONC configuration is refused. Actual original host
+acquisition matches one root instruction and preserves technical-unavailable output. Forty ancestor
+instructions are separately qualified with a controlled Location/Project, not genuine VCS discovery.
+Original Git discovery, the ready lifecycle and full native file/tool advertisement remain separate
+requirements; this private prerequisite does not activate the production service.
+
+The separately inactive original Read-parent transport also uses the existing authenticated tool
+route. Closed begin/byte/stat/list/close packets require the existing admitted run's actual ready
+state, observed exact session, current accepted root and captured native Read facet. They preserve
+the canonical parent identity, replay/ordinal controls and single authority charge. Failed or
+cancelled close validates that identity before aborting only its existing admission controller.
+Completed close does not cancel unrelated work. Returned settlement joins actual physical work and
+the same idempotent slot release, so response disconnection cannot free a still-running reader.
+Private controls use genuine authority/Manager admission with hermetic endpoint and supervisor
+readiness; they do not qualify the fixed service host as ready or activate its native advertisement.
+The existing rejection operation records the closed `native-read-refused` reason without bodies.
+
+A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
+immediate directory entries to original native file consumers. Its collected output limit is
+64 MiB, matching the pinned original process-backed Files contract; directory overflow is refused
+without partial entries. Existing public text/snapshot limits and consumers retain their contracts.
+The existing read/edit port owns its private primitive forwarding, with the same current producer,
+authority guard and accepted-root pre/postflight. It records closed outcomes on the existing
+`coding-runtime.workspace-read` line; response bytes and rejected content never enter evidence.
+It also supplies a private additional currentness veto for physical IO admission. A lost binding
+wipes returned bytes before refusal. This facet does not grant a model-visible tool or a native
+host ingress. Actual original Read controls retain paging, directory, image/PDF and binary handling;
+the original instruction service retains its own loading and deduplication. Initial/global
+instruction discovery and complete native service
+qualification remain separate requirements. Symlink content, hardlinks and cross-device content
+are still refused; Windows native IO and Linux/Intel execution are not qualified by the macOS
+controls. Those limits remain open native-parity work rather than permanent capability exclusions.
+Private native IO now waits on the same eight physical slots used by public text reads. Its bounded
+waiting capacity admits one complete supported ancestor-instruction load. Captured requests retain
+their original path, range and cancellation signal; root, artifact and currentness are checked again
+after waiting and immediately before physical IO. Cancellation removes waiters, while an admitted
+slot remains held until the actual process settles. Public text reads retain their existing busy
+result. Overflow is an explicit technical refusal, never partial instruction success.
+
+An original Node service host has its own supplemental immutable artifact identity: final npm
+payload and archive, fixed Node executable and bootstrap, dependency lock, license inventory,
+SBOM and build-provenance evidence. Existing CLI archive approval neither approves nor selects
+that host. The shared closed metadata contract distinguishes npm byte integrity from unavailable
+upstream source-build attestation. Its inactive launch-shape producer admits only the fixed
+bootstrap argument and rejects ambient Node loader or native-library injection. Ordinary CLI
+approval checks retain their pre-build path; supplemental host checks require the compiled
+canonical contract. These shape checks do not replace disk, platform, current-authority,
+network or process-lifetime qualification and do not activate native tools.
+
+The existing npm runtime builder also exposes a private, unapproved service-host candidate path.
+It retains the approved CLI members and copies fixed original host assets, locked installed
+dependencies and the artifact-owned Node distribution through the existing archive and tree owners.
+Final npm extraction precedes payload attestation; npm-excluded metadata is reported explicitly.
+The original npm SBOM root stays in its metadata exactly once, while the Node executable is added
+with its measured digest. Installed alias identities retain their actual manifests and license
+files. License-policy refusal remains in the private receipt and prevents production qualification;
+the candidate has no publish configuration and does not change public runtime pins or selectors.
+
+The inactive supplemental disk inspection matches declared canonical metadata to the server-owned
+target supplement, then obtains the complete tree and six fixed Node/bootstrap/lock/SBOM/license/
+provenance digests from one fresh stable pass through the existing attestation owner. Its immutable
+receipt binds the inspected root and the platform captured before IO, and reports only
+supplementary byte qualification. Mutation of an input platform during attestation cannot change
+the later prepared-program target. It neither
+measures the archive/count/source claims nor proves executable suitability, current authority or
+point-of-launch freshness. Missing or unsafe files, cancellation and deadlines retain the owning
+attestation errors and registered body-free log. The inactive fixed executable entry now serves the original public `createRoutes` graph through
+the original Node HTTP/WebSocket server, preserving before-acquisition replacements. It accepts
+one bounded immutable binding packet, publishes readiness after acquisition and closes its native
+scope on stdin EOF. Its executable refuses a process cwd outside the packet's canonical workspace
+before acquiring the original graph. Its database and freshness check use the existing launch
+producer's `<stateRoot>/state/opencode.db` path. Original default session creation and its echo
+retain that workspace Location. These entry controls do not establish current native filesystem
+authority. The BFF separately checks the original created and echoed
+session Location against the captured accepted workspace, and rechecks cancellation after each
+await before proceeding to model readiness. Existing authenticated Fetch factory behavior remains
+available. The existing Manager can privately prepare the distinct owned Node/bootstrap program,
+freshly reattest it and write its single bounded packet through the owned stdin lifetime lease before
+handshake. Unsupported or failed writes follow existing cleanup and recovery; a copied program or
+receipt cannot replace the artifact owner's binding. Host readiness remains unqualified before the
+ordinary CLI adapter can open, so this transport path does not activate the service. This prerequisite
+still needs actual platform/process-lifetime controls, current native IO authority and fresh
+final-payload qualification before production selection or launch. EOF closure alone does not prove
+settlement of delegated effects.
+
+The closed canonical startup packet now carries the same captured `direct` or `code-mode` profile
+as the immutable run configuration. The shared contracts package owns that enum and the eleven
+packet fields. A fixed generated data asset supplies those fields, profiles and the 16 KiB ceiling
+to the native host and executable entry. Static imports select the existing fixed direct or Code
+Mode factory; input cannot name a module, executable or source locator. Missing or arbitrary profiles refuse rather than silently choosing direct; valid mutable input
+is captured before asynchronous work. A copied artifact receipt remains invalid. The existing factory algorithms
+and default model projections remain unchanged. Actual original Tool/Plugin/Location acquisition
+and provider request serialization qualify both selected mapped profiles, including the original
+Code Mode inventory. That inventory includes two additional native items beyond the seventeen
+managed handlers; these controls do not qualify those items or native workspace tools. They do
+not activate the service or replace final packaged-byte/platform qualification.
+
+Portable CLI discovery derives executable, license and SBOM digests from one fresh, bounded
+content pass over stable file descriptors. Those evidence digests and the payload digest belong
+to the same before/after tree snapshot; a separately read provenance file is not sufficient.
+The existing locale-sorted payload digest remains byte-compatible, including complete paths that
+collate equally. Only those ties require the historical directory-enumeration order. Launch uses
+a separate fresh pass and never trusts cached discovery evidence for current disk contents.
 
 Codex subscription traffic remains a distinct runtime/model source. Its egress uses Keiko's shared
 enterprise proxy and custom-CA path, and any official authentication navigation target is validated
@@ -360,6 +653,16 @@ Content-bearing live prompt, response, model-reasoning (see the Issue #3878 amen
 diagnostic events are transient, bounded, and access-controlled. Durable operational events and
 evidence are a separate content-free projection; they carry only ids, digests, counts, booleans,
 closed states/codes, and safe labels.
+
+The authenticated live safe-activity tool projection also carries canonical per-call facts
+(#3874): a completed read's workspace-relative path, returned-window bytes and whole-file line
+count; the actual number of discovery entries returned; a closed edit refusal and the affected
+relative path only when materialization identified it; and elapsed bridge service time. Service
+time includes governed waits and excludes model generation. These facts come from the governed
+producer, remain bounded by the existing aggregate feed limits, and survive native restatement
+and immutable replay. Raw arguments/results, unknown refusal strings and unsafe paths are rejected.
+Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
+the existing tool-result operation records service duration through its standard duration field.
 
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously
@@ -400,6 +703,41 @@ shutdown, and product update first revoke the run's Authority Envelope and block
 then terminate the complete tree. A run reaches a terminal/reusable slot only after the supervisor
 proves tree exit. If complete exit cannot be proven, state becomes `recovery-required`; the active-run
 slot remains occupied and no replacement run may start until reconciliation proves reap.
+
+The `starting` state admits the same `stopping` path as an established run. Its server-owned
+startup cancellation signal covers asynchronous preparation, handshake and initial context loading;
+stop, takeover and shutdown abort it. Immediately before spawning, the manager checks cancellation
+again, so late preparation cannot create a tree after a successful stop. A delayed start result
+waits for the interruption's teardown result and never dispatches the initial task or replaces its
+terminal state. An unproven teardown or a late live host remains `recovery-required`; cancellation
+does not substitute for process-tree exit proof (F25, #3873).
+
+Launch attestation uses asynchronous filesystem IO and bounded cooperative yields, so startup
+cancellation can run while a large immutable payload is checked. The existing startup deadline,
+tree and file bounds still apply. Immediately after that await and before process creation, the
+manager verifies the same active start, current workspace, cancellation and accepted authority.
+This check neither renews nor widens authority. Discovery retains its synchronous boundary and
+does not acquire a new launch deadline. Historical directory enumeration can allocate its native
+entry array before a concurrent tree growth is refused; this change makes no stronger allocation
+or startup-latency guarantee for that existing owner.
+
+The pinned OpenCode V2 Darwin application-sandbox backend also uses the native `serve --stdio`
+stdin-EOF lifetime lease. The verified V2 preparation producer and the existing process backend
+must both support it before the manager selects that fixed launch form. The supervisor refuses an
+unsupported lease marker, and the backend refuses a missing or closed writable pipe before it
+accepts tree ownership. Keiko retains the pipe for the complete runtime lifetime; handshake,
+tool dispatch and adapter disposal never end it. OpenCode keeps its authenticated HTTP service
+and closes its native server scope when the owner's pipe reaches EOF. Readiness accepts only the
+native closed loopback URL record or the existing ordinary-serve line. The existing body-free
+confinement-spawn record identifies the selected lifetime form. This does not extend authority,
+replace explicit tree reap, or qualify the sealed helper and other platforms by inference.
+
+An acknowledged recovery row remains visible until a replacement starts, but no longer blocks
+workspace selection when the runtime manager reports `stopped`. Workspace activation uses that
+specific predicate rather than treating every retained recovery row as a running process. The
+checks before body parsing and immediately before checkout mutation remain; an unacknowledged row
+or a host in any other state still blocks selection. History and shutdown keep the broader live-row
+predicate, and acknowledgement never turns an unproven host into a stopped one.
 
 Supported platform names are not sufficient evidence that confinement exists. Runtime availability
 uses this release-qualified matrix:
@@ -554,7 +892,10 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 - **Reads are coalesced, and the log says by how much.** A live turn can emit an event for every
   streamed token, and each sync hint costs one history read, so the pump folds the plain hints that
   pile up while a read runs into one, and a control hint's read covers the plain hints queued before
-  it (control hints are never dropped and keep their order). Every event is therefore a hint
+  it (control hints are never dropped and keep their order). Production spaces ordinary history
+  reads by at least 100 ms using a monotonic clock, so a fast response cannot force another full
+  read for each streamed delta. Control hints, source failure and source end flush immediately;
+  every live delta is still observed before coalescing. Every event is therefore a hint
   delivered or an event merged, apart from the hints still queued when the run stops;
   `mergedEventCount` on `coding-runtime.history-projection` is the number merged since the previous
   line, so a timeline that lags or skips an update is explained by how many events one read stood

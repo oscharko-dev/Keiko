@@ -2,8 +2,14 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 
 import { type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   accessSync,
+  existsSync,
+  closeSync,
+  fstatSync,
+  openSync,
   chmodSync,
   constants,
   mkdirSync,
@@ -20,6 +26,9 @@ import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
+import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -51,11 +60,63 @@ import {
   type RuntimeProcessTree,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
-import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolFacade,
+  CodingToolFacadeInput,
+  CodingAcceptedInitializationReadPort,
+  CodingAcceptedInitializationFacet,
+  CodingToolNativeTextReadFacet,
+  CodingToolNativeReadBeginInput,
+  CodingToolNativeReadIdentity,
+  CodingToolNativeTextSnapshotResult,
+} from "./codingToolFacadePorts.js";
+import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
+import {
+  createSecureWorkspaceTextReadPort,
+  secureWorkspaceTextDigest,
+} from "./secureWorkspaceTextRead.js";
+import {
+  encodeSecureWorkspaceReadResponse,
+  decodeSecureWorkspaceNativeResponse,
+  encodeSecureWorkspaceSnapshotResponse,
+} from "./secureWorkspaceTextReadProtocol.js";
+import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
+import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
+import type { SecureWorkspaceTextReadProcess } from "./secureWorkspaceTextReadProcess.js";
+import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
+import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
+import {
+  catalogRuntimeFixture,
+  RUNTIME_NOW,
+} from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
+import {
+  productionRuntimeAuthorityFacts,
+  type ProductionWorkspaceAuthorityInput,
+} from "./productionRuntimeWorkspaceAuthority.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import { dirname } from "node:path";
+import { createCodingToolFacade } from "./codingToolFacade.js";
+import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
-import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type {
+  CodingRuntimeManager,
+  OpenCodeLifecycleAdapter,
+  OpenCodeLifecyclePrepareRequest,
+  OpenCodeLifecyclePrepareResult,
+} from "./codingRuntimeManager.js";
+import {
+  inspectOpenCodeServiceHostDisk,
+  OPENCODE_SERVICE_HOST_DISK_EVIDENCE,
+  type OpenCodeServiceHostDiskReceipt,
+} from "./opencodeServiceHostArtifact.js";
+import { attestPortableSidecarTreeSync } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
-import type { OpenCodeGovernedSinkReceipt } from "./opencodeRuntimeAdapter.js";
+import {
+  createGeneratedOpenCodeV2Plugins,
+  openCodeToolClientTimeoutMs,
+  type OpenCodeGovernedSinkReceipt,
+} from "./opencodeRuntimeAdapter.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
@@ -68,7 +129,33 @@ import {
 import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
-import { openCodeToolClientTimeoutMs } from "./opencodeRuntimeAdapter.js";
+
+const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
+
+// Observe the real source producer without replacing its generated tools or source definitions.
+vi.mock("./opencodeToolSchemas.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeToolSchemas.js")>();
+  return {
+    ...actual,
+    OPENCODE_TOOL_SOURCE_DEFINITIONS: new Proxy(actual.OPENCODE_TOOL_SOURCE_DEFINITIONS, {
+      get(target, property, receiver): unknown {
+        if (property !== "map") return Reflect.get(target, property, receiver) as unknown;
+        return (...args: unknown[]): unknown => {
+          const result: unknown = Reflect.apply(target.map.bind(target), target, args);
+          generatedToolSources.passes += 1;
+          if (Array.isArray(result)) {
+            for (const entry of result as unknown[]) {
+              if (Array.isArray(entry) && typeof entry[1] === "string") {
+                generatedToolSources.utf8Bytes += Buffer.byteLength(entry[1], "utf8");
+              }
+            }
+          }
+          return result;
+        };
+      },
+    }),
+  };
+});
 
 const dirs: string[] = [];
 const MODEL_CAPABILITY = "m".repeat(43);
@@ -90,17 +177,34 @@ const OPENAPI: unknown = JSON.parse(
 );
 const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(OPENAPI).digest;
 
+function materializedV2PluginPaths(runRoot: string): readonly string[] {
+  return Object.keys(createGeneratedOpenCodeV2Plugins()).map((name) =>
+    join(runRoot, "config", "opencode", "plugins", `${name}.ts`),
+  );
+}
+
 interface OpenCodeRuntimeComposition {
+  readonly prepareServiceHost: (
+    request: OpenCodeLifecyclePrepareRequest,
+    receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
+  ) => Promise<OpenCodeLifecyclePrepareResult>;
   readonly manager: CodingRuntimeManager;
   readonly toolBridge: {
     readonly url: string;
     readonly requestDeadlineMs: number;
+    readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
+    readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
     handle(input: {
       readonly method: "POST";
       readonly headers: Headers;
       readonly body: string;
       readonly signal?: AbortSignal;
-    }): Promise<{ readonly status: number; readonly body: string }>;
+    }): Promise<{
+      readonly status: number;
+      readonly body: string;
+      readonly nativeBytes?: Uint8Array;
+      readonly nativeResult?: true;
+    }>;
   };
   readonly runPort: {
     readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
@@ -138,6 +242,8 @@ interface OpenCodeRuntimeCompositionModule {
   ) => number;
   createOpenCodeRuntimeComposition(input: {
     readonly activityLog?: ServerLogSink;
+    readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
+    readonly toolProfile?: "direct" | "code-mode" | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
@@ -166,6 +272,7 @@ interface OpenCodeRuntimeCompositionModule {
     // the SAME single attested loopback origin the model gateway rides, never a second listener.
     readonly toolFacadeOrigin: string;
     readonly toolFacade: CodingToolFacade;
+    readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
     readonly governedEventSink: {
       readonly execute: (
         identityKey: string,
@@ -173,13 +280,19 @@ interface OpenCodeRuntimeCompositionModule {
       ) => Promise<OpenCodeGovernedSinkReceipt>;
     };
     readonly safeActivity?: {
-      readonly arm: () => void;
+      readonly arm: (sessionId?: string, profile?: "direct" | "code-mode") => void;
+      readonly beginTool?: (input: {
+        readonly actionId: string;
+        readonly tool: string;
+        readonly occurredAt: string;
+      }) => void;
       readonly clear: () => void;
       readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
       readonly captureMessages?: (messages: readonly CodingHistoryMessage[]) => boolean;
       readonly recordDrops: (count: number) => void;
       readonly settleTool: (input: {
         readonly actionId: string;
+        readonly delegateStarted?: true;
         readonly state: "succeeded" | "failed" | "denied" | "cancelled";
         readonly occurredAt: string;
       }) => void;
@@ -219,10 +332,14 @@ function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
   return Promise.resolve(loadedCompositionModule);
 }
 
-async function withDeterministicReadinessTimers<T>(operation: () => Promise<T>): Promise<T> {
+async function withDeterministicReadinessTimers<T>(
+  operation: () => Promise<T>,
+  beforeAdvance: Promise<void>,
+): Promise<T> {
   vi.useFakeTimers();
   try {
     const pending = operation();
+    await beforeAdvance;
     await vi.advanceTimersByTimeAsync(50);
     return await pending;
   } finally {
@@ -356,8 +473,29 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+  readonly workspaceRoot?: string;
+  readonly gatewayUrl?: string;
+  readonly signal?: AbortSignal;
+  readonly sessionLocation?: {
+    readonly created?: "wrong" | "missing";
+    readonly echoed?: "wrong" | "missing";
+    readonly stages?: string[];
+    readonly afterCreated?: () => void;
+  };
+  readonly toolFacadeCapability?: string;
+  readonly readToolProfile?: () => "direct" | "code-mode";
+  readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
+  readonly onSpawn?: (() => void) | undefined;
+  readonly stdinLifetime?: {
+    readonly supports: true;
+    readonly launches: RuntimeSupervisorLaunchRequest[];
+    readonly pipe: PassThrough;
+  };
   readonly activityLog?: ServerLogSink;
   readonly startTimeoutMs?: number;
+  readonly shutdownTimeoutMs?: number;
+  readonly onRelease?: (runId: string) => void;
   readonly historyResponse?: Promise<Response>;
   readonly historyResponseFactory?: (signal?: AbortSignal) => Promise<Response>;
   readonly expectedStart?: Readonly<Record<string, unknown>>;
@@ -399,6 +537,12 @@ interface StartBridgeControl {
     runtime: OpenCodeRuntimeComposition,
     runRoot: string,
   ) => void | Promise<void>;
+}
+
+function optionalSpawnGuard(control: StartBridgeControl | undefined): {
+  readonly canSpawnRuntime?: NonNullable<StartBridgeControl["canSpawnRuntime"]>;
+} {
+  return control?.canSpawnRuntime === undefined ? {} : { canSpawnRuntime: control.canSpawnRuntime };
 }
 
 function optionalSafeActivity(control: StartBridgeControl | undefined): {
@@ -459,6 +603,100 @@ function optionalToolResultCorrelation(control: StartBridgeControl | undefined):
     : { toolResultCorrelationId: control.toolResultCorrelationId };
 }
 
+function fixtureStdinOwnership(control: StartBridgeControl | undefined): {
+  readonly supportsStdinLifetime?: true;
+  readonly stdin?: PassThrough;
+} {
+  return control?.stdinLifetime === undefined
+    ? {}
+    : { supportsStdinLifetime: true, stdin: control.stdinLifetime.pipe };
+}
+
+function fixtureStartupLine(
+  request: RuntimeSupervisorLaunchRequest,
+  control: StartBridgeControl | undefined,
+): string {
+  control?.stdinLifetime?.launches.push(request);
+  return control?.stdinLifetime === undefined
+    ? "server listening on http://127.0.0.1:43123\n"
+    : '{"url":"http://127.0.0.1:43123"}\n';
+}
+
+function fixtureShutdownTimeout(control: StartBridgeControl | undefined): number {
+  return control?.shutdownTimeoutMs ?? 20;
+}
+
+function fixtureRelease(control: StartBridgeControl | undefined, runId: string): true {
+  control?.onRelease?.(runId);
+  return true;
+}
+
+function fixtureWorkspaceRoot(root: string, control: StartBridgeControl | undefined): string {
+  return control?.workspaceRoot ?? join(root, "workspace");
+}
+
+function fixtureToolCapability(control: StartBridgeControl | undefined): string {
+  return control?.toolFacadeCapability ?? TOOL_CAPABILITY;
+}
+
+function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
+  const nativeTextRead = facade.nativeTextRead;
+  const acceptedInitialization = facade.acceptedInitialization;
+  return {
+    ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
+    ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
+    execute: (input) =>
+      input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
+        ? Promise.resolve({ status: "observed", evidence: [] })
+        : facade.execute(input),
+  };
+}
+
+function fixtureGatewayUrl(control: StartBridgeControl | undefined): string {
+  return control?.gatewayUrl ?? "http://127.0.0.1:1983/api/coding-sidecar/gateway";
+}
+
+function fixturePreparation(
+  captured: RuntimeSupervisorLaunchRequest | undefined,
+  executablePath: string,
+  verification: PortableSidecarRuntimeVerification,
+): OpenCodeLifecyclePrepareRequest {
+  return {
+    runId: FIXTURE_RUN_ID,
+    executablePath,
+    env: captured?.env ?? {},
+    verification,
+    timeoutMs: 100,
+  };
+}
+
+/** Exact Info.location.directory shape qualified by original pinned native HTTP create/get. */
+function fixtureNativeSession(
+  id: string,
+  directory: string,
+  stage: "created" | "echoed",
+  control: StartBridgeControl | undefined,
+): Readonly<Record<string, unknown>> {
+  const locationControl = control?.sessionLocation;
+  locationControl?.stages?.push(stage);
+  if (stage === "created") locationControl?.afterCreated?.();
+  const disposition = locationControl?.[stage];
+  return {
+    id,
+    ...(disposition === "missing"
+      ? {}
+      : {
+          location: {
+            directory: disposition === "wrong" ? join(directory, "other-workspace") : directory,
+          },
+        }),
+  };
+}
+
+function fixtureSignal(control: StartBridgeControl | undefined): AbortSignal | undefined {
+  return control?.signal;
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -466,22 +704,31 @@ async function startBridgeFixture(
     maxInFlight: 1,
   },
   control?: StartBridgeControl,
-): Promise<{ readonly runtime: OpenCodeRuntimeComposition; stop(): Promise<void> }> {
+): Promise<{
+  readonly runtime: OpenCodeRuntimeComposition;
+  readonly preparation: OpenCodeLifecyclePrepareRequest;
+  stop(): Promise<void>;
+}> {
   const root = tempDir("keiko-opencode-tool-bridge-");
   const resourceRoot = join(root, "resources");
   const portable = portableFixture(resourceRoot);
   mkdirSync(join(root, "workspace"), { recursive: true });
   const stdout = new PassThrough();
   const stderr = new PassThrough();
+  let capturedLaunch: RuntimeSupervisorLaunchRequest | undefined;
   const supervisor = createRuntimeProcessSupervisor({
     backend: {
       identity: { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" },
-      spawnOwnedTree: (): RuntimeProcessTree => {
-        stdout.end("server listening on http://127.0.0.1:43123\n");
+      ...fixtureStdinOwnership(control),
+      spawnOwnedTree: (request): RuntimeProcessTree => {
+        capturedLaunch = request;
+        control?.onSpawn?.();
+        stdout.end(fixtureStartupLine(request, control));
         return {
           treeId: "tool-bridge-tree",
           stdout,
           stderr,
+          ...fixtureStdinOwnership(control),
           onTreeExit: (): void => undefined,
         };
       },
@@ -561,6 +808,7 @@ async function startBridgeFixture(
       return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
     }
     if (path.endsWith("/prompt")) {
+      control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
         readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string") {
@@ -610,18 +858,22 @@ async function startBridgeFixture(
     }
     if (path === "/api/session" && init?.method === "POST") {
       control?.sessionCreateCalls?.push("ses_tool");
-      return Promise.resolve(v2Envelope({ id: "ses_tool" }));
+      return Promise.resolve(
+        v2Envelope(fixtureNativeSession("ses_tool", capturedLaunch?.cwd ?? "", "created", control)),
+      );
     }
-    if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_tool" }]));
+    if (path === "/api/session")
+      return Promise.resolve(
+        v2Envelope([
+          fixtureNativeSession("ses_tool", capturedLaunch?.cwd ?? "", "echoed", control),
+        ]),
+      );
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
-  const readinessAwareFacade: CodingToolFacade = {
-    execute: (input) =>
-      input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
-        ? Promise.resolve({ status: "observed", evidence: [] })
-        : facade.execute(input),
-  };
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
+    get toolProfile(): "direct" | "code-mode" | undefined {
+      return control?.readToolProfile?.();
+    },
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
     contextGeometry: {
@@ -631,11 +883,12 @@ async function startBridgeFixture(
     },
     capabilities: {
       modelGatewayCapability: MODEL_CAPABILITY,
-      toolFacadeCapability: TOOL_CAPABILITY,
+      toolFacadeCapability: fixtureToolCapability(control),
     },
     toolBridge,
     toolFacadeOrigin: TOOL_FACADE_ORIGIN,
-    toolFacade: readinessAwareFacade,
+    toolFacade: fixtureToolFacade(facade),
+    ...optionalRootAccess(control),
     governedEventSink: {
       execute: (_identityKey, event): Promise<"applied"> => {
         control?.governedEvents?.push(event);
@@ -648,6 +901,7 @@ async function startBridgeFixture(
     ...optionalActivityLog(control),
     ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
+    ...optionalSpawnGuard(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> =>
         Promise.resolve(control?.gatewayRefused !== true),
@@ -660,7 +914,7 @@ async function startBridgeFixture(
       revokeRuntime: (): true => true,
       abortInFlightActions: (): true => true,
       markRuntimeRecoveryRequired: (): true => true,
-      releaseRuntimeAfterReap: (): true => true,
+      releaseRuntimeAfterReap: (runId): true => fixtureRelease(control, runId),
     },
   });
   const mode = runtimeMode(control);
@@ -670,7 +924,7 @@ async function startBridgeFixture(
       treeBindingId: "b".repeat(64),
       authorityEnvelopeDigest: "c".repeat(64),
       taskRef: "issue-2254",
-      workspaceRoot: join(root, "workspace"),
+      workspaceRoot: fixtureWorkspaceRoot(root, control),
       adapterKind: "opencode-compatible",
       runtimeSource: "keiko-sidecar",
       modelSource: "keiko-model-gateway",
@@ -678,12 +932,13 @@ async function startBridgeFixture(
       effectiveMode: mode,
       executablePath: portable.executablePath,
       managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
-      gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      gatewayUrl: fixtureGatewayUrl(control),
       modelProfileId: "coding-safe-openai-compatible",
       args: [],
       inheritedEnvAllowlist: [],
-      shutdownTimeoutMs: 20,
+      shutdownTimeoutMs: fixtureShutdownTimeout(control),
       startTimeoutMs: control?.startTimeoutMs ?? 100,
+      signal: fixtureSignal(control),
       confinement: {
         platform: "darwin",
         arch: "arm64",
@@ -696,13 +951,41 @@ async function startBridgeFixture(
     control?.expectedStart ?? { ok: true, runId: FIXTURE_RUN_ID, status: "ready" },
   );
   await control?.afterStart?.(runtime, join(root, "state", FIXTURE_RUN_ID));
+  const preparation = fixturePreparation(
+    capturedLaunch,
+    portable.executablePath,
+    portable.verification,
+  );
   return {
     runtime,
+    preparation,
     stop: async (): Promise<void> => {
       await runtime.manager.stop(FIXTURE_RUN_ID);
     },
   };
 }
+
+it("selects native stdin ownership only after the production V2 prepare and keeps it open", async () => {
+  const pipe = new PassThrough();
+  const launches: RuntimeSupervisorLaunchRequest[] = [];
+  const fixture = await startBridgeFixture(
+    {
+      execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+    },
+    undefined,
+    { stdinLifetime: { supports: true, launches, pipe } },
+  );
+  try {
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.parentLifetime).toBe("stdin-eof");
+    expect(launches[0]?.args).toContain("--stdio");
+    expect(pipe.writableEnded).toBe(false);
+    expect(pipe.destroyed).toBe(false);
+  } finally {
+    await fixture.stop();
+    pipe.destroy();
+  }
+});
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
   return turnHistory("succeeded");
@@ -762,7 +1045,9 @@ function turnHistory(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -775,6 +1060,32 @@ afterAll(() => {
 });
 
 describe("unmounted OpenCode runtime composition", () => {
+  it("reuses cached native sources without regenerating a discarded legacy bundle at readiness", async () => {
+    createGeneratedOpenCodeV2Plugins();
+    const before = { ...generatedToolSources };
+    const atSpawn: (typeof before)[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: (): Promise<{ status: "completed"; evidence: never[] }> =>
+          Promise.resolve({ status: "completed", evidence: [] }),
+      },
+      undefined,
+      {
+        onSpawn: (): void => {
+          atSpawn.push({ ...generatedToolSources });
+        },
+      },
+    );
+    try {
+      expect(atSpawn).toHaveLength(1);
+      expect(atSpawn[0]).toEqual(before);
+      expect(generatedToolSources).toEqual(atSpawn[0]);
+      expect(fixture.runtime.manager.health()).toMatchObject({ status: "ready" });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("shows the human task without replaying attached issue context as a user message", () => {
     const context = "PRIVATE_ISSUE_CONTEXT";
     const intent = "Summarize the issue";
@@ -896,6 +1207,10 @@ describe("unmounted OpenCode runtime composition", () => {
         },
       });
     let readinessStatusReads = 0;
+    let observePoll: (() => void) | undefined;
+    const readinessPolled = new Promise<void>((resolve) => {
+      observePoll = resolve;
+    });
     // eslint-disable-next-line complexity -- the finite mock endpoint table is intentionally explicit.
     const fetchMock = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
       const path = requestPath(url);
@@ -922,13 +1237,18 @@ describe("unmounted OpenCode runtime composition", () => {
       if (path === "/api/session/ses_1/message") return Promise.resolve(v2Envelope([]));
       if (path.endsWith("/prompt")) return Promise.resolve(v2Envelope({}));
       if (path.endsWith("/interrupt")) return Promise.resolve(v2Envelope({}));
-      if (path === "/api/session/active")
+      if (path === "/api/session/active") {
+        observePoll?.();
         return Promise.resolve(
           v2Envelope(readinessStatusReads++ < 4 ? { ses_1: { type: "busy" } } : {}),
         );
+      }
       if (path === "/api/session" && init?.method === "POST")
-        return Promise.resolve(v2Envelope({ id: "ses_1" }));
-      if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_1" }]));
+        return Promise.resolve(v2Envelope({ id: "ses_1", location: { directory: workspaceRoot } }));
+      if (path === "/api/session")
+        return Promise.resolve(
+          v2Envelope([{ id: "ses_1", location: { directory: workspaceRoot } }]),
+        );
       return Promise.resolve(new Response("", { status: 404 }));
     });
     const fetch = fetchMock as unknown as typeof globalThis.fetch;
@@ -995,37 +1315,39 @@ describe("unmounted OpenCode runtime composition", () => {
       authorityLifecycle,
     });
 
-    const startResult = await withDeterministicReadinessTimers(() =>
-      Promise.resolve(
-        runtime.manager.start({
-          runId: "run-1",
-          treeBindingId: "a".repeat(64),
-          authorityEnvelopeDigest: "b".repeat(64),
-          taskRef: "issue-2254",
-          workspaceRoot,
-          adapterKind: "opencode-compatible",
-          runtimeSource: "keiko-sidecar",
-          modelSource: "keiko-model-gateway",
-          requestedMode: "supervised-coding",
-          effectiveMode: "supervised-coding",
-          executablePath: executable,
-          managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
-          // Same loopback origin as `TOOL_FACADE_ORIGIN` (below) -- ADR-0043 D11-D14 (#3390):
-          // production derives both from ONE loopback origin (productionOpenCodeActivation.ts).
-          gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
-          modelProfileId: "coding-safe-openai-compatible",
-          args: ["--caller"],
-          inheritedEnvAllowlist: [],
-          shutdownTimeoutMs: 5,
-          startTimeoutMs: 100,
-          confinement: {
-            platform: "darwin",
-            arch: "arm64",
-            backend: "macos-app-sandbox",
-            releaseReceipt: `sha256:${"a".repeat(64)}`,
-          },
-        }),
-      ),
+    const startResult = await withDeterministicReadinessTimers(
+      () =>
+        Promise.resolve(
+          runtime.manager.start({
+            runId: "run-1",
+            treeBindingId: "a".repeat(64),
+            authorityEnvelopeDigest: "b".repeat(64),
+            taskRef: "issue-2254",
+            workspaceRoot,
+            adapterKind: "opencode-compatible",
+            runtimeSource: "keiko-sidecar",
+            modelSource: "keiko-model-gateway",
+            requestedMode: "supervised-coding",
+            effectiveMode: "supervised-coding",
+            executablePath: executable,
+            managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
+            // Same loopback origin as `TOOL_FACADE_ORIGIN` (below) -- ADR-0043 D11-D14 (#3390):
+            // production derives both from ONE loopback origin (productionOpenCodeActivation.ts).
+            gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+            modelProfileId: "coding-safe-openai-compatible",
+            args: ["--caller"],
+            inheritedEnvAllowlist: [],
+            shutdownTimeoutMs: 5,
+            startTimeoutMs: 100,
+            confinement: {
+              platform: "darwin",
+              arch: "arm64",
+              backend: "macos-app-sandbox",
+              releaseReceipt: `sha256:${"a".repeat(64)}`,
+            },
+          }),
+        ),
+      readinessPolled,
     );
     expect(startResult).toMatchObject({ ok: true });
     expect(readinessStatusReads).toBe(5);
@@ -1086,15 +1408,13 @@ describe("unmounted OpenCode runtime composition", () => {
         expect(statSync(path).mode & 0o777).toBe(0o700);
       for (const path of [
         join(runRoot, "config", "opencode", "opencode.json"),
-        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
-        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
+        ...materializedV2PluginPaths(runRoot),
       ])
         expect(statSync(path).mode & 0o777).toBe(0o600);
     }
     const files = [
       join(runRoot, "config", "opencode", "opencode.json"),
-      join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
-      join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
+      ...materializedV2PluginPaths(runRoot),
     ]
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
@@ -1593,6 +1913,38 @@ describe("private OpenCode run control", () => {
     return permission.requestId;
   };
 
+  it("closes a pending human permission without starting a delegate or retaining authority", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const delegate = vi.fn((): Promise<unknown> => Promise.resolve({ outcome: "completed" }));
+    const realFacade = createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: delegate },
+    });
+    const onRelease = vi.fn();
+    const fixture = await startBridgeFixture(realFacade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      onRelease,
+    });
+    try {
+      const decision = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await governedAsk("call_pending_close")),
+      });
+      await permissionRequested(runtimeEvents);
+      expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toEqual({
+        ok: true,
+        status: "stopped",
+      });
+      expect(await decision).toMatchObject({ status: 403, rejection: "approval-cancelled" });
+      expect(delegate).not.toHaveBeenCalled();
+      expect(onRelease).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("aliases live permission ids and resolves only the run-owned upstream request", async () => {
     const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
     const permissionRequests: {
@@ -1825,14 +2177,7 @@ describe("private OpenCode run control", () => {
     const retained = [
       JSON.stringify(governedEvents),
       readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
-      readFileSync(
-        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
-        "utf8",
-      ),
-      readFileSync(
-        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
-        "utf8",
-      ),
+      ...materializedV2PluginPaths(runRoot).map((path) => readFileSync(path, "utf8")),
     ].join("\n");
     expect(retained).not.toContain(prompt);
     expect(retained).not.toContain(initialContext);
@@ -2226,6 +2571,45 @@ describe("private OpenCode tool bridge", () => {
       },
     };
   };
+
+  it("settles governed read facts with the actual bridge service duration and no raw output", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => {
+        now += 125;
+        return Promise.resolve({ ...completed, read: { ...completed.read, totalLines: 400 } });
+      }),
+    };
+    const activity = activityRecorder();
+    const fixture = await startBridgeFixture(facade, undefined, {
+      safeActivity: activity.safeActivity,
+    });
+    try {
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: toolBody("call_facts"),
+      });
+      expect(activity.settlements).toEqual([
+        expect.objectContaining({
+          actionId: "tool:call_facts",
+          state: "succeeded",
+          presentation: {
+            relativePath: "src/index.ts",
+            readByteCount: 7,
+            totalFileLines: 400,
+            bridgeDurationMs: 125,
+          },
+        }),
+      ]);
+      expect(JSON.stringify(activity.settlements)).not.toContain("fixture");
+      expect(JSON.stringify(activity.settlements)).not.toContain("digest");
+    } finally {
+      clock.mockRestore();
+      await fixture.stop();
+    }
+  });
 
   // #3390 (ADR-0043 D11-D14): a negative proof that no production path re-opens a second loopback
   // listener for this bridge. The public port's OWN shape is the guard: it exposes exactly `url`
@@ -3457,3 +3841,3228 @@ describe("private OpenCode tool bridge", () => {
     );
   });
 });
+
+describe("production OpenCode pending-spawn guard wiring", () => {
+  it("forwards the server-owned live guard and refuses spawn before native readiness", async () => {
+    const spawned = vi.fn();
+    const guard = vi.fn<NonNullable<StartBridgeControl["canSpawnRuntime"]>>(() => false);
+    const bridge = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        canSpawnRuntime: guard,
+        onSpawn: spawned,
+        expectedStart: { ok: false, failureCode: "authority-resolution-failed", retryable: false },
+      },
+    );
+    expect(guard).toHaveBeenCalledOnce();
+    expect(guard.mock.calls[0]?.[0]).toMatchObject({
+      runId: FIXTURE_RUN_ID,
+      treeBindingId: "b".repeat(64),
+      authorityEnvelopeDigest: "c".repeat(64),
+    });
+    expect(spawned).not.toHaveBeenCalled();
+    await bridge.stop();
+  });
+});
+
+it("keeps real delegate admission private for duplicate and replay bridge responses", async () => {
+  const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+  let resolve!: (value: unknown) => void;
+  const delegate = vi.fn(
+    () =>
+      new Promise((accept) => {
+        resolve = accept;
+      }),
+  );
+  const facade = createCodingToolFacade(
+    {
+      authority: {
+        admit: (): ReturnType<
+          import("./codingToolFacadePorts.js").CodingToolAuthorityPort["admit"]
+        > => ({
+          ok: true,
+          binding: {
+            runId: "run-1",
+            workspaceId: "workspace",
+            envelopeDigest: "a".repeat(64),
+            workspaceRootDigest: "b".repeat(64),
+            expiresAt: "2030-01-01T00:00:00.000Z",
+          },
+          mutationGuard: { check: () => true },
+        }),
+      },
+      delegate: { execute: delegate },
+    },
+    { invocationRegistry: registry, requireInvocationRegistryForEdits: true },
+  );
+  const beginTool = vi.fn();
+  const settleTool = vi.fn();
+  const fixture = await startBridgeFixture(
+    facade,
+    { requestDeadlineMs: 1_000, maxInFlight: 2 },
+    {
+      safeActivity: {
+        arm: vi.fn(),
+        clear: vi.fn(),
+        ingest: () => true,
+        recordDrops: vi.fn(),
+        beginTool,
+        settleTool,
+      },
+    },
+  );
+  const request = {
+    method: "POST" as const,
+    headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+    body: JSON.stringify({
+      action: "edit",
+      actionId: "ses_tool:call_edit",
+      idempotencyKey: "same-edit",
+      changeset: {
+        patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+        files: [{ file: "a.ts", expectedContentHash: "a".repeat(64) }],
+      },
+    }),
+  };
+  try {
+    const running = fixture.runtime.toolBridge.handle(request);
+    await vi.waitFor(() => {
+      expect(beginTool).toHaveBeenCalledTimes(1);
+    });
+    const duplicate = await fixture.runtime.toolBridge.handle(request);
+    expect(settleTool.mock.calls[0]?.[0]).not.toHaveProperty("delegateStarted");
+    resolve({ outcome: "completed" });
+    const completed = await running;
+    expect(settleTool.mock.calls[1]?.[0]).toMatchObject({
+      delegateStarted: true,
+      state: "succeeded",
+    });
+    const replay = await fixture.runtime.toolBridge.handle(request);
+    expect(settleTool.mock.calls[2]?.[0]).not.toHaveProperty("delegateStarted");
+    expect(beginTool).toHaveBeenCalledTimes(1);
+    expect(delegate).toHaveBeenCalledTimes(1);
+    for (const response of [duplicate, completed, replay]) {
+      expect(response.body).not.toContain("delegateStarted");
+      expect(response.body).not.toContain("onDelegateStarted");
+    }
+  } finally {
+    resolve({ outcome: "completed" });
+    await fixture.stop();
+    registry.dispose();
+  }
+});
+
+it("retains private state and authority release until the real admitted facade effect settles", async () => {
+  let release!: (value: unknown) => void;
+  let effectSettled = false;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const delegate = vi.fn(async (): Promise<unknown> => {
+    const result = await pending;
+    effectSettled = true;
+    return result;
+  });
+  const facade = createCodingToolFacade({
+    authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+    delegate: { execute: delegate },
+  });
+  const onRelease = vi.fn();
+  let runRoot = "";
+  const fixture = await startBridgeFixture(
+    facade,
+    { requestDeadlineMs: 1_000, maxInFlight: 1 },
+    {
+      onRelease,
+      afterStart: (_runtime, path): void => {
+        runRoot = path;
+      },
+    },
+  );
+  try {
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+      body: JSON.stringify({
+        action: "command",
+        commandId: "test",
+        actionId: "tool:call_drain",
+        idempotencyKey: "drain",
+      }),
+    });
+    await vi.waitFor(() => {
+      expect(delegate).toHaveBeenCalledOnce();
+    });
+    vi.useFakeTimers();
+    const stopping = fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+    await vi.advanceTimersByTimeAsync(21);
+    expect(await stopping).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(effectSettled).toBe(false);
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await handled).toMatchObject({ status: 502 });
+    expect(
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify({
+          action: "command",
+          commandId: "test",
+          actionId: "tool:call_after_close",
+          idempotencyKey: "after-close",
+        }),
+      }),
+    ).toMatchObject({ status: 503 });
+    expect(delegate).toHaveBeenCalledOnce();
+    const reconciling = fixture.runtime.manager.reconcile(FIXTURE_RUN_ID);
+    await vi.advanceTimersByTimeAsync(21);
+    expect(await reconciling).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(onRelease).not.toHaveBeenCalled();
+    release({ outcome: "completed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(effectSettled).toBe(true);
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect((): void => {
+      accessSync(runRoot);
+    }).toThrow();
+    expect(onRelease).toHaveBeenCalledOnce();
+  } finally {
+    release({ outcome: "completed" });
+    vi.useRealTimers();
+    await fixture.stop();
+  }
+});
+
+it.each(["cooperative", "rejecting"] as const)(
+  "joins a real %s delegate after close aborts it",
+  async (kind) => {
+    let settled = false;
+    const delegate = vi.fn(
+      (
+        _request: Parameters<
+          Parameters<typeof createCodingToolFacade>[0]["delegate"]["execute"]
+        >[0],
+        signal: AbortSignal | undefined,
+      ): Promise<unknown> =>
+        new Promise((resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            (): void => {
+              settled = true;
+              if (kind === "rejecting") reject(new Error("private-delegate-body"));
+              else resolve({ outcome: "completed" });
+            },
+            { once: true },
+          );
+        }),
+    );
+    const facade = createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: delegate },
+    });
+    const onRelease = vi.fn();
+    let runRoot = "";
+    const fixture = await startBridgeFixture(
+      facade,
+      { requestDeadlineMs: 1_000, maxInFlight: 1 },
+      {
+        onRelease,
+        afterStart: (_runtime, path): void => {
+          runRoot = path;
+        },
+      },
+    );
+    try {
+      const handled = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify({
+          action: "command",
+          commandId: "test",
+          actionId: "tool:call_cooperative",
+          idempotencyKey: "cooperative",
+        }),
+      });
+      await vi.waitFor(() => {
+        expect(delegate).toHaveBeenCalledOnce();
+      });
+      expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toEqual({
+        ok: true,
+        status: "stopped",
+      });
+      expect(settled).toBe(true);
+      expect(await handled).toMatchObject({ status: 502 });
+      expect((): void => {
+        accessSync(runRoot);
+      }).toThrow();
+      expect(onRelease).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.stop();
+    }
+  },
+);
+
+it("never removes private state after a timed-out adapter close eventually completes", async () => {
+  const module = await import("./opencodeRuntimeAdapter.js");
+  const createAdapter = module.createOpenCodeRuntimeAdapter;
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const closing = vi.fn();
+  const spy = vi.spyOn(module, "createOpenCodeRuntimeAdapter").mockImplementation((input) => {
+    const adapter = createAdapter(input);
+    return {
+      ...adapter,
+      close: async (): Promise<void> => {
+        closing();
+        await pending;
+        await adapter.close();
+      },
+    };
+  });
+  const onRelease = vi.fn();
+  let runRoot = "";
+  const fixture = await startBridgeFixture(
+    createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: (): Promise<unknown> => Promise.resolve({ outcome: "completed" }) },
+    }),
+    undefined,
+    {
+      onRelease,
+      afterStart: (_runtime, path): void => {
+        runRoot = path;
+      },
+    },
+  );
+  vi.useFakeTimers();
+  try {
+    const stopping = fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+    await vi.advanceTimersByTimeAsync(21);
+    expect(await stopping).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(closing).toHaveBeenCalledOnce();
+    expect(onRelease).not.toHaveBeenCalled();
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect((): void => {
+      accessSync(runRoot);
+    }).toThrow();
+    expect(onRelease).toHaveBeenCalledOnce();
+  } finally {
+    finish();
+    vi.useRealTimers();
+    spy.mockRestore();
+    await fixture.stop();
+  }
+});
+
+it("captures the configured tool profile getter once before asynchronous readiness", async () => {
+  const readToolProfile = vi.fn((): "direct" => {
+    if (readToolProfile.mock.calls.length > 1) throw new Error("profile-second-read");
+    return "direct";
+  });
+  const arm = vi.fn();
+  const fixture = await startBridgeFixture(
+    createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: (): Promise<unknown> => Promise.resolve({ outcome: "completed" }) },
+    }),
+    undefined,
+    {
+      readToolProfile,
+      safeActivity: {
+        arm,
+        clear: vi.fn(),
+        ingest: (): true => true,
+        recordDrops: vi.fn(),
+        settleTool: vi.fn(),
+      },
+    },
+  );
+  try {
+    expect(readToolProfile).toHaveBeenCalledOnce();
+    expect(arm).toHaveBeenCalledWith("ses_tool", "direct");
+    expect(await fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "Read-only fixture task")).toBe(
+      true,
+    );
+    expect(readToolProfile).toHaveBeenCalledOnce();
+  } finally {
+    await fixture.stop();
+  }
+});
+
+interface NativeBridgeFixture {
+  readonly facade: ReturnType<typeof createProductionManagedWorktreeToolFacade>;
+  readonly authority: ReturnType<typeof catalogRuntimeFixture>;
+  readonly process: ReturnType<typeof vi.fn<SecureWorkspaceTextReadProcess["run"]>>;
+  readonly activity: ReturnType<typeof createBufferedServerLogSink>;
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly readHead: ReturnType<typeof vi.fn<() => string>>;
+  readonly workspace: ProductionWorkspaceAuthorityInput;
+  readonly control: Pick<StartBridgeControl, "workspaceRoot" | "toolFacadeCapability">;
+}
+
+function nativeBridgeWorkspace(
+  authority: ReturnType<typeof catalogRuntimeFixture>,
+): ProductionWorkspaceAuthorityInput {
+  const c = authority.trusted;
+  const instance = {
+    workspaceId: c.workspaceId,
+    repositoryId: c.projectId,
+    repositoryRoot: authority.root,
+    managedWorktreePath: authority.root,
+    taskId: c.taskId,
+    taskBranch: c.branchRef,
+    baseBranch: c.branch.baseRef,
+    lastVerifiedHead: "1".repeat(40),
+    lifecycleState: "active" as const,
+    health: "healthy" as const,
+    driftMarkers: [],
+  };
+  return {
+    workspaceLifecycle: {
+      getActive: () => ({ instance, binding: { activeRoot: authority.root } }),
+    } as unknown as ProductionWorkspaceAuthorityInput["workspaceLifecycle"],
+    managedTaskWorkspaceRoot: dirname(dirname(authority.root)),
+    deploymentCeiling: "autonomous-delivery",
+    readWorkspaceHead: () => "1".repeat(40),
+    now: () => new Date(RUNTIME_NOW),
+  };
+}
+
+function nativeBridgeSnapshot(path: string, rich = true): Buffer {
+  const fd = openSync(path, "r");
+  try {
+    const info = fstatSync(fd);
+    const bytes = readFileSync(fd);
+    if (!rich) return encodeSecureWorkspaceReadResponse({ status: "ok", bytes });
+    return encodeSecureWorkspaceSnapshotResponse({
+      status: "ok",
+      bytes,
+      info: { type: "file", size: info.size, mtimeMs: info.mtimeMs },
+    });
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function nativeBridgeSecureRead(
+  authority: ReturnType<typeof catalogRuntimeFixture>,
+  process: SecureWorkspaceTextReadProcess["run"],
+  native = false,
+): ReturnType<typeof createSecureWorkspaceTextReadPort> {
+  return createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot: () => authority.root,
+    artifact: nativeBridgeArtifact(native),
+    artifactVerifier: { verify: () => true },
+    platform: { os: "darwin", arch: "arm64" },
+    processFactory: { create: () => ({ run: process }) },
+  });
+}
+
+function nativeBridgeArtifact(native: boolean): SecureWorkspaceTextReadArtifact {
+  return {
+    target: "darwin-arm64",
+    installRelativePath: "runtime/native/keiko-secure-workspace-read",
+    sha256: "a".repeat(64),
+    protocol: "KSR1/KSS1",
+    snapshotProtocol: "KSR2/KSS2",
+    sourceCommit: "b".repeat(40),
+    sourceTreeSha256: "a".repeat(64),
+    signed: true,
+    ...(native ? { nativeProtocol: "KSR3/KSS3" as const } : {}),
+  };
+}
+
+function nativeReadAuthority(
+  maxToolCalls?: number,
+  runId = "run-1",
+): ReturnType<typeof catalogRuntimeFixture> {
+  const base = catalogRuntimeFixture("autonomous-delivery");
+  if (maxToolCalls === undefined) return base;
+  const trusted = { ...base.trusted, budget: { ...base.trusted.budget, maxToolCalls } };
+  const registry = new EditorAgentAuthorityRegistry();
+  const authority = new CodingRuntimeAuthorityService(
+    registry,
+    () => runId,
+    () => "nonce-1",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(RUNTIME_NOW) }),
+  );
+  const intent = {
+    schemaVersion: "1" as const,
+    requestId: "request-1",
+    command: "start" as const,
+    taskIntent: "Read the accepted workspace",
+    requestedMode: "autonomous-delivery" as const,
+    modelSource: "keiko-model-gateway" as const,
+  };
+  const confirmation = authority.confirmStart(
+    intent,
+    trusted.taskId,
+    trusted.operatorId,
+    RUNTIME_NOW,
+  );
+  const minted = authority.mintStart(intent, trusted, confirmation, RUNTIME_NOW);
+  if (!minted.ok) throw new TypeError("Expected one-tool authority mint");
+  authority.transition(runId, "ready", RUNTIME_NOW);
+  authority.transition(runId, "running", RUNTIME_NOW);
+  return { ...base, trusted, registry, authority, minted };
+}
+
+function nativeBridgeFixture(
+  text: string,
+  effect?: SecureWorkspaceTextReadProcess["run"],
+  maxToolCalls?: number,
+  native = false,
+  runId = "run-1",
+): NativeBridgeFixture {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(RUNTIME_NOW));
+  const authority = nativeReadAuthority(maxToolCalls, runId);
+  dirs.push(dirname(dirname(authority.root)));
+  writeFileSync(join(authority.root, "fixture.ts"), text);
+  const process = vi.fn<SecureWorkspaceTextReadProcess["run"]>(
+    effect ??
+      ((request): Promise<Buffer> =>
+        Promise.resolve(
+          nativeBridgeSnapshot(
+            join(authority.root, "fixture.ts"),
+            Buffer.from(request.stdin.subarray(0, 4)).toString("ascii") === "KSR2",
+          ),
+        )),
+  );
+  const activity = createBufferedServerLogSink();
+  const registry = createCodingToolInvocationRegistry({ now: () => Date.parse(RUNTIME_NOW) });
+  const readHead = vi.fn<() => string>(() => "1".repeat(40));
+  const workspace = { ...nativeBridgeWorkspace(authority), readWorkspaceHead: readHead };
+  const facade = createProductionManagedWorktreeToolFacade({
+    authority: authority.authority,
+    authorityRef: authority.minted.authorityRef,
+    workspaceRoot: authority.root,
+    authorityExpiresAt: authority.trusted.expiresAt,
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: "autonomous-delivery",
+    liveFacts: () => productionRuntimeAuthorityFacts(workspace, authority.trusted),
+    resolveWorkspaceRootAccess: () => ({
+      kind: "managed-task",
+      canonicalRoot: authority.root,
+      repositoryRoot: authority.root,
+      fs: nodeWorkspaceFs,
+    }),
+    secureWorkspaceTextRead: nativeBridgeSecureRead(authority, process, native),
+    editorAgentClient: { action: vi.fn() },
+    onRuntimeEvent: vi.fn(),
+    verificationRunner: { runToReport: vi.fn() },
+    invocationRegistry: registry,
+    activityLog: activity,
+  });
+  return {
+    facade,
+    authority,
+    process,
+    activity,
+    registry,
+    readHead,
+    workspace,
+    control: {
+      workspaceRoot: authority.root,
+      toolFacadeCapability: authority.minted.toolFacadeCapability,
+    },
+  };
+}
+
+function nativeBridgeInput(id = "private-native-read"): CodingToolFacadeInput {
+  return {
+    body: JSON.stringify({
+      action: "read",
+      relativePath: "fixture.ts",
+      actionId: id,
+      idempotencyKey: id,
+    }),
+  };
+}
+
+function nativeInvocationInput(
+  id = "native-original-read",
+  signal?: AbortSignal,
+): CodingToolNativeReadBeginInput {
+  return {
+    ...nativeBridgeInput(id),
+    signal,
+    context: {
+      sessionID: "native-session",
+      messageID: "native-message",
+      id: "native-call",
+      agent: "build",
+    },
+  };
+}
+
+it("charges one original read invocation rather than each target and instruction IO", async () => {
+  const f = nativeBridgeFixture("PRIVATE_PARENT_READ_BYTES", undefined, 1);
+  const admission = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 1000 },
+    f.control,
+  );
+  const invocations = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+  expect(invocations).toBeDefined();
+  try {
+    const begun = await invocations?.begin(nativeInvocationInput());
+    expect(begun?.ok).toBe(true);
+    if (begun?.ok !== true || invocations === undefined)
+      throw new Error("native read did not begin");
+    for (const ordinal of [1, 2]) {
+      const result = await invocations.readTextSnapshot(begun.identity, {
+        ordinal,
+        relativePath: "fixture.ts",
+      });
+      expect(result.ok).toBe(true);
+    }
+    expect(f.process).toHaveBeenCalledTimes(2);
+    expect(admission.mock.calls.reduce((count, [input]) => count + input.usage.toolCalls, 0)).toBe(
+      1,
+    );
+    expect(await invocations.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    expect(invocations.signalFor(begun.identity)).toBeUndefined();
+    expect(
+      f.registry.inspect({ runId: f.authority.minted.authorityRef.runId, ...begun.identity }).kind,
+    ).toBe("terminal");
+    expect(await invocations.begin(nativeInvocationInput("budget-exhausted-next-read"))).toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.process).toHaveBeenCalledTimes(2);
+  } finally {
+    f.registry.dispose();
+    await fixture.stop();
+  }
+});
+
+it("offers an inactive original read invocation owner on the existing private bridge", async () => {
+  const f = nativeBridgeFixture("PRIVATE_PARENT_READ_BYTES");
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 1000 },
+    f.control,
+  );
+  try {
+    expect(fixture.runtime.toolBridge.nativeTextRead?.invocations?.begin).toBeTypeOf("function");
+    expect(f.process).not.toHaveBeenCalled();
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("retains private state while the actual canonical native snapshot producer remains held", async () => {
+  let release!: (value: Buffer) => void;
+  let physicalSettled = false;
+  const held = new Promise<Buffer>((resolve) => {
+    release = resolve;
+  }).then((packet) => {
+    physicalSettled = true;
+    return packet;
+  });
+  const f = nativeBridgeFixture("PRIVATE_SNAPSHOT_SENTINEL", () => held);
+  const onRelease = vi.fn();
+  let runRoot = "";
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { requestDeadlineMs: 1_000, maxInFlight: 1 },
+    {
+      ...f.control,
+      onRelease,
+      afterStart: (_runtime, root): void => {
+        runRoot = root;
+      },
+    },
+  );
+  const result = fixture.runtime.toolBridge.nativeTextRead?.readTextSnapshot(nativeBridgeInput());
+  try {
+    await vi.waitFor(() => {
+      expect(f.process).toHaveBeenCalledOnce();
+    });
+    const stopped = await fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+    expect(stopped).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(physicalSettled).toBe(false);
+    expect(await result).toEqual({ ok: false, reason: "cancelled" });
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+    await vi.waitFor(() => {
+      expect(physicalSettled).toBe(true);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect((): void => {
+      accessSync(runRoot);
+    }).toThrow();
+    expect(onRelease).toHaveBeenCalledOnce();
+  } finally {
+    release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+    await result;
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("offers the inactive native bridge facet only when the actual canonical producer exists", async () => {
+  const f = nativeBridgeFixture("");
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    expect(fixture.runtime.toolBridge.nativeTextRead?.readTextSnapshot).toBeTypeOf("function");
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+function readNativeBridge(
+  runtime: OpenCodeRuntimeComposition,
+  input: CodingToolFacadeInput = nativeBridgeInput(),
+): Promise<CodingToolNativeTextSnapshotResult> {
+  const facet = runtime.toolBridge.nativeTextRead;
+  if (facet === undefined) throw new TypeError("Native bridge fixture is unavailable");
+  return facet.readTextSnapshot(input);
+}
+
+async function stopNativeBridge(
+  f: NativeBridgeFixture,
+  fixture: Awaited<ReturnType<typeof startBridgeFixture>>,
+): Promise<void> {
+  await fixture.stop();
+  f.registry.dispose();
+}
+
+it.each(["", "PRIVATE_NATIVE_SNAPSHOT_SENTINEL\n".repeat(3_000)])(
+  "delivers the real native snapshot and metadata outside the model renderer (%#)",
+  async (text) => {
+    const f = nativeBridgeFixture(text);
+    const rendered = createBufferedServerLogSink();
+    const safe = {
+      arm: vi.fn(),
+      clear: vi.fn(),
+      ingest: (): true => true,
+      recordDrops: vi.fn(),
+      settleTool: vi.fn(),
+      beginTool: vi.fn(),
+    };
+    const fixture = await startBridgeFixture(
+      f.facade,
+      { requestDeadlineMs: 1_000, maxInFlight: 2 },
+      {
+        ...f.control,
+        activityLog: rendered,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+        safeActivity: safe,
+      },
+    );
+    const renderedBefore = rendered.events.filter(
+      (event) => event.op === "coding-runtime.tool-result-rendered",
+    ).length;
+    try {
+      const result = await readNativeBridge(fixture.runtime);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("Expected real native snapshot");
+      expect(secureWorkspaceTextDigest(result.text)).toBe(secureWorkspaceTextDigest(text));
+      const stat = statSync(join(f.authority.root, "fixture.ts"));
+      expect(result.info).toEqual({ type: "file", size: stat.size, mtimeMs: stat.mtimeMs });
+      expect(f.process).toHaveBeenCalledOnce();
+      expect(safe.beginTool).not.toHaveBeenCalled();
+      expect(safe.settleTool).not.toHaveBeenCalled();
+      expect(
+        rendered.events.filter((event) => event.op === "coding-runtime.tool-result-rendered"),
+      ).toHaveLength(renderedBefore);
+      expect(
+        JSON.stringify({ events: f.activity.events, rendered: rendered.events }),
+      ).not.toContain("PRIVATE_NATIVE_SNAPSHOT_SENTINEL");
+      expect(
+        f.activity.events.some(
+          (event) =>
+            event.op === "tool-catalog.invocation-settled" && event.extra?.status === "completed",
+        ),
+      ).toBe(true);
+    } finally {
+      await stopNativeBridge(f, fixture);
+    }
+  },
+);
+
+it.each(["native-first", "model-first"] as const)(
+  "shares one actual admission capacity across %s requests",
+  async (order) => {
+    let release!: (value: Buffer) => void;
+    const held = new Promise<Buffer>((resolve) => {
+      release = resolve;
+    });
+    let fixturePath = "";
+    const f = nativeBridgeFixture("safe source", ({ stdin }) =>
+      held.then(() =>
+        nativeBridgeSnapshot(
+          fixturePath,
+          Buffer.from(stdin.subarray(0, 4)).toString("ascii") === "KSR2",
+        ),
+      ),
+    );
+    fixturePath = join(f.authority.root, "fixture.ts");
+    const fixture = await startBridgeFixture(
+      f.facade,
+      { requestDeadlineMs: 1_000, maxInFlight: 1 },
+      f.control,
+    );
+    const normal = (): Promise<{ readonly status: number; readonly body: string }> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({
+          authorization: `Bearer ${f.authority.minted.toolFacadeCapability}`,
+        }),
+        body: String(nativeBridgeInput("normal-read").body),
+      });
+    const first = order === "native-first" ? readNativeBridge(fixture.runtime) : normal();
+    try {
+      await vi.waitFor(() => {
+        expect(f.process).toHaveBeenCalledOnce();
+      });
+      if (order === "native-first") expect(await normal()).toMatchObject({ status: 429 });
+      else expect(await readNativeBridge(fixture.runtime)).toEqual({ ok: false, reason: "busy" });
+      expect(f.process).toHaveBeenCalledOnce();
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts"), order === "native-first"));
+      const firstResult = await first;
+      if ("body" in firstResult) {
+        expect(firstResult.status).toBe(200);
+        expect(JSON.parse(firstResult.body)).toMatchObject({ status: "completed" });
+      } else expect(firstResult).toMatchObject({ ok: true });
+      // Each hermetic process owns its response frame, just as the real helper does.
+      expect(
+        await readNativeBridge(fixture.runtime, nativeBridgeInput("capacity-recovered")),
+      ).toMatchObject({ ok: true });
+    } finally {
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts"), order === "native-first"));
+      await first;
+      await stopNativeBridge(f, fixture);
+    }
+  },
+);
+
+it.each([
+  ["malformed", { body: "{" }],
+  [
+    "wrong action",
+    { body: '{"action":"command","commandId":"test","actionId":"wrong","idempotencyKey":"wrong"}' },
+  ],
+  [
+    "window start",
+    {
+      body: '{"action":"read","relativePath":"fixture.ts","startLine":1,"actionId":"window","idempotencyKey":"window"}',
+    },
+  ],
+  [
+    "window size",
+    {
+      body: '{"action":"read","relativePath":"fixture.ts","maxLines":1,"actionId":"window","idempotencyKey":"window"}',
+    },
+  ],
+  ["headers", { headers: new Headers() }],
+  ["foreign capability", { capability: "foreign-server-capability" }],
+  ["oversize", { body: "x".repeat(CODING_TOOL_MAX_BODY_BYTES + 1) }],
+] as const)(
+  "refuses a private %s request before canonical admission or IO",
+  async (_label, override) => {
+    const f = nativeBridgeFixture("safe source");
+    const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+    try {
+      expect(
+        await readNativeBridge(fixture.runtime, { ...nativeBridgeInput(), ...override }),
+      ).toEqual({ ok: false, reason: "invalid-request" });
+      expect(f.process).not.toHaveBeenCalled();
+      expect(
+        f.registry.inspect({
+          runId: "run-1",
+          actionId: "private-native-read",
+          idempotencyKey: "private-native-read",
+        }),
+      ).toEqual({ kind: "missing" });
+    } finally {
+      await stopNativeBridge(f, fixture);
+    }
+  },
+);
+
+it("refuses a pre-aborted private caller before the real read and refuses post-close calls", async () => {
+  const f = nativeBridgeFixture("safe source");
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    expect(
+      await readNativeBridge(fixture.runtime, {
+        ...nativeBridgeInput(),
+        signal: AbortSignal.abort(),
+      }),
+    ).toEqual({ ok: false, reason: "cancelled" });
+    expect(f.process).not.toHaveBeenCalled();
+    await fixture.stop();
+    expect(await readNativeBridge(fixture.runtime)).toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.process).not.toHaveBeenCalled();
+  } finally {
+    await stopNativeBridge(f, fixture);
+  }
+});
+
+it("owns mutable private request bytes before the canonical producer can observe them", async () => {
+  const f = nativeBridgeFixture("safe source");
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    const body = Buffer.from(nativeBridgeInput().body);
+    const result = readNativeBridge(fixture.runtime, { body });
+    body.fill(0);
+    expect(await result).toMatchObject({ ok: true });
+    expect(f.process).toHaveBeenCalledOnce();
+  } finally {
+    await stopNativeBridge(f, fixture);
+  }
+});
+
+it.each(["authority-revoked", "authority-expired", "workspace-drift"] as const)(
+  "withholds real native bytes when canonical postflight sees %s",
+  async (change) => {
+    let release!: (value: Buffer) => void;
+    const held = new Promise<Buffer>((resolve) => {
+      release = resolve;
+    });
+    const f = nativeBridgeFixture("PRIVATE_POSTFLIGHT_SENTINEL", () => held);
+    const fixture = await startBridgeFixture(
+      f.facade,
+      { requestDeadlineMs: 1_000, maxInFlight: 1 },
+      f.control,
+    );
+    const result = readNativeBridge(fixture.runtime);
+    try {
+      await vi.waitFor(() => {
+        expect(f.process).toHaveBeenCalledOnce();
+      });
+      if (change === "authority-revoked")
+        expect(f.authority.authority.revokeBeforeTerminate("run-1")).toBe(true);
+      else if (change === "authority-expired")
+        vi.setSystemTime(new Date(f.authority.trusted.expiresAt));
+      else f.readHead.mockReturnValue("2".repeat(40));
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+      expect(await result).toMatchObject({ ok: false });
+      expect(JSON.stringify(await result)).not.toContain("PRIVATE_POSTFLIGHT_SENTINEL");
+    } finally {
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+      await result;
+      await stopNativeBridge(f, fixture);
+    }
+  },
+);
+
+it("preserves canonical replay/refusal with no new private physical effect", async () => {
+  let release!: (value: Buffer) => void;
+  const held = new Promise<Buffer>((resolve) => {
+    release = resolve;
+  });
+  const f = nativeBridgeFixture("safe source", () => held.then((packet) => Buffer.from(packet)));
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { requestDeadlineMs: 1_000, maxInFlight: 2 },
+    f.control,
+  );
+  const result = readNativeBridge(fixture.runtime);
+  try {
+    await vi.waitFor(() => {
+      expect(f.process).toHaveBeenCalledOnce();
+    });
+    expect(await readNativeBridge(fixture.runtime)).toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.process).toHaveBeenCalledOnce();
+    release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+    expect(await result).toMatchObject({ ok: true });
+    expect(await readNativeBridge(fixture.runtime)).toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.process).toHaveBeenCalledOnce();
+  } finally {
+    release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+    await result;
+    await stopNativeBridge(f, fixture);
+  }
+});
+
+it.each(["disconnect", "deadline"] as const)(
+  "withholds late native bytes and retains capacity after %s",
+  async (cause) => {
+    let release!: (value: Buffer) => void;
+    let settled = false;
+    const held = new Promise<Buffer>((resolve) => {
+      release = resolve;
+    }).then((packet) => {
+      settled = true;
+      return packet;
+    });
+    const f = nativeBridgeFixture("PRIVATE_CANCELED_NATIVE_BYTES", () =>
+      held.then((packet) => Buffer.from(packet)),
+    );
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const fixture = await startBridgeFixture(
+      f.facade,
+      { requestDeadlineMs: cause === "deadline" ? 10 : 1_000, maxInFlight: 1 },
+      {
+        ...f.control,
+        diagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
+        },
+      },
+    );
+    const abort = new AbortController();
+    const pending = readNativeBridge(fixture.runtime, {
+      ...nativeBridgeInput(),
+      signal: abort.signal,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(f.process).toHaveBeenCalledOnce();
+      });
+      if (cause === "disconnect") abort.abort();
+      expect(await pending).toEqual({
+        ok: false,
+        reason: cause === "deadline" ? "timeout" : "cancelled",
+      });
+      expect(settled).toBe(false);
+      expect(await readNativeBridge(fixture.runtime, nativeBridgeInput("after-cancel"))).toEqual({
+        ok: false,
+        reason: "busy",
+      });
+      expect(f.process).toHaveBeenCalledOnce();
+      if (cause === "deadline")
+        expect(diagnostics).toMatchObject([
+          {
+            operation: "coding-runtime.tool-bridge",
+            message: "tool-bridge-deadline",
+            deadlineMs: 10,
+          },
+        ]);
+      else expect(diagnostics).toHaveLength(0);
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(true);
+      expect(
+        await readNativeBridge(fixture.runtime, nativeBridgeInput("fresh-read")),
+      ).toMatchObject({ ok: true });
+      expect(f.process).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_CANCELED_NATIVE_BYTES");
+    } finally {
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+      await pending;
+      await stopNativeBridge(f, fixture);
+    }
+  },
+);
+
+it.each(["cooperative", "rejecting"] as const)(
+  "joins actual %s secure-read work before releasing the stopped run",
+  async (outcome) => {
+    let settled = false;
+    const effect: SecureWorkspaceTextReadProcess["run"] = ({ signal }) =>
+      new Promise((resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          (): void => {
+            settled = true;
+            if (outcome === "rejecting") reject(new Error("PRIVATE_SECURE_READ_FAILURE"));
+            else resolve(Buffer.alloc(0));
+          },
+          { once: true },
+        );
+      });
+    const f = nativeBridgeFixture("safe source", effect);
+    const onRelease = vi.fn();
+    const fixture = await startBridgeFixture(
+      f.facade,
+      { requestDeadlineMs: 1_000, maxInFlight: 1 },
+      { ...f.control, onRelease },
+    );
+    const pending = readNativeBridge(fixture.runtime);
+    try {
+      await vi.waitFor(() => {
+        expect(f.process).toHaveBeenCalledOnce();
+      });
+      expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toEqual({
+        ok: true,
+        status: "stopped",
+      });
+      expect(settled).toBe(true);
+      expect(await pending).toEqual({ ok: false, reason: "cancelled" });
+      expect(onRelease).toHaveBeenCalledOnce();
+      expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_SECURE_READ_FAILURE");
+    } finally {
+      await stopNativeBridge(f, fixture);
+    }
+  },
+);
+
+it("retains an explicit canonical denied read without starting a physical effect", async () => {
+  const f = nativeBridgeFixture("safe source");
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    const result = await readNativeBridge(fixture.runtime, {
+      body: JSON.stringify({
+        action: "read",
+        actionId: "denied-read",
+        idempotencyKey: "denied-read",
+        relativePath: ".env",
+      }),
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect(f.process).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+  } finally {
+    await stopNativeBridge(f, fixture);
+  }
+});
+
+it("captures the private producer function once before readiness and repeated reads", async () => {
+  const f = nativeBridgeFixture("safe source");
+  const original = f.facade.nativeTextRead;
+  if (original === undefined) throw new TypeError("Native snapshot fixture unavailable");
+  const readMethod = vi.fn(() => {
+    if (readMethod.mock.calls.length > 1) throw new Error("native-producer-second-read");
+    return original.readTextSnapshot;
+  });
+  const fixture = await startBridgeFixture(
+    {
+      ...f.facade,
+      nativeTextRead: {
+        get readTextSnapshot() {
+          return readMethod();
+        },
+      },
+    },
+    undefined,
+    f.control,
+  );
+  try {
+    expect(Object.isFrozen(fixture.runtime.toolBridge.nativeTextRead)).toBe(true);
+    expect(await readNativeBridge(fixture.runtime, nativeBridgeInput("captured-1"))).toMatchObject({
+      ok: true,
+    });
+    expect(await readNativeBridge(fixture.runtime, nativeBridgeInput("captured-2"))).toMatchObject({
+      ok: true,
+    });
+    expect(readMethod).toHaveBeenCalledOnce();
+  } finally {
+    await stopNativeBridge(f, fixture);
+  }
+});
+
+it.each(["synchronous", "asynchronous"] as const)(
+  "classifies a %s private facade fault without exposing body or error text",
+  async (kind) => {
+    const native = {
+      readTextSnapshot: (): Promise<CodingToolNativeTextSnapshotResult> => {
+        const error = new Error("PRIVATE_FACADE_FAILURE_SENTINEL");
+        if (kind === "synchronous") throw error;
+        return Promise.reject(error);
+      },
+    };
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: (): Promise<import("./codingToolIpc.js").CodingToolResult> =>
+          Promise.resolve({ status: "failed", evidence: [] }),
+        nativeTextRead: native,
+      },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
+        },
+      },
+    );
+    try {
+      expect(await readNativeBridge(fixture.runtime)).toEqual({
+        ok: false,
+        reason: "dispatch-refused",
+      });
+      expect(diagnostics).toMatchObject([
+        {
+          operation: "coding-runtime.tool-bridge",
+          errorClass: "Error",
+          message: "tool-facade-failed",
+        },
+      ]);
+      expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_FACADE_FAILURE_SENTINEL");
+      expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toEqual({
+        ok: true,
+        status: "stopped",
+      });
+    } finally {
+      await fixture.stop();
+    }
+  },
+);
+
+it.each(["direct", "code-mode"] as const)(
+  "materializes the selected %s profile into the real native config and plugin sources",
+  async (profile) => {
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        readToolProfile: () => profile,
+        afterStart: (_runtime, runRoot): void => {
+          const config = readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8");
+          expect(config.includes('{"action":"execute","resource":"*","effect":"allow"}')).toBe(
+            profile === "code-mode",
+          );
+          for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins(profile))) {
+            expect(
+              readFileSync(join(runRoot, "config", "opencode", "plugins", `${name}.ts`), "utf8"),
+            ).toBe(source);
+          }
+        },
+      },
+    );
+    try {
+      expect(fixture.runtime.manager.health()).toMatchObject({ status: "ready" });
+    } finally {
+      await fixture.stop();
+    }
+  },
+);
+
+async function preparationReceipt(): Promise<
+  Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>
+> {
+  const payloadRoot = tempDir("keiko-host-composition-bytes-");
+  mkdirSync(join(payloadRoot, "runtime"));
+  mkdirSync(join(payloadRoot, "evidence"));
+  for (const [path] of OPENCODE_SERVICE_HOST_DISK_EVIDENCE)
+    writeFileSync(join(payloadRoot, path), "inactive byte fixture");
+  const measured = attestPortableSidecarTreeSync(
+    payloadRoot,
+    "runtime/node",
+    Date.now() + 5000,
+    undefined,
+    OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path]) => path),
+  );
+  const base = (
+    JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../keiko-contracts/src/opencode-service-host.private-qualified.fixture.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { readonly approval: Record<string, unknown> }
+  ).approval;
+  const approval = {
+    ...base,
+    payloadTreeSha256: measured.treeSha256,
+    ...Object.fromEntries(
+      OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path, field]) => [
+        field,
+        measured.selectedFileSha256ByPath?.[path],
+      ]),
+    ),
+  };
+  const receipt = await inspectOpenCodeServiceHostDisk(
+    {
+      payloadRoot,
+      target: "macos-arm64",
+      approval,
+      trustedSupplement: { "macos-arm64": approval },
+    },
+    { deadline: Date.now() + 5000 },
+  );
+  if (!receipt.ok) throw new Error("Expected supplementary byte receipt");
+  return receipt;
+}
+
+async function stoppedPreparationFixture(
+  profile: "direct" | "code-mode" = "direct",
+): ReturnType<typeof startBridgeFixture> {
+  const fixture = await startBridgeFixture(
+    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+    undefined,
+    {
+      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+      readToolProfile: () => profile,
+    },
+  );
+  await fixture.stop();
+  return fixture;
+}
+
+describe("inactive fixed-host preparation at existing captured composition", () => {
+  it("derives fixed packet config/capabilities/root from the actual accepted CLI producer values", async () => {
+    const fixture = await stoppedPreparationFixture();
+    const receipt = await preparationReceipt();
+    const result = await fixture.runtime.prepareServiceHost(fixture.preparation, receipt);
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.serviceHost === undefined)
+      throw new Error("Expected inactive host preparation");
+    const { binding, packet } = result.serviceHost;
+    const root = result.env?.OPENCODE_CONFIG_DIR;
+    if (root === undefined) throw new Error("Expected captured config root");
+    const config = readFileSync(join(root, "opencode.json"));
+    expect(binding.configDigest).toBe(createHash("sha256").update(config).digest("hex"));
+    expect(binding.workspace).toBe(fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT);
+    expect(binding.mode).toBe(fixture.preparation.env.KEIKO_CODING_MODE);
+    expect(binding.password).toBe(result.env?.OPENCODE_SERVER_PASSWORD);
+    expect(binding.providerCapability).toBe(MODEL_CAPABILITY);
+    expect(binding.facadeCapability).toBe(TOOL_CAPABILITY);
+    expect(binding.facadeURL).toBe(fixture.runtime.toolBridge.url);
+    expect(JSON.parse(packet)).toEqual(binding);
+    await expect(
+      fixture.runtime.runPort.submitTask(fixture.preparation.runId, "must remain inactive"),
+    ).resolves.toBe(false);
+    await expect(fixture.runtime.prepareServiceHost(fixture.preparation, receipt)).resolves.toEqual(
+      { ok: false, reason: "host-preparation-unqualified" },
+    );
+  });
+
+  it("fails host readiness before reading startup or opening an adapter through the same lifecycle owner", async () => {
+    const managerModule = await import("./codingRuntimeManager.js");
+    const original = managerModule.createCodingRuntimeManager;
+    let lifecycle: OpenCodeLifecycleAdapter | undefined;
+    vi.spyOn(managerModule, "createCodingRuntimeManager").mockImplementation((input) => {
+      lifecycle = input.openCodeLifecycleAdapter;
+      return original(input);
+    });
+    const fixture = await stoppedPreparationFixture();
+    const result = await fixture.runtime.prepareServiceHost(
+      fixture.preparation,
+      await preparationReceipt(),
+    );
+    expect(result.ok).toBe(true);
+    let reads = 0;
+    if (lifecycle === undefined) throw new Error("Expected actual lifecycle owner");
+    await expect(
+      lifecycle.handshake({
+        runId: fixture.preparation.runId,
+        timeoutMs: 100,
+        startupOutput: {
+          nextLine: (): Promise<string> => {
+            reads += 1;
+            return Promise.reject(new Error("must not read"));
+          },
+        },
+        onPermission: (): void => undefined,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "host-readiness-unqualified" });
+    expect(reads).toBe(0);
+  });
+
+  it.each(["direct", "code-mode"] as const)(
+    "binds the captured %s profile to the same config digest without admitting readiness",
+    async (toolProfile) => {
+      const fixture = await stoppedPreparationFixture(toolProfile);
+      const result = await fixture.runtime.prepareServiceHost(
+        fixture.preparation,
+        await preparationReceipt(),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok || result.serviceHost === undefined)
+        throw new Error("Expected inactive preparation");
+      expect(result.serviceHost.binding).toMatchObject({ toolProfile });
+      const config = readFileSync(
+        join(result.serviceHost.binding.stateRoot, "config", "opencode", "opencode.json"),
+      );
+      expect(result.serviceHost.binding.configDigest).toBe(
+        createHash("sha256").update(config).digest("hex"),
+      );
+      expect(JSON.parse(result.serviceHost.packet)).toEqual(result.serviceHost.binding);
+      await expect(
+        fixture.runtime.runPort.submitTask(fixture.preparation.runId, "still inactive"),
+      ).resolves.toBe(false);
+    },
+  );
+
+  it("rejects a copied receipt without blocking later preparation from the owned receipt", async () => {
+    const receipt = await preparationReceipt();
+    const direct = await stoppedPreparationFixture();
+    await expect(
+      direct.runtime.prepareServiceHost(direct.preparation, { ...receipt }),
+    ).resolves.toEqual({ ok: false, reason: "config-materialization-failed" });
+    await expect(
+      direct.runtime.prepareServiceHost(direct.preparation, receipt),
+    ).resolves.toMatchObject({ ok: true });
+  });
+});
+
+describe("accepted original native session Location binding", () => {
+  it.each([
+    { created: "wrong" as const },
+    { created: "missing" as const },
+    { echoed: "wrong" as const },
+    { echoed: "missing" as const },
+  ])("refuses inconsistent native Location before model readiness: %j", async (fault) => {
+    const stages: string[] = [];
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        sessionLocation: { ...fault, stages },
+        diagnostics,
+        expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+      },
+    );
+    expect(stages).not.toContain("prompt");
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "coding-runtime.handshake",
+        code: "session-echo",
+        correlationId: FIXTURE_RUN_ID,
+      }),
+    );
+    const record = JSON.stringify(diagnostics.record.mock.calls);
+    expect(record).not.toContain("other-workspace");
+    expect(record).not.toContain(fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+
+  it("keeps the actual original Location shape bound to the supervisor-proved accepted root", async () => {
+    const stages: string[] = [];
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      { sessionLocation: { stages } },
+    );
+    expect(stages.slice(0, 2)).toEqual(["created", "echoed"]);
+    expect(stages).toContain("prompt");
+    expect(fixture.runtime.manager.health().status).toBe("ready");
+    await fixture.stop();
+  });
+
+  it("refuses cancellation after original creation before echo/model readiness", async () => {
+    const controller = new AbortController();
+    const stages: string[] = [];
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        signal: controller.signal,
+        sessionLocation: {
+          stages,
+          afterCreated: (): void => {
+            controller.abort();
+          },
+        },
+        expectedStart: { ok: false, failureCode: "start-aborted", retryable: true },
+      },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stages).toEqual(["created"]);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+});
+
+async function beginOriginalBridgeRead(
+  fixture: Awaited<ReturnType<typeof startBridgeFixture>>,
+  input = nativeInvocationInput(),
+): Promise<{
+  readonly facet: NonNullable<CodingToolNativeTextReadFacet["invocations"]>;
+  readonly begun: Extract<
+    import("./codingToolFacadePorts.js").CodingToolNativeReadBeginResult,
+    { readonly ok: true }
+  >;
+}> {
+  const facet = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+  if (facet === undefined) throw new TypeError("Expected original read bridge");
+  const begun = await facet.begin(input);
+  if (!begun.ok) throw new TypeError("Expected admitted original read");
+  return { facet, begun };
+}
+
+it.each(["cancel", "deadline", "stop"] as const)(
+  "retains the actual original read's held physical work after %s and reconciles only after settlement",
+  async (cause) => {
+    let release!: (packet: Buffer) => void;
+    const held = new Promise<Buffer>((resolve) => {
+      release = resolve;
+    });
+    let physicalSettled = false;
+    const f = nativeBridgeFixture("PRIVATE_ORIGINAL_HELD_BYTES", () =>
+      held.then((packet) => {
+        physicalSettled = true;
+        return packet;
+      }),
+    );
+    const signal = new AbortController();
+    const onRelease = vi.fn();
+    let runRoot = "";
+    const fixture = await startBridgeFixture(
+      f.facade,
+      { requestDeadlineMs: cause === "deadline" ? 100 : 1000, maxInFlight: 1 },
+      {
+        ...f.control,
+        onRelease,
+        afterStart: (_runtime, root): void => {
+          runRoot = root;
+        },
+      },
+    );
+    try {
+      const { facet, begun } = await beginOriginalBridgeRead(
+        fixture,
+        nativeInvocationInput("native-held", signal.signal),
+      );
+      let delegateSettled = false;
+      void begun.settled.then(() => {
+        delegateSettled = true;
+      });
+      const read = facet.readTextSnapshot(begun.identity, {
+        ordinal: 1,
+        relativePath: "fixture.ts",
+      });
+      await vi.waitFor(() => {
+        expect(f.process).toHaveBeenCalledOnce();
+      });
+      if (cause === "cancel") signal.abort();
+      if (cause === "stop")
+        expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+          failureCode: "runtime-reap-unproven",
+        });
+      expect((await read).ok).toBe(false);
+      expect(physicalSettled).toBe(false);
+      expect(delegateSettled).toBe(false);
+      expect(
+        await facet.readTextSnapshot(begun.identity, { ordinal: 2, relativePath: "fixture.ts" }),
+      ).toMatchObject({ ok: false });
+      expect(f.process).toHaveBeenCalledOnce();
+      if (cause !== "stop") {
+        expect(await facet.begin(nativeInvocationInput("second-native-held"))).toEqual({
+          ok: false,
+          reason: "busy",
+        });
+        expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+          failureCode: "runtime-reap-unproven",
+        });
+      }
+      expect(existsSync(runRoot)).toBe(true);
+      expect(onRelease).not.toHaveBeenCalled();
+      expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+        ok: false,
+        failureCode: "runtime-reap-unproven",
+      });
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+      await begun.settled;
+      expect(physicalSettled).toBe(true);
+      expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      expect(existsSync(runRoot)).toBe(false);
+      expect(onRelease).toHaveBeenCalledOnce();
+      expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_ORIGINAL_HELD_BYTES");
+    } finally {
+      release(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+      f.registry.dispose();
+      await fixture.stop();
+    }
+  },
+);
+
+it.each(["head", "root", "revoked", "expired"] as const)(
+  "refuses private child IO after actual current %s authority changes",
+  async (cause) => {
+    const f = nativeBridgeFixture("PRIVATE_STALE_ORIGINAL_BYTES");
+    const fixture = await startBridgeFixture(
+      f.facade,
+      { requestDeadlineMs: 1000, maxInFlight: 1 },
+      f.control,
+    );
+    try {
+      const { facet, begun } = await beginOriginalBridgeRead(fixture);
+      if (cause === "head") f.readHead.mockReturnValue("2".repeat(40));
+      else if (cause === "root") {
+        const active = f.workspace.workspaceLifecycle.getActive();
+        if (active === undefined) throw new TypeError("Expected active workspace");
+        vi.spyOn(f.workspace.workspaceLifecycle, "getActive").mockReturnValue({
+          ...active,
+          binding: { ...active.binding, activeRoot: join(dirname(f.authority.root), "other") },
+        });
+      } else if (cause === "revoked") f.authority.registry.revoke(f.authority.minted.authorityRef);
+      else vi.setSystemTime(new Date(Date.parse(f.authority.trusted.expiresAt) + 1));
+      expect(
+        (await facet.readTextSnapshot(begun.identity, { ordinal: 1, relativePath: "fixture.ts" }))
+          .ok,
+      ).toBe(false);
+      expect(f.process).not.toHaveBeenCalled();
+      expect(await facet.close(begun.identity, "completed")).toBe(false);
+      await begun.settled;
+      expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_STALE_ORIGINAL_BYTES");
+    } finally {
+      f.registry.dispose();
+      await fixture.stop();
+    }
+  },
+);
+
+it("shares capacity between one original read and ordinary/native tool requests without charging child IO again", async () => {
+  const f = nativeBridgeFixture("PRIVATE_SHARED_PARENT_BYTES");
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { requestDeadlineMs: 1000, maxInFlight: 1 },
+    f.control,
+  );
+  try {
+    const { facet, begun } = await beginOriginalBridgeRead(fixture);
+    expect(await facet.begin(nativeInvocationInput("second-parent"))).toEqual({
+      ok: false,
+      reason: "busy",
+    });
+    expect(await readNativeBridge(fixture.runtime, nativeBridgeInput("standalone-read"))).toEqual({
+      ok: false,
+      reason: "busy",
+    });
+    const ordinary = await fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({ authorization: `Bearer ${f.authority.minted.toolFacadeCapability}` }),
+      body: JSON.stringify({
+        action: "read",
+        relativePath: "fixture.ts",
+        actionId: "ordinary-read",
+        idempotencyKey: "ordinary-read",
+      }),
+    });
+    expect(ordinary.status).toBe(429);
+    expect(
+      (await facet.readTextSnapshot(begun.identity, { ordinal: 1, relativePath: "fixture.ts" })).ok,
+    ).toBe(true);
+    expect(await facet.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    const next = await beginOriginalBridgeRead(fixture, nativeInvocationInput("fresh-parent"));
+    expect(
+      (
+        await next.facet.readTextSnapshot(next.begun.identity, {
+          ordinal: 1,
+          relativePath: "fixture.ts",
+        })
+      ).ok,
+    ).toBe(true);
+    expect(await next.facet.close(next.begun.identity, "completed")).toBe(true);
+    expect(f.process).toHaveBeenCalledTimes(2);
+  } finally {
+    f.registry.dispose();
+    await fixture.stop();
+  }
+});
+
+it("settles an original read's rejected physical process before a fresh parent is admitted", async () => {
+  const error = new Error("PRIVATE_ORIGINAL_PROCESS_FAILURE");
+  const f = nativeBridgeFixture("PRIVATE_ORIGINAL_SOURCE", () => Promise.reject(error));
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { requestDeadlineMs: 1000, maxInFlight: 1 },
+    f.control,
+  );
+  try {
+    const { facet, begun } = await beginOriginalBridgeRead(fixture);
+    expect(
+      await facet.readTextSnapshot(begun.identity, { ordinal: 1, relativePath: "fixture.ts" }),
+    ).toMatchObject({ ok: false, reason: "process-failed" });
+    expect(await facet.close(begun.identity, "failed")).toBe(false);
+    await begun.settled;
+    const failed = f.activity.events.filter(
+      (event) => event.op === "coding-runtime.workspace-read" && event.extra?.state === "failed",
+    );
+    expect(failed).toHaveLength(1);
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.workspace-read.emitted-line",
+        formatActivityLogProofLine(failed[0] ?? {}),
+      ),
+    ).toMatchObject({ state: "failed", purpose: "native-tool-io", reason: "process-failed" });
+    expect(JSON.stringify(f.activity.events)).not.toContain(error.message);
+    expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_ORIGINAL_SOURCE");
+    f.process.mockResolvedValue(nativeBridgeSnapshot(join(f.authority.root, "fixture.ts")));
+    const next = await beginOriginalBridgeRead(fixture, nativeInvocationInput("after-rejection"));
+    expect(
+      (
+        await facet.readTextSnapshot(next.begun.identity, {
+          ordinal: 1,
+          relativePath: "fixture.ts",
+        })
+      ).ok,
+    ).toBe(true);
+    expect(await facet.close(next.begun.identity, "completed")).toBe(true);
+    await next.begun.settled;
+    expect(f.process).toHaveBeenCalledTimes(2);
+  } finally {
+    f.registry.dispose();
+    await fixture.stop();
+  }
+});
+
+it("captures the host profile once and keeps it aligned with materialized config after input mutation", async () => {
+  let toolProfile: "direct" | "code-mode" = "code-mode";
+  let reads = 0;
+  const fixture = await startBridgeFixture(
+    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+    undefined,
+    {
+      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+      readToolProfile: () => {
+        reads += 1;
+        return toolProfile;
+      },
+    },
+  );
+  await fixture.stop();
+  toolProfile = "direct";
+  const result = await fixture.runtime.prepareServiceHost(
+    fixture.preparation,
+    await preparationReceipt(),
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok || result.serviceHost === undefined)
+    throw new Error("Expected captured host profile");
+  expect(result.serviceHost.binding.toolProfile).toBe("code-mode");
+  expect(reads).toBe(1);
+  const config = readFileSync(
+    join(result.serviceHost.binding.stateRoot, "config", "opencode", "opencode.json"),
+    "utf8",
+  );
+  expect(config.includes('{"action":"execute","resource":"*","effect":"allow"}')).toBe(true);
+});
+
+function initialBridgeAuthority(): ReturnType<typeof catalogRuntimeFixture> & {
+  readonly authorityRegistry: EditorAgentAuthorityRegistry;
+} {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(RUNTIME_NOW));
+  const base = catalogRuntimeFixture("autonomous-delivery");
+  dirs.push(dirname(dirname(base.root)));
+  const authorityRegistry = new EditorAgentAuthorityRegistry();
+  const authority = new CodingRuntimeAuthorityService(
+    authorityRegistry,
+    () => FIXTURE_RUN_ID,
+    () => "nonce-initial-bridge",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.now() }),
+  );
+  const intent = {
+    schemaVersion: "1" as const,
+    requestId: "request-initial-bridge",
+    command: "start" as const,
+    taskIntent: "Load original accepted project instructions",
+    requestedMode: "autonomous-delivery" as const,
+    modelSource: "keiko-model-gateway" as const,
+  };
+  const proof = authority.confirmStart(
+    intent,
+    base.trusted.taskId,
+    base.trusted.operatorId,
+    RUNTIME_NOW,
+  );
+  const minted = authority.mintStart(intent, base.trusted, proof, RUNTIME_NOW);
+  if (!minted.ok) throw new TypeError("Expected accepted initial bridge mint");
+  return { ...base, authority, minted, authorityRegistry };
+}
+
+function initialBridgeProducer(effect?: SecureWorkspaceNativeFileIO["readBytes"]): {
+  readonly runtime: ReturnType<typeof initialBridgeAuthority>;
+  readonly facade: CodingToolFacade;
+  readonly read: ReturnType<typeof vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>>;
+  readonly bytes: Uint8Array;
+  readonly info: { readonly type: "file"; readonly size: number; readonly mtimeMs: number };
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly control: Pick<StartBridgeControl, "workspaceRoot" | "toolFacadeCapability">;
+} {
+  const runtime = initialBridgeAuthority();
+  const workspace = nativeBridgeWorkspace(runtime);
+  const liveFacts = (): ReturnType<typeof productionRuntimeAuthorityFacts> =>
+    productionRuntimeAuthorityFacts(workspace, runtime.trusted);
+  const access = (): WorkspaceRootAccess => ({
+    kind: "managed-task" as const,
+    canonicalRoot: runtime.root,
+    repositoryRoot: runtime.root,
+    fs: nodeWorkspaceFs,
+  });
+  const projection = createProductionAcceptedInitializationAuthority({
+    minted: runtime.minted,
+    authority: runtime.authority,
+    context: runtime.trusted,
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    signal: new AbortController().signal,
+    now: (): Date => new Date(),
+  });
+  const bytes = new Uint8Array([65, 71, 69, 78, 84, 83]);
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -1 };
+  const read = vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>(
+    effect ??
+      ((): Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>> =>
+        Promise.resolve({ ok: true, bytes, info })),
+  );
+  const registry = createCodingToolInvocationRegistry();
+  const facade = createProductionManagedWorktreeToolFacade({
+    authority: runtime.authority,
+    authorityRef: runtime.minted.authorityRef,
+    workspaceRoot: runtime.root,
+    authorityExpiresAt: runtime.trusted.expiresAt,
+    effectiveMode: "autonomous-delivery",
+    deploymentCeiling: "autonomous-delivery",
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    secureWorkspaceTextRead: {
+      readText: vi.fn(),
+      nativeFileIO: {
+        readBytes: read,
+        stat: vi.fn(),
+        list: vi.fn(),
+      },
+    },
+    initializationAuthority: projection,
+    editorAgentClient: { action: vi.fn() },
+    verificationRunner: { runToReport: vi.fn() },
+    invocationRegistry: registry,
+    onRuntimeEvent: vi.fn(),
+    activityLog: createBufferedServerLogSink(),
+  });
+  return {
+    runtime,
+    facade,
+    read,
+    bytes,
+    info,
+    registry,
+    control: {
+      workspaceRoot: runtime.root,
+      toolFacadeCapability: runtime.minted.toolFacadeCapability,
+    },
+  };
+}
+
+it("offers the accepted initialization callback only on the inactive private bridge", async () => {
+  const f = initialBridgeProducer();
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    expect(fixture.runtime.toolBridge.acceptedInitialization?.run).toBeTypeOf("function");
+    expect(
+      await fixture.runtime.toolBridge.acceptedInitialization?.run(async (io) => {
+        const read = await io.readBytes({ relativePath: "AGENTS.md" });
+        return read.ok ? read.bytes.length : -1;
+      }),
+    ).toEqual({ ok: true, value: 6 });
+    expect(f.read).toHaveBeenCalledOnce();
+    expect(f.runtime.authority.state().state).toBe("starting");
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("retains initial raw IO through callback failure, interrupted preparation and recovery release", async () => {
+  let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = initialBridgeProducer(() => held);
+  const onRelease = vi.fn();
+  let root = "";
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { requestDeadlineMs: 1000, maxInFlight: 1 },
+    {
+      ...f.control,
+      onRelease,
+      afterStart: (_runtime, runRoot) => {
+        root = runRoot;
+      },
+    },
+  );
+  const pending = fixture.runtime.toolBridge.acceptedInitialization?.run((io) => {
+    void io.readBytes({ relativePath: "AGENTS.md" });
+    return Promise.reject(new Error("PRIVATE_NATIVE_INITIAL_FAILURE"));
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    expect(await pending).toEqual({ ok: false, reason: "cancelled" });
+    expect(() => {
+      accessSync(root);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    release({ ok: true, bytes: f.bytes, info: f.info });
+    await vi.waitFor(() => {
+      expect(f.bytes.every((byte) => byte === 0)).toBe(true);
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect(() => {
+      accessSync(root);
+    }).toThrow();
+    expect(onRelease).toHaveBeenCalledOnce();
+  } finally {
+    release({ ok: true, bytes: f.bytes, info: f.info });
+    await pending;
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("shares the existing admission capacity with initial acquisition instead of a second gate", async () => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = initialBridgeProducer();
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 1000 },
+    f.control,
+  );
+  let entered = false;
+  const pending = fixture.runtime.toolBridge.acceptedInitialization?.run(async () => {
+    entered = true;
+    await held;
+    return "ready";
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(entered).toBe(true);
+    });
+    expect(
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${f.runtime.minted.toolFacadeCapability}` }),
+        body: JSON.stringify({
+          action: "read",
+          relativePath: "AGENTS.md",
+          actionId: "ordinary-call",
+          idempotencyKey: "ordinary-call",
+        }),
+      }),
+    ).toMatchObject({ status: 429 });
+    expect(
+      await fixture.runtime.toolBridge.acceptedInitialization?.run(() =>
+        Promise.resolve("second-start"),
+      ),
+    ).toEqual({ ok: false, reason: "busy" });
+    finish();
+    expect(await pending).toEqual({ ok: true, value: "ready" });
+    expect(
+      await fixture.runtime.toolBridge.acceptedInitialization?.run(() =>
+        Promise.resolve("watch-refresh"),
+      ),
+    ).toEqual({ ok: false, reason: "initialization-closed" });
+  } finally {
+    finish();
+    await pending;
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("returns initial deadline refusal promptly while the actual raw producer remains held", async () => {
+  let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = initialBridgeProducer(() => held);
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 60 },
+    f.control,
+  );
+  let late!: CodingAcceptedInitializationReadPort;
+  const pending = fixture.runtime.toolBridge.acceptedInitialization?.run((io) => {
+    late = io;
+    return io.readBytes({ relativePath: "AGENTS.md" });
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    expect(await pending).toEqual({ ok: false, reason: "timeout" });
+    expect(await late.readBytes({ relativePath: "nested/AGENTS.md" })).toEqual({
+      ok: false,
+      reason: "preflight-refused",
+    });
+    expect(f.read).toHaveBeenCalledOnce();
+  } finally {
+    release({ ok: true, bytes: f.bytes, info: f.info });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+// Fixture verifier accepts this exact compiled helper, without claiming release qualification.
+describe.skipIf(process.platform !== "darwin")(
+  "original Read parent with actual native IO process",
+  () => {
+    let executable = "";
+    beforeAll(() => {
+      const base = mkdtempSync(join(tmpdir(), "native-parent-file-"));
+      executable = join(base, "secure-read");
+      execFileSync("cc", [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        fileURLToPath(
+          new URL(
+            "../../../../native/secure-workspace-read/secure_workspace_read.c",
+            import.meta.url,
+          ),
+        ),
+        "-o",
+        executable,
+      ]);
+    });
+    afterAll(() => {
+      if (executable !== "") rmSync(dirname(executable), { recursive: true, force: true });
+    });
+    function physicalFixture(
+      afterFrame?: (frame: Uint8Array) => Promise<Uint8Array>,
+      runId = "run-1",
+    ): NativeBridgeFixture {
+      const factory = createNodeSecureWorkspaceReadProcessFactory({
+        binding: {
+          executable,
+          artifact: nativeBridgeArtifact(true),
+          resourceRoot: dirname(executable),
+          helperSizeBytes: statSync(executable).size,
+        },
+        safeCwd: dirname(executable),
+      });
+      return nativeBridgeFixture(
+        "PRIVATE_PARENT_NATIVE_BYTES",
+        (request) =>
+          factory
+            .create(nativeBridgeArtifact(true))
+            .run(request)
+            .then((frame) => afterFrame?.(frame) ?? frame),
+        1,
+        true,
+        runId,
+      );
+    }
+    it("runs bytes, stat, root list and zero range under one authority charge and admission slot", async () => {
+      const f = physicalFixture();
+      const admission = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+      const fixture = await startBridgeFixture(
+        f.facade,
+        { maxInFlight: 1, requestDeadlineMs: 1000 },
+        f.control,
+      );
+      try {
+        const parent = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+        const begun = await parent?.begin(nativeInvocationInput());
+        if (begun?.ok !== true || parent?.fileIO === undefined)
+          throw new TypeError("Missing native parent IO");
+        const packet = {
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io" as const,
+        };
+        const bytes = await parent.fileIO.readBytes(begun.identity, packet);
+        expect(bytes).toMatchObject({
+          ok: true,
+          bytes: Buffer.from("PRIVATE_PARENT_NATIVE_BYTES"),
+        });
+        expect(await parent.fileIO.stat(begun.identity, { ...packet, ordinal: 2 })).toMatchObject({
+          ok: true,
+          info: { type: "file", size: statSync(join(f.authority.root, "fixture.ts")).size },
+        });
+        expect(
+          await parent.fileIO.list(begun.identity, { ...packet, ordinal: 3, relativePath: "" }),
+        ).toMatchObject({
+          ok: true,
+          entries: [{ name: "fixture.ts", type: "file" }],
+        });
+        expect(
+          await parent.fileIO.readBytes(begun.identity, {
+            ...packet,
+            ordinal: 4,
+            range: { offset: 0, length: 0 },
+          }),
+        ).toMatchObject({ ok: true, bytes: Buffer.alloc(0) });
+        expect(f.process).toHaveBeenCalledTimes(4);
+        expect(
+          admission.mock.calls.reduce((count, [input]) => count + input.usage.toolCalls, 0),
+        ).toBe(1);
+        expect(await parent.begin(nativeInvocationInput("other-parent"))).toEqual({
+          ok: false,
+          reason: "busy",
+        });
+        expect(await parent.close(begun.identity, "completed")).toBe(true);
+        await begun.settled;
+        expect(JSON.stringify(f.activity.events)).not.toMatch(
+          /PRIVATE_PARENT_NATIVE_BYTES|fixture\.ts/u,
+        );
+      } finally {
+        await stopNativeBridge(f, fixture);
+      }
+    });
+    it("retains the real native process promise through stop and withholds its held completed response", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reached = vi.fn();
+      const f = physicalFixture(async (frame) => {
+        reached();
+        await held;
+        return frame;
+      });
+      const onRelease = vi.fn();
+      let runRoot = "";
+      const fixture = await startBridgeFixture(
+        f.facade,
+        { maxInFlight: 1, requestDeadlineMs: 1000 },
+        {
+          ...f.control,
+          onRelease,
+          afterStart: (_runtime, root): void => {
+            runRoot = root;
+          },
+        },
+      );
+      const parent = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+      const begun = await parent?.begin(nativeInvocationInput());
+      if (begun?.ok !== true || parent?.fileIO === undefined)
+        throw new TypeError("Missing native parent IO");
+      const reading = parent.fileIO.readBytes(begun.identity, {
+        ordinal: 1,
+        relativePath: "fixture.ts",
+        purpose: "native-tool-io",
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(reached).toHaveBeenCalledOnce();
+        });
+        expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+          failureCode: "runtime-reap-unproven",
+        });
+        expect(await reading).toEqual({ ok: false, reason: "cancelled" });
+        expect(existsSync(runRoot)).toBe(true);
+        expect(onRelease).not.toHaveBeenCalled();
+        expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+        });
+        release();
+        await begun.settled;
+        expect(existsSync(runRoot)).toBe(true);
+        expect(onRelease).not.toHaveBeenCalled();
+        expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+          ok: true,
+          status: "stopped",
+        });
+        expect(existsSync(runRoot)).toBe(false);
+        expect(onRelease).toHaveBeenCalledOnce();
+        const workspaceReads = f.activity.events.filter(
+          (event) => event.op === "coding-runtime.workspace-read",
+        );
+        expect(workspaceReads.at(-1)?.extra?.state).toBe("failed");
+        expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_PARENT_NATIVE_BYTES");
+      } finally {
+        release();
+        await reading;
+        await stopNativeBridge(f, fixture);
+      }
+    });
+
+    it("transports real binary, stat and directory IO through one admitted HTTP parent", async () => {
+      const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+      const admission = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+      const route = await startNativeReadTransportFixture(f);
+      try {
+        const identity = await admittedTransportIdentity(route);
+        const request = {
+          identity,
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io",
+        };
+        const bytes = await route.call("readBytes", request);
+        expect(nativeTransportFrame(bytes)).toMatchObject({
+          status: "ok",
+          bytes: Buffer.from("PRIVATE_PARENT_NATIVE_BYTES"),
+        });
+        const stat = await route.call("stat", { ...request, ordinal: 2 });
+        expect(nativeTransportFrame(stat)).toMatchObject({ status: "ok", info: { type: "file" } });
+        const list = await route.call("list", { ...request, ordinal: 3, relativePath: "" });
+        expect(nativeTransportFrame(list).info.type).toBe("directory");
+        const zero = await route.call("readBytes", {
+          ...request,
+          ordinal: 4,
+          range: { offset: 0, length: 0 },
+        });
+        expect(nativeTransportFrame(zero).bytes).toHaveLength(0);
+        expect(f.process).toHaveBeenCalledTimes(4);
+        expect(admission.mock.calls.reduce((n, [input]) => n + input.usage.toolCalls, 0)).toBe(1);
+        expect(
+          nativeTransportVerdict(
+            (await route.call("close", { identity, outcome: "completed" })).body,
+          ),
+        ).toEqual({ ok: true });
+        expect(
+          nativeTransportVerdict((await route.call("begin", originalReadTransportBegin())).body).ok,
+        ).toBe(false);
+        expect(JSON.stringify(f.activity.events)).not.toMatch(
+          /PRIVATE_PARENT_NATIVE_BYTES|fixture\.ts/u,
+        );
+      } finally {
+        await stopNativeBridge(f, route.fixture);
+      }
+    });
+
+    it("retains physical IO through a disconnected HTTP parent and refuses a false completed close", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reached = vi.fn();
+      const f = physicalFixture(async (frame) => {
+        reached();
+        await held;
+        return frame;
+      }, FIXTURE_RUN_ID);
+      const onRelease = vi.fn();
+      const route = await startNativeReadTransportFixture(f, { onRelease });
+      const identity = await admittedTransportIdentity(route);
+      const cancel = new AbortController();
+      const reading = route.call(
+        "readBytes",
+        { identity, ordinal: 1, relativePath: "fixture.ts", purpose: "native-tool-io" },
+        cancel.signal,
+      );
+      try {
+        await vi.waitFor(() => {
+          expect(reached).toHaveBeenCalledOnce();
+        });
+        cancel.abort();
+        expect(JSON.parse((await reading).body)).toMatchObject({ ok: false });
+        expect(
+          nativeTransportVerdict(
+            (await route.call("close", { identity, outcome: "completed" })).body,
+          ),
+        ).toEqual({ ok: false });
+        expect(onRelease).not.toHaveBeenCalled();
+        expect(await route.fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+          failureCode: "runtime-reap-unproven",
+        });
+        release();
+        await vi.waitFor(() => {
+          expect(f.registry.inspect({ runId: FIXTURE_RUN_ID, ...identity }).kind).toBe("terminal");
+        });
+        expect(await route.fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+          ok: true,
+        });
+        expect(onRelease).toHaveBeenCalledOnce();
+      } finally {
+        release();
+        await reading;
+        await stopNativeBridge(f, route.fixture);
+      }
+    });
+
+    it("cannot cancel the active parent with a foreign identity and refuses terminal replay", async () => {
+      const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+      const route = await startNativeReadTransportFixture(f);
+      try {
+        const identity = await admittedTransportIdentity(route);
+        for (const foreign of [
+          { ...identity, invocationId: "0".repeat(32) },
+          { ...identity, actionId: "different" },
+          { ...identity, idempotencyKey: "different" },
+        ]) {
+          expect(
+            nativeTransportVerdict(
+              (await route.call("close", { identity: foreign, outcome: "cancelled" })).body,
+            ),
+          ).toEqual({ ok: false });
+          expect(
+            route.fixture.runtime.toolBridge.nativeTextRead?.invocations?.signalFor(identity)
+              ?.aborted,
+          ).toBe(false);
+        }
+        expect(
+          nativeTransportFrame(
+            await route.call("stat", {
+              identity,
+              ordinal: 1,
+              relativePath: "fixture.ts",
+              purpose: "native-tool-io",
+            }),
+          ).status,
+        ).toBe("ok");
+        expect(
+          nativeTransportVerdict(
+            (await route.call("close", { identity, outcome: "completed" })).body,
+          ),
+        ).toEqual({ ok: true });
+        expect(
+          nativeTransportVerdict((await route.call("close", { identity, outcome: "failed" })).body),
+        ).toEqual({ ok: false });
+        expect(
+          nativeTransportVerdict((await route.call("begin", originalReadTransportBegin())).body).ok,
+        ).toBe(false);
+        expect(f.process).toHaveBeenCalledOnce();
+      } finally {
+        await stopNativeBridge(f, route.fixture);
+      }
+    });
+
+    it.each(["changed", "technical"] as const)(
+      "withholds and wipes actual IO when root postflight is %s",
+      async (change) => {
+        const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+        const diagnostics: ServerDiagnosticRecord[] = [];
+        let captured: Uint8Array | undefined;
+        const observed = observeNativeReadBytes(f, (bytes): void => {
+          captured = bytes;
+        });
+        const route = await startNativeReadTransportFixture(observed, {
+          diagnostics: {
+            record: (event): void => {
+              diagnostics.push(event);
+            },
+          },
+        });
+        try {
+          const identity = await admittedTransportIdentity(route);
+          const accepted = route.root();
+          route.root
+            .mockImplementationOnce(() => accepted)
+            .mockImplementationOnce(() => {
+              if (change === "technical") throw new TypeError("PRIVATE_ROOT_POSTFLIGHT_FAILURE");
+              return { ...accepted, canonicalRoot: "/changed-root" };
+            });
+          const result = await route.call("readBytes", {
+            identity,
+            ordinal: 1,
+            relativePath: "fixture.ts",
+            purpose: "native-tool-io",
+          });
+          expect(result.status).toBe(change === "technical" ? 502 : 409);
+          expect(result.nativeBytes).toBeUndefined();
+          expect(captured).toBeDefined();
+          expect(captured?.every((byte) => byte === 0)).toBe(true);
+          expect(nativeTransportVerdict(result.body)).toMatchObject({ ok: false });
+          expect(f.process).toHaveBeenCalledOnce();
+          expect(
+            nativeTransportVerdict(
+              (await route.call("close", { identity, outcome: "completed" })).body,
+            ),
+          ).toEqual({ ok: false });
+          expect(diagnostics).toHaveLength(change === "technical" ? 1 : 0);
+          expect(JSON.stringify({ events: f.activity.events, diagnostics })).not.toMatch(
+            /PRIVATE_ROOT_POSTFLIGHT_FAILURE|PRIVATE_PARENT_NATIVE_BYTES|fixture\.ts/u,
+          );
+        } finally {
+          await stopNativeBridge(f, route.fixture);
+        }
+      },
+    );
+
+    it.each(["head", "expired", "withdrawn"] as const)(
+      "refuses stale %s authority over HTTP before starting a helper",
+      async (change) => {
+        const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+        const route = await startNativeReadTransportFixture(f);
+        try {
+          const identity = await admittedTransportIdentity(route);
+          if (change === "head") f.readHead.mockReturnValue("2".repeat(40));
+          else if (change === "expired")
+            vi.setSystemTime(new Date(Date.parse(f.authority.trusted.expiresAt) + 1));
+          else f.authority.registry.revoke(f.authority.minted.authorityRef);
+          expect(
+            nativeTransportVerdict(
+              (
+                await route.call("readBytes", {
+                  identity,
+                  ordinal: 1,
+                  relativePath: "fixture.ts",
+                  purpose: "native-tool-io",
+                })
+              ).body,
+            ).ok,
+          ).toBe(false);
+          expect(f.process).not.toHaveBeenCalled();
+          expect(
+            nativeTransportVerdict(
+              (await route.call("close", { identity, outcome: "failed" })).body,
+            ),
+          ).toEqual({ ok: false });
+        } finally {
+          await stopNativeBridge(f, route.fixture);
+        }
+      },
+    );
+
+    it("refuses copied identities, ordinal replay and sensitive paths without duplicate effects", async () => {
+      const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+      const route = await startNativeReadTransportFixture(f);
+      try {
+        const identity = await admittedTransportIdentity(route);
+        const request = {
+          identity,
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io",
+        };
+        expect(
+          nativeTransportVerdict(
+            (
+              await route.call("stat", {
+                ...request,
+                identity: { ...identity, invocationId: "0".repeat(32) },
+              })
+            ).body,
+          ).ok,
+        ).toBe(false);
+        expect(nativeTransportFrame(await route.call("stat", request)).status).toBe("ok");
+        expect(nativeTransportVerdict((await route.call("stat", request)).body).ok).toBe(false);
+        expect(
+          nativeTransportVerdict(
+            (await route.call("readBytes", { ...request, ordinal: 2, relativePath: ".env" })).body,
+          ).ok,
+        ).toBe(false);
+        expect(f.process).toHaveBeenCalledOnce();
+        expect(
+          nativeTransportVerdict((await route.call("close", { identity, outcome: "failed" })).body),
+        ).toEqual({ ok: false });
+      } finally {
+        await stopNativeBridge(f, route.fixture);
+      }
+    });
+
+    it.each(["head", "expired", "withdrawn"] as const)(
+      "refuses private original IO with stale %s authority before the actual child starts",
+      async (change) => {
+        const f = physicalFixture();
+        const fixture = await startBridgeFixture(
+          f.facade,
+          { maxInFlight: 1, requestDeadlineMs: 1000 },
+          f.control,
+        );
+        try {
+          const parent = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+          const begun = await parent?.begin(nativeInvocationInput());
+          if (begun?.ok !== true || parent?.fileIO === undefined)
+            throw new TypeError("Missing native IO");
+          if (change === "head") f.readHead.mockReturnValue("2".repeat(40));
+          else if (change === "expired")
+            vi.setSystemTime(new Date(Date.parse(f.authority.trusted.expiresAt) + 1));
+          else f.authority.registry.revoke(f.authority.minted.authorityRef);
+          expect(
+            (
+              await parent.fileIO.readBytes(begun.identity, {
+                ordinal: 1,
+                relativePath: "fixture.ts",
+                purpose: "native-tool-io",
+              })
+            ).ok,
+          ).toBe(false);
+          expect(f.process).not.toHaveBeenCalled();
+          expect(await parent.close(begun.identity, "failed")).toBe(false);
+        } finally {
+          await stopNativeBridge(f, fixture);
+        }
+      },
+    );
+  },
+);
+
+function initialTransportPacket(
+  phase: string,
+  extra: Readonly<Record<string, unknown>> = {},
+): string {
+  return JSON.stringify({
+    action: "native-initialization",
+    phase,
+    runId: FIXTURE_RUN_ID,
+    ...extra,
+  });
+}
+
+async function initialTransportFixture(
+  effect?: SecureWorkspaceNativeFileIO["readBytes"],
+  requestDeadlineMs = 5000,
+): Promise<{
+  producer: ReturnType<typeof initialBridgeProducer>;
+  log: ReturnType<typeof createBufferedServerLogSink>;
+  setRoot: (root: string) => void;
+  fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+  call: (
+    phase: string,
+    extra?: Readonly<Record<string, unknown>>,
+  ) => ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]>;
+}> {
+  const producer = initialBridgeProducer(effect);
+  const log = createBufferedServerLogSink();
+  let currentRoot = producer.runtime.root;
+  const fixture = await startBridgeFixture(
+    producer.facade,
+    { maxInFlight: 1, requestDeadlineMs },
+    {
+      ...producer.control,
+      activityLog: log,
+      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: currentRoot,
+        repositoryRoot: producer.runtime.root,
+        fs: nodeWorkspaceFs,
+      }),
+    },
+  );
+  await fixture.stop();
+  const prepared = await fixture.runtime.prepareServiceHost(
+    fixture.preparation,
+    await preparationReceipt(),
+  );
+  expect(prepared.ok).toBe(true);
+  return {
+    producer,
+    log,
+    setRoot: (root): void => {
+      currentRoot = root;
+    },
+    fixture,
+    call: (phase, extra) =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({
+          authorization: `Bearer ${producer.runtime.minted.toolFacadeCapability}`,
+        }),
+        body: initialTransportPacket(phase, extra),
+      }),
+  };
+}
+
+it("binds same-route initial bytes to the actual accepted callback without charging a model tool", async () => {
+  const { producer, fixture, call } = await initialTransportFixture();
+  try {
+    const begin = await call("begin");
+    expect(begin.status).toBe(200);
+    const value = JSON.parse(begin.body) as { scopeId: string };
+    expect(value.scopeId).toBeTypeOf("string");
+    const result = await call("readBytes", { scopeId: value.scopeId, relativePath: "AGENTS.md" });
+    expect(result.status).toBe(200);
+    expect((result as unknown as { nativeBytes?: Uint8Array }).nativeBytes).toBeInstanceOf(
+      Uint8Array,
+    );
+    expect(producer.read).toHaveBeenCalledOnce();
+    expect(producer.runtime.authority.state().state).toBe("starting");
+    expect(await call("end", { scopeId: value.scopeId })).toMatchObject({ status: 200 });
+  } finally {
+    await fixture.stop();
+    producer.registry.dispose();
+  }
+});
+
+function optionalRootAccess(control: StartBridgeControl | undefined): {
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+} {
+  return control?.resolveWorkspaceRootAccess === undefined
+    ? {}
+    : { resolveWorkspaceRootAccess: control.resolveWorkspaceRootAccess };
+}
+
+it("persists real transport lifecycle without content, paths or authority bytes", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const started = await f.call("begin");
+    const { scopeId } = JSON.parse(started.body) as { scopeId: string };
+    await f.call("end", { scopeId });
+    const events = f.log.events.filter(
+      (event) => event.op === "coding-runtime.initialization-transport",
+    );
+    expect(events).toHaveLength(2);
+    const line = formatActivityLogProofLine(events[0] ?? {});
+    expectActivityLogProof("coding-runtime.initialization-transport.emitted-line", line);
+    expect(events.map((event) => event.extra?.stage)).toEqual(["begin", "end"]);
+    expect(events.map((event) => event.extra?.outcome)).toEqual(["accepted", "completed"]);
+    expect(line).not.toContain(f.producer.runtime.root);
+    expect(line).not.toContain(scopeId);
+    expect(line).not.toContain(f.producer.runtime.minted.toolFacadeCapability);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("rejects copied scopes, duplicate begin, extra selectors and calls after initial end", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const started = await f.call("begin");
+    const { scopeId } = JSON.parse(started.body) as { scopeId: string };
+    expect((await f.call("begin")).status).toBe(409);
+    expect(
+      (await f.call("readBytes", { scopeId: "0".repeat(36), relativePath: "AGENTS.md" })).status,
+    ).toBe(409);
+    expect(
+      (await f.call("readBytes", { scopeId, relativePath: "AGENTS.md", purpose: "native-tool-io" }))
+        .status,
+    ).toBe(400);
+    expect(f.producer.read).not.toHaveBeenCalled();
+    expect((await f.call("end", { scopeId })).status).toBe(200);
+    expect((await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
+    expect((await f.call("begin")).status).toBe(409);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("requires actual prepared host and current accepted root before initial callback", async () => {
+  const f = initialBridgeProducer();
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    const result = await fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({ authorization: `Bearer ${f.runtime.minted.toolFacadeCapability}` }),
+      body: initialTransportPacket("begin"),
+    });
+    expect(result.status).toBe(409);
+    expect(f.read).not.toHaveBeenCalled();
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("rejects current-root drift before IO and after an outstanding real producer resolves", async () => {
+  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = await initialTransportFixture(() => held);
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const pending = f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
+    await vi.waitFor(() => {
+      expect(f.producer.read).toHaveBeenCalledOnce();
+    });
+    f.setRoot(join(f.producer.runtime.root, "changed"));
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    const result = await pending;
+    expect(result.status).toBe(409);
+    expect(f.producer.bytes.every((byte) => byte === 0)).toBe(true);
+    expect((await f.call("stat", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
+    expect(f.producer.read).toHaveBeenCalledOnce();
+  } finally {
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("removes transport authority when the actual accepted starting mint is revoked", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    f.producer.runtime.authorityRegistry.revoke(f.producer.runtime.minted.authorityRef);
+    expect((await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
+    expect(f.producer.read).not.toHaveBeenCalled();
+    expect((await f.call("end", { scopeId })).status).toBe(409);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("preserves original technical read failure as an unavailable private result", async () => {
+  const f = await initialTransportFixture(() =>
+    Promise.resolve({ ok: false, reason: "process-failed" }),
+  );
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const result = await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
+    expect(JSON.parse(result.body)).toEqual({ ok: false, reason: "process-failed" });
+    expect((await f.call("end", { scopeId })).status).toBe(200);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("cancels promptly while holding the SAME physical gate until the actual raw IO settles", async () => {
+  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = await initialTransportFixture(() => held);
+  const controller = new AbortController();
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const pending = f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: initialTransportPacket("readBytes", { scopeId, relativePath: "AGENTS.md" }),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(f.producer.read).toHaveBeenCalledOnce();
+    });
+    controller.abort();
+    expect(JSON.parse((await pending).body)).toMatchObject({ ok: false, reason: "cancelled" });
+    const busy = await f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: "{}",
+    });
+    expect(busy.status).toBe(429);
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await vi.waitFor(async () => {
+      expect(
+        (
+          await f.fixture.runtime.toolBridge.handle({
+            method: "POST",
+            headers: new Headers({
+              authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+            }),
+            body: "{}",
+          })
+        ).status,
+      ).not.toBe(429);
+    });
+    expect(f.producer.bytes.every((byte) => byte === 0)).toBe(true);
+  } finally {
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it.each(["accessor", "inherited", "symbol", "extra", "nested-accessor"])(
+  "captures closed initial packets without evaluating %s input",
+  async (kind) => {
+    const { copyNativeInitializationPacket } = await import("./opencodeRuntimeComposition.js");
+    const value: Record<PropertyKey, unknown> = {
+      action: "native-initialization",
+      phase: "begin",
+      runId: FIXTURE_RUN_ID,
+    };
+    const get = vi.fn(() => FIXTURE_RUN_ID);
+    if (kind === "accessor") Object.defineProperty(value, "runId", { get });
+    if (kind === "inherited") Object.setPrototypeOf(value, { inherited: true });
+    if (kind === "symbol") value[Symbol("selector")] = true;
+    if (kind === "extra") value.authority = "untrusted";
+    if (kind === "nested-accessor") {
+      value.phase = "readBytes";
+      value.scopeId = "0".repeat(36);
+      value.relativePath = "AGENTS.md";
+      value.range = Object.defineProperty({ length: 1 }, "offset", { get });
+    }
+    expect(copyNativeInitializationPacket(value)).toBeUndefined();
+    expect(get).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["expired", "ready", "running"] as const)(
+  "refuses initial transport when actual accepted authority is %s",
+  async (state) => {
+    const f = await initialTransportFixture();
+    try {
+      if (state === "expired")
+        vi.setSystemTime(new Date(Date.parse(f.producer.runtime.trusted.expiresAt) + 1));
+      else {
+        expect(f.producer.runtime.authority.transition(FIXTURE_RUN_ID, "ready", RUNTIME_NOW)).toBe(
+          true,
+        );
+        if (state === "running")
+          expect(
+            f.producer.runtime.authority.transition(FIXTURE_RUN_ID, "running", RUNTIME_NOW),
+          ).toBe(true);
+      }
+      expect((await f.call("begin")).status).toBe(409);
+      expect(f.producer.read).not.toHaveBeenCalled();
+    } finally {
+      await f.fixture.stop();
+      f.producer.registry.dispose();
+    }
+  },
+);
+
+it("refuses an initial begin when the actual accepted root no longer matches preparation", async () => {
+  const f = await initialTransportFixture();
+  try {
+    f.setRoot(join(f.producer.runtime.root, "other"));
+    expect((await f.call("begin")).status).toBe(409);
+    expect(f.producer.read).not.toHaveBeenCalled();
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("reports transport deadline while retaining actual outstanding IO and refusing a new scope", async () => {
+  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = await initialTransportFixture(() => held, 100);
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const result = await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
+    expect(JSON.parse(result.body)).toEqual({ ok: false, reason: "timeout" });
+    expect((await f.call("begin")).status).toBe(409);
+    expect(f.producer.read).toHaveBeenCalledOnce();
+    const ordinary = await f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: "{}",
+    });
+    expect(ordinary.status).toBe(429);
+  } finally {
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("settles initial end honestly when its actual lifecycle writer fails", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const write = f.log.write.bind(f.log);
+    vi.spyOn(f.log, "write").mockImplementation((event) => {
+      if (event.op === "coding-runtime.initialization-transport" && event.extra?.stage === "end")
+        throw new Error("PRIVATE_INITIAL_END_WRITER_FAILURE");
+      write(event);
+    });
+    const pending = f.call("end", { scopeId });
+    let result: Awaited<ReturnType<typeof f.call>> | undefined;
+    void pending.then((value) => {
+      result = value;
+    });
+    await vi.waitFor(
+      () => {
+        expect(result).toBeDefined();
+      },
+      { timeout: 100 },
+    );
+    expect(JSON.parse((await pending).body)).toEqual({
+      ok: false,
+      reason: "initialization-failed",
+    });
+    expect((await f.call("begin")).status).toBe(409);
+    expect(f.log.lines().join("\n")).not.toContain("PRIVATE_INITIAL_END_WRITER_FAILURE");
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+function originalReadTransportBody(
+  phase: string,
+  extra: Readonly<Record<string, unknown>> = {},
+): string {
+  return JSON.stringify({
+    action: "native-read-invocation",
+    phase,
+    runId: FIXTURE_RUN_ID,
+    ...extra,
+  });
+}
+
+function originalReadTransportBegin(): {
+  actionId: string;
+  idempotencyKey: string;
+  relativePath: string;
+  context: CodingToolNativeReadBeginInput["context"];
+  runId?: string;
+} {
+  return {
+    actionId: "ses_tool:original-read",
+    idempotencyKey: "ses_tool:original-read",
+    relativePath: "fixture.ts",
+    context: {
+      sessionID: "ses_tool",
+      messageID: "msg_original",
+      id: "original-read",
+      agent: "build",
+    },
+  };
+}
+
+it("admits a genuine ready native read parent over the existing HTTP dispatch boundary", async () => {
+  const f = nativeBridgeFixture("PRIVATE_PARENT_ROUTE", undefined, 1, false, FIXTURE_RUN_ID);
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 5000 },
+    {
+      ...f.control,
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: f.authority.root,
+        repositoryRoot: f.authority.root,
+        fs: nodeWorkspaceFs,
+      }),
+    },
+  );
+  const call = (
+    phase: string,
+    extra: Readonly<Record<string, unknown>>,
+  ): ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]> =>
+    fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.authority.minted.toolFacadeCapability}`,
+      }),
+      body: originalReadTransportBody(phase, extra),
+    });
+  try {
+    const result = await call("begin", originalReadTransportBegin());
+    expect(result.status).toBe(200);
+    const { identity } = JSON.parse(result.body) as { identity: Readonly<Record<string, string>> };
+    expect(identity).toMatchObject({ actionId: "ses_tool:original-read" });
+    expect((await call("close", { identity, outcome: "completed" })).body).toBe('{"ok":true}');
+    expect(f.authority.minted.authorityRef.runId).toBe(FIXTURE_RUN_ID);
+    expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_PARENT_ROUTE");
+  } finally {
+    await stopNativeBridge(f, fixture);
+  }
+});
+
+type NativeTransportFixture = Awaited<ReturnType<typeof startNativeReadTransportFixture>>;
+async function startNativeReadTransportFixture(
+  f: NativeBridgeFixture,
+  extra: StartBridgeControl = {},
+  deadline = 5000,
+): Promise<{
+  fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+  root: ReturnType<typeof vi.fn<() => WorkspaceRootAccess>>;
+  call: (
+    phase: string,
+    extra?: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ) => ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]>;
+}> {
+  const root = vi.fn<() => WorkspaceRootAccess>(() => ({
+    kind: "managed-task",
+    canonicalRoot: f.authority.root,
+    repositoryRoot: f.authority.root,
+    fs: nodeWorkspaceFs,
+  }));
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: deadline },
+    { ...f.control, ...extra, resolveWorkspaceRootAccess: root },
+  );
+  return {
+    fixture,
+    root,
+    call: (phase, extra, signal) =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({
+          authorization: `Bearer ${f.authority.minted.toolFacadeCapability}`,
+        }),
+        body: originalReadTransportBody(phase, extra ?? {}),
+        ...(signal === undefined ? {} : { signal }),
+      }),
+  };
+}
+
+async function admittedTransportIdentity(
+  route: NativeTransportFixture,
+): Promise<CodingToolNativeReadIdentity> {
+  const result = await route.call("begin", originalReadTransportBegin());
+  expect(result.status).toBe(200);
+  const value = JSON.parse(result.body) as { ok: boolean; identity: CodingToolNativeReadIdentity };
+  expect(value.ok).toBe(true);
+  expect(value.identity.invocationId).toBeTypeOf("string");
+  return value.identity;
+}
+
+function nativeTransportFrame(
+  result: Awaited<ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]>>,
+): Extract<ReturnType<typeof decodeSecureWorkspaceNativeResponse>, { status: "ok" }> {
+  expect(result.status).toBe(200);
+  if (result.nativeBytes === undefined) throw new TypeError("Missing native frame");
+  const frame = decodeSecureWorkspaceNativeResponse(result.nativeBytes);
+  if (frame.status !== "ok") throw new TypeError("Expected successful native frame");
+  return frame;
+}
+
+it.each(["session", "unknown-run", "root", "cancelled"] as const)(
+  "rejects %s Read transport admission without authority charge",
+  async (change) => {
+    const f = nativeBridgeFixture("PRIVATE_REFUSED_ADMISSION", undefined, 1, false, FIXTURE_RUN_ID);
+    const charge = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+    const route = await startNativeReadTransportFixture(f);
+    const packet = originalReadTransportBegin();
+    const cancelled = new AbortController();
+    if (change === "session") packet.context = { ...packet.context, sessionID: "other-session" };
+    if (change === "unknown-run") packet.runId = "not-the-accepted-run";
+    if (change === "root")
+      route.root.mockReturnValue({
+        kind: "managed-task",
+        canonicalRoot: "/not-accepted",
+        repositoryRoot: f.authority.root,
+        fs: nodeWorkspaceFs,
+      });
+    if (change === "cancelled") cancelled.abort();
+    try {
+      expect(
+        nativeTransportVerdict((await route.call("begin", packet, cancelled.signal)).body).ok,
+      ).toBe(false);
+      expect(charge).not.toHaveBeenCalled();
+      expect(f.process).not.toHaveBeenCalled();
+    } finally {
+      await stopNativeBridge(f, route.fixture);
+    }
+  },
+);
+
+it("keeps native Read unavailable in a genuinely prepared STARTING service host", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const response = await f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: originalReadTransportBody("begin", originalReadTransportBegin()),
+    });
+    expect(JSON.parse(response.body)).toMatchObject({ ok: false, reason: "dispatch-refused" });
+    expect(f.producer.read).not.toHaveBeenCalled();
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("does not return a parent admitted while the accepted root changed across await", async () => {
+  const f = nativeBridgeFixture("PRIVATE_POSTAWAIT_ROOT", undefined, 1, false, FIXTURE_RUN_ID);
+  const owned = f.facade.nativeTextRead;
+  const original = owned?.invocations;
+  if (owned === undefined || original === undefined)
+    throw new TypeError("Missing actual native facet");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = vi.fn();
+  const begin = original.begin;
+  const facade = {
+    ...f.facade,
+    nativeTextRead: {
+      ...owned,
+      invocations: {
+        ...original,
+        begin: async (
+          input: CodingToolNativeReadBeginInput,
+        ): Promise<Awaited<ReturnType<typeof begin>>> => {
+          const result = await begin(input);
+          reached();
+          await held;
+          return result;
+        },
+      },
+    },
+  };
+  const route = await startNativeReadTransportFixture({ ...f, facade });
+  const pending = route.call("begin", originalReadTransportBegin());
+  try {
+    await vi.waitFor(() => {
+      expect(reached).toHaveBeenCalledOnce();
+    });
+    route.root.mockReturnValue({
+      kind: "managed-task",
+      canonicalRoot: "/changed-after-admission",
+      repositoryRoot: f.authority.root,
+      fs: nodeWorkspaceFs,
+    });
+    release();
+    expect(JSON.parse((await pending).body)).toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(await route.fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+    expect(f.process).not.toHaveBeenCalled();
+  } finally {
+    release();
+    await pending;
+    await stopNativeBridge(f, route.fixture);
+  }
+});
+
+it.each([
+  "accessor",
+  "inherited",
+  "symbol",
+  "extra",
+  "context-accessor",
+  "context-extra",
+  "range-stat",
+] as const)("captures Read transport data without trusting %s fields", async (kind) => {
+  const { copyNativeReadTransportPacket } = await import("./opencodeRuntimeComposition.js");
+  const getter = vi.fn(() => "PRIVATE_ACCESSOR");
+  const packet: Record<string | symbol, unknown> = JSON.parse(
+    originalReadTransportBody("begin", originalReadTransportBegin()),
+  ) as Record<string, unknown>;
+  if (kind === "accessor") Object.defineProperty(packet, "actionId", { get: getter });
+  if (kind === "inherited") Object.setPrototypeOf(packet, { authority: "not-owned" });
+  if (kind === "symbol") packet[Symbol("authority")] = "not-owned";
+  if (kind === "extra") packet.workspaceRoot = "/not-owned";
+  if (kind === "context-accessor")
+    Object.defineProperty(packet.context, "sessionID", { get: getter });
+  if (kind === "context-extra")
+    packet.context = { ...(packet.context as object), guard: "not-owned" };
+  if (kind === "range-stat") {
+    Object.assign(packet, {
+      phase: "stat",
+      identity: { actionId: "a", idempotencyKey: "a", invocationId: "b" },
+      ordinal: 1,
+      purpose: "native-tool-io",
+      range: { offset: 0, length: 1 },
+    });
+    delete packet.actionId;
+    delete packet.idempotencyKey;
+    delete packet.context;
+  }
+  expect(copyNativeReadTransportPacket(packet)).toBeUndefined();
+  expect(getter).not.toHaveBeenCalled();
+});
+
+function nativeTransportVerdict(body: string): { readonly ok: boolean } {
+  return JSON.parse(body) as { readonly ok: boolean };
+}
+
+it("logs technical root acquisition failure and starts no canonical Read effect", async () => {
+  const f = nativeBridgeFixture("PRIVATE_ROOT_ACQUISITION", undefined, 1, false, FIXTURE_RUN_ID);
+  const charge = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const route = await startNativeReadTransportFixture(f, {
+    diagnostics: {
+      record: (event): void => {
+        diagnostics.push(event);
+      },
+    },
+  });
+  route.root.mockImplementationOnce(() => {
+    throw new TypeError("PRIVATE_ROOT_ACQUISITION_FAILURE");
+  });
+  try {
+    const result = await route.call("begin", originalReadTransportBegin());
+    expect(result.status).toBe(502);
+    expect(nativeTransportVerdict(result.body)).toMatchObject({ ok: false });
+    expect(charge).not.toHaveBeenCalled();
+    expect(f.process).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_ROOT_ACQUISITION_FAILURE");
+  } finally {
+    await stopNativeBridge(f, route.fixture);
+  }
+});
+
+function observeNativeReadBytes(
+  f: NativeBridgeFixture,
+  captured: (bytes: Uint8Array) => void,
+): NativeBridgeFixture {
+  const selected = f.facade.nativeTextRead;
+  const parent = selected?.invocations;
+  const io = parent?.fileIO;
+  if (selected === undefined || parent === undefined || io === undefined)
+    throw new TypeError("Missing actual native file producer");
+  return {
+    ...f,
+    facade: {
+      ...f.facade,
+      nativeTextRead: {
+        ...selected,
+        invocations: {
+          ...parent,
+          fileIO: {
+            ...io,
+            readBytes: async (identity, input): ReturnType<typeof io.readBytes> => {
+              const result = await io.readBytes(identity, input);
+              if (result.ok) captured(result.bytes);
+              return result;
+            },
+          },
+        },
+      },
+    },
+  };
+}

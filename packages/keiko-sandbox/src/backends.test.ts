@@ -8,6 +8,7 @@ import {
   SEATBELT_DENY_EGRESS_PROFILE,
   type WrappedCommand,
 } from "./backends.js";
+import { executionRootSeatbeltProfile } from "./seatbelt-execution-root.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy } from "./types.js";
 
 const plan: IsolatedRunPlan = {
@@ -57,6 +58,7 @@ describe("buildWrappedCommand", () => {
       "--unshare-net",
       "--die-with-parent",
       "--new-session",
+      "--unshare-pid",
       "--proc",
       "/proc",
       "--dev",
@@ -119,6 +121,7 @@ describe("buildWrappedCommand", () => {
       "--unshare-net",
       "--die-with-parent",
       "--new-session",
+      "--unshare-pid",
       "--proc",
       "/proc",
       "--dev",
@@ -172,6 +175,19 @@ describe("buildWrappedCommand", () => {
     ]);
   });
 
+  it("keeps execution-root process confinement when networking is explicitly inherited", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("bubblewrap", {
+        ...plan,
+        filesystem: "execution-root",
+        network: "inherit",
+      }),
+    );
+    expect(wrapped.command).toBe("bwrap");
+    expect(wrapped.args).toContain("--unshare-pid");
+    expect(wrapped.args).not.toContain("--unshare-net");
+  });
+
   it("unshare maps root and creates a fresh network namespace", () => {
     const wrapped = expectWrapped(buildWrappedCommand("unshare", plan));
     expect(wrapped.command).toBe("unshare");
@@ -185,6 +201,64 @@ describe("buildWrappedCommand", () => {
     expect(wrapped.args[1]).toBe(SEATBELT_DENY_EGRESS_PROFILE);
     expect(wrapped.args.slice(2)).toEqual(["node", "-e", "process.exit(0)"]);
   });
+
+  it("supports execution-root Seatbelt without granting the host home or loopback network", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("seatbelt", {
+        ...plan,
+        filesystem: "execution-root",
+        cwd: '/work/root"quoted',
+      }),
+    );
+    const profile = wrapped.args[1];
+    expect(profile).toContain(
+      "(deny file-read* file-write* network* mach-lookup appleevent-send lsopen)",
+    );
+    expect(profile).toContain('(subpath "/work/root\\"quoted")');
+    expect(profile).not.toContain("localhost");
+    expect(profile).not.toContain('(subpath "/Users")');
+    const home = "/Users/test-owner";
+    const nvm = `${home}/.nvm/versions/node/v24/bin`;
+    const bounded = executionRootSeatbeltProfile({ ...plan, filesystem: "execution-root" }, [nvm]);
+    expect(bounded).toContain(`(subpath ${JSON.stringify(nvm)})`);
+    expect(bounded).not.toContain(`(subpath ${JSON.stringify(home)})`);
+  });
+
+  it("does not import broad Linux install roots or mutable System volumes into macOS", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("seatbelt", {
+        ...plan,
+        command: "/trusted/node/bin/node",
+        filesystem: "execution-root",
+      }),
+    );
+    expect(wrapped.args[1]).not.toContain('(subpath "/opt")');
+    expect(wrapped.args[1]).not.toContain('(subpath "/usr")');
+    expect(wrapped.args[1]).not.toContain('(subpath "/System")');
+    expect(wrapped.args[1]).toContain('(subpath "/System/Library")');
+    expect(wrapped.args[1]).toContain('(literal "/private/var/select/sh")');
+  });
+
+  it("admits a resolved npm package without granting its installation parent's other files", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("seatbelt", {
+        ...plan,
+        filesystem: "execution-root",
+        command: "/trusted/node/lib/node_modules/npm/bin/npx-cli.js",
+      }),
+    );
+    expect(wrapped.args[1]).toContain('(subpath "/trusted/node/lib/node_modules/npm")');
+    expect(wrapped.args[1]).not.toContain('(subpath "/trusted/node")');
+  });
+
+  it.each(["relative/root", "/work/root\nother", "/work/root\0other"])(
+    "refuses an unsafe execution root before building the profile: %j",
+    (cwd) => {
+      expect(() =>
+        buildWrappedCommand("seatbelt", { ...plan, filesystem: "execution-root", cwd }),
+      ).toThrow("seatbelt-execution-root-invalid");
+    },
+  );
 
   it("the seatbelt profile denies remote egress but keeps loopback and unix sockets", () => {
     expect(SEATBELT_DENY_EGRESS_PROFILE).toContain("(deny network-outbound)");

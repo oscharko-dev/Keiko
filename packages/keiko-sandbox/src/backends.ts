@@ -2,10 +2,19 @@
 // runs the target command under an OS/container egress boundary. No spawning, no filesystem — these
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
-import { basename, dirname, isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { linuxGatewayLauncherPath } from "./runtime.js";
-import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
+import {
+  executionRootSeatbeltProfile,
+  gatewayFilesystemSeatbeltRules,
+} from "./seatbelt-execution-root.js";
+import type {
+  IsolatedRunPlan,
+  NetworkGatewayPolicy,
+  RuntimeGatewayFilesystem,
+  SandboxBackend,
+} from "./types.js";
 
 export interface WrappedCommand {
   readonly command: string;
@@ -44,6 +53,7 @@ function roBindTryArgs(paths: readonly string[]): readonly string[] {
 function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
   // Execution-root mode is for untrusted generated tests. It exposes the disposable root read-write,
   // enough read-only system/toolchain paths to execute Node tooling, and /tmp + /dev + /proc.
+  // Its private PID namespace denies host process access and reaps detached descendants on exit.
   // /tmp is a symlink back into the disposable root so hardcoded temp writes stay contained.
   // It deliberately does not bind /home, /run, /var/run, or the host root as a writable filesystem.
   const commandDir = dirname(plan.command);
@@ -54,6 +64,7 @@ function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
     ...(plan.network === "none" ? ["--unshare-net"] : []),
     "--die-with-parent",
     "--new-session",
+    "--unshare-pid",
     "--proc",
     "/proc",
     "--dev",
@@ -162,7 +173,17 @@ function buildUnshareCommand(plan: IsolatedRunPlan): WrappedCommand {
 }
 
 function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
-  return ["-p", SEATBELT_DENY_EGRESS_PROFILE, plan.command, ...plan.args];
+  const profile =
+    plan.filesystem === "execution-root"
+      ? executionRootSeatbeltProfile(plan, [
+          "/bin",
+          "/usr/bin",
+          "/usr/lib",
+          dirname(process.execPath),
+          resolve(dirname(process.execPath), "../lib"),
+        ])
+      : SEATBELT_DENY_EGRESS_PROFILE;
+  return ["-p", profile, plan.command, ...plan.args];
 }
 
 function gatewayProcessExecPolicy(command: string, childExecutable: string): string {
@@ -194,6 +215,7 @@ export function buildGatewaySeatbeltCommand(
   command: string,
   args: readonly string[],
   childExecutable: string,
+  filesystem?: RuntimeGatewayFilesystem,
 ): WrappedCommand {
   const closedGateway = copyNetworkGatewayPolicy(gateway);
   if (closedGateway === undefined) throw new TypeError("gateway-network-policy-invalid");
@@ -202,9 +224,30 @@ export function buildGatewaySeatbeltCommand(
     "(version 1)(allow default)(deny network*)" +
     gatewayProcessExecPolicy(command, childExecutable) +
     "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
+    (filesystem === undefined ? "" : gatewayFilesystemSeatbeltRules(filesystem, childExecutable)) +
     `(allow network-outbound (remote ${family} "localhost:${String(closedGateway.port)}"))` +
     `(allow network-inbound (local ${family} "localhost:*"))`;
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
+}
+
+function buildSeatbeltCommand(plan: IsolatedRunPlan): WrappedCommand {
+  const gateway = copyNetworkGatewayPolicy(plan.network);
+  if (gateway !== undefined) {
+    return buildGatewaySeatbeltCommand(
+      gateway,
+      plan.command,
+      plan.args,
+      plan.gatewayChildExecutable ?? "",
+      plan.gatewayFilesystem,
+    );
+  }
+  if (
+    plan.network !== "none" &&
+    !(plan.network === "inherit" && plan.filesystem === "execution-root")
+  ) {
+    throw new TypeError("sandbox-network-policy-invalid");
+  }
+  return { command: "sandbox-exec", args: seatbeltArgs(plan) };
 }
 
 function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] {
@@ -236,9 +279,7 @@ function unsupportedBackend(backend: never): never {
 function assertCompatibleFilesystem(backend: SandboxBackend, plan: IsolatedRunPlan): void {
   if (
     plan.filesystem === "execution-root" &&
-    (backend === "unshare" ||
-      backend === "seatbelt" ||
-      copyNetworkGatewayPolicy(plan.network) !== undefined)
+    (backend === "unshare" || copyNetworkGatewayPolicy(plan.network) !== undefined)
   ) {
     throw new TypeError("sandbox-filesystem-policy-unsupported");
   }
@@ -255,19 +296,8 @@ export function buildWrappedCommand(
       return buildBubblewrapCommand(plan);
     case "unshare":
       return buildUnshareCommand(plan);
-    case "seatbelt": {
-      const gateway = copyNetworkGatewayPolicy(plan.network);
-      if (gateway !== undefined) {
-        return buildGatewaySeatbeltCommand(
-          gateway,
-          plan.command,
-          plan.args,
-          plan.gatewayChildExecutable ?? "",
-        );
-      }
-      if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
-      return { command: "sandbox-exec", args: seatbeltArgs(plan) };
-    }
+    case "seatbelt":
+      return buildSeatbeltCommand(plan);
     case "container-docker":
       return { command: "docker", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
     case "container-podman":

@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -18,7 +19,9 @@ import {
   resolveContained,
   safeRealDirectory,
   safeRealFile,
+  validateRuntimeGatewayFilesystemRoots,
 } from "./nativeRuntimeProcessPaths.js";
+import type { RuntimeGatewayFilesystem } from "@oscharko-dev/keiko-sandbox";
 
 // KEIKO-0357: safeRealFile / safeRealDirectory grew symlink and hard-link rejection guards but
 // had zero co-located negative-test coverage, unlike every comparable path-containment check in
@@ -146,6 +149,84 @@ describe("pathIsContained and resolveContained", () => {
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(platform === "win32")("native gateway filesystem root qualification", () => {
+  function roots(): { readonly root: string; readonly filesystem: RuntimeGatewayFilesystem } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-roots-")));
+    const filesystem: RuntimeGatewayFilesystem = {
+      workspaceRoot: join(root, "workspace"),
+      workspaceAccess: "read-only",
+      privateStateRoot: join(root, "state"),
+      runtimeReadRoot: join(root, "runtime"),
+    };
+    for (const path of [
+      filesystem.workspaceRoot,
+      filesystem.privateStateRoot,
+      filesystem.runtimeReadRoot,
+    ])
+      mkdirSync(path, { mode: 0o700 });
+    return { root, filesystem };
+  }
+
+  it("retains the exact accepted cwd and configured immutable runtime root", () => {
+    const fixture = roots();
+    const { filesystem } = fixture;
+    try {
+      expect(() => {
+        validateRuntimeGatewayFilesystemRoots(
+          filesystem,
+          [filesystem.runtimeReadRoot],
+          filesystem.workspaceRoot,
+        );
+      }).not.toThrow();
+      expect(() => {
+        validateRuntimeGatewayFilesystemRoots(
+          filesystem,
+          [filesystem.runtimeReadRoot],
+          fixture.root,
+        );
+      }).toThrow("native-runtime-request-invalid");
+      expect(() => {
+        validateRuntimeGatewayFilesystemRoots(filesystem, [fixture.root], filesystem.workspaceRoot);
+      }).toThrow("native-runtime-request-invalid");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses private state writable or readable by another user", () => {
+    const fixture = roots();
+    try {
+      chmodSync(fixture.filesystem.privateStateRoot, 0o755);
+      expect(() => {
+        validateRuntimeGatewayFilesystemRoots(
+          fixture.filesystem,
+          [fixture.filesystem.runtimeReadRoot],
+          fixture.filesystem.workspaceRoot,
+        );
+      }).toThrow("native-runtime-request-invalid");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a substituted private-state symlink immediately before launch", () => {
+    const fixture = roots();
+    try {
+      rmSync(fixture.filesystem.privateStateRoot, { recursive: true });
+      symlinkSync(fixture.filesystem.workspaceRoot, fixture.filesystem.privateStateRoot, "dir");
+      expect(() => {
+        validateRuntimeGatewayFilesystemRoots(
+          fixture.filesystem,
+          [fixture.filesystem.runtimeReadRoot],
+          fixture.filesystem.workspaceRoot,
+        );
+      }).toThrow("native-runtime-request-invalid");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
     }
   });
 });

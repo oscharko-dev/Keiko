@@ -189,6 +189,7 @@ export {
 export {
   discoverGatewayContextWindow,
   requestGatewayReadinessChatCompletion,
+  readGatewayReadinessChatCompletionResponse,
   type GatewayContextWindowDiscovery,
   type GatewayContextWindowDiscoveryRequest,
   type GatewayReadinessChatCompletionRequest,

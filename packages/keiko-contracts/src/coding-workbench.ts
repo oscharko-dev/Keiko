@@ -1,4 +1,5 @@
 import { deepFreeze } from "./deep-freeze.js";
+import type { VerificationKind } from "./verification.js";
 import type { GatewayVerificationState } from "./gateway-verification.js";
 import type { ModelReasoningEffort } from "./gateway.js";
 
@@ -239,6 +240,7 @@ export type CodingWorkbenchRuntimeEventKind =
   | "runtime-health"
   | "task-submitted"
   | "observation-streamed"
+  | "native-retry-changed"
   | "permission-requested"
   | "diff-summarized"
   | "verification-summarized"
@@ -257,6 +259,7 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "runtime-health",
     "task-submitted",
     "observation-streamed",
+    "native-retry-changed",
     "permission-requested",
     "diff-summarized",
     "verification-summarized",
@@ -530,10 +533,12 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   // Appended (PR #3452, F73): the coding model qualifies in every other respect, but its forced
   // tool-call proof is missing or older than 24 h. The remedy is a new probe, not another model.
   | "tool-calling-unverified"
-  // Appended (#3591, 1.1.7): the automatic verification of this model (context window or tool
+  // Appended (#3591, 1.1.7): the automatic verification of this model (basic chat, context window or tool
   // calling) is still running against a slow gateway. Transient: the Workbench re-reads its profile
   // until the probe settles, and no operator action is required.
-  | "model-verification-pending";
+  | "model-verification-pending"
+  // An actual current-generation basic-chat check failed; background recovery continues.
+  | "conversation-not-ready";
 
 /**
  * The floor `runMetadata.maxPromptTokens` must clear before a coding run is allowed to look
@@ -637,12 +642,59 @@ export interface CodingWorkbenchPermissionRequest {
   readonly expiresAt: string;
 }
 
+/** Body-free verifier step outcomes, never test or assertion counts. */
+export interface CodingWorkbenchVerificationSummary {
+  readonly verifierId: VerificationKind;
+  readonly status: "passed" | "failed" | "partial";
+  readonly passedCount: number;
+  /** Canonical non-passing steps: failed, denied, timed out, cancelled, or resource-exceeded. */
+  readonly failedCount: number;
+  readonly skippedCount: number;
+  /** Actual VerificationReport duration, in milliseconds. */
+  readonly durationMs: number;
+}
+
+/** Native OpenCode physical attempt (initial attempt is 1), never the gateway retry counter. */
+export interface CodingWorkbenchNativeRetry {
+  readonly attempt: number;
+  /** Canonical UTC millisecond instant copied from the native retry schedule. */
+  readonly scheduledAt: string;
+}
+
+/** Closed, body-free native retry facts shared by history, runtime events and SSE. */
+export function isCodingWorkbenchNativeRetry(value: unknown): value is CodingWorkbenchNativeRetry {
+  if (!nativeRetryDataRecord(value)) return false;
+  const facts = value;
+  if (!Number.isSafeInteger(facts.attempt) || Number(facts.attempt) < 1) return false;
+  const at = facts.scheduledAt;
+  if (typeof at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(at))
+    return false;
+  const millis = Date.parse(at);
+  return Number.isFinite(millis) && new Date(millis).toISOString() === at;
+}
+
+// The existing ownDataRecord convention: inspect descriptors before reading untrusted fields.
+function nativeRetryDataRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype) return false;
+  const fields = Object.getOwnPropertyDescriptors(value);
+  return (
+    Reflect.ownKeys(fields).length === 2 &&
+    Object.hasOwn(fields, "attempt") &&
+    Object.hasOwn(fields, "scheduledAt") &&
+    Object.values(fields).every((field) => "value" in field && field.enumerable === true)
+  );
+}
+
 export interface CodingWorkbenchRuntimeEvent {
   readonly schemaVersion: typeof CODING_WORKBENCH_SCHEMA_VERSION;
   readonly eventId: string;
   readonly runId: string;
   readonly occurredAt: string;
   readonly kind: CodingWorkbenchRuntimeEventKind;
+  /** Required only on native-retry-changed; null is the native history's explicit clear. */
+  readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly requestedMode?: CodingWorkbenchMode | undefined;
@@ -665,6 +717,10 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly failureLocationCount?: number | undefined;
   readonly failureLocationsTruncated?: boolean | undefined;
   readonly verificationTargetDigest?: string | undefined;
+  /** Server-owned edit revision captured at the verifier admission; absent means unavailable. */
+  readonly verificationEditRevision?: number | undefined;
+  /** Absent on older events; never infer counts or timing from tool text. */
+  readonly verificationSummary?: CodingWorkbenchVerificationSummary | undefined;
   readonly artifactKind?: string | undefined;
   readonly artifactLabel?: string | undefined;
   readonly artifactDigest?: string | undefined;

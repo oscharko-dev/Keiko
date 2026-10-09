@@ -4,6 +4,7 @@ import type {
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  WorkspaceManifestAccess,
 } from "@oscharko-dev/keiko-contracts";
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
@@ -511,6 +512,8 @@ describe("useCodingWorkbenchRuntime", () => {
       }),
     );
 
+    act(() => view.result.current.actions.setSelectedModel("model-redacted"));
+
     await waitFor(() => expect(view.result.current.state.pairing).toBe("unpaired"));
     await waitFor(() => expect(view.result.current.state.run.status).toBe("ready"));
     expect(view.result.current.state.canStart).toBe(false);
@@ -519,6 +522,8 @@ describe("useCodingWorkbenchRuntime", () => {
   });
 
   it("confirms the paired window through the same honest read before arming Start", async () => {
+    const pairing = deferred<WorkspaceManifestAccess>();
+    manifestAccessMock.mockReturnValueOnce(pairing.promise);
     installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
     const activeWorkspace = workspace();
     const view = renderHook(() =>
@@ -528,8 +533,20 @@ describe("useCodingWorkbenchRuntime", () => {
       }),
     );
 
+    act(() => view.result.current.actions.setSelectedModel("model-redacted"));
+    await waitFor(() => expect(view.result.current.state.run.status).toBe("ready"));
+    expect(view.result.current.state.pairing).toBe("unknown");
+    expect(view.result.current.state.canStart).toBe(false);
+    await act(async () => {
+      pairing.resolve({ session: "paired", manifests: [] });
+      await pairing.promise;
+    });
+
     await waitFor(() => expect(view.result.current.state.pairing).toBe("paired"));
     await waitFor(() => expect(view.result.current.state.canStart).toBe(true));
+
+    act(() => view.result.current.actions.setSelectedModel(null));
+    expect(view.result.current.state.canStart).toBe(false);
 
     view.unmount();
   });

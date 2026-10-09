@@ -134,21 +134,26 @@ function fieldInventory(): readonly Record<string, unknown>[] {
   ];
 }
 
+function strictModelInventory(options: StrictLiteLlmOptions): readonly Record<string, unknown>[] {
+  return options.fullInventory === true
+    ? fieldInventory()
+    : [
+        ...(options.unsuitableFirstChatModel === true ? [{ model_name: "dotsocr" }] : []),
+        { model_name: "qwen-chat", model_info: { mode: "chat" } },
+        ...(options.secondChatModel === true
+          ? [{ model_name: "gemma-chat", model_info: { mode: "chat" } }]
+          : []),
+        { model_name: "multilingual-e5-large", model_info: { mode: "embedding" } },
+      ];
+}
+
 function answerModelInfo(res: ServerResponse, options: StrictLiteLlmOptions): void {
-  if (options.fullInventory === true) {
-    json(res, { data: fieldInventory() });
-    return;
-  }
-  json(res, {
-    data: [
-      ...(options.unsuitableFirstChatModel === true ? [{ model_name: "dotsocr" }] : []),
-      { model_name: "qwen-chat", model_info: { mode: "chat" } },
-      ...(options.secondChatModel === true
-        ? [{ model_name: "gemma-chat", model_info: { mode: "chat" } }]
-        : []),
-      { model_name: "multilingual-e5-large", model_info: { mode: "embedding" } },
-    ],
-  });
+  json(res, { data: strictModelInventory(options) });
+}
+
+function answerModels(res: ServerResponse, options: StrictLiteLlmOptions): void {
+  const ids = new Set(strictModelInventory(options).map((model) => model.model_name));
+  json(res, { data: [...ids].map((id) => ({ id })) });
 }
 
 function answerChatCompletion(
@@ -251,6 +256,8 @@ function startStrictLiteLlm(
       const url = req.url ?? "";
       if (url.endsWith("/model/info")) {
         answerModelInfo(res, options);
+      } else if (url.endsWith("/models")) {
+        answerModels(res, options);
       } else if (url.endsWith("/chat/completions")) {
         answerChatCompletion(res, raw, log, behavior);
       } else if (url.endsWith("/embeddings")) {

@@ -140,12 +140,17 @@ function useActivityConnection(input: ActivityConnectionInput): void {
     }
     const controller = new AbortController();
     setState({ status: "loading", feed: null, errorCode: null });
-    void connectActivity(controller, enqueue, runStateRef)
+    const publish = (snapshot: CodingAppSessionChannelSnapshot): void => {
+      if (!controller.signal.aborted) enqueue(snapshot);
+    };
+    void connectActivity(controller, publish, runStateRef)
       .then(() => {
+        if (controller.signal.aborted) return;
         flush();
         markDisconnected(controller, runStateRef, setState);
       })
       .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
         flush();
         markConnectionFailure(error, controller, setState);
       });

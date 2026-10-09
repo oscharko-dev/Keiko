@@ -433,7 +433,7 @@ export async function handleSetActiveTaskWorkspace(
       }
       // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
       assertSafeFieldValue(requestedBy, "requestedBy");
-      if (deps.codingRuntimeOrchestrator?.hasLiveRun()) {
+      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
         throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
       }
       const result = await guard.setActive({
@@ -468,7 +468,7 @@ export async function handleSelectLocalCheckout(
       correlationId: ctx.correlationId,
     },
     async () => {
-      if (deps.codingRuntimeOrchestrator?.hasLiveRun()) {
+      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
         throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
       }
       const body = await readJsonObject(ctx.req);
@@ -478,7 +478,7 @@ export async function handleSelectLocalCheckout(
       const resolved = await resolveRoot(deps.store, root, deps.redactor);
       // Body parsing and root resolution yield to other requests. Recheck immediately before the
       // synchronous checkout mutation so a run started meanwhile cannot lose its bound branch.
-      if (deps.codingRuntimeOrchestrator?.hasLiveRun()) {
+      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
         throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
       }
       let active: ActiveWorkspaceView;

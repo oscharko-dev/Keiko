@@ -127,6 +127,7 @@ export function recordGovernedToolModelContent(
   sink: ServerLogSink,
   correlationId: string,
   result: unknown,
+  bridgeDurationMs?: number,
 ): void {
   const status =
     typeof result === "object" && result !== null && "status" in result ? result.status : undefined;
@@ -136,7 +137,10 @@ export function recordGovernedToolModelContent(
   sink.write(
     activityLogEvent(
       CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION,
-      { correlationId },
+      {
+        correlationId,
+        ...(bridgeDurationMs === undefined ? {} : { durationMs: bridgeDurationMs }),
+      },
       { framing: facts.framing, textBlockCount: facts.textBlockCount, resultStatus },
     ),
   );

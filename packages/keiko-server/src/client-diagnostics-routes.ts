@@ -151,6 +151,24 @@ const CLIENT_COMPOSER_ACTIVITY = defineActivityLogOperation({
       required: false,
       values: ["keyboard"],
     },
+    submissionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["start", "follow-up"],
+    },
+    submissionOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["attempted"],
+    },
+    normalization: { type: "string", dataClass: "closed-enum", required: false, values: ["trim"] },
+    displayedDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    submittedDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    draftMatchesInput: { type: "boolean", dataClass: "closed-enum", required: false },
+    inputCharacterCount: { type: "integer", dataClass: "count", required: false },
+    submittedCharacterCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -571,6 +589,9 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "files-directory-navigation",
   "files-project-selection",
   "editor-project-selection",
+  "gateway-catalog-adoption",
+  "gateway-profile-refresh",
+  "model-selection-availability",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -587,6 +608,9 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "files directory navigation": "files-directory-navigation",
   "files project selection": "files-project-selection",
   "editor project selection": "editor-project-selection",
+  "gateway catalog adoption": "gateway-catalog-adoption",
+  "gateway profile refresh": "gateway-profile-refresh",
+  "model selection availability": "model-selection-availability",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -632,6 +656,45 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.logClientStageSettled",
   fields: {
     ...CLIENT_STAGE_FIELDS,
+    profileOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["adopted", "unavailable", "failed", "superseded"],
+    },
+    catalogReread: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["requested", "skipped", "none"],
+    },
+    modelSurface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["chat", "coding-workbench"],
+    },
+    catalogSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["bootstrap", "foreground", "background", "workbench"],
+    },
+    catalogOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unchanged", "changed", "adopted", "held", "restored", "fallback", "refused"],
+    },
+    configuredModelCount: { type: "integer", dataClass: "count", required: false },
+    usableModelCount: { type: "integer", dataClass: "count", required: false },
+    selectionProvenance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["human", "elected"],
+    },
+    selectionDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     previewKind: {
       type: "string",
       dataClass: "closed-enum",
@@ -2130,12 +2193,30 @@ function logClientComposerActivity(
         ...(request.composerFocusIndicator === undefined
           ? {}
           : { focusIndicator: request.composerFocusIndicator }),
+        ...composerSubmissionFields(request),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
   return true;
+}
+
+function composerSubmissionFields(
+  request: ClientDiagnosticIngestRequest,
+): Partial<ActivityLogFields<typeof CLIENT_COMPOSER_ACTIVITY>> {
+  const submission = request.composerSubmission;
+  if (submission === undefined) return {};
+  return {
+    submissionKind: submission.kind,
+    submissionOutcome: submission.outcome,
+    normalization: submission.normalization,
+    displayedDigest: submission.displayedDigest,
+    submittedDigest: submission.submittedDigest,
+    draftMatchesInput: submission.draftMatchesInput,
+    inputCharacterCount: submission.inputCharacterCount,
+    submittedCharacterCount: submission.submittedCharacterCount,
+  };
 }
 
 function logClientStageStarted(
@@ -2170,6 +2251,34 @@ function sourcePreviewActivityFields(
   return binaryReason === undefined ? counts : { ...counts, binaryReason };
 }
 
+function modelCatalogActivityFields(
+  evidence: ClientStageSettledIngestRequest["modelCatalog"],
+): Pick<
+  ActivityLogFields<typeof CLIENT_STAGE_SETTLED_OPERATION>,
+  | "modelSurface"
+  | "catalogSource"
+  | "catalogOutcome"
+  | "configuredModelCount"
+  | "usableModelCount"
+  | "selectionProvenance"
+  | "selectionDigest"
+> {
+  if (evidence === undefined) return {};
+  return {
+    modelSurface: evidence.surface,
+    catalogSource: evidence.source,
+    catalogOutcome: evidence.outcome,
+    configuredModelCount: evidence.configuredModelCount,
+    usableModelCount: evidence.usableModelCount,
+    ...(evidence.selectionProvenance === undefined
+      ? {}
+      : { selectionProvenance: evidence.selectionProvenance }),
+    ...(evidence.selectionDigest === undefined
+      ? {}
+      : { selectionDigest: evidence.selectionDigest }),
+  };
+}
+
 function logClientStageSettled(
   request: ClientStageSettledIngestRequest,
   correlationId: string,
@@ -2183,6 +2292,13 @@ function logClientStageSettled(
         ordinal: request.ordinal,
         ...request.deletion,
         ...sourcePreviewActivityFields(request.preview),
+        ...modelCatalogActivityFields(request.modelCatalog),
+        ...(request.gatewayProfile === undefined
+          ? {}
+          : {
+              profileOutcome: request.gatewayProfile.outcome,
+              catalogReread: request.gatewayProfile.catalogReread,
+            }),
         ...(request.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: request.navigationOutcome }),

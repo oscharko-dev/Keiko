@@ -12,18 +12,27 @@ import {
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
-import { WORKSPACE_READ_REFUSAL_CODES } from "./codingToolReadEditPorts.js";
+import {
+  WORKSPACE_READ_REFUSAL_CODES,
+  WORKSPACE_DISCOVERY_REFUSAL_CODES,
+} from "./codingToolReadEditPorts.js";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import { WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type {
   AuxiliaryCapabilityOutcomeV1,
   VerificationFailureLocation,
+  WorkspacePathDiscoveryEntry,
+  WorkspacePathDiscoveryTruncationReason,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  EDITOR_AGENT_CONFLICT_CODES,
-  EDITOR_AGENT_FAILURE_CODES,
-} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+  CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
+  isCodingSafeActivityPresentationPath,
+  type CodingSafeActivityToolPresentation,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
@@ -41,6 +50,7 @@ import {
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
   declaredCodingToolAction,
+  codingToolDiscoveryText,
   dependencyBootstrapFailureSummary,
   isPermissionObservation,
   parseCodingToolRequest,
@@ -48,6 +58,7 @@ import {
   type CodingToolActionRequest,
   type CodingToolEgressReadResult,
   type CodingToolReadResult,
+  type CodingToolDiscoveryResult,
   type CodingToolResult,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
@@ -77,41 +88,12 @@ const READ_DIGEST = /^[a-f0-9]{64}$/u;
 const VERIFICATION_FAILURE_SUMMARY =
   /^(?:test|targeted-test|typecheck|lint|build) failed; (?:0|[2-8]) structured failure locations$|^(?:test|targeted-test|typecheck|lint|build) failed; 1 structured failure location$/u;
 
-// The closed vocabulary an edit failure's `reasonCode` may carry: the two contract-owned closed
-// enums (EditorAgentConflictCode + EditorAgentFailureCode) plus this port's own transport /
-// no-session / route markers. Sourcing the two contract enums instead of hand-restating them keeps
-// this set in lockstep with `keiko-contracts` — every future addition to either canonical list
-// reaches the facade without a coordinated edit. Content-free by construction (never raw command
-// output, unlike the delegate evidence every other governed action strips), so forwarding one of
-// these to the model in place of the bare "failed" status is safe. An unrecognized value (a
-// defensive floor, not an expected path) falls back to "failed" rather than forwarding an unvetted
-// string.
-const EDIT_TRANSPORT_REASON_CODES = [
-  "RESPONSE_TOO_LARGE",
-  "TRANSPORT_FAILURE",
-  "REDIRECT_BLOCKED",
-  "EDIT_TRANSPORT_ERROR",
-] as const;
-// The two refusals the read/edit port raises BEFORE the editor route ever sees the changeset: the
-// prepare stage rejected it (malformed changeset, revoked mutation guard, cross-wired producer
-// binding), or the workspace access the run is bound to stopped resolving while the port waited for
-// a live editor session. Both used to reach the model as a bare "failed", so a governed run whose
-// workspace authority had been revoked looked exactly like a retryable editor conflict and the
-// agent kept re-issuing the edit (workbench end-to-end run, 2026-09-03).
-const EDIT_PORT_REFUSAL_REASON_CODES = [
-  "EDIT_PREPARE_FAILED",
-  "WORKSPACE_ACCESS_LOST",
-  "EDIT_MUTATION_FAILED",
-] as const;
-// Exported so the run's edit refusal bound (codingRuntimeRefusalEscalation.ts) can pin that it
-// classifies every code this facade forwards to the model (F5, #3873).
-export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
-  ...EDITOR_AGENT_CONFLICT_CODES,
-  ...EDITOR_AGENT_FAILURE_CODES,
-  ...EDIT_TRANSPORT_REASON_CODES,
-  ...EDIT_PORT_REFUSAL_REASON_CODES,
-  "ci-observation-required",
-]);
+// The contract-owned vocabulary combines the existing editor conflict/failure codes with the
+// governed port's refusal and transport markers. Unknown delegate strings are withheld.
+// Exported so the run's refusal escalation pins complete classification without a second list.
+export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>(
+  CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
+);
 // The verification PORT's own closed markers (productionManagedWorktreeTools.ts), as opposed to the
 // runner vocabulary sourced below. The first two are raised BEFORE the runner is called: the run's
 // authority or managed-workspace liveness was already gone when the tool call arrived, or the
@@ -157,6 +139,7 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   // A read the port refused for the model's own request (#3615): named, so the model can act on it
   // and the catalog settles the call as a refusal instead of a handler fault.
   ...Object.values(WORKSPACE_READ_REFUSAL_CODES),
+  ...Object.values(WORKSPACE_DISCOVERY_REFUSAL_CODES),
   ...GOVERNED_VERIFICATION_REASON_CODES,
   // The verification runner's own closed codes (editor/verificationRunnerErrors.ts), sourced rather
   // than restated for the same reason the two contract enums above are. A verification the runner
@@ -225,6 +208,7 @@ async function executeCatalogRequest(
   const delegateState = { threw: false };
   try {
     const result = await bridge.execute(request, input, async (signal, mutationGuard) => {
+      input.onDelegateStarted?.();
       try {
         return project(
           request,
@@ -332,8 +316,35 @@ function codingToolEditOutcome(result: CodingToolResult): CodingToolEditOutcome 
   return {
     kind: "refused",
     reasonCode: code === undefined || code === "failed" ? "UNCLASSIFIED" : code,
-    ...EDIT_REFUSAL_CAUSES.get(result),
+    ...bodyFreeEditRefusalCause(EDIT_REFUSAL_CAUSES.get(result)),
   };
+}
+
+function bodyFreeEditRefusalCause(
+  cause: EditRefusalCause | undefined,
+): Omit<EditRefusalCause, "affectedRelativePath"> {
+  return {
+    ...(cause?.prepareCause === undefined ? {} : { prepareCause: cause.prepareCause }),
+    ...(cause?.readReason === undefined ? {} : { readReason: cause.readReason }),
+  };
+}
+
+/** Server-private live presentation; the affected path never enters the model reply or evidence. */
+export function codingToolEditPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  if (result.status !== "failed") return {};
+  const candidate =
+    result.reasonCode ?? result.evidence.find((item) => item.kind === "governed-delegate")?.code;
+  const refusalReason = CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES.find(
+    (code) => code === candidate,
+  );
+  if (refusalReason === undefined) return {};
+  const affectedRelativePath = EDIT_REFUSAL_CAUSES.get(result)?.affectedRelativePath;
+  return Object.freeze({
+    refusalReason,
+    ...(affectedRelativePath === undefined ? {} : { affectedRelativePath }),
+  });
 }
 
 async function executeAdmitted(
@@ -363,6 +374,7 @@ async function executePlainAction(
   request: CodingToolActionRequest,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
 ): Promise<CodingToolResult> {
+  input.onDelegateStarted?.();
   const runDelegate = (): Promise<unknown> =>
     ports.delegate.execute(request, input.signal, admission.mutationGuard);
   try {
@@ -423,6 +435,7 @@ async function executeClaimedEdit(
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
   if (isAborted(signal)) return empty("cancelled");
+  input.onDelegateStarted?.();
   const runDelegate = (): Promise<unknown> =>
     ports.delegate.execute(request, signal, admission.mutationGuard);
   try {
@@ -468,10 +481,20 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
     };
   }
   if (request.action === "skill" || request.action === "child-agent") return projected("failed");
-  const read = projectPayload(request, value.read);
-  return read === undefined
-    ? projected(value.outcome)
-    : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
+  return projectCompletedPayload(request, value.read);
+}
+
+function projectCompletedPayload(
+  request: CodingToolActionRequest,
+  value: unknown,
+): CodingToolResult {
+  const read = projectPayload(request, value);
+  if (read === undefined) return projected(request.action === "discover" ? "failed" : "completed");
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    read,
+  };
 }
 
 function isCodingToolVerificationResult(value: unknown): value is CodingToolVerificationResult {
@@ -916,7 +939,9 @@ function projectEditFailure(
 // The closed cause the edit port gave an `EDIT_PREPARE_FAILED` refusal (which preparation step
 // refused, and why a materialization read failed) rides BESIDE the model-facing result, keyed by the
 // result object, never in it: `JSON.stringify(result)` is what the model receives, and the run's
-// refusal bound is the only reader (`codingToolEditOutcome`). Every route that answers an edit
+// refusal bound reads only its closed words (`codingToolEditOutcome`); the authenticated live UI
+// reads an optional authoritative affected path through `codingToolEditPresentation`. The path
+// never enters the model-facing result, the outcome observer or the Activity Log. Every answered edit
 // hands back the object `project` built — the admitted delegate and the catalog bridge alike — so
 // the key survives both. A word outside the closed vocabularies is dropped, and the refusal then
 // reads as the code alone, exactly as before.
@@ -927,6 +952,7 @@ const EDIT_READ_REASON_SET: ReadonlySet<unknown> = new Set(EDIT_READ_REASONS);
 interface EditRefusalCause {
   readonly prepareCause?: EditPrepareCause;
   readonly readReason?: EditReadReason;
+  readonly affectedRelativePath?: string;
 }
 
 function isEditPrepareCause(value: unknown): value is EditPrepareCause {
@@ -939,11 +965,23 @@ function isEditReadReason(value: unknown): value is EditReadReason {
 
 function editRefusalCause(value: Record<string, unknown>): EditRefusalCause | undefined {
   const { prepareCause, readReason } = value;
+  const affectedRelativePath = authoritativeAffectedPath(value);
   const cause = {
     ...(isEditPrepareCause(prepareCause) ? { prepareCause } : {}),
     ...(isEditReadReason(readReason) ? { readReason } : {}),
+    ...(affectedRelativePath === undefined ? {} : { affectedRelativePath }),
   };
   return Object.keys(cause).length === 0 ? undefined : cause;
+}
+
+function authoritativeAffectedPath(value: Record<string, unknown>): string | undefined {
+  if (
+    !isEditReadReason(value.readReason) ||
+    (value.prepareCause !== "replacement-read-failed" && value.prepareCause !== "cancelled")
+  )
+    return undefined;
+  const path = value.affectedRelativePath;
+  return isCodingSafeActivityPresentationPath(path) && !isDenied(path) ? path : undefined;
 }
 
 function editFailureCoaching(
@@ -999,7 +1037,8 @@ function projectPayload(
   request: CodingToolActionRequest,
   value: unknown,
 ): CodingToolReadResult | CodingToolEgressReadResult | undefined {
-  if (request.action === "read" || request.action === "discover") return projectRead(value);
+  if (request.action === "read" || request.action === "discover")
+    return projectRead(value, request.action === "discover" ? request.maxResults : undefined);
   if (request.action === "egress") return projectEgressRead(value);
   return undefined;
 }
@@ -1007,14 +1046,160 @@ function projectPayload(
 // The digest is validated and passed through, never recomputed: it covers the WHOLE governed
 // file while `text` may be only the requested window (#2473), and recomputing it over the window
 // would break the changeset expectedContentHash anchor.
-function projectRead(value: unknown): CodingToolReadResult | undefined {
+function projectRead(value: unknown, maxPaths?: number): CodingToolReadResult | undefined {
   if (!isRecord(value) || typeof value.text !== "string") return undefined;
   const bytes = Buffer.from(value.text, "utf8");
   if (bytes.length > CODING_TOOL_MAX_READ_BYTES || !isUtf8(bytes)) return undefined;
   if (typeof value.digest !== "string" || !READ_DIGEST.test(value.digest)) return undefined;
   const facts = readWindowFacts(value);
   if (facts === undefined) return undefined;
-  return { text: value.text, byteCount: bytes.length, digest: value.digest, ...facts };
+  const discovery = discoveryCountFacts(value, maxPaths);
+  if (discovery === undefined) return undefined;
+  const result = {
+    text: value.text,
+    byteCount: bytes.length,
+    digest: value.digest,
+    ...facts,
+    ...discovery,
+  };
+  return checkedDiscoveryReadProjection(result);
+}
+
+function checkedDiscoveryReadProjection(
+  read: CodingToolReadResult,
+): CodingToolReadResult | undefined {
+  if (read.discovery === undefined) return read;
+  return validDiscoveryReadProjection(read) ? read : undefined;
+}
+
+function validDiscoveryReadProjection(read: CodingToolReadResult): boolean {
+  return (
+    read.discovery !== undefined &&
+    read.text === codingToolDiscoveryText(read.discovery.entries) &&
+    read.totalLines === (read.text.length === 0 ? 0 : read.text.split("\n").length - 1) &&
+    Buffer.byteLength(JSON.stringify(read), "utf8") <= CODING_TOOL_MAX_READ_BYTES
+  );
+}
+
+function discoveryCountFacts(
+  value: Record<string, unknown>,
+  maxPaths: number | undefined,
+):
+  | {
+      readonly returnedPathCount?: number;
+      readonly discovery?: CodingToolDiscoveryResult;
+    }
+  | undefined {
+  const count = value.returnedPathCount;
+  const discovery = value.discovery;
+  if (maxPaths === undefined || count === undefined)
+    return discovery === undefined ? {} : undefined;
+  if (!boundedLineCount(count, 0) || count > maxPaths) return undefined;
+  if (discovery === undefined) return { returnedPathCount: count };
+  return isDiscoveryResult(discovery, count)
+    ? { returnedPathCount: count, discovery: capturedDiscoveryResult(discovery) }
+    : undefined;
+}
+
+function isDiscoveryEntry(value: unknown): value is WorkspacePathDiscoveryEntry {
+  return (
+    plainDiscoveryRecord(value, ["relativePath", "kind", "sizeBytes"]) &&
+    isValidScopePath(value.relativePath, { mustBeRelative: true }) &&
+    typeof value.relativePath === "string" &&
+    !isDenied(value.relativePath) &&
+    (value.kind === "file" || value.kind === "directory") &&
+    boundedLineCount(value.sizeBytes, 0)
+  );
+}
+
+function plainDiscoveryRecord(
+  value: unknown,
+  keys: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Reflect.ownKeys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key)) &&
+    Object.values(Object.getOwnPropertyDescriptors(value)).every((entry) => "value" in entry)
+  );
+}
+
+function isDiscoveryReason(value: unknown): value is WorkspacePathDiscoveryTruncationReason {
+  const reasons: readonly unknown[] = WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS;
+  return reasons.includes(value);
+}
+
+function isDiscoveryEntries(
+  value: unknown,
+  count: number,
+): value is readonly WorkspacePathDiscoveryEntry[] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== count ||
+    !plainDenseArray(value) ||
+    !value.every(isDiscoveryEntry)
+  )
+    return false;
+  const entries: readonly WorkspacePathDiscoveryEntry[] = value;
+  return new Set(entries.map((entry) => entry.relativePath)).size === count;
+}
+
+function plainDenseArray(value: readonly unknown[]): boolean {
+  return (
+    Object.getPrototypeOf(value) === Array.prototype &&
+    Reflect.ownKeys(value).length === value.length + 1 &&
+    Object.keys(value).every((key, index) => key === String(index)) &&
+    Object.values(Object.getOwnPropertyDescriptors(value)).every((entry) => "value" in entry)
+  );
+}
+
+function isDiscoveryReasons(
+  value: unknown,
+): value is readonly WorkspacePathDiscoveryTruncationReason[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS.length &&
+    plainDenseArray(value) &&
+    value.every(isDiscoveryReason) &&
+    new Set(value).size === value.length
+  );
+}
+
+function isDiscoveryResult(value: unknown, count: number): value is CodingToolDiscoveryResult {
+  if (
+    !plainDiscoveryRecord(value, [
+      "entries",
+      "matchedCount",
+      "coverageIncomplete",
+      "truncationReasons",
+    ])
+  )
+    return false;
+  if (!isDiscoveryEntries(value.entries, count) || !isDiscoveryReasons(value.truncationReasons))
+    return false;
+  if (
+    !boundedLineCount(value.matchedCount, count) ||
+    value.coverageIncomplete !== value.truncationReasons.length > 0
+  )
+    return false;
+  return value.matchedCount === count
+    ? !value.truncationReasons.includes("result-limit")
+    : value.truncationReasons.includes("result-limit") ||
+        value.truncationReasons.includes("output-limit");
+}
+
+function capturedDiscoveryResult(value: CodingToolDiscoveryResult): CodingToolDiscoveryResult {
+  return {
+    entries: value.entries.map(({ relativePath, kind, sizeBytes }) => ({
+      relativePath,
+      kind,
+      sizeBytes,
+    })),
+    matchedCount: value.matchedCount,
+    coverageIncomplete: value.coverageIncomplete,
+    truncationReasons: [...value.truncationReasons],
+  };
 }
 
 function readWindowFacts(

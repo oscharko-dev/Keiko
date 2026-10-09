@@ -23,6 +23,7 @@ describe("check-package-surface script", () => {
     expect(source).toContain("export function assertTypeScriptRuntimeSurface");
     expect(source).toContain("KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY");
     expect(source).toContain("__keikoPackageSurfaceCoverageSeam");
+    expect(source).toContain("    assertRootPublicApiContract,");
     expect(source).toContain("must never pass a release gate");
     expect(source).not.toMatch(/^export\s+default\b/m);
   });

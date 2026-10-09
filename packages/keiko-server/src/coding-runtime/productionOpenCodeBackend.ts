@@ -1,5 +1,6 @@
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
@@ -8,6 +9,7 @@ import type {
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isCodingSafeActivityToolPresentation } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import {
@@ -52,6 +54,11 @@ import {
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import {
+  OPENCODE_TOOL_SOURCE_DEFINITIONS,
+  openCodeVisibleToolNames,
+  type OpenCodeToolProfile,
+} from "./opencodeToolSchemas.js";
 import { resolveOpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -117,7 +124,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "verifyObserved" | "clear"
+    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -148,6 +155,8 @@ export interface ProductionOpenCodeBackendInput {
 export function createProductionOpenCodeBackend(
   input: ProductionOpenCodeBackendInput,
 ): ProductionRuntimeBackendResolver {
+  const toolProfile = input.gatewayReadiness.toolProfile ?? "direct";
+  openCodeVisibleToolNames(toolProfile);
   const safeActivityProjection =
     input.safeActivityProjection ??
     createCodingSafeActivityProjection({
@@ -158,17 +167,19 @@ export function createProductionOpenCodeBackend(
           ? undefined
           : codingSafeActivityTtlMs(input.runtimeMaxDurationMs),
     });
-  return {
+  return Object.freeze({
+    toolProfile,
     safeActivityProjection,
-    createRun: (run): QualifiedProductionRuntimeRun =>
-      createOpenCodeRun(input, run, safeActivityProjection),
-  };
+    createRun: (run: ProductionRuntimeBackendInput): QualifiedProductionRuntimeRun =>
+      createOpenCodeRun(input, run, safeActivityProjection, toolProfile),
+  });
 }
 
 function createOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
   safeActivityProjection: CodingSafeActivityProjection,
+  toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
   const metadata = input.resolveGatewayRunMetadata?.(run.context.modelProfile.profileId);
@@ -181,9 +192,10 @@ function createOpenCodeRun(
     run.minted.authorityRef.runId,
     safeActivityProjection,
     input.historyCapture,
+    run.onRuntimeEvent,
   );
   try {
-    const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry);
+    const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry, toolProfile);
     const launch = openCodeLaunchMaterial(input, run);
     const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
     const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
@@ -212,15 +224,17 @@ function composeOpenCodeRun(
   run: ProductionRuntimeBackendInput,
   safeActivity: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>,
   contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
+  toolProfile: OpenCodeToolProfile,
 ): ReturnType<typeof createOpenCodeRuntimeComposition> {
   return createOpenCodeRuntimeComposition({
+    toolProfile,
     portable: {
       verification: input.portable.sidecar,
       resourceRoot: input.portable.installRoot,
       target: input.portable.target,
       admission: admissionPolicy(input.portable),
     },
-    stateBaseRoot: join(input.runtimeStateRoot, "coding-runtime", "opencode"),
+    stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
     capabilities: {
       modelGatewayCapability: run.minted.modelGatewayCapability,
@@ -251,13 +265,30 @@ function composeOpenCodeRun(
     toolResultCorrelationId: run.minted.authorityRef.runId,
     onRuntimeEvent: run.onRuntimeEvent,
     onSandboxAttestation: observeOpenCodeSandboxAttestation(input, run),
-    authorityLifecycle: run.authorityLifecycle,
-    codingToolApprovals: run.codingToolApprovals,
-    resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
+    ...runtimeLaunchSafety(run),
     // #3873: one submitted task's whole agent loop is bounded by the run's own envelope duration,
     // never by a fixed turn wall shorter than the envelope the operator configured.
     maxTurnWaitMs: run.context.budget.maxRuntimeMs,
   });
+}
+
+function openCodeStateBaseRoot(runtimeStateRoot: string): string {
+  mkdirSync(runtimeStateRoot, { recursive: true, mode: 0o700 });
+  return join(realpathSync(runtimeStateRoot), "coding-runtime", "opencode");
+}
+
+function runtimeLaunchSafety(
+  run: ProductionRuntimeBackendInput,
+): Pick<
+  OpenCodeRuntimeCompositionInput,
+  "resolveWorkspaceRootAccess" | "canSpawnRuntime" | "authorityLifecycle" | "codingToolApprovals"
+> {
+  return {
+    authorityLifecycle: run.authorityLifecycle,
+    codingToolApprovals: run.codingToolApprovals,
+    resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
+    canSpawnRuntime: run.canSpawnRuntime,
+  };
 }
 
 function observeOpenCodeSandboxAttestation(
@@ -302,99 +333,316 @@ function safeActivityController(
   runId: string,
   projection: CodingSafeActivityProjection,
   historyCapture: ProductionOpenCodeBackendInput["historyCapture"],
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
 ): NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]> {
-  const terminal =
-    boundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>();
-  const knownCalls = boundedCorrelations<true>();
-  let armed = false;
-  const ingest = (signal: CodingSafeActivitySignal): boolean => {
-    if (!armed) return true;
-    const accepted = projection.ingest(runId, signal);
-    if (accepted && signal.kind === "tool") {
-      rememberKnownCall(runId, signal.callId, projection, knownCalls, terminal);
-      schedulePendingTerminal(runId, signal.callId, projection, terminal, knownCalls);
-    }
-    return accepted;
+  const tools: ActivityToolCorrelations = {
+    runId,
+    projection,
+    terminal: boundedCorrelations<ToolSignal>(),
+    knownCalls: boundedCorrelations<KnownActivityTool>(),
+    binding: undefined,
+    armed: false,
   };
+  const retryObserver = nativeRetryObserver(runId, onRuntimeEvent);
   return {
-    captureMessages: (messages): boolean => armed && historyCapture?.(runId, messages) === true,
-    arm: (): void => {
-      armed = true;
+    captureMessages: (messages): boolean =>
+      tools.armed && historyCapture?.(runId, messages) === true,
+    arm: (sessionId, profile): void => {
+      bindActivityTools(tools, sessionId, profile);
+      tools.armed = true;
+    },
+    beginTool: (input): void => {
+      if (tools.armed) rememberAdmittedChild(tools, input);
     },
     clear: (): void => {
-      armed = false;
-      clearCorrelations(terminal);
-      clearCorrelations(knownCalls);
+      tools.armed = false;
+      tools.binding = undefined;
+      retryObserver.clear();
+      clearCorrelations(tools.terminal);
+      clearCorrelations(tools.knownCalls);
     },
-    ingest,
+    ingest: (signal): boolean => ingestActivitySignal(tools, retryObserver, signal),
     recordDrops: (count): void => {
-      if (armed) projection.recordDrops(runId, "validation-rejected", count);
+      if (tools.armed) projection.recordDrops(runId, "validation-rejected", count);
     },
-    settleTool: ({ actionId, state, occurredAt }): void => {
-      if (!armed) return;
-      const callId = callIdFromAction(actionId);
-      if (callId === undefined) {
-        projection.recordDrop(runId, "validation-rejected");
-        return;
-      }
-      const signal = { kind: "tool", callId, state, occurredAt } as const;
-      rememberTerminal(runId, callId, signal, projection, terminal, knownCalls);
-      if (knownCalls.values.has(callId)) {
-        schedulePendingTerminal(runId, callId, projection, terminal, knownCalls);
-      }
+    settleTool: (input): void => {
+      if (tools.armed) rememberSettledTool(tools, input);
     },
   };
 }
 
-function schedulePendingTerminal(
-  runId: string,
-  callId: string,
-  projection: CodingSafeActivityProjection,
-  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
-  known: BoundedCorrelations<true>,
+function ingestActivitySignal(
+  tools: ActivityToolCorrelations,
+  retryObserver: ReturnType<typeof nativeRetryObserver>,
+  signal: CodingSafeActivitySignal,
+): boolean {
+  if (!tools.armed) return true;
+  const accepted = tools.projection.ingest(tools.runId, signal);
+  if (accepted) retryObserver.observe(signal);
+  if (accepted && signal.kind === "tool") {
+    rememberObservedCall(tools, signal);
+    schedulePendingTerminal(tools, signal.callId);
+    scheduleParentChildren(tools, signal.callId);
+  }
+  return accepted;
+}
+
+function bindActivityTools(
+  tools: ActivityToolCorrelations,
+  sessionId: string | undefined,
+  profile: OpenCodeToolProfile | undefined,
 ): void {
-  queueMicrotask(() => {
-    applyPendingTerminal(runId, callId, projection, pending, known);
+  const binding =
+    profile === "code-mode" &&
+    sessionId !== undefined &&
+    /^ses_[A-Za-z0-9_-]{1,251}$/u.test(sessionId)
+      ? { sessionId, profile }
+      : undefined;
+  if (tools.binding?.sessionId !== binding?.sessionId) {
+    clearCorrelations(tools.terminal);
+    clearCorrelations(tools.knownCalls);
+  }
+  tools.binding = binding;
+}
+
+type ToolSignal = Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>;
+type KnownActivityTool =
+  | {
+      readonly kind: "native";
+      readonly messageId?: string;
+      readonly parentHash?: string;
+      readonly invalid?: true;
+    }
+  | { readonly kind: "child"; readonly parentHash: string; readonly tool: string };
+interface ActivityToolCorrelations {
+  readonly runId: string;
+  readonly projection: CodingSafeActivityProjection;
+  readonly terminal: BoundedCorrelations<ToolSignal>;
+  readonly knownCalls: BoundedCorrelations<KnownActivityTool>;
+  armed: boolean;
+  binding: { readonly sessionId: string; readonly profile: OpenCodeToolProfile } | undefined;
+}
+const MAPPED_ACTIVITY_TOOLS: ReadonlySet<string> = new Set(
+  OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => name),
+);
+
+function capturedChildHash(tools: ActivityToolCorrelations, actionId: string): string | undefined {
+  const binding = tools.binding;
+  if (binding === undefined || !actionId.startsWith(`${binding.sessionId}:`)) return undefined;
+  const match = /^cm_([a-f0-9]{64})_([1-9]\d{0,3})$/u.exec(callIdFromAction(actionId) ?? "");
+  return match !== null && Number(match[2]) <= MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS
+    ? match[1]
+    : undefined;
+}
+
+function rememberAdmittedChild(
+  tools: ActivityToolCorrelations,
+  input: Parameters<
+    NonNullable<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["beginTool"]>
+  >[0],
+): void {
+  if (tools.binding === undefined || !callIdFromAction(input.actionId)?.startsWith("cm_")) return;
+  const parentHash = capturedChildHash(tools, input.actionId);
+  const callId = callIdFromAction(input.actionId);
+  if (parentHash === undefined || callId === undefined || !MAPPED_ACTIVITY_TOOLS.has(input.tool)) {
+    tools.projection.recordDrop(tools.runId, "validation-rejected");
+    return;
+  }
+  if (tools.knownCalls.values.has(callId)) return;
+  rememberKnownCall(tools, callId, { kind: "child", parentHash, tool: input.tool });
+  rememberTerminal(tools, callId, {
+    kind: "tool",
+    callId,
+    tool: input.tool,
+    state: "running",
+    occurredAt: input.occurredAt,
+  });
+  schedulePendingTerminal(tools, callId);
+}
+
+function rememberSettledTool(
+  tools: ActivityToolCorrelations,
+  input: Parameters<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["settleTool"]>[0],
+): void {
+  const signal = settledToolSignal(input);
+  if (signal === undefined) {
+    tools.projection.recordDrop(tools.runId, "validation-rejected");
+    return;
+  }
+  if (tools.binding !== undefined && signal.callId.startsWith("cm_")) {
+    // A refusal or replay answered without executing is not another admitted child operation.
+    if (input.delegateStarted !== true) return;
+    if (
+      capturedChildHash(tools, input.actionId) === undefined ||
+      tools.knownCalls.values.get(signal.callId)?.kind !== "child"
+    ) {
+      tools.projection.recordDrop(tools.runId, "validation-rejected");
+      return;
+    }
+  }
+  rememberTerminal(tools, signal.callId, signal);
+  if (tools.knownCalls.values.has(signal.callId)) schedulePendingTerminal(tools, signal.callId);
+}
+
+function nativeParentHash(tools: ActivityToolCorrelations, signal: ToolSignal): string | undefined {
+  const binding = tools.binding;
+  if (binding === undefined || signal.tool !== "execute" || signal.messageId === undefined)
+    return undefined;
+  return createHash("sha256").update(`${binding.sessionId}:${signal.callId}`).digest("hex");
+}
+
+function ambiguousParent(
+  existing: Extract<KnownActivityTool, { readonly kind: "native" }> | undefined,
+  signal: ToolSignal,
+): boolean {
+  return (
+    existing?.invalid === true ||
+    (existing?.parentHash !== undefined &&
+      (existing.messageId !== signal.messageId || signal.tool !== "execute"))
+  );
+}
+
+function rememberObservedCall(tools: ActivityToolCorrelations, signal: ToolSignal): void {
+  const existing = tools.knownCalls.values.get(signal.callId);
+  if (existing?.kind === "child") return;
+  if (ambiguousParent(existing, signal)) {
+    if (existing !== undefined)
+      rememberKnownCall(tools, signal.callId, { ...existing, invalid: true });
+    tools.projection.recordDrop(tools.runId, "validation-rejected");
+    return;
+  }
+  const parentHash = nativeParentHash(tools, signal);
+  rememberKnownCall(tools, signal.callId, {
+    kind: "native",
+    ...(signal.messageId === undefined ? {} : { messageId: signal.messageId }),
+    ...(parentHash === undefined ? {} : { parentHash }),
   });
 }
 
-function applyPendingTerminal(
+function scheduleParentChildren(tools: ActivityToolCorrelations, callId: string): void {
+  const parent = tools.knownCalls.values.get(callId);
+  if (parent?.kind !== "native" || parent.parentHash === undefined || parent.invalid === true)
+    return;
+  for (const [childId, child] of tools.knownCalls.values) {
+    if (child.kind === "child" && child.parentHash === parent.parentHash)
+      schedulePendingTerminal(tools, childId);
+  }
+}
+
+function nativeRetryObserver(
   runId: string,
-  callId: string,
-  projection: CodingSafeActivityProjection,
-  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
-  known: BoundedCorrelations<true>,
-): void {
-  const signal = pending.values.get(callId);
-  if (signal !== undefined && projection.ingest(runId, signal)) {
-    deleteCorrelation(pending, callId);
-    deleteCorrelation(known, callId);
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
+): {
+  readonly observe: (signal: CodingSafeActivitySignal) => void;
+  readonly clear: () => void;
+} {
+  let current: { readonly messageId: string; readonly digest: string } | undefined;
+  let sequence = 0;
+  const observe = (signal: CodingSafeActivitySignal): void => {
+    if (signal.kind !== "message" || signal.role !== "assistant") return;
+    const nativeRetry = ownNativeRetryFact(signal.nativeRetry);
+    if (nativeRetry === null && current?.messageId !== signal.messageId) return;
+    const factDigest = codingRuntimeFactDigest([signal.messageId, nativeRetry]);
+    if (factDigest === current?.digest) return;
+    current =
+      nativeRetry === null ? undefined : { messageId: signal.messageId, digest: factDigest };
+    onRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: `event-runtime-status-${String(++sequence)}`,
+      runId,
+      occurredAt: new Date().toISOString(),
+      kind: "native-retry-changed",
+      nativeRetry,
+    });
+  };
+  return {
+    observe,
+    clear: (): void => {
+      current = undefined;
+    },
+  };
+}
+
+function ownNativeRetryFact(
+  fact: CodingWorkbenchRuntimeEvent["nativeRetry"],
+): NonNullable<CodingWorkbenchRuntimeEvent["nativeRetry"]> | null {
+  return fact === undefined || fact === null ? null : Object.freeze({ ...fact });
+}
+
+function settledToolSignal({
+  actionId,
+  state,
+  occurredAt,
+  presentation,
+}: Parameters<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["settleTool"]>[0]):
+  Extract<CodingSafeActivitySignal, { readonly kind: "tool" }> | undefined {
+  const callId = callIdFromAction(actionId);
+  if (
+    callId === undefined ||
+    (presentation !== undefined && !isCodingSafeActivityToolPresentation(presentation))
+  )
+    return undefined;
+  return {
+    kind: "tool",
+    callId,
+    state,
+    occurredAt,
+    ...(presentation === undefined ? {} : { presentation: Object.freeze({ ...presentation }) }),
+  };
+}
+
+function schedulePendingTerminal(tools: ActivityToolCorrelations, callId: string): void {
+  queueMicrotask(() => {
+    applyPendingTerminal(tools, callId);
+  });
+}
+
+function joinedChildSignal(
+  tools: ActivityToolCorrelations,
+  signal: ToolSignal,
+): ToolSignal | undefined {
+  const child = tools.knownCalls.values.get(signal.callId);
+  if (child?.kind !== "child") return signal;
+  for (const parent of tools.knownCalls.values.values()) {
+    if (
+      parent.kind === "native" &&
+      parent.parentHash === child.parentHash &&
+      parent.messageId !== undefined &&
+      parent.invalid !== true
+    ) {
+      return { ...signal, messageId: parent.messageId, tool: child.tool };
+    }
+  }
+  return undefined;
+}
+
+function applyPendingTerminal(tools: ActivityToolCorrelations, callId: string): void {
+  const pending = tools.terminal.values.get(callId);
+  const signal = pending === undefined ? undefined : joinedChildSignal(tools, pending);
+  if (signal !== undefined && tools.projection.ingest(tools.runId, signal)) {
+    deleteCorrelation(tools.terminal, callId);
+    if (signal.state !== "running") deleteCorrelation(tools.knownCalls, callId);
   }
 }
 
 function rememberKnownCall(
-  runId: string,
+  tools: ActivityToolCorrelations,
   callId: string,
-  projection: CodingSafeActivityProjection,
-  known: BoundedCorrelations<true>,
-  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
+  value: KnownActivityTool,
 ): void {
-  const evicted = rememberBoundedCorrelation(known, callId, true);
-  for (const identity of evicted) deleteCorrelation(pending, identity);
-  projection.recordDrops(runId, "capacity-rejected", evicted.length);
+  const evicted = rememberBoundedCorrelation(tools.knownCalls, callId, value);
+  for (const identity of evicted) deleteCorrelation(tools.terminal, identity);
+  tools.projection.recordDrops(tools.runId, "capacity-rejected", evicted.length);
 }
 
 function rememberTerminal(
-  runId: string,
+  tools: ActivityToolCorrelations,
   callId: string,
-  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
-  projection: CodingSafeActivityProjection,
-  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
-  known: BoundedCorrelations<true>,
+  signal: ToolSignal,
 ): void {
-  const evicted = rememberBoundedCorrelation(pending, callId, signal);
-  for (const identity of evicted) deleteCorrelation(known, identity);
-  projection.recordDrops(runId, "capacity-rejected", evicted.length);
+  const evicted = rememberBoundedCorrelation(tools.terminal, callId, signal);
+  for (const identity of evicted) deleteCorrelation(tools.knownCalls, identity);
+  tools.projection.recordDrops(tools.runId, "capacity-rejected", evicted.length);
 }
 
 function rememberBoundedCorrelation<T>(
@@ -592,6 +840,23 @@ function runtimeGatewayConfinement(
     envelopeDigest: run.minted.authorityRef.envelopeDigest,
     runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
     modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
+    ...(portable.target === "macos-arm64" || portable.target === "macos-x64"
+      ? {
+          filesystem: {
+            workspaceRoot: run.context.workspaceRoot,
+            workspaceAccess: "read-only" as const,
+            privateStateRoot: join(
+              realpathSync(input.runtimeStateRoot),
+              "coding-runtime",
+              "opencode",
+              run.minted.authorityRef.runId,
+            ),
+            runtimeReadRoot: realpathSync(
+              join(portable.installRoot, portable.sidecar.payloadRootPath),
+            ),
+          },
+        }
+      : {}),
   });
 }
 

@@ -151,6 +151,8 @@ function clientStagePostBody(
         ordinal: report.ordinal,
         durationMs: report.durationMs,
         preview: report.preview,
+        ...(report.modelCatalog === undefined ? {} : { modelCatalog: report.modelCatalog }),
+        ...(report.gatewayProfile === undefined ? {} : { gatewayProfile: report.gatewayProfile }),
         ...(report.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: report.navigationOutcome }),
@@ -294,6 +296,7 @@ function clientMessagePostBody(
     filesScopeDecision: meta.filesScopeDecision,
     codingRunRestore: meta.codingRunRestore,
     composerActivity: meta.composerActivity,
+    composerSubmission: meta.composerSubmission,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
     codingHistoryScope: meta.codingHistoryScope,

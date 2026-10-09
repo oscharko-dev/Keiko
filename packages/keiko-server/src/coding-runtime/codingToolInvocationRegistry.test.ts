@@ -431,3 +431,122 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
     },
   );
 });
+
+function nativeRegistryOwner(
+  signal: AbortSignal,
+): import("./codingToolFacadePorts.js").CodingToolNativeReadOwner {
+  return Object.freeze({
+    invocationId: "actual-catalog-invocation",
+    signal,
+    readTextSnapshot: vi.fn(() =>
+      Promise.resolve({ ok: false as const, reason: "denied" as const }),
+    ),
+    close: vi.fn(() => Promise.resolve(false)),
+    revoke: vi.fn(),
+  });
+}
+
+function claimedNativeRegistry(now: () => number = () => 0): {
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly request: StagedEditRequest;
+  readonly owner: ReturnType<typeof nativeRegistryOwner>;
+} {
+  const registry = createCodingToolInvocationRegistry({ now });
+  const request = stagedEdit();
+  expect(registry.stage(request).kind).toBe("staged");
+  const claimed = registry.take(request);
+  if (claimed.kind !== "ready") throw new TypeError("Expected claimed native parent");
+  const owner = nativeRegistryOwner(claimed.signal);
+  expect(registry.attachNativeRead(request, owner)).toBe(true);
+  return { registry, request, owner };
+}
+
+describe("native read ownership on the existing claimed invocation", () => {
+  it("attaches only after the actual parent is claimed and rejects replacement or forged opaque IDs", () => {
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const request = stagedEdit();
+    const owner = nativeRegistryOwner(new AbortController().signal);
+    expect(registry.attachNativeRead(request, owner)).toBe(false);
+    registry.stage(request);
+    expect(registry.attachNativeRead(request, owner)).toBe(false);
+    registry.take(request);
+    expect(registry.attachNativeRead(request, owner)).toBe(true);
+    expect(registry.attachNativeRead(request, owner)).toBe(false);
+    expect(registry.nativeReadOwner(request, "forged-catalog-invocation")).toBeUndefined();
+    expect(registry.nativeReadOwner(request, owner.invocationId)).toBe(owner);
+    expect(registry.inspect(request).kind).toBe("in-flight");
+    registry.dispose();
+  });
+
+  it.each(["settle", "expiry", "revoke", "dispose"] as const)(
+    "cuts off lookup on %s while revoking the attached actual owner once",
+    (cause) => {
+      let now = 0;
+      const f = claimedNativeRegistry(() => now);
+      expect(
+        f.registry.claimNativeReadOperation(f.request, f.owner.invocationId, 1, DIGEST_A),
+      ).toBe("ready");
+      if (cause === "settle") f.registry.settle(f.request);
+      else if (cause === "expiry") now = CODING_TOOL_INVOCATION_DEFAULT_TTL_MS + 1;
+      else if (cause === "revoke") f.registry.revokeRun(f.request.runId);
+      else f.registry.dispose();
+      expect(f.registry.nativeReadOwner(f.request, f.owner.invocationId)).toBeUndefined();
+      expect(
+        f.registry.claimNativeReadOperation(f.request, f.owner.invocationId, 2, DIGEST_A),
+      ).toBe("refused");
+      expect(f.owner.revoke).toHaveBeenCalledOnce();
+      f.registry.dispose();
+      expect(f.owner.revoke).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retains only packet ordinal and digest, refusing duplicate, changed, and malformed packets", () => {
+    const f = claimedNativeRegistry();
+    const claim = (ordinal: number, digest = DIGEST_A): string =>
+      f.registry.claimNativeReadOperation(f.request, f.owner.invocationId, ordinal, digest);
+    expect(claim(1)).toBe("ready");
+    expect(claim(1)).toBe("duplicate");
+    expect(claim(1, DIGEST_B)).toBe("conflict");
+    for (const ordinal of [0, -1, 0.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])
+      expect(claim(ordinal)).toBe("refused");
+    expect(claim(2, "invalid")).toBe("refused");
+    expect(claim(2)).toBe("ready");
+    expect(f.owner.readTextSnapshot).not.toHaveBeenCalled();
+    f.registry.dispose();
+  });
+
+  it("bounds the same parent's metadata inventory and releases it with the same entry", () => {
+    const f = claimedNativeRegistry();
+    for (let ordinal = 1; ordinal <= 2048; ordinal++)
+      expect(
+        f.registry.claimNativeReadOperation(f.request, f.owner.invocationId, ordinal, DIGEST_A),
+      ).toBe("ready");
+    expect(
+      f.registry.claimNativeReadOperation(f.request, f.owner.invocationId, 2049, DIGEST_A),
+    ).toBe("busy");
+    expect(f.registry.settle(f.request)).toBe(true);
+    const next = stagedEdit({
+      actionId: "fresh-action",
+      idempotencyKey: "fresh-key",
+      payload: Buffer.alloc(CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY),
+    });
+    expect(f.registry.stage(next).kind).toBe("staged");
+    f.registry.dispose();
+  });
+
+  it("charges packet metadata against the existing per-entry byte ceiling", () => {
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const request = stagedEdit({
+      payload: Buffer.alloc(CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY),
+    });
+    registry.stage(request);
+    const claimed = registry.take(request);
+    if (claimed.kind !== "ready") throw new TypeError("Expected claimed byte-bound parent");
+    const owner = nativeRegistryOwner(claimed.signal);
+    expect(registry.attachNativeRead(request, owner)).toBe(true);
+    expect(registry.claimNativeReadOperation(request, owner.invocationId, 1, DIGEST_A)).toBe(
+      "busy",
+    );
+    registry.dispose();
+  });
+});

@@ -583,7 +583,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "Das Kontextfenster des konfigurierten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens). Keiko hat es automatisch geprüft und konnte 32.000 Tokens nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben.",
   "codingWorkbench.source.unavailableReason.model-verification-pending":
-    "Keiko prüft dieses Modell gerade beim Gateway (ein Kontextfenster von mindestens 32.000 Token und Tool-Calling). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; die Workbench aktualisiert sich von selbst, sobald die Prüfung abgeschlossen ist.",
+    "Keiko prüft dieses Modell gerade beim Gateway (Chat-Verfügbarkeit, ein Kontextfenster von mindestens 32.000 Token und Tool-Calling). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; die Workbench aktualisiert sich von selbst, sobald die Prüfung abgeschlossen ist.",
+  "codingWorkbench.source.unavailableReason.conversation-not-ready":
+    "Die letzte automatische Chat-Prüfung konnte dieses Modell nicht nutzen. Keiko prüft im Hintergrund weiter; wähle ein anderes bereites Modell oder warte auf die Wiederherstellung.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "Die automatische Tool-Calling-Prüfung des Coding-Modells wurde nicht erfolgreich abgeschlossen. Prüfe das letzte Readiness-Ergebnis unter Einstellungen → Modelle.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
@@ -956,6 +958,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.duration.minutes": "{minutes} Min. {seconds} s",
   "codingWorkbench.runStatus.duration.hours": "{hours} Std. {minutes} Min.",
   "codingWorkbench.runStatus.phase.model": "Wartet auf das Modell",
+  "codingWorkbench.runStatus.nativeRetry": "OpenCode-Versuch {attempt} geplant für {scheduledAt}",
   "codingWorkbench.runStatus.phase.gateway": "Modell-Gateway nicht erreichbar, neuer Versuch",
   "codingWorkbench.runStatus.phase.verifier": "Führt eine Prüfung aus",
   "codingWorkbench.runStatus.phase.tool": "Führt ein Werkzeug aus",
@@ -1015,6 +1018,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Unteragent abgeschlossen",
   "codingWorkbench.event.operator-decision": "Deine Entscheidung nötig",
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
+  "codingWorkbench.event.native-retry-changed": "OpenCode-Wiederholungsstatus aktualisiert",
   "codingWorkbench.event.model-gateway-retrying": "Modell-Gateway nicht erreichbar, neuer Versuch",
   "codingWorkbench.event.model-gateway-recovered": "Modell-Gateway antwortet wieder",
   "codingWorkbench.event.model-gateway-retry-stopped": "Wiederholung beim Modell-Gateway beendet",
@@ -1040,6 +1044,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Lauf wurde beendet, weil der Modellanbieter nicht erreichbar war oder aufgehört hat zu antworten – auch nachdem Keiko gewartet und es erneut versucht hat. Abgelehnt wurde nichts. Prüfe, ob das Modell-Gateway und sein Anbieter laufen, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich. Ein Betreiber kann die Wartezeit mit der Gateway-Einstellung codingOutageWindowMs verlängern.",
   "codingWorkbench.event.failure.model-turn-failed":
     "Der Lauf wurde beendet, weil sein letzter Modellschritt fehlgeschlagen ist – den Grund zeigt dieser Schritt oben. Behebe diesen Grund und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.failure.verification-not-evidenced":
+    "Die Aufgabe ist nicht verifiziert: Die Prüfungen sind fehlgeschlagen, wurden nicht ausgeführt oder fanden vor der letzten Änderung statt. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Prüfe das letzte Verifikationsergebnis, behebe die Ursache und führe die passenden Prüfungen erneut aus, bevor die Aufgabe abgeschlossen wird.",
   "codingWorkbench.event.runFailed": "Coding-Lauf fehlgeschlagen",
   "codingWorkbench.event.turnFailure.provider-failed":
     "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",
@@ -1053,6 +1059,39 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Modell hat diesen Schritt ohne Text und ohne Werkzeugaufruf beendet. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
   "codingWorkbench.event.turnFailure.invalid-tool-call":
     "Das Modell hat bei jedem Versuch ein Werkzeug mit Argumenten aufgerufen, die nicht zum Werkzeug passen. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
+  "codingWorkbench.event.turnCause.provider-failed":
+    "Das Modell-Gateway hat diesen Schritt nicht abgeschlossen.",
+  "codingWorkbench.event.turnCause.stream-incomplete":
+    "Der Antwortstream des Modells endete, bevor dieser Schritt abgeschlossen war.",
+  "codingWorkbench.event.turnCause.turn-rejected":
+    "Das Modell oder eine Workbench-Sicherheitsprüfung hat diesen Schritt nicht angenommen.",
+  "codingWorkbench.event.turnCause.output-exhausted":
+    "Das Modell hat sein Ausgabebudget verbraucht, bevor dieser Schritt abgeschlossen war.",
+  "codingWorkbench.event.turnCause.empty-answer":
+    "Das Modell hat diesen Schritt ohne Antwort oder Tool-Aufruf beendet.",
+  "codingWorkbench.event.turnCause.invalid-tool-call":
+    "Das Modell hat für diesen Schritt keinen gültigen Tool-Aufruf erzeugt.",
+  "codingWorkbench.event.turnProgress.active": "Die Aufgabe läuft weiter.",
+  "codingWorkbench.event.turnProgress.gateway-retrying":
+    "Keiko versucht den Aufruf des Modell-Gateways automatisch erneut.",
+  "codingWorkbench.verification.result": "{verifier}: {status}",
+  "codingWorkbench.verification.verifier.test": "Tests",
+  "codingWorkbench.verification.verifier.targeted-test": "Gezielte Tests",
+  "codingWorkbench.verification.verifier.typecheck": "Typprüfung",
+  "codingWorkbench.verification.verifier.lint": "Lint",
+  "codingWorkbench.verification.verifier.build": "Build",
+  "codingWorkbench.verification.status.passed": "Bestanden",
+  "codingWorkbench.verification.status.failed": "Fehlgeschlagen",
+  "codingWorkbench.verification.status.partial": "Teilweise",
+  "codingWorkbench.verification.checks":
+    "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {skipped} übersprungen",
+  "codingWorkbench.verification.duration": "Dauer: {duration} ms",
+  "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
+  "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
+  "codingWorkbench.activity.returnedPaths": "Zurückgegebene Pfade: {count}",
+  "codingWorkbench.activity.editRefusal": "Edit abgelehnt: {reason}",
+  "codingWorkbench.activity.affectedFile": "Betroffene Datei: {path}",
+  "codingWorkbench.activity.serviceDuration": "Tool-Verarbeitung: {duration} ms",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

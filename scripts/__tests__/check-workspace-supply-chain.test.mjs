@@ -1,4 +1,10 @@
 import { Buffer } from "node:buffer";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, URL } from "node:url";
+import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,6 +12,7 @@ import {
   addTypeScriptRuntimeToSbom,
   isLicenseExpressionApproved,
   offendersForComponent,
+  reviewedDependencyLicenseFailures,
   typescriptToolchainSbomFailures,
 } from "../check-workspace-supply-chain.mjs";
 
@@ -190,3 +197,214 @@ describe("offendersForComponent", () => {
     ).toEqual([{ id: "x@1.0.0", license: "(GPL-3.0-only OR LGPL-3.0-only)" }]);
   });
 });
+
+describe("version-bound component license decisions", () => {
+  const component = {
+    name: "spdx-exceptions",
+    version: "2.5.0",
+    purl: "pkg:npm/spdx-exceptions@2.5.0",
+    licenses: [{ license: { id: "CC-BY-3.0" } }],
+  };
+  it("accepts only the reviewed SPDX data identity with its actual declared license", () => {
+    expect(offendersForComponent(component)).toEqual([]);
+    expect(APPROVED_LICENSES.has("CC-BY-3.0")).toBe(false);
+    expect(isLicenseExpressionApproved("CC-BY-3.0")).toBe(false);
+  });
+  it("accepts the reviewed Bowser variant without globally admitting MITNFA", () => {
+    expect(
+      offendersForComponent({
+        name: "bowser",
+        version: "2.14.1",
+        purl: "pkg:npm/bowser@2.14.1",
+        licenses: [{ expression: "MIT AND MITNFA" }],
+      }),
+    ).toEqual([]);
+    expect(isLicenseExpressionApproved("MITNFA")).toBe(false);
+  });
+  it.each([
+    { purl: undefined },
+    { purl: "pkg:npm/spdx-exceptions@2.6.0" },
+    { version: "2.6.0" },
+    { name: "other" },
+    { purl: "pkg:npm/other@2.5.0" },
+    { licenses: [] },
+    { licenses: [{ license: { id: "GPL-3.0-only" } }] },
+    { licenses: [{ expression: "CC-BY-3.0 AND GPL-3.0-only" }] },
+    { licenses: [{ expression: "CC-BY-3.0 WITH unknown-exception" }] },
+    { licenses: [{ license: { id: "unknown" } }] },
+  ])("retains refusals for identity or license drift %j", (drift) => {
+    expect(offendersForComponent({ ...component, ...drift })).not.toEqual([]);
+  });
+  it("still chooses the existing BSD option of json-schema without a local exception", () => {
+    expect(
+      offendersForComponent({
+        name: "json-schema",
+        version: "0.4.0",
+        purl: "pkg:npm/json-schema@0.4.0",
+        licenses: [{ expression: "(AFL-2.1 OR BSD-3-Clause)" }],
+      }),
+    ).toEqual([]);
+  });
+});
+
+function canonicalLicenseLocks() {
+  return [
+    JSON.parse(readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8")),
+    JSON.parse(
+      readFileSync(
+        new URL("../../native/opencode-service-host/package-lock.json", import.meta.url),
+        "utf8",
+      ),
+    ),
+  ];
+}
+
+describe("reviewed dependency license preflight", () => {
+  it("qualifies both actual canonical lock producers before package-wide GitHub exclusions", () => {
+    expect(reviewedDependencyLicenseFailures(canonicalLicenseLocks())).toEqual([]);
+  });
+
+  it.each(["bowser", "json-schema", "spdx-exceptions"])(
+    "rejects version, artifact, declaration and identity drift for %s",
+    (name) => {
+      const variants = [
+        { version: "99.0.0" },
+        { integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` },
+        { integrity: undefined },
+        { license: "GPL-3.0-only" },
+        { license: "MIT AND GPL-3.0-only" },
+        { license: undefined },
+        { resolved: "https://example.invalid/other.tgz" },
+        { name: "other" },
+      ];
+      for (const drift of variants) {
+        const locks = canonicalLicenseLocks();
+        Object.assign(locks[1].packages[`node_modules/${name}`], drift);
+        expect(reviewedDependencyLicenseFailures(locks), JSON.stringify(drift)).not.toEqual([]);
+      }
+    },
+  );
+
+  it.each(["bowser", "json-schema", "spdx-exceptions"])("rejects missing %s metadata", (name) => {
+    const locks = canonicalLicenseLocks();
+    Reflect.deleteProperty(locks[1].packages, `node_modules/${name}`);
+    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  });
+
+  it.each(["bowser", "json-schema", "spdx-exceptions"])("rejects npm aliases of %s", (name) => {
+    const locks = canonicalLicenseLocks();
+    const entry = locks[1].packages[`node_modules/${name}`];
+    Reflect.deleteProperty(locks[1].packages, `node_modules/${name}`);
+    locks[1].packages["node_modules/alias"] = { ...entry, name };
+    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  });
+
+  it("inspects nested root records in addition to the approved native instance", () => {
+    const locks = canonicalLicenseLocks();
+    const entry = locks[1].packages["node_modules/bowser"];
+    locks[0].packages["node_modules/other/node_modules/bowser"] = { ...entry };
+    expect(reviewedDependencyLicenseFailures(locks)).toEqual([]);
+    locks[0].packages["node_modules/other/node_modules/bowser"].version = "99.0.0";
+    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    [],
+    { lockfileVersion: 2, packages: {} },
+    { lockfileVersion: 3, packages: [] },
+  ])("rejects malformed canonical lock metadata %j", (lock) => {
+    const locks = canonicalLicenseLocks();
+    locks[0] = lock;
+    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  });
+
+  it("refuses malformed package records rather than silently skipping them", () => {
+    const locks = canonicalLicenseLocks();
+    locks[1].packages["node_modules/bowser"] = null;
+    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  });
+});
+
+describe("required GitHub license exclusion preflight", () => {
+  it("rejects a future-version alias even if its optional name field is missing", () => {
+    const locks = canonicalLicenseLocks();
+    locks[0].packages["node_modules/alias"] = {
+      version: "99.0.0",
+      resolved: "https://registry.npmjs.org/bowser/-/bowser-99.0.0.tgz",
+      integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}`,
+      license: "GPL-3.0-only",
+    };
+    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  });
+
+  it("requires canonical root metadata even when the native instances remain intact", () => {
+    const locks = canonicalLicenseLocks();
+    delete locks[0].packages[""];
+    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  });
+
+  it("emits package-wide exclusions only after the actual standalone CLI accepts both locks", () => {
+    const locks = canonicalLicenseLocks();
+    const result = runLicensePreflight(locks);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      "pkg:npm/spdx-exceptions, pkg:npm/bowser, pkg:npm/json-schema",
+    );
+    expect(result.stderr).toBe("");
+    locks[1].packages["node_modules/bowser"].version = "99.0.0";
+    const refused = runLicensePreflight(locks);
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toBe("");
+    expect(refused.stderr).toContain("bowser: reviewed artifact, identity or license drift");
+  });
+
+  it("makes the same-job guard mandatory before the pinned package-wide license action", () => {
+    const workflow = parse(
+      readFileSync(
+        new URL("../../.github/workflows/dependency-review.yml", import.meta.url),
+        "utf8",
+      ),
+    );
+    const steps = workflow.jobs["dependency-review"].steps;
+    const guard = steps.findIndex((step) => step.id === "runtime-license-policy");
+    const action = steps.findIndex((step) =>
+      step.uses?.startsWith("actions/dependency-review-action@"),
+    );
+    expect(guard).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(action);
+    expect(steps[guard].if).toBeUndefined();
+    expect(steps[guard]["continue-on-error"]).toBeUndefined();
+    expect(steps[guard].run).toContain(
+      "node scripts/check-workspace-supply-chain.mjs --check-reviewed-dependency-licenses",
+    );
+    expect(steps[action].with["allow-dependencies-licenses"]).toContain(
+      "${{ steps.runtime-license-policy.outputs.exclusions }}",
+    );
+    expect(steps[action].with["allow-licenses"]).not.toMatch(/CC-BY-3\.0|MITNFA|AFL/);
+  });
+});
+
+function runLicensePreflight(locks) {
+  const fixture = mkdtempSync(join(tmpdir(), "keiko-license-preflight-"));
+  try {
+    mkdirSync(join(fixture, "native/opencode-service-host"), { recursive: true });
+    writeFileSync(join(fixture, "package-lock.json"), JSON.stringify(locks[0]));
+    writeFileSync(
+      join(fixture, "native/opencode-service-host/package-lock.json"),
+      JSON.stringify(locks[1]),
+    );
+    return spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL("../check-workspace-supply-chain.mjs", import.meta.url)),
+        "--check-reviewed-dependency-licenses",
+      ],
+      { cwd: fixture, encoding: "utf8" },
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}

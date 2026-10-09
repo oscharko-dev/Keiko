@@ -7,6 +7,7 @@ import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { RunCommandDeps, RunCommandInput, CommandResult } from "@oscharko-dev/keiko-tools";
 import type { RegistryEgressProxy } from "../../../keiko-verification/dist/registryEgress.js";
+import type { VerificationDeps } from "@oscharko-dev/keiko-verification";
 import { runDependencyBootstrap } from "../../../keiko-verification/dist/dependencies.js";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
@@ -44,6 +45,23 @@ vi.mock("../../../keiko-tools/dist/exec.js", async (original) => {
       ),
   };
 });
+// This suite isolates the existing installation diagnostic faults from platform availability.
+// Only the new trusted metadata resolver is injected; runtime admission is proven separately in
+// verificationRuntimeTarget.test.ts. Orchestrator, npm executor and original failure assertions stay real.
+vi.mock("./verificationRuntimeTarget.js", () => ({
+  resolveVerificationRuntimeTarget: (): Promise<
+    NonNullable<VerificationDeps["dependencyInstallTarget"]>
+  > =>
+    Promise.resolve({
+      os: "linux",
+      cpu: "x64",
+      libc: "glibc",
+      nodeVersion: "v24.18.0",
+      nodeAbi: "137",
+      napiVersion: "10",
+      runtimeIdentitySha256: "f".repeat(64),
+    }),
+}));
 // Only the OS/network boundary fails. Runner, execution composition, orchestrator and bootstrap
 // are the production implementations, including the packaged cross-package imports.
 vi.mock("../../../keiko-verification/dist/registryEgress.js", async (original) => ({
@@ -364,7 +382,11 @@ describe("composed verification dependency bootstrap", () => {
     const events = lines.map((line) =>
       expectActivityLogProof("editor.verification.workspace.emitted-line", line),
     );
-    expect(events.map((event) => [event.correlationId, event.state])).toEqual([
+    expect(
+      events
+        .filter((event) => event.state !== "runtime-target")
+        .map((event) => [event.correlationId, event.state]),
+    ).toEqual([
       ["first-workspace-request", "waiting"],
       ["first-workspace-request", "acquired"],
       ["second-workspace-request", "waiting"],
@@ -372,6 +394,12 @@ describe("composed verification dependency bootstrap", () => {
       ["second-workspace-request", "acquired"],
       ["second-workspace-request", "released"],
     ]);
+    expect(events.filter((event) => event.state === "runtime-target")).toHaveLength(2);
+    expect(
+      events
+        .filter((event) => event.state === "runtime-target")
+        .every((event) => event.runtimeTargetOutcome === "measured"),
+    ).toBe(true);
     expect(new Set(events.map((event) => event.workspaceDigest)).size).toBe(1);
   });
 });

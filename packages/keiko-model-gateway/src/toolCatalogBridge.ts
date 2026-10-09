@@ -20,7 +20,14 @@ import {
   type CatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
-import type { GatewayRequest, NormalizedToolCall, ToolDefinition, UsageMetadata } from "./types.js";
+import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import type {
+  GatewayRequest,
+  NormalizedResponse,
+  NormalizedToolCall,
+  ToolDefinition,
+  UsageMetadata,
+} from "./types.js";
 import { logCorrelationId, resolveLogSink, type ModelGatewayLogSink } from "./observability.js";
 
 const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
@@ -36,6 +43,12 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["projection", "response"],
+    },
+    transport: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["assistant-text"],
     },
     status: {
       type: "string",
@@ -222,8 +235,10 @@ export interface GatewayToolCallRepair {
   readonly toolCallId: string;
   readonly offeredAlias: string;
   readonly shape?: CatalogSchemaMismatch | undefined;
+  readonly transport?: "assistant-text" | undefined;
 }
 export interface GatewayToolCatalogBridge {
+  readonly assertNativeTransport: (response: NormalizedResponse) => void;
   readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
   readonly tools: readonly ToolDefinition[];
   readonly bind: (call: NormalizedToolCall) => NormalizedToolCall;
@@ -263,27 +278,24 @@ function capturedAdvertisement(input: unknown): GatewayToolCatalogAdvertisement 
   );
   return object as unknown as GatewayToolCatalogAdvertisement;
 }
-/**
- * The native `question` extension is not a Keiko tool descriptor (ADR-0175 D2) and
- * carry no schema on the compiled projection -- their pinned wire schema is the single source
- * `@oscharko-dev/keiko-tool-catalog`'s `OPENCODE_NATIVE_EXTENSION_DEFINITIONS`. A projection may
- * only ever declare the closed `"question"` alias set (contracts-enforced), so a
- * missing definition here is an impossible-by-contract drift, not a request-shaped error.
- */
-function nativeExtensionDefinition(): (typeof OPENCODE_NATIVE_EXTENSION_DEFINITIONS)[number] {
-  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS[0];
-  if (definition === undefined) throw new TypeError("Missing native extension definition");
-  return definition;
-}
+/** Native extensions retain their exact pinned schemas and never become managed handlers. */
 function nativeExtensionTools(normalizer: ToolInvocationNormalizer): readonly ToolDefinition[] {
-  return normalizer.binding.projection.nativeExtensions.map(() => {
-    const definition = nativeExtensionDefinition();
+  return normalizer.binding.projection.nativeExtensions.map((extension) => {
+    const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find(
+      (entry) =>
+        `${entry.alias}@${String(entry.contractVersion)}` ===
+        `${extension.alias}@${String(extension.contractVersion)}`,
+    );
+    if (definition === undefined) throw new TypeError("Missing native extension definition");
     return Object.freeze({
       name: definition.alias,
       description: definition.description,
       parameters: definition.inputSchema,
     });
   });
+}
+function isCodeModeProjection(normalizer: ToolInvocationNormalizer): boolean {
+  return isNativeExtensionAlias(normalizer, "execute");
 }
 function definitions(normalizer: ToolInvocationNormalizer, now: number): readonly ToolDefinition[] {
   const tools = normalizer.tools(now);
@@ -292,7 +304,7 @@ function definitions(normalizer: ToolInvocationNormalizer, now: number): readonl
     "unsupported-capability",
   );
   return Object.freeze([
-    ...tools.map((tool) =>
+    ...(isCodeModeProjection(normalizer) ? [] : tools).map((tool) =>
       Object.freeze({
         name: tool.alias,
         description: tool.description,
@@ -333,6 +345,7 @@ function captureCall(input: NormalizedToolCall): NormalizedToolCall {
   return object as unknown as NormalizedToolCall;
 }
 interface CatalogRejectionDetails {
+  readonly transport?: "assistant-text";
   readonly canonicalToolId?: string;
   readonly contractVersion?: number;
   readonly catalogReason?: CatalogFailureReason;
@@ -439,6 +452,7 @@ function bindCall(
     captured = call;
     requireBridge(normalizer !== undefined, "unoffered-tool");
     if (isNativeExtensionAlias(normalizer, call.name)) {
+      normalizer.tools(now());
       log.write(
         activityLogEvent(
           TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION,
@@ -451,6 +465,7 @@ function bindCall(
       );
       return call;
     }
+    requireBridge(!isCodeModeProjection(normalizer), "unoffered-tool");
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
     log.write(
       activityLogEvent(TOOL_CATALOG_CALL_BOUND_OPERATION, toolCatalogEnvelope(log, "info"), {
@@ -526,6 +541,51 @@ function bindCalls(
   return Object.freeze(entries.map((call) => bindCall(normalizer, call, now, log)));
 }
 
+// Reserved model transport markers outside Markdown code are a failed tool invocation, never
+// executable prose. Only aliases from this captured, validated offer can request a correction.
+const TEXT_TOOL_CALL =
+  /(?:<channel>\s*<tool_call>|<\|tool_call>)\s*(?:call:)?([A-Za-z]\w{0,127})\s*\{/gu;
+
+function textInvocationAlias(
+  content: string,
+  tools: readonly ToolDefinition[],
+): string | undefined {
+  const code = markdownCodeRanges(content);
+  const aliases = new Set(tools.map((tool) => tool.name));
+  let range = 0;
+  for (const match of content.matchAll(TEXT_TOOL_CALL)) {
+    while ((code[range]?.end ?? Number.POSITIVE_INFINITY) <= match.index) range += 1;
+    if ((code[range]?.start ?? Number.POSITIVE_INFINITY) <= match.index) continue;
+    const alias = match[1];
+    if (alias !== undefined && aliases.has(alias)) return alias;
+  }
+  return undefined;
+}
+
+function assertNativeTransport(
+  response: NormalizedResponse,
+  tools: readonly ToolDefinition[],
+  log: ModelGatewayLogSink,
+): void {
+  if (tools.length === 0 || response.toolCalls.length > 0) return;
+  const offeredAlias = textInvocationAlias(response.content, tools);
+  if (offeredAlias === undefined) return;
+  const repair = Object.freeze({
+    toolCallId: "assistant-text-call",
+    offeredAlias,
+    transport: "assistant-text" as const,
+  });
+  reject(
+    log,
+    "response",
+    new GatewayToolCatalogError("invalid-arguments", undefined, true, repair),
+    {
+      catalogReason: "invalid-shape",
+      transport: "assistant-text",
+    },
+  );
+}
+
 function bridge(
   normalizer: ToolInvocationNormalizer | undefined,
   tools: readonly ToolDefinition[],
@@ -534,6 +594,9 @@ function bridge(
 ): GatewayToolCatalogBridge {
   return Object.freeze({
     tools,
+    assertNativeTransport: (response: NormalizedResponse): void => {
+      assertNativeTransport(response, tools, log);
+    },
     bind: (call: NormalizedToolCall): NormalizedToolCall => bindCall(normalizer, call, now, log),
     bindCalls: (calls: readonly NormalizedToolCall[]): readonly NormalizedToolCall[] =>
       bindCalls(normalizer, calls, now, log),

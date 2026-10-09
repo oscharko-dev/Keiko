@@ -43,6 +43,8 @@ import { logCommandTermination, processServerLogSink } from "../process-log-sink
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/mutex.js";
 
+import { resolveVerificationRuntimeTarget } from "./verificationRuntimeTarget.js";
+
 const verificationWorkspaces = createWorkspaceMutexRegistry();
 const VERIFICATION_WORKSPACE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -56,9 +58,16 @@ const VERIFICATION_WORKSPACE_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["waiting", "acquired", "released"],
+      values: ["waiting", "acquired", "released", "runtime-target"],
     },
     workspaceDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    runtimeTargetOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["measured", "refused"],
+    },
+    runtimeIdentityDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -70,13 +79,20 @@ const VERIFICATION_WORKSPACE_OPERATION = defineActivityLogOperation({
 
 function workspaceAdmission(
   args: ExecuteVerificationArgs,
-  state: "waiting" | "acquired" | "released",
+  state: "waiting" | "acquired" | "released" | "runtime-target",
+  runtimeTargetOutcome?: "measured" | "refused",
+  runtimeIdentityDigest?: string,
 ): void {
   (args.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       VERIFICATION_WORKSPACE_OPERATION,
       { correlationId: args.correlationId ?? UNKNOWN_CORRELATION_ID },
-      { state, workspaceDigest: createHash("sha256").update(args.workspace.root).digest("hex") },
+      {
+        state,
+        workspaceDigest: createHash("sha256").update(args.workspace.root).digest("hex"),
+        ...(runtimeTargetOutcome === undefined ? {} : { runtimeTargetOutcome }),
+        ...(runtimeIdentityDigest === undefined ? {} : { runtimeIdentityDigest }),
+      },
     ),
   );
 }
@@ -158,6 +174,7 @@ export interface ExecuteVerificationArgs {
   // The orchestrator's redacted output tail of a step that did not pass (ADR-0126 D3), forwarded
   // as it happens; never part of the persisted report.
   readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
+  readonly onTargetedProjectFailure?: VerificationDeps["onTargetedProjectFailure"];
 }
 
 // The egress policy every verification run executes under: a step that needs an enforced
@@ -211,6 +228,47 @@ export function verificationDependencyFailureHandler(
   };
 }
 
+function targetedProjectFailureHandler(
+  args: ExecuteVerificationArgs,
+): NonNullable<VerificationDeps["onTargetedProjectFailure"]> {
+  return (error): void => {
+    emitServerDiagnostic(
+      args.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation: "verification.targeted-project",
+        source: "verification.targeted-project.guard",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+    args.onTargetedProjectFailure?.(error);
+  };
+}
+
+function verificationRuntimeTargetResolver(
+  args: ExecuteVerificationArgs,
+): NonNullable<VerificationDeps["resolveDependencyInstallTarget"]> {
+  return async () => {
+    try {
+      const target = await resolveVerificationRuntimeTarget({
+        workspace: args.workspace,
+        signal: args.signal,
+        ...(args.fs === undefined ? {} : { fs: args.fs }),
+        onTerminated: verificationTerminationHandler(
+          args.activityLog ?? processServerLogSink(),
+          args.correlationId,
+        ),
+      });
+      workspaceAdmission(args, "runtime-target", "measured", target.runtimeIdentitySha256);
+      return target;
+    } catch (error) {
+      workspaceAdmission(args, "runtime-target", "refused");
+      throw error;
+    }
+  };
+}
+
 // Probe, then run the plan under enforced, fail-closed egress isolation. Behavior is identical to the
 // composition postApplyVerification.ts performed inline before this extraction.
 export async function executeVerificationEnforced(
@@ -240,6 +298,7 @@ async function executeExclusiveVerification(
   const activityLog = args.activityLog ?? processServerLogSink();
   const report = await runVerification(args.plan, {
     workspace: args.workspace,
+    resolveDependencyInstallTarget: verificationRuntimeTargetResolver(args),
     ...(args.fs === undefined ? {} : { fs: args.fs }),
     signal: args.signal,
     networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
@@ -247,6 +306,7 @@ async function executeExclusiveVerification(
     // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
     // timeout/abort leaves its verified Windows tree-kill disposition in the log.
     onTerminated: verificationTerminationHandler(activityLog, args.correlationId),
+    onTargetedProjectFailure: targetedProjectFailureHandler(args),
     onDependencyBootstrapFailure: verificationDependencyFailureHandler(
       args.diagnostics,
       args.correlationId,

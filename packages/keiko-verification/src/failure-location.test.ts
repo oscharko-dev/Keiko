@@ -513,3 +513,46 @@ describe("extractFailureLocations — scrubbed host paths (#3390)", () => {
     }
   });
 });
+
+describe("extractFailureLocations — selected project resolution", () => {
+  it.each([
+    ["/repo", "/repo/packages/ui", "../../shared/assert.spec.ts", "shared/assert.spec.ts"],
+    [
+      "C:\\repo",
+      "C:\\repo\\packages\\ui",
+      "..\\..\\shared\\assert.spec.ts",
+      "shared/assert.spec.ts",
+    ],
+  ])(
+    "keeps repository containment distinct from %s project resolution",
+    (root, cwd, file, expected) => {
+      const output = cmd(` ❯ ${file}:2:1\n ❯ src/a.test.ts:3:1`);
+      expect(
+        extractFailureLocations("targeted-test", output, root, cwd).map((item) => item.file),
+      ).toEqual([expected, "packages/ui/src/a.test.ts"]);
+    },
+  );
+
+  it.each(["../../../outside.spec.ts", "/repo-evil/a.test.ts", "D:\\other\\a.test.ts"])(
+    "still refuses an escaping selected-project frame %s",
+    (file) => {
+      expect(
+        extractFailureLocations(
+          "targeted-test",
+          cmd(` ❯ ${file}:2:1`),
+          "/repo",
+          "/repo/packages/ui",
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["/repo-evil/ui", "/outside", "/repo/packages/../ui", "relative/ui"])(
+    "refuses an uncontained or ambiguous working directory %s",
+    (cwd) => {
+      expect(
+        extractFailureLocations("targeted-test", cmd(" ❯ src/a.test.ts:3:1"), "/repo", cwd),
+      ).toEqual([]);
+    },
+  );
+});

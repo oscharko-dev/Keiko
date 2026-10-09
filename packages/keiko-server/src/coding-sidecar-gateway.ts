@@ -26,6 +26,7 @@ import {
   type GatewayRetryNotice,
   type GatewayRetryObserver,
   type GatewayStreamChunk,
+  type ResolveCodingSafeSidecarGatewayProfileOptions,
   type NormalizedToolCall,
   type NormalizedResponse,
   type ToolDefinition,
@@ -62,6 +63,8 @@ import {
   currentGateway,
   currentGatewayConfig,
   currentGatewayVerification,
+  currentConversationReadinessObservation,
+  type RuntimeGatewayConfig,
   type UiHandlerDeps,
 } from "./deps.js";
 import {
@@ -72,7 +75,8 @@ import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   opencodeGatewayOfferLifetimeMs,
   hasExactOpenCodeVisibleToolContract,
-  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+  openCodeVisibleToolNames,
+  type OpenCodeToolProfile,
   type OpenCodeGatewayHandlerCoverage,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
@@ -283,6 +287,7 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // remains after the prompt — the value an output-exhausted turn has to be read against.
     maxOutputTokens: { type: "integer", dataClass: "count", required: false },
     inputMessageCount: { type: "integer", dataClass: "count", required: true },
+    offeredToolCount: { type: "integer", dataClass: "count", required: false },
     // #3873 (F23): how many prior assistant messages carried nothing but the reasoning of a turn that
     // already ran and were dropped before the gateway request was built, so the estimate above and
     // `inputMessageCount` describe what is actually sent upstream. A count; the reasoning is never
@@ -316,7 +321,14 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
         "no-tool-calling",
         "tool-calling-unverified",
         "model-verification-pending",
+        "conversation-not-ready",
       ],
+    },
+    storedReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["model-context-window-insufficient", "no-tool-calling", "tool-calling-unverified"],
     },
     inputTokenLimit: { type: "integer", dataClass: "count", required: false },
     availablePromptTokens: { type: "integer", dataClass: "count", required: false },
@@ -933,6 +945,8 @@ function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
 }
 
 export interface OpenCodeGatewayReadinessRegistry {
+  /** Server-owned qualification choice; never selected from a request. */
+  readonly toolProfile?: OpenCodeToolProfile;
   readonly claim: (runId: string) => boolean;
   readonly verifyObserved: (runId: string) => void;
   readonly isVerified: (runId: string) => boolean;
@@ -971,7 +985,10 @@ function pendingChallengeWait(
   });
 }
 
-export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
+export function createOpenCodeGatewayReadinessRegistry(
+  toolProfile: OpenCodeToolProfile = "direct",
+): OpenCodeGatewayReadinessRegistry {
+  openCodeVisibleToolNames(toolProfile);
   const observed = new Set<string>();
   const armed = new Set<string>();
   const adoptionGapDiagnosed = new Set<string>();
@@ -980,7 +997,8 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
     observed.add(runId);
     waiters.get(runId)?.(true);
   };
-  return {
+  return Object.freeze<OpenCodeGatewayReadinessRegistry>({
+    toolProfile,
     claim: (runId): boolean => {
       if (!armed.delete(runId)) return false;
       verifyObserved(runId);
@@ -1010,7 +1028,7 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
       adoptionGapDiagnosed.delete(runId);
       waiters.get(runId)?.(false);
     },
-  };
+  });
 }
 
 export interface CodingSidecarGatewayChatCompletionRequest {
@@ -1424,6 +1442,7 @@ function isMatchingModelAlias(
  */
 /** The per-request facts the tool-catalog advertisement is minted from. */
 interface GatewayToolCatalogOffer {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly coverage: OpenCodeGatewayHandlerCoverage | undefined;
   readonly offerLifetimeMs: number;
 }
@@ -1432,11 +1451,12 @@ function toolCatalogFor(
   tools: readonly ToolDefinition[] | undefined,
   offer: GatewayToolCatalogOffer,
 ): GatewayCallRequest["toolCatalog"] {
-  return isExactManagedToolSet(tools)
+  return isExactManagedToolSet(tools, offer.toolProfile)
     ? createOpenCodeGatewayToolCatalogAdvertisement(
         Date.now(),
         offer.coverage,
         offer.offerLifetimeMs,
+        offer.toolProfile,
       )
     : undefined;
 }
@@ -1489,7 +1509,10 @@ function resolveToolCatalogHandlerCoverage(
         !unavailable.has(name as OpenCodeOptionalToolName),
     )
     .sort(compareStrings);
-  const coverage = createCanonicalOpenCodeHandlerCoverage(unavailable);
+  const coverage = createCanonicalOpenCodeHandlerCoverage(
+    unavailable,
+    gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
+  );
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION,
@@ -2366,6 +2389,9 @@ function runtimeRetryFor(
 ): RuntimeRetry {
   if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
   if (repairFailedAgain(error, failureCode)) return "refused";
+  // The gateway already owns bounded schema/transport correction. Repeating the identical
+  // malformed turn in OpenCode adds no correction and can loop without an attempt limit.
+  if (failureCode === "invalid-tool-call") return "refused";
   return isFinalProviderRejection(error, failureCode) ? "refused" : "allowed";
 }
 
@@ -2561,8 +2587,11 @@ function bearerCapability(ctx: RouteContext): string | undefined {
   return capability.length > 0 ? capability : undefined;
 }
 
-function isExactManagedToolSet(tools: readonly ToolDefinition[] | undefined): boolean {
-  return hasExactOpenCodeVisibleToolContract(tools);
+function isExactManagedToolSet(
+  tools: readonly ToolDefinition[] | undefined,
+  profile: OpenCodeToolProfile = "direct",
+): boolean {
+  return hasExactOpenCodeVisibleToolContract(tools, profile);
 }
 
 function isAdmittedManagedToolSet(
@@ -2571,7 +2600,8 @@ function isAdmittedManagedToolSet(
   runId: string,
 ): boolean {
   return (
-    isExactManagedToolSet(tools) || (tools === undefined && registry?.isVerified(runId) === true)
+    isExactManagedToolSet(tools, registry?.toolProfile ?? "direct") ||
+    (tools === undefined && registry?.isVerified(runId) === true)
   );
 }
 
@@ -2610,8 +2640,9 @@ function toolNameSetDigest(names: readonly string[]): string {
 
 function toolContractMismatch(
   tools: readonly ToolDefinition[] | undefined,
+  profile: OpenCodeToolProfile,
 ): GatewayRejectionEvidence {
-  const expected = new Set<string>(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+  const expected = new Set<string>(openCodeVisibleToolNames(profile));
   const received = new Set(tools?.map((tool) => tool.name) ?? []);
   const unexpected = [...received].filter((name) => !expected.has(name));
   const missing = [...expected].filter((name) => !received.has(name));
@@ -2643,7 +2674,13 @@ function refuseGatewayToolContract(
     code,
   });
   const answer = forbiddenGatewayRequest();
-  logGatewayRejection(ctx, runId, answer.status, reason, toolContractMismatch(tools));
+  logGatewayRejection(
+    ctx,
+    runId,
+    answer.status,
+    reason,
+    toolContractMismatch(tools, gatewayReadinessRegistry(deps)?.toolProfile ?? "direct"),
+  );
   refuseReadinessChallenge(deps, runId, parsed);
   reportGatewayTurnRejection(ctx, deps, runId, answer);
   return answer;
@@ -3007,6 +3044,7 @@ function gatewayRequestCancellation(
 }
 
 interface GatewayChatDelivery {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly modelAlias: string;
   readonly maxOutputTokens: number;
   readonly upstreamStreamingSupported: boolean;
@@ -3049,7 +3087,11 @@ function requestForGatewayDelivery(
       delivery.maxOutputTokens,
       ctx.correlationId,
       delivery.reasoningEffort,
-      { coverage: delivery.toolCatalogCoverage, offerLifetimeMs: delivery.offerLifetimeMs },
+      {
+        coverage: delivery.toolCatalogCoverage,
+        offerLifetimeMs: delivery.offerLifetimeMs,
+        toolProfile: delivery.toolProfile,
+      },
     ),
     retryObserver,
   };
@@ -4043,6 +4085,72 @@ function openAiStreamChunk(
   };
 }
 
+function configuredConversationSubset(
+  config: GatewayConfig,
+  holder: RuntimeGatewayConfig | undefined,
+  freshOnly: boolean,
+): GatewayConfig {
+  const providers = config.providers.filter((provider) => {
+    const readiness =
+      holder?.current() === config
+        ? currentConversationReadinessObservation({ gatewayConfig: holder }, provider.modelId)
+        : undefined;
+    return freshOnly ? readiness === true : readiness !== false;
+  });
+  const ids = new Set(providers.map((provider) => provider.modelId));
+  return {
+    ...config,
+    providers,
+    ...(config.capabilities === undefined
+      ? {}
+      : { capabilities: config.capabilities.filter((model) => ids.has(model.id)) }),
+  };
+}
+
+/** New admissions and passive readiness share the original selector over fresh serving evidence. */
+function resolveFreshCodingProfile(
+  config: GatewayConfig | undefined,
+  holder: RuntimeGatewayConfig | undefined,
+  options: ResolveCodingSafeSidecarGatewayProfileOptions,
+): CodingWorkbenchSidecarGatewayResult {
+  const configured = resolveCodingSafeSidecarGatewayProfile(config, options);
+  if (configured.status !== "available" || config === undefined) return configured;
+  const fresh = resolveCodingSafeSidecarGatewayProfile(
+    configuredConversationSubset(config, holder, true),
+    options,
+  );
+  if (fresh.status === "available") return fresh;
+  // Preserve a structural window refusal; an untested connection cannot repair that shortfall.
+  if (!codingContextFits(configured)) return configured;
+  const unknown = resolveCodingSafeSidecarGatewayProfile(
+    configuredConversationSubset(config, holder, false),
+    options,
+  );
+  return {
+    status: "unavailable",
+    reason:
+      unknown.status === "available" ? "model-verification-pending" : "conversation-not-ready",
+  };
+}
+
+function passiveCodingProfile(deps: UiHandlerDeps): CodingWorkbenchSidecarGatewayResult {
+  return resolveFreshCodingProfile(currentGatewayConfig(deps), deps.gatewayConfig, {
+    deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
+    modelSource: currentModelSource(deps),
+    gatewayVerification: currentGatewayVerification(deps),
+  });
+}
+
+function conversationShortfall(
+  result: CodingWorkbenchSidecarGatewayResult,
+): CodingWorkbenchReadinessShortfall | undefined {
+  if (result.status === "available") return undefined;
+  return result.reason === "model-verification-pending" ||
+    result.reason === "conversation-not-ready"
+    ? result.reason
+    : undefined;
+}
+
 /**
  * Readiness dimension (#3390 closeout): a profile can be "available" per the stored config and
  * probe yet still be unusable — its `runMetadata.maxPromptTokens` (derived from the capability via
@@ -4056,8 +4164,13 @@ function gatewayReadinessProjection(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): CodingWorkbenchSidecarGatewayResult {
-  const result = resolveGatewayProfile(deps).result;
+  const result = passiveCodingProfile(deps);
   if (codingContextFits(result)) return result;
+  const conversation = conversationShortfall(result);
+  if (conversation !== undefined) {
+    logReadinessShortfall(ctx, result, conversation, conversation === "model-verification-pending");
+    return result;
+  }
   const shortfall =
     result.status === "available" ? "model-context-window-insufficient" : result.reason;
   if (
@@ -4068,11 +4181,11 @@ function gatewayReadinessProjection(
     return result;
   // #3591 (1.1.7): while the automatic probe is still running against a slow gateway the shortfall
   // is not a verdict. The profile says so, and the Workbench re-reads it instead of refusing.
-  const pending = readinessProbePending(deps, result, shortfall);
+  const pending = readinessProbePending(deps, result);
   const reason: CodingWorkbenchReadinessShortfall = pending
     ? "model-verification-pending"
     : shortfall;
-  logReadinessShortfall(ctx, result, reason, pending);
+  logReadinessShortfall(ctx, result, reason, pending, shortfall);
   // An open verification replaces the stored shortfall for an unavailable projection too (an
   // unverified tool-calling proof whose probe is still running), or the Workbench would stop
   // reading and keep the refusal until an unrelated refresh.
@@ -4112,13 +4225,16 @@ export function codingContextShortfall(
  * model the gateway does not admit right now is a typed refusal that names the sidecar's reason
  * (#3565 Observation 17), never a bare Error the orchestrator can only report as
  * `authority-resolution-failed`; so is a model whose window cannot hold the run's prompt (#3603).
+ * Only a fresh basic-chat success in the same current runtime holder admits a new run; already
+ * admitted F73 requests keep their captured profile and never use this new-run guard.
  */
 export function admitCodingRunModel(
   config: GatewayConfig | undefined,
   modelId: string | undefined,
   reasoningEffort: ModelReasoningEffort | undefined,
+  holder: RuntimeGatewayConfig | undefined,
 ): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } {
-  const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
+  const resolved = resolveFreshCodingProfile(config, holder, {
     ...(modelId === undefined ? {} : { modelId }),
   });
   if (resolved.status !== "available" || config === undefined) {
@@ -4159,14 +4275,13 @@ type CodingWorkbenchReadinessShortfall =
   | "model-context-window-insufficient"
   | "no-tool-calling"
   | "tool-calling-unverified"
-  | "model-verification-pending";
+  | "model-verification-pending"
+  | "conversation-not-ready";
 
 function readinessProbePending(
   deps: UiHandlerDeps,
   result: CodingWorkbenchSidecarGatewayResult,
-  shortfall: CodingWorkbenchReadinessShortfall,
 ): boolean {
-  if (shortfall === "no-tool-calling") return false;
   const config = currentGatewayConfig(deps);
   if (config === undefined) return false;
   // An unavailable projection (an unverified tool-calling proof) names no model: its verification
@@ -4181,6 +4296,8 @@ function logReadinessShortfall(
   result: CodingWorkbenchSidecarGatewayResult,
   reason: CodingWorkbenchReadinessShortfall,
   pending: boolean,
+  storedReason?:
+    "model-context-window-insufficient" | "no-tool-calling" | "tool-calling-unverified",
 ): void {
   getServerLogger().warn(
     activityLogEvent(
@@ -4191,6 +4308,7 @@ function logReadinessShortfall(
       },
       {
         reason,
+        ...(pending && storedReason !== undefined ? { storedReason } : {}),
         probeMode: pending ? "pending" : "passive",
         ...(result.status === "available"
           ? {
@@ -4281,7 +4399,11 @@ function rejectUnmanagedGatewayToolContract(
   authentication: AuthenticatedGatewayRequest,
 ): RouteResult | undefined {
   const declaresTools = parsed.tools !== undefined && parsed.tools.length > 0;
-  if (!declaresTools || isExactManagedToolSet(parsed.tools)) return undefined;
+  if (
+    !declaresTools ||
+    isExactManagedToolSet(parsed.tools, gatewayReadinessRegistry(deps)?.toolProfile ?? "direct")
+  )
+    return undefined;
   return refuseGatewayToolContract(ctx, deps, authentication.runId, parsed);
 }
 
@@ -4306,23 +4428,20 @@ function authenticatedGatewayAdmission(
   modelAlias: string,
 ): RuntimeGatewayAdmission {
   const registry = gatewayReadinessRegistry(deps);
+  const exact = isExactManagedToolSet(parsed.tools, registry?.toolProfile ?? "direct");
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
     return {
       kind: "handled",
       result: refuseGatewayToolContract(ctx, deps, authentication.runId, parsed),
     };
   }
-  if (
-    isExactManagedToolSet(parsed.tools) &&
-    isRuntimeReadinessProbe(parsed) &&
-    registry?.claim(authentication.runId) === true
-  ) {
+  if (exact && isRuntimeReadinessProbe(parsed) && registry?.claim(authentication.runId) === true) {
     return {
       kind: "handled",
       result: fixedReadinessResponse(ctx, deps, modelAlias, parsed.stream === true),
     };
   }
-  if (isExactManagedToolSet(parsed.tools)) registry?.verifyObserved(authentication.runId);
+  if (exact) registry?.verifyObserved(authentication.runId);
   noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
   return { kind: "proceed" };
 }
@@ -4536,6 +4655,7 @@ function logValidatedRequestBounds(
         estimatedPromptTokens,
         maxOutputTokens: admittedOutputTokens(bounds, estimatedPromptTokens),
         inputMessageCount: request.messages.length,
+        offeredToolCount: request.tools?.length ?? 0,
         droppedReasoningMessageCount: request.droppedReasoningMessageCount,
         completeness: "complete",
         loss: "none",
@@ -4572,6 +4692,7 @@ function executeBudgetedGatewayChat(
   return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {
     ...profile,
     promptTokenReservation,
+    toolProfile: gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
     toolCatalogCoverage: resolveToolCatalogHandlerCoverage(
       deps,
       authentication.runId,

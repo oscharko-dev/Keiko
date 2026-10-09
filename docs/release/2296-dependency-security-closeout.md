@@ -189,8 +189,8 @@ or peer graph).
 | `eslint`                      | keiko-ui              | 10.10.0 | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.                                                                                                                                                                                                                         |
 | `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.                                                                                                                                                                                                                                   |
 | `typescript-eslint`           | root                  | 8.70.0  | current        | Includes rule correctness fixes and one opt-in rule. The dependency rollup regenerates the lockfile-bound tool-catalog evidence and runs the full lint lane before delivery.                                                                                                                                 |
-| `next`                        | keiko-ui              | 16.3.6  | current        | Security patch on the 16.3 line taken 2026-09-30 for GHSA-vcvr-r3jv-pc5j (critical, fixed in 16.3.6; PR #3678); moved together with `eslint-config-next`.                                                                                                                                                    |
-| `eslint-config-next`          | keiko-ui              | 16.3.6  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
+| `next`                        | keiko-ui              | 16.3.8  | current        | Security patch on the 16.3 line taken 2026-10-08 for the reviewed Next advisories fixed in 16.3.8 (PR #3895), retaining the prior critical 16.3.6 repair from #3678; moved together with `eslint-config-next`.                                                                                               |
+| `eslint-config-next`          | keiko-ui              | 16.3.8  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
 | `react`                       | keiko-ui              | 19.3.0  | current        | React and its declarations move together across the UI and editor test/runtime surfaces; the UI, editor, static export, accessibility, and E2E lanes are authoritative.                                                                                                                                      |
 | `react-dom`                   | keiko-ui              | 19.3.0  | current        | Matches `react` across the UI and editor surfaces.                                                                                                                                                                                                                                                           |
 | `prosemirror-commands`        | keiko-ui              | 1.7.2   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
@@ -377,6 +377,34 @@ is added to `allow-dependencies-licenses` in `.github/workflows/dependency-revie
 the same reasoning applies: it is development-only lint tooling, executed in CI and on developer
 machines, never linked into Keiko or distributed in the published npm tarball. The Dependabot
 `ignore` entry is removed and `eslint-plugin-sonarjs` moves to 4.2.1.
+
+### Exact-artifact original OpenCode host license correction (#3895)
+
+The OpenCode host integration introduced three component classifications that the earlier
+package-wide filter could not represent accurately. The engineering-reviewed correction in #3895
+binds each disposition to its exact original component identity and artifact. Dependency Review's
+global thirteen approved license IDs, the local twelve-license SPDX allowlist, dependency
+vulnerability thresholds, action pins, signature checks and merge conditions are unchanged.
+[ADR-0002](../adr/ADR-0002-ci-and-supply-chain-security-baseline.md) records the exact scope.
+
+| Original component      | Reviewed disposition                                                                                                                                                                                                             | Preserved distribution obligations                                                                                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spdx-exceptions@2.5.0` | Exact SPDX identifier data under `CC-BY-3.0`; no global CC-BY-3.0 allowance.                                                                                                                                                     | Full original README plus Linux Foundation and Contributors copyright attribution, Kyle E. Mitchell credit, pinned upstream source, CC-BY-3.0 license URL, unchanged-file statement and no implied endorsement. |
+| `bowser@2.14.1`         | npm metadata declares MIT; the original full notice has the `MITNFA` condition. Only this original artifact is recognized.                                                                                                       | Complete original license, including its original-author bug-report contact condition for substantial functional modifications; no shortened or relabeled MIT notice.                                           |
+| `json-schema@0.4.0`     | Use its existing BSD-3-Clause option from `(AFL-2.1 OR BSD-3-Clause)`; the required Dependency Review log separately reports `AFL-2.1 AND AFL-3.0 AND BSD-3-Clause`. The classification disposition is limited to this artifact. | Complete original dual-license notice, including BSD copyright, redistribution conditions and disclaimer; no global AFL-2.1 or AFL-3.0 allowance.                                                               |
+
+The pinned `actions/dependency-review-action` ignores versions in its exclusion PURLs. The workflow
+therefore runs the existing supply-chain owner's mandatory preflight before passing the three
+package-name exclusions. Both canonical npm locks are inspected: every matching instance must retain
+its exact original name, version, registry URL, SRI and declared license. Missing records, malformed
+locks, aliases, later versions and artifact or license drift refuse the workflow before exclusions
+are emitted. Local CycloneDX evaluation retains its SPDX expression parser and recognizes only exact
+component PURL/name/version identities; unrelated licenses and disallowed compound expressions still
+fail. The complete original notices and actual dependency SBOM remain in the host payload.
+
+Owning failure-first controls cover missing preflight, aliases, root-lock gaps and identity, artifact
+or license drift. Release and platform qualification remain separate from this component
+disposition; it does not activate the host or establish complete OpenCode parity.
 
 ## Follow-ups
 

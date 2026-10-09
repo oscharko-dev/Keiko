@@ -1432,9 +1432,6 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
   // request correlation and carries its class as structured fields, not only in the message.
   it("reports a stalled stream with the turn's correlation and a structured timeout class", async () => {
     const reports: (ClientDiagnosticMeta | undefined)[] = [];
-    setClientDiagnosticWriter((_message, meta) => {
-      reports.push(meta);
-    });
     try {
       vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
         (_input, _signal, handlers): Promise<void> => {
@@ -1449,6 +1446,9 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
         },
       );
       const view = await bootStreamingHook();
+      setClientDiagnosticWriter((_message, meta) => {
+        reports.push(meta);
+      });
       act(() => view.result.current.setDraft("hello"));
       await act(async () => {
         await view.result.current.sendMessage();

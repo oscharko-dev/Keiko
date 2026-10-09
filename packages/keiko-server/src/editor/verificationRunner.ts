@@ -11,7 +11,7 @@
 // is a Keiko-synthesized `npx vitest/jest run <files>` invocation and is exempt (parity with
 // postApplyVerification.ts). Runs always use `networkEnforcement: "enforce-or-fail-closed"`.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   EditorVerificationCatalog,
   EditorVerificationCatalogEntry,
@@ -23,6 +23,7 @@ import type {
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -106,6 +107,16 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
       values: ["vitest", "jest", "mocha", "node-test", "unknown"],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
+    metadataOnly: { type: "boolean", dataClass: "closed-enum", required: false },
+    targetedProjectCount: { type: "integer", dataClass: "count", required: false },
+    nestedProjectCount: { type: "integer", dataClass: "count", required: false },
+    targetedProjectRootSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    targetedProjectRefused: { type: "boolean", dataClass: "closed-enum", required: false },
     trustBasis: {
       type: "string",
       dataClass: "closed-enum",
@@ -360,6 +371,31 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
   return undefined;
 }
 
+function targetedProjectSelectionFields(plan: VerificationPlan): {
+  readonly targetedProjectCount: number;
+  readonly nestedProjectCount: number;
+  readonly targetedProjectRootSha256?: string;
+} {
+  const roots = new Set(
+    plan.steps
+      .filter((step) => step.kind === "targeted-test")
+      .map((step) =>
+        step.command === "npx" && step.args[2] === "--root" ? (step.args[3] ?? "") : "",
+      ),
+  );
+  return {
+    targetedProjectCount: roots.size,
+    nestedProjectCount: [...roots].filter((root) => root !== "").length,
+    ...(roots.size === 0
+      ? {}
+      : {
+          targetedProjectRootSha256: createHash("sha256")
+            .update(JSON.stringify([...roots].sort(compareStrings)))
+            .digest("hex"),
+        }),
+  };
+}
+
 // ─── Manager ─────────────────────────────────────────────────────────────────────
 
 interface InFlightRun {
@@ -553,6 +589,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       diagnostics: this.diagnostics,
       fs: resolved.access.fs,
       dependencyBootstrap: "auto",
+      onTargetedProjectFailure: (error): void => {
+        this.recordRunnerFailure(resolved.workspace, entry.correlationId, error, true);
+      },
     };
   }
 
@@ -581,7 +620,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
       workspace = resolved.workspace;
       const { plan, trustBasis } = this.buildPlan(resolved, input);
-      this.recordRunnerSelection(workspace, input.correlationId, plan.steps.length, trustBasis);
+      this.recordRunnerSelection(workspace, input.correlationId, plan, trustBasis);
       this.assertRunnable(plan);
       this.assertWorkspaceTrustAtEffect(resolved, input);
       return { resolved, plan };
@@ -751,7 +790,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private recordRunnerSelection(
     workspace: WorkspaceInfo,
     correlationId: string | undefined,
-    stepCount: number,
+    plan: VerificationPlan,
     trustBasis: ScriptTrustBasis | undefined,
   ): void {
     this.activityLog.write(
@@ -761,7 +800,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         {
           state: "selected",
           runnerId: workspace.testFramework,
-          stepCount,
+          stepCount: plan.steps.length,
+          metadataOnly: true,
+          ...targetedProjectSelectionFields(plan),
           ...(trustBasis === undefined ? {} : { trustBasis }),
         },
       ),
@@ -843,6 +884,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     workspace: WorkspaceInfo | undefined,
     correlationId: string | undefined,
     error: unknown,
+    targetedProjectRefused = false,
   ): void {
     const detail = describeError(error);
     const reason = error instanceof VerificationRunnerError ? error.code : "INTERNAL";
@@ -858,6 +900,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           state: "refused",
           runnerId: workspace?.testFramework ?? "unknown",
           reason,
+          ...(targetedProjectRefused ? { targetedProjectRefused: true } : {}),
           // WHY script trust refused (ADR-0147 D3 vocabulary). Without it a worktree whose manifest
           // the run itself rewrote read exactly like a repository nobody had trusted (run 8,
           // 2026-09-10), and the operator was pointed at the wrong grant.
@@ -1094,7 +1137,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         project === undefined ? "Project not found." : "Project root path could not be resolved.",
       );
     }
-    const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs);
+    const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs, {
+      scanSourceFilesForLanguages: false,
+    });
     const repositoryRoot = access.kind === "managed-task" ? access.repositoryRoot : undefined;
     if (repositoryRoot === undefined) {
       return {

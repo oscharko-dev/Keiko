@@ -8,9 +8,53 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { I18nProvider } from "@/lib/i18n";
+import { I18nProvider, loadLocaleMessages, translate } from "@/lib/i18n";
 import type { GatewayReadinessReport, ModelCapability, SafeGatewayConfig } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
+
+it("attributes embedding verification to the configured retrieval model in the copied report", () => {
+  const report: GatewayReadinessReport = {
+    modelId: "chat-fixture",
+    checkedAt: "2026-10-07T00:00:00Z",
+    overallStatus: "ready",
+    probes: [
+      {
+        name: "embedding",
+        modelId: "embedding-fixture",
+        status: "passed",
+        latencyMs: 277,
+        evidence:
+          "Configured retrieval embedding endpoint returned 1024 dimensions with L2 norm 1.0000.",
+      },
+    ],
+    verifiedCapabilities: {
+      embedding: true,
+      embeddingModelId: "embedding-fixture",
+      embeddingDimensions: 1024,
+      embeddingNorm: 1,
+    },
+  };
+  const copied = formatGatewayReadinessReport(report);
+  expect(copied).toContain("Model: chat-fixture");
+  expect(copied).toContain("Retrieval embedding model: embedding-fixture (1024 dimensions)");
+  expect(copied).toContain("Probe model: embedding-fixture");
+});
+
+it("does not attribute an older embedding report with missing identity to its chat model", () => {
+  const report: GatewayReadinessReport = {
+    modelId: "chat-fixture",
+    checkedAt: "2026-10-07T00:00:00Z",
+    overallStatus: "ready",
+    probes: [],
+    verifiedCapabilities: { embedding: true, embeddingDimensions: 1024 },
+  };
+  expect(formatGatewayReadinessReport(report)).toContain(
+    "Retrieval embedding: passed (model identity unavailable in this report)",
+  );
+  expect(formatGatewayReadinessReport(report)).not.toContain(
+    "Retrieval embedding model: chat-fixture",
+  );
+});
 import {
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   consumePendingGatewaySetup,
@@ -1056,6 +1100,44 @@ describe("SettingsPanel gateway readiness checks", () => {
     expect(screen.getByRole("button", { name: "Apply verified values" })).toBeEnabled();
   });
 
+  it("copies retrieval identity using the active German UI translator", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = setClipboard(writeText);
+    try {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem("keiko.locale", "de");
+      primeFetches([chatCapability("test-chat-1")]);
+      runGatewayReadinessMock.mockResolvedValue({
+        modelId: "test-chat-1",
+        checkedAt: "2026-10-07T00:00:00Z",
+        overallStatus: "ready",
+        probes: [],
+        verifiedCapabilities: {
+          embedding: true,
+          embeddingModelId: "embedding-fixture",
+          embeddingDimensions: 1024,
+        },
+      });
+      render(
+        <I18nProvider>
+          <SettingsPanel />
+        </I18nProvider>,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Bereitschaft prüfen" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Bericht kopieren" }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "Retrieval-Embedding-Modell: embedding-fixture (1024 Dimensionen)",
+          ),
+        );
+      });
+    } finally {
+      if (clipboardDescriptor === undefined) Reflect.deleteProperty(navigator, "clipboard");
+      else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
   it("copies a complete readiness report for customer diagnostics", async () => {
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     const clipboardDescriptor = setClipboard(writeText);
@@ -1373,3 +1455,30 @@ describe("SettingsPanel Figma token deep-link (Issue #1399)", () => {
     expect(await screen.findByLabelText(/figma access token/iu)).toBeInTheDocument();
   });
 });
+
+it.each([true, false])(
+  "localizes retrieval model evidence in German, identity=%s",
+  async (identity) => {
+    await loadLocaleMessages("de");
+    const report: GatewayReadinessReport = {
+      modelId: "chat-fixture",
+      checkedAt: "2026-10-07T00:00:00Z",
+      overallStatus: "ready",
+      probes: [],
+      verifiedCapabilities: {
+        embedding: true,
+        ...(identity ? { embeddingModelId: "embedding-fixture", embeddingDimensions: 1024 } : {}),
+      },
+    };
+    const copied = formatGatewayReadinessReport(report, (key, values) =>
+      translate("de", key, values),
+    );
+    expect(copied).toContain(
+      identity
+        ? "Retrieval-Embedding-Modell: embedding-fixture (1024 Dimensionen)"
+        : "Retrieval-Embedding: bestanden (Modellidentität in diesem Bericht nicht verfügbar)",
+    );
+    expect(copied).not.toContain("Retrieval embedding");
+    expect(copied).toContain('"modelId": "chat-fixture"');
+  },
+);

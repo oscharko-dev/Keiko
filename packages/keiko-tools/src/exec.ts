@@ -1445,8 +1445,12 @@ function applyHomeIsolation(
   env: Record<string, string>,
   deps: RunCommandDeps,
   reservation: WindowsTerminationReservation | undefined,
+  target: SpawnTarget,
+  cwd: string,
 ): RunState {
-  if (deps.policy.homeIsolation === "inherit") {
+  const confined =
+    target.attestation?.backend === "seatbelt" && target.attestation.filesystemEnforced;
+  if (deps.policy.homeIsolation === "inherit" && !confined) {
     const inherited = inheritedHome(env);
     if (inherited !== undefined) {
       env.HOME = inherited;
@@ -1454,11 +1458,26 @@ function applyHomeIsolation(
       return createRunState(undefined, undefined, reservation);
     }
   }
-  const home = deps.home ?? nodeHomeProvider;
+  const home = deps.home ?? executionHome(cwd, confined);
   const homeDir = home.make();
+  if (confined) prepareConfinedHome(env, cwd, homeDir);
   env.HOME = homeDir;
   env.USERPROFILE = homeDir;
   return createRunState(home, homeDir, reservation);
+}
+
+function executionHome(cwd: string, confined: boolean): HomeProvider {
+  return confined
+    ? { ...nodeHomeProvider, make: (): string => mkdtempSync(join(cwd, ".keiko-home-")) }
+    : nodeHomeProvider;
+}
+
+function prepareConfinedHome(env: Record<string, string>, cwd: string, homeDir: string): void {
+  const canonicalHome = realpathSync(homeDir);
+  if (!isWithinWorkspace(cwd, canonicalHome) || canonicalHome === cwd) {
+    throw new CommandDeniedError("sandbox temporary directory escaped the execution root", "node");
+  }
+  env.TMPDIR = canonicalHome;
 }
 
 function reserveWindowsTermination(
@@ -1535,6 +1554,46 @@ function writeBoundedInput(ctx: ExecContext): void {
   }
 }
 
+function confinedDarwinTarget(target: SpawnTarget): boolean {
+  return (
+    target.attestation?.platform === "darwin" &&
+    target.attestation.backend === "seatbelt" &&
+    target.attestation.filesystemEnforced
+  );
+}
+
+function explicitOpenSslConfiguration(
+  input: RunCommandInput,
+  env: Readonly<Record<string, string>>,
+): boolean {
+  return (
+    ["OPENSSL_CONF", "OPENSSL_CONF_INCLUDE", "OPENSSL_MODULES"].some((name) =>
+      Object.hasOwn(env, name),
+    ) ||
+    input.args.some((arg) => /^--(?:openssl-|enable-fips|force-fips)/u.test(arg)) ||
+    /--(?:openssl-|enable-fips|force-fips)/u.test(env.NODE_OPTIONS ?? "")
+  );
+}
+
+function commandEnvironment(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  target: SpawnTarget,
+): Record<string, string> {
+  const env = buildChildEnv(deps.processEnv, deps.policy);
+  if (confinedDarwinTarget(target) && !explicitOpenSslConfiguration(input, env)) {
+    // Homebrew's ambient OpenSSL configuration lives outside the admitted execution root. A
+    // default child must not import it; explicitly admitted crypto configuration stays intact.
+    env.OPENSSL_CONF = "/dev/null";
+  }
+  if (confinedDarwinTarget(target) && (input.command === "npm" || input.command === "npx")) {
+    // npm's bare shell lookup can hit an unreadable caller bin directory in PATH. The system
+    // shell is already admitted by the execution-root profile; bind its exact executable.
+    env.npm_config_script_shell = "/bin/sh";
+  }
+  return env;
+}
+
 // Runs an allowlisted command. Rejects with CommandDeniedError (before spawn) for a denied
 // command or a workspace-escaping cwd (PathEscapeError), CommandTimeoutError on timeout, and
 // CommandCancelledError on abort; otherwise resolves a redacted, byte-capped CommandResult. All
@@ -1546,11 +1605,11 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     const executable = resolveExecutable(input, deps);
     const cwd = resolveCwd(deps, input.cwd);
     const target = resolveSpawnTarget(input, deps, executable, cwd);
-    const env = buildChildEnv(deps.processEnv, deps.policy);
+    const env = commandEnvironment(input, deps, target);
     const reservation = reserveWindowsTermination(input, deps);
     let state: RunState;
     try {
-      state = applyHomeIsolation(env, deps, reservation);
+      state = applyHomeIsolation(env, deps, reservation, target, cwd);
     } catch (error) {
       reservation?.release();
       throw error;

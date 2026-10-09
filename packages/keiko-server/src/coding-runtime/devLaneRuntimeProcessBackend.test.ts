@@ -9,8 +9,10 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRuntimeGatewayConfinement,
+  buildRuntimeGatewaySeatbeltCommand,
   currentPlatform,
   probeBackends,
+  planLongLivedRuntimeSandbox,
 } from "@oscharko-dev/keiko-sandbox";
 import {
   expectActivityLogProof,
@@ -25,6 +27,7 @@ import {
 } from "./devLaneRuntimeProcessBackend.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
+  createRuntimeProcessSupervisor,
   type PreparedRuntimeSandboxLaunch,
   type RuntimeProcessBackend,
   type RuntimeProcessTree,
@@ -174,6 +177,39 @@ afterEach(() => {
 });
 
 describe("dev-lane runtime process backend", () => {
+  it("enforces the exact gateway and executable policy through supervisor preparation", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    const spawn = vi.fn<DevLaneRuntimeSpawn>(() => fakeChild(4711));
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      spawnRuntime: spawn,
+    });
+    const request = launchRequest(fixture);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [request.qualification],
+      planSandbox: (sandboxRequest): ReturnType<typeof planLongLivedRuntimeSandbox> =>
+        planLongLivedRuntimeSandbox(
+          sandboxRequest,
+          { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+          "darwin",
+        ),
+    });
+
+    expect(supervisor.spawnOwnedTree(request).ok).toBe(true);
+    const profile = spawn.mock.calls[0]?.[1][1];
+    expect(profile).toContain('(remote tcp4 "localhost:1983")');
+    expect(profile).toContain("(deny process-exec)");
+    expect(profile).not.toContain('(remote ip "localhost:*")');
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({ op: "runtime.confinement.spawned", correlationId: request.runId }),
+    );
+  });
+
   it("does not mistake a live child's error event for a completed process tree", async () => {
     const fixture = stageFixture();
     const child = fakeChild(4711);
@@ -255,6 +291,127 @@ describe("dev-lane runtime process backend", () => {
     expect(spawns).toBe(0);
   });
 
+  it("retains the leased stdin through the existing owned tree and records its lifetime", () => {
+    const fixture = stageFixture();
+    const stdin = new PassThrough();
+    const child = { ...fakeChild(4711), stdin };
+    const spawned: Parameters<DevLaneRuntimeSpawn>[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      spawnRuntime: (...args) => {
+        spawned.push(args);
+        return child;
+      },
+    });
+    const tree = backend.spawnOwnedTree({
+      ...launchRequest(fixture),
+      args: ["serve", "--stdio"],
+      parentLifetime: "stdin-eof",
+    });
+    expect(backend.supportsStdinLifetime).toBe(true);
+    expect(spawned[0]?.[2]).toMatchObject({ parentLifetime: "stdin-eof" });
+    expect(stdin.destroyed).toBe(false);
+    expect(stdin.writableEnded).toBe(false);
+    expect(tree).not.toHaveProperty("stdin");
+    const event = activityLog.events.find((record) => record.op === "runtime.confinement.spawned");
+    if (event === undefined) throw new Error("expected native lifetime evidence");
+    expect(
+      expectActivityLogProof(
+        "runtime.confinement.spawned.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ parentLifetime: "stdin-eof", correlationId: "run-2475" });
+    child.settle(0);
+  });
+
+  it.each(["missing", "ended", "destroyed", "non-writable"] as const)(
+    "refuses a requested stdin lease with a %s pipe and terminates the unowned child",
+    (state) => {
+      const fixture = stageFixture();
+      const stdin = new PassThrough();
+      if (state === "ended") stdin.end();
+      if (state === "destroyed") stdin.destroy();
+      if (state === "non-writable") Object.defineProperty(stdin, "writable", { value: false });
+      const child = { ...fakeChild(4711), ...(state === "missing" ? {} : { stdin }) };
+      const kills: NodeJS.Signals[] = [];
+      const activityLog = createBufferedServerLogSink();
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        runtimeRoot: fixture.runtimeRoot,
+        gatewayConfinement: gatewayConfinement(),
+        activityLog,
+        spawnRuntime: () => child,
+        killProcessGroup: (_pid, signal) => {
+          kills.push(signal);
+        },
+      });
+      expect(() =>
+        backend.spawnOwnedTree({
+          ...launchRequest(fixture),
+          args: ["serve", "--stdio"],
+          parentLifetime: "stdin-eof",
+        }),
+      ).toThrow("runtime-stdin-lifetime-unavailable");
+      expect(kills).toEqual(["SIGKILL"]);
+      expect(activityLog.events.some((event) => event.op === "runtime.confinement.spawned")).toBe(
+        false,
+      );
+      expect(activityLog.events[0]?.extra).toMatchObject({ launchPhase: "tree-ownership" });
+    },
+  );
+
+  it("records stdin port errors without pretending that the live child was reaped", async () => {
+    const fixture = stageFixture();
+    const stdin = new PassThrough();
+    const child = { ...fakeChild(4711), stdin };
+    const activityLog = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      spawnRuntime: () => child,
+    });
+    const tree = backend.spawnOwnedTree({
+      ...launchRequest(fixture),
+      args: ["serve", "--stdio"],
+      parentLifetime: "stdin-eof",
+    });
+    expect(() => stdin.emit("error", new Error("test-only-pipe-error"))).not.toThrow();
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
+    const failure = activityLog.events.find((record) => record.op === "runtime.confinement.failed");
+    expect(failure).toMatchObject({ correlationId: "run-2475", errorKind: "internal" });
+    expect(Array.isArray(failure?.extra?.frames)).toBe(true);
+    expect(Array.isArray(failure?.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(failure)).not.toContain("test-only-pipe-error");
+    child.settle(0);
+  });
+
+  it("leaves Linux on its existing lifetime and refuses an unqualified stdin lease", () => {
+    const fixture = stageFixture();
+    const spawnRuntime = vi.fn(() => fakeChild(4711, true));
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: LINUX_IDENTITY,
+      platform: "linux",
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      spawnRuntime,
+    });
+    expect(backend.supportsStdinLifetime).toBeUndefined();
+    expect(() =>
+      backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        args: ["serve", "--stdio"],
+        parentLifetime: "stdin-eof",
+      }),
+    ).toThrow("runtime-stdin-lifetime-unavailable");
+    expect(spawnRuntime).not.toHaveBeenCalled();
+  });
+
   it("spawns a detached child from inside the runtime root and reports its exit", async () => {
     const fixture = stageFixture();
     const spawned: {
@@ -276,7 +433,14 @@ describe("dev-lane runtime process backend", () => {
     const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.executable).toBe(SANDBOX.command);
-    expect(spawned[0]?.args).toEqual(SANDBOX.args);
+    expect(spawned[0]?.args).toEqual(
+      buildRuntimeGatewaySeatbeltCommand(
+        gatewayConfinement(),
+        fixture.executable,
+        ["serve"],
+        TEST_GIT.path,
+      ).args,
+    );
     expect(spawned[0]?.options.detached).toBe(true);
     expect(spawned[0]?.options.shell).toBe(false);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);

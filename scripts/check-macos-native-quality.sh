@@ -114,4 +114,10 @@ if [[ "$invalid_manager_status" -ne 1 ]]; then
   exit 1
 fi
 
+# The tools graph is not built yet in cross-platform-smoke. The runner builds only that graph
+# before executing the existing real Seatbelt consumers and checking every required result.
+# Exercise the real symlink entry point in this full native lane, outside the unit-test loop.
+ln -s "$root/scripts/check-macos-native-containment.mjs" "$scratch/check-macos-native-containment.mjs"
+node "$scratch/check-macos-native-containment.mjs"
+
 echo "macos-native-quality: PASS - compiler, analyzer, and boundary checks completed."

@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
+import { secureWorkspaceReadArtifactByteCap } from "./secureWorkspaceTextReadArtifact.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import {
   createSecureWorkspaceReadProcessPort,
@@ -55,6 +56,12 @@ export function createNodeSecureWorkspaceReadProcessFactory(
         executable: options.binding.executable,
         cwd: options.safeCwd,
         spawn,
+        ...(artifact.nativeProtocol === undefined
+          ? {}
+          : { nativeProtocol: artifact.nativeProtocol }),
+        ...(artifact.snapshotProtocol === undefined
+          ? {}
+          : { snapshotProtocol: artifact.snapshotProtocol }),
       });
     },
   });
@@ -121,6 +128,9 @@ function sameArtifact(
     expected.installRelativePath === actual.installRelativePath &&
     expected.sha256 === actual.sha256 &&
     expected.protocol === actual.protocol &&
+    expected.snapshotProtocol === actual.snapshotProtocol &&
+    expected.nativeProtocol === actual.nativeProtocol &&
+    secureWorkspaceReadArtifactByteCap(expected) === secureWorkspaceReadArtifactByteCap(actual) &&
     expected.sourceCommit === actual.sourceCommit &&
     expected.sourceTreeSha256 === actual.sourceTreeSha256 &&
     expected.signed === actual.signed

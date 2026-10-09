@@ -1,6 +1,30 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath, URL } from "node:url";
+import { join } from "node:path";
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resolveDeclaredKnipEntry, run } from "../check-knip.mjs";
+
+const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+function knipConfig() {
+  return JSON.parse(readFileSync(join(repoRoot, "knip.json"), "utf8"));
+}
+
+function isNodeSuite(name) {
+  const source = ts.createSourceFile(
+    name,
+    readFileSync(join(repoRoot, "native/opencode-service-host", name), "utf8"),
+    ts.ScriptTarget.Latest,
+  );
+  return source.statements.some(
+    (node) =>
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === "node:test",
+  );
+}
 
 // The dead-code / unused-export gate (knip.json) must fail closed: a clean run passes, any reported
 // finding fails, and a knip launch failure (e.g. a missing/corrupt install) fails rather than being
@@ -100,5 +124,31 @@ describe("knip executable resolution", () => {
     ["package escape", { bin: "../outside.js" }],
   ])("fails closed for %s metadata", (_label, metadata) => {
     expect(() => resolveDeclaredKnipEntry(packageJsonPath, metadata)).toThrow();
+  });
+});
+
+describe("assembled original service Knip ownership", () => {
+  it("inventories the actual node:test suites and shipped entry without hiding native files", () => {
+    const config = knipConfig();
+    const host = config.workspaces["native/opencode-service-host"];
+    const sources = readdirSync(join(repoRoot, "native/opencode-service-host"));
+    const tests = sources.filter((name) => name.endsWith(".test.mjs") && isNodeSuite(name));
+
+    expect(tests.length).toBeGreaterThan(0);
+    expect(host?.entry).toEqual(expect.arrayContaining([...tests, "host.mjs", "entry.mjs"]));
+    expect(host.project).toContain("*.mjs");
+    expect(host.ignore).toBeUndefined();
+    expect(config.workspaces["."].ignore).not.toContain("native/runtime-supervisor/**");
+  });
+
+  it("declares only the actual secure-helper compiler in its server owner", () => {
+    const config = knipConfig();
+    expect(config.workspaces["packages/keiko-server"].ignoreBinaries).toEqual(["cc"]);
+    expect(config.ignoreBinaries).not.toContain("cc");
+    expect(config.ignoreDependencies).not.toContain("@opencode/ai");
+    expect(config.ignoreDependencies).not.toContain("@opencode/plugin");
+    expect(config.workspaces["native/opencode-service-host"].ignoreDependencies).toEqual([
+      "@effect/platform-node-shared",
+    ]);
   });
 });

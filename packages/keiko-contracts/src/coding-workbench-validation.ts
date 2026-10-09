@@ -1,6 +1,9 @@
 import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
-import { validateStrictUtcInstant } from "./coding-workbench-runtime-api-validation.js";
+import {
+  isCodingWorkbenchVerificationSummary,
+  validateStrictUtcInstant,
+} from "./coding-workbench-runtime-api-validation.js";
 import { isVerificationKind } from "./editor-verification.js";
 import { MODEL_REASONING_EFFORTS } from "./gateway.js";
 import {
@@ -33,6 +36,7 @@ import {
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchValidationResult,
   isCodingWorkbenchModeWidening,
+  isCodingWorkbenchNativeRetry,
 } from "./coding-workbench.js";
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
@@ -665,6 +669,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
   "runtime-health": runtimeEventAllowedKeys("runtimeSource", "modelSource", "health"),
   "task-submitted": runtimeEventAllowedKeys("taskRef", "requestedMode", "effectiveMode"),
   "observation-streamed": runtimeEventAllowedKeys("channel", "sequence", "byteCount", "truncated"),
+  "native-retry-changed": runtimeEventAllowedKeys("nativeRetry"),
   "permission-requested": runtimeEventAllowedKeys("permissionRequest"),
   "diff-summarized": runtimeEventAllowedKeys("fileCount", "addedLines", "deletedLines"),
   "verification-summarized": runtimeEventAllowedKeys(
@@ -676,6 +681,8 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "failureLocationCount",
     "failureLocationsTruncated",
     "verificationTargetDigest",
+    "verificationEditRevision",
+    "verificationSummary",
   ),
   "artifact-produced": runtimeEventAllowedKeys(
     "artifactKind",
@@ -975,6 +982,7 @@ function validateRuntimeEventCounts(value: Record<string, unknown>, errors: stri
     "passedCount",
     "failedCount",
     "skippedCount",
+    "verificationEditRevision",
     "artifactBytes",
     "childResultCount",
   ].forEach((key) => {
@@ -1137,6 +1145,27 @@ function validateVerificationSummarizedEventFields(
   validateRequiredSafeIntegerField(value, "passedCount", "event", errors);
   validateRequiredSafeIntegerField(value, "failedCount", "event", errors);
   validateRequiredSafeIntegerField(value, "skippedCount", "event", errors);
+  validateVerificationSummaryAgreement(value, errors);
+}
+
+function validateVerificationSummaryAgreement(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  const summary = value.verificationSummary;
+  if (summary === undefined) return;
+  if (!isCodingWorkbenchVerificationSummary(summary)) {
+    errors.push("event.verificationSummary is invalid");
+    return;
+  }
+  if (
+    summary.status !== value.verificationStatus ||
+    summary.passedCount !== value.passedCount ||
+    summary.failedCount !== value.failedCount ||
+    summary.skippedCount !== value.skippedCount
+  ) {
+    errors.push("event.verificationSummary disagrees with the canonical check counts or status");
+  }
 }
 
 function validateArtifactProducedEventFields(
@@ -1250,6 +1279,12 @@ function validateChildRunCompletedEventFields(
   validateRequiredSafeIntegerField(value, "childResultCount", "event", errors);
 }
 
+function validateNativeRetryEventFields(value: Record<string, unknown>, errors: string[]): void {
+  if (value.nativeRetry !== null && !isCodingWorkbenchNativeRetry(value.nativeRetry)) {
+    errors.push("event.nativeRetry must be canonical native retry facts or null");
+  }
+}
+
 const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   Record<
     CodingWorkbenchRuntimeEventKind,
@@ -1261,6 +1296,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   "runtime-health": validateRuntimeHealthEventFields,
   "task-submitted": validateTaskSubmittedEventFields,
   "observation-streamed": validateObservationEventFields,
+  "native-retry-changed": validateNativeRetryEventFields,
   "permission-requested": validatePermissionRequestedEventFields,
   "diff-summarized": validateDiffSummarizedEventFields,
   "verification-summarized": validateVerificationSummarizedEventFields,

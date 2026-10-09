@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   CatalogDigest,
@@ -10,6 +10,7 @@ import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   deriveGatewayCatalogReadiness,
   hasExactOpenCodeVisibleToolContract,
+  openCodeGatewayCatalogProjection,
   OPENCODE_MODEL_VISIBLE_TOOLS,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   projectedGatewaySchema,
@@ -19,6 +20,25 @@ import {
 } from "./opencodeToolSchemas.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
 import { OPENCODE_GOVERNED_SYSTEM_PROMPT } from "./opencodeLaunchProfile.js";
+import { createCanonicalOpenCodeHandlerCoverage } from "../tool-catalog/catalogToolFacadeBridge.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+
+const projectionCompilations = vi.hoisted(() => ({ count: 0, utf8Bytes: 0 }));
+
+vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-tool-catalog")>();
+  return {
+    ...actual,
+    compileToolProjection: (
+      ...args: Parameters<typeof actual.compileToolProjection>
+    ): ReturnType<typeof actual.compileToolProjection> => {
+      const projection = actual.compileToolProjection(...args);
+      projectionCompilations.count += 1;
+      projectionCompilations.utf8Bytes += Buffer.byteLength(JSON.stringify(projection), "utf8");
+      return projection;
+    },
+  };
+});
 
 /** Minimal, independently-constructed `CompiledCatalogTool` fixture -- built here, not through
  * `createToolDescriptor`, since the point of this test is to exercise `handlerRequirement` shapes
@@ -385,6 +405,70 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
     expect(first.offered.expiresAt).toBe(new Date(1_000 + 120_000 + 5_000).toISOString());
   });
 
+  it("does not recompile the immutable projection while producing fresh request offers", () => {
+    const initial = openCodeGatewayCatalogProjection();
+    const bytes = JSON.stringify(initial.projection);
+    const before = { ...projectionCompilations };
+    const first = createOpenCodeGatewayToolCatalogAdvertisement(1_000, undefined, 30_000);
+    const second = createOpenCodeGatewayToolCatalogAdvertisement(2_000, undefined, 60_000);
+
+    expect(projectionCompilations).toEqual(before);
+    expect(first.projection).toBe(initial.projection);
+    expect(second.projection).toBe(initial.projection);
+    expect(JSON.stringify(second.projection)).toBe(bytes);
+    expect(first.offered.offerId).not.toBe(second.offered.offerId);
+    expect(first.offered.expiresAt).toBe(new Date(31_000).toISOString());
+    expect(second.offered.expiresAt).toBe(new Date(62_000).toISOString());
+  });
+
+  it("shares only recursively immutable catalog facts and returns independent wrappers", () => {
+    const first = openCodeGatewayCatalogProjection();
+    const second = openCodeGatewayCatalogProjection();
+    const bytes = JSON.stringify(second);
+    const tool = first.projection.tools[0];
+    if (tool === undefined) throw new Error("expected a compiled OpenCode tool");
+
+    expect(first).not.toBe(second);
+    expect(first.catalog).toBe(second.catalog);
+    expect(first.projection).toBe(second.projection);
+    expect(Reflect.set(tool.inputSchema, "type", "string")).toBe(false);
+    expect(Reflect.set(first.projection.tools, "0", undefined)).toBe(false);
+    expect(Reflect.set(first.catalog, "catalogRevision", "different")).toBe(false);
+    expect(Reflect.set(first, "projection", undefined)).toBe(true);
+    expect(JSON.stringify(second)).toBe(bytes);
+  });
+
+  it("recomputes real handler availability without changing a previous request offer", () => {
+    const unavailable = new Set<OpenCodeOptionalToolName>();
+    const first = createOpenCodeGatewayToolCatalogAdvertisement(
+      1_000,
+      createCanonicalOpenCodeHandlerCoverage(unavailable),
+      30_000,
+    );
+    const child = first.projection.tools.find((tool) => tool.alias === "keiko_child_agent");
+    if (child === undefined) throw new Error("expected the child tool in the real projection");
+    const previous = JSON.stringify(first.offered);
+    unavailable.add("keiko_child_agent");
+    const second = createOpenCodeGatewayToolCatalogAdvertisement(
+      2_000,
+      createCanonicalOpenCodeHandlerCoverage(unavailable),
+      30_000,
+    );
+
+    expect(second.projection).toBe(first.projection);
+    expect(second.offered.binding.handlerSetDigest).not.toBe(
+      first.offered.binding.handlerSetDigest,
+    );
+    expect(first.offered.toolRefs.map((ref) => ref.canonicalId)).toContain(
+      child.toolRef.canonicalId,
+    );
+    expect(second.offered.toolRefs.map((ref) => ref.canonicalId)).not.toContain(
+      child.toolRef.canonicalId,
+    );
+    expect(JSON.stringify(first.offered)).toBe(previous);
+    expect(second.offered.toolRefs).not.toBe(first.offered.toolRefs);
+  });
+
   // The offer used to expire after a fixed 30 s. A ~6k-token `keiko_changeset_edit` call took 49 s
   // to generate (2026-09-10), so the response bound against a dead offer: `expired-compatibility`,
   // reported as GATEWAY_MALFORMED_TOOL_CALL, chat failed, turn failed, run failed with no change.
@@ -612,6 +696,22 @@ describe("OpenCode 2.0.10 real advertisement fidelity", () => {
     expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
   });
 
+  it.each(["mode", "directory"])("denies a discovery schema missing its %s scope", (field) => {
+    const tools = realAdvertisementFixture().map((tool) => {
+      if (tool.name !== "keiko_workspace_discover") return tool;
+      const properties = Object.fromEntries(
+        Object.entries(tool.parameters.properties as Record<string, unknown>).filter(
+          ([key]) => key !== field,
+        ),
+      );
+      const required = (tool.parameters.required as readonly string[]).filter(
+        (key) => key !== field,
+      );
+      return { ...tool, parameters: { ...tool.parameters, properties, required } };
+    });
+    expect(hasExactOpenCodeVisibleToolContract(tools)).toBe(false);
+  });
+
   it("denies a historical verification projection without targetPath", () => {
     const historicalAdvertisement = realAdvertisementFixture().map((tool) =>
       tool.name === "keiko_verification"
@@ -656,5 +756,84 @@ describe("OpenCode 2.0.10 real advertisement fidelity", () => {
         : tool,
     );
     expect(hasExactOpenCodeVisibleToolContract(sourceShaped)).toBe(false);
+  });
+});
+
+function codeModeFixture(): readonly RealAdvertisedTool[] {
+  const value = JSON.parse(
+    readFileSync(
+      new URL("./opencodeToolSchemas.opencode-2.0.10-codemode.fixture.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { readonly tools: readonly RealAdvertisedTool[] };
+  return value.tools;
+}
+
+describe("inactive native Code Mode qualification", () => {
+  it("accepts the original pinned snapshot only under the explicit Code Mode profile", () => {
+    expect(hasExactOpenCodeVisibleToolContract(codeModeFixture(), "code-mode")).toBe(true);
+    expect(hasExactOpenCodeVisibleToolContract(codeModeFixture())).toBe(false);
+  });
+});
+
+describe("explicit native Code Mode schema boundary", () => {
+  it("rejects mixed direct/inner, empty, duplicate and altered outer schemas", () => {
+    const tools = codeModeFixture();
+    const execute = tools.find((tool) => tool.name === "execute");
+    const question = tools.find((tool) => tool.name === "question");
+    if (execute === undefined || question === undefined)
+      throw new TypeError("Missing native producer tools");
+    const invalid = [
+      [],
+      [execute],
+      [question, question],
+      [...tools, ...projectedTools().slice(0, 1)],
+      [question, { ...execute, parameters: { ...execute.parameters, additionalProperties: true } }],
+      [question, { ...execute, parameters: { type: "object", properties: {}, required: [] } }],
+      [question, { ...execute, parameters: { ...execute.parameters, maxProperties: 1 } }],
+    ];
+    for (const value of invalid)
+      expect(hasExactOpenCodeVisibleToolContract(value, "code-mode")).toBe(false);
+    expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture(), "code-mode")).toBe(
+      false,
+    );
+  });
+
+  it("retains actual inner handler coverage, offer lifetime and the entire canonical projection", () => {
+    const projection = openCodeGatewayCatalogProjection("code-mode").projection;
+    const coverage: OpenCodeGatewayHandlerCoverage = {
+      readinessByToolId: new Map(
+        projection.tools.map((tool) => [
+          tool.toolRef.canonicalId,
+          tool.toolRef.canonicalId === "keiko.repo.search" ? "unavailable" : "ready",
+        ]),
+      ),
+      handlerSetDigest: "caller-owned-handler-digest" as CatalogDigest,
+    };
+    const offer = createOpenCodeGatewayToolCatalogAdvertisement(1000, coverage, 9000, "code-mode");
+    expect(offer.projection.tools).toHaveLength(17);
+    expect(offer.offered.toolRefs).toHaveLength(16);
+    expect(offer.offered.toolRefs.some((ref) => ref.canonicalId === "keiko.repo.search")).toBe(
+      false,
+    );
+    expect(offer.offered.binding).toMatchObject({
+      readiness: "unavailable",
+      handlerSetDigest: coverage.handlerSetDigest,
+    });
+    expect(offer.offered.expiresAt).toBe(new Date(10000).toISOString());
+    expect(offer.projection).toBe(projection);
+    const before = { ...projectionCompilations };
+    createOpenCodeGatewayToolCatalogAdvertisement(1000, coverage, 9000, "code-mode");
+    expect(projectionCompilations).toEqual(before);
+    expect(openCodeGatewayCatalogProjection().projection.tools).toEqual(projection.tools);
+    expect(openCodeGatewayCatalogProjection().projection.nativeExtensions).toEqual([
+      { alias: "question", contractVersion: 1 },
+    ]);
+  });
+
+  it("refuses an unknown explicit profile at the immutable projection owner", () => {
+    expect(() => {
+      Reflect.apply(openCodeGatewayCatalogProjection, undefined, ["unknown"]);
+    }).toThrow(TypeError);
   });
 });

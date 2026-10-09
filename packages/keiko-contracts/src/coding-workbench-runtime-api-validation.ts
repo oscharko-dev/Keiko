@@ -1,8 +1,12 @@
+import { exactKeys, isRecord } from "./contract-validation-primitives.js";
+export { exactKeys, isRecord } from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
+  isCodingWorkbenchNativeRetry,
   type CodingWorkbenchValidationResult,
+  type CodingWorkbenchVerificationSummary,
 } from "./coding-workbench.js";
 import {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
@@ -11,29 +15,14 @@ import {
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
   type CodingWorkbenchTurnFailureCode,
 } from "./coding-workbench-runtime-constants.js";
+import { isVerificationKind } from "./editor-verification.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const STRICT_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
-export function exactKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  const errors: string[] = [];
-  for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) errors.push(`${path}.${key} is not allowed`);
-  }
-  return errors;
 }
 
 export function result<T>(value: unknown, errors: string[]): CodingWorkbenchValidationResult<T> {
@@ -93,7 +82,14 @@ export function sseEventKeys(kind: unknown): readonly string[] {
     "failureCode",
   ];
   return kind === "runtime-event"
-    ? [...common, "eventKind", "auxiliaryOutcome", "contentTrust"]
+    ? [
+        ...common,
+        "eventKind",
+        "auxiliaryOutcome",
+        "contentTrust",
+        "verificationSummary",
+        "nativeRetry",
+      ]
     : common;
 }
 
@@ -115,6 +111,48 @@ export function validateSseEventFields(
   validateNonNegativeSafeInteger(value.revision, "revision", errors);
   validateSseEventKind(value, errors);
   validateSseOptionalEnums(value, errors);
+  validateSseVerificationSummary(value, errors);
+  validateSseNativeRetry(value, errors);
+}
+
+export function isCodingWorkbenchVerificationSummary(
+  value: unknown,
+): value is CodingWorkbenchVerificationSummary {
+  if (!isRecord(value)) return false;
+  const keys = ["verifierId", "status", "passedCount", "failedCount", "skippedCount", "durationMs"];
+  return (
+    exactKeys(value, keys, "verificationSummary").length === 0 &&
+    keys.every((key) => Object.hasOwn(value, key)) &&
+    isVerificationKind(value.verifierId) &&
+    isOneOf(value.status, ["passed", "failed", "partial"]) &&
+    [value.passedCount, value.failedCount, value.skippedCount].every(
+      (count) => Number.isSafeInteger(count) && Number(count) >= 0,
+    ) &&
+    typeof value.durationMs === "number" &&
+    Number.isFinite(value.durationMs) &&
+    value.durationMs >= 0
+  );
+}
+
+function validateSseNativeRetry(value: Record<string, unknown>, errors: string[]): void {
+  if (value.kind === "runtime-event" && value.eventKind === "native-retry-changed") {
+    if (value.nativeRetry !== null && !isCodingWorkbenchNativeRetry(value.nativeRetry)) {
+      errors.push("nativeRetry must be canonical native retry facts or null");
+    }
+  } else if (value.nativeRetry !== undefined) {
+    errors.push("nativeRetry is only admissible on native-retry-changed");
+  }
+}
+
+function validateSseVerificationSummary(value: Record<string, unknown>, errors: string[]): void {
+  if (value.verificationSummary === undefined) return;
+  if (
+    value.kind !== "runtime-event" ||
+    value.eventKind !== "verification-summarized" ||
+    !isCodingWorkbenchVerificationSummary(value.verificationSummary)
+  ) {
+    errors.push("verificationSummary is invalid or outside verification-summarized");
+  }
 }
 
 // The `eventKind` of a runtime-event frame: an adapter event kind, or one of the SSE-only gateway

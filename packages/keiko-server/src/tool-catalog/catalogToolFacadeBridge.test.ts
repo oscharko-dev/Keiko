@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import { describe, expect, it, vi } from "vitest";
@@ -29,12 +32,15 @@ vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
   };
 });
 
+import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
+import { nativeTextSnapshotRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
+  openCodeCatalogAliasFor,
   createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
@@ -159,6 +165,54 @@ const UNCOVERED: readonly CodingToolActionRequest[] = [
 ];
 
 describe("canonical catalog facade bridge", () => {
+  it("keeps changed discovery scope in the canonical replay identity", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-catalog-discovery-")));
+    for (const directory of ["src", "sibling"]) mkdirSync(join(root, directory));
+    try {
+      const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+      const stage = vi.spyOn(registry, "stage");
+      const { bridge, log } = createBridge({
+        invocationRegistry: registry,
+        context: () => ({ ...context, workspaceRoot: root }),
+      });
+      const run = vi.fn((_signal: AbortSignal, guard: CodingToolMutationGuard) => {
+        expect(guard.check()).toBe(true);
+        return Promise.resolve({
+          status: "completed" as const,
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+        });
+      });
+      const first = {
+        ...discoverRequest,
+        mode: "directory" as const,
+        directory: "src",
+        query: "*",
+      };
+      const second = { ...first, directory: "sibling" };
+      const firstResult = await bridge.execute(
+        first,
+        { ...facadeInput(), body: JSON.stringify(first) },
+        run,
+      );
+      expect(firstResult).toMatchObject({ status: "completed" });
+      await expect(
+        bridge.execute(second, { ...facadeInput(), body: JSON.stringify(second) }, run),
+      ).resolves.toMatchObject({ status: "invalid" });
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(stage.mock.calls[0]?.[0].digest).not.toBe(stage.mock.calls[1]?.[0].digest);
+      expect(log.events.at(-1)).toMatchObject({
+        op: "tool-catalog.invocation-settled",
+        extra: {
+          reason: "replay-conflict",
+          effectStarted: false,
+        },
+      });
+      expect(JSON.stringify(log.events)).not.toContain("sibling");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("#3417: reports skill discovery unavailable together with the skill it lists", () => {
     const ready = createCanonicalOpenCodeHandlerCoverage(new Set());
     const hidden = createCanonicalOpenCodeHandlerCoverage(
@@ -769,3 +823,210 @@ describe("canonical catalog facade bridge", () => {
     expect(bindings[1]?.extra?.handlerSetDigest).toBe(readyDigest);
   });
 });
+
+describe("inactive Code Mode handler coverage", () => {
+  it("binds the actual same seventeen handlers to the selected projection identity", () => {
+    const direct = createCanonicalOpenCodeHandlerCoverage(new Set());
+    const grouped = createCanonicalOpenCodeHandlerCoverage(new Set(), "code-mode");
+    expect(grouped.readinessByToolId).toEqual(direct.readinessByToolId);
+    expect(grouped.readinessByToolId.size).toBe(17);
+    expect(grouped.handlerSetDigest).not.toBe(direct.handlerSetDigest);
+  });
+});
+
+it("derives mapped aliases from the existing canonical request producer", () => {
+  expect(openCodeCatalogAliasFor(discoverRequest)).toBe("keiko_workspace_discover");
+  expect(
+    openCodeCatalogAliasFor({
+      ...identity,
+      action: "git",
+      operation: "stage",
+      phase: "execute",
+      proposalId: "proposal",
+    }),
+  ).toBe("keiko_git_execute");
+  expect(new Set(COVERED.map(openCodeCatalogAliasFor)).size).toBe(COVERED.length);
+  for (const request of UNCOVERED) expect(openCodeCatalogAliasFor(request)).toBeUndefined();
+});
+
+describe("private native snapshot canonical binding", () => {
+  const request = {
+    action: "read" as const,
+    relativePath: "src/private.ts",
+    actionId: "native-private-1",
+    idempotencyKey: "native-private-1",
+  };
+  it("does not add windowless reads to public coverage or create the private profile by default", () => {
+    const { bridge } = createBridge();
+    expect(bridge.covers(request)).toBe(false);
+    expect(bridge.executeTextSnapshot).toBeUndefined();
+  });
+  it("refuses private windows before the canonical handler executes", async () => {
+    const { bridge, log } = createBridge({ nativeTextSnapshotAvailable: true });
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] }));
+    expect(
+      await bridge.executeTextSnapshot?.(
+        { ...request, startLine: 1, maxLines: 1 },
+        facadeInput(),
+        run,
+      ),
+    ).toEqual({ status: "invalid", evidence: [] });
+    expect(run).not.toHaveBeenCalled();
+    expect(log.events.map((event) => event.op)).toEqual(["tool-catalog.dispatch-unbound"]);
+  });
+  it.each([
+    { status: "completed" as const, evidence: [] },
+    {
+      status: "completed" as const,
+      evidence: [],
+      snapshot: {
+        digest: "a".repeat(64),
+        byteCount: 0,
+        info: { type: "file", size: 0, mtimeMs: 0 },
+      },
+    },
+    {
+      status: "completed" as const,
+      evidence: [],
+      read: {
+        text: "PRIVATE_NATIVE_TEXT_SENTINEL",
+        byteCount: 28,
+        totalLines: 1,
+        digest: "a".repeat(64),
+      },
+    },
+  ])(
+    "rejects a fabricated model-read completion under the closed private receipt schema",
+    async (result) => {
+      const { bridge, log } = createBridge({ nativeTextSnapshotAvailable: true });
+      const run = vi.fn(
+        (_signal: AbortSignal, guard: CodingToolMutationGuard): Promise<CodingToolResult> => {
+          expect(guard.check()).toBe(true);
+          return Promise.resolve(result);
+        },
+      );
+      expect(await bridge.executeTextSnapshot?.(request, facadeInput(), run)).toEqual({
+        status: "failed",
+        evidence: [],
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(
+        log.events.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+      ).toMatchObject({ status: "failed", reason: "result-contract-failed" });
+      expect(JSON.stringify(log.events)).not.toContain("PRIVATE_NATIVE_TEXT_SENTINEL");
+      expect(JSON.stringify(log.events)).not.toContain("src/private.ts");
+    },
+  );
+
+  it("expires the actual private descriptor invocation and withholds late completion", async () => {
+    let elapsed = 0;
+    const { bridge, log } = createBridge({
+      nativeTextSnapshotAvailable: true,
+      elapsedNow: () => elapsed,
+    });
+    const completion = deferred<CodingToolResult>();
+    let captured: CodingToolMutationGuard | undefined;
+    const run = vi.fn(
+      (_signal: AbortSignal, guard: CodingToolMutationGuard): Promise<CodingToolResult> => {
+        captured = guard;
+        expect(guard.check()).toBe(true);
+        return completion.promise;
+      },
+    );
+    const pending = bridge.executeTextSnapshot?.(request, facadeInput(), run);
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledOnce();
+    });
+    const descriptor = nativeTextSnapshotRegistrationSet().entries[0]?.descriptor;
+    if (descriptor === undefined) throw new TypeError("Expected private descriptor");
+    elapsed = descriptor.bounds.maxDurationMs + 1;
+    expect(captured?.check()).toBe(false);
+    await expect(pending).resolves.toEqual({ status: "timeout", evidence: [] });
+    completion.resolve({ status: "completed", evidence: [] });
+    await vi.waitFor(() => {
+      expect(log.events.some((event) => event.op === "tool-catalog.completion-discarded")).toBe(
+        true,
+      );
+    });
+    expect(captured?.check()).toBe(false);
+    expect(
+      log.events.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "timeout", reason: "deadline-exceeded" });
+  });
+});
+
+it("passes the actual opaque catalog invocation to the private original-read delegate with one settlement", async () => {
+  const { bridge, log } = createBridge({ nativeTextSnapshotAvailable: true });
+  const request = { ...identity, action: "read" as const, relativePath: "README.md" };
+  const seen: string[] = [];
+  const result = await bridge.executeNativeReadInvocation?.(
+    request,
+    {
+      body: JSON.stringify(request),
+      capability: "capability",
+      context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+      offset: 0,
+      limit: 20,
+    },
+    (_signal, guard, invocationId): Promise<CodingToolResult> => {
+      expect(guard.check()).toBe(true);
+      seen.push(invocationId);
+      return Promise.resolve({
+        status: "completed",
+        evidence: [{ kind: "native-read-invocation", code: "completed" }],
+      });
+    },
+  );
+  expect(result?.status).toBe("completed");
+  const admitted = log.events.filter((event) => event.op === "tool-catalog.invocation-started");
+  const settled = log.events.filter((event) => event.op === "tool-catalog.invocation-settled");
+  expect(admitted).toHaveLength(1);
+  expect(settled).toHaveLength(1);
+  expect(seen).toEqual([admitted[0]?.extra?.invocationId]);
+  expect(settled[0]?.extra?.invocationId).toBe(seen[0]);
+  expect(JSON.stringify(log.events)).not.toContain("README.md");
+  expect(JSON.stringify(log.events)).not.toContain("capability");
+});
+
+it.each(["", "long-segment/".repeat(50) + "é.ts"])(
+  "keeps exact original Read targets at private handler capture without public parser substitution (%#)",
+  async (relativePath) => {
+    const request = { ...identity, action: "read" as const, relativePath };
+    const capture = vi.fn(() => request);
+    const run = vi.fn(
+      (_signal: AbortSignal, guard: CodingToolMutationGuard): Promise<CodingToolResult> => {
+        expect(guard.check()).toBe(true);
+        return Promise.resolve({
+          status: "completed",
+          evidence: [{ kind: "native-read-invocation", code: "completed" }],
+        });
+      },
+    );
+    const { bridge, log } = createBridge({
+      nativeTextSnapshotAvailable: true,
+      captureNativeReadAction: capture,
+    });
+    const result = await bridge.executeNativeReadInvocation?.(
+      request,
+      {
+        body: JSON.stringify(request),
+        capability: "capability",
+        offset: 0,
+        limit: 0,
+        context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+      },
+      run,
+    );
+    expect(result?.status).toBe("completed");
+    expect(run).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledOnce();
+    expect(JSON.stringify(log.events)).not.toContain("long-segment/");
+    const ordinary = await bridge.executeTextSnapshot?.(
+      { ...request, actionId: "snapshot-next", idempotencyKey: "snapshot-next" },
+      facadeInput(),
+      run,
+    );
+    expect(ordinary?.status).not.toBe("completed");
+    expect(run).toHaveBeenCalledOnce();
+  },
+);

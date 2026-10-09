@@ -6,22 +6,33 @@ import type {
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { isCodingSafeActivityPresentationPath } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
+  type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import {
   detectWorkspaceAt,
-  discoverWithStats,
+  discoverWorkspacePaths,
+  executionControlledWorkspaceFs,
   isDenied,
+  PathDeniedError,
+  PathEscapeError,
+  RepoSearchInvalidQueryError,
+  StructuralExecutionStoppedError,
+  type WorkspacePathDiscoveryResult,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import {
@@ -37,7 +48,12 @@ import {
   type EditPrepareCause,
   type MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
-import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
+import {
+  isExactEditorAgentChangeset,
+  codingToolDiscoveryText,
+  type CodingToolDiscoveryResult,
+  type CodingToolReadResult,
+} from "./codingToolIpc.js";
 import {
   changesetPayloadBytes,
   isReplacementChangeset,
@@ -63,13 +79,24 @@ import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   secureWorkspaceTextDigest,
+  type SecureWorkspaceNativeBytesRequest,
+  type SecureWorkspaceNativeBytesResult,
+  type SecureWorkspaceNativeFileIO,
+  type SecureWorkspaceNativeStatResult,
+  type SecureWorkspaceNativeListResult,
   type SecureWorkspaceTextReadPort,
+  type SecureWorkspaceTextSnapshotResult,
+  isSecureWorkspaceTextRelativePath,
 } from "./secureWorkspaceTextRead.js";
 import {
   WORKSPACE_PATH_ABSENCE_VERDICTS,
   type WorkspacePathAbsence,
 } from "./secureWorkspaceTextReadAbsence.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type {
+  RuntimeChangesetApplyInput,
+  RuntimeChangesetApplyPort,
+} from "../editor/agentRoutes.js";
 
 const MAX_READ_BYTES = 65_536;
 const RAW_SINGLE_FILE_PATCH =
@@ -105,7 +132,8 @@ type EditOutcome =
       readonly reasonCode?: string | undefined;
       readonly message?: string | undefined;
       readonly prepareCause?: EditPrepareCause | undefined;
-      readonly readReason?: WorkspaceReadFailureReason | undefined;
+      readonly readReason?: GovernedWorkspaceReadFailure | undefined;
+      readonly affectedRelativePath?: string | undefined;
     };
 
 // NO_ACTIVE_SESSION means the bounded wait for a live Workbench editor bridge
@@ -124,13 +152,65 @@ const EDITOR_SESSION_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 3_000, 5_000] as
 
 export interface CodingToolReadEditPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
+  /** Same producer/authority/log owner; original native algorithms consume only these IO facts. */
+  readonly nativeFileIO: GovernedNativeFileIO;
+  /** Server-private IO only; consumes the original authority owner's admitted guard. No host is enabled. */
+  readonly nativeTextRead: {
+    readTextSnapshot(
+      request: {
+        readonly relativePath: string;
+        readonly purpose: "native-tool-io" | "native-instructions";
+      },
+      signal: AbortSignal | undefined,
+      mutationGuard: CodingToolMutationGuard,
+    ): Promise<GovernedTextSnapshotResult>;
+  };
   readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
 }
 
+export interface GovernedNativeFileRequest {
+  readonly relativePath: string;
+  readonly purpose: "native-tool-io" | "native-instructions";
+  readonly range?: SecureWorkspaceNativeBytesRequest["range"];
+}
+
+type NativePrimitiveResult =
+  | SecureWorkspaceNativeBytesResult
+  | SecureWorkspaceNativeStatResult
+  | SecureWorkspaceNativeListResult;
+type NativePrimitiveRefusalReason =
+  "preflight-refused" | "postflight-refused" | "exception" | "native-io-unavailable";
+export type GovernedNativeFileResult<T extends NativePrimitiveResult> =
+  T | { readonly ok: false; readonly reason: NativePrimitiveRefusalReason };
+
+export interface GovernedNativeFileIO {
+  readBytes(
+    request: GovernedNativeFileRequest,
+    signal: AbortSignal | undefined,
+    guard: CodingToolMutationGuard,
+  ): Promise<GovernedNativeFileResult<SecureWorkspaceNativeBytesResult>>;
+  stat(
+    request: GovernedNativeFileRequest,
+    signal: AbortSignal | undefined,
+    guard: CodingToolMutationGuard,
+  ): Promise<GovernedNativeFileResult<SecureWorkspaceNativeStatResult>>;
+  list(
+    request: GovernedNativeFileRequest,
+    signal: AbortSignal | undefined,
+    guard: CodingToolMutationGuard,
+  ): Promise<GovernedNativeFileResult<SecureWorkspaceNativeListResult>>;
+}
+
+export type GovernedTextSnapshotResult =
+  | Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: true }>
+  | { readonly ok: false; readonly reason: GovernedWorkspaceReadFailure | "snapshot-unavailable" };
+
 export interface CodingToolReadEditPortDeps {
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly editorAgentClient: EditorAgentActionClient;
+  /** Server-owned allowed changesets reuse the Editor transaction without a browser decision. */
+  readonly serverRuntimeChangeset?: RuntimeChangesetApplyPort | undefined;
   readonly resolveEditorActionContext: () => EditorActionContext;
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
   readonly resolveWorkspaceRoot?: (() => string | undefined) | undefined;
@@ -185,6 +265,11 @@ export function createCodingToolReadEditPorts(
   deps: CodingToolReadEditPortDeps,
 ): CodingToolReadEditPorts {
   return {
+    nativeFileIO: createGuardedNativeFileIO(deps),
+    nativeTextRead: {
+      readTextSnapshot: (request, signal, mutationGuard) =>
+        executeSnapshotRead(deps, request, signal, mutationGuard),
+    },
     repositoryRead: {
       execute: (request, signal, mutationGuard) =>
         executeRead(deps, request, signal, mutationGuard),
@@ -200,55 +285,346 @@ export function createCodingToolReadEditPorts(
   };
 }
 
-function executeDiscover(
+type NativePrimitiveRead<T extends NativePrimitiveResult> = (
+  io: SecureWorkspaceNativeFileIO,
+  request: SecureWorkspaceNativeBytesRequest & { readonly isCurrent: () => boolean },
+) => Promise<T>;
+
+function createGuardedNativeFileIO(deps: CodingToolReadEditPortDeps): GovernedNativeFileIO {
+  return Object.freeze<GovernedNativeFileIO>({
+    readBytes: (request, signal, guard) =>
+      executeNativePrimitive(deps, request, signal, guard, (io, input) => io.readBytes(input)),
+    stat: (request, signal, guard) =>
+      executeNativePrimitive(deps, request, signal, guard, (io, input) => io.stat(input)),
+    list: (request, signal, guard) =>
+      executeNativePrimitive(deps, request, signal, guard, (io, input) => io.list(input)),
+  });
+}
+
+async function executeNativePrimitive<T extends NativePrimitiveResult>(
+  deps: CodingToolReadEditPortDeps,
+  request: GovernedNativeFileRequest,
+  signal: AbortSignal | undefined,
+  guard: CodingToolMutationGuard,
+  invoke: NativePrimitiveRead<T>,
+): Promise<GovernedNativeFileResult<T>> {
+  const binding = safeMutationBinding(guard);
+  const captured = Object.freeze({
+    ...request,
+    ...(request.range === undefined ? {} : { range: Object.freeze({ ...request.range }) }),
+  });
+  try {
+    return await attemptNativePrimitive(deps, captured, signal, guard, binding, invoke);
+  } catch (error) {
+    return recordNativePrimitiveFailure(deps, captured, binding, "exception", error);
+  }
+}
+
+async function attemptNativePrimitive<T extends NativePrimitiveResult>(
+  deps: CodingToolReadEditPortDeps,
+  request: GovernedNativeFileRequest,
+  signal: AbortSignal | undefined,
+  guard: CodingToolMutationGuard,
+  binding: RuntimeProducerBinding | undefined,
+  invoke: NativePrimitiveRead<T>,
+): Promise<GovernedNativeFileResult<T>> {
+  const root = discoveryWorkspace(deps)?.root;
+  const current = (): boolean =>
+    root !== undefined &&
+    binding !== undefined &&
+    hasLiveWorkspaceAccess(deps) &&
+    discoveryPostflight(deps, root, binding, signal, guard);
+  if (isDenied(request.relativePath) || !current())
+    return recordNativePrimitiveFailure(deps, request, binding, "preflight-refused");
+  const io = deps.secureWorkspaceTextRead.nativeFileIO;
+  if (io === undefined)
+    return recordNativePrimitiveFailure(deps, request, binding, "native-io-unavailable");
+  const result = await invoke(io, {
+    relativePath: request.relativePath,
+    signal,
+    isCurrent: current,
+    ...(request.range === undefined ? {} : { range: request.range }),
+  });
+  if (!current()) {
+    if (result.ok && "bytes" in result) result.bytes.fill(0);
+    return recordNativePrimitiveFailure(deps, request, binding, "postflight-refused");
+  }
+  if (result.ok) recordSnapshotRead(deps, binding, request.relativePath, request.purpose);
+  else logFailedRead(deps, { ...result, binding }, request.relativePath, request.purpose);
+  return result;
+}
+
+function recordNativePrimitiveFailure(
+  deps: CodingToolReadEditPortDeps,
+  request: GovernedNativeFileRequest,
+  binding: RuntimeProducerBinding | undefined,
+  reason: NativePrimitiveRefusalReason,
+  error?: unknown,
+): { readonly ok: false; readonly reason: NativePrimitiveRefusalReason } {
+  logFailedRead(deps, { ok: false, reason, binding, error }, request.relativePath, request.purpose);
+  return { ok: false, reason };
+}
+
+async function executeDiscover(
   deps: CodingToolReadEditPortDeps,
   request: RepositoryDiscoverRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): Promise<
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
-  | { readonly status: "failed" }
+  | { readonly status: "failed"; readonly reasonCode?: string }
 > {
-  return Promise.resolve(executeDiscoverSync(deps, request, signal, mutationGuard));
-}
-
-function executeDiscoverSync(
-  deps: CodingToolReadEditPortDeps,
-  request: RepositoryDiscoverRequest,
-  signal: AbortSignal | undefined,
-  mutationGuard: CodingToolMutationGuard,
-):
-  | { readonly status: "completed"; readonly read: CodingToolReadResult }
-  | { readonly status: "failed" } {
   const preflight = discoveryPreflight(deps, signal, mutationGuard);
   if (!preflight.ok) return { status: "failed" };
   const binding = preflight.binding;
+  const startedAtMs = Date.now();
+  let reason: DiscoverySettlementReason = "authority-denied";
+  let discovered: WorkspacePathDiscoveryResult | undefined;
+  let read: CodingToolReadResult | undefined;
+  let failure: unknown;
   try {
     const resolved = discoveryWorkspace(deps);
     if (resolved === undefined) return { status: "failed" };
-    const workspace = detectWorkspaceAt(resolved.root, resolved.fs);
-    const discovered = discoverWithStats(
-      workspace,
-      {
-        maxDepth: 40,
-        maxFiles: 20_000,
-        applyGitignore: true,
-      },
-      resolved.fs,
-    );
-    const text = discoveredPathText(
-      discovered.files.map(({ relativePath }): string => relativePath),
-      request.query,
-      request.maxResults,
-    );
+    discovered = await discoverPaths(resolved, request, signal, mutationGuard);
+    read = discoveryReadResult(discovered);
     if (!discoveryPostflight(deps, resolved.root, binding, signal, mutationGuard)) {
+      reason = isAborted(signal) ? "cancelled" : "authority-denied";
       return { status: "failed" };
     }
-    return { status: "completed", read: discoveryReadResult(text) };
+    reason = "none";
+    return { status: "completed", read };
   } catch (error) {
+    failure = error;
+    reason = discoveryFailureReason(signal, error);
     emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, error);
-    return { status: "failed" };
+    return discoveryRefusal(reason);
+  } finally {
+    recordDiscoverySettlement(
+      deps,
+      binding,
+      reason,
+      startedAtMs,
+      discovered,
+      reason === "none" ? read : undefined,
+      failure,
+    );
   }
+}
+
+function discoverPaths(
+  resolved: DiscoveryWorkspace,
+  request: RepositoryDiscoverRequest,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+): Promise<WorkspacePathDiscoveryResult> {
+  const nowMs = mutationGuard.executionBudget?.nowMs ?? Date.now;
+  const deadlineAtMs = Math.min(
+    nowMs() + DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
+    mutationGuard.executionBudget?.deadlineAtMs ?? Infinity,
+  );
+  const control = { nowMs, deadlineAtMs, ...(signal === undefined ? {} : { signal }) };
+  const workspace = detectWorkspaceAt(
+    resolved.root,
+    executionControlledWorkspaceFs(resolved.fs ?? nodeWorkspaceFs, control),
+    {
+      scanSourceFilesForLanguages: false,
+    },
+  );
+  return discoverWorkspacePaths(
+    workspace,
+    {
+      mode: request.mode ?? "keywords",
+      directory: request.directory ?? "",
+      query: request.mode === "glob" ? request.query : request.query.trim(),
+      maxResults: request.maxResults,
+    },
+    control,
+    resolved.fs,
+  );
+}
+
+type DiscoverySettlementReason =
+  | "none"
+  | "cancelled"
+  | "authority-denied"
+  | "inventory-failed"
+  | "timeout"
+  | "scope-denied"
+  | "invalid-request";
+
+export const WORKSPACE_DISCOVERY_REFUSAL_CODES = Object.freeze({
+  SCOPE_DENIED: "WORKSPACE_DISCOVERY_SCOPE_DENIED",
+  INVALID_REQUEST: "WORKSPACE_DISCOVERY_INVALID_REQUEST",
+  TIMEOUT: "WORKSPACE_DISCOVERY_TIMEOUT",
+});
+
+function discoveryFailureReason(
+  signal: AbortSignal | undefined,
+  error: unknown,
+): DiscoverySettlementReason {
+  if (isAborted(signal)) return "cancelled";
+  if (error instanceof StructuralExecutionStoppedError)
+    return error.reason === "timeout" ? "timeout" : "cancelled";
+  if (error instanceof PathDeniedError || error instanceof PathEscapeError) return "scope-denied";
+  if (error instanceof RepoSearchInvalidQueryError) return "invalid-request";
+  return "inventory-failed";
+}
+
+function discoveryRefusal(reason: DiscoverySettlementReason): {
+  readonly status: "failed";
+  readonly reasonCode?: string;
+} {
+  if (reason === "scope-denied")
+    return { status: "failed", reasonCode: WORKSPACE_DISCOVERY_REFUSAL_CODES.SCOPE_DENIED };
+  if (reason === "invalid-request")
+    return { status: "failed", reasonCode: WORKSPACE_DISCOVERY_REFUSAL_CODES.INVALID_REQUEST };
+  if (reason === "timeout")
+    return { status: "failed", reasonCode: WORKSPACE_DISCOVERY_REFUSAL_CODES.TIMEOUT };
+  return { status: "failed" };
+}
+
+const CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.workspace-discovery",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.recordDiscoverySettlement",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "cancelled",
+        "authority-denied",
+        "inventory-failed",
+        "timeout",
+        "scope-denied",
+        "invalid-request",
+      ],
+    },
+    cooperative: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceLanguageScan: { type: "boolean", dataClass: "closed-enum", required: true },
+    directorySortStrategy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["once-per-directory", "retained-results-only"],
+    },
+    discovered: { type: "integer", dataClass: "count", required: false },
+    denied: { type: "integer", dataClass: "count", required: false },
+    ignored: { type: "integer", dataClass: "count", required: false },
+    depthPruned: { type: "integer", dataClass: "count", required: false },
+    maxFilesPruned: { type: "integer", dataClass: "count", required: false },
+    unrepresentablePaths: { type: "integer", dataClass: "count", required: false },
+    directoriesDiscovered: { type: "integer", dataClass: "count", required: false },
+    directoriesPruned: { type: "integer", dataClass: "count", required: false },
+    ioErrors: { type: "integer", dataClass: "count", required: false },
+    returnedPathCount: { type: "integer", dataClass: "count", required: false },
+    matchedCount: { type: "integer", dataClass: "count", required: false },
+    coverageIncomplete: { type: "boolean", dataClass: "closed-enum", required: false },
+    truncationReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 6,
+      values: [
+        "result-limit",
+        "output-limit",
+        "directory-limit",
+        "io-error",
+        "time-limit",
+        "unrepresentable-path",
+      ],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  diagnosticWhen: [{ field: "reason", values: ["inventory-failed"] }],
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-workspace-discovery"],
+  proofIds: ["coding-runtime.workspace-discovery.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function recordDiscoverySettlement(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  reason: DiscoverySettlementReason,
+  startedAtMs: number,
+  discovered: WorkspacePathDiscoveryResult | undefined,
+  read: CodingToolReadResult | undefined,
+  failure: unknown,
+): void {
+  const errorKind: ActivityLogErrorKind | undefined =
+    reason === "none" ? undefined : discoveryErrorKind(reason);
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(binding?.runId),
+        durationMs: Math.max(0, Date.now() - startedAtMs),
+        ...(errorKind === undefined ? {} : { level: "warn", errorKind }),
+      },
+      {
+        state: reason === "none" ? "completed" : "failed",
+        reason,
+        cooperative: true,
+        sourceLanguageScan: false,
+        directorySortStrategy: "retained-results-only",
+        ...discoverySettlementFacts(discovered, read),
+        ...(failure === undefined
+          ? {}
+          : { frames: keikoStackFrames(failure), causeChain: causeChain(failure) }),
+      },
+    ),
+  );
+}
+
+function discoveryErrorKind(
+  reason: Exclude<DiscoverySettlementReason, "none">,
+): ActivityLogErrorKind {
+  if (reason === "inventory-failed") return "internal";
+  if (reason === "invalid-request") return "validation-failed";
+  return reason === "scope-denied" ? "authority-denied" : reason;
+}
+
+function discoverySettlementFacts(
+  discovered: WorkspacePathDiscoveryResult | undefined,
+  read: CodingToolReadResult | undefined,
+): Partial<ActivityLogFields<typeof CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION>> {
+  if (discovered === undefined) return {};
+  const { filesDiscovered, ...stats } = discovered.stats;
+  return {
+    discovered: filesDiscovered,
+    ...stats,
+    returnedPathCount: read?.returnedPathCount ?? 0,
+    matchedCount: discovered.matchedCount,
+    coverageIncomplete: read?.discovery?.coverageIncomplete ?? discovered.coverageIncomplete,
+    truncationReasons: read?.discovery?.truncationReasons ?? discovered.truncationReasons,
+  };
 }
 
 interface DiscoveryWorkspace {
@@ -286,48 +662,36 @@ function emitDiscoveryFailureDiagnostic(
   });
 }
 
-function discoveredPathText(paths: readonly string[], query: string, maxResults: number): string {
-  const terms = discoveryTerms(query);
-  const selected: string[] = [];
-  let bytes = 0;
-  for (const path of paths) {
-    if (selected.length >= maxResults) break;
-    if (isDenied(path) || !matchesDiscoveryTerms(path, terms)) continue;
-    const lineBytes = Buffer.byteLength(`${path}\n`, "utf8");
-    if (bytes + lineBytes > MAX_READ_BYTES) break;
-    selected.push(path);
-    bytes += lineBytes;
-  }
-  return selected.length === 0 ? "" : `${selected.join("\n")}\n`;
-}
-
-function matchesDiscoveryTerms(path: string, terms: readonly string[]): boolean {
-  const candidate = path.toLowerCase();
-  for (const term of terms) {
-    if (!candidate.includes(term)) return false;
-  }
-  return true;
-}
-
-function discoveryTerms(query: string): readonly string[] {
-  if (query.trim() === "*") return [];
-  const terms: string[] = [];
-  for (const term of query.toLowerCase().split(/[\s/_.-]+/u)) {
-    if (term.length === 0) continue;
-    terms.push(term);
-    if (terms.length === 8) break;
-  }
-  return terms;
-}
-
-function discoveryReadResult(text: string): CodingToolReadResult {
+function discoveryReadProjection(discovery: CodingToolDiscoveryResult): CodingToolReadResult {
+  const text = codingToolDiscoveryText(discovery.entries);
   const totalLines = text.length === 0 ? 0 : text.split("\n").length - 1;
   return {
     text,
     byteCount: Buffer.byteLength(text, "utf8"),
     digest: createHash("sha256").update(text, "utf8").digest("hex"),
     totalLines,
+    returnedPathCount: discovery.entries.length,
+    discovery,
   };
+}
+
+function discoveryReadResult(result: WorkspacePathDiscoveryResult): CodingToolReadResult {
+  const entries = [...result.entries];
+  const truncationReasons = [...result.truncationReasons];
+  const project = (): CodingToolReadResult =>
+    discoveryReadProjection({
+      entries,
+      truncationReasons,
+      matchedCount: result.matchedCount,
+      coverageIncomplete: truncationReasons.length > 0,
+    });
+  let read = project();
+  while (Buffer.byteLength(JSON.stringify(read), "utf8") > MAX_READ_BYTES) {
+    entries.pop();
+    if (!truncationReasons.includes("output-limit")) truncationReasons.push("output-limit");
+    read = project();
+  }
+  return read;
 }
 
 async function executeRead(
@@ -358,7 +722,7 @@ type GovernedRead =
     }
   | {
       readonly ok: false;
-      readonly reason: WorkspaceReadFailureReason;
+      readonly reason: GovernedWorkspaceReadFailure;
       readonly binding: RuntimeProducerBinding | undefined;
       readonly error?: unknown;
       // The closed verdict of the secure read's walk, set only when the helper answered
@@ -366,21 +730,95 @@ type GovernedRead =
       readonly absence?: WorkspacePathAbsence;
     };
 
+type GovernedSnapshotRead =
+  | (Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: true }> & {
+      readonly binding: RuntimeProducerBinding | undefined;
+    })
+  | (Omit<Extract<GovernedRead, { readonly ok: false }>, "reason"> & {
+      readonly reason: GovernedWorkspaceReadFailure | "snapshot-unavailable";
+    });
+type AnyGovernedRead = GovernedRead | GovernedSnapshotRead;
+
+async function executeSnapshotRead(
+  deps: CodingToolReadEditPortDeps,
+  request: {
+    readonly relativePath: string;
+    readonly purpose: "native-tool-io" | "native-instructions";
+  },
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+): Promise<GovernedTextSnapshotResult> {
+  const read = await governedWorkspaceRead(
+    deps,
+    request.relativePath,
+    signal,
+    mutationGuard,
+    request.purpose,
+    true,
+  );
+  if (!read.ok) return { ok: false, reason: read.reason };
+  recordSnapshotRead(deps, read.binding, request.relativePath, request.purpose);
+  return Object.freeze({
+    ok: true,
+    text: read.text,
+    info: Object.freeze({ type: "file", size: read.info.size, mtimeMs: read.info.mtimeMs }),
+  });
+}
+
+function recordSnapshotRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  relativePath: string,
+  purpose: ReadPurpose,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_READ_OPERATION,
+      { correlationId: correlationIdOrUnknown(binding?.runId) },
+      { state: "completed", purpose, targetPathSha256: targetPathDigest(relativePath) },
+    ),
+  );
+}
+
 // The one governed read: preflight (abort, denied path, live workspace, producer binding, guard),
 // the secure read, postflight, and the response bound. The model's own read and a replacement
 // materialization both read through it (#3873 review), so both fail closed the same way, and every
 // failure, a thrown one included, leaves its `coding-runtime.workspace-read` line here with the
 // closed reason and the purpose the read served.
+function governedWorkspaceRead(
+  deps: CodingToolReadEditPortDeps,
+  relativePath: string,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+  purpose: ReadPurpose,
+  snapshot?: false,
+): Promise<GovernedRead>;
+function governedWorkspaceRead(
+  deps: CodingToolReadEditPortDeps,
+  relativePath: string,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+  purpose: ReadPurpose,
+  snapshot: true,
+): Promise<GovernedSnapshotRead>;
 async function governedWorkspaceRead(
   deps: CodingToolReadEditPortDeps,
   relativePath: string,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
   purpose: ReadPurpose,
-): Promise<GovernedRead> {
+  snapshot = false,
+): Promise<AnyGovernedRead> {
   const binding = safeMutationBinding(mutationGuard);
   try {
-    const read = await attemptGovernedRead(deps, relativePath, signal, mutationGuard, binding);
+    const read = await attemptGovernedRead(
+      deps,
+      relativePath,
+      signal,
+      mutationGuard,
+      binding,
+      snapshot,
+    );
     if (!read.ok) recordReadFailure(deps, read, relativePath, purpose);
     return read;
   } catch (error) {
@@ -396,26 +834,71 @@ async function attemptGovernedRead(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
   initialBinding: RuntimeProducerBinding | undefined,
-): Promise<GovernedRead> {
+  snapshot: boolean,
+): Promise<AnyGovernedRead> {
   const preflight = readPreflight(deps, relativePath, signal, mutationGuard);
   if (!preflight.ok) return { ok: false, reason: "preflight-refused", binding: initialBinding };
   const binding = preflight.binding;
-  const result = await deps.secureWorkspaceTextRead.readText({ relativePath, signal });
-  if (!result.ok) {
-    return {
-      ok: false,
-      reason: result.reason,
-      binding,
-      ...(result.absence === undefined ? {} : { absence: result.absence }),
-    };
-  }
+  const result = await readGovernedValue(deps, relativePath, signal, snapshot);
+  if (!result.ok) return boundReadFailure(result, binding);
   if (!readPostflight(deps, result, binding, signal, mutationGuard)) {
     return { ok: false, reason: "postflight-refused", binding };
   }
-  if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) {
+  if (Buffer.byteLength(result.text, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) {
     return { ok: false, reason: "response-too-large", binding };
   }
+  if (snapshot) {
+    if (!("info" in result) || !validSnapshotRead(result.text, result.info))
+      return { ok: false, reason: "protocol-invalid", binding };
+    return { ok: true, text: result.text, info: result.info, binding };
+  }
   return { ok: true, text: result.text, binding };
+}
+
+async function readGovernedValue(
+  deps: CodingToolReadEditPortDeps,
+  relativePath: string,
+  signal: AbortSignal | undefined,
+  snapshot: boolean,
+): Promise<
+  SecureWorkspaceTextSnapshotResult | Awaited<ReturnType<SecureWorkspaceTextReadPort["readText"]>>
+> {
+  if (!snapshot) return deps.secureWorkspaceTextRead.readText({ relativePath, signal });
+  const readSnapshot = deps.secureWorkspaceTextRead.readTextSnapshot?.bind(
+    deps.secureWorkspaceTextRead,
+  );
+  return readSnapshot === undefined
+    ? { ok: false, reason: "snapshot-unavailable" }
+    : readSnapshot({ relativePath, signal });
+}
+
+function boundReadFailure(
+  result: Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: false }>,
+  binding: RuntimeProducerBinding | undefined,
+): Extract<GovernedSnapshotRead, { readonly ok: false }> {
+  return {
+    ok: false,
+    reason: result.reason,
+    binding,
+    ...("absence" in result ? { absence: result.absence } : {}),
+  };
+}
+
+function validSnapshotRead(
+  text: string,
+  info: unknown,
+): info is Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: true }>["info"] {
+  if (info === null || typeof info !== "object" || Reflect.ownKeys(info).length !== 3) return false;
+  return (
+    ownSnapshotValue(info, "type") === "file" &&
+    ownSnapshotValue(info, "size") === Buffer.byteLength(text, "utf8") &&
+    Number.isFinite(ownSnapshotValue(info, "mtimeMs"))
+  );
+}
+
+function ownSnapshotValue(info: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(info, key);
+  return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
 }
 
 // A path that does not exist is a legitimate precondition of the file a materialization creates or
@@ -423,7 +906,7 @@ async function attemptGovernedRead(
 // failed read.
 function recordReadFailure(
   deps: CodingToolReadEditPortDeps,
-  read: Extract<GovernedRead, { readonly ok: false }>,
+  read: Extract<AnyGovernedRead, { readonly ok: false }>,
   relativePath: string,
   purpose: ReadPurpose,
 ): void {
@@ -494,10 +977,16 @@ function targetPathDigest(relativePath: string): string {
   return createHash("sha256").update(relativePath, "utf8").digest("hex");
 }
 
-type WorkspaceReadFailureReason = GovernedWorkspaceReadFailure;
+type WorkspaceReadFailureReason =
+  GovernedWorkspaceReadFailure | "snapshot-unavailable" | "native-io-unavailable" | "wrong-kind";
 
 // #3873 review: which consumer a read served. Absent on lines written before the field existed.
-const READ_PURPOSES = ["tool-result", "edit-materialization"] as const;
+const READ_PURPOSES = [
+  "tool-result",
+  "edit-materialization",
+  "native-tool-io",
+  "native-instructions",
+] as const;
 type ReadPurpose = (typeof READ_PURPOSES)[number];
 
 const CODING_RUNTIME_WORKSPACE_READ_PURPOSE_FIELD = {
@@ -511,7 +1000,7 @@ const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
   type: "string",
   dataClass: "closed-enum",
   required: false,
-  values: [...EDIT_READ_REASONS],
+  values: [...EDIT_READ_REASONS, "snapshot-unavailable", "native-io-unavailable", "wrong-kind"],
 } as const;
 
 // #3873 review (PR #3876): the closed verdict of the server's no-follow walk, set only when the native
@@ -582,6 +1071,7 @@ const EDIT_FORMS = ["unified-diff", "replacements"] as const;
 type EditForm = (typeof EDIT_FORMS)[number];
 
 interface EditFormEvidence {
+  readonly executionPath?: "server" | "browser";
   readonly editForm: EditForm;
   readonly deletionCount?: number;
   readonly renameCount?: number;
@@ -617,6 +1107,12 @@ const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperat
       values: ["edit"],
     },
     editForm: EDIT_FORM_FIELD,
+    executionPath: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "browser"],
+    },
     deletionCount: EDIT_DELETION_COUNT_FIELD,
     renameCount: EDIT_RENAME_COUNT_FIELD,
   },
@@ -703,6 +1199,12 @@ const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
     readReason: CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD,
     replacementRefusal: EDIT_REPLACEMENT_REFUSAL_FIELD,
     editForm: EDIT_FORM_FIELD,
+    executionPath: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "browser"],
+    },
     deletionCount: EDIT_DELETION_COUNT_FIELD,
     renameCount: EDIT_RENAME_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -761,6 +1263,9 @@ const WORKSPACE_READ_ERROR_KINDS: Partial<
   "postflight-refused": "authority-denied",
   "not-found": "unavailable",
   "workspace-unavailable": "unavailable",
+  "snapshot-unavailable": "unavailable",
+  "native-io-unavailable": "unavailable",
+  "wrong-kind": "validation-failed",
   "too-large": "validation-failed",
   "response-too-large": "validation-failed",
   exception: "internal",
@@ -776,14 +1281,26 @@ function completedRead(
   binding: RuntimeProducerBinding | undefined,
   request: RepositoryReadRequest,
   text: string,
-): { readonly status: "completed"; readonly read: CodingToolReadResult } {
+):
+  | { readonly status: "completed"; readonly read: CodingToolReadResult }
+  | { readonly status: "failed"; readonly reasonCode?: string } {
   const window = readWindow(text, request.startLine, request.maxLines);
+  const byteCount = Buffer.byteLength(window.text, "utf8");
+  if (byteCount > MAX_READ_BYTES) {
+    recordReadFailure(
+      deps,
+      { ok: false, reason: "too-large", binding },
+      request.relativePath,
+      "tool-result",
+    );
+    return readRefusal("too-large");
+  }
   recordCompletedRead(deps, binding, request);
   return {
     status: "completed",
     read: {
       text: window.text,
-      byteCount: Buffer.byteLength(window.text, "utf8"),
+      byteCount,
       // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
       // anchored to the governed read even when the model only saw a window of it.
       digest: wholeFileDigest(text),
@@ -850,7 +1367,13 @@ function readRefusal(reason: WorkspaceReadFailureReason): {
 
 function logFailedRead(
   deps: CodingToolReadEditPortDeps,
-  read: Extract<GovernedRead, { readonly ok: false }>,
+  read: {
+    readonly ok: false;
+    readonly reason: WorkspaceReadFailureReason;
+    readonly binding: RuntimeProducerBinding | undefined;
+    readonly error?: unknown;
+    readonly absence?: WorkspacePathAbsence;
+  },
   relativePath: string,
   purpose: ReadPurpose,
 ): void {
@@ -948,14 +1471,19 @@ function readPreflight(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): ReadEditPreflightOutcome {
-  if (isAborted(signal) || isDenied(relativePath) || !hasLiveWorkspaceAccess(deps)) {
+  if (
+    isAborted(signal) ||
+    !isSecureWorkspaceTextRelativePath(relativePath) ||
+    isDenied(relativePath) ||
+    !hasLiveWorkspaceAccess(deps)
+  ) {
     return { ok: false };
   }
   const binding = mutationBinding(mutationGuard);
   if (binding === null) return { ok: false };
   if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
   if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return { ok: false };
-  return isDenied(relativePath) ? { ok: false } : { ok: true, binding };
+  return { ok: true, binding };
 }
 
 function discoveryPreflight(
@@ -1005,6 +1533,7 @@ function readPostflight(
 }
 
 interface PreparedEdit {
+  readonly requiresReview: boolean;
   readonly action: EditorAgentAction;
   readonly leaseRequest: CodingRuntimeEditorMutationLeaseRequest | undefined;
   readonly signal: AbortSignal;
@@ -1116,6 +1645,9 @@ function materializationRefused(
     return editRefused(deps, correlationId, "EDIT_PREPARE_FAILED", {
       prepareCause: result.reason === "cancelled" ? "cancelled" : "replacement-read-failed",
       readReason: result.reason,
+      ...(isCodingSafeActivityPresentationPath(result.file) && !isDenied(result.file)
+        ? { affectedRelativePath: result.file }
+        : {}),
       ...(message === undefined ? {} : { message }),
       ...evidence,
     });
@@ -1186,27 +1718,90 @@ async function executeMaterializedEdit(
   }
   const correlationId = editCorrelationId(prepared.action);
   try {
-    const bound = await bindPreparedEdit(deps, prepared, correlationId, evidence);
-    if ("refused" in bound) return bound.refused;
-    // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
-    const completion =
-      prepared.leaseRequest === undefined
-        ? undefined
-        : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
-    const result = await deps.editorAgentClient.action(bound.action, prepared.signal);
-    if (result.ok && editorStatusCompleted(result.value.result.status)) {
-      return await completedEdit(deps, correlationId, completion, evidence);
+    const serverInput = serverPreparedEditInput(prepared);
+    if (deps.serverRuntimeChangeset !== undefined && serverInput !== undefined) {
+      return await executeServerPreparedEdit(
+        deps,
+        deps.serverRuntimeChangeset,
+        serverInput,
+        correlationId,
+        { ...evidence, executionPath: "server" },
+      );
     }
-    discardMutationLease(deps, prepared.leaseRequest);
-    return editRefused(deps, correlationId, editFailureReasonCode(result), {
-      ...editFailureDetail(result),
+    return await executeBrowserPreparedEdit(deps, prepared, correlationId, {
       ...evidence,
+      executionPath: "browser",
     });
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
     emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
     return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
+}
+
+function serverPreparedEditInput(prepared: PreparedEdit): RuntimeChangesetApplyInput | undefined {
+  if (
+    prepared.requiresReview ||
+    prepared.leaseRequest === undefined ||
+    prepared.workspaceRoot === undefined
+  )
+    return undefined;
+  return {
+    action: prepared.action,
+    leaseRequest: prepared.leaseRequest,
+    workspaceRoot: prepared.workspaceRoot,
+    signal: prepared.signal,
+  };
+}
+
+async function executeBrowserPreparedEdit(
+  deps: CodingToolReadEditPortDeps,
+  prepared: PreparedEdit,
+  correlationId: string,
+  evidence: EditFormEvidence,
+): Promise<EditOutcome> {
+  const bound = await bindPreparedEdit(deps, prepared, correlationId, evidence);
+  if ("refused" in bound) return bound.refused;
+  // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
+  const completion =
+    prepared.leaseRequest === undefined
+      ? undefined
+      : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
+  const result = await deps.editorAgentClient.action(bound.action, prepared.signal);
+  if (result.ok && editorStatusCompleted(result.value.result.status))
+    return completedEdit(deps, correlationId, completion, evidence);
+  discardMutationLease(deps, prepared.leaseRequest);
+  return editRefused(deps, correlationId, editFailureReasonCode(result), {
+    ...editFailureDetail(result),
+    ...evidence,
+  });
+}
+
+async function executeServerPreparedEdit(
+  deps: CodingToolReadEditPortDeps,
+  apply: RuntimeChangesetApplyPort,
+  input: RuntimeChangesetApplyInput,
+  correlationId: string,
+  evidence: EditFormEvidence,
+): Promise<EditOutcome> {
+  const completion = deps.mutationLeaseCoordinator?.waitForMutation(
+    input.leaseRequest,
+    input.signal,
+  );
+  const result = await apply(input);
+  if (result.status === "succeeded")
+    return completedEdit(deps, correlationId, completion, evidence);
+  discardMutationLease(deps, input.leaseRequest);
+  if (input.signal.aborted) return editRefused(deps, correlationId, "CANCELLED", evidence);
+  return editRefused(
+    deps,
+    correlationId,
+    result.conflict?.code ?? result.failure?.code ?? "EDIT_MUTATION_FAILED",
+    {
+      ...(result.message === undefined ? {} : { message: result.message }),
+      ...evidence,
+    },
+  );
 }
 
 // A change applied or rejected in its review is the human's decision, logged as such; a cancelled
@@ -1248,8 +1843,9 @@ async function completedEdit(
 interface EditRefusalDetail extends Partial<EditFormEvidence> {
   readonly message?: string;
   readonly prepareCause?: EditPrepareCause;
-  readonly readReason?: WorkspaceReadFailureReason;
+  readonly readReason?: GovernedWorkspaceReadFailure;
   readonly replacementRefusal?: ReplacementRefusalEvidence;
+  readonly affectedRelativePath?: string;
 }
 
 function editRefused(
@@ -1258,7 +1854,7 @@ function editRefused(
   reasonCode: string | undefined,
   detail: EditRefusalDetail = {},
 ): EditOutcome {
-  const { message, ...evidence } = detail;
+  const { message, affectedRelativePath, ...evidence } = detail;
   // The refusal line stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches
   // the activity log, only the outcome returned to the caller.
   logEditRefused(deps, correlationId, reasonCode, evidence);
@@ -1266,6 +1862,7 @@ function editRefused(
     status: "failed",
     reasonCode,
     ...(message === undefined ? {} : { message }),
+    ...(affectedRelativePath === undefined ? {} : { affectedRelativePath }),
     ...refusalCauseFields(evidence),
   };
 }
@@ -1283,11 +1880,13 @@ function refusalCauseFields({
 }
 
 function editFormFields({
+  executionPath,
   editForm,
   deletionCount,
   renameCount,
 }: Partial<EditFormEvidence>): Partial<EditFormEvidence> {
   return {
+    ...(executionPath === undefined ? {} : { executionPath }),
     ...(editForm === undefined ? {} : { editForm }),
     ...(deletionCount === undefined ? {} : { deletionCount }),
     ...(renameCount === undefined ? {} : { renameCount }),
@@ -1357,14 +1956,16 @@ function emitEditFailureDiagnostic(
   correlationId: string,
   error: unknown,
 ): void {
-  emitServerDiagnostic(diagnostics, {
-    correlationId,
-    timestamp: new Date().toISOString(),
-    operation: "coding-runtime.editor-changeset",
-    source: "coding-tool-read-edit-ports.edit",
-    errorClass: contentFreeErrorClass(error),
-    message: "edit-transport-failed",
-  });
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "coding-runtime.editor-changeset",
+      source: "coding-tool-read-edit-ports.edit",
+      error,
+      redact: (): string => "edit-transport-failed",
+    }),
+  );
 }
 
 // A governed edit the editor route refused (a policy denial, a conflict, a failed apply) is a
@@ -1460,9 +2061,18 @@ function prepareEdit(
   if (context === undefined || !editorContextMatches(context, binding))
     return { refused: "editor-context-unavailable" };
   const action = changesetAction(request, changeset, context);
-  const leaseRequest = registerMutationLease(deps, action, context, binding, mutationGuard);
+  const requiresReview = resolveReviewRequirement(deps);
+  const leaseRequest = registerMutationLease(
+    deps,
+    action,
+    context,
+    binding,
+    mutationGuard,
+    requiresReview,
+  );
   if (binding !== undefined && leaseRequest === undefined) return { refused: "lease-unavailable" };
   return {
+    requiresReview,
     action,
     leaseRequest,
     signal: signal ?? new AbortController().signal,
@@ -1533,6 +2143,7 @@ function registerMutationLease(
   context: EditorActionContext,
   binding: RuntimeProducerBinding | undefined,
   mutationGuard: CodingToolMutationGuard,
+  requiresReview: boolean,
 ): CodingRuntimeEditorMutationLeaseRequest | undefined {
   if (binding === undefined) return undefined;
   const coordinator = deps.mutationLeaseCoordinator;
@@ -1544,7 +2155,7 @@ function registerMutationLease(
     workspaceRootDigest: binding.workspaceRootDigest,
     actionId: action.actionId,
     idempotencyKey: action.idempotencyKey,
-    requiresReview: resolveReviewRequirement(deps),
+    requiresReview,
     mutationGuard: (): boolean => checkGuard(mutationGuard),
   });
   return registered ? request : undefined;

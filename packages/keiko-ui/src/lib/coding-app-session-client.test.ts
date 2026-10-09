@@ -52,6 +52,34 @@ function seams(fragment: string): {
 }
 
 describe("redeemCodingAppSessionPairingFragment (#2478)", () => {
+  it("logs an unexpected decoder fault and refuses pairing without exposing fragment contents", async () => {
+    const target = seams(encodeCodingAppSessionPairingFragment(attestation));
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const parse = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+      throw new TypeError("private fragment decoder fault");
+    });
+    try {
+      await expect(redeemCodingAppSessionPairingFragment(target.seams)).resolves.toBe(false);
+      expect(target.stripped()).toBe(1);
+      expect(target.posted()).toEqual([]);
+      expect(
+        parse.mock.calls.filter(([input]) => input === JSON.stringify(attestation)),
+      ).toHaveLength(1);
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+        "[keiko] local app session pairing failed: TypeError",
+        expect.objectContaining({
+          correlationId: expect.any(String),
+          errorEvidence: expect.objectContaining({ errorClass: "TypeError" }),
+        }),
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(/private|req_launcher|c{64}/u);
+    } finally {
+      parse.mockRestore();
+      resetClientDiagnosticWriter();
+    }
+  });
+
   it("redeems a launcher fragment and strips it before the attestation is posted onward", async () => {
     const fragment = encodeCodingAppSessionPairingFragment(attestation);
     const target = seams(fragment);

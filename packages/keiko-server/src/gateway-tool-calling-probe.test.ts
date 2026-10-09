@@ -46,7 +46,138 @@ function requestBodyAt(fetchImpl: typeof fetch, index: number): Record<string, u
   return JSON.parse(body) as Record<string, unknown>;
 }
 
+function streamedToolResponse(argumentsText = '{"status":"ok"}'): Response {
+  const events = [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "probe-call",
+                type: "function",
+                function: { name: "report_readiness", arguments: argumentsText.slice(0, 5) },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      choices: [
+        { delta: { tool_calls: [{ index: 0, function: { arguments: argumentsText.slice(5) } }] } },
+      ],
+    },
+    {
+      choices: [{ delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    },
+  ];
+  return new Response(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
+    {
+      headers: { "content-type": "text/event-stream" },
+    },
+  );
+}
+
+const STREAMING_CONFIG: GatewayConfig = { ...CONFIG, capabilities: [CAPABILITY] };
+
 describe("probeGatewayToolCalling", () => {
+  it("proves fragmented native calls on the configured streaming path in one request", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(streamedToolResponse())) as typeof fetch;
+    const reportFailure = vi.fn();
+    await expect(
+      probeGatewayToolCalling(STREAMING_CONFIG, PROVIDER, fetchImpl, reportFailure),
+    ).resolves.toBe("verified");
+    expect(requestBodyAt(fetchImpl, 0)).toMatchObject({ stream: true });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unterminated EOF", ""],
+    [
+      "failed generation",
+      'data: {"error":{"code":"503","message":"synthetic unavailable"}}\n\ndata: [DONE]\n\n',
+    ],
+  ])("does not verify a valid streamed call followed by %s", async (_label, suffix) => {
+    const body = (await streamedToolResponse().text())
+      .split("\n\n")
+      .filter((frame) => !frame.includes("finish_reason") && !frame.includes("[DONE]"))
+      .join("\n\n");
+    const reportFailure = vi.fn();
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(body + suffix, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      );
+    await expect(
+      probeGatewayToolCalling(STREAMING_CONFIG, PROVIDER, fetchImpl, reportFailure),
+    ).resolves.toBe("unverified");
+    expect(reportFailure).toHaveBeenCalledOnce();
+  });
+
+  it.each(["finish_reason", "[DONE]"])("accepts the actual %s terminal marker", async (marker) => {
+    const body = (await streamedToolResponse().text())
+      .split("\n\n")
+      .filter((frame) =>
+        marker === "[DONE]" ? !frame.includes("finish_reason") : !frame.includes("[DONE]"),
+      )
+      .join("\n\n");
+    const reportFailure = vi.fn();
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(body, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      );
+    await expect(
+      probeGatewayToolCalling(STREAMING_CONFIG, PROVIDER, fetchImpl, reportFailure),
+    ).resolves.toBe("verified");
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
+  it.each(["{", '{"status":"wrong"}', '{"status":"ok","extra":true}'])(
+    "rejects invalid streamed readiness arguments %s without blaming transport",
+    async (argumentsText) => {
+      const reportFailure = vi.fn();
+      const fetchImpl: typeof fetch = () => Promise.resolve(streamedToolResponse(argumentsText));
+      await expect(
+        probeGatewayToolCalling(STREAMING_CONFIG, PROVIDER, fetchImpl, reportFailure),
+      ).resolves.toBe("unsupported");
+      expect(reportFailure).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses buffering for a model configured without streaming", async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
+    ) as typeof fetch;
+    await expect(
+      probeGatewayToolCalling(
+        { ...STREAMING_CONFIG, capabilities: [{ ...CAPABILITY, streaming: false }] },
+        PROVIDER,
+        fetchImpl,
+      ),
+    ).resolves.toBe("verified");
+    expect(requestBodyAt(fetchImpl, 0).stream).not.toBe(true);
+  });
+
   it("reserves the shared spend ceiling before dispatching the paid probe", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-tool-probe-budget-"));
     const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse({ choices: [] }))) as typeof fetch;
@@ -72,42 +203,49 @@ describe("probeGatewayToolCalling", () => {
     }
   });
 
-  it("settles supplied provider usage so the next bounded probe can be admitted", async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "keiko-tool-probe-settlement-"));
-    const payload = {
-      choices: [
-        {
-          message: {
-            tool_calls: [{ function: { name: "report_readiness", arguments: '{"status":"ok"}' } }],
+  it.each([false, true])(
+    "settles provider usage so the next bounded probe is admitted (streamed: %s)",
+    async (streamed) => {
+      const stateDir = mkdtempSync(join(tmpdir(), "keiko-tool-probe-settlement-"));
+      const payload = {
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+              ],
+            },
           },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      };
+      const fetchImpl = vi.fn(() =>
+        Promise.resolve(streamed ? streamedToolResponse() : jsonResponse(payload)),
+      ) as typeof fetch;
+      const spend = {
+        env: {
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.0042",
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
         },
-      ],
-      usage: { prompt_tokens: 1, completion_tokens: 1 },
-    };
-    const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse(payload))) as typeof fetch;
-    const spend = {
-      env: {
-        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.0042",
-        [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
-      },
-      capability: CAPABILITY,
-      correlationId: "request-correlation-abcdefg",
-    };
-    try {
-      await expect(
-        probeGatewayToolCalling(CONFIG, PROVIDER, fetchImpl, undefined, spend),
-      ).resolves.toBe("verified");
-      await expect(
-        probeGatewayToolCalling(CONFIG, PROVIDER, fetchImpl, undefined, spend),
-      ).resolves.toBe("verified");
-      expect(fetchImpl).toHaveBeenCalledTimes(2);
-      expect(requestBodyAt(fetchImpl, 0)).toMatchObject({
-        max_tokens: CAPABILITY.maxOutputTokens,
-      });
-    } finally {
-      rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
+        capability: CAPABILITY,
+        correlationId: "request-correlation-abcdefg",
+      };
+      try {
+        await expect(
+          probeGatewayToolCalling(CONFIG, PROVIDER, fetchImpl, undefined, spend),
+        ).resolves.toBe("verified");
+        await expect(
+          probeGatewayToolCalling(CONFIG, PROVIDER, fetchImpl, undefined, spend),
+        ).resolves.toBe("verified");
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+        expect(requestBodyAt(fetchImpl, 0)).toMatchObject({
+          max_tokens: CAPABILITY.maxOutputTokens,
+        });
+      } finally {
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("verifies support only when the forced function call is present", async () => {
     let requestBody = "";

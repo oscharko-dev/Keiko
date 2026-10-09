@@ -139,6 +139,7 @@ import {
   type EditorAgentAuthorityResolution,
 } from "./agentAuthorityRegistry.js";
 import { recordBufferSafetyState } from "./bufferSafetyEvidence.js";
+import { retainedDirtyTargets } from "./bufferSafetyTargets.js";
 import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentAuditForTests,
@@ -148,11 +149,13 @@ import {
 } from "./agentActionAudit.js";
 import {
   EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE,
+  editorAgentSnapshotLocation,
   editorAgentRootContainmentReason,
   isEditorAgentRootBoundaryDenial,
   resolveEditorAgentActionRoot,
   resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
+  resolveEditorAgentRuntimeRoot,
   type EditorAgentRootBoundaryReason,
   serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
@@ -1304,7 +1307,10 @@ function registerBufferSafetySnapshot(
     shapedCorrelationId(request.snapshot.sessionId),
   );
   if (reason !== null) return rootBoundaryError(reason);
-  const snapshot = { ...request.snapshot, workspaceRoot: rooted.root.workspaceRoot };
+  const snapshot = {
+    ...request.snapshot,
+    workspaceRoot: editorAgentSnapshotLocation(request.snapshot, deps?.store),
+  };
   const supplied = request.bufferSnapshotCapability;
   if (supplied !== undefined) {
     const digest = bridgeCapabilityDigest(supplied);
@@ -1944,8 +1950,9 @@ function applyChangeset(
   projection: ChangesetProjection,
   runtimeMutation: RuntimeMutationClassification,
   deps?: EditorAgentRouteDeps,
+  signal?: AbortSignal,
 ): EditorAgentActionResult {
-  if (!claimRuntimeMutation(runtimeMutation, deps)) {
+  if (signal?.aborted === true || !claimRuntimeMutation(runtimeMutation, deps)) {
     return runtimeMutationLeaseDeniedResult(action);
   }
   const fs = changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
@@ -1953,7 +1960,7 @@ function applyChangeset(
   try {
     applyPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), projection.diff, {
       applyEnabled: true,
-      signal: new AbortController().signal,
+      signal: signal ?? new AbortController().signal,
       fs,
       lineBreakMarkers: projection.lineBreakMarkers,
       ...(editorAgentPatchWriterForTests === undefined
@@ -2166,7 +2173,16 @@ function handleApprovedChangesetResult(
 ): RouteResult {
   const rooted = approvedChangesetRoot(action, snapshot, deps, runtimeMutation);
   if (!rooted.ok) return rooted.response;
-  action = rooted.action;
+  return commitApprovedChangeset(rooted.action, snapshot, deps, runtimeMutation);
+}
+
+function commitApprovedChangeset(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentRouteDeps | undefined,
+  runtimeMutation: RuntimeMutationClassification,
+  signal?: AbortSignal,
+): RouteResult {
   const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
   const policyConflict = policyAdmissionConflict(action, decision);
   if (policyConflict !== null) {
@@ -2193,7 +2209,7 @@ function handleApprovedChangesetResult(
   const result =
     projection.kind === "conflict"
       ? projection.result
-      : applyChangeset(action, snapshot, projection, runtimeMutation, deps);
+      : applyChangeset(action, snapshot, projection, runtimeMutation, deps, signal);
   return finishRuntimeChangeset(action, snapshot, result, deps, runtimeMutation, decision);
 }
 
@@ -2206,6 +2222,28 @@ function projectApprovedChangeset(
   const inspectionFs = changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
   if (inspectionFs === undefined) {
     return { kind: "conflict", result: runtimeMutationLeaseDeniedResult(action) };
+  }
+  try {
+    const retained = retainedDirtyTargets(
+      snapshot.workspaceRoot,
+      normalizedChangesetPaths(action),
+      deps?.store,
+      deps?.workspaceRootAccessResolver,
+    );
+    snapshot = { ...snapshot, dirtyFiles: [...new Set([...snapshot.dirtyFiles, ...retained])] };
+  } catch (error) {
+    emitChangesetDiagnostic(
+      action,
+      "editor.agent.bufferSafety",
+      error,
+      "Buffer safety state could not be resolved.",
+    );
+    return {
+      kind: "conflict",
+      result: changesetConflict(action, [
+        { code: "DIRTY", message: "Unsaved buffer safety state could not be resolved." },
+      ]),
+    };
   }
   // Asked again here, not remembered from admission: the human's review may have outlasted the
   // registration, and a diff whose provenance ended is validated by the default reading.
@@ -2220,6 +2258,134 @@ function projectApprovedChangeset(
     return { kind: "conflict", result: inspection.result };
   }
   return projectChangeset(action, snapshot, inspection.validation, inspectionFs, lineBreakMarkers);
+}
+
+export interface RuntimeChangesetApplyInput {
+  readonly action: EditorAgentAction;
+  readonly leaseRequest: CodingRuntimeEditorMutationLeaseRequest;
+  readonly workspaceRoot: string;
+  readonly signal: AbortSignal;
+}
+
+export type RuntimeChangesetApplyPort = (
+  input: RuntimeChangesetApplyInput,
+) => Promise<EditorAgentActionResult>;
+
+export function createRuntimeChangesetApplyPort(
+  deps: EditorAgentRouteDeps,
+): RuntimeChangesetApplyPort {
+  return (input): Promise<EditorAgentActionResult> =>
+    Promise.resolve(applyRuntimeChangeset(input, deps));
+}
+
+/** An internal runtime capability; browser review and its authenticated decision lease stay separate. */
+export function applyRuntimeChangeset(
+  input: RuntimeChangesetApplyInput,
+  deps: EditorAgentRouteDeps,
+): EditorAgentActionResult {
+  const { action, leaseRequest, signal } = input;
+  if (
+    signal.aborted ||
+    !validRuntimeChangesetIdentity(input) ||
+    deps.runtimeMutationLease === undefined
+  )
+    return runtimeMutationLeaseDeniedResult(action);
+  const runtimeMutation = matchesRuntimeMutationLease(deps.runtimeMutationLease, {
+    kind: "runtime",
+    request: leaseRequest,
+  });
+  if (runtimeMutation.kind !== "runtime" || runtimeMutation.requiresReview !== false)
+    return runtimeMutationLeaseDeniedResult(action);
+  const rooted = runtimeChangesetRoot(input, deps);
+  if (!rooted.ok) {
+    completeRuntimeMutation(action, runtimeMutation, deps, "failed");
+    return rooted.result;
+  }
+  const response = commitApprovedChangeset(
+    rooted.action,
+    rooted.snapshot,
+    deps,
+    runtimeMutation,
+    signal,
+  );
+  const body: unknown = response.body;
+  if (!isRecord(body) || !isEditorAgentActionResult(body.result))
+    return runtimeMutationLeaseDeniedResult(action);
+  return body.result;
+}
+
+function validRuntimeChangesetIdentity({
+  action,
+  leaseRequest,
+  workspaceRoot,
+}: RuntimeChangesetApplyInput): boolean {
+  return (
+    action.type === "applyChangeset" &&
+    isEditorAgentAction(action) &&
+    action.authorityRef !== undefined &&
+    action.authorityRef.runId === leaseRequest.runId &&
+    action.authorityRef.envelopeDigest === leaseRequest.envelopeDigest &&
+    runtimeLeaseReferenceMatches(leaseRequest) &&
+    leaseRequest.workspaceId !== undefined &&
+    leaseRequest.workspaceRootDigest === editorAgentWorkspaceRootDigest(workspaceRoot) &&
+    action.actionId === leaseRequest.actionId &&
+    action.idempotencyKey === leaseRequest.idempotencyKey
+  );
+}
+
+function runtimeLeaseReferenceMatches(request: CodingRuntimeEditorMutationLeaseRequest): boolean {
+  return (
+    request.authorityRef.runId === request.runId &&
+    request.authorityRef.envelopeDigest === request.envelopeDigest
+  );
+}
+
+function runtimeChangesetRoot(
+  input: RuntimeChangesetApplyInput,
+  deps: EditorAgentRouteDeps,
+):
+  | {
+      readonly ok: true;
+      readonly action: EditorAgentAction;
+      readonly snapshot: EditorAgentSessionSnapshot;
+    }
+  | { readonly ok: false; readonly result: EditorAgentActionResult } {
+  const { action, workspaceRoot } = input;
+  const denied = { ok: false as const, result: runtimeMutationLeaseDeniedResult(action) };
+  const access = workspaceRootAccessOrUndefined(
+    deps.workspaceRootAccessResolver?.(workspaceRoot, actionCorrelationId(action)),
+  );
+  if (access === undefined) return denied;
+  const snapshot: EditorAgentSessionSnapshot = {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId: action.sessionId,
+    windowId: "coding-workbench",
+    workspaceRoot,
+    activePaneId: null,
+    panes: [],
+    dirtyFiles: [],
+    activeFile: null,
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: Date.now(),
+  };
+  const root = resolveEditorAgentRuntimeRoot(snapshot, access, deps.store);
+  if (!root.ok) return denied;
+  const reason = editorAgentRootContainmentReason(
+    root.root,
+    actionRootPaths(action, snapshot),
+    deps,
+    actionCorrelationId(action),
+  );
+  if (reason !== null) return denied;
+  const binding = root.root.binding;
+  return {
+    ok: true,
+    action: binding === undefined ? action : { ...action, rootBinding: binding },
+    snapshot: binding === undefined ? snapshot : { ...snapshot, rootBinding: binding },
+  };
 }
 
 function finishRuntimeChangeset(

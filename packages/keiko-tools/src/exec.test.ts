@@ -1,16 +1,20 @@
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
+  statSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
-import { isAbsolute, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWindowsTerminationCapacity,
@@ -46,6 +50,8 @@ import {
   type SandboxPolicy,
 } from "./types.js";
 import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
+import { buildWrappedCommand } from "@oscharko-dev/keiko-sandbox";
+import { buildChildEnv } from "./sandbox.js";
 
 let root: string;
 let info: WorkspaceInfo;
@@ -99,6 +105,763 @@ function realDeps(processEnv: NodeJS.ProcessEnv): RunCommandDeps {
 function controller(): AbortController {
   return new AbortController();
 }
+
+interface NativeProfileFixtureResult {
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly profile: string;
+}
+
+function nativeFixtureExecutable(command: string, env: NodeJS.ProcessEnv): string {
+  if (command === "node") return realpathSync(process.execPath);
+  const path = (env.PATH ?? "").split(delimiter).map((directory) => join(directory, command));
+  const executable = path.find((candidate) => existsSync(candidate));
+  if (executable === undefined) throw new Error("Native profile fixture executable unavailable");
+  return realpathSync(executable);
+}
+
+// This exercises the production profile directly; it is not an assured runCommand admission.
+async function runNativeContainmentFixture(
+  input: Parameters<typeof runCommand>[0],
+  deps: RunCommandDeps,
+): Promise<NativeProfileFixtureResult> {
+  const cwd = realpathSync(root);
+  const home = realpathSync(mkdtempSync(join(cwd, ".keiko-home-")));
+  const wrapped = buildWrappedCommand("seatbelt", {
+    command: nativeFixtureExecutable(input.command, deps.processEnv),
+    args: input.args,
+    cwd,
+    network: deps.policy.network,
+    filesystem: "execution-root",
+  });
+  if (wrapped === undefined) throw new Error("Native containment profile unavailable");
+  const env = {
+    OPENSSL_CONF: "/dev/null",
+    npm_config_script_shell: "/bin/sh",
+    ...buildChildEnv(deps.processEnv, deps.policy),
+    HOME: home,
+    TMPDIR: home,
+  };
+  const child = deps.spawn(wrapped.command, wrapped.args, {
+    cwd,
+    env,
+    shell: false,
+    detached: true,
+  });
+  const out: Buffer[] = [],
+    err: Buffer[] = [];
+  child.stdout?.on("data", (chunk: Buffer) => out.push(chunk));
+  child.stderr?.on("data", (chunk: Buffer) => err.push(chunk));
+  const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  try {
+    await once(child, "close");
+    return {
+      exitCode: child.exitCode,
+      stdout: Buffer.concat(out).toString("utf8"),
+      stderr: Buffer.concat(err).toString("utf8"),
+      profile: wrapped.args[1] ?? "",
+    };
+  } finally {
+    clearTimeout(timer);
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe.runIf(process.platform === "darwin")("native profile containment only", () => {
+  function confinedDeps(): RunCommandDeps {
+    return {
+      ...realDeps({ PATH: process.env.PATH ?? "" }),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      sandboxAvailability: {
+        seatbelt: true,
+        bubblewrap: false,
+        unshare: false,
+        docker: false,
+        podman: false,
+      },
+    };
+  }
+
+  it.each(["none", "inherit"] as const)(
+    "does not admit an assured run with only Seatbelt and network:%s",
+    async (network) => {
+      const spawn = vi.fn(nodeSpawnFn);
+      await expect(
+        runCommand(
+          {
+            command: "node",
+            args: ["-e", "process.stdout.write('UNADMITTED')"],
+            cwd: undefined,
+            timeoutMs: undefined,
+            signal: controller().signal,
+          },
+          {
+            ...confinedDeps(),
+            policy: { ...confinedDeps().policy, network },
+            spawn,
+          },
+        ),
+      ).rejects.toThrow(CommandDeniedError);
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("admits the available local container through the existing command owner", async () => {
+    const endpointRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-command-engine-")));
+    const endpoint = join(endpointRoot, "engine.sock");
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(endpoint, resolve));
+    try {
+      const spawn = recordingSpawn();
+      const pending = runCommand(
+        {
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          spawn: spawn.fn,
+          resolveExecutable: (command) => `/abs/${command}`,
+          processEnv: { PATH: process.env.PATH ?? "", DOCKER_HOST: `unix://${endpoint}` },
+          sandboxAvailability: {
+            seatbelt: true,
+            bubblewrap: false,
+            unshare: false,
+            docker: true,
+            podman: false,
+          },
+        },
+      );
+      spawn.child.emit("close", 0, null);
+      const result = await pending;
+      expect(result.attestation).toEqual({
+        backend: "container-docker",
+        filesystemEnforced: true,
+        networkEnforced: true,
+        platform: "darwin",
+      });
+      expect(spawn.calls()[0]?.command).toBe("/abs/docker");
+      expect(spawn.calls()[0]?.args).toContain("--rm");
+      expect(spawn.calls()[0]?.args).toContain("--network=none");
+      expect(spawn.calls()[0]?.args).not.toContain("--pid=host");
+      expect(spawn.calls()[0]?.args).not.toContain("--network=host");
+    } finally {
+      await new Promise<void>((resolve) =>
+        listener.close(() => {
+          resolve();
+        }),
+      );
+      rmSync(endpointRoot, { recursive: true, force: true });
+    }
+  });
+
+  async function withOwnedVictim(run: (pid: number) => Promise<void>): Promise<void> {
+    const victim = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+    try {
+      await once(victim, "spawn");
+      if (victim.pid === undefined) throw new Error("Owned victim did not start");
+      await run(victim.pid);
+      expect(() => process.kill(victim.pid ?? 0, 0)).not.toThrow();
+    } finally {
+      const exited = once(victim, "exit");
+      victim.kill("SIGTERM");
+      await exited;
+    }
+  }
+
+  it("refuses signaling outside its own sandbox while retaining self access", async () => {
+    await withOwnedVictim(async (pid) => {
+      const code = `
+        const target=Number(process.argv[1]);
+        let signalDenied=false;try{process.kill(target,0)}catch(e){signalDenied=e.code==="EPERM"}
+        let selfAllowed=true;try{process.kill(process.pid,0)}catch{selfAllowed=false}
+        process.stdout.write(JSON.stringify({signalDenied,selfAllowed}));
+      `;
+      const control = spawnSync(process.execPath, ["-e", code, String(pid)], { encoding: "utf8" });
+      expect(control.status).toBe(0);
+      expect(JSON.parse(control.stdout) as unknown).toEqual({
+        signalDenied: false,
+        selfAllowed: true,
+      });
+      const result = await runNativeContainmentFixture(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: ["-e", code, String(pid)],
+          signal: controller().signal,
+        },
+        confinedDeps(),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toEqual({
+        signalDenied: true,
+        selfAllowed: true,
+      });
+    });
+  });
+
+  it("refuses actual process metadata outside its sandbox while preserving self inspection", async () => {
+    const tool = realpathSync(mkdtempSync(join(tmpdir(), "keiko-owned-process-probe-")));
+    const source = join(tool, "probe.c");
+    const executable = join(tool, "process-info-probe");
+    writeFileSync(
+      source,
+      String.raw`
+      #include <errno.h>
+      #include <libproc.h>
+      #include <stdio.h>
+      #include <stdlib.h>
+      #include <unistd.h>
+      int main(int argc,char **argv){
+        if(argc!=2)return 9;
+        struct proc_bsdinfo info;errno=0;
+        int n=proc_pidinfo(atoi(argv[1]),PROC_PIDTBSDINFO,0,&info,sizeof(info));
+        int denied=n==0&&errno==EPERM;
+        int self=proc_pidinfo(getpid(),PROC_PIDTBSDINFO,0,&info,sizeof(info))>0;
+        printf("{\"denied\":%s,\"self\":%s}",denied?"true":"false",self?"true":"false");return 0;
+      }
+    `,
+    );
+    try {
+      expect(spawnSync("/usr/bin/clang", [source, "-o", executable]).status).toBe(0);
+      await withOwnedVictim(async (pid) => {
+        const control = spawnSync(executable, [String(pid)], { encoding: "utf8" });
+        expect(control.status).toBe(0);
+        expect(JSON.parse(control.stdout) as unknown).toEqual({ denied: false, self: true });
+        const result = await runNativeContainmentFixture(
+          {
+            cwd: undefined,
+            timeoutMs: undefined,
+            command: "process-info-probe",
+            args: [String(pid)],
+            signal: controller().signal,
+          },
+          {
+            ...confinedDeps(),
+            commandRules: [{ executable: "process-info-probe" }],
+            processEnv: { PATH: `${tool}:/usr/bin:/bin` },
+          },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.stdout) as unknown).toEqual({ denied: true, self: true });
+      });
+    } finally {
+      rmSync(tool, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps its own sandbox descendant signal lifecycle available", async () => {
+    const code = `
+      const cp=require("node:child_process");
+      const child=cp.spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});
+      child.once("spawn",()=>{process.kill(child.pid,0);child.kill("SIGTERM")});
+      child.once("exit",(_,signal)=>process.stdout.write(signal==="SIGTERM"?"OWNED-REAPED":"UNPROVEN"));
+    `;
+    const result = await runNativeContainmentFixture(
+      {
+        cwd: undefined,
+        timeoutMs: undefined,
+        command: "node",
+        args: ["-e", code],
+        signal: controller().signal,
+      },
+      confinedDeps(),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("OWNED-REAPED");
+  });
+
+  it.each(["env", "node-flag"] as const)(
+    "preserves an explicitly admitted workspace OpenSSL configuration through %s",
+    async (route) => {
+      const config = join(realpathSync(root), "openssl.cnf");
+      writeFileSync(config, "");
+      const code =
+        'process.stdout.write(require("node:crypto").getFips()===0?"CONFIGURED":"UNPROVEN")';
+      const result = await runNativeContainmentFixture(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: [...(route === "node-flag" ? [`--openssl-config=${config}`] : []), "-e", code],
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          processEnv: { PATH: process.env.PATH ?? "", OPENSSL_CONF: config },
+          policy: {
+            ...confinedDeps().policy,
+            envAllowlist: [...DEFAULT_ENV_ALLOWLIST, ...(route === "env" ? ["OPENSSL_CONF"] : [])],
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("CONFIGURED");
+    },
+  );
+
+  it("preserves and refuses an explicit OpenSSL configuration outside the admitted root", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-openssl-config-"));
+    const config = join(outside, "openssl.cnf");
+    writeFileSync(config, "");
+    try {
+      const code = 'process.stdout.write("CONFIGURED")';
+      const control = spawnSync(process.execPath, ["-e", code], {
+        encoding: "utf8",
+        env: { ...process.env, OPENSSL_CONF: config },
+      });
+      expect(control.status).toBe(0);
+      expect(control.stdout).toBe("CONFIGURED");
+      const calls: Parameters<NonNullable<RunCommandDeps["spawn"]>>[] = [];
+      const result = await runNativeContainmentFixture(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: ["-e", code],
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          processEnv: { PATH: process.env.PATH ?? "", OPENSSL_CONF: config },
+          policy: {
+            ...confinedDeps().policy,
+            envAllowlist: [...DEFAULT_ENV_ALLOWLIST, "OPENSSL_CONF"],
+          },
+          spawn: (...args) => {
+            calls.push(args);
+            return nodeSpawnFn(...args);
+          },
+        },
+      );
+      expect(calls[0]?.[2].env.OPENSSL_CONF).toBe(config);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("OpenSSL configuration error");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  const homebrewPrefix = ["/opt/homebrew", "/usr/local"].find((prefix) =>
+    process.execPath.startsWith(`${prefix}/Cellar/`),
+  );
+
+  it.skipIf(homebrewPrefix === undefined).each(["var", "etc"] as const)(
+    "refuses an owned canary in mutable Homebrew %s while Node still executes",
+    async (directory) => {
+      if (homebrewPrefix === undefined) throw new TypeError("Homebrew fixture unavailable");
+      const outside = mkdtempSync(join(homebrewPrefix, directory, "keiko-review-canary-"));
+      const canary = join(outside, "owned-canary.txt");
+      writeFileSync(canary, "controlled-canary");
+      const code = `
+        const fs=require("node:fs");
+        try{fs.readFileSync(process.argv[1]);process.stdout.write("READABLE")}
+        catch(e){process.stdout.write(e.code==="EPERM"?"DENIED":"UNPROVEN")}
+      `;
+      try {
+        const control = spawnSync(process.execPath, ["-e", code, canary], { encoding: "utf8" });
+        expect(control.status).toBe(0);
+        expect(control.stdout).toBe("READABLE");
+        const result = await runNativeContainmentFixture(
+          {
+            cwd: undefined,
+            timeoutMs: undefined,
+            command: "node",
+            args: ["-e", code, canary],
+            signal: controller().signal,
+          },
+          confinedDeps(),
+        );
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe("DENIED");
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("allows the dyld boot directory metadata while denying unrelated Preboot children", async () => {
+    const boot = "/System/Volumes/Preboot";
+    const child = readdirSync(boot).find(
+      (name) => name !== "Cryptexes" && statSync(join(boot, name)).isDirectory(),
+    );
+    if (child === undefined) throw new TypeError("Preboot directory fixture unavailable");
+    const outside = join(boot, child);
+    const code = `
+      const fs=require("node:fs");const top=Array.isArray(fs.readdirSync(process.argv[1]));
+      let denied=false;try{fs.readdirSync(process.argv[2])}catch(e){denied=e.code==="EPERM"}
+      process.stdout.write(JSON.stringify({top,denied}));
+    `;
+    const args = ["-e", code, boot, outside];
+    const control = spawnSync(process.execPath, args, { encoding: "utf8" });
+    expect(control.status).toBe(0);
+    expect(JSON.parse(control.stdout) as unknown).toEqual({ top: true, denied: false });
+    const result = await runNativeContainmentFixture(
+      { cwd: undefined, timeoutMs: undefined, command: "node", args, signal: controller().signal },
+      confinedDeps(),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout) as unknown).toEqual({ top: true, denied: true });
+  });
+
+  it("confines files, symlinks and descendants while keeping an owned temporary directory", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-confined-canary-"));
+    const denied = join(outside, "canary.txt");
+    writeFileSync(denied, "qualification-canary");
+    symlinkSync(denied, join(root, "escape.txt"));
+    const code = `
+      const fs = require("node:fs"), cp = require("node:child_process"), os = require("node:os");
+      const deny = (f) => { try { f(); return false; } catch(e) { return e.code === "EPERM"; } };
+      fs.writeFileSync("inside.txt", "inside");
+      const temp = os.tmpdir(); fs.writeFileSync(temp + "/probe", "temp");
+      const child = cp.spawnSync(process.execPath, ["-e", 'try{require("node:fs").readFileSync(process.argv[1]);process.exit(7)}catch{process.exit(0)}', process.argv[1]]);
+      process.stdout.write(JSON.stringify({inside:fs.readFileSync("inside.txt", "utf8") === "inside",
+        readDenied:deny(()=>fs.readFileSync(process.argv[1])), writeDenied:deny(()=>fs.writeFileSync(process.argv[1],"changed")),
+        symlinkDenied:deny(()=>fs.readFileSync("escape.txt")), childDenied:child.status === 0,
+        temp, home:process.env.HOME}));
+    `;
+    try {
+      const result = await runNativeContainmentFixture(
+        {
+          command: "node",
+          args: ["-e", code, denied],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        confinedDeps(),
+      );
+      const facts: unknown = JSON.parse(result.stdout);
+      expect(result.exitCode).toBe(0);
+      expect(facts).toMatchObject({
+        inside: true,
+        readDenied: true,
+        writeDenied: true,
+        symlinkDenied: true,
+        childDenied: true,
+      });
+      expectConfinedTemporaryDirectory(facts);
+      expect(result.profile).toContain("(deny signal process-info*)");
+      expect(result.profile).toContain("(deny file-read* file-write* network*");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  function expectConfinedTemporaryDirectory(facts: unknown): void {
+    if (
+      typeof facts !== "object" ||
+      facts === null ||
+      !("temp" in facts) ||
+      typeof facts.temp !== "string"
+    ) {
+      throw new TypeError("Temporary-directory proof unavailable.");
+    }
+    expect(facts.temp.startsWith(join(realpathSync(root), ".keiko-home-"))).toBe(true);
+    expect(facts).toHaveProperty("home", facts.temp);
+    expect(existsSync(facts.temp)).toBe(false);
+  }
+
+  it("refuses outbound connections to a host-loopback listener", async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve) => {
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    const address = listener.address();
+    if (address === null || typeof address === "string")
+      throw new TypeError("Loopback fixture unavailable.");
+    try {
+      const code =
+        'const s=require("node:net").connect(Number(process.argv[1]),"127.0.0.1");s.once("connect",()=>{s.end();process.exitCode=7});s.once("error",e=>{process.stdout.write(e.code);s.destroy()})';
+      const result = await runNativeContainmentFixture(
+        {
+          command: "node",
+          args: ["-e", code, String(address.port)],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        confinedDeps(),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("EPERM");
+    } finally {
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+
+  it("retains the explicit inherited network choice without removing filesystem confinement", async () => {
+    const listener = createServer((socket) => socket.end());
+    await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
+    const address = listener.address();
+    if (address === null || typeof address === "string")
+      throw new TypeError("Loopback fixture unavailable");
+    try {
+      const code = `
+        const s=require("node:net").connect(Number(process.argv[1]),"127.0.0.1");
+        s.once("connect",()=>{s.end();process.stdout.write("CONNECTED")});
+        s.once("error",()=>{process.stdout.write("UNPROVEN");s.destroy()});
+      `;
+      const result = await runNativeContainmentFixture(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: ["-e", code, String(address.port)],
+          signal: controller().signal,
+        },
+        { ...confinedDeps(), policy: { ...confinedDeps().policy, network: "inherit" } },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("CONNECTED");
+      expect(result.profile).toContain("(deny file-read* file-write*");
+      expect(result.profile).not.toContain("network*");
+    } finally {
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+
+  it("refuses a caller home pointing at the repository without deleting it", async () => {
+    const cleanup = vi.fn();
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          home: { make: (): string => root, cleanup },
+        },
+      ),
+    ).rejects.toThrow(CommandDeniedError);
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(existsSync(root)).toBe(true);
+  });
+
+  it("runs npm scripts with foreign caller bins without changing their workspace PATH", async () => {
+    const caller = mkdtempSync(join(tmpdir(), "keiko-npm-caller-"));
+    const callerBin = join(caller, "node_modules", ".bin");
+    const workspaceBin = join(root, "node_modules", ".bin");
+    mkdirSync(callerBin, { recursive: true });
+    mkdirSync(workspaceBin, { recursive: true });
+    const task = join(workspaceBin, "owned-task");
+    writeFileSync(task, '#!/bin/sh\nprintf "owned-task-passed"\n');
+    chmodSync(task, 0o755);
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(0)" && owned-task' } }),
+    );
+    // The profile admits the actual runtime, while an inherited PATH may name an external symlink.
+    const runtimeBin = dirname(nativeFixtureExecutable("node", {}));
+    const path = `${callerBin}:${runtimeBin}:${process.env.PATH ?? ""}`;
+    const calls: Parameters<NonNullable<RunCommandDeps["spawn"]>>[] = [];
+    try {
+      const result = await runNativeContainmentFixture(
+        {
+          command: "npm",
+          args: ["run", "typecheck"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          commandRules: [{ executable: "npm", allowedSubcommands: ["run"] }],
+          processEnv: { PATH: path, npm_config_script_shell: "/unrelated/caller-shell" },
+          spawn: (...args) => {
+            calls.push(args);
+            return nodeSpawnFn(...args);
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("owned-task-passed");
+      expect(result.stderr).toBe("");
+      expect(calls[0]?.[2]).toMatchObject({ shell: false, env: { PATH: path } });
+      expect(result.profile).toContain("(deny signal process-info*)");
+      expect(result.profile).toContain("(deny file-read* file-write* network*");
+    } finally {
+      rmSync(caller, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runCommand — the confined npm script shell", () => {
+  const cases = [
+    {
+      command: "npm",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: true,
+      pin: true,
+      opensslPin: true,
+    },
+    {
+      command: "npx",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: true,
+      pin: true,
+      opensslPin: true,
+    },
+    {
+      command: "node",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: true,
+      pin: false,
+      opensslPin: true,
+    },
+    {
+      command: "npm",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: false,
+      pin: false,
+      opensslPin: false,
+    },
+    {
+      command: "npm",
+      platform: "linux",
+      backend: "bubblewrap",
+      scoped: true,
+      pin: false,
+      opensslPin: false,
+    },
+    {
+      command: "npm",
+      platform: "darwin",
+      backend: "none",
+      scoped: false,
+      pin: false,
+      opensslPin: false,
+    },
+    {
+      command: "npm",
+      platform: "win32",
+      backend: "none",
+      scoped: false,
+      pin: false,
+      opensslPin: false,
+    },
+  ] as const;
+
+  function expectRecordedEnvironment(
+    spawn: ReturnType<typeof recordingSpawn>,
+    path: string,
+    row: (typeof cases)[number],
+  ): void {
+    const call = spawn.calls()[0];
+    if (call === undefined) throw new Error("Expected the real spawn boundary");
+    expect(call.options).toMatchObject({ shell: false, env: { PATH: path } });
+    expect(call.options.env.npm_config_script_shell).toBe(row.pin ? "/bin/sh" : undefined);
+    expect(call.options.env.OPENSSL_CONF).toBe(row.opensslPin ? "/dev/null" : undefined);
+  }
+
+  it.each(cases)(
+    "uses the actual $platform/$backend/$command route (scoped=$scoped)",
+    async (row) => {
+      const spawn = recordingSpawn();
+      const path = process.env.PATH ?? "";
+      const pending = runCommand(
+        {
+          command: row.command,
+          args: ["--version"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn, { PATH: path, npm_config_script_shell: "/caller/shell" }),
+          commandRules: [{ executable: row.command }],
+          resolveExecutable: (command) => `/abs/${command}`,
+          killWindowsTree: () => "succeeded",
+          platform: row.platform,
+          policy: {
+            ...DEFAULT_SANDBOX_POLICY,
+            network: row.backend === "none" ? "inherit" : "none",
+            filesystem: row.scoped ? "execution-root" : "inherit",
+          },
+          sandboxAvailability: {
+            seatbelt: row.backend === "seatbelt",
+            bubblewrap: row.backend === "bubblewrap",
+            unshare: false,
+            docker: false,
+            podman: false,
+          },
+        },
+      );
+      if (row.platform === "darwin" && row.backend === "seatbelt" && row.scoped) {
+        await expect(pending).rejects.toThrow(CommandDeniedError);
+        expect(spawn.calls()).toHaveLength(0);
+        return;
+      }
+      spawn.child.emit("close", 0, null);
+      const result = await pending;
+      expect(result.attestation?.backend).toBe(row.backend === "none" ? undefined : row.backend);
+      expectRecordedEnvironment(spawn, path, row);
+    },
+  );
+
+  it.each([
+    { args: ["--openssl-config=/admitted/config"], env: {} },
+    { args: ["--openssl-shared-config"], env: {} },
+    { args: ["--enable-fips"], env: {} },
+    { args: ["--force-fips"], env: {} },
+    { args: [], env: { OPENSSL_CONF: "/admitted/config" } },
+    { args: [], env: { OPENSSL_CONF: "" } },
+    { args: [], env: { OPENSSL_MODULES: "/admitted/modules" } },
+    { args: [], env: { NODE_OPTIONS: "--enable-fips" } },
+  ])("does not replace explicitly admitted crypto intent: %j", async ({ args, env }) => {
+    const spawn = recordingSpawn();
+    const pending = runCommand(
+      { cwd: undefined, timeoutMs: undefined, command: "node", args, signal: controller().signal },
+      {
+        ...fakeDeps(spawn.fn, { PATH: process.env.PATH ?? "", ...env }),
+        resolveExecutable: (command) => `/abs/${command}`,
+        platform: "darwin",
+        policy: {
+          ...DEFAULT_SANDBOX_POLICY,
+          network: "none",
+          filesystem: "inherit",
+          envAllowlist: [...DEFAULT_ENV_ALLOWLIST, ...Object.keys(env)],
+        },
+        sandboxAvailability: {
+          seatbelt: true,
+          bubblewrap: false,
+          unshare: false,
+          docker: false,
+          podman: false,
+        },
+      },
+    );
+    spawn.child.emit("close", 0, null);
+    await pending;
+    const captured = spawn.calls()[0];
+    if (captured === undefined) throw new Error("Expected the real spawn boundary");
+    expect(captured.options.env.OPENSSL_CONF).toBe(env.OPENSSL_CONF);
+    expect(captured.options.env).toMatchObject(env);
+    expect(captured.args.slice(3)).toEqual(args);
+  });
+});
 
 interface HomeRecorder {
   readonly provider: HomeProvider;
@@ -1226,6 +1989,7 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
       spawn.child.emit("close", 0, null);
       const result = await promise;
       const call = spawn.calls()[0];
+      expect(call?.args).toContain("--unshare-pid");
       expect(call?.args).toEqual(
         expect.arrayContaining(["--bind", realpathSync(root), "/keiko-execution-root"]),
       );

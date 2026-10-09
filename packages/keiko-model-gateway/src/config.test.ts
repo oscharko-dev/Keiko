@@ -27,6 +27,95 @@ import {
 } from "./config.js";
 import { resolveCodingSafeSidecarGatewayProfile } from "./model-selection.js";
 
+describe("source-bound discovered provider credentials", () => {
+  function linkedRaw(change: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      providers: [
+        {
+          modelId: "derived-model",
+          baseUrl: "https://gw.example/v1",
+          apiKeySourceModelId: "source-model",
+          ...change,
+        },
+        { modelId: "source-model", baseUrl: "https://gw.example/v1" },
+      ],
+    };
+  }
+  const sourceEnv = { KEIKO_MODEL_SOURCE_MODEL_API_KEY: "transient-source-key" };
+
+  it("retains an actual source vault reference underneath a transient environment override", () => {
+    const config = parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: "source-model",
+            baseUrl: "https://gw.example/v1",
+            apiKeySecretRef: "existing-source-reference",
+          },
+        ],
+      },
+      sourceEnv,
+    );
+    expect(config.providers[0]?.apiKey).toBe("transient-source-key");
+    expect(config.providers[0]?.apiKeySecretRef).toBe("existing-source-reference");
+    expect(JSON.stringify(toSafeObject(config))).not.toContain("existing-source-reference");
+  });
+
+  it("resolves a source-bound alias independent of ordering and rotates with its source", () => {
+    const first = parseGatewayConfig(linkedRaw(), sourceEnv);
+    expect(first.providers[0]?.apiKey).toBe(sourceEnv.KEIKO_MODEL_SOURCE_MODEL_API_KEY);
+    expect(first.providers[0]?.apiKeySourceModelId).toBe("source-model");
+    const rotated = parseGatewayConfig(linkedRaw(), {
+      KEIKO_MODEL_SOURCE_MODEL_API_KEY: "rotated-source-key",
+    });
+    expect(rotated.providers[0]?.apiKey).toBe("rotated-source-key");
+    expect(JSON.stringify(toSafeObject(first))).not.toContain("apiKeySourceModelId");
+    expect(JSON.stringify(toSafeObject(first))).not.toContain("transient-source-key");
+  });
+
+  it("uses the source's existing vault reference without creating an alias reference", () => {
+    const raw = linkedRaw();
+    raw.providers = [
+      {
+        modelId: "source-model",
+        baseUrl: "https://gw.example/v1",
+        apiKeySecretRef: "existing-source-reference",
+      },
+      {
+        modelId: "derived-model",
+        baseUrl: "https://gw.example/v1",
+        apiKeySourceModelId: "source-model",
+      },
+    ];
+    const resolver = vi.fn((reference: string) =>
+      reference === "existing-source-reference" ? "durable-source-key" : undefined,
+    );
+    const config = parseGatewayConfig(raw, {}, { secretResolver: resolver });
+    expect(config.providers[1]?.apiKey).toBe("durable-source-key");
+    expect(resolver).toHaveBeenCalledExactlyOnceWith("existing-source-reference");
+  });
+
+  it("keeps an explicit alias environment override transient", () => {
+    const config = parseGatewayConfig(linkedRaw(), {
+      ...sourceEnv,
+      KEIKO_MODEL_DERIVED_MODEL_API_KEY: "alias-override",
+    });
+    expect(config.providers[0]?.apiKey).toBe("alias-override");
+    expect(config.providers[0]?.apiKeySourceModelId).toBe("source-model");
+  });
+
+  it.each([
+    { apiKeySourceModelId: "missing-model" },
+    { apiKeySourceModelId: "derived-model" },
+    { baseUrl: "https://other.example/v1" },
+    { apiKeyHeaderName: "api-key" },
+    { apiKey: "ambiguous-plaintext" },
+    { apiKeySecretRef: "ambiguous-reference" },
+  ])("rejects invalid or ambiguous source bindings: %j", (change) => {
+    expect(() => parseGatewayConfig(linkedRaw(change), sourceEnv)).toThrow(ConfigInvalidError);
+  });
+});
+
 interface RawProvider {
   modelId: string;
   baseUrl: string;
@@ -3350,3 +3439,23 @@ describe.each(["codingStreaming", "codingReasoningDisplay"] as const)(
     });
   },
 );
+
+describe("automatic catalog origin", () => {
+  it.each(["discovered", "explicit"])("retains the actual %s provider origin", (catalogOrigin) => {
+    const parsed = parseGatewayConfig({ providers: [{ ...validProvider(), catalogOrigin }] });
+    expect(parsed.providers[0]).toHaveProperty("catalogOrigin", catalogOrigin);
+  });
+  it("does not invent provenance for a legacy provider", () => {
+    expect(parseGatewayConfig({ providers: [validProvider()] }).providers[0]).not.toHaveProperty(
+      "catalogOrigin",
+    );
+  });
+  it.each(["automatic", "", true, { origin: "discovered" }])(
+    "refuses invalid supplied catalog provenance %j",
+    (catalogOrigin) => {
+      expect(() =>
+        parseGatewayConfig({ providers: [{ ...validProvider(), catalogOrigin }] }),
+      ).toThrow(ConfigInvalidError);
+    },
+  );
+});

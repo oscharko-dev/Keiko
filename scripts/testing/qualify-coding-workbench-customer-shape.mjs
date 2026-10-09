@@ -132,7 +132,11 @@ function lifecycle(project, stateDir, port, configPath, pairingSecret) {
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: pairingSecret,
     KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
   };
-  return (action) => run(process.execPath, [bin, action, ...args], { cwd: project, env });
+  return (action) =>
+    run(process.execPath, [bin, action, ...args, ...(action === "start" ? ["--no-open"] : [])], {
+      cwd: project,
+      env,
+    });
 }
 
 function activityLines(stateDir) {
@@ -373,8 +377,8 @@ async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
   if (expectFailure) {
     const failure =
       phase === "truncation-proof"
-        ? /The model response stream stopped before the turn completed/u
-        : /The model provider rejected this turn/u;
+        ? /The model response stream (?:ended before this step completed|stopped before the turn completed)/u
+        : /The model (?:gateway did not complete this step|provider rejected this turn)/u;
     await expect(page.getByText(failure).first()).toBeVisible({ timeout: 45_000 });
   } else {
     await expect(page.getByText(CUSTOMER_SHAPE_REPLY, { exact: true })).toBeVisible({

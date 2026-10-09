@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { requestGatewayReadinessChatCompletion } from "./readiness-probe.js";
+import { GatewayResponseBodyValidationError } from "./http.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -431,7 +432,8 @@ describe("requestGatewayReadinessChatCompletion", () => {
       name: "a malformed body",
       body: (): BodyInit => "<html>bad gateway</html>",
       expectRead: (error: unknown): void => {
-        expect(error).toBeInstanceOf(SyntaxError);
+        expect(error).toBeInstanceOf(GatewayResponseBodyValidationError);
+        expect(error).toMatchObject({ validation: "json-invalid" });
       },
     },
     {

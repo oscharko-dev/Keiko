@@ -24,6 +24,7 @@ import {
   writeSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
@@ -31,6 +32,7 @@ import {
   isSupportReportFileName,
   isActivityLogOwnedFileName,
   parseSupportIncidentFileName,
+  isActivityLogCorrelationId,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
@@ -66,11 +68,13 @@ const ATLASSIAN_CREDENTIAL_ARTIFACT_SET: ReadonlySet<string> = new Set(
 // channel — issue #3351); `launcher-state.json` from `launcher-state.ts`; portable
 // install attestation from `portable.ts`.
 export const UI_SHUTDOWN_REQUEST_FILE = "ui.shutdown";
+export const UI_BROWSER_OPEN_REQUEST_FILE = "ui.browser-open";
 
 export const KEIKO_STATE_FILES = [
   "ui.pid",
   "ui.log",
   UI_SHUTDOWN_REQUEST_FILE,
+  UI_BROWSER_OPEN_REQUEST_FILE,
   "launcher-state.json",
   "portable-install-state.json",
 ] as const;
@@ -222,13 +226,24 @@ export function isKeikoUiLaunchId(value: string): boolean {
 export interface PidRecord {
   readonly pid: number;
   readonly launchId?: string | undefined;
+  readonly browserOpenSupported?: true;
 }
 
-export function writeExclusivePidFile(path: string, pid: number, launchId?: string): void {
+export function writeExclusivePidFile(
+  path: string,
+  pid: number,
+  launchId?: string,
+  browserOpenSupported = false,
+): void {
+  const capability = browserOpenSupported && launchId !== undefined ? "browser-open-v1\n" : "";
+  writeExclusiveStateFile(path, `${encodePidFile(pid, launchId)}${capability}`);
+}
+
+function writeExclusiveStateFile(path: string, contents: string): void {
   const fd = createExclusivePidFileSlot(path);
   try {
     assertRegularSingleLinkFile(fd, path);
-    writeSync(fd, encodePidFile(pid, launchId), null, "utf8");
+    writeSync(fd, contents, null, "utf8");
   } finally {
     closeSync(fd);
   }
@@ -245,6 +260,166 @@ export function shutdownRequestPath(stateDir: string): string {
 
 export function writeShutdownRequest(stateDir: string, pid: number, launchId?: string): void {
   writeExclusivePidFile(shutdownRequestPath(stateDir), pid, launchId);
+}
+
+/** The running launcher opens the browser itself; this request never contains a secret. */
+export function writeBrowserOpenRequest(
+  stateDir: string,
+  pid: number,
+  launchId: string,
+  correlationId?: string,
+  host?: "127.0.0.1" | "localhost",
+): void {
+  if (
+    !isKeikoUiLaunchId(launchId) ||
+    (correlationId !== undefined && !isActivityLogCorrelationId(correlationId))
+  ) {
+    throw new TypeError("Browser request identity is invalid.");
+  }
+  writeExclusiveStateFile(
+    join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE),
+    `${encodePidFile(pid, launchId)}${correlationId ?? ""}\n${host ?? ""}\n`,
+  );
+}
+
+interface BrowserRequestIdentity {
+  readonly correlationId?: string;
+  readonly requestFingerprint?: string;
+}
+
+export type BrowserOpenRequestOutcome =
+  | { readonly state: "absent" }
+  | ({
+      readonly state: "refused";
+      readonly reason: "unsafe-request" | "invalid-request" | "identity-mismatch";
+    } & BrowserRequestIdentity)
+  | ({ readonly state: "failed" } & BrowserRequestIdentity)
+  | ({
+      readonly state: "accepted";
+      readonly host?: "127.0.0.1" | "localhost";
+    } & BrowserRequestIdentity);
+
+export function takeBrowserOpenRequest(
+  stateDir: string,
+  pid: number,
+  launchId: string,
+  onFailure?: (error: unknown) => void,
+): BrowserOpenRequestOutcome {
+  const path = join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE);
+  const record = readBrowserRequest(path, pid, launchId, onFailure);
+  if (
+    record.state === "absent" ||
+    (record.state === "refused" && record.reason === "unsafe-request")
+  )
+    return record;
+  try {
+    rmSync(path, { force: true });
+    return record;
+  } catch (error) {
+    reportBrowserRequestFailure(onFailure, error);
+    return record.state === "accepted" ? { ...record, state: "failed" } : record;
+  }
+}
+
+function readBrowserRequest(
+  path: string,
+  pid: number,
+  launchId: string,
+  onFailure: ((error: unknown) => void) | undefined,
+): Exclude<BrowserOpenRequestOutcome, { state: "failed" }> {
+  let fd: number;
+  try {
+    fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
+  } catch (error) {
+    if (isFsCode(error, "ENOENT")) return { state: "absent" };
+    reportBrowserRequestFailure(onFailure, error);
+    return { state: "refused", reason: "unsafe-request" };
+  }
+  let requestFingerprint: string | undefined;
+  try {
+    assertRegularSingleLinkFile(fd, path);
+    const stat = fstatSync(fd);
+    requestFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify([stat.dev, stat.ino, stat.mtimeMs, stat.ctimeMs, stat.size, stat.mode]),
+      )
+      .digest("hex");
+    if (!isOwnerPrivateDescriptor(fd))
+      return { state: "refused", reason: "unsafe-request", requestFingerprint };
+    const buffer = Buffer.alloc(256);
+    const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytes === 0) return { state: "absent" };
+    if (bytes === buffer.length)
+      return { state: "refused", reason: "invalid-request", requestFingerprint };
+    return {
+      ...parseBrowserRequest(buffer.subarray(0, bytes).toString("utf8"), pid, launchId),
+      requestFingerprint,
+    };
+  } catch (error) {
+    reportBrowserRequestFailure(onFailure, error);
+    return {
+      state: "refused",
+      reason: "unsafe-request",
+      ...(requestFingerprint === undefined ? {} : { requestFingerprint }),
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function reportBrowserRequestFailure(
+  onFailure: ((error: unknown) => void) | undefined,
+  error: unknown,
+): void {
+  onFailure?.(error);
+}
+
+function parseBrowserRequest(
+  raw: string,
+  pid: number,
+  launchId: string,
+): Exclude<BrowserOpenRequestOutcome, { state: "absent" | "failed" }> {
+  const lines = raw.split("\n");
+  const record = parsePidRecord(raw);
+  const metadata = browserRequestMetadata(lines);
+  if (metadata === undefined || record?.launchId === undefined) {
+    return { state: "refused", reason: "invalid-request" };
+  }
+  if (record.pid !== pid || record.launchId !== launchId)
+    return {
+      state: "refused",
+      reason: "identity-mismatch",
+      ...(metadata.correlationId === undefined ? {} : { correlationId: metadata.correlationId }),
+    };
+  return {
+    state: "accepted",
+    ...metadata,
+  };
+}
+
+function browserRequestMetadata(lines: readonly string[]):
+  | {
+      readonly correlationId?: string;
+      readonly host?: "127.0.0.1" | "localhost";
+    }
+  | undefined {
+  const correlationId = optionalRequestValue(lines[2]);
+  const host = optionalRequestValue(lines[3]);
+  if (
+    lines.length > 5 ||
+    optionalRequestValue(lines[4]) !== undefined ||
+    (correlationId !== undefined && !isActivityLogCorrelationId(correlationId))
+  )
+    return undefined;
+  if (host !== undefined && host !== "127.0.0.1" && host !== "localhost") return undefined;
+  return {
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(host === undefined ? {} : { host }),
+  };
+}
+
+function optionalRequestValue(value: string | undefined): string | undefined {
+  return value === "" ? undefined : value;
 }
 
 export function peekShutdownRequest(stateDir: string, pid: number, launchId?: string): boolean {
@@ -303,12 +478,16 @@ function parsePidRecord(raw: string): PidRecord | undefined {
   if (pidLine === undefined || !/^[1-9]\d*$/.test(pidLine)) return undefined;
   const launchLine = lines[1]?.trim();
   if (launchLine !== undefined && isKeikoUiLaunchId(launchLine)) {
-    return { pid: Number(pidLine), launchId: launchLine };
+    return {
+      pid: Number(pidLine),
+      launchId: launchLine,
+      ...(lines[2] === "browser-open-v1" ? { browserOpenSupported: true } : {}),
+    };
   }
   return { pid: Number(pidLine) };
 }
 
-export function readPidRecord(path: string): PidRecord | undefined {
+export function readPidRecord(path: string, ownerOnly = false): PidRecord | undefined {
   let fd: number;
   try {
     fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
@@ -317,6 +496,7 @@ export function readPidRecord(path: string): PidRecord | undefined {
   }
   try {
     assertRegularSingleLinkFile(fd, path);
+    if (ownerOnly && !isOwnerPrivateDescriptor(fd)) return undefined;
     const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
     if (bytesRead === 0 || bytesRead === MAX_PID_FILE_BYTES) return undefined;
@@ -326,6 +506,13 @@ export function readPidRecord(path: string): PidRecord | undefined {
   } finally {
     closeSync(fd);
   }
+}
+
+function isOwnerPrivateDescriptor(fd: number): boolean {
+  const stats = fstatSync(fd);
+  return (
+    process.getuid === undefined || (stats.uid === process.getuid() && (stats.mode & 0o077) === 0)
+  );
 }
 
 // Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined when the

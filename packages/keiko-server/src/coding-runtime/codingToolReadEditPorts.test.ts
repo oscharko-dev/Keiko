@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type {
   EditorAgentAction,
@@ -18,6 +18,8 @@ import {
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
+import type { WorkspaceFs, WorkspaceDirEntry } from "@oscharko-dev/keiko-workspace";
 
 import {
   expectActivityLogProof,
@@ -30,12 +32,23 @@ import type { CodingToolMutationGuard, MaterializedPatchCharge } from "./codingT
 import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
+  WORKSPACE_DISCOVERY_REFUSAL_CODES,
 } from "./codingToolReadEditPorts.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import type {
+  SecureWorkspaceNativeFileIO,
   SecureWorkspaceTextReadPort,
   SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
+import {
+  createSecureWorkspaceTextReadPort,
+  secureWorkspaceTextDigest,
+} from "./secureWorkspaceTextRead.js";
+import {
+  SecureWorkspaceReadProcessError,
+  type SecureWorkspaceTextReadProcess,
+} from "./secureWorkspaceTextReadProcess.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { WORKSPACE_PATH_ABSENCE_VERDICTS } from "./secureWorkspaceTextReadAbsence.js";
 
 const DIGEST = "a".repeat(64);
@@ -67,6 +80,548 @@ function liveDiscoveryBinding(): {
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   };
 }
+
+function streamingDiscoveryFixture(files: Readonly<Record<string, string>>): {
+  readonly ports: ReturnType<typeof createCodingToolReadEditPorts>;
+  readonly fs: WorkspaceFs;
+  readonly events: readonly ServerLogEvent[];
+} {
+  const root = "/streaming-discovery-fixture";
+  const fs = memFs(root, { "package.json": '{"name":"fixture"}', ...files });
+  const events: ServerLogEvent[] = [];
+  return {
+    fs,
+    events,
+    ports: createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveWorkspaceRootAccess: () => ({ kind: "ordinary", canonicalRoot: root, fs }),
+      activityLog: { write: (event): void => void events.push(event) },
+    }),
+  };
+}
+
+function discoverySourceFiles(prefix: string, count: number): Record<string, string> {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => [`${prefix}/file-${String(index)}.ts`, "source"]),
+  );
+}
+
+describe("production Coding Workbench discovery completeness", () => {
+  const request = {
+    action: "discover",
+    actionId: "discover-target",
+    idempotencyKey: "discover-target-key",
+    query: "target",
+    maxResults: 10,
+  } as const;
+  const cases = [
+    [
+      "late file after 20k entries",
+      "z/target.ts",
+      {
+        ...discoverySourceFiles("a", 10_000),
+        ...discoverySourceFiles("b", 10_000),
+        "z/target.ts": "target",
+      },
+    ],
+    [
+      "file below 41 directories",
+      `${Array.from({ length: 41 }, () => "deep").join("/")}/target.ts`,
+      { [`${Array.from({ length: 41 }, () => "deep").join("/")}/target.ts`]: "target" },
+    ],
+    [
+      "file inside a 10k-overflow directory",
+      "wide/target.ts",
+      { ...discoverySourceFiles("wide", 10_001), "wide/target.ts": "target" },
+    ],
+  ] as const;
+
+  it.each(cases)(
+    "returns the actual %s through the production port",
+    async (_name, path, files) => {
+      const { ports } = streamingDiscoveryFixture(files);
+      const result = await ports.repositoryDiscover.execute(request, undefined, {
+        check: () => true,
+      });
+      expect(result).toMatchObject({
+        status: "completed",
+        read: { text: `${path}\n`, returnedPathCount: 1 },
+      });
+    },
+  );
+});
+
+type NativePrimitiveMocks = {
+  readonly [K in keyof SecureWorkspaceNativeFileIO]: Mock<SecureWorkspaceNativeFileIO[K]>;
+};
+
+interface NativePrimitiveFixture {
+  readonly ports: ReturnType<typeof createCodingToolReadEditPorts>;
+  readonly guard: CodingToolMutationGuard;
+  readonly events: ServerLogEvent[];
+  readonly bytes: Uint8Array;
+  readonly io: NativePrimitiveMocks;
+  readonly revoke: () => void;
+  readonly moveRoot: () => void;
+}
+
+function nativePrimitiveFixture(secure?: SecureWorkspaceTextReadPort): NativePrimitiveFixture {
+  const binding = liveDiscoveryBinding();
+  const events: ServerLogEvent[] = [];
+  const bytes = new Uint8Array([0, 255, 128]);
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -2000 };
+  let allowed = true;
+  let root = "/native-primitive-fixture";
+  const io: NativePrimitiveMocks = {
+    readBytes: vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>(() =>
+      Promise.resolve({ ok: true, bytes, info }),
+    ),
+    stat: vi.fn<SecureWorkspaceNativeFileIO["stat"]>(() => Promise.resolve({ ok: true, info })),
+    list: vi.fn<SecureWorkspaceNativeFileIO["list"]>(() =>
+      Promise.resolve({ ok: true, entries: [], info: { ...info, type: "directory" } }),
+    ),
+  };
+  const guard = { binding, check: (): boolean => allowed };
+  const ports = createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: secure ?? { readText: vi.fn(), nativeFileIO: io },
+    editorAgentClient: { action: vi.fn() },
+    resolveEditorActionContext: vi.fn(),
+    resolveRepositoryReadContext: () => binding,
+    resolveWorkspaceRoot: () => root,
+    enforceProducerBinding: true,
+    activityLog: { write: (event): void => void events.push(event) },
+  });
+  return {
+    ports,
+    guard,
+    events,
+    bytes,
+    io,
+    revoke: (): void => {
+      allowed = false;
+    },
+    moveRoot: (): void => {
+      root = "/other-native-workspace";
+    },
+  };
+}
+
+describe("governed original native file primitives", () => {
+  const request = { relativePath: "src/a.bin", purpose: "native-tool-io" as const };
+
+  it("preserves native bytes and emits the existing body-free read proof", async () => {
+    const f = nativePrimitiveFixture();
+    const result = await f.ports.nativeFileIO.readBytes(request, undefined, f.guard);
+    expect(result).toMatchObject({ ok: true, bytes: f.bytes, info: { mtimeMs: -2000 } });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "completed", purpose: "native-tool-io" });
+    expect(JSON.stringify(persisted)).not.toContain(request.relativePath);
+  });
+
+  it("records an unavailable native capability without falling back to text IO", async () => {
+    const readText = vi.fn();
+    const f = nativePrimitiveFixture({ readText });
+    await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+      ok: false,
+      reason: "native-io-unavailable",
+    });
+    expect(readText).not.toHaveBeenCalled();
+    expect(f.events.at(-1)?.extra).toMatchObject({
+      state: "failed",
+      reason: "native-io-unavailable",
+    });
+  });
+
+  it("records thrown native IO through the same existing diagnostic owner", async () => {
+    const f = nativePrimitiveFixture();
+    f.io.readBytes.mockRejectedValueOnce(new Error(SENTINEL));
+    await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+      ok: false,
+      reason: "exception",
+    });
+    expect(f.events.at(-1)?.extra).toMatchObject({ state: "failed", reason: "exception" });
+    expect(JSON.stringify(f.events)).not.toContain(SENTINEL);
+  });
+
+  it("retains the native raw promise until settlement after cancellation", async () => {
+    const f = nativePrimitiveFixture();
+    const controller = new AbortController();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.io.readBytes.mockImplementationOnce(async () => {
+      await held;
+      return { ok: true, bytes: f.bytes, info: { type: "file", size: 3, mtimeMs: -2000 } };
+    });
+    let settled = false;
+    const pending = f.ports.nativeFileIO.readBytes(request, controller.signal, f.guard);
+    void pending.then(() => {
+      settled = true;
+    });
+    controller.abort();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(f.events).toHaveLength(0);
+    release?.();
+    await expect(pending).resolves.toEqual({ ok: false, reason: "postflight-refused" });
+    expect(f.bytes).toEqual(new Uint8Array(3));
+  });
+
+  it("preserves and logs a closed native wrong-kind result with its same-FD facts", async () => {
+    const f = nativePrimitiveFixture();
+    const info = { type: "directory" as const, size: 128, mtimeMs: -2000 };
+    f.io.readBytes.mockResolvedValueOnce({ ok: false, reason: "wrong-kind", info });
+    await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+      ok: false,
+      reason: "wrong-kind",
+      info,
+    });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "failed", reason: "wrong-kind" });
+    expect(persisted).not.toHaveProperty("info");
+  });
+
+  it.each(["revoke", "moveRoot", "cancel"] as const)(
+    "wipes native bytes after %s during physical IO",
+    async (change) => {
+      const f = nativePrimitiveFixture();
+      const controller = new AbortController();
+      f.io.readBytes.mockImplementationOnce(() => {
+        if (change === "cancel") controller.abort();
+        else f[change]();
+        return Promise.resolve({
+          ok: true,
+          bytes: f.bytes,
+          info: { type: "file", size: 3, mtimeMs: -2000 },
+        });
+      });
+      await expect(
+        f.ports.nativeFileIO.readBytes(request, controller.signal, f.guard),
+      ).resolves.toEqual({ ok: false, reason: "postflight-refused" });
+      expect(f.bytes).toEqual(new Uint8Array(3));
+      expect(f.events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason: "postflight-refused",
+      });
+    },
+  );
+
+  it("passes root directory and long paths through the separately bounded native owner", async () => {
+    const f = nativePrimitiveFixture();
+    await expect(
+      f.ports.nativeFileIO.list({ ...request, relativePath: "" }, undefined, f.guard),
+    ).resolves.toMatchObject({ ok: true, entries: [] });
+    const relativePath = Array.from({ length: 7 }, () => "d".repeat(80)).join("/") + "/a.bin";
+    await expect(
+      f.ports.nativeFileIO.readBytes({ ...request, relativePath }, undefined, f.guard),
+    ).resolves.toMatchObject({ ok: true });
+    expect(f.io.readBytes).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ relativePath }),
+    );
+  });
+
+  it.each([".env", ".keiko/private/state.db"])(
+    "refuses %s before native IO",
+    async (relativePath) => {
+      const f = nativePrimitiveFixture();
+      await expect(
+        f.ports.nativeFileIO.readBytes({ ...request, relativePath }, undefined, f.guard),
+      ).resolves.toEqual({ ok: false, reason: "preflight-refused" });
+      expect(f.io.readBytes).not.toHaveBeenCalled();
+      expect(f.events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason: "preflight-refused",
+      });
+    },
+  );
+
+  it.each(["process-failed", "protocol-invalid"] as const)(
+    "records the actual private helper's %s closed refusal",
+    async (reason) => {
+      const response = new Uint8Array(Buffer.from(SENTINEL));
+      const secure = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => "/native-primitive-fixture",
+        artifact: {
+          target: "darwin-arm64",
+          installRelativePath: "runtime/native/keiko-secure-workspace-read",
+          sha256: DIGEST,
+          sourceCommit: "b".repeat(40),
+          sourceTreeSha256: DIGEST,
+          protocol: "KSR1/KSS1",
+          nativeProtocol: "KSR3/KSS3",
+          signed: true,
+        },
+        platform: { os: "darwin", arch: "arm64" },
+        artifactVerifier: { verify: () => true },
+        processFactory: {
+          create: (): SecureWorkspaceTextReadProcess => ({
+            run: () =>
+              reason === "process-failed"
+                ? Promise.reject(new SecureWorkspaceReadProcessError(reason))
+                : Promise.resolve(response),
+          }),
+        },
+      });
+      const f = nativePrimitiveFixture(secure);
+      await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+        ok: false,
+        reason,
+      });
+      const persisted = expectActivityLogProof(
+        "coding-runtime.workspace-read.emitted-line",
+        formatActivityLogProofLine(f.events.at(-1) ?? {}),
+      );
+      expect(persisted).toMatchObject({ state: "failed", purpose: "native-tool-io", reason });
+      expect(JSON.stringify(f.events)).not.toContain(SENTINEL);
+      if (reason === "protocol-invalid") expect(response).toEqual(new Uint8Array(response.length));
+    },
+  );
+});
+
+describe("production Coding Workbench scoped streaming discovery", () => {
+  const request = {
+    action: "discover",
+    actionId: "discover-scoped",
+    idempotencyKey: "discover-scoped-key",
+    query: "target",
+    maxResults: 10,
+  } as const;
+
+  it("passes scoped glob discovery through without traversing unrelated siblings", async () => {
+    const { ports, fs, events } = streamingDiscoveryFixture({
+      "packages/ui/deep/target.ts": "source",
+      "packages/other/target.ts": "other",
+    });
+    const iterate = vi.spyOn(fs, "iterateDirectory");
+    const result = await ports.repositoryDiscover.execute(
+      { ...request, mode: "glob", directory: "packages/ui", query: "packages/**/target.*" },
+      undefined,
+      { check: () => true },
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 1,
+        text: "packages/ui/deep/target.ts\n",
+        discovery: {
+          entries: [{ relativePath: "packages/ui/deep/target.ts", kind: "file", sizeBytes: 6 }],
+          matchedCount: 1,
+          coverageIncomplete: false,
+          truncationReasons: [],
+        },
+      },
+    });
+    expect(iterate.mock.calls.map(([path]) => path)).toEqual([
+      "/streaming-discovery-fixture/packages/ui",
+      "/streaming-discovery-fixture/packages/ui/deep",
+    ]);
+    expect(events.at(-1)?.extra).toMatchObject({
+      discovered: 1,
+      returnedPathCount: 1,
+      coverageIncomplete: false,
+      directorySortStrategy: "retained-results-only",
+    });
+    expect(JSON.stringify(events)).not.toContain("packages/ui");
+  });
+
+  it("returns immediate directory entries with their actual kinds", async () => {
+    const { ports } = streamingDiscoveryFixture({
+      "src/target.ts": "source",
+      "src/deep/target.ts": "deep",
+    });
+    const result = await ports.repositoryDiscover.execute(
+      { ...request, mode: "directory", directory: "src", query: "*" },
+      undefined,
+      { check: () => true },
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 2,
+        totalLines: 2,
+        discovery: {
+          entries: [
+            { relativePath: "src/deep", kind: "directory", sizeBytes: 0 },
+            { relativePath: "src/target.ts", kind: "file", sizeBytes: 6 },
+          ],
+          matchedCount: 2,
+          coverageIncomplete: false,
+        },
+      },
+    });
+  });
+
+  it.each(["../outside", "node_modules"])(
+    "refuses unsafe directory %s with a closed reason",
+    async (directory) => {
+      const { ports, events } = streamingDiscoveryFixture({ "node_modules/target.ts": "source" });
+      const result = await ports.repositoryDiscover.execute({ ...request, directory }, undefined, {
+        check: () => true,
+      });
+      expect(result).toEqual({
+        status: "failed",
+        reasonCode:
+          directory === "../outside"
+            ? WORKSPACE_DISCOVERY_REFUSAL_CODES.INVALID_REQUEST
+            : WORKSPACE_DISCOVERY_REFUSAL_CODES.SCOPE_DENIED,
+      });
+      expect(events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason: directory === "../outside" ? "invalid-request" : "scope-denied",
+      });
+      expect(JSON.stringify(events)).not.toContain(directory);
+    },
+  );
+
+  it("bounds metadata and legacy text together without overstating returned item count", async () => {
+    const prefix = Array.from({ length: 16 }, () => "a".repeat(200)).join("/");
+    const { ports, events } = streamingDiscoveryFixture(
+      Object.fromEntries(
+        Array.from({ length: 30 }, (_, index) => [
+          `${prefix}/target-${String(index)}.ts`,
+          "source",
+        ]),
+      ),
+    );
+    const result = await ports.repositoryDiscover.execute(
+      { ...request, maxResults: 100 },
+      undefined,
+      { check: () => true },
+    );
+    expect(result.status).toBe("completed");
+    if (result.status !== "completed" || result.read === undefined || !("discovery" in result.read))
+      throw new Error("Expected bounded discovery result");
+    const read = result.read;
+    expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(65_536);
+    expect(read.returnedPathCount).toBe(read.discovery?.entries.length);
+    expect(read.returnedPathCount).toBeLessThan(30);
+    expect(read.discovery).toMatchObject({
+      matchedCount: 30,
+      coverageIncomplete: true,
+      truncationReasons: ["output-limit"],
+    });
+    expect(events.at(-1)?.extra).toMatchObject({
+      matchedCount: 30,
+      returnedPathCount: read.returnedPathCount,
+      coverageIncomplete: true,
+      truncationReasons: ["output-limit"],
+    });
+  });
+
+  it("stops a blocked directory iterator at the server-owned execution deadline", async () => {
+    const { ports, fs, events } = streamingDiscoveryFixture({ "target.ts": "source" });
+    const iterate = fs.iterateDirectory;
+    let release: () => void = () => undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    Reflect.set(
+      fs,
+      "iterateDirectory",
+      async function* (path: string): AsyncIterable<WorkspaceDirEntry> {
+        yield* iterate?.call(fs, path) ?? [];
+        await blocked;
+      },
+    );
+    const result = await ports.repositoryDiscover.execute(request, undefined, {
+      check: () => true,
+      executionBudget: { nowMs: Date.now, deadlineAtMs: Date.now() + 250 },
+    });
+    release();
+    expect(result).toMatchObject({
+      status: "completed",
+      read: { discovery: { coverageIncomplete: true, truncationReasons: ["time-limit"] } },
+    });
+    expect(events.at(-1)?.extra).toMatchObject({
+      coverageIncomplete: true,
+      truncationReasons: ["time-limit"],
+    });
+  });
+
+  it("performs no metadata IO when the server-owned execution deadline already expired", async () => {
+    const { ports, fs, events } = streamingDiscoveryFixture({ "target.ts": "source" });
+    const realPath = vi.spyOn(fs, "realPath");
+    const stat = vi.spyOn(fs, "stat");
+    const read = vi.spyOn(fs, "readFileUtf8SameDescriptor");
+    const result = await ports.repositoryDiscover.execute(request, undefined, {
+      check: () => true,
+      executionBudget: { nowMs: Date.now, deadlineAtMs: Date.now() - 1 },
+    });
+    expect(realPath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: "failed", reasonCode: "WORKSPACE_DISCOVERY_TIMEOUT" });
+    const line = formatActivityLogProofLine(events.at(-1) ?? {});
+    expectActivityLogProof("coding-runtime.workspace-discovery.emitted-line", line);
+    expect(JSON.parse(line)).toMatchObject({
+      state: "failed",
+      reason: "timeout",
+      errorKind: "timeout",
+    });
+    expect(line).not.toContain("target.ts");
+  });
+
+  it.each(["timeout", "cancelled"] as const)(
+    "stops metadata detection immediately after %s is observed",
+    async (reason) => {
+      const { ports, fs, events } = streamingDiscoveryFixture({ "target.ts": "source" });
+      const realPath = fs.realPath;
+      const controller = new AbortController();
+      let now = 1;
+      const resolve = vi.spyOn(fs, "realPath").mockImplementation((path) => {
+        const result = realPath.call(fs, path);
+        if (reason === "timeout") now = 3;
+        else controller.abort();
+        return result;
+      });
+      const stat = vi.spyOn(fs, "stat");
+      const read = vi.spyOn(fs, "readFileUtf8SameDescriptor");
+      const result = await ports.repositoryDiscover.execute(request, controller.signal, {
+        check: () => true,
+        executionBudget: { nowMs: () => now, deadlineAtMs: 2 },
+      });
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(stat).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        reason === "timeout"
+          ? { status: "failed", reasonCode: "WORKSPACE_DISCOVERY_TIMEOUT" }
+          : { status: "failed" },
+      );
+      expect(events.at(-1)?.extra).toMatchObject({ state: "failed", reason });
+    },
+  );
+
+  it("does not claim paths were returned after scheduled authority revocation", async () => {
+    const { ports, events } = streamingDiscoveryFixture(discoverySourceFiles("src", 96));
+    let authorized = true;
+    const revoked = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        authorized = false;
+        resolve();
+      });
+    });
+    const result = await ports.repositoryDiscover.execute({ ...request, query: "*" }, undefined, {
+      check: () => authorized,
+    });
+    await revoked;
+    expect(result).toEqual({ status: "failed" });
+    expect(events.at(-1)?.extra).toMatchObject({
+      state: "failed",
+      reason: "authority-denied",
+      returnedPathCount: 0,
+    });
+  });
+});
 
 function changeset(): EditorAgentChangeset {
   return {
@@ -128,7 +683,7 @@ async function observedWorkspaceReadFailure(kind: WorkspaceReadFailureFixture): 
     }
     return Promise.resolve({
       ok: true,
-      text: kind === "oversize" ? "x".repeat(65_537) : "safe\n",
+      text: kind === "oversize" ? "x".repeat(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1) : "safe\n",
     });
   });
   const ports = createCodingToolReadEditPorts({
@@ -494,6 +1049,41 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     },
   );
 
+  it("counts returned discovery paths independently of lines inside a filename", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-count-"));
+    try {
+      writeFileSync(join(root, "one\nfilename.ts"), "export {};\n");
+      writeFileSync(join(root, "second.ts"), "export {};\n");
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action: vi.fn() },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-discover-count",
+          authorityRef: { runId: "run-discover-count", envelopeDigest: DIGEST },
+          origin: "agent",
+        }),
+        resolveWorkspaceRoot: () => root,
+      });
+      const result = await ports.repositoryDiscover.execute(
+        {
+          action: "discover",
+          actionId: "discover-count",
+          idempotencyKey: "discover-count-key",
+          query: "*",
+          maxResults: 10,
+        },
+        undefined,
+        { check: (): true => true },
+      );
+      expect(result).toMatchObject({
+        status: "completed",
+        read: { returnedPathCount: 2, totalLines: 3 },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));
     try {
@@ -729,6 +1319,77 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     });
   });
 
+  it("reads a small window from a large file and retains its whole-file precondition", async () => {
+    const text = "Repository convention.\n".repeat(4_000);
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true, text }) },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const result = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-large",
+        idempotencyKey: "read-large",
+        relativePath: "AGENTS.md",
+        startLine: 3_001,
+        maxLines: 2,
+      },
+      undefined,
+      { check: (): true => true },
+    );
+    expect(result).toEqual({
+      status: "completed",
+      read: {
+        text: "Repository convention.\n".repeat(2),
+        byteCount: 46,
+        digest: secureWorkspaceTextDigest(text),
+        totalLines: 4_000,
+        nextStartLine: 3_003,
+      },
+    });
+    const event = events.find((candidate) => candidate.op === "coding-runtime.workspace-read");
+    expect(event?.extra).toMatchObject({ state: "completed", startLine: 3_001, maxLines: 2 });
+  });
+
+  it("refuses an oversized model window without returning source text", async () => {
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: {
+        readText: () =>
+          Promise.resolve({ ok: true, text: "Repository convention.\n".repeat(4_000) }),
+      },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    await expect(
+      ports.repositoryRead.execute(
+        {
+          action: "read",
+          actionId: "read-large",
+          idempotencyKey: "read-large",
+          relativePath: "AGENTS.md",
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "workspace-read-too-large" });
+    const event = events.find((candidate) => candidate.op === "coding-runtime.workspace-read");
+    expect(event?.extra).toMatchObject({ state: "failed", reason: "too-large" });
+    expect(events.some((candidate) => candidate.extra?.state === "completed")).toBe(false);
+  });
+
   it("returns content-free read failures and cancellation without calling a writer", async () => {
     const readText = vi.fn(() =>
       Promise.resolve({ ok: false as const, reason: "cancelled" as const }),
@@ -802,7 +1463,8 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     const editorAction = vi.fn();
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: {
-        readText: () => Promise.resolve({ ok: true, text: "x".repeat(65_537) }),
+        readText: () =>
+          Promise.resolve({ ok: true, text: "x".repeat(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1) }),
       },
       editorAgentClient: { action: editorAction },
       resolveEditorActionContext: () => ({
@@ -1095,6 +1757,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           completeness: "complete",
           loss: "none",
           editForm: "unified-diff",
+          executionPath: "browser",
         },
       }),
     ]);
@@ -1471,6 +2134,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
             completeness: "complete",
             loss: "none",
             editForm: "unified-diff",
+            executionPath: "browser",
           },
         }),
       ]);
@@ -2037,6 +2701,7 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       reasonCode: "EDIT_PREPARE_FAILED",
       prepareCause: "replacement-read-failed",
       readReason: "busy",
+      affectedRelativePath: "src/a.ts",
     });
     expect(events.map((event) => event.op)).toEqual([
       "coding-runtime.workspace-read",
@@ -2057,6 +2722,7 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       editForm: "replacements",
     });
     expect(events[1]).toMatchObject({ errorKind: "unavailable" });
+    expect(JSON.stringify(events)).not.toContain("src/a.ts");
   });
 
   it("records a cancelled materialization read as cancelled, not as unavailable", async () => {
@@ -2071,6 +2737,7 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       reasonCode: "EDIT_PREPARE_FAILED",
       prepareCause: "cancelled",
       readReason: "cancelled",
+      affectedRelativePath: "src/a.ts",
     });
     expect(events[0]).toMatchObject({
       op: "coding-runtime.workspace-read",
@@ -2406,4 +3073,181 @@ describe("CodingTool materialized patch provenance (#3873)", () => {
     expect(registry.lookup(supplied.patch).registered).toBe(false);
     expect(registry.stats().entries).toBe(0);
   });
+});
+
+interface NativeTextSnapshotFixture {
+  readonly ports: ReturnType<typeof createCodingToolReadEditPorts>;
+  readonly guard: {
+    readonly binding: ReturnType<typeof liveDiscoveryBinding>;
+    readonly check: () => boolean;
+  };
+  readonly events: ServerLogEvent[];
+  readonly readTextSnapshot: ReturnType<
+    typeof vi.fn<
+      () => Promise<import("./secureWorkspaceTextRead.js").SecureWorkspaceTextSnapshotResult>
+    >
+  >;
+  readonly revoke: () => void;
+  readonly replace: () => void;
+}
+
+describe("governed native text snapshot current authority", () => {
+  function fixture(): NativeTextSnapshotFixture {
+    const binding = liveDiscoveryBinding();
+    let current = { ...binding };
+    let allowed = true;
+    const events: ServerLogEvent[] = [];
+    const readTextSnapshot = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        text: "safe source\n",
+        info: Object.freeze({ type: "file" as const, size: 12, mtimeMs: 1_600_000_000_000 }),
+      }),
+    );
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn(), readTextSnapshot },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveRepositoryReadContext: () => current,
+      enforceProducerBinding: true,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    const guard = {
+      binding,
+      check: (): boolean => allowed,
+    };
+    return {
+      ports,
+      guard,
+      events,
+      readTextSnapshot,
+      revoke: (): void => {
+        allowed = false;
+      },
+      replace: (): void => {
+        current = { ...binding, workspaceRootDigest: "d".repeat(64) };
+      },
+    };
+  }
+
+  it("returns immutable same-descriptor facts only for current bound IO", async () => {
+    const f = fixture();
+    expect(f.ports.nativeTextRead).toBeDefined();
+    await expect(
+      f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-tool-io" },
+        undefined,
+        f.guard,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      text: "safe source\n",
+      info: { type: "file", size: 12, mtimeMs: 1_600_000_000_000 },
+    });
+    expect(f.events.at(-1)?.extra).toMatchObject({ state: "completed", purpose: "native-tool-io" });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "completed", purpose: "native-tool-io" });
+    expect(JSON.stringify(persisted)).not.toContain("safe source");
+    expect(JSON.stringify(persisted)).not.toContain("src/a.ts");
+  });
+
+  it.each(["revoke", "replace", "cancel"] as const)(
+    "discards both text and metadata after %s during native IO",
+    async (change) => {
+      const f = fixture();
+      const abort = new AbortController();
+      f.readTextSnapshot.mockImplementationOnce(() => {
+        if (change === "cancel") abort.abort();
+        else f[change]();
+        return Promise.resolve({
+          ok: true,
+          text: "safe source\n",
+          info: { type: "file", size: 12, mtimeMs: 1_600_000_000_000 },
+        });
+      });
+      const result = await f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-instructions" },
+        abort.signal,
+        f.guard,
+      );
+      expect(result).toEqual({ ok: false, reason: "postflight-refused" });
+      expect(f.events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        purpose: "native-instructions",
+        reason: "postflight-refused",
+      });
+    },
+  );
+
+  it("owns immutable metadata and rejects accessor facts without evaluating them", async () => {
+    const f = fixture();
+    const info = { type: "file" as const, size: 12, mtimeMs: 1_600_000_000_000 };
+    f.readTextSnapshot.mockResolvedValueOnce({ ok: true, text: "safe source\n", info });
+    const result = await f.ports.nativeTextRead.readTextSnapshot(
+      { relativePath: "src/a.ts", purpose: "native-tool-io" },
+      undefined,
+      f.guard,
+    );
+    info.size = 999;
+    expect(result).toMatchObject({ ok: true, info: { size: 12 } });
+    if (!result.ok) throw new Error("expected snapshot");
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.info)).toBe(true);
+    const getter = vi.fn(() => 1_600_000_000_000);
+    Reflect.defineProperty(info, "mtimeMs", { get: getter });
+    info.size = 12;
+    f.readTextSnapshot.mockResolvedValueOnce({ ok: true, text: "safe source\n", info });
+    await expect(
+      f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-tool-io" },
+        undefined,
+        f.guard,
+      ),
+    ).resolves.toEqual({ ok: false, reason: "protocol-invalid" });
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("records absence of a rich capability without calling the ordinary read fallback", async () => {
+    const f = fixture();
+    f.readTextSnapshot.mockResolvedValueOnce({ ok: false, reason: "snapshot-unavailable" });
+    await expect(
+      f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-instructions" },
+        undefined,
+        f.guard,
+      ),
+    ).resolves.toEqual({ ok: false, reason: "snapshot-unavailable" });
+    expect(f.events.at(-1)?.extra).toMatchObject({
+      state: "failed",
+      purpose: "native-instructions",
+      reason: "snapshot-unavailable",
+    });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "failed",
+      purpose: "native-instructions",
+      reason: "snapshot-unavailable",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("src/a.ts");
+  });
+
+  it.each([".env", ".keiko/private/state.db", "../outside.txt"])(
+    "refuses protected %s before the helper is called",
+    async (relativePath) => {
+      const f = fixture();
+      const result = await f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath, purpose: "native-tool-io" },
+        undefined,
+        f.guard,
+      );
+      expect(result).toEqual({ ok: false, reason: "preflight-refused" });
+      expect(f.readTextSnapshot).not.toHaveBeenCalled();
+    },
+  );
 });

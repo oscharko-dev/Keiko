@@ -12,9 +12,7 @@ import { fileURLToPath } from "node:url";
 // misencodes on Windows (drive letters) and mishandles `%`, `#`, `?`, spaces.
 export { fileURLToPath };
 
-// One canonical name at the boundary. `frame` (macOS) and `header` (Windows) were the same
-// function; both call sites now use `header` (the Windows spelling), and `frame` is exported as an
-// alias so external readers see the historical name too.
+// One canonical name at the boundary. Both platform harnesses use the same header codec.
 export function header(magic, kind, payloadLength) {
   const bytes = Buffer.alloc(12);
   bytes.write(magic, 0, "ascii");
@@ -23,7 +21,6 @@ export function header(magic, kind, payloadLength) {
   bytes.writeUInt32LE(payloadLength, 8);
   return bytes;
 }
-export const frame = header;
 
 /**
  * Build the KRP1 launch packet. Both platforms encode the same shape: 32-hex recovery handle,
@@ -186,8 +183,7 @@ const EXIT_POLL_ATTEMPTS = 200;
 const EXIT_POLL_INTERVAL_MS = 20;
 
 /**
- * Poll until `pid` disappears. Exported as both `waitForExit` (Windows spelling) and `waitGone`
- * (macOS spelling); the two were the same function with different names and poll budgets.
+ * Poll until `pid` disappears using the same name and budget on both platforms.
  */
 export async function waitForExit(pid) {
   for (let attempt = 0; attempt < EXIT_POLL_ATTEMPTS; attempt += 1) {
@@ -203,7 +199,6 @@ export async function waitForExit(pid) {
     `pid ${String(pid)} remained visible after ${String(EXIT_POLL_ATTEMPTS * EXIT_POLL_INTERVAL_MS)}ms`,
   );
 }
-export const waitGone = waitForExit;
 
 /**
  * Diagnostic wrapper: race `promise` against the child's `exited` promise so a stream failure is

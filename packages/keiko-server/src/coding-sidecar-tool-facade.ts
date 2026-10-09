@@ -26,7 +26,10 @@ import { CODING_TOOL_MAX_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { readJsonObject } from "./files.js";
 import { getServerLogger } from "./observability/index.js";
-import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import { errorBody, type RouteContext, type RouteResult, type HandlerOutcome } from "./routes.js";
+import { STREAMING } from "./route-outcome.js";
+import { SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES } from "./coding-runtime/secureWorkspaceTextReadProtocol.js";
+import { emitServerDiagnostic, contentFreeErrorClass } from "./diagnostics-log.js";
 
 // Closed vocabulary (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // warn line naming WHY, never a raw message. A status the bridge can return that is not in this
@@ -37,6 +40,9 @@ import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 // result, which the plugin returns to the model in place of the call, so the run goes on without it
 // (owner decision 2026-09-26, ADR-0124 D6); a cancelled or unavailable ask stays a bare 403.
 type CodingSidecarToolFacadeRejectionReason =
+  | "native-read-refused"
+  | "native-initialization-refused"
+  | "native-response-failed"
   | "origin-not-allowed"
   | "capability-invalid"
   | "body-too-large"
@@ -58,6 +64,9 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
       dataClass: "closed-enum",
       required: true,
       values: [
+        "native-read-refused",
+        "native-initialization-refused",
+        "native-response-failed",
         "origin-not-allowed",
         "capability-invalid",
         "body-too-large",
@@ -88,6 +97,9 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
 const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   Record<CodingSidecarToolFacadeRejectionReason, ActivityLogErrorKind>
 > = {
+  "native-read-refused": "authority-denied",
+  "native-initialization-refused": "authority-denied",
+  "native-response-failed": "unavailable",
   "origin-not-allowed": "authority-denied",
   "capability-invalid": "permission-denied",
   "body-too-large": "invalid-request",
@@ -330,7 +342,7 @@ function toolFacadeRouteResult(ctx: RouteContext, result: OpenCodeToolBridgeResp
 export async function handleCodingSidecarToolFacade(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): Promise<RouteResult> {
+): Promise<HandlerOutcome> {
   if (hasBrowserOrigin(ctx)) {
     logToolFacadeRejection(ctx, 403, "origin-not-allowed");
     return {
@@ -348,6 +360,7 @@ export async function handleCodingSidecarToolFacade(
     return parsed;
   }
   const disconnect = bindRouteDisconnect(ctx);
+  const deadlineAtMs = Date.now() + bridge.requestDeadlineMs;
   try {
     const result = await bridge.handle({
       method: "POST",
@@ -355,8 +368,158 @@ export async function handleCodingSidecarToolFacade(
       body: JSON.stringify(parsed),
       signal: disconnect.signal,
     });
+    if (result.nativeBytes !== undefined)
+      return await deliverNativeToolBytes(ctx, result, disconnect.signal, deadlineAtMs);
+    if (result.nativeResult === true) {
+      if (result.status !== 200)
+        logToolFacadeRejection(
+          ctx,
+          result.status,
+          parsed.action === "native-read-invocation"
+            ? "native-read-refused"
+            : "native-initialization-refused",
+        );
+      return { status: result.status, body: JSON.parse(result.body) as unknown };
+    }
     return toolFacadeRouteResult(ctx, result);
   } finally {
     disconnect.detach();
   }
+}
+
+async function deliverNativeToolBytes(
+  ctx: RouteContext,
+  result: OpenCodeToolBridgeResponse,
+  signal: AbortSignal,
+  deadlineAtMs: number,
+): Promise<HandlerOutcome> {
+  const bytes = result.nativeBytes;
+  if (bytes === undefined) throw new TypeError("native-response-missing");
+  try {
+    if (result.status !== 200 || bytes.byteLength > SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES)
+      throw new TypeError("native-response-invalid");
+    ctx.res.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(bytes.byteLength),
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    await writeNativeBytes(ctx, bytes, signal, deadlineAtMs);
+  } catch (error) {
+    reportNativeDeliveryFailure(ctx, error);
+    ctx.res.destroy();
+  } finally {
+    bytes.fill(0);
+  }
+  return STREAMING;
+}
+
+function writeNativeBytes(
+  ctx: RouteContext,
+  bytes: Uint8Array,
+  signal: AbortSignal,
+  deadlineAtMs: number,
+): Promise<void> {
+  const refusal = nativeDeliveryRefusal(signal, deadlineAtMs);
+  if (refusal !== undefined) return Promise.reject(refusal);
+  return new Promise((resolve, reject) => {
+    let offset = 0;
+    let settled = false;
+    let detachLifetime = (): void => undefined;
+    const cleanup = (): void => {
+      settled = true;
+      detachLifetime();
+      ctx.res.removeListener("drain", write);
+      ctx.res.removeListener("finish", finished);
+      ctx.res.removeListener("close", closed);
+      ctx.res.removeListener("error", reportNativeWriteFailure);
+    };
+    const finished = (): void => {
+      cleanup();
+      resolve();
+    };
+    const reportNativeWriteFailure = (error: unknown): void => {
+      cleanup();
+      reject(error instanceof Error ? error : new TypeError("native-response-failed"));
+    };
+    const closed = (): void => {
+      if (ctx.res.writableFinished) finished();
+      else reportNativeWriteFailure(new Error("native-response-disconnected"));
+    };
+    const write = (): void => {
+      if (settled) return;
+      try {
+        offset = writeNativeChunks(ctx, bytes, offset);
+        if (!ctx.res.writableEnded) ctx.res.once("drain", write);
+      } catch (error) {
+        reportNativeWriteFailure(error);
+      }
+    };
+    ctx.res.once("finish", finished);
+    ctx.res.once("close", closed);
+    ctx.res.once("error", reportNativeWriteFailure);
+    detachLifetime = bindNativeDeliveryLifetime(signal, deadlineAtMs, reportNativeWriteFailure);
+    if (ctx.res.destroyed) closed();
+    else write();
+  });
+}
+
+function nativeDeliveryRefusal(
+  signal: AbortSignal,
+  deadlineAtMs: number,
+): DOMException | undefined {
+  if (signal.aborted) return new DOMException("native-response-aborted", "AbortError");
+  if (deadlineAtMs <= Date.now())
+    return new DOMException("native-response-deadline", "TimeoutError");
+  return undefined;
+}
+
+function writeNativeChunks(ctx: RouteContext, bytes: Uint8Array, start: number): number {
+  let offset = start;
+  while (offset < bytes.byteLength) {
+    const end = Math.min(offset + 65536, bytes.byteLength);
+    const part = bytes.subarray(offset, end);
+    offset = end;
+    if (!ctx.res.write(part)) return offset;
+  }
+  ctx.res.end();
+  return offset;
+}
+
+function bindNativeDeliveryLifetime(
+  signal: AbortSignal,
+  deadlineAtMs: number,
+  reportFailure: (error: unknown) => void,
+): () => void {
+  const onAbort = (): void => {
+    reportFailure(new DOMException("native-response-aborted", "AbortError"));
+  };
+  const timer = setTimeout(
+    () => {
+      reportFailure(new DOMException("native-response-deadline", "TimeoutError"));
+    },
+    Math.max(0, deadlineAtMs - Date.now()),
+  );
+  signal.addEventListener("abort", onAbort, { once: true });
+  return (): void => {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
+  };
+}
+
+function reportNativeDeliveryFailure(ctx: RouteContext, error: unknown): void {
+  const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+  logToolFacadeRejection(
+    ctx,
+    timedOut ? 408 : 502,
+    timedOut ? "deadline" : "native-response-failed",
+  );
+  emitServerDiagnostic(undefined, {
+    correlationId: correlationIdOrUnknown(ctx.correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "coding-sidecar-tool-facade.native-response",
+    errorClass: contentFreeErrorClass(error),
+    message: "server-operation-failed",
+  });
 }

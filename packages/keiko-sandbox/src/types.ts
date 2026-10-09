@@ -21,6 +21,14 @@ export type { SandboxBackend } from "@oscharko-dev/keiko-contracts";
 // `SandboxPolicy` structurally, only this package's own plan/decision types.
 export type IsolatedRunNetworkPolicy = NetworkPolicy | NetworkGatewayPolicy;
 
+/** Transient, server-owned native service roots; model-visible access needs its own authority hook. */
+export interface RuntimeGatewayFilesystem {
+  readonly workspaceRoot: string;
+  readonly workspaceAccess: "read-only";
+  readonly privateStateRoot: string;
+  readonly runtimeReadRoot: string;
+}
+
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
 // selector so backend choice is deterministic and unit-testable without touching the filesystem.
 export interface BackendAvailability {
@@ -42,6 +50,7 @@ export interface IsolatedRunPlan {
   readonly filesystem?: FilesystemPolicy | undefined;
   /** Exact trusted child executable admitted by the long-lived gateway profile. */
   readonly gatewayChildExecutable?: string | undefined;
+  readonly gatewayFilesystem?: RuntimeGatewayFilesystem | undefined;
 }
 
 // The decision for a single run:

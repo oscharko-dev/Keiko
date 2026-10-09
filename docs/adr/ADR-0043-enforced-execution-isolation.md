@@ -89,6 +89,16 @@ wrapped command, recording the attestation on `CommandResult`. No second spawnin
 that request neither boundary are unaffected — egress enforcement is opt-in per call, so the
 read-only command tools keep `network: "inherit"` and their existing behaviour.
 
+The retained Darwin execution-root environment mapping uses the server-owned
+`npm_config_script_shell=/bin/sh` for `npm`/`npx`. It is not currently selected by assured macOS
+admission, which requires the container lifetime owner (D9); direct native containment fixtures
+qualify the shell/path seam independently. npm extends `PATH` with caller and ancestor bin
+directories; an inaccessible foreign bin directory can make its bare `sh` lookup fail even
+though the system shell is already admitted. Binding that existing executable preserves the
+original `PATH`, workspace bin resolution, the outer `shell: false` spawn and all filesystem and
+network rules. Ambient shell overrides are not accepted. Other commands and backends retain
+their existing environment policy.
+
 D12's gateway-only Linux wrapper does not create another product command boundary: the planned child
 is still one command to the consumer, while the package-private launcher owns only the inseparable
 namespace peer, anonymous descriptor relay, and target-child lifecycle needed to enforce that plan.
@@ -175,10 +185,57 @@ Both assured pre-filter execution and in-place repository verification request
 `filesystem:"execution-root"`. In-place runs still operate against the selected real workspace,
 including ordinary package scripts and targeted tests, but repository code may write only inside
 that root and sandbox temporary storage. The governed command runner uses the same existing policy.
-Strict bubblewrap or the Docker/Podman fallback must enforce the requested filesystem boundary;
-network-only `unshare` and Seatbelt wrappers do not qualify. If no compatible backend is available,
-execution fails closed before spawning. A network compatibility setting never removes a requested
-filesystem boundary. Sandbox attestations report network and filesystem enforcement separately.
+Strict bubblewrap on Linux or Docker/Podman must enforce the requested execution-root boundary.
+Linux execution-root bubblewrap always uses `--unshare-pid`, including explicit inherited-network
+runs. Its private `/proc` excludes host processes, confined code cannot signal them, and the PID
+namespace reaps detached descendants when the main command exits. The compatibility network-only
+wrapper retains its existing contract. Actual compiled `runCommand` controls qualify both an owned
+foreign-process signal/visibility refusal and zero acting descendants after successful settlement,
+with a held-main detached-write positive control.
+On macOS, assured execution-root runs select Docker/Podman with its existing private PID namespace
+and container lifetime; without one, admission fails closed before spawn. Filesystem-scoped Seatbelt
+cannot own a detached `setsid` descendant after the command exits, so it no longer qualifies for
+this selection. Network-only native Seatbelt and gateway routes retain their existing qualified
+contracts. The direct macOS containment profile denies reads and writes outside the canonical
+accepted root, except
+readonly OS/runtime paths, narrowly selected toolchain libraries, and ancestor directory metadata.
+It grants neither the entire `/opt` or `/usr` trees nor Homebrew `var` and `etc`. Homebrew-linked Node
+uses library-file reads and toolchain metadata; it does not receive a general Homebrew data grant.
+Only the dyld boot directories themselves and the selected OS runtime subtree are readable; unrelated
+Preboot children stay denied. Writes and the ephemeral HOME/TMPDIR stay within the accepted root,
+including writes from descendants. Symlink escapes and service-mediated filesystem escapes stay denied.
+The direct native profile restricts its scoped signal and process-info APIs to the sandbox and
+process itself. Those controls do not provide a PID namespace or exclude every process metadata
+API: sysctl process-table and argument queries are outside that qualified proof. They prove
+individual file, network, signal and process-info restrictions only, not full process isolation
+or command lifetime. The actual isolated regression returned
+`exitCode:0` while a detached owned child could still write after settlement. Signaling the original
+process group cannot contain a child that has left it. Native macOS assured execution may qualify
+again only with the existing attested descendant owner wired through the command lifecycle, with
+actual zero-live settlement proof; that integration remains follow-up work in #3899/#3901.
+
+`network:"none"` denies host and external network access. The direct Seatbelt profile also denies
+its own loopback, whereas the container has a private loopback namespace. An explicitly selected
+`network:"inherit"` preserves the selected execution-root boundary and truthfully reports
+`networkEnforced:false`; it never upgrades a `none` or gateway policy. Coding Workbench command and
+verification producers still select `none` behind the accepted Authority Envelope. A test requiring
+its own isolated loopback namespace needs a qualifying container/backend; Seatbelt does not silently
+grant host loopback or detect that requirement from the test body. On macOS, containers are selected
+at admission for execution-root work, never as a retry after a native test fails. Container
+`network:none` separates host loopback from container-local loopback; actual platform evidence must
+qualify that distinction, and no host network/PID namespace is granted. The command
+attestation reports filesystem and network enforcement separately. No compatible backend means
+execution is refused before spawn.
+
+Pure planners require the caller's already canonical workspace-contained cwd, and the spawner must
+actually enter that directory. `runCommand` owns both operations; the platform proof supplies both
+instead of passing a `/var` alias and inheriting the test runner's cwd. The retained direct Darwin
+profile fixture binds `OPENSSL_CONF=/dev/null` so Node does not
+import ambient Homebrew OpenSSL configuration outside its root. Explicit policy-admitted OpenSSL
+environment configuration, Node crypto flags, and admitted `NODE_OPTIONS` remain intact. Workspace
+configurations work in that profile proof; configurations outside the admitted root remain refused
+by its filesystem boundary. These fixture facts do not certify Seatbelt command lifetime, a native
+assured execution route, FIPS certification or support for external provider modules.
 
 The Docker fallback resolves only the selected local engine endpoint before spawning: a canonical
 Unix socket outside the execution root, or a Windows named pipe under the local `npipe:////./pipe/` namespace (including Docker Desktop's Linux engine). Remote or
@@ -343,9 +400,8 @@ container bridge implements the same contract. Invalid/accessor-backed gateway v
 `network:"none"` shape.
 
 Windows remains a reasoned refusal rather than silent non-enforcement:
-`nativeRuntimeProcessBackend.ts` (the backend used for the Windows dev lane and every
-release-qualified platform) now accepts an optional `gatewayConfinement` and, when one is attached,
-refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REASON` string
+`nativeRuntimeProcessBackend.ts` accepts an optional `gatewayConfinement` and, on Windows when one
+is attached, refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REASON` string
 `planIsolatedRun` would produce, rather than a silent unconfined spawn — its native launch-packet
 protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
 body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
@@ -353,13 +409,32 @@ Windows refusal leaves the same evidence a support report can reconstruct. Produ
 (`productionOpenCodeBackend.ts`) always supplies the exact gateway policy, including Windows dev
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before
-spawning a helper and records `runtime.confinement.failed`; omitting the policy to keep a launch
-working is a fail-open defect. The macOS app-sandbox and dev lanes enforce the same policy through
-Seatbelt. #2951 remains open for #3423's Windows-native WFP enforcement. The Linux target is
+spawning a Windows helper and records `runtime.confinement.failed`; omitting the policy to keep a
+launch working is a fail-open defect. The macOS app-sandbox, npm-runtime and explicit dev lanes
+enforce the same policy through Seatbelt. A generic supervisor-prepared loopback wrapper never bypasses the exact gateway policy:
+both prepared and direct backend launches derive the final wrapper from the same server-owned
+policy. The sealed helper receives that exact wrapper in its existing launch packet.
+
+For the staged native-service filesystem foundation, this same Seatbelt owner denies filesystem
+access by default and admits a root union: read-only accepted workspace, read/write private per-run
+native state, immutable runtime and narrowly required OS/Git support. Canonical roots are revalidated
+immediately before launch, private state must belong to the current user with no group/other access,
+and its writable root must never contain the accepted workspace or overlap the immutable runtime.
+The normal `<workspace>/.keiko` per-run private metadata subtree remains writable; workspace code
+files outside that exact subtree remain read-only. The closed logged workspace access fact is
+`read-only-outside-private-state`, rather than an unconditional read-only claim. Root identity is transient and
+bound into the existing policy digest; existing `runtime.confinement.spawned` evidence adds only
+closed filesystem/access facts, never paths. Actual OS probes prove workspace writes and foreign
+file/symlink reads are denied while private-state writes remain possible. The kernel cannot
+separate runtime-internal reads from model reads of the same admitted inode: canonical native
+permission enforcement for sensitive workspace paths and private-state access remains mandatory
+before production native tools are admitted. Workspace reads in this foundation do not widen any
+mode's mutation authority; production native workspace effect tools remain denied.
+
+#2951 remains open for #3423's Windows-native WFP enforcement. The Linux target is
 represented only after #3451's exact staged payload, offline-attested qualification, fresh-runner
 verification, and reference-runner proof all pass; no source-only or declared Boolean can qualify
 it.
-
 
 ## Addendum — the governed tool facade rides the ONE attested loopback destination, never a second (2026-09-05)
 
@@ -412,7 +487,6 @@ reason `deadline`) if the body has not finished arriving in time — without des
 since request and response share one connection and destroying it would prevent that very 408 from
 being sent.
 
-
 ## Addendum — the Git executable admitted into the process-exec allowlist is attested, not path-trusted (2026-09-05)
 
 ### D16 — Do not allowlist conventional Xcode/CommandLineTools paths unconditionally
@@ -425,7 +499,7 @@ conventional Apple Git path unconditionally — `/usr/bin/git`,
 local user (the same actor D11's whole boundary exists to contain once inside the sandbox) can
 replace the file at any of them, and the sidecar would then execute that substitute with its
 inherited process context and the D11 gateway egress carve-out still attached. Hardcoding the
-paths meant the allowlist trusted *location* instead of *identity*.
+paths meant the allowlist trusted _location_ instead of _identity_.
 
 The fix, `packages/keiko-sandbox/src/darwin-git.ts`, resolves and attests the ONE Git executable
 the profile admits, at every launch, instead of trusting any fixed path:
@@ -443,7 +517,7 @@ the profile admits, at every launch, instead of trusting any fixed path:
   to the filesystem root must be a non-symlink directory, owned by `uid 0`, and not group- or
   other-writable either. Any failure — including any thrown `fs` error, e.g. the path not existing
   — is caught and converted into the single closed outcome, `throw new Error(
-  "runtime-gateway-git-untrusted")`. If the selected candidate fails, the fixed Command Line Tools
+"runtime-gateway-git-untrusted")`. If the selected candidate fails, the fixed Command Line Tools
   candidate must pass every same check; otherwise launch still fails closed. A qualifying executable's
   SHA-256 digest is computed and returned alongside its path (`AttestedDarwinGitExecutable`).
 - `buildGatewaySeatbeltCommand` (`backends.ts`) and `buildRuntimeGatewaySeatbeltCommand`
@@ -488,9 +562,9 @@ layer that owns the plan. Before the first script step of a plan that has one, t
 reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
 (`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, or Keiko
 has not recorded a completed install for that tree, it runs
-exactly `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error` through
-the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm
-install` and nothing else, no leading flags, `-c`/`--call` denied), under
+the fixed base command `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error`
+with the server-owned target flags described below, through the same keiko-tools command boundary
+as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm install` and nothing else, no leading flags, `-c`/`--call` denied), under
 `DEPENDENCY_INSTALL_LIMITS` (240 s wall time, 1 MiB output) and with **host network**. This is the
 one verification command that keeps egress, and the reason it may is the same reason D1–D10 deny
 it elsewhere: those steps EXECUTE untrusted, model-written code. `--ignore-scripts` disables npm's
@@ -502,10 +576,35 @@ which every server verification path uses, requires an enforcing backend and ref
 cannot confine; only a caller that explicitly selects the `inherit` compatibility mode lets steps
 inherit host network. The child receives the ephemeral empty HOME every
 governed command receives (C5), so only npm's default registry configuration applies, and a
-project-level `.npmrc` refuses the bootstrap outright (`refused`, `project npm config present`):
-a manifest cannot redirect the install to a registry nobody configured. An unreadable manifest
+project-level `.npmrc` permits only the closed guard settings `strict-allow-scripts=true`,
+`ignore-scripts=true` and `engine-strict=true`, plus blank and comment lines. Every other setting,
+unreadable or oversized config, interpolation or unsafe descriptor refuses the bootstrap
+(`refused`, `project npm config present`). Config admission is checked again immediately before
+the npm spawn and config identity participates in the process-owned installation receipt. The
+fixed `--ignore-scripts` invocation and registry-only egress remain in force; a manifest cannot
+redirect the install to a registry nobody configured. An unreadable manifest
 refuses too; a manifest without declarations, or a workspace without one, is `none` and nothing
 runs.
+
+Dependency installation and script execution can run on different platforms. For a canonical
+bootstrap decision of `current` or `install`, the server resolves the selected verification target
+before reusing or recording an installation receipt. The fixed constant Node metadata probe runs
+through the existing `runCommand` boundary with `network: "none"` and
+`filesystem: "execution-root"`, under the same selected isolation policy as verification. Decisions
+that require no bootstrap do not probe. The closed result contains the effective OS, CPU, libc,
+Node version, module ABI and N-API version. Its runtime identity also binds the selected attested
+backend and, for a container, the existing default image identifier. That identifier is not an
+immutable OCI content digest. Invalid or unavailable target metadata fails closed through the
+existing bootstrap failure/refusal path and prevents script execution.
+
+npm still runs on the host through the existing registry proxy, with lifecycle scripts disabled.
+The fixed invocation adds only server-produced `--os`, `--cpu` and, where applicable, `--libc`
+values for the measured execution target. This selects optional prebuilt native dependencies for
+that target rather than assuming the host's platform. It does not cross-compile required native
+addons or enable their lifecycle builds; required-package platform and engine checks can still
+apply to the host. A package that needs a disabled install script remains unsupported. The real
+npm 11.16.0 control qualifies one Linux native binding and one exact-file Vitest test, not generic
+native-build or complete OpenCode parity.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
@@ -556,8 +655,10 @@ The hidden lockfile alone is not completion evidence: npm can write it before re
 and leave a partly unpacked package behind. A successful bootstrap records a process-owned receipt
 only after npm exits successfully, the installed tree passes the source check, and registry egress
 has no refusal or fault. The receipt is bound to the manifest, lockfiles and installed entries by
-filesystem identity, size and change time; restored modification times cannot preserve it. Keiko
-writes no completion file in the workspace. Repository-written marker files confer no authority.
+filesystem identity, size and change time, together with the measured dependency target and runtime
+identity; restored modification times or a receipt from another execution target cannot preserve
+it. Keiko writes no completion file in the workspace. Repository-written marker files confer no
+authority.
 The cache holds at most 32 workspaces, enumerates at most 100,000 installed entries, follows no
 directory symlinks and fails closed to reinstall when identity metadata is unavailable. Changed
 entries, eviction and process restart require another successful bootstrap. This receipt records

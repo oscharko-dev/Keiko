@@ -51,6 +51,7 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
         "expired",
         "unavailable",
         "authority-resolution-failed",
+        "native-producer-failed",
       ],
     },
     proposalId: {
@@ -260,6 +261,12 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       required: true,
       values: ["namespace-inherited", "runtime-and-attested-git-only"],
     },
+    parentLifetime: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["stdin-eof"],
+    },
     childExecutableDigest: {
       type: "string",
       dataClass: "digest",
@@ -271,6 +278,24 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       dataClass: "closed-enum",
       required: false,
       values: ["selected", "command-line-tools"],
+    },
+    filesystemPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["native-root-union-v1"],
+    },
+    workspaceAccess: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["read-only-outside-private-state"],
+    },
+    privateStateAccess: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["read-write"],
     },
   },
   causal: "correlation",

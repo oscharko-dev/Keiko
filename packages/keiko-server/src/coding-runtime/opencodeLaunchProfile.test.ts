@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenCodeLaunchProfile,
+  createFixedOpenCodeConfig,
   createFixedOpenCodeV2Config,
   OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
-  OPENCODE_GOVERNED_V2_SYSTEM_PROMPT,
   resolveOpenCodeContextGeometry,
   type OpenCodeLaunchProfileInput,
 } from "./opencodeLaunchProfile.js";
@@ -52,6 +52,13 @@ function v2Rules(config: Readonly<Record<string, unknown>>): readonly {
 }
 
 describe("OpenCode launch profile", () => {
+  it("retains native V2 Build and compaction prompt ownership", () => {
+    const config = createFixedOpenCodeV2Config(CONTEXT_GEOMETRY);
+    expect(config).not.toHaveProperty("agents");
+    expect(config.default_agent).toBe("build");
+    expect(config.compaction).toMatchObject({ auto: true });
+  });
+
   it("distinguishes ready delivery proposals from proposals requiring human approval", () => {
     expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("approval-required");
     expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("ready");
@@ -91,16 +98,11 @@ describe("OpenCode launch profile", () => {
     if (!profile.ok) throw new Error("expected fixed managed launch profile");
     const config = JSON.parse(profile.config) as {
       readonly model: string;
-      readonly agents: Readonly<Record<string, unknown>>;
       readonly providers: Readonly<Record<string, unknown>>;
       readonly permissions: readonly { readonly action: string; readonly effect: string }[];
     };
     expect(config.model).toBe("keiko-runtime/coding");
-    expect(Object.keys(config.agents)).toEqual(["build", "compaction"]);
-    expect(record(config.agents.build)).toEqual({ system: OPENCODE_GOVERNED_V2_SYSTEM_PROMPT });
-    expect(record(config.agents.compaction)).toEqual({
-      system: OPENCODE_GOVERNED_COMPACTION_PROMPT,
-    });
+    expect(config).not.toHaveProperty("agents");
     const provider = record(config.providers["keiko-runtime"]);
     expect(provider).toMatchObject({
       name: "Keiko Governed Coding Gateway",
@@ -123,7 +125,6 @@ describe("OpenCode launch profile", () => {
     for (const tool of OPENCODE_PINNED_BUILT_IN_TOOLS) {
       expect(finalPermissionAction(config.permissions, tool)).toBe("deny");
     }
-    expect(OPENCODE_GOVERNED_V2_SYSTEM_PROMPT).not.toContain("todowrite");
     for (const tool of OPENCODE_MODEL_VISIBLE_TOOL_NAMES) {
       expect(finalPermissionAction(config.permissions, tool)).toBe("allow");
     }
@@ -134,15 +135,12 @@ describe("OpenCode launch profile", () => {
     expect(finalPermissionAction(config.permissions, "keiko_submit_changeset")).toBe("deny");
   });
 
-  it("distinguishes creation from digest-bound edits of existing files", () => {
-    const profile = buildOpenCodeLaunchProfile({
-      executable: "/managed/opencode",
-      stateRoot: "/private/run",
-      ...CONTEXT_INPUT,
-      randomBytes: (): Buffer => Buffer.alloc(32, 7),
-    });
-    if (!profile.ok) throw new Error("expected fixed managed launch profile");
-    const prompt = record(record(profile.configValue.agents).build).system;
+  it("preserves the V1 compatibility prompt's digest-bound edit and instruction guidance", () => {
+    const config = createFixedOpenCodeConfig(CONTEXT_GEOMETRY);
+    const prompt = record(record(config.agent).build).prompt;
+    expect(record(record(config.agent).compaction).prompt).toBe(
+      OPENCODE_GOVERNED_COMPACTION_PROMPT,
+    );
     expect(prompt).toContain("Read every existing file before you edit it");
     // #3873: the model-visible edit form is exact text replacements; the unified diff is gone.
     expect(prompt).toContain("Submit changeset.edits: exact text replacements");
@@ -192,15 +190,8 @@ describe("OpenCode launch profile", () => {
     expect(prompt).toContain(createHash("sha256").update("", "utf8").digest("hex"));
   });
 
-  it("teaches the launched agent to refine truncated search without inventing pagination", () => {
-    const profile = buildOpenCodeLaunchProfile({
-      executable: "/managed/opencode",
-      stateRoot: "/private/run",
-      ...CONTEXT_INPUT,
-      randomBytes: (): Buffer => Buffer.alloc(32, 7),
-    });
-    if (!profile.ok) throw new Error("expected fixed managed launch profile");
-    const prompt = record(record(profile.configValue.agents).build).system;
+  it("preserves the V1 compatibility prompt's bounded search guidance", () => {
+    const prompt = record(record(createFixedOpenCodeConfig(CONTEXT_GEOMETRY).agent).build).prompt;
     expect(prompt).not.toContain("continuation cursors");
     expect(prompt).toContain("truncationReasons");
     expect(prompt).toContain("includeGlobs");
@@ -209,10 +200,8 @@ describe("OpenCode launch profile", () => {
     expect(prompt).toContain("lexical mode for natural-language concepts");
   });
 
-  it("documents every model-visible tool and the built-in prohibition in the agent prompt", () => {
-    // The V2 child resolves the coding model with its default agent; the governed system
-    // override is what live models actually receive, so every
-    // projected tool must be taught there and the removed built-ins must be named as absent.
+  it("preserves the V1 compatibility prompt's tool vocabulary and built-in prohibition", () => {
+    // V1 compatibility keeps its existing prompt; V2 uses native context and catalog descriptions.
     for (const tool of OPENCODE_MODEL_VISIBLE_TOOL_NAMES) {
       expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(tool);
     }
@@ -421,4 +410,42 @@ describe("OpenCode launch profile", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+it("admits original execute only in the selected Code Mode configuration", () => {
+  const direct = v2Rules(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY));
+  const codeMode = v2Rules(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY, undefined, "code-mode"));
+  expect(finalPermissionAction(direct, "execute")).toBe("deny");
+  expect(finalPermissionAction(codeMode, "execute")).toBe("allow");
+  expect(finalPermissionAction(codeMode, "question")).toBe("allow");
+  expect(finalPermissionAction(codeMode, "keiko_workspace_read")).toBe("allow");
+  for (const action of ["read", "shell", "unknown_tool"]) {
+    expect(finalPermissionAction(codeMode, action)).toBe("deny");
+  }
+  expect(JSON.stringify(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY, undefined, "direct"))).toBe(
+    JSON.stringify(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY)),
+  );
+});
+
+it("rejects unsupported native config profiles rather than silently using direct", () => {
+  expect(() => {
+    Reflect.apply(createFixedOpenCodeV2Config, undefined, [
+      CONTEXT_GEOMETRY,
+      undefined,
+      "unsupported",
+    ]);
+  }).toThrow(TypeError);
+});
+
+it("threads the selected profile into the actual launch configuration", () => {
+  const profile = buildOpenCodeLaunchProfile({
+    executable: "/managed/opencode",
+    stateRoot: "/private/run",
+    contextGeometry: CONTEXT_GEOMETRY,
+    toolProfile: "code-mode",
+    randomBytes: () => Buffer.alloc(32, 7),
+  });
+  if (!profile.ok) throw new Error("expected selected managed profile");
+  expect(finalPermissionAction(v2Rules(profile.configValue), "execute")).toBe("allow");
+  expect(profile.config).toBe(JSON.stringify(profile.configValue));
 });

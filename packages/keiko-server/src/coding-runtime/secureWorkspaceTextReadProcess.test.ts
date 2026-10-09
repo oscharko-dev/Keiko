@@ -7,6 +7,13 @@ import {
   type SecureWorkspaceTextReadProcess,
 } from "./secureWorkspaceTextReadProcess.js";
 
+import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES,
+  SECURE_WORKSPACE_TEXT_SNAPSHOT_MAX_RESPONSE_BYTES,
+  encodeSecureWorkspaceSnapshotRequest,
+  encodeSecureWorkspaceNativeRequest,
+} from "./secureWorkspaceTextReadProtocol.js";
+
 type Listener = (code?: number | null) => void;
 type DataListener = (chunk: Uint8Array) => void;
 
@@ -219,11 +226,64 @@ describe("secure workspace text-read supervised process", () => {
       stdin: Buffer.from("request"),
       signal: new AbortController().signal,
     });
-    const overflowChunk = Buffer.alloc(65_549, 0x41);
+    const overflowChunk = Buffer.alloc(SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES + 1, 0x41);
     overflowFake.emitStdout(overflowChunk);
     await expect(overflowRun).rejects.toThrow("secure-workspace-read-aborted");
     expect(overflowChunk).toEqual(Buffer.alloc(overflowChunk.byteLength));
     expect(overflowFake.kill).toHaveBeenCalledOnce();
     expect(overflowFake.reap).toHaveBeenCalledOnce();
   });
+});
+
+describe("fixed rich helper process ceiling", () => {
+  const request = (): Buffer =>
+    encodeSecureWorkspaceSnapshotRequest({
+      root: "/workspace",
+      relativePath: "src/a.ts",
+      byteCap: 1_048_576,
+    });
+
+  it("never sends a rich request to a process with no pinned rich capability", async () => {
+    const spawn = vi.fn();
+    const port = processPort(spawn);
+    await expect(
+      port.run({ stdin: request(), signal: new AbortController().signal }),
+    ).rejects.toThrow("secure-workspace-read-protocol-invalid");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps richer metadata within an exact 16-byte addition to the response bound", async () => {
+    const fake = fakeChild();
+    const port = createSecureWorkspaceReadProcessPort({
+      executable: "/verified/helper",
+      cwd: "/safe/cwd",
+      spawn: { spawn: () => fake.child },
+      snapshotProtocol: "KSR2/KSS2",
+    });
+    const run = port.run({ stdin: request(), signal: new AbortController().signal });
+    const oversized = Buffer.alloc(SECURE_WORKSPACE_TEXT_SNAPSHOT_MAX_RESPONSE_BYTES + 1, 0x61);
+    fake.emitStdout(oversized);
+    await expect(run).rejects.toThrow("secure-workspace-read-aborted");
+    expect(oversized).toEqual(Buffer.alloc(oversized.byteLength));
+    expect(fake.kill).toHaveBeenCalledOnce();
+    expect(fake.reap).toHaveBeenCalledOnce();
+  });
+});
+
+it("refuses private native IO before spawning an unqualified legacy helper", async () => {
+  const fake = fakeChild();
+  const spawn = vi.fn(() => fake.child);
+  const port = processPort(spawn);
+  await expect(
+    port.run({
+      stdin: encodeSecureWorkspaceNativeRequest({
+        root: "/workspace",
+        relativePath: "large.bin",
+        operation: "read",
+        range: { offset: 10, length: 4 },
+      }),
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrow("secure-workspace-read-protocol-invalid");
+  expect(spawn).not.toHaveBeenCalled();
 });

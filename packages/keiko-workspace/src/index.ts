@@ -19,6 +19,12 @@ export type {
   DiscoveredFile,
   DiscoveryOptions,
   DiscoveryStats,
+  WorkspacePathDiscoveryMode,
+  WorkspacePathDiscoveryRequest,
+  WorkspacePathDiscoveryEntry,
+  WorkspacePathDiscoveryTruncationReason,
+  WorkspacePathDiscoveryStats,
+  WorkspacePathDiscoveryResult,
   FileContent,
   ReadOptions,
   SelectionReason,
@@ -34,6 +40,9 @@ export {
   DEFAULT_READ_OPTIONS,
   SELECTION_REASON_PRIORITY,
   WORKSPACE_LANGUAGES,
+  WORKSPACE_PATH_DISCOVERY_MODES,
+  WORKSPACE_PATH_DISCOVERY_LIMITS,
+  WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS,
 } from "./types.js";
 
 export {
@@ -78,6 +87,13 @@ export {
   readWorkspaceFile,
   type DiscoveryResult,
 } from "./discovery.js";
+
+export { discoverWorkspacePaths } from "./workspacePathDiscovery.js";
+export {
+  executionControlledWorkspaceFs,
+  StructuralExecutionStoppedError,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
 
 export { lexicalRetrievalStrategy, type RankedFile, type RetrievalStrategy } from "./retrieval.js";
 

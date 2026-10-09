@@ -1,3 +1,5 @@
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import {
   createProductionDraftDeliveryService,
   requestDraftDeliveryApproval,
@@ -45,6 +47,7 @@ import {
 import {
   EditorAgentAuthorityRegistry,
   editorAgentAuthorityRegistry,
+  editorAgentAuthorityEnvelopeDigest,
 } from "../editor/agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import {
@@ -73,6 +76,8 @@ import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegist
 import type {
   CodingRuntimeEditOutcomeObserver,
   CodingToolEditOutcome,
+  CodingAcceptedInitializationAuthority,
+  CodingToolMutationGuard,
   CodingToolFacade,
 } from "./codingToolFacadePorts.js";
 import type { OpenCodeToolBridge } from "./opencodeRuntimeComposition.js";
@@ -171,6 +176,7 @@ export interface ProductionRuntimeBackendInput {
   >;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly workspaceIsCurrent: () => boolean;
+  readonly canSpawnRuntime?: CodingRuntimeManagerDeps["canSpawnRuntime"];
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly contextUsage?: CodingRuntimeContextUsageRegistry | undefined;
 }
@@ -191,6 +197,8 @@ export interface QualifiedProductionRuntimeRun {
 }
 
 export interface ProductionRuntimeBackendResolver {
+  /** Captured by the server backend; never selected by task or tool input. */
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly createRun: (input: ProductionRuntimeBackendInput) => QualifiedProductionRuntimeRun;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
@@ -202,6 +210,7 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
+  readonly serverRuntimeChangeset?: ProductionManagedWorktreeToolInput["serverRuntimeChangeset"];
   readonly verificationRunner: ProductionManagedWorktreeToolInput["verificationRunner"];
   readonly commandRunner?: ProductionManagedWorktreeToolInput["commandRunner"] | undefined;
   readonly confirmationConsumer?: CodingRuntimeStartConfirmationConsumer | undefined;
@@ -257,6 +266,7 @@ interface ResearchComposition {
 // What every run of this server shares: the run-bound research grants and the one server-approved
 // skill catalog (#3417). One value, so a run's composition keeps its parameter count in hand.
 interface RunComposition {
+  readonly toolProfile: OpenCodeToolProfile;
   // Filled once by `deps.ts` after the deps graph exists; `undefined` until then, and on a server
   // that composes no semantic index -- which is what makes a lexical-only search the default.
   readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
@@ -325,11 +335,14 @@ export function resolveProductionRuntimeStartConfirmationClaim(
 // server-approved skill catalog (#3417) is what every run composes its tools from, and what the
 // operator's channel reads back. The effort registry (#3873) times model calls on the server clock.
 function sharedRunComposition(input: ProductionCodingRuntimeResolverInput): RunComposition {
+  const toolProfile = input.backend.toolProfile ?? "direct";
+  openCodeVisibleToolNames(toolProfile);
   const research: ResearchComposition = {
     grants: createResearchGrantRegistry(),
     pending: createPendingResearchApprovals(),
   };
   return {
+    toolProfile,
     research,
     skillCatalog: createServerApprovedSkillCatalog(),
     semanticSearch: { current: undefined },
@@ -657,12 +670,7 @@ function launchResolver(
           context,
           minted,
           authority,
-          research: shared.research,
-          skillCatalog: shared.skillCatalog,
-          semanticSearch: shared.semanticSearch,
-          editOutcomes: shared.editOutcomes,
-          contextUsage: shared.contextUsage,
-          runEffort: shared.runEffort,
+          ...shared,
           onRuntimeEvent,
           notifyVerifiedHeadAdvanced,
         });
@@ -876,6 +884,7 @@ function prepareRunToolContext(
 }
 
 interface RunToolSurfaceInput {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly input: ProductionCodingRuntimeResolverInput;
   readonly request: ProductionRuntimeBackendInput["request"];
   readonly context: CodingRuntimeTrustedContext;
@@ -939,6 +948,7 @@ function composeRunToolPorts(
     childModelPortFactory: input.childModelPortFactory,
   });
   const toolFacade = createManagedToolFacade({
+    toolProfile: args.toolProfile,
     input,
     request,
     context,
@@ -1194,24 +1204,38 @@ function createBackendRun({
       parentCorrelationId: request.correlationId,
     }),
     onRuntimeEvent,
-    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) reads as "not
-    // current": the runtime must not keep acting on a workspace the product cannot verify.
-    workspaceIsCurrent: (): boolean => {
-      try {
-        return (
-          input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
-          context.workspaceId
-        );
-      } catch (error) {
-        if (isIdentityProofFailure(error)) return false;
-        throw error;
-      }
-    },
+    canSpawnRuntime: pendingSpawnGuard({
+      input,
+      context,
+      minted,
+      authority,
+      controller,
+      resolveWorkspaceRootAccess,
+    }),
+    workspaceIsCurrent: runtimeWorkspaceIsCurrent(input, context),
     resolveWorkspaceRootAccess,
     contextUsage,
   });
   validateLaunchedBackend(backend, context, request.runId, input.diagnostics);
   return backend;
+}
+
+function runtimeWorkspaceIsCurrent(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+): () => boolean {
+  // IDENTITY_PROOF_FAILED is already logged by the proof owner; an unavailable proof is not current.
+  return (): boolean => {
+    try {
+      return (
+        input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
+        context.workspaceId
+      );
+    } catch (error) {
+      if (isIdentityProofFailure(error)) return false;
+      throw error;
+    }
+  };
 }
 
 // KfQ-confirmed: `validateBackendLaunch` runs AFTER `input.backend.createRun(...)` has already
@@ -1274,6 +1298,7 @@ function recordBackendDisposalFailure(
 
 /** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */
 interface ManagedToolFacadeInput {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly ciRepairBudget?: CiRepairExecutionBudget | undefined;
   readonly ciObservationService?: CiObservationService | undefined;
   readonly draftDeliveryService?: DraftDeliveryService | undefined;
@@ -1355,6 +1380,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     childModel,
   } = options;
   return createProductionManagedWorktreeToolFacade({
+    toolProfile: options.toolProfile,
     authority,
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     authorityRef: minted.authorityRef,
@@ -1398,10 +1424,13 @@ function mutationPortOptions({
   leases,
 }: Pick<ManagedToolFacadeInput, "input" | "leases">): Pick<
   ProductionManagedWorktreeToolInput,
-  "mutationLeaseCoordinator" | "materializedPatches"
+  "mutationLeaseCoordinator" | "materializedPatches" | "serverRuntimeChangeset"
 > {
   return {
     mutationLeaseCoordinator: leases,
+    ...(input.serverRuntimeChangeset === undefined
+      ? {}
+      : { serverRuntimeChangeset: input.serverRuntimeChangeset }),
     ...(input.materializedPatches === undefined
       ? {}
       : { materializedPatches: input.materializedPatches }),
@@ -1411,10 +1440,30 @@ function mutationPortOptions({
 // The run's own observers on its tool facade: the runtime event sink, and the counter of the run's
 // governed tool calls for its effort roll-up (#3873).
 function runObservers(
-  options: Pick<ManagedToolFacadeInput, "onRuntimeEvent" | "onToolSettled">,
-): Pick<ProductionManagedWorktreeToolInput, "onRuntimeEvent" | "onToolSettled"> {
+  options: Pick<
+    ManagedToolFacadeInput,
+    "onRuntimeEvent" | "onToolSettled" | "editOutcomes" | "minted"
+  >,
+): Pick<
+  ProductionManagedWorktreeToolInput,
+  | "onRuntimeEvent"
+  | "onToolSettled"
+  | "verificationRevision"
+  | "verificationBlocked"
+  | "verificationAdmitted"
+> {
   return {
     onRuntimeEvent: options.onRuntimeEvent,
+    verificationRevision: (): number | undefined =>
+      options.editOutcomes.current?.verificationRevision?.(options.minted.authorityRef.runId),
+    verificationBlocked: (reason, targetDigest): void =>
+      options.editOutcomes.current?.verificationBlocked?.(
+        options.minted.authorityRef.runId,
+        reason,
+        targetDigest,
+      ),
+    verificationAdmitted: () =>
+      options.editOutcomes.current?.verificationAdmitted?.(options.minted.authorityRef.runId),
     ...(options.onToolSettled === undefined ? {} : { onToolSettled: options.onToolSettled }),
   };
 }
@@ -1583,6 +1632,42 @@ function researchApprovalRequester(
   };
 }
 
+function pendingSpawnGuard({
+  input,
+  context,
+  minted,
+  authority,
+  controller,
+  resolveWorkspaceRootAccess,
+}: Pick<
+  CreateBackendRunInput,
+  "input" | "context" | "minted" | "authority" | "controller" | "resolveWorkspaceRootAccess"
+>): NonNullable<CodingRuntimeManagerDeps["canSpawnRuntime"]> {
+  return (launch): boolean => {
+    try {
+      return (
+        launch.runId === minted.authorityRef.runId &&
+        launch.treeBindingId === minted.treeBindingId &&
+        launch.authorityEnvelopeDigest === minted.authorityRef.envelopeDigest &&
+        launch.workspaceRoot === context.workspaceRoot &&
+        !controller.signal.aborted &&
+        resolveWorkspaceRootAccess()?.canonicalRoot === context.workspaceRoot &&
+        authority.revalidateCapabilityForPendingSpawn({
+          capability: minted.toolFacadeCapability,
+          adapterKind: adapterKind(context),
+          liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+          workspaceRoot: context.workspaceRoot,
+          deploymentCeiling: context.deploymentCeiling,
+          nowIso: runtimeNow(input).toISOString(),
+        }).ok
+      );
+    } catch (error) {
+      if (error instanceof CodingRuntimeLaunchRejectedError) return false;
+      throw error;
+    }
+  };
+}
+
 function runtimeMutationLive(
   input: ProductionCodingRuntimeResolverInput,
   context: CodingRuntimeTrustedContext,
@@ -1712,4 +1797,130 @@ function launchRequest(
     treeBindingId: minted.treeBindingId,
     authorityEnvelopeDigest: minted.authorityRef.envelopeDigest,
   };
+}
+
+interface AcceptedInitializationProjectionInput {
+  readonly minted: MintedRuntime;
+  readonly authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForPendingSpawn">;
+  readonly context: CodingRuntimeTrustedContext;
+  readonly liveFacts: () => ReturnType<typeof productionRuntimeAuthorityFacts>;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly signal: AbortSignal;
+  readonly now: () => Date;
+}
+
+type AcceptedInitializationProjection = ReturnType<typeof captureAcceptedInitialization>;
+
+/** Inactive server-private projection of one genuine accepted STARTING lease. */
+export function createProductionAcceptedInitializationAuthority(
+  input: AcceptedInitializationProjectionInput,
+): CodingAcceptedInitializationAuthority | undefined {
+  const projection = captureAcceptedInitialization(input);
+  const first = projection.resolution();
+  if (
+    !first.ok ||
+    first.envelope.authority.runId !== projection.runId ||
+    editorAgentAuthorityEnvelopeDigest(first.envelope.authority) !== projection.envelopeDigest ||
+    !first.envelope.authority.actionClasses.includes("workspace-read")
+  )
+    return undefined;
+  const binding = Object.freeze({
+    runId: projection.runId,
+    envelopeDigest: projection.envelopeDigest,
+    workspaceId: first.envelope.binding.workspaceId,
+    workspaceRootDigest: first.envelope.binding.workspaceRootDigest,
+    expiresAt: first.envelope.authority.expiresAt,
+  });
+  const deadlineAtMs = Math.min(
+    Date.parse(binding.expiresAt),
+    Date.parse(first.envelope.issuedAt) + first.envelope.authority.budget.maxRuntimeMs,
+  );
+  let claimed = false;
+  return Object.freeze({
+    signal: projection.signal,
+    resolve: (caller?: AbortSignal): CodingToolMutationGuard | undefined => {
+      if (claimed) return undefined;
+      claimed = true;
+      const check = (): boolean =>
+        currentInitializationProjection(projection, binding, deadlineAtMs, caller);
+      return check()
+        ? Object.freeze({
+            binding,
+            check,
+            executionBudget: Object.freeze({
+              deadlineAtMs,
+              nowMs: (): number => projection.now().getTime(),
+            }),
+          })
+        : undefined;
+    },
+  });
+}
+
+function captureAcceptedInitialization(input: AcceptedInitializationProjectionInput): {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+  readonly workspaceRoot: string;
+  readonly signal: AbortSignal;
+  readonly now: () => Date;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly resolution: () => ReturnType<
+    CodingRuntimeAuthorityService["revalidateCapabilityForPendingSpawn"]
+  >;
+} {
+  const { authority, liveFacts, resolveWorkspaceRootAccess, signal, now, minted, context } = input;
+  const revalidate = authority.revalidateCapabilityForPendingSpawn.bind(authority);
+  const capability = minted.toolFacadeCapability;
+  const reference = minted.authorityRef;
+  const workspaceRoot = context.workspaceRoot;
+  const deploymentCeiling = context.deploymentCeiling;
+  const kind = adapterKind(context);
+  return Object.freeze({
+    runId: reference.runId,
+    envelopeDigest: reference.envelopeDigest,
+    workspaceRoot,
+    signal,
+    now,
+    resolveWorkspaceRootAccess,
+    resolution: () =>
+      revalidate({
+        capability,
+        adapterKind: kind,
+        liveFacts: liveFacts(),
+        workspaceRoot,
+        deploymentCeiling,
+        nowIso: now().toISOString(),
+      }),
+  });
+}
+
+function currentInitializationProjection(
+  projection: AcceptedInitializationProjection,
+  binding: NonNullable<CodingToolMutationGuard["binding"]>,
+  deadlineAtMs: number,
+  caller?: AbortSignal,
+): boolean {
+  if (!initializationRootCurrent(projection, deadlineAtMs, caller)) return false;
+  const checked = projection.resolution();
+  return (
+    checked.ok &&
+    checked.envelope.authority.runId === binding.runId &&
+    editorAgentAuthorityEnvelopeDigest(checked.envelope.authority) === binding.envelopeDigest &&
+    checked.envelope.binding.workspaceId === binding.workspaceId &&
+    checked.envelope.binding.workspaceRootDigest === binding.workspaceRootDigest &&
+    checked.envelope.authority.actionClasses.includes("workspace-read")
+  );
+}
+
+function initializationRootCurrent(
+  projection: AcceptedInitializationProjection,
+  deadlineAtMs: number,
+  caller?: AbortSignal,
+): boolean {
+  return (
+    !projection.signal.aborted &&
+    caller?.aborted !== true &&
+    projection.now().getTime() < deadlineAtMs &&
+    projection.resolveWorkspaceRootAccess()?.canonicalRoot === projection.workspaceRoot
+  );
 }

@@ -14,6 +14,8 @@ import {
   type CodingWorkbenchRuntimeEventKind,
   type CodingWorkbenchRuntimeSource,
   type CodingWorkbenchValidationResult,
+  type CodingWorkbenchVerificationSummary,
+  type CodingWorkbenchNativeRetry,
 } from "./coding-workbench.js";
 import { validateCodingWorkbenchPermissionRequest } from "./coding-workbench-validation.js";
 import {
@@ -379,6 +381,10 @@ export type CodingWorkbenchRuntimeSseEvent =
        * other frame.
        */
       readonly contentTrust?: CodingWorkbenchContentTrust | undefined;
+      /** Optional measured check metadata on verification-summarized events only. */
+      readonly verificationSummary?: CodingWorkbenchVerificationSummary | undefined;
+      /** Required only on native-retry-changed; null reports the native producer's clear. */
+      readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
     };
 
 function validateTaskIntent(value: unknown, errors: string[]): void {

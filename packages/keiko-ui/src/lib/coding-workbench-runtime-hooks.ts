@@ -1,5 +1,6 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
-import { reportClientDiagnostic } from "./client-diagnostics";
+import { newClientCorrelationId } from "./bff-correlation";
+import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
@@ -41,6 +42,10 @@ import {
 } from "./coding-workbench-live-state";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
+type SourceRefresh = (
+  catalogAlreadyCurrent?: boolean,
+  parentCorrelationId?: string,
+) => Promise<void>;
 
 interface RefreshSequences {
   readonly profile: RefObject<number>;
@@ -52,7 +57,10 @@ interface RefreshSequences {
 
 export interface RuntimeResources {
   readonly refreshProfile: () => Promise<void>;
-  readonly refreshSource: () => Promise<void>;
+  readonly refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+  ) => Promise<void>;
   readonly prepareCodexSetup: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
@@ -128,21 +136,63 @@ function sourceVerificationPending(
   return profile.status === "unavailable" && profile.reason === "model-verification-pending";
 }
 
+function settleGatewayProfileRefresh(
+  correlationId: string,
+  parentCorrelationId: string | undefined,
+  startedAt: number,
+  outcome: "adopted" | "unavailable" | "failed" | "superseded",
+  catalogReread: "requested" | "skipped" | "none",
+): void {
+  reportGatewayProfileRefresh(correlationId, parentCorrelationId, {
+    durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+    evidence: { outcome, catalogReread },
+  });
+}
+
 async function refreshManagedGatewaySource(
   sequenceRef: RefObject<number>,
   sequence: number,
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
+  catalogAlreadyCurrent: boolean,
+  parentCorrelationId?: string,
 ): Promise<void> {
+  const correlationId = newClientCorrelationId();
+  const startedAt = performance.now();
+  reportGatewayProfileRefresh(correlationId, parentCorrelationId);
   dispatch({ kind: "profile-empty" });
-  const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
-  // The server verifies on this read what the Workbench needs (an expired tool-call proof, an
-  // unproven context window) and stores it, so the model catalog the picker filters may have
-  // changed underneath: a catalog fetched before the read would show an empty picker.
-  requestGatewayModelCatalogRefresh();
-  if (sequenceRef.current !== sequence) return;
-  dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
-  if (sourceVerificationPending(profile)) scheduleReread(sequence);
+  try {
+    const profile = await fetchCodingWorkbenchSidecarGatewayProfile(correlationId);
+    if (sequenceRef.current !== sequence) {
+      settleGatewayProfileRefresh(
+        correlationId,
+        parentCorrelationId,
+        startedAt,
+        "superseded",
+        "none",
+      );
+      return;
+    }
+    if (!catalogAlreadyCurrent) requestGatewayModelCatalogRefresh();
+    dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
+    if (sourceVerificationPending(profile)) scheduleReread(sequence);
+    settleGatewayProfileRefresh(
+      correlationId,
+      parentCorrelationId,
+      startedAt,
+      profile.status === "available" ? "adopted" : "unavailable",
+      catalogAlreadyCurrent ? "skipped" : "requested",
+    );
+  } catch (error) {
+    settleGatewayProfileRefresh(
+      correlationId,
+      parentCorrelationId,
+      startedAt,
+      sequenceRef.current === sequence ? "failed" : "superseded",
+      "none",
+    );
+    throw error;
+  }
 }
 
 // The re-read timer belongs to the mounted Workbench: a newer refresh replaces it, and unmounting
@@ -151,7 +201,7 @@ async function refreshManagedGatewaySource(
 // hook nor schedules a re-read when it lands.
 function useVerificationReread(
   sequenceRef: RefObject<number>,
-  refreshRef: RefObject<() => Promise<void>>,
+  refreshRef: RefObject<SourceRefresh>,
 ): (sequence: number) => void {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(
@@ -166,54 +216,61 @@ function useVerificationReread(
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         timerRef.current = undefined;
-        if (sequenceRef.current === sequence) void refreshRef.current();
+        if (sequenceRef.current === sequence) void refreshRef.current(true);
       }, CODING_WORKBENCH_VERIFYING_REFRESH_MS);
     },
     [refreshRef, sequenceRef],
   );
 }
 
+function failSourceRefresh(
+  preference: CodingWorkbenchRuntimeState["runtimePreference"],
+  error: unknown,
+  dispatch: RuntimeDispatch,
+): void {
+  const mapped = codingWorkbenchRuntimeApiError(error);
+  const status = codingWorkbenchFailureStatus(mapped);
+  dispatch({ kind: "resource-failed", resource: "source", status, error: mapped });
+  if (preference === "codex-subscription")
+    dispatch({ kind: "resource-failed", resource: "profile", status, error: mapped });
+}
+
 function useSourceRefresh(
   sequenceRef: RefObject<number>,
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
-): () => Promise<void> {
-  const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+): SourceRefresh {
+  const refreshRef = useRef<SourceRefresh>(() => Promise.resolve());
   const scheduleReread = useVerificationReread(sequenceRef, refreshRef);
-  const refresh = useCallback(async (): Promise<void> => {
-    const sequence = (sequenceRef.current += 1);
-    const preference = stateRef.current.runtimePreference;
-    dispatch({ kind: "resource-loading", resource: "source" });
-    try {
-      if (preference === "managed-gateway") {
-        await refreshManagedGatewaySource(sequenceRef, sequence, dispatch, scheduleReread);
-        return;
+  refreshRef.current = useCallback(
+    async (catalogAlreadyCurrent = false, parentCorrelationId?: string): Promise<void> => {
+      const sequence = (sequenceRef.current += 1);
+      const preference = stateRef.current.runtimePreference;
+      dispatch({ kind: "resource-loading", resource: "source" });
+      try {
+        if (preference === "managed-gateway") {
+          await refreshManagedGatewaySource(
+            sequenceRef,
+            sequence,
+            dispatch,
+            scheduleReread,
+            catalogAlreadyCurrent,
+            parentCorrelationId,
+          );
+          return;
+        }
+        dispatch({ kind: "resource-loading", resource: "profile" });
+        const profile = await fetchCodingWorkbenchCodexSubscriptionProfile();
+        if (sequenceRef.current !== sequence) return;
+        setCodexSubscriptionSource(profile, dispatch);
+      } catch (error) {
+        if (sequenceRef.current !== sequence) return;
+        failSourceRefresh(preference, error, dispatch);
       }
-      dispatch({ kind: "resource-loading", resource: "profile" });
-      const profile = await fetchCodingWorkbenchCodexSubscriptionProfile();
-      if (sequenceRef.current !== sequence) return;
-      setCodexSubscriptionSource(profile, dispatch);
-    } catch (error) {
-      if (sequenceRef.current !== sequence) return;
-      const mapped = codingWorkbenchRuntimeApiError(error);
-      dispatch({
-        kind: "resource-failed",
-        resource: "source",
-        status: codingWorkbenchFailureStatus(mapped),
-        error: mapped,
-      });
-      if (preference === "codex-subscription") {
-        dispatch({
-          kind: "resource-failed",
-          resource: "profile",
-          status: codingWorkbenchFailureStatus(mapped),
-          error: mapped,
-        });
-      }
-    }
-  }, [dispatch, scheduleReread, sequenceRef, stateRef]);
-  refreshRef.current = refresh;
-  return refresh;
+    },
+    [dispatch, scheduleReread, sequenceRef, stateRef],
+  );
+  return refreshRef.current;
 }
 
 function setCodexSubscriptionSource(

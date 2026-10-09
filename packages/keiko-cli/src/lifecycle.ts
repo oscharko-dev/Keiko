@@ -11,6 +11,7 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   resolveWindowsPowerShellExecutable,
   securityErrorKind,
+  bindSecurityLogCorrelation,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import {
@@ -31,10 +32,12 @@ import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contra
 import {
   absoluteExistingPath,
   resolvePreferredInstallLayout,
+  installLayoutOverrideEvidence,
   writeInstallLayoutOverrideEvidence,
 } from "./install-layout.js";
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
+import { emitBrowserHandoff } from "./lifecycle-browser-activity.js";
 import type { CliIo } from "./runner.js";
 import {
   createCliSecurityLogSink,
@@ -49,7 +52,10 @@ import {
   removePidFileIfMatches,
   resolveContainedStateDir,
   writeExclusivePidFile,
+  writeBrowserOpenRequest,
+  type PidRecord,
 } from "./state-paths.js";
+import { liveProcessHasLaunchId } from "./ui-process-identity.js";
 import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
@@ -58,6 +64,7 @@ type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 type HealthProbeFn = (url: string) => Promise<HealthProbeResult>;
 type SleepFn = (ms: number) => Promise<void>;
 type ProcessKiller = (pid: number, signal?: NodeJS.Signals | 0) => void;
+type BrowserOpener = (url: string) => void | Promise<void>;
 type PortAvailabilityFn = (host: string, port: number) => Promise<boolean>;
 type LifecycleFlag = "--port" | "--host" | "--state-dir" | "--start-timeout" | "--stop-timeout";
 type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
@@ -116,12 +123,13 @@ function launchIdForStart(env: EnvSource, io: CliIo): string | undefined {
 }
 
 const USAGE = `Usage:
-  keiko start [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open]
+  keiko start [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open|--no-open]
   keiko stop [--state-dir PATH]
-  keiko restart [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open]
+  keiko restart [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open|--no-open]
   keiko status [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH]
 
 Manages the local Keiko UI process. Runtime state is written to .keiko/ by default.
+Start and restart open an authenticated browser session by default; --no-open opts out.
 `;
 
 interface LifecycleOptions {
@@ -151,7 +159,7 @@ export interface LifecycleCliDeps {
   readonly isProcessAlive?: ((pid: number) => boolean) | undefined;
   readonly killProcess?: ProcessKiller | undefined;
   readonly isPortAvailable?: PortAvailabilityFn | undefined;
-  readonly openExternal?: ((url: string) => void) | undefined;
+  readonly openExternal?: BrowserOpener | undefined;
   readonly platform?: (() => NodeJS.Platform) | undefined;
   readonly killWindowsTree?: WindowsTreeKill | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -161,13 +169,14 @@ export interface LifecycleCliDeps {
 }
 
 interface LifecycleRuntimeDeps {
+  readonly correlationId: string;
   readonly spawnFn: SpawnFn;
   readonly healthProbe: HealthProbeFn;
   readonly sleep: SleepFn;
   readonly isProcessAlive: (pid: number) => boolean;
   readonly killProcess: ProcessKiller;
   readonly isPortAvailable: PortAvailabilityFn;
-  readonly openExternal: (url: string) => void;
+  readonly openExternal: BrowserOpener;
   readonly platform: NodeJS.Platform;
   readonly killWindowsTree?: WindowsTreeKill | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -221,8 +230,8 @@ function collectLifecycleOptions(args: readonly string[]): RawLifecycleOptions |
     if (arg === "--help" || arg === "-h") {
       return "help";
     }
-    if (arg === "--open") {
-      raw.openBrowser = true;
+    if (arg === "--open" || arg === "--no-open") {
+      raw.openBrowser = arg === "--open";
       continue;
     }
     if (!isLifecycleFlag(arg)) return null;
@@ -259,7 +268,7 @@ function buildLifecycleOptions(
     stateDir: resolveContainedStateDir(cwd, env, home, raw.stateDirRaw),
     startTimeoutMs,
     stopTimeoutMs,
-    openBrowser: raw.openBrowser === true,
+    openBrowser: raw.openBrowser !== false,
   };
 }
 
@@ -455,7 +464,7 @@ function runningPid(
 
 // #2478 (ADR-0141 W1.5): `keiko start` is the trusted launcher of the UI process. It provisions a
 // process-scoped pairing secret to the spawned BFF as an inherited environment value only — never
-// a disk file, never a URL — and, with `--open`, hands the browser one single-use, freshness-bounded
+// a disk file, never a URL — and, unless `--no-open`, hands the browser one single-use, freshness-bounded
 // pairing attestation in the boot URL fragment. An operator-provisioned secret in the caller's
 // environment is respected so external supervision setups keep working.
 function resolveLauncherPairingSecret(env: EnvSource): string {
@@ -540,29 +549,115 @@ export function resolveExternalOpener(
   return { command: "xdg-open", args: [url] };
 }
 
-function defaultOpenExternal(url: string, platform: NodeJS.Platform, env: EnvSource): void {
+const BROWSER_OPENER_ENVIRONMENT = [
+  "PATH",
+  "HOME",
+  "USERPROFILE",
+  "SystemRoot",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "LOCALAPPDATA",
+  "APPDATA",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "XDG_RUNTIME_DIR",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "XDG_DATA_DIRS",
+  "XDG_DATA_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_CONFIG_DIRS",
+  "XDG_CURRENT_DESKTOP",
+  "DESKTOP_SESSION",
+  "KDE_FULL_SESSION",
+  "BROWSER",
+  "LANG",
+  "LC_ALL",
+] as const;
+
+function waitForExternalOpener(child: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error): void => {
+      clearTimeout(timer);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onError = (error: Error): void => {
+      finish(error);
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      finish(code === 0 && signal === null ? undefined : new Error("Browser opener failed"));
+    };
+    const timer = setTimeout(() => {
+      finish(new Error("Browser opener result timed out"));
+    }, 5_000);
+    child.once("error", onError);
+    child.once("close", onClose);
+    child.once("spawn", () => {
+      child.unref();
+    });
+  });
+}
+
+export async function defaultOpenExternal(
+  url: string,
+  platform: NodeJS.Platform,
+  env: EnvSource,
+): Promise<void> {
+  const { buildSandboxEnv } = await import("@oscharko-dev/keiko-tools");
   const opener = resolveExternalOpener(url, platform, env);
   const child = spawn(opener.command, [...opener.args], {
     detached: true,
     stdio: "ignore",
+    env: buildSandboxEnv(env, BROWSER_OPENER_ENVIRONMENT),
   });
-  child.unref();
+  await waitForExternalOpener(child);
 }
 
 async function maybeOpenBrowser(
   options: LifecycleOptions,
   io: CliIo,
-  openExternal: (url: string) => void,
+  openExternal: BrowserOpener,
   securityLogSink: SecurityLogSink | undefined,
   pairingSecret?: string,
 ): Promise<void> {
-  if (!options.openBrowser) return;
-  const baseUrl = lifecycleBaseUrl(options);
+  if (!options.openBrowser) {
+    emitBrowserHandoff(securityLogSink, { outcome: "headless", attestationProvided: false });
+    return;
+  }
+  await performBrowserHandoff(
+    lifecycleBaseUrl(options),
+    io,
+    openExternal,
+    securityLogSink,
+    pairingSecret,
+  );
+}
+
+export async function performBrowserHandoff(
+  baseUrl: string,
+  io: CliIo,
+  openExternal: BrowserOpener,
+  securityLogSink: SecurityLogSink | undefined,
+  pairingSecret?: string,
+): Promise<void> {
   try {
     const target =
       pairingSecret === undefined ? baseUrl : await pairedOpenUrl(baseUrl, pairingSecret);
-    openExternal(target);
+    await openExternal(target);
+    emitBrowserHandoff(securityLogSink, {
+      outcome: "requested",
+      attestationProvided: pairingSecret !== undefined,
+    });
   } catch (error) {
+    emitBrowserHandoff(securityLogSink, {
+      outcome: "failed",
+      attestationProvided: pairingSecret !== undefined,
+      error,
+    });
     emitCliWindowsSystemFailure(error, securityLogSink, "start-open-browser");
     io.err(`keiko start: failed to open ${baseUrl} in the default browser.\n`);
   }
@@ -572,7 +667,7 @@ async function reportHealthyStart(
   options: LifecycleOptions,
   io: CliIo,
   pid: number,
-  openExternal: (url: string) => void,
+  openExternal: BrowserOpener,
   securityLogSink: SecurityLogSink | undefined,
   pairingSecret: string,
 ): Promise<number> {
@@ -669,36 +764,69 @@ async function ensureStartPortAvailable(
   return false;
 }
 
-async function keepAlreadyRunningUi(
+function keepAlreadyRunningUi(
   options: LifecycleOptions,
   io: CliIo,
   deps: LifecycleRuntimeDeps,
-  pid: number,
-): Promise<void> {
-  io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
-  // The pairing secret of an already-running BFF is process-private to that launch, so this
-  // window opens unpaired (fail closed) — question content needs a fresh paired launch.
-  await maybeOpenBrowser(options, io, deps.openExternal, deps.securityLogSink);
-  if (options.openBrowser) {
-    io.out(
-      "Note: this window is not paired for coding question content; run `keiko restart --open` to pair a fresh app session.\n",
-    );
+  record: PidRecord,
+): boolean {
+  io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(record.pid)}).\n`);
+  if (!options.openBrowser) {
+    emitBrowserHandoff(deps.securityLogSink, { outcome: "headless", attestationProvided: false });
+    return true;
   }
+  const verify = deps.verifyLaunchIdentity ?? liveProcessHasLaunchId;
+  if (record.launchId === undefined || !verify(record.pid, record.launchId)) {
+    io.out("Run `keiko restart` to open an authenticated browser for this older launch.\n");
+    emitBrowserHandoff(deps.securityLogSink, {
+      outcome: "restart-required",
+      attestationProvided: false,
+      reason: record.launchId === undefined ? "launch-id-missing" : "identity-unverified",
+    });
+    return true;
+  }
+  if (record.browserOpenSupported !== true) {
+    io.out("Run `keiko restart` to open an authenticated browser for this older launch.\n");
+    emitBrowserHandoff(deps.securityLogSink, {
+      outcome: "restart-required",
+      attestationProvided: false,
+      reason: "channel-unsupported",
+    });
+    return true;
+  }
+  try {
+    writeBrowserOpenRequest(
+      options.stateDir,
+      record.pid,
+      record.launchId,
+      deps.correlationId,
+      options.host === "localhost" ? "localhost" : "127.0.0.1",
+    );
+  } catch (error) {
+    emitBrowserHandoff(deps.securityLogSink, {
+      outcome: "failed",
+      attestationProvided: false,
+      error,
+    });
+    io.err("keiko start: failed to request a browser from the running UI.\n");
+    return false;
+  }
+  emitBrowserHandoff(deps.securityLogSink, { outcome: "delegated", attestationProvided: false });
+  return true;
 }
 
 async function handleStaleRunning(
   options: LifecycleOptions,
   io: CliIo,
   deps: LifecycleRuntimeDeps,
-  running: number,
+  running: PidRecord,
 ): Promise<number | "start"> {
   const health = await deps.healthProbe(healthUrl(options));
   if (health.version === SDK_VERSION) {
-    await keepAlreadyRunningUi(options, io, deps, running);
-    return 0;
+    return keepAlreadyRunningUi(options, io, deps, running) ? 0 : 1;
   }
   io.out(
-    `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`,
+    `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running.pid)}.\n`,
   );
   const stopped = await cmdStop(options, io, deps);
   if (stopped !== 0) return stopped;
@@ -745,7 +873,7 @@ function publishPidOrKillChild(
   launchId: string,
 ): boolean {
   try {
-    writeExclusivePidFile(pidFile(options), pid, launchId);
+    writeExclusivePidFile(pidFile(options), pid, launchId, true);
     return true;
   } catch (error) {
     deps.killProcess(pid, "SIGKILL");
@@ -772,7 +900,7 @@ async function cmdStart(
   deps: LifecycleRuntimeDeps,
   cwd: string,
 ): Promise<number> {
-  const running = runningPid(options, deps.isProcessAlive);
+  const running = runningPidRecord(options, deps.isProcessAlive);
   if (running !== undefined) {
     const nextAction = await handleStaleRunning(options, io, deps, running);
     if (nextAction !== "start") return nextAction;
@@ -949,10 +1077,12 @@ function runtimeDeps(
   deps: LifecycleCliDeps,
   env: EnvSource,
   securityLogSink: SecurityLogSink | undefined,
+  correlationId: string,
 ): LifecycleRuntimeDeps {
   const fetchImpl = deps.fetchImpl;
   const platform = deps.platform?.() ?? process.platform;
   return {
+    correlationId,
     spawnFn: deps.spawnFn ?? spawn,
     healthProbe:
       fetchImpl === undefined
@@ -966,9 +1096,7 @@ function runtimeDeps(
     isPortAvailable: deps.isPortAvailable ?? defaultIsPortAvailable,
     openExternal:
       deps.openExternal ??
-      ((url: string): void => {
-        defaultOpenExternal(url, platform, env);
-      }),
+      ((url: string): Promise<void> => defaultOpenExternal(url, platform, env)),
     platform,
     killWindowsTree: deps.killWindowsTree,
     processEnv: deps.processEnv,
@@ -1004,6 +1132,10 @@ function parseWithStateDirGuard(
   return { kind: "options", value: parsed };
 }
 
+function lifecycleInvocationCorrelationId(env: EnvSource): string {
+  return installLayoutOverrideEvidence(env)?.correlationId ?? randomUUID();
+}
+
 export async function runLifecycleCli(
   command: LifecycleCommand,
   args: readonly string[],
@@ -1028,10 +1160,12 @@ export async function runLifecycleCli(
   }
 
   const options = outcome.value;
+  const correlationId = lifecycleInvocationCorrelationId(env);
   writeInstallLayoutOverrideEvidence(deps.securityLogSinkFactory?.(options.stateDir), env);
   const securityLogSink =
-    deps.securityLogSink ?? createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory);
-  const fullDeps = runtimeDeps(deps, env, securityLogSink);
+    bindSecurityLogCorrelation(deps.securityLogSink, correlationId) ??
+    createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory, correlationId);
+  const fullDeps = runtimeDeps(deps, env, securityLogSink, correlationId);
 
   const handlers: Readonly<Record<LifecycleCommand, () => Promise<number>>> = {
     start: () => cmdStart(options, io, env, fullDeps, cwd),

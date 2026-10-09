@@ -543,20 +543,50 @@ export type { FetchConfigResponse };
 // Route 3 — models
 // ---------------------------------------------------------------------------
 
-let modelsRequest: Promise<{ models: ModelCapability[] }> | undefined;
+interface InflightModelsRequest {
+  readonly promise: Promise<{ models: ModelCapability[] }>;
+  readonly correlationId: string | undefined;
+}
+
+let modelsRequest: InflightModelsRequest | undefined;
 
 export function resetModelRequestCache(): void {
   modelsRequest = undefined;
+  modelsRefreshRequest = undefined;
 }
 
-export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
-  modelsRequest ??= fetchJson<{ models: ModelCapability[] }>("/api/models").catch(
-    (error: unknown) => {
-      modelsRequest = undefined;
-      throw error;
-    },
+let modelsRefreshRequest: InflightModelsRequest | undefined;
+
+export async function fetchModels(
+  correlationId?: string,
+  refreshCatalog = false,
+): Promise<{ models: ModelCapability[] }> {
+  const candidates = refreshCatalog
+    ? [modelsRefreshRequest]
+    : [modelsRefreshRequest, modelsRequest];
+  // A shared request can name only the correlation actually sent to the BFF.
+  const active = candidates.find(
+    (request) => request !== undefined && request.correlationId === correlationId,
   );
-  return modelsRequest;
+  if (active === undefined) {
+    const pending = fetchJson<{ models: ModelCapability[] }>(
+      refreshCatalog ? "/api/models?refresh=1" : "/api/models",
+      {
+        cache: "no-store",
+        ...(refreshCatalog ? { headers: { "X-Keiko-CSRF": "1" } } : {}),
+      },
+      undefined,
+      correlationId,
+    ).finally(() => {
+      if (modelsRequest?.promise === pending) modelsRequest = undefined;
+      if (modelsRefreshRequest?.promise === pending) modelsRefreshRequest = undefined;
+    });
+    const request = { promise: pending, correlationId };
+    if (refreshCatalog) modelsRefreshRequest = request;
+    else modelsRequest = request;
+    return pending;
+  }
+  return active.promise;
 }
 
 // ---------------------------------------------------------------------------

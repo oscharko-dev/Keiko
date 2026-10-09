@@ -1,3 +1,4 @@
+import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
@@ -70,9 +71,16 @@ import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type {
   CodingToolEditOutcome,
+  CodingAcceptedInitializationAuthority,
+  CodingAcceptedInitializationFacet,
+  CodingAcceptedInitializationReadPort,
+  CodingAcceptedInitializationRequest,
+  CodingAcceptedInitializationResult,
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
+  CodingVerificationBlockedReason,
+  CodingVerificationExecutedObserver,
 } from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
@@ -525,6 +533,10 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
 }
 
 export interface ProductionManagedWorktreeToolInput {
+  /** Inactive server-owned initial acquisition projection; absent in ordinary compositions. */
+  readonly initializationAuthority?: CodingAcceptedInitializationAuthority | undefined;
+  /** Server-captured catalog projection; legacy compositions retain direct tools. */
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly ciObservationService?: CiObservationService;
   readonly draftDeliveryService?: DraftDeliveryService;
@@ -552,6 +564,7 @@ export interface ProductionManagedWorktreeToolInput {
   readonly liveFacts: () => CodingWorkbenchRuntimeAuthorityFacts;
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly editorAgentClient: CodingToolReadEditPortDeps["editorAgentClient"];
+  readonly serverRuntimeChangeset?: CodingToolReadEditPortDeps["serverRuntimeChangeset"];
   readonly mutationLeaseCoordinator?: CodingToolReadEditPortDeps["mutationLeaseCoordinator"];
   /** The server-wide record of the diff text the edit port renders itself (PR #3876 review). */
   readonly materializedPatches?: CodingToolReadEditPortDeps["materializedPatches"];
@@ -610,6 +623,12 @@ export interface ProductionManagedWorktreeToolInput {
    * it, so the run's orchestration can bound consecutive refusals. Absent, nothing is reported.
    */
   readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
+  /** Server-owned edit revision captured before a verifier executes or waits for script trust. */
+  readonly verificationRevision?: (() => number | undefined) | undefined;
+  readonly verificationBlocked?:
+    ((reason: CodingVerificationBlockedReason, targetDigest?: string) => void) | undefined;
+  readonly verificationAdmitted?:
+    (() => CodingVerificationExecutedObserver | undefined) | undefined;
 }
 
 // #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
@@ -753,11 +772,14 @@ export function createProductionManagedWorktreeToolFacade(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolFacade {
   const readEdit = createReadEditPorts(input);
-  return createRuntimeCodingToolFacade(
+  const facade = createRuntimeCodingToolFacade(
     input.authority,
     managedWorktreeAuthorityContext(input),
     governedPorts(input, readEdit),
     {
+      toolProfile: input.toolProfile,
+      nativeTextRead: readEdit.nativeTextRead,
+      nativeFileIO: readEdit.nativeFileIO,
       invocationRegistry: input.invocationRegistry,
       ...(input.ciRepairBudget === undefined ? {} : { ciRepairBudget: input.ciRepairBudget }),
       reserveEditDelegation: true,
@@ -777,6 +799,8 @@ export function createProductionManagedWorktreeToolFacade(
         : { observeEditOutcome: input.observeEditOutcome }),
     },
   );
+  const acceptedInitialization = acceptedInitializationFacet(input, readEdit);
+  return acceptedInitialization === undefined ? facade : { ...facade, acceptedInitialization };
 }
 
 function managedWorktreeAuthorityContext(
@@ -818,6 +842,9 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
     activityLog: input.activityLog,
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     editorAgentClient: input.editorAgentClient,
+    ...(input.serverRuntimeChangeset === undefined
+      ? {}
+      : { serverRuntimeChangeset: input.serverRuntimeChangeset }),
     resolveEditorActionContext: () => ({
       sessionId: `runtime-${input.authorityRef.runId}`,
       authorityRef: input.authorityRef,
@@ -1280,6 +1307,7 @@ function buildCommandRunner(
         requestId: request.actionId,
         signal,
         timeoutMs: guard.resolveParentAuthority?.()?.commandPolicy.maxCommandTimeoutMs,
+        beforeSpawn: (): boolean => guard.check() && live(input),
       });
       if (result.failureReason !== "none") {
         return { status: "failed", reasonCode: "command-execution-failed" };
@@ -1668,18 +1696,14 @@ function buildVerificationRunner(
   let verificationSequence = 0;
   return {
     execute: async (request, signal, guard): Promise<VerificationPortResult> => {
-      const entryRefusal = verificationLivenessRefusal(input, guard, signal);
-      if (entryRefusal !== undefined) {
-        return verificationPortRefusal(input, "verification-authority-revoked", entryRefusal);
-      }
-      const kind = verificationKind(request.verifierId);
-      if (kind === undefined) {
-        return verificationPortRefusal(input, "verification-verifier-unsupported");
-      }
+      const kind = verificationRunnerEntry(input, request, guard, signal);
+      if (typeof kind !== "string") return kind;
       // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
       // catalog's ceilings both run from admission, so the wait below must be measured from here
       // and not from the moment the first attempt failed (owner review, PR #3452).
       const enteredAtMs = Date.now();
+      const editRevision = input.verificationRevision?.();
+      const executed = input.verificationAdmitted?.();
       let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
       if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
         if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
@@ -1687,16 +1711,94 @@ function buildVerificationRunner(
         }
       }
       if (attempt.outcome === "refused") return attempt.result;
-      if (attempt.outcome === "threw") return verificationRefused(input, attempt.error);
+      if (attempt.outcome === "threw") {
+        recordVerificationBlocker(input, request, attempt.error);
+        return verificationRefused(input, attempt.error);
+      }
       const completionRefusal = verificationLivenessRefusal(input, guard, signal);
       if (completionRefusal !== undefined) {
         return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
       }
+      observeVerificationExecution(input, request, attempt.report, executed);
       verificationSequence += 1;
-      publishVerification(input, verificationSequence, attempt.report, request);
+      publishVerification(
+        input,
+        verificationSequence,
+        attempt.report,
+        {
+          ...request,
+          verifierId: kind,
+        },
+        editRevision,
+      );
       return verificationOutcome(input, attempt, guard, signal);
     },
   };
+}
+
+function verificationRunnerEntry(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): VerificationKind | VerificationPortResult {
+  const refusal = verificationLivenessRefusal(input, guard, signal);
+  if (refusal !== undefined) {
+    return verificationPortRefusal(input, "verification-authority-revoked", refusal);
+  }
+  const kind = verificationKind(request.verifierId);
+  if (kind !== undefined) return kind;
+  input.verificationBlocked?.(
+    "verification-verifier-unsupported",
+    codingVerificationTargetDigest(request.verifierId, request.targetPath),
+  );
+  return verificationPortRefusal(input, "verification-verifier-unsupported");
+}
+
+function recordVerificationBlocker(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  error: unknown,
+): void {
+  if (!(error instanceof VerificationRunnerError)) return;
+  switch (error.code) {
+    case "PROJECT_NOT_FOUND":
+    case "WORKSPACE_TRUST_REQUIRED":
+    case "NO_RUNNABLE_STEPS":
+    case "VERIFICATION_RUNNER_UNAVAILABLE":
+      input.verificationBlocked?.(
+        error.code,
+        codingVerificationTargetDigest(request.verifierId, request.targetPath),
+      );
+  }
+}
+
+function observeVerificationExecution(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  report: VerificationReport,
+  executed: CodingVerificationExecutedObserver | undefined,
+): void {
+  const target = codingVerificationTargetDigest(request.verifierId, request.targetPath);
+  const executedRedStatuses: readonly string[] = EXECUTED_RED_STATUSES;
+  if (
+    report.results.some(
+      (result) => result.status === "passed" || executedRedStatuses.includes(result.status),
+    )
+  ) {
+    executed?.(target);
+  } else {
+    input.verificationBlocked?.("VERIFICATION_NOT_RUN", target);
+  }
 }
 
 type VerificationAttempt =
@@ -2283,6 +2385,7 @@ function verificationPortRefusal(
   reasonCode: "verification-authority-revoked" | "verification-verifier-unsupported",
   condition?: VerificationLivenessRefusal,
 ): VerificationPortResult {
+  if (reasonCode === "verification-authority-revoked") input.verificationBlocked?.(reasonCode);
   emitVerificationDiagnostic(input, reasonCode, "verification-refused", undefined, condition);
   return { status: "failed", reasonCode };
 }
@@ -2383,7 +2486,8 @@ function publishVerification(
   request: Extract<
     import("./codingToolIpc.js").CodingToolActionRequest,
     { readonly action: "verification" }
-  >,
+  > & { readonly verifierId: VerificationKind },
+  editRevision: number | undefined,
 ): void {
   const failure = modelVerificationFailure(report);
   const event: CodingWorkbenchRuntimeEvent = {
@@ -2393,7 +2497,16 @@ function publishVerification(
     occurredAt: new Date().toISOString(),
     kind: "verification-summarized",
     verificationKind: "verification-command",
+    ...(editRevision === undefined ? {} : { verificationEditRevision: editRevision }),
     verificationStatus: verificationStatus(report.overallStatus),
+    verificationSummary: {
+      verifierId: request.verifierId,
+      status: verificationStatus(report.overallStatus),
+      passedCount: report.counts.passed,
+      failedCount: failedCount(report),
+      skippedCount: report.counts.skipped,
+      durationMs: report.durationMs,
+    },
     passedCount: report.counts.passed,
     failedCount: failedCount(report),
     skippedCount: report.counts.skipped,
@@ -2447,4 +2560,203 @@ function verificationKind(value: string): VerificationKind | undefined {
     default:
       return undefined;
   }
+}
+
+interface AcceptedInitializationScope {
+  open: boolean;
+  readonly pending: Set<Promise<unknown>>;
+  readonly signal: AbortSignal | undefined;
+  readonly guard: CodingToolMutationGuard;
+  readonly refuse: () => void;
+}
+
+function acceptedInitializationFacet(
+  input: ProductionManagedWorktreeToolInput,
+  readEdit: CodingToolReadEditPorts,
+): CodingAcceptedInitializationFacet | undefined {
+  const authority = input.initializationAuthority;
+  const resolve = authority?.resolve.bind(authority);
+  const acceptedSignal = authority?.signal;
+  if (resolve === undefined || acceptedSignal === undefined) return undefined;
+  let used = false;
+  return Object.freeze({
+    run: <T>(
+      initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+      signal?: AbortSignal,
+    ): Promise<CodingAcceptedInitializationResult<T>> => {
+      if (used) {
+        reportInitializationFailure(input, "initialization-refused");
+        return Promise.resolve({ ok: false, reason: "initialization-closed" });
+      }
+      used = true;
+      const combined =
+        signal === undefined ? acceptedSignal : AbortSignal.any([acceptedSignal, signal]);
+      return prepareAcceptedInitialization(input, readEdit, initialize, resolve, combined);
+    },
+  });
+}
+
+async function prepareAcceptedInitialization<T>(
+  input: ProductionManagedWorktreeToolInput,
+  readEdit: CodingToolReadEditPorts,
+  initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+  resolve: CodingAcceptedInitializationAuthority["resolve"],
+  signal: AbortSignal,
+): Promise<CodingAcceptedInitializationResult<T>> {
+  try {
+    const guard = resolve(signal);
+    if (guard === undefined) {
+      reportInitializationFailure(input, "initialization-refused");
+      return { ok: false, reason: "initialization-refused" };
+    }
+    return await executeAcceptedInitialization(input, readEdit, initialize, {
+      open: true,
+      pending: new Set(),
+      signal,
+      guard,
+      refuse: (): void => {
+        reportInitializationFailure(input, "initialization-refused");
+      },
+    });
+  } catch (error) {
+    reportInitializationFailure(input, "initialization-failed", error);
+    return { ok: false, reason: "initialization-failed" };
+  }
+}
+
+async function executeAcceptedInitialization<T>(
+  input: ProductionManagedWorktreeToolInput,
+  readEdit: CodingToolReadEditPorts,
+  initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+  scope: AcceptedInitializationScope,
+): Promise<CodingAcceptedInitializationResult<T>> {
+  const close = (): void => {
+    scope.open = false;
+  };
+  scope.signal?.addEventListener("abort", close, { once: true });
+  let result: CodingAcceptedInitializationResult<T>;
+  try {
+    result = { ok: true, value: await initialize(initializationReadPort(readEdit, scope)) };
+  } catch (error) {
+    reportInitializationFailure(input, "initialization-failed", error);
+    result = { ok: false, reason: "initialization-failed" };
+  } finally {
+    close();
+    scope.signal?.removeEventListener("abort", close);
+    await Promise.allSettled(scope.pending);
+  }
+  if (scope.signal?.aborted === true) return { ok: false, reason: "cancelled" };
+  if (!scope.guard.check()) {
+    reportInitializationFailure(input, "initialization-refused");
+    return { ok: false, reason: "initialization-refused" };
+  }
+  return result;
+}
+
+function initializationReadPort(
+  readEdit: CodingToolReadEditPorts,
+  scope: AcceptedInitializationScope,
+): CodingAcceptedInitializationReadPort {
+  const guard = Object.freeze({
+    ...scope.guard,
+    check: (): boolean => scope.open && scope.guard.check(),
+  });
+  const native = readEdit.nativeFileIO;
+  const read = native.readBytes.bind(native);
+  const stat = native.stat.bind(native);
+  const list = native.list.bind(native);
+  return Object.freeze({
+    readBytes: (request: CodingAcceptedInitializationRequest) => {
+      const owned = captureInitializationRequest(request);
+      return retainInitializationWork(scope, () => read(owned, scope.signal, guard));
+    },
+    stat: (request: CodingAcceptedInitializationRequest) => {
+      const owned = captureInitializationRequest(request);
+      return retainInitializationWork(scope, () => stat(owned, scope.signal, guard));
+    },
+    list: (request: CodingAcceptedInitializationRequest) => {
+      const owned = captureInitializationRequest(request);
+      return retainInitializationWork(scope, () => list(owned, scope.signal, guard));
+    },
+  });
+}
+
+function captureInitializationRequest(
+  request: CodingAcceptedInitializationRequest,
+): CodingAcceptedInitializationRequest & { readonly purpose: "native-instructions" } {
+  const fields = initializationDataRecord(request, ["relativePath", "range"]);
+  const relativePath: unknown = fields.relativePath?.value;
+  const range: unknown = fields.range?.value;
+  if (typeof relativePath !== "string") throw new TypeError("Invalid initial instruction path");
+  return Object.freeze({
+    relativePath,
+    purpose: "native-instructions",
+    ...(range === undefined ? {} : { range: captureInitializationRange(range) }),
+  });
+}
+
+function captureInitializationRange(value: unknown): {
+  readonly offset: number;
+  readonly length: number;
+} {
+  const fields = initializationDataRecord(value, ["offset", "length"]);
+  const offset: unknown = fields.offset?.value;
+  const length: unknown = fields.length?.value;
+  if (typeof offset !== "number" || typeof length !== "number")
+    throw new TypeError("Invalid initial instruction range");
+  return Object.freeze({ offset, length });
+}
+
+function initializationDataRecord(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, PropertyDescriptor> {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new TypeError("Invalid initial instruction request");
+  const fields = Object.getOwnPropertyDescriptors(value);
+  if (
+    Reflect.ownKeys(value).some((key) => typeof key !== "string" || !keys.includes(key)) ||
+    Object.values(fields).some((field) => !("value" in field))
+  )
+    throw new TypeError("Invalid initial instruction request fields");
+  return fields;
+}
+
+function retainInitializationWork<T>(
+  scope: AcceptedInitializationScope,
+  invoke: () => Promise<T>,
+): Promise<T | { readonly ok: false; readonly reason: "preflight-refused" }> {
+  if (!scope.open || scope.signal?.aborted === true || !scope.guard.check()) {
+    scope.refuse();
+    return Promise.resolve({ ok: false, reason: "preflight-refused" });
+  }
+  const work = Promise.resolve().then(invoke);
+  scope.pending.add(work);
+  void work.then(
+    () => scope.pending.delete(work),
+    () => scope.pending.delete(work),
+  );
+  return work;
+}
+
+function reportInitializationFailure(
+  input: ProductionManagedWorktreeToolInput,
+  code: "initialization-refused" | "initialization-failed",
+  error?: unknown,
+): void {
+  emitServerDiagnostic(input.diagnostics, {
+    correlationId: isValidCorrelationId(input.authorityRef.runId)
+      ? input.authorityRef.runId
+      : UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.accepted-initialization",
+    source: "production-managed-worktree-tools.accepted-initialization",
+    errorClass: error === undefined ? "AuthorityDenied" : contentFreeErrorClass(error),
+    code,
+    message: "server-operation-failed",
+  });
 }

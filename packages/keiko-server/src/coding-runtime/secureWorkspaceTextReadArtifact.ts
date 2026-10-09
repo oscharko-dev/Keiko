@@ -1,4 +1,8 @@
 import type { SecureWorkspaceReadPlatform } from "./secureWorkspaceTextReadProcess.js";
+import {
+  isSecureWorkspaceReadByteCap,
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+} from "./secureWorkspaceTextReadProtocol.js";
 
 export type SecureWorkspaceReadTarget = "linux-x64" | "win32-x64" | "darwin-arm64" | "darwin-x64";
 
@@ -11,6 +15,12 @@ export interface SecureWorkspaceTextReadArtifact {
   readonly sourceCommit: string;
   readonly sourceTreeSha256: string;
   readonly signed: boolean;
+  /** Server-pinned helper capability; absent for the current portable/dev helper. */
+  readonly byteCap?: number;
+  /** Server-pinned, digest-bound optional capability; absent on every current shipped helper. */
+  readonly snapshotProtocol?: "KSR2/KSS2";
+  /** Separately digest-bound private bytes/range/stat/list capability. Never implied by text IO. */
+  readonly nativeProtocol?: "KSR3/KSS3";
 }
 
 export interface SecureWorkspaceTextReadArtifactVerifier {
@@ -52,12 +62,55 @@ export function isValidSecureWorkspaceTextReadArtifact(
       ? "runtime/native/keiko-secure-workspace-read.exe"
       : "runtime/native/keiko-secure-workspace-read";
   return (
-    artifact.target === target &&
-    artifact.installRelativePath === expectedPath &&
-    artifact.protocol === "KSR1/KSS1" &&
+    validInstallShape(artifact, target, expectedPath) &&
+    validSnapshotCapability(artifact) &&
+    validNativeCapability(artifact, target) &&
     artifact.signed &&
+    isSecureWorkspaceReadByteCap(secureWorkspaceReadArtifactByteCap(artifact)) &&
     /^[a-f0-9]{64}$/.test(artifact.sha256) &&
     /^[a-f0-9]{40}$/.test(artifact.sourceCommit) &&
     /^[a-f0-9]{64}$/.test(artifact.sourceTreeSha256)
   );
+}
+
+export function secureWorkspaceReadArtifactByteCap(
+  artifact: SecureWorkspaceTextReadArtifact,
+): number {
+  return artifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
+}
+
+function validSnapshotCapability(artifact: SecureWorkspaceTextReadArtifact): boolean {
+  return snapshotProtocolApproved(
+    artifact.snapshotProtocol,
+    secureWorkspaceReadArtifactByteCap(artifact),
+  );
+}
+
+function snapshotProtocolApproved(protocol: unknown, byteCap: number): boolean {
+  return (
+    protocol === undefined ||
+    (protocol === "KSR2/KSS2" && byteCap === SECURE_WORKSPACE_TEXT_READ_MAX_BYTES)
+  );
+}
+
+function validNativeCapability(
+  artifact: SecureWorkspaceTextReadArtifact,
+  target: SecureWorkspaceReadTarget,
+): boolean {
+  return nativeProtocolApproved(artifact.nativeProtocol, target);
+}
+
+function validInstallShape(
+  artifact: SecureWorkspaceTextReadArtifact,
+  target: string,
+  expectedPath: string,
+): boolean {
+  return (
+    artifact.target === target &&
+    artifact.installRelativePath === expectedPath &&
+    artifact.protocol === "KSR1/KSS1"
+  );
+}
+function nativeProtocolApproved(protocol: unknown, target: SecureWorkspaceReadTarget): boolean {
+  return protocol === undefined || (protocol === "KSR3/KSS3" && target !== "win32-x64");
 }

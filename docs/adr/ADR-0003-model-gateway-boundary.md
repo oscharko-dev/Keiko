@@ -858,7 +858,15 @@ States:
   streamed rejection that carries no correction is never replayed as it was, and one that follows
   answer text the caller already received (a sentence of preface, then a malformed call) surfaces at
   once, because a repair would deliver that text a second time; the coding sidecar then ends the turn
-  as `invalid-tool-call` with `runtimeRetry=allowed`, and the runtime retries the turn. The correction is decided when the attempt that carries it starts, on the
+  as `invalid-tool-call` with `runtimeRetry=refused`. OpenCode must not repeat the identical
+  malformed turn after the gateway's bounded correction has ended or answer text has committed.
+  Reserved model tool-transport markers in assistant text outside Markdown code, naming a tool
+  from the captured offer without a native structured call, are the same failure. Keiko never
+  executes them as prose. Before answer text commits, the existing schema-repair mechanism asks
+  for native function `tool_calls`, without quoting the rejected arguments. Literal code examples,
+  explanations and requests without an offered tool remain ordinary content. Rejection and
+  correction record `transport=assistant-text` on the existing catalog operations; measured usage
+  survives the rejected answer. The correction is decided when the attempt that carries it starts, on the
   retry loop's own attempt count, so a steered repair on top of the provider's attempts never leaves
   a rejection uncorrected or re-sends a stale correction. The provider answered every time: a lab run of
   1.1.8 behind a LiteLLM `hosted_vllm` route opened the breaker after five such calls and failed the

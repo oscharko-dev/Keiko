@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import { useLocale } from "@/lib/i18n";
 import type {
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
@@ -18,6 +19,7 @@ import {
 } from "./codingWorkbenchLabels";
 import {
   formatRunDuration,
+  nativeRunRetry,
   runSettledAt,
   runStartedAt,
   type CodingWorkbenchRunPhase,
@@ -113,6 +115,30 @@ function RunPhase({
   );
 }
 
+function NativeRetry({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const locale = useLocale();
+  const retry = nativeRunRetry(state.run.value, state.events);
+  if (retry === null) return null;
+  return (
+    <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-native-retry">
+      {t("codingWorkbench.runStatus.nativeRetry", {
+        attempt: String(retry.attempt),
+        scheduledAt: new Intl.DateTimeFormat(locale, {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }).format(new Date(retry.scheduledAt)),
+      })}
+    </span>
+  );
+}
+
 function ReadinessDetails({
   state,
   t,
@@ -171,6 +197,7 @@ export function CodingWorkbenchRunStatus({
         </span>
         <ElapsedTime elapsed={elapsed} t={t} />
         <RunPhase phase={phase} t={t} />
+        <NativeRetry state={state} t={t} />
       </p>
       <ReadinessDetails state={state} t={t} />
     </div>

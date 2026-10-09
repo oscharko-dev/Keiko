@@ -9,6 +9,8 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
+  openCodeVisibleToolNames,
+  type OpenCodeToolProfile,
 } from "./opencodeToolSchemas.js";
 
 const OPENCODE_WIRE_ENVELOPE_RESERVE_BYTES = 64 * 1_024;
@@ -28,6 +30,7 @@ export interface OpenCodeContextGeometry {
 }
 
 export interface OpenCodeLaunchProfileInput {
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly executable: string;
   readonly stateRoot: string;
   readonly contextGeometry?: OpenCodeContextGeometry | undefined;
@@ -80,10 +83,6 @@ Delivering your work, when granted: keiko_git_status and keiko_git_diff read the
 
 Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
 
-export const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
-  "1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.",
-  "1. Plan: keep a short plan in your responses so the operator can follow your progress.",
-);
 export type OpenCodeLaunchProfileResult =
   | {
       readonly ok: true;
@@ -110,6 +109,7 @@ export function buildOpenCodeLaunchProfile(
   const configValue = createFixedOpenCodeV2Config(
     input.contextGeometry,
     input.unavailableOptionalTools,
+    input.toolProfile,
   );
   return {
     ok: true,
@@ -292,11 +292,13 @@ export function createFixedOpenCodeConfig(
   };
 }
 
-/** OpenCode V2's native configuration: all direct tools denied, only Keiko's bridge exposed. */
+/** Original V2 execution with exactly the server-selected governed tool profile. */
 export function createFixedOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
+  profile: OpenCodeToolProfile = "direct",
 ): Readonly<Record<string, unknown>> {
+  openCodeVisibleToolNames(profile);
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -309,6 +311,7 @@ export function createFixedOpenCodeV2Config(
   const permissions = [
     { action: "*", resource: "*", effect: "deny" },
     { action: "question", resource: "*", effect: "allow" },
+    ...(profile === "code-mode" ? [{ action: "execute", resource: "*", effect: "allow" }] : []),
     ...OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(
       ({ name }) => !unavailable.has(name as OpenCodeOptionalToolName),
     ).map(({ name: action }) => ({ action, resource: "*", effect: "allow" })),
@@ -319,10 +322,6 @@ export function createFixedOpenCodeV2Config(
     snapshots: false,
     model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    agents: {
-      build: { system: OPENCODE_GOVERNED_V2_SYSTEM_PROMPT },
-      compaction: { system: OPENCODE_GOVERNED_COMPACTION_PROMPT },
-    },
     providers: fixedOpenCodeV2Provider(contextGeometry),
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },

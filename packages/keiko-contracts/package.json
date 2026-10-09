@@ -139,6 +139,10 @@
       "types": "./dist/coding-app-session.d.ts",
       "import": "./dist/coding-app-session.js"
     },
+    "./runtime/coding-app-session-pairing": {
+      "types": "./dist/coding-app-session-pairing.d.ts",
+      "import": "./dist/coding-app-session-pairing.js"
+    },
     "./runtime/coding-context": {
       "types": "./dist/coding-context.d.ts",
       "import": "./dist/coding-context.js"
@@ -834,6 +838,10 @@
     "./runtime/governed-tool-bridge": {
       "types": "./dist/governed-tool-bridge.d.ts",
       "import": "./dist/governed-tool-bridge.js"
+    },
+    "./runtime/opencode-service-host": {
+      "types": "./dist/opencode-service-host.d.ts",
+      "import": "./dist/opencode-service-host.js"
     }
   },
   "scripts": {

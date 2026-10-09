@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
+import { I18nProvider, I18N_STORAGE_KEY, loadLocaleMessages } from "@/lib/i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeSnapshot,
@@ -344,3 +345,52 @@ describe("CodingWorkbenchRunStatus", () => {
     expect(screen.queryByRole("timer")).toBeNull();
   });
 });
+
+it.each(["en", "de"] as const)(
+  "displays the native schedule in %s local time, then clears on native clear and settlement",
+  async (locale) => {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    const retry: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "run-1:2",
+      sequence: 2,
+      occurredAt: NOW,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 4,
+      eventKind: "native-retry-changed",
+      nativeRetry: { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+    };
+    const state = runState(snapshot("running"), [...RUNNING.events, retry]);
+    const { rerender } = render(
+      <I18nProvider>
+        <CodingWorkbenchRunStatus state={state} researchGrant={null} phase="model" />
+      </I18nProvider>,
+    );
+    const localTime = new Intl.DateTimeFormat(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date("2026-10-07T12:00:02.000Z"));
+    expect(screen.getByTestId("coding-runtime-native-retry")).toHaveTextContent(localTime);
+    expect(screen.getByTestId("coding-runtime-native-retry")).not.toHaveTextContent(
+      "2026-10-07T12:00:02.000Z",
+    );
+    const cleared = {
+      ...state,
+      events: [...state.events, { ...retry, nativeRetry: null, sequence: 3, cursor: "run-1:3" }],
+    };
+    rerender(<CodingWorkbenchRunStatus state={cleared} researchGrant={null} phase="model" />);
+    expect(screen.queryByTestId("coding-runtime-native-retry")).not.toBeInTheDocument();
+    rerender(
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("succeeded"), state.events)}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.queryByTestId("coding-runtime-native-retry")).not.toBeInTheDocument();
+  },
+);

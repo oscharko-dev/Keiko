@@ -1,3 +1,9 @@
+import {
+  attestPortableSidecarTreeSync,
+  computePortableSidecarPayloadTreeDigest,
+  type PortableSidecarTreeAttestation,
+} from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -12,11 +18,15 @@ import {
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import { productionUpdateFacts } from "../update-install-mode.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   NPM_LANE_RUNTIME_APPROVALS,
+  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
@@ -94,6 +104,8 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Hermetic test seam; production callers never supply the npm lane's trust anchor. */
   readonly npmLaneApprovals?: Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
+  readonly npmLanePreviousApprovals?:
+    Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
 }
 
 export function devLaneEnvEnabled(value: string | undefined): boolean {
@@ -178,7 +190,16 @@ export function discoverNpmLaneOpenCode(
   try {
     const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
     if (packageRoot === undefined) return { outcome: "inactive" };
-    return discoverNpmLanePackage(join(packageRoot, NPM_LANE_RUNTIME_DIR), target, approval);
+    const previous =
+      input.npmLaneApprovals === undefined
+        ? NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target]
+        : input.npmLanePreviousApprovals?.[target];
+    return discoverNpmLanePackage(
+      join(packageRoot, NPM_LANE_RUNTIME_DIR),
+      target,
+      approval,
+      previous,
+    );
   } catch (error) {
     // A verification that cannot be completed (an unreadable file, a directory that changed under
     // the walk) is a refusal, and the reason it could not be completed is evidence of its own.
@@ -218,15 +239,14 @@ function discoverNpmLanePackage(
   runtimeRoot: string,
   target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
   approval: NpmLaneRuntimeApproval,
+  previous: NpmLaneRuntimeApproval | undefined,
 ): DevLaneOpenCodeDiscovery {
   const payload = verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, approval);
   if (!payload.ok) return refused(payload.refusal);
   const helperPath = join(runtimeRoot, helperRelativePath(target));
   if (!isRegularFile(helperPath)) return refused("secure-read-helper-missing");
-  if (
-    sha256File(helperPath) !== approval.helperSha256 ||
-    statSync(helperPath).size !== approval.helperSizeBytes
-  ) {
+  const helper = matchingNpmHelperApproval(helperPath, approval, previous);
+  if (helper === undefined) {
     return refused("secure-read-helper-stale");
   }
   if (!trustedNativeHelperDirectory(runtimeRoot, target)) {
@@ -234,14 +254,15 @@ function discoverNpmLanePackage(
   }
   const secureRead: DevLaneSecureReadBinding = {
     helperPath,
-    helperSizeBytes: approval.helperSizeBytes,
+    helperSizeBytes: helper.helperSizeBytes,
     artifact: {
       target: secureReadTarget(target),
       installRelativePath: `runtime/${helperRelativePath(target)}`,
-      sha256: approval.helperSha256,
+      sha256: helper.helperSha256,
       protocol: "KSR1/KSS1",
-      sourceCommit: approval.helperSourceCommit,
-      sourceTreeSha256: approval.helperSourceTreeSha256,
+      sourceCommit: helper.helperSourceCommit,
+      sourceTreeSha256: helper.helperSourceTreeSha256,
+      byteCap: helper.helperMaxBytes ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
       // Verified by its content digest against the server's own pin, never by a signature chain.
       signed: true,
     },
@@ -253,6 +274,19 @@ function discoverNpmLanePackage(
     payload.sidecar,
     secureRead,
     undefined,
+  );
+}
+
+function matchingNpmHelperApproval(
+  helperPath: string,
+  approval: NpmLaneRuntimeApproval,
+  previous: NpmLaneRuntimeApproval | undefined,
+): NpmLaneRuntimeApproval | undefined {
+  const sha256 = sha256File(helperPath);
+  const size = statSync(helperPath).size;
+  const candidates = previous === undefined ? [approval] : [approval, previous];
+  return candidates.find(
+    (candidate) => candidate.helperSha256 === sha256 && candidate.helperSizeBytes === size,
   );
 }
 
@@ -417,24 +451,26 @@ function verifiedPayload(
   const sbomPath = "payload/evidence/sbom.cdx.json";
   const files = [executablePath, licensePath, sbomPath].map((file) => join(installRoot, file));
   if (!files.every(isRegularFile)) return { ok: false, refusal: "payload-missing" };
-  const executableSha256 = sha256File(join(installRoot, executablePath));
-  const executableTreeSha256 = digestText(
-    `bin/${target === "windows-x64" ? "opencode.exe" : "opencode"}\0${executableSha256}\0`,
-  );
   // KEIKO-0763/KEIKO-0763-r3: verify the SBOM's on-disk contents against the catalog-approved
   // digest the same way the executable-tree and license checks work. approved.sbomSha256 is
   // REQUIRED (approvedSidecarShape refuses "payload-unapproved" before this function is ever
   // reached without one), so this comparison always runs -- a drift-only SBOM (identical binary,
   // mutated provenance) can no longer flow through as "verified" by skipping the comparison.
-  const sbomEvidenceSha256 = sha256File(join(installRoot, sbomPath));
+  const selectedRelativePath = `bin/${target === "windows-x64" ? "opencode.exe" : "opencode"}`;
+  const attestation = discoveryPayloadAttestation(installRoot, selectedRelativePath);
+  const evidence = discoveryEvidence(attestation);
+  if (evidence === undefined) return { ok: false, refusal: "payload-missing" };
+  const { executableSha256, licenseEvidenceSha256, sbomEvidenceSha256 } = evidence;
+  const executableTreeSha256 = computePortableSidecarPayloadTreeDigest([
+    { relativePath: selectedRelativePath, sha256: executableSha256 },
+  ]);
   if (
     executableTreeSha256 !== approved.executableTreeSha256 ||
-    sha256File(join(installRoot, licensePath)) !== approved.licenseSha256 ||
+    licenseEvidenceSha256 !== approved.licenseSha256 ||
     sbomEvidenceSha256 !== approved.sbomSha256
   ) {
     return { ok: false, refusal: "payload-tampered" };
   }
-  const payloadRoot = join(installRoot, "payload");
   return {
     ok: true,
     sidecar: {
@@ -443,16 +479,57 @@ function verifiedPayload(
       shippedExecutableSha256: executableSha256,
       executableTreeSha256,
       licenseEvidencePath: licensePath,
-      licenseEvidenceSha256: approved.licenseSha256,
+      licenseEvidenceSha256,
       sbomEvidencePath: sbomPath,
       sbomEvidenceSha256,
       protocolSchemaRawSha256: approved.protocolSchemaSha256,
       protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
       protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
       availability: devLaneAvailability(),
-      summary: devLaneSummary(target, approved, payloadRoot, join(installRoot, executablePath)),
+      summary: devLaneSummary(
+        target,
+        approved,
+        attestation.treeSha256,
+        join(installRoot, executablePath),
+      ),
     },
   };
+}
+
+interface DiscoveryEvidence {
+  readonly executableSha256: string;
+  readonly licenseEvidenceSha256: string;
+  readonly sbomEvidenceSha256: string;
+}
+
+function discoveryEvidence(
+  attestation: PortableSidecarTreeAttestation,
+): DiscoveryEvidence | undefined {
+  const executableSha256 = attestation.selectedFileSha256;
+  const sbomEvidenceSha256 = attestation.selectedFileSha256ByPath?.["evidence/sbom.cdx.json"];
+  const licenseEvidenceSha256 = attestation.selectedFileSha256ByPath?.["evidence/LICENSE"];
+  if (
+    executableSha256 === undefined ||
+    sbomEvidenceSha256 === undefined ||
+    licenseEvidenceSha256 === undefined
+  ) {
+    return undefined;
+  }
+  return { executableSha256, licenseEvidenceSha256, sbomEvidenceSha256 };
+}
+
+function discoveryPayloadAttestation(
+  installRoot: string,
+  selectedRelativePath: string,
+): PortableSidecarTreeAttestation {
+  // Discovery has no wall-clock launch window; preserve that boundary while retaining tree bounds.
+  return attestPortableSidecarTreeSync(
+    join(installRoot, "payload"),
+    selectedRelativePath,
+    Number.MAX_SAFE_INTEGER,
+    bindSecurityLogCorrelation(processServerLogSink(), UNKNOWN_CORRELATION_ID),
+    [selectedRelativePath, "evidence/LICENSE", "evidence/sbom.cdx.json"],
+  );
 }
 
 /**
@@ -476,10 +553,9 @@ function devLaneAvailability(): PortableSidecarRuntimeVerification["availability
 function devLaneSummary(
   target: DevLaneOpenCodeTarget,
   approved: ApprovedDevLaneSidecar,
-  payloadRoot: string,
+  payloadSha256: string,
   executable: string,
 ): PortableSidecarRuntimeVerification["summary"] {
-  const payloadSha256 = hashDirectoryTree(payloadRoot);
   return {
     name: SIDECAR_NAME,
     kind: "coding-runtime",
@@ -709,39 +785,7 @@ function digestText(value: string): string {
  * it. A test that hand-restated the concatenation could formerly drift silently; that path is
  * now closed.
  */
-export function computePortableSidecarPayloadTreeDigest(
-  entries: readonly { readonly relativePath: string; readonly sha256: string }[],
-): string {
-  const hash = createHash("sha256");
-  const sorted = [...entries].sort((left, right) =>
-    left.relativePath.localeCompare(right.relativePath),
-  );
-  for (const entry of sorted) {
-    hash.update(`${entry.relativePath}\0${entry.sha256}\0`);
-  }
-  return hash.digest("hex");
-}
-
-/**
- * In-process payload digest. Delegates to the canonical
- * `computePortableSidecarPayloadTreeDigest` above — one formula, one place. Mirrors
- * `inspectStagedSidecarPayload`'s tree walk (locale-sorted) so the launch-time re-check agrees
- * byte-for-byte with the discovery-recorded summary.
- */
-function hashDirectoryTree(root: string): string {
-  const entries: { readonly relativePath: string; readonly sha256: string }[] = [];
-  // #3099 R8 KfQ perf: `computePortableSidecarPayloadTreeDigest` re-sorts internally, so
-  // passing a no-op comparator to `listFiles` avoids the redundant O(n log n) sort on the
-  // discovery walk. Array.sort in modern V8 is stable, so `() => 0` preserves insertion order
-  // (irrelevant here — the helper sorts by relativePath itself).
-  for (const file of listFiles(root, () => 0)) {
-    entries.push({
-      relativePath: relative(root, file).split(sep).join("/"),
-      sha256: sha256File(file),
-    });
-  }
-  return computePortableSidecarPayloadTreeDigest(entries);
-}
+export { computePortableSidecarPayloadTreeDigest } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 
 /**
  * Cross-process helper-source digest. The staging script records `sourceTreeSha256` in one

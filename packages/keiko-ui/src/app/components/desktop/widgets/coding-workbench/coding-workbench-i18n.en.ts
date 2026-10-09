@@ -559,7 +559,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Keiko checked it automatically and could not confirm 32,000 tokens. Choose a larger model, or have the gateway declare this model's max_input_tokens.",
   "codingWorkbench.source.unavailableReason.model-verification-pending":
-    "Keiko is still verifying this model with the gateway (a context window of at least 32,000 tokens, and tool calling). On a busy gateway this can take a few minutes; the Workbench refreshes by itself when the check settles.",
+    "Keiko is still verifying this model with the gateway (basic chat, a context window of at least 32,000 tokens, and tool calling). On a busy gateway this can take a few minutes; the Workbench refreshes by itself when the check settles.",
+  "codingWorkbench.source.unavailableReason.conversation-not-ready":
+    "The latest automatic chat check could not use this model. Keiko continues checking in the background; choose another ready model or wait for recovery.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
@@ -926,6 +928,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.duration.minutes": "{minutes} min {seconds} s",
   "codingWorkbench.runStatus.duration.hours": "{hours} h {minutes} min",
   "codingWorkbench.runStatus.phase.model": "Waiting for the model",
+  "codingWorkbench.runStatus.nativeRetry": "OpenCode attempt {attempt} scheduled for {scheduledAt}",
   "codingWorkbench.runStatus.phase.gateway": "Model gateway unavailable, retrying",
   "codingWorkbench.runStatus.phase.verifier": "Running a verifier",
   "codingWorkbench.runStatus.phase.tool": "Running a tool",
@@ -981,6 +984,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Child agent completed",
   "codingWorkbench.event.operator-decision": "Your decision needed",
   "codingWorkbench.event.failure-redacted": "Failure reported",
+  "codingWorkbench.event.native-retry-changed": "OpenCode retry state updated",
   "codingWorkbench.event.model-gateway-retrying": "Model gateway unavailable, retrying",
   "codingWorkbench.event.model-gateway-recovered": "Model gateway answered again",
   "codingWorkbench.event.model-gateway-retry-stopped": "Model gateway retry stopped",
@@ -1006,6 +1010,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The run ended because the model provider could not be reached or stopped answering, even after Keiko waited and retried. Nothing was rejected. Check that the model gateway and its provider are running, then start the task again; your changes so far stay in the task workspace. An operator can lengthen the wait with the gateway setting codingOutageWindowMs.",
   "codingWorkbench.event.failure.model-turn-failed":
     "The run ended because its last model step failed, for the reason shown on that step above. Address that reason, then start the task again; your changes so far stay in the task workspace.",
+  "codingWorkbench.event.failure.verification-not-evidenced":
+    "The task is not verified: its checks failed, did not run, or preceded the final edit. Your changes remain in the task workspace. Inspect the latest verification result, resolve its cause, and rerun the relevant checks before completing the task.",
   "codingWorkbench.event.runFailed": "Coding run failed",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",
@@ -1019,6 +1025,39 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model finished this turn without any text or tool call. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
   "codingWorkbench.event.turnFailure.invalid-tool-call":
     "The model called a tool with arguments that do not match the tool, on every attempt. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
+  "codingWorkbench.event.turnCause.provider-failed":
+    "The model gateway did not complete this step.",
+  "codingWorkbench.event.turnCause.stream-incomplete":
+    "The model response stream ended before this step completed.",
+  "codingWorkbench.event.turnCause.turn-rejected":
+    "The model or a Workbench guard did not accept this step.",
+  "codingWorkbench.event.turnCause.output-exhausted":
+    "The model used its output budget before completing this step.",
+  "codingWorkbench.event.turnCause.empty-answer":
+    "The model ended this step without an answer or tool call.",
+  "codingWorkbench.event.turnCause.invalid-tool-call":
+    "The model did not produce a valid tool call for this step.",
+  "codingWorkbench.event.turnProgress.active": "The run is still active.",
+  "codingWorkbench.event.turnProgress.gateway-retrying":
+    "Keiko is retrying the model gateway automatically.",
+  "codingWorkbench.verification.result": "{verifier}: {status}",
+  "codingWorkbench.verification.verifier.test": "Tests",
+  "codingWorkbench.verification.verifier.targeted-test": "Targeted tests",
+  "codingWorkbench.verification.verifier.typecheck": "Type check",
+  "codingWorkbench.verification.verifier.lint": "Lint",
+  "codingWorkbench.verification.verifier.build": "Build",
+  "codingWorkbench.verification.status.passed": "Passed",
+  "codingWorkbench.verification.status.failed": "Failed",
+  "codingWorkbench.verification.status.partial": "Partial",
+  "codingWorkbench.verification.checks":
+    "Checks: {passed} passed, {failed} unsuccessful, {skipped} skipped",
+  "codingWorkbench.verification.duration": "Duration: {duration} ms",
+  "codingWorkbench.activity.readBytes": "Read: {bytes} bytes",
+  "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
+  "codingWorkbench.activity.returnedPaths": "Returned paths: {count}",
+  "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
+  "codingWorkbench.activity.affectedFile": "Affected file: {path}",
+  "codingWorkbench.activity.serviceDuration": "Tool service: {duration} ms",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

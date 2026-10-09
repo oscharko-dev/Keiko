@@ -1,5 +1,6 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
+import type { RuntimeGatewayFilesystem } from "@oscharko-dev/keiko-sandbox";
 
 export function safeRealFile(path: string): string {
   try {
@@ -36,4 +37,23 @@ export function resolveContained(root: string, relativePath: string): string {
 
 export function invalidRequest(): never {
   throw new Error("native-runtime-request-invalid");
+}
+
+/** Re-prove the exact server-owned roots immediately before constructing the native wrapper. */
+export function validateRuntimeGatewayFilesystemRoots(
+  filesystem: RuntimeGatewayFilesystem | undefined,
+  runtimeRoots: readonly string[],
+  cwd: string,
+): void {
+  if (filesystem === undefined) return;
+  if (
+    filesystem.workspaceRoot !== cwd ||
+    safeRealDirectory(filesystem.workspaceRoot) !== cwd ||
+    !runtimeRoots.includes(filesystem.runtimeReadRoot) ||
+    safeRealDirectory(filesystem.runtimeReadRoot) !== filesystem.runtimeReadRoot ||
+    safeRealDirectory(filesystem.privateStateRoot) !== filesystem.privateStateRoot
+  )
+    invalidRequest();
+  const state = lstatSync(filesystem.privateStateRoot);
+  if ((state.mode & 0o077) !== 0 || state.uid !== process.getuid?.()) invalidRequest();
 }

@@ -1,23 +1,58 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  truncateSync,
+  readFileSync,
+  linkSync,
+  utimesSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi, type Mock } from "vitest";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 
 import {
   createSecureWorkspaceTextReadPort,
+  exactWorkspaceRead,
+  isSecureWorkspaceNativeRelativePath,
+  SECURE_WORKSPACE_NATIVE_MAX_WAITERS,
   type SecureWorkspaceTextReadResult,
+  type SecureWorkspaceNativeFileIO,
+  type SecureWorkspaceNativeStatResult,
 } from "./secureWorkspaceTextRead.js";
+import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
 import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
-import type { SecureWorkspaceTextReadProcessFactory } from "./secureWorkspaceTextReadProcess.js";
 import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_LIVE,
+  type SecureWorkspaceTextReadProcessFactory,
+} from "./secureWorkspaceTextReadProcess.js";
+import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+  encodeSecureWorkspaceNativeRequest,
+  decodeSecureWorkspaceNativeResponse,
+  encodeSecureWorkspaceSnapshotResponse,
   decodeSecureWorkspaceReadRequest,
   encodeSecureWorkspaceReadResponse,
   type SecureWorkspaceReadClosedStatus,
 } from "./secureWorkspaceTextReadProtocol.js";
 
-const MAX_TEXT_BYTES = 65_536;
+const MAX_TEXT_BYTES = SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
 const artifact: SecureWorkspaceTextReadArtifact = {
   target: "darwin-arm64",
   installRelativePath: "runtime/native/keiko-secure-workspace-read",
@@ -78,6 +113,53 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 }
 
 describe("SecureWorkspaceTextReadPort", () => {
+  it("uses the verified legacy helper's request ceiling during a runtime upgrade", async () => {
+    const caps: number[] = [];
+    const run = (request: { readonly stdin: Uint8Array }): Promise<Uint8Array> => {
+      caps.push(Buffer.from(request.stdin).readUInt32LE(16));
+      return Promise.resolve(response(0, Buffer.from("safe\n")));
+    };
+    const port = createSecureWorkspaceTextReadPort({
+      resolveWorkspaceRoot: () => "/server-owned/workspace",
+      artifact: { ...artifact, byteCap: 65_536 },
+      artifactVerifier: { verify: (): boolean => true },
+      processFactory: { create: () => ({ run }) },
+      platform: { os: "darwin", arch: "arm64" },
+    });
+    await expect(port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: true,
+      text: "safe\n",
+    });
+    expect(caps).toEqual([65_536]);
+  });
+
+  it("reads a repository instruction file above the former 64 KiB ceiling", async () => {
+    const text = "Repository convention.\n".repeat(4_000);
+    const { port } = createPort(() => Promise.resolve(response(0, Buffer.from(text))));
+    await expect(port.readText({ relativePath: "AGENTS.md" })).resolves.toEqual({
+      ok: true,
+      text,
+    });
+  });
+
+  it("rejects a legacy helper response above that artifact's verified ceiling", async () => {
+    const port = createSecureWorkspaceTextReadPort({
+      resolveWorkspaceRoot: () => "/server-owned/workspace",
+      artifact: { ...artifact, byteCap: 65_536 },
+      artifactVerifier: { verify: (): boolean => true },
+      processFactory: {
+        create: () => ({
+          run: (): Promise<Uint8Array> => Promise.resolve(response(0, Buffer.alloc(65_537, 0x61))),
+        }),
+      },
+      platform: { os: "darwin", arch: "arm64" },
+    });
+    await expect(port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "protocol-invalid",
+    });
+  });
+
   it("fails closed when no live workspace is bound without verification or spawn", async () => {
     const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
     const resolveWorkspaceRoot = vi.fn(() => undefined);
@@ -156,7 +238,7 @@ describe("SecureWorkspaceTextReadPort", () => {
     expect(unknown.create).not.toHaveBeenCalled();
   });
 
-  it("returns exactly 65,536 safe bytes and maps helper oversize status to a content-free denial", async () => {
+  it("returns exactly the pinned maximum safe bytes and maps helper oversize status to a content-free denial", async () => {
     const exact = Buffer.alloc(MAX_TEXT_BYTES, 0x61);
     const exactPort = createPort(() => Promise.resolve(response(0, exact)));
     const oversizedPort = createPort(() => Promise.resolve(response(6)));
@@ -282,7 +364,9 @@ describe("SecureWorkspaceTextReadPort", () => {
   });
 
   it("admits at most eight live helpers and returns busy immediately without a ninth process", async () => {
-    const pending = Array.from({ length: 8 }, () => deferred<Uint8Array>());
+    const pending = Array.from({ length: SECURE_WORKSPACE_TEXT_READ_MAX_LIVE }, () =>
+      deferred<Uint8Array>(),
+    );
     let next = 0;
     const { port, create } = createPort(() => {
       const current = pending[next];
@@ -618,3 +702,916 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
     });
   });
 });
+
+it("offers a rich snapshot facet without treating a verified legacy helper as rich-capable", async () => {
+  const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("private text"))));
+  const { port, create } = createPort(run);
+  expect("readTextSnapshot" in port).toBe(true);
+  await expect(port.readTextSnapshot?.({ relativePath: "src/a.ts" })).resolves.toEqual({
+    ok: false,
+    reason: "snapshot-unavailable",
+  });
+  expect(create).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
+describe("pinned rich secure text read", () => {
+  function richPort(
+    run: (request: {
+      readonly stdin: Uint8Array;
+      readonly signal: AbortSignal;
+    }) => Promise<Uint8Array>,
+  ): ReturnType<typeof createSecureWorkspaceTextReadPort> {
+    return createSecureWorkspaceTextReadPort({
+      resolveWorkspaceRoot: () => "/current/workspace",
+      artifact: { ...artifact, snapshotProtocol: "KSR2/KSS2" },
+      artifactVerifier: { verify: (): boolean => true },
+      processFactory: { create: () => ({ run }) },
+      platform: { os: "darwin", arch: "arm64" },
+    });
+  }
+  function snapshot(): Buffer {
+    return encodeSecureWorkspaceSnapshotResponse({
+      status: "ok",
+      bytes: Buffer.from("safe\n"),
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+  }
+
+  it("returns only verified same-descriptor facts and wipes transient response bytes", async () => {
+    const frame = snapshot();
+    const port = richPort(({ stdin }) => {
+      expect(Buffer.from(stdin.subarray(0, 4)).toString("ascii")).toBe("KSR2");
+      return Promise.resolve(frame);
+    });
+    const result = await port.readTextSnapshot?.({ relativePath: "src/a.ts" });
+    expect(result).toEqual({
+      ok: true,
+      text: "safe\n",
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+    if (!result?.ok) throw new Error("expected snapshot");
+    expect(Object.isFrozen(result.info)).toBe(true);
+  });
+
+  it("discards the snapshot when the caller cancels before helper settlement", async () => {
+    const controller = new AbortController();
+    const frame = snapshot();
+    const port = richPort(() => {
+      controller.abort();
+      return Promise.resolve(frame);
+    });
+    await expect(
+      port.readTextSnapshot?.({ relativePath: "src/a.ts", signal: controller.signal }),
+    ).resolves.toEqual({ ok: false, reason: "cancelled" });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+  });
+
+  it("preserves the current-workspace wrapper around the richer facet", async () => {
+    let current = true;
+    const port = exactWorkspaceRead(
+      richPort(() => {
+        current = false;
+        return Promise.resolve(snapshot());
+      }),
+      () => current,
+      "workspace-unavailable",
+    );
+    await expect(port.readTextSnapshot?.({ relativePath: "AGENTS.md" })).resolves.toEqual({
+      ok: false,
+      reason: "workspace-unavailable",
+    });
+  });
+
+  it.each([".env", ".keiko/private/state.db", "../outside.txt"])(
+    "does not invoke the helper for protected %s",
+    async (relativePath) => {
+      const run = vi.fn(() => Promise.resolve(snapshot()));
+      const port = richPort(run);
+      await expect(port.readTextSnapshot?.({ relativePath })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+      });
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a foreign ordinary success frame without disclosing content", async () => {
+    const frame = response(0, Buffer.from("private text"));
+    const port = richPort(() => Promise.resolve(frame));
+    await expect(port.readTextSnapshot?.({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "protocol-invalid",
+    });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+  });
+
+  it("persists an actual malformed snapshot refusal through the governed read owner", async () => {
+    const frame = encodeSecureWorkspaceReadResponse({
+      status: "ok",
+      bytes: Buffer.from("PRIVATE_HELPER_RESPONSE_SENTINEL"),
+    });
+    const binding = {
+      runId: "run-rich-decoder-refusal",
+      envelopeDigest: "a".repeat(64),
+      workspaceId: "workspace-rich-decoder-refusal",
+      workspaceRootDigest: "b".repeat(64),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: richPort(() => Promise.resolve(frame)),
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveRepositoryReadContext: () => binding,
+      enforceProducerBinding: true,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    await expect(
+      ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-tool-io" },
+        undefined,
+        { binding, check: () => true },
+      ),
+    ).resolves.toEqual({ ok: false, reason: "protocol-invalid" });
+    expect(events).toHaveLength(1);
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "failed",
+      purpose: "native-tool-io",
+      reason: "protocol-invalid",
+    });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+    expect(JSON.stringify(events)).not.toContain("PRIVATE_HELPER_RESPONSE_SENTINEL");
+    expect(JSON.stringify(events)).not.toContain("src/a.ts");
+  });
+});
+
+// The injected verifier proves fixture bytes only, not release signatures or production activation.
+function nativeFixturePort(
+  root: string,
+  executable: string,
+  overrides: Partial<SecureWorkspaceTextReadArtifact> = {},
+  legacy = false,
+): ReturnType<typeof createSecureWorkspaceTextReadPort> {
+  const target = process.platform === "darwin" ? `darwin-${process.arch}` : "linux-x64";
+  const candidate = {
+    ...artifact,
+    target,
+    nativeProtocol: "KSR3/KSS3" as const,
+    sha256: createHash("sha256").update(readFileSync(executable)).digest("hex"),
+    ...overrides,
+  };
+  if (legacy) Reflect.deleteProperty(candidate, "nativeProtocol");
+  return createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot: () => root,
+    artifact: candidate,
+    artifactVerifier: { verify: (): boolean => true },
+    processFactory: createNodeSecureWorkspaceReadProcessFactory({
+      binding: {
+        executable,
+        artifact: candidate,
+        helperSizeBytes: readFileSync(executable).length,
+        resourceRoot: dirname(executable),
+      },
+      safeCwd: dirname(executable),
+    }),
+  });
+}
+
+function requireNativeFacet(
+  port: ReturnType<typeof createSecureWorkspaceTextReadPort>,
+): SecureWorkspaceNativeFileIO {
+  expect(port.nativeFileIO).toBeDefined();
+  if (port.nativeFileIO === undefined) throw new Error("native-io-facet-missing");
+  return port.nativeFileIO;
+}
+
+describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "private native file IO using the actual descriptor helper",
+  () => {
+    let base: string;
+    let root: string;
+    let executable: string;
+    beforeAll(() => {
+      base = realpathSync(mkdtempSync(join(tmpdir(), "native-io-port-")));
+      root = join(base, "workspace");
+      mkdirSync(root);
+      executable = join(base, "secure-read");
+      execFileSync("cc", [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        process.platform === "linux" ? "-D_GNU_SOURCE" : "-D_DARWIN_C_SOURCE",
+        "-O2",
+        fileURLToPath(
+          new URL(
+            "../../../../native/secure-workspace-read/secure_workspace_read.c",
+            import.meta.url,
+          ),
+        ),
+        "-o",
+        executable,
+      ]);
+      writeFileSync(join(root, "bytes.bin"), Buffer.from([0, 255, 128, 2, 0]));
+      utimesSync(join(root, "bytes.bin"), new Date(-2000), new Date(-2000));
+      mkdirSync(join(root, "nested"));
+      writeFileSync(join(root, "nested", "visible.ts"), "safe");
+      writeFileSync(join(root, ".env"), "synthetic fixture secret");
+    });
+    afterAll(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+
+    it("keeps path depth independent of native waiter capacity and matches the actual helper", async () => {
+      const valid = `${Array.from({ length: 63 }, () => "deep").join("/")}/scope.ts`;
+      const invalid = `deep/${valid}`;
+      mkdirSync(dirname(join(root, valid)), { recursive: true });
+      writeFileSync(join(root, valid), "scope");
+      expect(isSecureWorkspaceNativeRelativePath(valid)).toBe(true);
+      expect(isSecureWorkspaceNativeRelativePath(invalid)).toBe(false);
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      await expect(io.readBytes({ relativePath: valid })).resolves.toMatchObject({
+        ok: true,
+        bytes: Buffer.from("scope"),
+      });
+      const nativeFrame = execFileSync(executable, {
+        input: encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: invalid,
+          operation: "read",
+        }),
+      });
+      expect(decodeSecureWorkspaceNativeResponse(nativeFrame)).toEqual({
+        status: "invalid-path",
+      });
+      await expect(io.readBytes({ relativePath: invalid })).resolves.toMatchObject({
+        ok: false,
+        reason: "denied",
+      });
+    });
+
+    it("preserves raw binary and finite pre-epoch metadata without text decoding", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      await expect(io.readBytes({ relativePath: "bytes.bin" })).resolves.toEqual({
+        ok: true,
+        bytes: Buffer.from([0, 255, 128, 2, 0]),
+        info: { type: "file", size: 5, mtimeMs: -2000 },
+      });
+      await expect(io.stat({ relativePath: "bytes.bin" })).resolves.toEqual({
+        ok: true,
+        info: { type: "file", size: 5, mtimeMs: -2000 },
+      });
+    });
+
+    it.each(["\uFEFFsafe\n", "\uFEFF", "safe\n"])(
+      "preserves physical BOM snapshot facts through the governed port for %j",
+      async (text) => {
+        writeFileSync(join(root, "bom-snapshot.ts"), text);
+        const binding = {
+          runId: "run-bom-snapshot",
+          envelopeDigest: "a".repeat(64),
+          workspaceId: "workspace-bom-snapshot",
+          workspaceRootDigest: "b".repeat(64),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        };
+        const events: ServerLogEvent[] = [];
+        const secure = nativeFixturePort(root, executable, { snapshotProtocol: "KSR2/KSS2" });
+        const ports = createCodingToolReadEditPorts({
+          secureWorkspaceTextRead: secure,
+          editorAgentClient: { action: vi.fn() },
+          resolveEditorActionContext: vi.fn(),
+          resolveRepositoryReadContext: () => binding,
+          enforceProducerBinding: true,
+          activityLog: { write: (event): void => void events.push(event) },
+        });
+        await expect(
+          ports.nativeTextRead.readTextSnapshot(
+            { relativePath: "bom-snapshot.ts", purpose: "native-tool-io" },
+            undefined,
+            { binding, check: () => true },
+          ),
+        ).resolves.toMatchObject({ ok: true, text, info: { size: Buffer.byteLength(text) } });
+        expectActivityLogProof(
+          "coding-runtime.workspace-read.emitted-line",
+          formatActivityLogProofLine(events[0] ?? {}),
+        );
+        expect(events[0]?.extra).toMatchObject({ state: "completed" });
+        expect(JSON.stringify(events)).not.toContain("bom-snapshot.ts");
+        expect(JSON.stringify(events)).not.toContain(text);
+        await expect(secure.readText({ relativePath: "bom-snapshot.ts" })).resolves.toEqual({
+          ok: true,
+          text: text.replace(/^\uFEFF/u, ""),
+        });
+      },
+    );
+
+    it.each([
+      ["\uFEFFvisible.ts"],
+      ["\uFEFFvisible.ts", "visible.ts"],
+      ["\uFEFF"],
+      ["plain.ts", "\nline.ts"],
+    ])("lists exact BOM directory identities and reads the returned names %j", async (...names) => {
+      const directory = `bom-directory-${String(names.length)}-${String(names[0].length)}`;
+      mkdirSync(join(root, directory));
+      for (const name of names) writeFileSync(join(root, directory, name), "safe");
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      const result = await io.list({ relativePath: directory });
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error("directory-list-failed");
+      expect(result.entries.map((entry) => entry.name).sort()).toEqual([...names].sort());
+      for (const entry of result.entries) {
+        await expect(
+          io.readBytes({ relativePath: `${directory}/${entry.name}` }),
+        ).resolves.toMatchObject({ ok: true, bytes: Buffer.from("safe") });
+      }
+    });
+
+    it("keeps original large-file byte ranges and EOF semantics outside the text ceiling", async () => {
+      const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x61);
+      bytes.set([0, 255, 128], 1_300_000);
+      writeFileSync(join(root, "large.bin"), bytes);
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      const result = await io.readBytes({
+        relativePath: "large.bin",
+        range: { offset: 1_300_000, length: 3 },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        bytes: Buffer.from([0, 255, 128]),
+        info: { type: "file", size: bytes.length },
+      });
+      expect(
+        await io.readBytes({
+          relativePath: "large.bin",
+          range: { offset: bytes.length + 1, length: 3 },
+        }),
+      ).toMatchObject({ ok: true, bytes: Buffer.alloc(0) });
+    });
+
+    it("returns immediate directory entries while filtering sensitive names before disclosure", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      const rootResult = await io.list({ relativePath: "" });
+      expect(rootResult).toMatchObject({ ok: true, info: { type: "directory" } });
+      if (!rootResult.ok) throw new Error("directory-list-failed");
+      expect(rootResult.entries.map((entry) => entry.name)).not.toContain(".env");
+      await expect(io.list({ relativePath: "nested" })).resolves.toMatchObject({
+        ok: true,
+        entries: [{ name: "visible.ts", type: "file" }],
+      });
+      await expect(io.readBytes({ relativePath: "nested" })).resolves.toMatchObject({
+        ok: false,
+        reason: "wrong-kind",
+        info: { type: "directory" },
+      });
+    });
+
+    it("refuses sensitive, escaped and malformed paths without testing their presence", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      for (const relativePath of [
+        ".env",
+        ".env.local",
+        "../outside",
+        "/absolute",
+        "nested/",
+        "\ud800",
+      ])
+        await expect(io.stat({ relativePath })).resolves.toMatchObject({
+          ok: false,
+          reason: "denied",
+        });
+    });
+
+    it("does not grant content or directory access through links or hardlinks", async () => {
+      symlinkSync("bytes.bin", join(root, "symlink.bin"));
+      symlinkSync("nested", join(root, "symlink-dir"));
+      linkSync(join(root, "bytes.bin"), join(root, "hardlink.bin"));
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      await expect(io.stat({ relativePath: "symlink.bin" })).resolves.toMatchObject({
+        ok: true,
+        info: { type: "symlink" },
+      });
+      for (const relativePath of ["symlink.bin", "hardlink.bin"])
+        await expect(io.readBytes({ relativePath })).resolves.toMatchObject({ ok: false });
+      await expect(io.list({ relativePath: "symlink-dir" })).resolves.toMatchObject({ ok: false });
+    });
+
+    it("keeps whole-file bytes distinct from text caps and bounds native payloads honestly", async () => {
+      const content = Buffer.alloc(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1, 0);
+      const path = join(root, "whole.bin");
+      writeFileSync(path, content);
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      expect(await io.readBytes({ relativePath: "whole.bin" })).toMatchObject({
+        ok: true,
+        bytes: content,
+        info: { size: content.length },
+      });
+      writeFileSync(join(root, "empty.bin"), Buffer.alloc(0));
+      expect(await io.readBytes({ relativePath: "empty.bin" })).toMatchObject({
+        ok: true,
+        bytes: Buffer.alloc(0),
+      });
+      truncateSync(path, SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1);
+      await expect(io.readBytes({ relativePath: "whole.bin" })).resolves.toMatchObject({
+        ok: false,
+        reason: "too-large",
+      });
+      await expect(
+        io.readBytes({
+          relativePath: "whole.bin",
+          range: {
+            offset: SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+            length: 1,
+          },
+        }),
+      ).resolves.toMatchObject({ ok: true, bytes: Buffer.alloc(1) });
+    });
+
+    it.skipIf(process.platform !== "linux")(
+      "refuses an unrepresentable directory rather than dropping an entry",
+      async () => {
+        const folder = join(root, "invalid-entry");
+        mkdirSync(folder);
+        writeFileSync(join(folder, "valid.ts"), "safe");
+        writeFileSync(Buffer.concat([Buffer.from(`${folder}/`), Buffer.from([0xff])]), "synthetic");
+        const io = requireNativeFacet(nativeFixturePort(root, executable));
+        await expect(io.list({ relativePath: "invalid-entry" })).resolves.toMatchObject({
+          ok: false,
+          reason: "denied",
+        });
+      },
+    );
+
+    it("keeps original legal long paths above the public IPC path bound", async () => {
+      const folders = Array.from({ length: 8 }, (_, index) =>
+        `${String(index)}-`.concat("p".repeat(80)),
+      );
+      mkdirSync(join(root, ...folders), { recursive: true });
+      const path = folders.join("/").concat("/file:with-colon.ts");
+      writeFileSync(join(root, path), "long path text");
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      expect(Buffer.byteLength(path)).toBeGreaterThan(512);
+      await expect(io.readBytes({ relativePath: path })).resolves.toMatchObject({
+        ok: true,
+        bytes: Buffer.from("long path text"),
+      });
+    });
+
+    it("joins cancellation and workspace postflight before releasing actual helper bytes", async () => {
+      const frame = execFileSync(executable, {
+        input: encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "read",
+        }),
+      });
+      const work = deferred<Uint8Array>();
+      let current = root;
+      const run = vi.fn((): Promise<Uint8Array> => work.promise);
+      const port = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => current,
+        artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+        artifactVerifier: { verify: (): boolean => true },
+        platform: { os: "darwin", arch: "arm64" },
+        processFactory: { create: () => ({ run }) },
+      });
+      const reading = requireNativeFacet(port).readBytes({ relativePath: "nested/visible.ts" });
+      await vi.waitFor(() => {
+        expect(run).toHaveBeenCalledOnce();
+      });
+      current = `${root}-other`;
+      work.resolve(frame);
+      await expect(reading).resolves.toMatchObject({ ok: false, reason: "workspace-unavailable" });
+      expect(frame.every((byte) => byte === 0)).toBe(true);
+    });
+
+    it("rejects invalid ranges, cancellation and missing capability without a process", async () => {
+      const run = vi.fn(() => Promise.resolve(Buffer.alloc(0)));
+      const port = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => root,
+        artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+        artifactVerifier: { verify: (): boolean => true },
+        platform: { os: "darwin", arch: "arm64" },
+        processFactory: { create: () => ({ run }) },
+      });
+      const io = requireNativeFacet(port);
+      for (const range of [
+        { offset: -1, length: 1 },
+        { offset: 0, length: SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1 },
+        { offset: Number.MAX_SAFE_INTEGER, length: 1 },
+      ])
+        await expect(io.readBytes({ relativePath: "bytes.bin", range })).resolves.toMatchObject({
+          ok: false,
+          reason: "denied",
+        });
+      await expect(
+        io.stat({ relativePath: "bytes.bin", signal: AbortSignal.abort() }),
+      ).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it("shares existing physical capacity and retains cancellation slots until actual settlement", async () => {
+      const frame = execFileSync(executable, {
+        input: encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "stat",
+        }),
+      });
+      const pending = Array.from({ length: SECURE_WORKSPACE_TEXT_READ_MAX_LIVE }, () =>
+        deferred<Uint8Array>(),
+      );
+      let count = 0;
+      const run = vi.fn((): Promise<Uint8Array> => {
+        const work = pending[count++];
+        return work === undefined ? Promise.resolve(Buffer.from(frame)) : work.promise;
+      });
+      const port = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => root,
+        artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+        artifactVerifier: { verify: (): boolean => true },
+        platform: { os: "darwin", arch: "arm64" },
+        processFactory: { create: () => ({ run }) },
+      });
+      const io = requireNativeFacet(port);
+      const controller = new AbortController();
+      const calls = pending.map(() =>
+        io.stat({ relativePath: "nested/visible.ts", signal: controller.signal }),
+      );
+      await vi.waitFor(() => {
+        expect(run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      controller.abort();
+      await expect(port.readText({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
+        ok: false,
+        reason: "busy",
+      });
+      const waiting = io.stat({ relativePath: "nested/visible.ts" });
+      await Promise.resolve();
+      expect(run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      pending.forEach((work) => {
+        work.resolve(Buffer.from(frame));
+      });
+      const results = await Promise.all(calls);
+      expect(results.every((result) => !result.ok && result.reason === "cancelled")).toBe(true);
+      await expect(waiting).resolves.toMatchObject({ ok: true });
+      await expect(io.stat({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
+        ok: true,
+      });
+    });
+
+    it("preserves the exact workspace wrapper and purges bytes after its guard changes", async () => {
+      const bytes = Buffer.from([0, 255, 1]);
+      let current = true;
+      const read = vi.fn(() => {
+        current = false;
+        return Promise.resolve({
+          ok: true as const,
+          bytes,
+          info: { type: "file" as const, size: 3, mtimeMs: 0 },
+        });
+      });
+      const wrapped = exactWorkspaceRead(
+        {
+          readText: (): Promise<SecureWorkspaceTextReadResult> =>
+            Promise.resolve({ ok: false, reason: "denied" }),
+          nativeFileIO: { readBytes: read, stat: vi.fn(), list: vi.fn() },
+        },
+        () => current,
+        "workspace-unavailable",
+      );
+      const io = requireNativeFacet(wrapped);
+      await expect(io.readBytes({ relativePath: "a.bin" })).resolves.toMatchObject({
+        ok: false,
+        reason: "workspace-unavailable",
+      });
+      expect(bytes).toEqual(Buffer.alloc(3));
+      await expect(io.readBytes({ relativePath: "a.bin" })).resolves.toMatchObject({
+        ok: false,
+        reason: "workspace-unavailable",
+      });
+      expect(read).toHaveBeenCalledOnce();
+    });
+
+    it("queues private native effects while public reads retain their existing busy result", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const total = SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + 4;
+      const settled: number[] = [];
+      const calls = Array.from({ length: total }, (_, index) =>
+        fixture.io.stat({ relativePath: "nested/visible.ts" }).then((result) => {
+          settled.push(index);
+          return result;
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      expect(settled).toHaveLength(0);
+      await expect(
+        fixture.port.readText({ relativePath: "nested/visible.ts" }),
+      ).resolves.toMatchObject({ ok: false, reason: "busy" });
+      fixture.release();
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(total);
+      });
+      fixture.release();
+      expect((await Promise.all(calls)).every((result) => result.ok)).toBe(true);
+    });
+
+    it("removes cancelled private waiters without spawning their helper", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const controller = new AbortController();
+      const queued = fixture.io.stat({
+        relativePath: "nested/visible.ts",
+        signal: controller.signal,
+      });
+      await Promise.resolve();
+      controller.abort();
+      await expect(queued).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+      fixture.release();
+      await Promise.all(active);
+      expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+    });
+
+    it("expires a queued private deadline without a child or leaked slot", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const deadline = new AbortController();
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      const queued = fixture.io.stat({ relativePath: "nested/visible.ts" });
+      await Promise.resolve();
+      deadline.abort();
+      timeout.mockRestore();
+      await expect(queued).resolves.toMatchObject({ ok: false, reason: "timeout" });
+      fixture.release();
+      await Promise.all(active);
+      expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+    });
+
+    it.each(["authority", "root"] as const)(
+      "rechecks %s after waiting before a physical helper",
+      async (kind) => {
+        let currentRoot = root;
+        let current = true;
+        const fixture = heldNativeFixture(root, executable, () => currentRoot);
+        const active = fillNativeSlots(fixture.io);
+        await vi.waitFor(() => {
+          expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+        });
+        const request = { relativePath: "nested/visible.ts", isCurrent: (): boolean => current };
+        const queued = fixture.io.stat(request);
+        await Promise.resolve();
+        if (kind === "root") currentRoot = `${root}-changed`;
+        else current = false;
+        fixture.release();
+        await expect(queued).resolves.toMatchObject({
+          ok: false,
+          reason: kind === "root" ? "workspace-unavailable" : "denied",
+        });
+        await Promise.all(active);
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      },
+    );
+
+    it("bounds private wait capacity without reserving a physical slot for overflow", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const queued = fillNativeSlots(fixture.io, SECURE_WORKSPACE_NATIVE_MAX_WAITERS);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await expect(fixture.io.stat({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
+        ok: false,
+        reason: "busy",
+      });
+      for (
+        let count = SECURE_WORKSPACE_TEXT_READ_MAX_LIVE;
+        count <= SECURE_WORKSPACE_NATIVE_MAX_WAITERS;
+        count += SECURE_WORKSPACE_TEXT_READ_MAX_LIVE
+      ) {
+        fixture.release();
+        await vi.waitFor(() => {
+          expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + count);
+        });
+      }
+      fixture.release();
+      expect((await Promise.all([...active, ...queued])).every((result) => result.ok)).toBe(true);
+    });
+
+    it("captures private request getters once before waiting and ignores subsequent path mutation", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      let path = "nested/visible.ts";
+      const getter = vi.fn(() => path);
+      const guard = vi.fn(() => (): boolean => true);
+      const queued = fixture.io.stat({
+        get relativePath() {
+          return getter();
+        },
+        get isCurrent() {
+          return guard();
+        },
+      });
+      path = ".env";
+      fixture.release();
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + 1);
+      });
+      const stdin = fixture.run.mock.calls.at(-1)?.[0].stdin;
+      expect(stdin).toBeDefined();
+      expect(stdin).toEqual(
+        encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "stat",
+        }),
+      );
+      fixture.release();
+      await Promise.all(active);
+      await expect(queued).resolves.toMatchObject({ ok: true });
+      expect(getter).toHaveBeenCalledOnce();
+      expect(guard).toHaveBeenCalledOnce();
+    });
+
+    it("captures private range, signal and callback before a queued read", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const range = { offset: 1, length: 2 };
+      const controller = new AbortController();
+      const signal = vi.fn((): AbortSignal | undefined => undefined);
+      const request = {
+        relativePath: "nested/visible.ts",
+        range,
+        get signal(): AbortSignal | undefined {
+          return signal();
+        },
+        isCurrent: (): boolean => true,
+      };
+      const queued = fixture.io.readBytes(request);
+      range.offset = 4;
+      range.length = 1;
+      request.isCurrent = (): boolean => false;
+      signal.mockReturnValue(controller.signal);
+      controller.abort();
+      fixture.release();
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + 1);
+      });
+      expect(fixture.run.mock.calls.at(-1)?.[0].stdin).toEqual(
+        encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "read",
+          range: { offset: 1, length: 2 },
+        }),
+      );
+      fixture.release();
+      await Promise.all(active);
+      const result = await queued;
+      expect(result.ok).toBe(true);
+      if (result.ok)
+        expect(result.bytes).toEqual(readFileSync(join(root, "nested/visible.ts")).subarray(1, 3));
+      expect(signal).toHaveBeenCalledOnce();
+    });
+
+    it("passes the exact workspace guard into queued native effects before helper spawn", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      let current = true;
+      const wrapped = requireNativeFacet(
+        exactWorkspaceRead(fixture.port, () => current, "workspace-unavailable"),
+      );
+      const queued = wrapped.stat({ relativePath: "nested/visible.ts" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      current = false;
+      fixture.release();
+      await Promise.all(active);
+      await expect(queued).resolves.toMatchObject({ ok: false, reason: "workspace-unavailable" });
+      expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+    });
+
+    it.each(["root", "authority", "cancel"] as const)(
+      "rechecks %s after post-wait artifact verification",
+      async (kind) => {
+        const blocked = deferred<boolean>();
+        let currentRoot = root;
+        let current = true;
+        const controller = new AbortController();
+        const run = vi.fn((): Promise<Uint8Array> => Promise.reject(new Error("must-not-spawn")));
+        let verifications = 0;
+        const io = requireNativeFacet(
+          createSecureWorkspaceTextReadPort({
+            resolveWorkspaceRoot: () => currentRoot,
+            artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+            artifactVerifier: { verify: () => (++verifications === 1 ? true : blocked.promise) },
+            platform: { os: "darwin", arch: "arm64" },
+            processFactory: { create: () => ({ run }) },
+          }),
+        );
+        const reading = io.stat({
+          relativePath: "nested/visible.ts",
+          signal: controller.signal,
+          isCurrent: () => current,
+        });
+        await vi.waitFor(() => {
+          expect(verifications).toBe(2);
+        });
+        if (kind === "root") currentRoot = `${root}-changed`;
+        else if (kind === "authority") current = false;
+        else controller.abort();
+        blocked.resolve(true);
+        await expect(reading).resolves.toMatchObject({
+          ok: false,
+          reason:
+            kind === "root"
+              ? "workspace-unavailable"
+              : kind === "authority"
+                ? "denied"
+                : "cancelled",
+        });
+        expect(run).not.toHaveBeenCalled();
+      },
+    );
+
+    it("keeps native capability unavailable on currently pinned text helpers", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable, {}, true));
+      await expect(io.stat({ relativePath: "nested" })).resolves.toMatchObject({
+        ok: false,
+        reason: "native-io-unavailable",
+      });
+    });
+  },
+);
+
+function heldNativeFixture(
+  root: string,
+  executable: string,
+  resolveRoot = (): string => root,
+): {
+  readonly port: ReturnType<typeof createSecureWorkspaceTextReadPort>;
+  readonly io: SecureWorkspaceNativeFileIO;
+  readonly run: Mock<
+    (request: { readonly stdin: Uint8Array; readonly signal: AbortSignal }) => Promise<Uint8Array>
+  >;
+  readonly release: () => void;
+} {
+  const held: {
+    readonly work: ReturnType<typeof deferred<Uint8Array>>;
+    readonly frame: Uint8Array;
+  }[] = [];
+  const run = vi.fn(
+    (_request: {
+      readonly stdin: Uint8Array;
+      readonly signal: AbortSignal;
+    }): Promise<Uint8Array> => {
+      const work = deferred<Uint8Array>();
+      held.push({ work, frame: execFileSync(executable, { input: _request.stdin }) });
+      return work.promise;
+    },
+  );
+  const port = createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot: resolveRoot,
+    artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+    artifactVerifier: { verify: (): boolean => true },
+    platform: { os: "darwin", arch: "arm64" },
+    processFactory: { create: () => ({ run }) },
+  });
+  return {
+    port,
+    io: requireNativeFacet(port),
+    run,
+    release: (): void => {
+      held.splice(0).forEach(({ work, frame }) => {
+        work.resolve(Buffer.from(frame));
+      });
+    },
+  };
+}
+function fillNativeSlots(
+  io: SecureWorkspaceNativeFileIO,
+  count = SECURE_WORKSPACE_TEXT_READ_MAX_LIVE,
+): readonly Promise<SecureWorkspaceNativeStatResult>[] {
+  return Array.from({ length: count }, () => io.stat({ relativePath: "nested/visible.ts" }));
+}

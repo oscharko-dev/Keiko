@@ -1,0 +1,38 @@
+{
+  "name": "keiko-opencode-service-host",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode/server": "2.0.10",
+    "@opencode/core": "2.0.10",
+    "@opencode/util": "2.0.10",
+    "effect": "4.0.0-rc.112",
+    "@effect/platform-node": "4.0.0-rc.112",
+    "@effect/platform-node-shared": "4.0.0-rc.112",
+    "@opencode/ai": "2.0.10",
+    "@opencode/plugin": "2.0.10"
+  },
+  "overrides": {
+    "effect": "4.0.0-rc.112",
+    "@effect/platform-node": "4.0.0-rc.112",
+    "@effect/platform-node-shared": "4.0.0-rc.112",
+    "@effect/sql-sqlite-bun": "4.0.0-rc.112",
+    "@effect/opentelemetry": "4.0.0-rc.112",
+    "@modelcontextprotocol/client@2.0.0": "2.2.0",
+    "@modelcontextprotocol/core@2.0.0": "2.2.0",
+    "@ai-sdk/provider-utils@4.0.21": "4.0.33",
+    "@ai-sdk/provider-utils@4.0.23": "4.0.33",
+    "@opentelemetry/core@2.6.1": "2.8.0",
+    "js-yaml@3.15.2": {
+      "argparse": "2.0.1"
+    },
+    "gitlab-ai-provider@6.12.1": {
+      "@ai-sdk/provider-utils": "4.0.33"
+    },
+    "@opencode/core@2.0.10": {
+      "@parcel/watcher": "2.6.0"
+    }
+  },
+  "version": "0.0.0-private",
+  "license": "Apache-2.0"
+}

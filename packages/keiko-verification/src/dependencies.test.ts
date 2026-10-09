@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceInfo, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { DEPENDENCY_INSTALL_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
@@ -58,6 +58,18 @@ function workspaceAt(root: string): WorkspaceInfo {
   };
 }
 
+function npmConfigFaultFs(root: string, error: Error): WorkspaceFs {
+  const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+  return {
+    ...nodeWorkspaceFs,
+    readFileUtf8SameDescriptor: (...args): ReturnType<NonNullable<typeof read>> => {
+      if (args[0] === join(root, ".npmrc")) throw error;
+      if (read === undefined) throw new TypeError("Expected descriptor read");
+      return read(...args);
+    },
+  };
+}
+
 function writeManifestText(root: string, content: string): void {
   writeFileSync(join(root, "package.json"), content, "utf8");
 }
@@ -78,7 +90,10 @@ function registryEntry(name: string): Readonly<Record<string, unknown>> {
 
 // The lockfile npm 7+ writes (version 3): the workspace's own folder plus what it installs.
 function lockfileText(packages: Readonly<Record<string, unknown>> = {}): string {
-  return JSON.stringify({ lockfileVersion: 3, packages: { "": {}, ...packages } });
+  return JSON.stringify({
+    lockfileVersion: 3,
+    packages: { "": {}, ...packages },
+  });
 }
 
 function writeLockfile(root: string, packages?: Readonly<Record<string, unknown>>): void {
@@ -163,7 +178,11 @@ describe("planDependencyBootstrap", () => {
 
   it("plans 'none' when every declaration section is present but empty", () => {
     const root = tempRoot();
-    writeManifest(root, { dependencies: {}, devDependencies: {}, optionalDependencies: {} });
+    writeManifest(root, {
+      dependencies: {},
+      devDependencies: {},
+      optionalDependencies: {},
+    });
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({ kind: "none" });
   });
 
@@ -206,6 +225,95 @@ describe("planDependencyBootstrap", () => {
       kind: "refused",
       reason: "project-npm-config",
       lockfile: "absent",
+    });
+  });
+
+  it("reports the original project npm config read fault without changing its refusal", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(join(root, ".npmrc"), "ignore-scripts=true\n");
+    const onFailure = vi.fn();
+    const error = Object.assign(new Error(`PRIVATE_CONFIG ${root} synthetic-token`), {
+      code: "EIO",
+    });
+    const fs = npmConfigFaultFs(root, error);
+    expect(planDependencyBootstrap(workspaceAt(root), fs, onFailure)).toEqual({
+      kind: "refused",
+      reason: "project-npm-config",
+      lockfile: "absent",
+    });
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith({
+      stage: "inspection",
+      error,
+    });
+  });
+
+  it("refuses an unreadable npm config metadata record instead of treating it as absent", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(join(root, ".npmrc"), "ignore-scripts=true\n");
+    const error = Object.assign(new Error(`PRIVATE_CONFIG ${root} synthetic-token`), {
+      code: "EIO",
+    });
+    const onFailure = vi.fn();
+    const fs = {
+      ...nodeWorkspaceFs,
+      stat: (path: string): ReturnType<typeof nodeWorkspaceFs.stat> => {
+        if (path === join(root, ".npmrc")) throw error;
+        return nodeWorkspaceFs.stat(path);
+      },
+    };
+    expect(planDependencyBootstrap(workspaceAt(root), fs, onFailure)).toEqual({
+      kind: "refused",
+      reason: "project-npm-config",
+      lockfile: "absent",
+    });
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith({
+      stage: "inspection",
+      error: expect.objectContaining({ cause: error }) as unknown,
+    });
+  });
+
+  it("keeps an absent project npm config approved and silent", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    const onFailure = vi.fn();
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, onFailure)).toEqual({
+      kind: "install",
+      lockfile: "absent",
+    });
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("admits script-restricting npm configuration without permitting source or credential overrides", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(
+      join(root, ".npmrc"),
+      "# repository script policy\nstrict-allow-scripts=true\nignore-scripts=true\n",
+      "utf8",
+    );
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({
+      kind: "install",
+      lockfile: "absent",
+    });
+  });
+
+  it.each([
+    "strict-allow-scripts=false",
+    "ignore-scripts=false",
+    "registry=https://example.invalid",
+    "//registry.npmjs.org/:_authToken=synthetic-value",
+    "script-shell=/outside/executable",
+    "strict-allow-scripts=${UNTRUSTED_VALUE}",
+    "strict-allow-scripts=true\nregistry=https://example.invalid",
+  ])("refuses npm configuration outside the closed guard-only settings: %s", (configuration) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(join(root, ".npmrc"), configuration, "utf8");
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toMatchObject({
+      kind: "refused",
+      reason: "project-npm-config",
     });
   });
 
@@ -356,13 +464,22 @@ describe("planDependencyBootstrap — dependency sources", () => {
 
   it("plans an install when every lockfile entry is the workspace, a link, a bundle or the registry", () => {
     const root = tempRoot();
-    writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: ["packages/*"] });
+    writeManifest(root, {
+      dependencies: { "left-pad": "1.3.0" },
+      workspaces: ["packages/*"],
+    });
     writeLockfile(root, {
       "packages/app": { version: "1.0.0" },
       "node_modules/app": { resolved: "packages/app", link: true },
       "node_modules/left-pad": registryEntry("left-pad"),
-      "node_modules/left-pad/node_modules/bundled": { version: "1.0.0", inBundle: true },
-      "node_modules/unresolved": { version: "1.0.0", integrity: REGISTRY_INTEGRITY },
+      "node_modules/left-pad/node_modules/bundled": {
+        version: "1.0.0",
+        inBundle: true,
+      },
+      "node_modules/unresolved": {
+        version: "1.0.0",
+        integrity: REGISTRY_INTEGRITY,
+      },
     });
     expect(planFor(root)).toEqual({ kind: "install", lockfile: "present" });
   });
@@ -372,7 +489,9 @@ describe("planDependencyBootstrap — dependency sources", () => {
     ["a cleartext URL", { resolved: registryUrl.replace("https:", "http:") }],
     [
       "another host",
-      { resolved: "https://registry.internal.example/left-pad/-/left-pad-1.3.0.tgz" },
+      {
+        resolved: "https://registry.internal.example/left-pad/-/left-pad-1.3.0.tgz",
+      },
     ],
     ["a user in the URL", { resolved: registryUrl.replace("https://", "https://operator@") }],
     ["a non-default port", { resolved: registryUrl.replace(".org/", ".org:8443/") }],
@@ -382,7 +501,9 @@ describe("planDependencyBootstrap — dependency sources", () => {
   ])("refuses a lockfile entry with %s", (_label, override) => {
     const root = tempRoot();
     writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
-    writeLockfile(root, { "node_modules/left-pad": { ...registryEntry("left-pad"), ...override } });
+    writeLockfile(root, {
+      "node_modules/left-pad": { ...registryEntry("left-pad"), ...override },
+    });
     expect(planFor(root)).toEqual({
       kind: "refused",
       reason: "unapproved-source",
@@ -489,9 +610,18 @@ describe("planDependencyBootstrap — workspace members", () => {
     ["dependencies", "github:owner/repo"],
   ])("refuses a workspace member whose %s names the location %j", (section, specifier) => {
     const root = tempRoot();
-    writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: ["packages/*"] });
-    writeMember(root, "packages/a", { name: "a", dependencies: { "left-pad": "1.3.0" } });
-    writeMember(root, "packages/b", { name: "b", [section]: { probe: specifier } });
+    writeManifest(root, {
+      dependencies: { "left-pad": "1.3.0" },
+      workspaces: ["packages/*"],
+    });
+    writeMember(root, "packages/a", {
+      name: "a",
+      dependencies: { "left-pad": "1.3.0" },
+    });
+    writeMember(root, "packages/b", {
+      name: "b",
+      [section]: { probe: specifier },
+    });
     expect(planFor(root)).toEqual({
       kind: "refused",
       reason: "unapproved-source",
@@ -505,18 +635,33 @@ describe("planDependencyBootstrap — workspace members", () => {
       devDependencies: { typescript: "^6.0.3" },
       workspaces: ["packages/*", "tools/**"],
     });
-    writeMember(root, "packages/a", { name: "a", dependencies: { "left-pad": "1.3.0", b: "*" } });
-    writeMember(root, "tools/cli/deep", { name: "deep", devDependencies: { vitest: "^4.1.0" } });
+    writeMember(root, "packages/a", {
+      name: "a",
+      dependencies: { "left-pad": "1.3.0", b: "*" },
+    });
+    writeMember(root, "tools/cli/deep", {
+      name: "deep",
+      devDependencies: { vitest: "^4.1.0" },
+    });
     mkdirSync(join(root, "packages", "not-a-package"));
     // npm never installs from what it does not reach: node_modules and dot-folders.
-    writeMember(root, "tools/node_modules/x", { name: "x", dependencies: { y: "file:../y" } });
-    writeMember(root, "tools/.cache/x", { name: "x", dependencies: { y: "file:../y" } });
+    writeMember(root, "tools/node_modules/x", {
+      name: "x",
+      dependencies: { y: "file:../y" },
+    });
+    writeMember(root, "tools/.cache/x", {
+      name: "x",
+      dependencies: { y: "file:../y" },
+    });
     expect(planFor(root)).toEqual({ kind: "install", lockfile: "absent" });
   });
 
   it("refuses a workspace member manifest it cannot read", () => {
     const root = tempRoot();
-    writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: ["packages/*"] });
+    writeManifest(root, {
+      dependencies: { "left-pad": "1.3.0" },
+      workspaces: ["packages/*"],
+    });
     mkdirSync(join(root, "packages", "a"), { recursive: true });
     writeManifestText(join(root, "packages", "a"), "{ not json");
     expect(planFor(root)).toEqual({
@@ -530,7 +675,10 @@ describe("planDependencyBootstrap — workspace members", () => {
     "refuses workspaces it cannot resolve to their members: %j",
     (pattern) => {
       const root = tempRoot();
-      writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: [pattern] });
+      writeManifest(root, {
+        dependencies: { "left-pad": "1.3.0" },
+        workspaces: [pattern],
+      });
       expect(planFor(root)).toEqual({
         kind: "refused",
         reason: "workspaces-unresolved",
@@ -548,7 +696,12 @@ describe("runDependencyBootstrap — settled plans (no spawn)", () => {
       bootstrapDepsFor(tempRoot(), rec.fn),
     );
     expect(outcome).toEqual({
-      summary: { state: "none", lockfile: "absent", exitCode: null, durationMs: 0 },
+      summary: {
+        state: "none",
+        lockfile: "absent",
+        exitCode: null,
+        durationMs: 0,
+      },
     });
     expect(rec.calls()).toHaveLength(0);
   });
@@ -627,7 +780,10 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     writeInstalledTree(root); // npm's hidden lockfile, as the (faked) install leaves it
 
     const rec = recordingSpawn();
-    scriptChildClose(rec.child, { stdout: "added 1 package in 400ms\n", exitCode: 0 });
+    scriptChildClose(rec.child, {
+      stdout: "added 1 package in 400ms\n",
+      exitCode: 0,
+    });
     const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
 
     expect(rec.calls()).toHaveLength(1);
@@ -717,7 +873,10 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     const plan = planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
 
     const rec = recordingSpawn();
-    scriptChildClose(rec.child, { stderr: "npm ERR! network failure\n", exitCode: 1 });
+    scriptChildClose(rec.child, {
+      stderr: "npm ERR! network failure\n",
+      exitCode: 1,
+    });
     const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
 
     expect(outcome.summary.state).toBe("failed");
@@ -733,7 +892,10 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     const plan = planFor(root);
     writeInstalledTree(root);
     const rec = recordingSpawn();
-    scriptChildClose(rec.child, { stderr: "npm ERR! incomplete install\n", exitCode: 1 });
+    scriptChildClose(rec.child, {
+      stderr: "npm ERR! incomplete install\n",
+      exitCode: 1,
+    });
 
     const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
 
@@ -921,7 +1083,10 @@ describe("runDependencyBootstrap — registry egress", () => {
         },
       };
       const plan = planDependencyBootstrap(workspaceAt(root), fs, onFailure);
-      expect(plan).toMatchObject({ kind: "refused", reason: "install-inspection-unavailable" });
+      expect(plan).toMatchObject({
+        kind: "refused",
+        reason: "install-inspection-unavailable",
+      });
       const code =
         fault === "limit"
           ? "DEPENDENCY_TREE_LIMIT"
@@ -933,7 +1098,10 @@ describe("runDependencyBootstrap — registry egress", () => {
         error: expect.objectContaining({ code }) as unknown,
       });
       const rec = recordingSpawn();
-      const result = await runDependencyBootstrap(plan, { ...bootstrapDepsFor(root, rec.fn), fs });
+      const result = await runDependencyBootstrap(plan, {
+        ...bootstrapDepsFor(root, rec.fn),
+        fs,
+      });
       expect(result.summary.state).toBe("refused");
       expect(rec.calls()).toHaveLength(0);
     },
@@ -981,10 +1149,15 @@ describe("runDependencyBootstrap — registry egress", () => {
       onFailure,
       startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
     });
-    expect(result.summary).toMatchObject({ state: "failed", completionRecorded: false });
+    expect(result.summary).toMatchObject({
+      state: "failed",
+      completionRecorded: false,
+    });
     expect(onFailure).toHaveBeenCalledWith({
       stage: "post-proxy",
-      error: expect.objectContaining({ code: "DEPENDENCY_TREE_DIRECTORY_UNSAFE" }) as unknown,
+      error: expect.objectContaining({
+        code: "DEPENDENCY_TREE_DIRECTORY_UNSAFE",
+      }) as unknown,
     });
   });
 
@@ -1092,6 +1265,94 @@ describe("runDependencyBootstrap — registry egress", () => {
     expect(rec.calls()).toHaveLength(0);
   });
 
+  it("refuses a project config that becomes unsafe after planning and before npm spawn", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeFileSync(join(root, ".npmrc"), "strict-allow-scripts=true\n");
+    const rec = recordingSpawn();
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => {
+        writeFileSync(join(root, ".npmrc"), "registry=https://example.invalid\n");
+        return Promise.resolve(fakeEgressProxy());
+      },
+    });
+
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary.state).toBe("failed");
+    expect(outcome.summary.completionRecorded).toBe(false);
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "accepts only approved npm settings with %j boundaries",
+    (boundary) => {
+      const root = tempRoot();
+      writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+      writeFileSync(
+        join(root, ".npmrc"),
+        ["# comment", "ignore-scripts=true", "; comment", "engine-strict=true", ""].join(boundary),
+      );
+      expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs).kind).toBe("install");
+    },
+  );
+
+  it("refuses CR-only hidden npm settings during planning", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(
+      join(root, ".npmrc"),
+      "# ordinary comment\rcache=/outside-workspace\roffline=true\r",
+    );
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toMatchObject({
+      kind: "refused",
+      reason: "project-npm-config",
+    });
+  });
+
+  it("refuses CR-only hidden npm settings at the final pre-spawn boundary", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => {
+        writeFileSync(
+          join(root, ".npmrc"),
+          "# ordinary comment\rcache=/outside-workspace\roffline=true\r",
+        );
+        return Promise.resolve(fakeEgressProxy());
+      },
+    });
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary.completionRecorded).toBe(false);
+    expect(outcome.summary.state).toBe("failed");
+  });
+
+  it("reports the original npm config fault during the final pre-spawn inspection", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeFileSync(join(root, ".npmrc"), "ignore-scripts=true\n");
+    const error = Object.assign(new Error(`PRIVATE_CONFIG ${root} synthetic-token`), {
+      code: "EIO",
+    });
+    const onFailure = vi.fn();
+    const rec = recordingSpawn();
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      fs: npmConfigFaultFs(root, error),
+      onFailure,
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(onFailure).toHaveBeenCalledWith({ stage: "inspection", error });
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary.state).toBe("failed");
+    expect(outcome.summary.completionRecorded).toBe(false);
+    expect(JSON.stringify(outcome)).not.toContain("PRIVATE_CONFIG");
+    expect(JSON.stringify(outcome)).not.toContain("synthetic-token");
+    expect(JSON.stringify(outcome)).not.toContain(root);
+  });
+
   it("runs npm behind the egress proxy, records its tunnels and closes it", async () => {
     const root = tempRoot();
     const plan = installPlan(root);
@@ -1121,7 +1382,10 @@ describe("runDependencyBootstrap — registry egress", () => {
     const plan = installPlan(root);
     const proxy = fakeEgressProxy({ allowed: 1, refused: 2 });
     const rec = recordingSpawn();
-    scriptChildClose(rec.child, { stderr: "npm error 403 Forbidden\n", exitCode: 1 });
+    scriptChildClose(rec.child, {
+      stderr: "npm error 403 Forbidden\n",
+      exitCode: 1,
+    });
 
     const outcome = await runDependencyBootstrap(plan, {
       ...bootstrapDepsFor(root, rec.fn),
@@ -1148,7 +1412,10 @@ describe("runDependencyBootstrap — registry egress", () => {
       startEgressProxy: () => Promise.resolve(fakeEgressProxy({ allowed: 2, refused: 0 })),
     });
 
-    expect(outcome.summary).toMatchObject({ state: "failed", egress: { allowed: 2, refused: 0 } });
+    expect(outcome.summary).toMatchObject({
+      state: "failed",
+      egress: { allowed: 2, refused: 0 },
+    });
   });
 
   // npm tolerates an optional dependency it could not fetch and exits 0; the refused destination is
@@ -1270,5 +1537,313 @@ describe("runDependencyBootstrap — registry egress", () => {
     } finally {
       signals.restore();
     }
+  });
+});
+
+function installTarget(
+  overrides: Partial<NonNullable<DependencyBootstrapDeps["dependencyInstallTarget"]>> = {},
+): NonNullable<DependencyBootstrapDeps["dependencyInstallTarget"]> {
+  return {
+    os: "linux",
+    cpu: "arm64",
+    libc: "glibc",
+    nodeVersion: "v24.18.0",
+    nodeAbi: "137",
+    napiVersion: "10",
+    runtimeIdentitySha256: "a".repeat(64),
+    ...overrides,
+  };
+}
+
+function installedTargetFixture(): string {
+  const root = tempRoot();
+  writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+  writeInstalledTree(root);
+  return root;
+}
+
+describe("dependency bootstrap execution target", () => {
+  it("selects optional native packages for the measured execution platform", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, rec.fn),
+        dependencyInstallTarget: installTarget(),
+      },
+    );
+    expect(result.summary.state).toBe("installed");
+    expect(rec.calls()[0]?.args).toEqual([
+      ...DEPENDENCY_INSTALL_ARGS,
+      "--os=linux",
+      "--cpu=arm64",
+      "--libc=glibc",
+    ]);
+  });
+
+  it.each([
+    { os: "darwin", libc: "none" },
+    { cpu: "x64" },
+    { libc: "musl" },
+    { nodeVersion: "v24.19.0" },
+    { nodeAbi: "138" },
+    { napiVersion: "11" },
+    { runtimeIdentitySha256: "b".repeat(64) },
+  ] as const)(
+    "invalidates the receipt when effective target metadata changes: %j",
+    async (change) => {
+      const root = installedTargetFixture();
+      const rec = recordingSpawn();
+      scriptChildClose(rec.child, { exitCode: 0 });
+      const target = installTarget();
+      await runDependencyBootstrap(
+        { kind: "install", lockfile: "absent" },
+        { ...bootstrapDepsFor(root, rec.fn), dependencyInstallTarget: target },
+      );
+      expect(
+        planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, undefined, target).kind,
+      ).toBe("current");
+      expect(
+        planDependencyBootstrap(
+          workspaceAt(root),
+          nodeWorkspaceFs,
+          undefined,
+          installTarget(change),
+        ).kind,
+      ).toBe("install");
+      expect(planFor(root).kind).toBe("install");
+    },
+  );
+
+  it.each([
+    { os: "linux --ignore-scripts=false" },
+    { cpu: "unknown" },
+    { libc: "none" },
+    { nodeVersion: "v24.18.0\n--force" },
+    { nodeAbi: "" },
+    { napiVersion: "unknown" },
+    { runtimeIdentitySha256: "x" },
+    { extraArgument: "--force" },
+  ])("refuses malformed target metadata before starting installation: %j", async (change) => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, rec.fn),
+        dependencyInstallTarget: { ...installTarget(), ...change } as never,
+      },
+    );
+    expect(result.summary.state).toBe("refused");
+    expect(rec.calls()).toHaveLength(0);
+    expect(planFor(root).kind).toBe("install");
+  });
+
+  it("snapshots data before awaiting the existing proxy", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const target = { ...installTarget() };
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, rec.fn),
+        dependencyInstallTarget: target,
+        startEgressProxy: () => {
+          target.os = "darwin";
+          target.libc = "none";
+          return Promise.resolve({
+            url: "http://127.0.0.1:19999",
+            counts: (): { allowed: number; refused: number } => ({ allowed: 0, refused: 0 }),
+            fault: (): undefined => undefined,
+            close: (): Promise<void> => Promise.resolve(),
+          });
+        },
+      },
+    );
+    expect(result.summary.state).toBe("installed");
+    expect(rec.calls()[0]?.args).toContain("--os=linux");
+    expect(
+      planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, undefined, installTarget()).kind,
+    ).toBe("current");
+    expect(
+      planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, undefined, target).kind,
+    ).toBe("install");
+  });
+});
+
+describe("dependency execution target resolver", () => {
+  it.each(["none", "refused"] as const)("does not probe a %s plan", async (kind) => {
+    const root = installedTargetFixture();
+    const resolver = vi.fn(() => Promise.resolve(installTarget()));
+    const rec = recordingSpawn();
+    const plan =
+      kind === "none"
+        ? { kind }
+        : {
+            kind,
+            lockfile: "absent" as const,
+            reason: "unapproved-source" as const,
+          };
+    const result = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      resolveDependencyInstallTarget: resolver,
+    });
+    expect(result.summary.state).toBe(kind);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("replans and reuses only the measured target receipt", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const resolver = vi.fn(() => Promise.resolve(installTarget()));
+    const deps = {
+      ...bootstrapDepsFor(root, rec.fn),
+      resolveDependencyInstallTarget: resolver,
+    };
+    const first = await runDependencyBootstrap(planFor(root), deps);
+    const second = await runDependencyBootstrap(planFor(root), deps);
+    expect(first.summary.state).toBe("installed");
+    expect(second.summary.state).toBe("current");
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(rec.calls()).toHaveLength(1);
+  });
+
+  it.each([new Error("probe unavailable"), undefined])(
+    "cannot reuse after an unavailable probe",
+    async (failure) => {
+      const root = installedTargetFixture();
+      const rec = recordingSpawn();
+      scriptChildClose(rec.child, { exitCode: 0 });
+      await runDependencyBootstrap(
+        { kind: "install", lockfile: "absent" },
+        bootstrapDepsFor(root, rec.fn),
+      );
+      expect(planFor(root).kind).toBe("current");
+      const onFailure = vi.fn();
+      const refused = await runDependencyBootstrap(planFor(root), {
+        ...bootstrapDepsFor(root, rec.fn),
+        onFailure,
+        resolveDependencyInstallTarget: () =>
+          failure instanceof Error ? Promise.reject(failure) : Promise.resolve(failure as never),
+      });
+      expect(["failed", "refused"]).toContain(refused.summary.state);
+      expect(planFor(root).kind).toBe("install");
+      expect(onFailure).toHaveBeenCalledTimes(1);
+      expect(onFailure.mock.calls[0]?.[0]).toMatchObject({ stage: "target-probe" });
+      expect(rec.calls()).toHaveLength(1);
+    },
+  );
+
+  it("refuses accessor fields without invoking repository-like getters", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    const getter = vi.fn(() => "linux");
+    const target = Object.defineProperty({ ...installTarget() }, "os", {
+      get: getter,
+    });
+    const outcome = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      { ...bootstrapDepsFor(root, rec.fn), dependencyInstallTarget: target },
+    );
+    expect(outcome.summary.state).toBe("refused");
+    expect(getter).not.toHaveBeenCalled();
+    expect(rec.calls()).toHaveLength(0);
+  });
+});
+
+describe("dependency completion target authority", () => {
+  it("binds compatibility receipts to the actual host runtime", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      bootstrapDepsFor(root, rec.fn),
+    );
+    expect(planFor(root).kind).toBe("current");
+    const version = Object.getOwnPropertyDescriptor(process, "version");
+    if (version === undefined) throw new TypeError("Host runtime version descriptor unavailable");
+    try {
+      Object.defineProperty(process, "version", {
+        ...version,
+        value: "v24.19.0",
+      });
+      expect(planFor(root).kind).toBe("install");
+    } finally {
+      Object.defineProperty(process, "version", version);
+    }
+    expect(planFor(root).kind).toBe("current");
+  });
+
+  it("discards the old receipt when a changed-target install fails", async () => {
+    const root = installedTargetFixture();
+    const first = recordingSpawn();
+    scriptChildClose(first.child, { exitCode: 0 });
+    const target = installTarget();
+    await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      { ...bootstrapDepsFor(root, first.fn), dependencyInstallTarget: target },
+    );
+    const failed = recordingSpawn();
+    scriptChildClose(failed.child, { exitCode: 1 });
+    const result = await runDependencyBootstrap(
+      { kind: "current", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, failed.fn),
+        dependencyInstallTarget: installTarget({ cpu: "x64" }),
+      },
+    );
+    expect(result.summary.state).toBe("failed");
+    expect(result.summary.completionRecorded).toBe(false);
+    expect(
+      planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, undefined, target).kind,
+    ).toBe("install");
+  });
+
+  it("discards existing completion authority when bootstrap is refused", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      bootstrapDepsFor(root, rec.fn),
+    );
+    expect(planFor(root).kind).toBe("current");
+    await runDependencyBootstrap(
+      { kind: "refused", reason: "unapproved-source", lockfile: "absent" },
+      bootstrapDepsFor(root, rec.fn),
+    );
+    expect(planFor(root).kind).toBe("install");
+  });
+});
+
+describe("dependency target receipt inspection", () => {
+  it("rejects a wrong target before scanning, while same-target changes require inspection", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const target = installTarget();
+    await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      { ...bootstrapDepsFor(root, rec.fn), dependencyInstallTarget: target },
+    );
+    const readDir = vi.fn(nodeWorkspaceFs.readDir);
+    const fs = { ...nodeWorkspaceFs, readDir };
+    expect(
+      planDependencyBootstrap(workspaceAt(root), fs, undefined, installTarget({ cpu: "x64" })).kind,
+    ).toBe("install");
+    expect(readDir).not.toHaveBeenCalled();
+    expect(planDependencyBootstrap(workspaceAt(root), fs, undefined, target).kind).toBe("current");
+    expect(readDir).toHaveBeenCalled();
+    readDir.mockClear();
+    writeFileSync(join(root, "node_modules", "changed.txt"), "changed");
+    expect(planDependencyBootstrap(workspaceAt(root), fs, undefined, target).kind).toBe("install");
+    expect(readDir).toHaveBeenCalled();
   });
 });

@@ -1,3 +1,11 @@
+import {
+  attestPortableSidecarTree,
+  computePortableSidecarPayloadTreeDigest,
+} from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import {
+  portableHandoffOperationFrom,
+  type PortableHandoffOperationOptions,
+} from "./update-portable-handoff-tree.js";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -77,12 +85,12 @@ function hashDirectoryTree(
   sidecar: PortableSidecarRuntimeVerification,
   cachedDigests: ReadonlyMap<string, string> = new Map(),
 ): string {
-  const hash = createHash("sha256");
-  for (const file of listFiles(root, sidecar)) {
-    const rel = relative(root, file).split(sep).join("/");
-    hash.update(`${rel}\0${cachedDigests.get(file) ?? sha256File(file)}\0`);
-  }
-  return hash.digest("hex");
+  return computePortableSidecarPayloadTreeDigest(
+    listFiles(root, sidecar).map((file) => ({
+      relativePath: relative(root, file).split(sep).join("/"),
+      sha256: cachedDigests.get(file) ?? sha256File(file),
+    })),
+  );
 }
 
 function hashExecutableTree(
@@ -91,7 +99,7 @@ function hashExecutableTree(
   executableSha256: string,
 ): string {
   const relativePath = relative(payloadRoot, executablePath).split(sep).join("/");
-  return createHash("sha256").update(`${relativePath}\0${executableSha256}\0`).digest("hex");
+  return computePortableSidecarPayloadTreeDigest([{ relativePath, sha256: executableSha256 }]);
 }
 
 export interface PortableSidecarDiskEvidence {
@@ -129,6 +137,32 @@ export function inspectStagedSidecarPayload(
   } catch {
     return MISSING_DISK_EVIDENCE;
   }
+}
+
+/** Recomputes both complete launch-critical digests without blocking the server event loop. */
+export async function inspectStagedSidecarPayloadAsync(
+  resourceRoot: string,
+  sidecar: PortableSidecarRuntimeVerification,
+  options: PortableHandoffOperationOptions,
+): Promise<PortableSidecarDiskEvidence> {
+  const payloadRoot = resolvedContainedPath(resourceRoot, sidecar.payloadRootPath, sidecar);
+  const executablePath = resolvedContainedPath(resourceRoot, sidecar.executablePath, sidecar);
+  const relativePath = relative(payloadRoot, executablePath).split(sep).join("/");
+  const attestation = await attestPortableSidecarTree(
+    payloadRoot,
+    relativePath,
+    portableHandoffOperationFrom(options),
+  );
+  const executableSha256 = attestation.selectedFileSha256;
+  return {
+    payloadPresent: executableSha256 !== undefined,
+    archiveDigestVerified: attestation.treeSha256 === sidecar.summary.payloadSha256,
+    executableTreeDigestVerified:
+      executableSha256 !== undefined &&
+      executableSha256 === sidecar.shippedExecutableSha256 &&
+      computePortableSidecarPayloadTreeDigest([{ relativePath, sha256: executableSha256 }]) ===
+        sidecar.executableTreeSha256,
+  };
 }
 
 function verifySidecarFiles(

@@ -88,6 +88,7 @@ const RUNTIME_REFUSAL_REASONS = [
   "issue-context-unavailable",
   "question-answer-rejected",
   "delivery-not-evidenced",
+  "verification-not-evidenced",
   "model-unavailable",
   "workspace-unqualified",
   "prompt-allowance-exhausted",

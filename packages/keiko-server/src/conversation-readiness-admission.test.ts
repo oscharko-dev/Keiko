@@ -3,7 +3,10 @@ import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-con
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { withConversationReadinessAdmission } from "./conversation-readiness-admission.js";
+import {
+  captureConversationReadinessAdmission,
+  withConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 import type { UiHandlerDeps } from "./deps.js";
 
 function doneResponse(): NormalizedResponse {
@@ -48,6 +51,7 @@ class ReceiverBoundPort implements ModelPort {
 }
 
 function readyDeps(generation: number): Pick<UiHandlerDeps, "gatewayConfig"> {
+  const checkedAt = new Date().toISOString();
   return {
     gatewayConfig: {
       storagePath: "/dev/null",
@@ -60,7 +64,7 @@ function readyDeps(generation: number): Pick<UiHandlerDeps, "gatewayConfig"> {
       verifiedCapability: () => ({
         modelId: "stream-model",
         generation,
-        checkedAt: "2026-08-17T00:00:00.000Z",
+        checkedAt,
         fields: { conversationReady: true },
       }),
       recordVerifiedCapability: () => undefined,
@@ -76,10 +80,13 @@ describe("withConversationReadinessAdmission — streaming receiver", () => {
       { type: "done", response: doneResponse() },
     ];
     const deps = readyDeps(3);
+    const admission = captureConversationReadinessAdmission(deps, "stream-model");
+    if ("status" in admission) throw new Error("expected fresh test model admission");
+    expect(admission.gatewayConfigGeneration).toBe(deps.gatewayConfig?.generation());
     const wrapped = withConversationReadinessAdmission(
       new ReceiverBoundPort(chunks),
       "stream-model",
-      { modelId: "stream-model", gatewayConfigGeneration: 3 },
+      admission,
       deps,
     );
 

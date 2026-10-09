@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CODING_RUNTIME_EVENT_HUB_MAX_BYTES,
@@ -648,5 +648,128 @@ describe("CodingRuntimeEventHub", () => {
         message: "sse-backpressure",
       }),
     ]);
+  });
+});
+
+describe("CodingRuntimeEventHub safe verifier facts", () => {
+  it("retains measured verifier checks in bounded replay and rejects content-bearing metadata", () => {
+    const hub = new CodingRuntimeEventHub();
+    const verificationSummary = {
+      verifierId: "targeted-test" as const,
+      status: "failed" as const,
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 1240.5,
+    };
+    const input: CodingRuntimeEventHubInput = {
+      ...status("run-verifier", 1),
+      kind: "runtime-event",
+      eventKind: "verification-summarized",
+      verificationSummary,
+    };
+    expect(hub.publish(input)).toMatchObject({ ok: true, event: { verificationSummary } });
+    expect(hub.replay("run-verifier")).toMatchObject({
+      ok: true,
+      events: [{ verificationSummary }],
+    });
+    const contentBearing = {
+      ...input,
+      verificationSummary: { ...verificationSummary, stdout: "private verifier output" },
+    };
+    expect(hub.publish(contentBearing)).toMatchObject({ ok: false });
+  });
+});
+
+describe("CodingRuntimeEventHub verifier metadata ownership", () => {
+  it("owns a validated snapshot instead of retaining mutable input or replay metadata", () => {
+    const hub = new CodingRuntimeEventHub();
+    const verificationSummary = {
+      verifierId: "targeted-test" as const,
+      status: "failed" as const,
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 1240.5,
+    };
+    const published = hub.publish({
+      ...status("run-1986", 1),
+      kind: "runtime-event",
+      eventKind: "verification-summarized",
+      verificationSummary,
+    });
+    if (!published.ok || published.event.kind !== "runtime-event") {
+      throw new Error("expected a published verifier event");
+    }
+    const encoded = JSON.stringify(published.event);
+    const encodedBytes = Buffer.byteLength(encoded, "utf8");
+    verificationSummary.failedCount = 99;
+    verificationSummary.durationMs = Number.NaN;
+    Object.assign(verificationSummary, { stdout: "UNVALIDATED_PRIVATE_CANARY" });
+    expect(published.event.verificationSummary).toEqual({
+      verifierId: "targeted-test",
+      status: "failed",
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 1240.5,
+    });
+    expect(hub.replay("run-1986")).toMatchObject({
+      ok: true,
+      events: [{ verificationSummary: { failedCount: 1, durationMs: 1240.5 } }],
+    });
+    expect(JSON.stringify(published.event)).toBe(encoded);
+    expect(Buffer.byteLength(JSON.stringify(published.event), "utf8")).toBe(encodedBytes);
+    expect(JSON.stringify(hub.replay("run-1986"))).not.toContain("UNVALIDATED_PRIVATE_CANARY");
+    const ownedSummary = published.event.verificationSummary;
+    if (ownedSummary === undefined) throw new Error("expected verifier metadata");
+    expect(Reflect.set(ownedSummary, "stdout", "UNVALIDATED_PRIVATE_CANARY")).toBe(false);
+    expect(Reflect.set(published.event, "revision", 99)).toBe(false);
+  });
+});
+
+describe("native OpenCode retry replay", () => {
+  it("rejects accessor facts before materialization can turn them into data properties", () => {
+    const getter = vi.fn((): number => 2);
+    const nativeRetry = Object.defineProperty(
+      { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+      "attempt",
+      { enumerable: true, get: getter },
+    );
+    const hub = new CodingRuntimeEventHub();
+    expect(
+      hub.publish({
+        ...status("run-native", 1),
+        kind: "runtime-event",
+        eventKind: "native-retry-changed",
+        nativeRetry,
+      }),
+    ).toEqual({ ok: false, reason: "invalid-event" });
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("owns native attempt facts and retains their explicit clear without gateway reinterpretation", () => {
+    const hub = new CodingRuntimeEventHub();
+    const nativeRetry = { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" };
+    const input = {
+      ...status("run-native", 1),
+      kind: "runtime-event" as const,
+      eventKind: "native-retry-changed" as const,
+      nativeRetry,
+    };
+    expect(hub.publish(input).ok).toBe(true);
+    nativeRetry.attempt = 99;
+    expect(hub.publish({ ...input, nativeRetry: null }).ok).toBe(true);
+    const replay = hub.replay("run-native");
+    expect(replay).toMatchObject({
+      ok: true,
+      events: [
+        { nativeRetry: { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" } },
+        { nativeRetry: null },
+      ],
+    });
+    if (!replay.ok) throw new Error("Expected retry replay");
+    const first = replay.events[0];
+    expect(first?.kind === "runtime-event" && Object.isFrozen(first.nativeRetry)).toBe(true);
   });
 });

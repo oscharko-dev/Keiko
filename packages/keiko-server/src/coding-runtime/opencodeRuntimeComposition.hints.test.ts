@@ -111,6 +111,54 @@ function channel(): {
 }
 
 describe("coalescedSyncHints", () => {
+  it("bounds history reads even when streamed events arrive after each fast read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const stream = channel();
+      const merged = vi.fn();
+      const hints = coalescedSyncHints(stream.events, toHint, merged, 100);
+      const first = hints.next();
+      stream.push(event(PLAIN));
+      await first;
+      const next = hints.next();
+      const delivered = vi.fn();
+      void next.then(delivered);
+      for (let index = 0; index < 4; index += 1) {
+        stream.push(event(PLAIN));
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(delivered).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(next).resolves.toEqual({ done: false, value: PLAIN });
+      expect(merged.mock.calls.flat()).toEqual([1, 1, 1]);
+      stream.end();
+      await expect(hints.next()).resolves.toEqual({ done: true, value: undefined });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes a terminal hint immediately during the plain-history delay", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const stream = channel();
+      const hints = coalescedSyncHints(stream.events, toHint, undefined, 100);
+      const first = hints.next();
+      stream.push(event(PLAIN));
+      await first;
+      const next = hints.next();
+      stream.push(event(PLAIN));
+      await vi.advanceTimersByTimeAsync(20);
+      stream.push(event(controlHint("terminal")));
+      await expect(next).resolves.toEqual({ done: false, value: controlHint("terminal") });
+      expect(vi.getTimerCount()).toBe(0);
+      stream.end();
+      await expect(hints.next()).resolves.toEqual({ done: true, value: undefined });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("collapses the plain hints that arrive while a history read runs into one", async () => {
     const burst = Array.from({ length: 200 }, () => event(PLAIN));
 

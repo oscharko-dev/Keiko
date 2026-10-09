@@ -36,8 +36,17 @@ import {
   selectCodingWorkbenchReadinessCandidate,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
-import { currentConversationReady, currentGatewayConfig } from "./deps.js";
+import type {
+  UiHandlerDeps,
+  VerifiedModelCapabilityFields,
+  VerifiedModelCapabilityObservation,
+} from "./deps.js";
+import {
+  CONVERSATION_READINESS_MAX_AGE_MS,
+  conversationReadinessAgeMs,
+  currentConversationReady,
+  currentGatewayConfig,
+} from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import type { RerankSelection } from "./grounded-rerank-facade.js";
@@ -235,6 +244,8 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
+    embeddingModelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    embeddingDimensions: { type: "integer", dataClass: "count", required: false },
   },
   diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
@@ -595,9 +606,24 @@ function logReadinessCompleted(
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
         inconclusiveProbeCount: inconclusiveProbeCount(report),
+        ...retrievalProbeEvidence(report),
       },
     ),
   );
+}
+
+function retrievalProbeEvidence(report: GatewayReadinessReport): {
+  readonly embeddingModelIdDigest?: string;
+  readonly embeddingDimensions?: number;
+} {
+  const modelId = report.probes.find((probe) => probe.name === "embedding")?.modelId;
+  const dimensions = report.verifiedCapabilities.embeddingDimensions;
+  return {
+    ...(modelId === undefined
+      ? {}
+      : { embeddingModelIdDigest: modelIdEvidence(modelId).modelIdDigest }),
+    ...(dimensions === undefined ? {} : { embeddingDimensions: dimensions }),
+  };
 }
 
 // One run's start line: the Coding Workbench's automatic run keeps its own operation, and a run
@@ -759,17 +785,42 @@ function roundedNorm(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
-// eslint-disable-next-line max-lines-per-function
 async function probeEmbedding(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
-  const start = Date.now();
   const provider = chooseEmbeddingProvider(config);
   if (provider === undefined) {
     return skipped("embedding", "No embedding-capable provider is configured.");
   }
+  return {
+    ...(await probeConfiguredEmbedding(deps, config, provider, correlationId)),
+    modelId: provider.modelId,
+  };
+}
+
+function embeddingVectorResult(vector: Float32Array, start: number): GatewayReadinessProbeResult {
+  const dimensions = vector.length;
+  const norm = roundedNorm(vectorL2Norm(vector));
+  const passed = dimensions > 0 && norm > 0;
+  return result(
+    "embedding",
+    passed ? "passed" : "failed",
+    start,
+    passed
+      ? `Configured retrieval embedding endpoint returned ${dimensions.toString()} dimensions with L2 norm ${norm.toFixed(4)} after Keiko normalization.`
+      : "Configured retrieval embedding endpoint returned an empty or zero-norm vector.",
+  );
+}
+
+async function probeConfiguredEmbedding(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  correlationId: string,
+): Promise<GatewayReadinessProbeResult> {
+  const start = Date.now();
   const spend = probeSpendContext(deps, config, provider, correlationId);
   let reservation: ReturnType<typeof reserveGatewayProbeSpend>;
   try {
@@ -797,20 +848,10 @@ async function probeEmbedding(
         `Embedding endpoint could not be verified (${embeddingFailureDetail(outcome)}).`,
       );
     }
-    const dimensions = outcome.value.vector.length;
-    const norm = roundedNorm(vectorL2Norm(outcome.value.vector));
-    const passed = dimensions > 0 && norm > 0;
-    return result(
-      "embedding",
-      passed ? "passed" : "failed",
-      start,
-      passed
-        ? `Embedding endpoint returned ${dimensions.toString()} dimensions with L2 norm ${norm.toFixed(4)}.`
-        : "Embedding endpoint returned an empty or zero-norm vector.",
-    );
+    return embeddingVectorResult(outcome.value.vector, start);
   } catch (probeError) {
     settleGatewayProbeSpend(reservation, undefined);
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "embedding",
@@ -869,7 +910,7 @@ async function probeReranker(
     });
     return rerankerSelectionResult(selection, start);
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "reranker",
@@ -980,7 +1021,7 @@ function providerWarning(errorValue: unknown): string {
 // operator sink keyed by the run's correlation id, with the failing probe named by `source`.
 // Content-free: error class, machine code, gateway request id — never a probe body, an endpoint,
 // or a credential.
-function probeFailure(
+function reportProbeFailure(
   deps: UiHandlerDeps,
   correlationId: string,
   name: GatewayReadinessProbeName,
@@ -1108,7 +1149,7 @@ async function probeChat(
         : "Basic chat did not return a valid assistant response.",
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "chat",
@@ -1155,7 +1196,7 @@ async function probeStreaming(
         : "Streaming completed without the expected text delta.",
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "streaming",
@@ -1189,7 +1230,7 @@ async function probeToolCalling(
     provider,
     deps.gatewayReadinessFetch,
     (error) => {
-      failure = probeFailure(
+      failure = reportProbeFailure(
         deps,
         correlationId,
         "tool_calling",
@@ -1206,7 +1247,7 @@ async function probeToolCalling(
       "tool_calling",
       "passed",
       start,
-      "OpenAI-compatible tool call returned the expected function name.",
+      "Native tool call returned the expected function and schema-valid arguments on the configured response path.",
     );
   }
   if (status === "transient") {
@@ -1256,7 +1297,7 @@ async function probeJsonSchema(
     }
     return jsonSchemaPayloadResult(start, await readProviderJson(response));
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "json_schema",
@@ -1348,7 +1389,7 @@ async function probeReasoning(
       detected ? undefined : qwenReasoningWarning(provider),
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "reasoning",
@@ -1403,7 +1444,7 @@ async function probeImageInput(
         : "The endpoint accepted image input but did not identify the test image content.",
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "image_input",
@@ -1435,7 +1476,7 @@ async function probeDocumentInput(
     }
     return documentInputPayloadResult(start, await readProviderJson(response));
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "document_input",
@@ -1590,7 +1631,7 @@ async function probeLongContext(
     }
     return longContextPayloadResult(start, tokens, sentinel, await readProviderJson(response));
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "long_context",
@@ -1726,10 +1767,11 @@ function verifiedCapabilities(
     VERIFIED_CAPABILITY_PROBES.map(([key, probe]) => [key, passed.has(probe) || undefined]),
   ) as Omit<
     GatewayReadinessReport["verifiedCapabilities"],
-    "testedContextTokens" | "embeddingDimensions" | "embeddingNorm"
+    "testedContextTokens" | "embeddingModelId" | "embeddingDimensions" | "embeddingNorm"
   >;
   return {
     ...verified,
+    embeddingModelId: embedding?.modelId,
     embeddingDimensions,
     embeddingNorm,
     testedContextTokens,
@@ -1798,16 +1840,35 @@ function recordReadinessObservation(
   // chat-only refresh and re-stamp stale previous fields with a fresh checkedAt — verified
   // evidence contradicted by the very run recording it.
   const chatOnlyRun = !executedCategoricalFeatureProbe(report.probes);
-  const fields =
-    chatOnlyRun && previous !== undefined && previous.generation === observedGeneration
-      ? { ...previous.fields, ...observation }
-      : observation;
+  const retained = retainedFeatureObservation(previous, chatOnlyRun, observedGeneration);
+  const fields = retained === undefined ? observation : { ...retained.fields, ...observation };
+  if (retained !== undefined) {
+    deps.gatewayConfig?.recordVerifiedCapability(
+      report.modelId,
+      fields,
+      retained.checkedAt,
+      observedGeneration,
+      report.checkedAt,
+    );
+    return;
+  }
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
     fields,
     report.checkedAt,
     observedGeneration,
   );
+}
+
+function retainedFeatureObservation(
+  previous: VerifiedModelCapabilityObservation | undefined,
+  chatOnly: boolean,
+  generation: number | undefined,
+): VerifiedModelCapabilityObservation | undefined {
+  if (!chatOnly || previous === undefined || previous.generation !== generation) return undefined;
+  return Object.keys(previous.fields).some((key) => key !== "conversationReady")
+    ? previous
+    : undefined;
 }
 
 function recordFailedReadinessObservation(
@@ -1835,6 +1896,7 @@ function preserveUnexecutedCapabilityObservation(
     { ...previous.fields, conversationReady: false },
     previous.checkedAt,
     observedGeneration,
+    report.checkedAt,
   );
   return true;
 }
@@ -1859,9 +1921,10 @@ function preserveVerifiedToolCallingObservation(
   // with its original timestamp so an unrelated outage cannot erase uncontradicted evidence.
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
-    { toolCalling: true },
+    { toolCalling: true, conversationReady: categoricalProbeValue(report.probes, "chat") === true },
     previous.checkedAt,
     observedGeneration,
+    report.checkedAt,
   );
   return true;
 }
@@ -1998,9 +2061,14 @@ const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
 // cooldown, so one slow answer at peak load locked the Workbench out with no operator remedy but
 // a restart. An inconclusive run is retried on the next Workbench read after this much quiet.
 export const WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS = 60_000;
-type WorkbenchProbeOutcome = "proven" | "refuted" | "inconclusive";
+type WorkbenchProbeOutcome = "proven" | "refuted" | "inconclusive" | "stale";
 interface WorkbenchProbeEntry {
   readonly promise: Promise<void>;
+  readonly perform: () => Promise<void>;
+  readonly holder: UiHandlerDeps["gatewayConfig"];
+  readonly cancelQueued: () => void;
+  prioritized: boolean;
+  running: boolean;
   at: number;
   cooldownMs: number;
   settled: boolean;
@@ -2012,10 +2080,12 @@ const workbenchProbes = new Map<string, WorkbenchProbeEntry>();
 // six models at once would store the first to finish and silently drop the other five. A queue
 // lets every run start on the generation the one before it left behind.
 let workbenchProbeQueue: Promise<void> = Promise.resolve();
+let workbenchProbeQueueRunning = false;
 
 export function resetCodingWorkbenchContextWindowProbesForTests(): void {
   workbenchProbes.clear();
   workbenchProbeQueue = Promise.resolve();
+  workbenchProbeQueueRunning = false;
 }
 
 /** Resolves once every automatic Workbench probe queued so far has finished. Test seam. */
@@ -2026,6 +2096,13 @@ export function codingWorkbenchProbesSettledForTests(): Promise<void> {
 function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
   const eligibility = codingWorkbenchModelEligibility(capability);
   if (eligibility === "ineligible") return [];
+  return [
+    ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
+    ...workbenchContextProbes(capability),
+  ];
+}
+
+function workbenchContextProbes(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
   const minimum = CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
   const canProveMinimum =
     Math.min(
@@ -2033,10 +2110,49 @@ function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayRea
       capability.maxInputTokens ?? Number.POSITIVE_INFINITY,
     ) >= minimum;
   const shortWindow = canProveMinimum && capability.contextWindow < minimum;
-  return [
-    ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
-    ...(shortWindow ? (["long_context"] as const) : []),
-  ];
+  return shortWindow ? ["long_context"] : [];
+}
+
+/** Fresh LiteLLM models need a live tool proof before they can appear in the Coding picker. */
+export async function initializeLiteLlmCodingReadiness(
+  deps: UiHandlerDeps,
+  correlationId: string,
+): Promise<void> {
+  const config = deps.gatewayConfig?.current();
+  if (config === undefined) return;
+  const targets = liteLlmWorkbenchProbeTargets(config);
+  await Promise.all(
+    targets.map((target) => enqueueWorkbenchProbe(deps, config, target, correlationId)),
+  );
+}
+
+function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
+  return listConfiguredCapabilities(config).flatMap((model): WorkbenchProbeTarget[] => {
+    const provider = config.providers.find((candidate) => candidate.modelId === model.id);
+    if (
+      model.kind !== "chat" ||
+      provider?.tokenCounter !== "litellm" ||
+      model.toolCallingVerification?.status === "unsupported"
+    )
+      return [];
+    const known = workbenchProbesNeeded(model);
+    const probes =
+      codingWorkbenchModelEligibility(model) === "ineligible"
+        ? ["tool_calling" as const, ...workbenchContextProbes(model)]
+        : known;
+    return probes.length === 0 ? [] : [{ modelId: model.id, probes }];
+  });
+}
+
+export function isLiteLlmCodingReadinessPending(deps: UiHandlerDeps): boolean {
+  const config = deps.gatewayConfig?.current();
+  return (
+    config?.providers.some(
+      (provider) =>
+        provider.tokenCounter === "litellm" &&
+        isCodingWorkbenchProbePending(config, provider.modelId),
+    ) ?? false
+  );
 }
 
 interface WorkbenchProbeTarget {
@@ -2068,14 +2184,19 @@ function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
  * profile while this holds keeps reading until the gateway has actually answered.
  */
 export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: string): boolean {
+  const model = listConfiguredCapabilities(config).find((candidate) => candidate.id === modelId);
+  if (model === undefined || model.toolCallingVerification?.status === "unsupported") return false;
   const entry = workbenchProbes.get(workbenchProbeKey(config, modelId));
-  return entry !== undefined && (!entry.settled || entry.outcome === "inconclusive");
+  return (
+    entry !== undefined &&
+    (!entry.settled || entry.outcome === "inconclusive" || entry.outcome === "stale")
+  );
 }
 
 /** Whether any model the Workbench could still elect has its verification open. */
 export function isAnyCodingWorkbenchProbePending(config: GatewayConfig): boolean {
-  return workbenchProbeTargets(config).some((target) =>
-    isCodingWorkbenchProbePending(config, target.modelId),
+  return config.providers.some((provider) =>
+    isCodingWorkbenchProbePending(config, provider.modelId),
   );
 }
 
@@ -2086,6 +2207,15 @@ function workbenchProbeOutcome(
   if ("status" in report) return "inconclusive";
   const results = target.probes.map((name) => report.probes.find((probe) => probe.name === name));
   if (results.every((probe) => probe?.status === "passed")) return "proven";
+  if (
+    results.some(
+      (probe) =>
+        probe?.name === "tool_calling" &&
+        (probe.status === "failed" || probe.status === "unsupported") &&
+        !probeInconclusive(probe),
+    )
+  )
+    return "refuted";
   // The gating chat probe runs first and a target probe is skipped when it fails: a gateway that
   // never answered the chat probe has not refuted anything either.
   if (report.probes.some(probeInconclusive)) return "inconclusive";
@@ -2095,7 +2225,6 @@ function workbenchProbeOutcome(
 async function runWorkbenchProbe(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
-  key: string,
   correlationId: string,
 ): Promise<WorkbenchProbeOutcome> {
   const generation = deps.gatewayConfig?.generation();
@@ -2112,12 +2241,14 @@ async function runWorkbenchProbe(
     const config = deps.gatewayConfig?.current();
     const stillNeeded =
       config !== undefined &&
-      workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
+      [...workbenchProbeTargets(config), ...liteLlmWorkbenchProbeTargets(config)].some(
+        (pending) => pending.modelId === target.modelId,
+      );
     // Proven, yet not stored: the configuration changed under the run and the conclusion was
     // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
     // the model unusable for hours.
     if (outcome === "proven" && stillNeeded && deps.gatewayConfig?.generation() !== generation)
-      workbenchProbes.delete(key);
+      return "stale";
     return outcome;
   } catch (error) {
     emitServerDiagnostic(
@@ -2140,30 +2271,102 @@ function enqueueWorkbenchProbe(
   config: GatewayConfig,
   target: WorkbenchProbeTarget,
   correlationId: string,
+  prioritized = false,
 ): Promise<void> {
   const key = workbenchProbeKey(config, target.modelId);
   const known = workbenchProbes.get(key);
-  if (known !== undefined && Date.now() - known.at < known.cooldownMs) {
+  if (known !== undefined && (!known.settled || Date.now() - known.at < known.cooldownMs)) {
+    known.prioritized ||= prioritized;
     return known.promise;
   }
+  const entry = createWorkbenchProbeEntry(deps, target, correlationId, prioritized);
+  workbenchProbes.set(key, entry);
+  startWorkbenchProbeQueue();
+  return entry.promise;
+}
+
+function createWorkbenchProbeEntry(
+  deps: UiHandlerDeps,
+  target: WorkbenchProbeTarget,
+  correlationId: string,
+  prioritized: boolean,
+): WorkbenchProbeEntry {
+  let finish: () => void = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
   const entry: WorkbenchProbeEntry = {
-    promise: workbenchProbeQueue.then(async () => {
-      const outcome = await runWorkbenchProbe(deps, target, key, correlationId);
+    promise,
+    holder: deps.gatewayConfig,
+    cancelQueued: (): void => {
+      if (entry.running || entry.settled) return;
+      entry.settled = true;
+      finish();
+    },
+    perform: async (): Promise<void> => {
+      const controlled =
+        deps.gatewayConfig === undefined
+          ? deps
+          : cancellableConversationProbeDeps(
+              deps,
+              conversationQueue(deps.gatewayConfig).controller.signal,
+            );
+      const outcome = await runWorkbenchProbe(controlled, target, correlationId);
       entry.settled = true;
       entry.outcome = outcome;
       entry.at = Date.now();
-      entry.cooldownMs =
-        outcome === "inconclusive"
-          ? WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS
-          : WORKBENCH_REPROBE_COOLDOWN_MS;
-    }),
+      entry.cooldownMs = workbenchProbeCooldownMs(outcome);
+      finish();
+    },
+    prioritized,
+    running: false,
     at: Date.now(),
     cooldownMs: WORKBENCH_REPROBE_COOLDOWN_MS,
     settled: false,
   };
-  workbenchProbeQueue = entry.promise;
-  workbenchProbes.set(key, entry);
-  return entry.promise;
+  return entry;
+}
+
+function workbenchProbeCooldownMs(outcome: WorkbenchProbeOutcome): number {
+  if (outcome === "stale") return 0;
+  if (outcome === "inconclusive") return WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS;
+  return WORKBENCH_REPROBE_COOLDOWN_MS;
+}
+
+function nextWorkbenchProbe(): WorkbenchProbeEntry | undefined {
+  const pending = [...workbenchProbes.values()].filter((entry) => !entry.settled && !entry.running);
+  return pending.find((entry) => entry.prioritized) ?? pending[0];
+}
+
+function startWorkbenchProbeQueue(): void {
+  if (workbenchProbeQueueRunning) return;
+  workbenchProbeQueueRunning = true;
+  workbenchProbeQueue = drainWorkbenchProbeQueue().finally(() => {
+    workbenchProbeQueueRunning = false;
+    if (nextWorkbenchProbe() !== undefined) startWorkbenchProbeQueue();
+  });
+}
+
+async function drainWorkbenchProbeQueue(): Promise<void> {
+  await Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    performNextWorkbenchProbe(resolve, reject);
+  });
+}
+
+function performNextWorkbenchProbe(resolve: () => void, reject: (error: unknown) => void): void {
+  const entry = nextWorkbenchProbe();
+  if (entry === undefined) {
+    resolve();
+    return;
+  }
+  entry.running = true;
+  void entry
+    .perform()
+    .then(() => {
+      performNextWorkbenchProbe(resolve, reject);
+    })
+    .catch(reject);
 }
 
 export async function ensureCodingWorkbenchContextWindows(
@@ -2182,7 +2385,10 @@ export async function ensureCodingWorkbenchContextWindows(
     ...targets.filter((target) => target.modelId !== electedModelId),
   ];
   const queued = new Map(
-    ordered.map((target) => [target.modelId, enqueueWorkbenchProbe(deps, config, target, id)]),
+    ordered.map((target) => [
+      target.modelId,
+      enqueueWorkbenchProbe(deps, config, target, id, target.modelId === electedModelId),
+    ]),
   );
   // A named model waits for ITS proof only — never for another model's. Without a name (the
   // Workbench could elect none yet) the first queued model is the one it would elect next.
@@ -2283,7 +2489,11 @@ function enqueueConversationProbe(
   return new Promise<void>((resolve, reject) => {
     queue.pending.push(async (): Promise<void> => {
       try {
-        if (!queue.disposed && holder.generation() === generation)
+        if (
+          !queue.disposed &&
+          holder.generation() === generation &&
+          holder.current()?.providers.some((provider) => provider.modelId === modelId) === true
+        )
           await runOnDemandReadinessProbe(
             cancellableConversationProbeDeps(deps, queue.controller.signal),
             holder,
@@ -2311,7 +2521,10 @@ function enqueueConversationProbe(
   });
 }
 
-function cancellableConversationProbeDeps(deps: UiHandlerDeps, signal: AbortSignal): UiHandlerDeps {
+export function cancellableConversationProbeDeps(
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+): UiHandlerDeps {
   const fetch = deps.gatewayReadinessFetch ?? globalThis.fetch;
   return {
     ...deps,
@@ -2330,14 +2543,19 @@ export async function stopConfiguredConversationReadiness(deps: UiHandlerDeps): 
   const queue = conversationQueue(holder);
   queue.disposed = true;
   queue.controller.abort();
+  const workbench = [...workbenchProbes.values()].filter((entry) => entry.holder === holder);
+  for (const entry of workbench) entry.cancelQueued();
   for (const timer of queue.retries.values()) clearTimeout(timer);
   queue.retries.clear();
   drainConversationQueue(queue);
   // Each probe reports its own failure; this barrier keeps those reports ahead of shutdown sealing.
-  await Promise.allSettled([...readinessProbesFor(holder).values()].map((probe) => probe.promise));
+  await Promise.allSettled([
+    ...[...readinessProbesFor(holder).values()].map((probe) => probe.promise),
+    ...workbench.map((entry) => entry.promise),
+  ]);
 }
 
-function initializationDeps(
+export function withReadinessParentCorrelation(
   deps: UiHandlerDeps,
   parentCorrelationId: string | undefined,
 ): UiHandlerDeps {
@@ -2364,7 +2582,7 @@ function monitorConversationInitialization(
   if (holder?.generation() !== generation || conversationQueue(holder).disposed) return;
   const causalParent = parentCorrelationId ?? holder.initializationCorrelationId;
   const probeCorrelationId = newCorrelationId();
-  const observedDeps = initializationDeps(deps, causalParent);
+  const observedDeps = withReadinessParentCorrelation(deps, causalParent);
   void ensureOnDemandConversationReadiness(observedDeps, modelId, probeCorrelationId, attempt)
     .catch((error: unknown) => {
       emitServerDiagnostic(
@@ -2386,6 +2604,30 @@ function monitorConversationInitialization(
 }
 
 const MAX_CONVERSATION_RECOVERY_DELAY_MS = 5 * 60_000;
+function conversationReadinessRenewAfterMs(): number {
+  return CONVERSATION_READINESS_MAX_AGE_MS - WORKBENCH_PROBE_TIMEOUT_FLOOR_MS - 60_000;
+}
+
+function conversationRecoveryDelay(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  attempt: number,
+): number {
+  const observation = holder.verifiedCapability(modelId);
+  if (currentConversationReady(deps, modelId) && observation !== undefined)
+    return (
+      Math.max(0, conversationReadinessRenewAfterMs() - conversationReadinessAgeMs(observation)) + 1
+    );
+  return (
+    (conversationQueue(holder).retryable.get(modelId) === false
+      ? MAX_CONVERSATION_RECOVERY_DELAY_MS
+      : Math.min(
+          NOT_READY_REPROBE_COOLDOWN_MS * 2 ** Math.min(attempt - 1, 4),
+          MAX_CONVERSATION_RECOVERY_DELAY_MS,
+        )) + 1
+  );
+}
 
 function scheduleConversationRecovery(
   deps: UiHandlerDeps,
@@ -2400,11 +2642,11 @@ function scheduleConversationRecovery(
   if (
     queue.disposed ||
     holder.generation() !== generation ||
-    currentConversationReady(deps, modelId)
+    holder.current()?.providers.some((provider) => provider.modelId === modelId) !== true
   )
     return;
-  if (queue.retryable.get(modelId) === false) return;
   clearTimeout(queue.retries.get(modelId));
+  const nextAttempt = currentConversationReady(deps, modelId) ? 1 : attempt + 1;
   const retry = setTimeout(
     () => {
       queue.retries.delete(modelId);
@@ -2413,19 +2655,51 @@ function scheduleConversationRecovery(
         modelId,
         generation,
         parentCorrelationId,
-        attempt + 1,
+        nextAttempt,
       );
     },
-    Math.min(
-      NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1),
-      MAX_CONVERSATION_RECOVERY_DELAY_MS,
-    ) + 1,
+    conversationRecoveryDelay(deps, holder, modelId, attempt),
   );
   retry.unref();
   queue.retries.set(modelId, retry);
 }
 
-/** Configuration-owned, rate-bounded background probes heal outages without per-question checks. */
+function resetConversationGeneration(
+  queue: ConversationInitializationQueue,
+  generation: number,
+): void {
+  if (queue.initializedGeneration === generation) return;
+  for (const timer of queue.retries.values()) clearTimeout(timer);
+  queue.retries.clear();
+  queue.retryable.clear();
+  queue.probeSettledAt.clear();
+  queue.initializedGeneration = generation;
+}
+
+function initializeConversationModel(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string | undefined,
+): void {
+  if (readinessProbesFor(holder).has(`${String(holder.generation())}:${modelId}`)) return;
+  const observation = holder.verifiedCapability(modelId);
+  const ready = currentConversationReady(deps, modelId);
+  const queue = conversationQueue(holder);
+  if (
+    ready &&
+    observation !== undefined &&
+    conversationReadinessAgeMs(observation) < conversationReadinessRenewAfterMs()
+  ) {
+    if (!queue.retries.has(modelId))
+      scheduleConversationRecovery(deps, modelId, holder.generation(), correlationId, 1);
+    return;
+  }
+  if (observation?.fields.conversationReady === false && queue.retries.has(modelId)) return;
+  monitorConversationInitialization(deps, modelId, holder.generation(), correlationId, 1);
+}
+
+/** Configuration-owned, rate-bounded background probes renew health and recover outages. */
 export function initializeConfiguredConversationReadiness(
   deps: UiHandlerDeps,
   correlationId?: string,
@@ -2433,31 +2707,20 @@ export function initializeConfiguredConversationReadiness(
   const holder = deps.gatewayConfig;
   if (holder === undefined) return;
   const queue = conversationQueue(holder);
-  const generation = holder.generation();
-  if (queue.disposed || queue.initializedGeneration === generation) return;
-  for (const timer of queue.retries.values()) clearTimeout(timer);
-  queue.retries.clear();
-  queue.retryable.clear();
-  queue.probeSettledAt.clear();
-  queue.initializedGeneration = generation;
+  if (queue.disposed) return;
+  resetConversationGeneration(queue, holder.generation());
   const config = currentGatewayConfig(deps);
   if (config === undefined) return;
   for (const model of listConfiguredCapabilities(config)) {
-    if (model.kind === "chat")
-      monitorConversationInitialization(deps, model.id, generation, correlationId, 1);
+    if (model.kind === "chat") initializeConversationModel(deps, holder, model.id, correlationId);
   }
 }
 
 /**
- * What a conversation request does about a model that is not ready. A ready model, and a model whose
- * readiness was never observed, are never probed here: interactive Chat adds no readiness request.
- * A probe already running is joined. Only a model whose LAST probe failed at least
- * `NOT_READY_REPROBE_COOLDOWN_MS` ago earns one fresh probe from the first request that needs it —
- * a conclusive failure stops the background retries, so without this a transient gateway answer at
- * startup would leave the model not-ready until a restart or a Settings change (1.1.13 regression;
- * 1.1.11 re-probed on the next send). The probe goes through the same in-flight map, the same
- * two-slot queue and the same cooldown as every other probe, so concurrent requests share it and a
- * failed one refreshes the cooldown: never a probe storm.
+ * Fresh chat success adds no interactive readiness request. A running probe is joined; an expired
+ * success or a failed observation outside its cooldown can share one fresh check through the
+ * existing two-slot queue. Background renewal and recovery use the same in-flight owner, so
+ * simultaneous requests cannot create a probe storm.
  */
 export async function awaitInitializedConversationReadiness(
   deps: UiHandlerDeps,
@@ -2488,7 +2751,12 @@ async function reprobeExpiredNotReadyModel(
   correlationId: string | undefined,
 ): Promise<void> {
   if (modelId.length === 0 || conversationQueue(holder).disposed) return;
-  if (!notReadyCooldownElapsed(holder, modelId)) return;
+  const observation = holder.verifiedCapability(modelId);
+  const expiredSuccess =
+    observation?.generation === holder.generation() &&
+    observation.fields.conversationReady === true &&
+    !currentConversationReady(deps, modelId);
+  if (!expiredSuccess && !notReadyCooldownElapsed(holder, modelId)) return;
   const requestCorrelationId = correlationId ?? newCorrelationId();
   // The probe's own lines carry the request's correlation id; a probe failure is reported once by
   // the queue and once here, against the request that was waiting for it.
@@ -2515,8 +2783,8 @@ async function reprobeExpiredNotReadyModel(
 // readiness twin of the 0.3.11 endless-indexing incident). It must not be re-probed on every
 // request either — each probe can burn the full provider timeout against a dead gateway. So a
 // current-generation non-ready observation answers the guard only within this window; after it,
-// configuration-owned background recovery — and, when that has stopped on a conclusive failure, the
-// first conversation request that needs the model — re-probes and either heals or refreshes the pin.
+// configuration-owned background recovery, or the first conversation request that needs the model,
+// re-probes and either heals or refreshes the pin. Answered failures retain slow background recovery.
 export const NOT_READY_REPROBE_COOLDOWN_MS = 30_000;
 
 // Age of the current-generation EXPLICIT failed chat observation of a model, `NaN` when its
@@ -2531,7 +2799,7 @@ function notReadyObservationAgeMs(
   const observation = holder.verifiedCapability(modelId);
   if (observation?.generation !== holder.generation()) return undefined;
   if (observation.fields.conversationReady !== false) return undefined;
-  return Date.now() - Date.parse(observation.checkedAt);
+  return conversationReadinessAgeMs(observation);
 }
 
 function withinNotReadyCooldown(
@@ -2561,6 +2829,23 @@ function notReadyCooldownElapsed(
   return usableAges.length > 0 && Math.min(...usableAges) >= NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
+function conversationProbeDue(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  backgroundAttempt: number | undefined,
+): boolean {
+  if (holder.current()?.providers.some((provider) => provider.modelId === modelId) !== true)
+    return false;
+  if (!currentConversationReady(deps, modelId)) return true;
+  if (backgroundAttempt === undefined) return false;
+  const observation = holder.verifiedCapability(modelId);
+  return (
+    observation !== undefined &&
+    conversationReadinessAgeMs(observation) >= conversationReadinessRenewAfterMs()
+  );
+}
+
 // `correlationId` is the conversation request that needed the answer: the probe's lines carry it,
 // so that request's timeline shows the check it waited for.
 export async function ensureOnDemandConversationReadiness(
@@ -2571,7 +2856,7 @@ export async function ensureOnDemandConversationReadiness(
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
-  if (currentConversationReady(deps, modelId)) return;
+  if (!conversationProbeDue(deps, holder, modelId, backgroundAttempt)) return;
   if (withinNotReadyCooldown(holder, modelId)) return;
   // The in-flight key carries the generation: a config replaced mid-probe must not hand the
   // NEW generation's caller the OLD generation's discarded report.

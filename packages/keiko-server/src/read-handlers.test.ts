@@ -203,6 +203,45 @@ describe("GET /api/config", () => {
 });
 
 describe("GET /api/models", () => {
+  it("omits expired readiness while a reload returns its local catalog synchronously", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+    try {
+      const gatewayConfig = probeVerifiedGatewayConfig(SAMPLE_CONFIG);
+      gatewayConfig.recordVerifiedCapability(
+        "example-chat-model",
+        { conversationReady: true },
+        new Date().toISOString(),
+      );
+      vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
+      const refreshGatewayCatalog = vi.fn();
+      const result = handleModels(
+        ctx("/api/models?refresh=1"),
+        depsWith({ gatewayConfig, refreshGatewayCatalog }),
+      );
+      expect(result).toMatchObject({
+        status: 200,
+        body: { models: [{ id: "example-chat-model" }] },
+      });
+      const body = result.body as { models: Record<string, unknown>[] };
+      expect(body.models[0]).not.toHaveProperty("conversationReady");
+      expect(refreshGatewayCatalog).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a requested background refresh and returns the existing catalog synchronously", () => {
+    const refreshGatewayCatalog = vi.fn();
+    const deps = depsWith({ config: SAMPLE_CONFIG, refreshGatewayCatalog });
+    const result = handleModels(ctx("/api/models?refresh=1"), deps);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ models: [{ id: "example-chat-model" }] });
+    expect(refreshGatewayCatalog).toHaveBeenCalledOnce();
+    handleModels(ctx("/api/models"), deps);
+    expect(refreshGatewayCatalog).toHaveBeenCalledOnce();
+  });
+
   // Relocated pin (0.3.11 → 0.3.12): the invariant is unchanged — only a CURRENT-generation
   // observation may project readiness, and a config re-save structurally invalidates it. What
   // changed is the projection of "never probed": tri-state ABSENT instead of a hard false,
@@ -229,7 +268,7 @@ describe("GET /api/models", () => {
     gatewayConfig.recordVerifiedCapability(
       "example-chat-model",
       { conversationReady: true },
-      "2026-08-16T00:00:00.000Z",
+      new Date().toISOString(),
       gatewayConfig.generation(),
     );
     expect(projectedReady()).toBe(true);

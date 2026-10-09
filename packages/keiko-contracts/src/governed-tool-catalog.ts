@@ -100,7 +100,7 @@ export interface CatalogProfileToolRef {
   readonly alias: string;
 }
 export interface CatalogNativeExtension {
-  readonly alias: "question";
+  readonly alias: "question" | "execute";
   readonly contractVersion: 1;
 }
 export interface CatalogCompatibilityEndpoint {

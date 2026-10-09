@@ -1,3 +1,7 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import { describe, expect, it, vi } from "vitest";
@@ -16,6 +20,7 @@ import {
   createRuntimeCodingToolFacade,
 } from "./codingToolAuthorityPort.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
+import type { GovernedNativeFileIO } from "./codingToolReadEditPorts.js";
 import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
 import {
   codingToolApprovalBindingDigest,
@@ -143,6 +148,31 @@ function runtimeContext(): {
     envelopeDigest: DIGEST,
     authorityExpiresAt: "2026-07-12T12:00:00.000Z",
   };
+}
+
+function discoveryPort(
+  workspaceRoot: string,
+): ReturnType<typeof createCodingToolReadEditPorts>["repositoryDiscover"] {
+  return createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+    editorAgentClient: { action: () => Promise.reject(new Error("unused-editor-route")) },
+    resolveEditorActionContext: () => {
+      throw new Error("unused-edit-context");
+    },
+    resolveWorkspaceRootAccess: () => ({
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      repositoryRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    }),
+    resolveRepositoryReadContext: () => ({
+      runId: runtimeContext().runId,
+      envelopeDigest: runtimeContext().envelopeDigest,
+      workspaceId: liveFacts.binding.workspaceId,
+      workspaceRootDigest: liveFacts.binding.workspaceRootDigest,
+      expiresAt: runtimeContext().authorityExpiresAt,
+    }),
+  }).repositoryDiscover;
 }
 
 function approvableRequest(
@@ -1426,36 +1456,42 @@ describe("CodingToolAuthorityPort", () => {
     };
 
     it("does not read an unavailable context at construction when a registry is supplied", async () => {
-      let available = false;
-      const contextProvider = vi.fn(() => {
-        if (!available) throw new Error("context-not-ready-private");
-        return runtimeContext();
-      });
-      const repositoryDiscover = vi.fn(() =>
-        Promise.resolve({ status: "completed" as const, evidence: [] }),
-      );
-      const runtime = createRuntimeCodingToolFacade(
-        authority,
-        contextProvider,
-        { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
-        { invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }) },
-      );
-      expect(contextProvider).not.toHaveBeenCalled();
+      const workspace = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lazy-discovery-")));
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(runtimeContext().nowIso));
+      try {
+        let available = false;
+        const contextProvider = vi.fn(() => {
+          if (!available) throw new Error("context-not-ready-private");
+          return { ...runtimeContext(), workspaceRoot: workspace };
+        });
+        const repositoryDiscover = vi.fn(discoveryPort(workspace).execute);
+        const runtime = createRuntimeCodingToolFacade(
+          authority,
+          contextProvider,
+          { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
+          { invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }) },
+        );
+        expect(contextProvider).not.toHaveBeenCalled();
 
-      available = true;
-      await expect(
-        runtime.execute({
-          body: JSON.stringify({
-            action: "discover",
-            actionId: "lazy-context",
-            idempotencyKey: "lazy-context",
-            query: "needle",
-            maxResults: 1,
+        available = true;
+        await expect(
+          runtime.execute({
+            body: JSON.stringify({
+              action: "discover",
+              actionId: "lazy-context",
+              idempotencyKey: "lazy-context",
+              query: "needle",
+              maxResults: 1,
+            }),
+            capability: "runtime-capability-secret",
           }),
-          capability: "runtime-capability-secret",
-        }),
-      ).resolves.toMatchObject({ status: "completed" });
-      expect(repositoryDiscover).toHaveBeenCalledOnce();
+        ).resolves.toMatchObject({ status: "completed" });
+        expect(repositoryDiscover).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+        rmSync(workspace, { recursive: true, force: true });
+      }
     });
 
     it("emits real tool-catalog.* binding + settlement lines with a correlation id and no bodies for a real discover dispatch", async () => {
@@ -1978,3 +2014,1055 @@ describe("CodingToolAuthorityPort", () => {
     });
   });
 });
+
+describe("private native snapshot constructor admission", () => {
+  const authority = {
+    resolveCapabilityForDelegation: (): {
+      readonly ok: true;
+      readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope;
+    } => ({
+      ok: true as const,
+      envelope: fullyAuthorizedEnvelope,
+    }),
+    revalidateCapabilityForMutation: (): {
+      readonly ok: true;
+      readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope;
+    } => ({
+      ok: true as const,
+      envelope: fullyAuthorizedEnvelope,
+    }),
+  };
+  it("keeps the private facet absent without its actual producer or canonical bridge", () => {
+    expect(
+      createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts()).nativeTextRead,
+    ).toBeUndefined();
+    const producer = { readTextSnapshot: vi.fn() };
+    expect(
+      createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+        nativeTextRead: producer,
+        disableCatalogBridge: true,
+      }).nativeTextRead,
+    ).toBeUndefined();
+    expect(producer.readTextSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("captures the actual private producer once without changing the model execute method", async () => {
+    const log = createBufferedServerLogSink();
+    const original = {
+      readTextSnapshot: vi.fn(() =>
+        Promise.resolve({ ok: false as const, reason: "snapshot-unavailable" as const }),
+      ),
+    };
+    const replacement = { readTextSnapshot: vi.fn() };
+    let selected = original;
+    const readSelection = vi.fn(() => selected);
+    const facade = createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+      get nativeTextRead() {
+        return readSelection();
+      },
+      catalogActivityLog: log,
+    });
+    selected = replacement;
+    expect(Object.isFrozen(facade.nativeTextRead)).toBe(true);
+    const result = await facade.nativeTextRead?.readTextSnapshot({
+      capability: "runtime-capability-secret",
+      body: JSON.stringify({
+        action: "read",
+        actionId: "private-constructor",
+        idempotencyKey: "private-constructor",
+        relativePath: "src/a.ts",
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: "snapshot-unavailable" });
+    expect(original.readTextSnapshot).toHaveBeenCalledOnce();
+    expect(replacement.readTextSnapshot).not.toHaveBeenCalled();
+    expect(readSelection).toHaveBeenCalledOnce();
+    expect(typeof facade.execute).toBe("function");
+  });
+  it("fails a technically unavailable private authority context closed with body-free evidence", async () => {
+    const log = createBufferedServerLogSink();
+    const diagnostics: unknown[] = [];
+    const producer = { readTextSnapshot: vi.fn() };
+    const facade = createRuntimeCodingToolFacade(
+      authority,
+      () => {
+        throw new Error("PRIVATE_NATIVE_AUTHORITY_CONTEXT_SENTINEL");
+      },
+      governedPorts(),
+      {
+        nativeTextRead: producer,
+        invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }),
+        catalogActivityLog: log,
+        catalogDiagnostics: { record: (value): void => void diagnostics.push(value) },
+      },
+    );
+    await expect(
+      facade.nativeTextRead?.readTextSnapshot({
+        capability: "runtime-capability-secret",
+        body: JSON.stringify({
+          action: "read",
+          actionId: "private-context",
+          idempotencyKey: "private-context",
+          relativePath: "src/private.ts",
+        }),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(producer.readTextSnapshot).not.toHaveBeenCalled();
+    expect(log.events).toMatchObject([
+      {
+        op: "coding-runtime.tool-result",
+        extra: { actionKind: "read", state: "discarded", reason: "authority-resolution-failed" },
+      },
+    ]);
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.stringify({ events: log.events, diagnostics })).not.toContain(
+      "PRIVATE_NATIVE_AUTHORITY_CONTEXT_SENTINEL",
+    );
+    expect(JSON.stringify({ events: log.events, diagnostics })).not.toContain("src/private.ts");
+  });
+});
+
+it.each(["late-bytes", "technical-rejection"] as const)(
+  "retains the actual private native delegate after catalog cancellation: %s",
+  async (outcome) => {
+    let finish!: () => void;
+    const producer = {
+      readTextSnapshot: vi.fn(
+        () =>
+          new Promise<{
+            readonly ok: true;
+            readonly text: string;
+            readonly info: {
+              readonly type: "file";
+              readonly size: number;
+              readonly mtimeMs: number;
+            };
+          }>((resolve, reject) => {
+            finish = (): void => {
+              if (outcome === "technical-rejection")
+                reject(new Error("PRIVATE_LATE_NATIVE_FAILURE"));
+              else
+                resolve({
+                  ok: true,
+                  text: "PRIVATE_LATE_NATIVE_BYTES",
+                  info: { type: "file", size: 25, mtimeMs: 0 },
+                });
+            };
+          }),
+      ),
+    };
+    const authority: Parameters<typeof createRuntimeCodingToolFacade>[0] = {
+      resolveCapabilityForDelegation: () => ({
+        ok: true as const,
+        envelope: fullyAuthorizedEnvelope,
+      }),
+      revalidateCapabilityForMutation: () => ({
+        ok: true as const,
+        envelope: fullyAuthorizedEnvelope,
+      }),
+    };
+    const log = createBufferedServerLogSink();
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const diagnostics: unknown[] = [];
+    let contextUnavailable = false;
+    const facade = createRuntimeCodingToolFacade(
+      authority,
+      () => {
+        if (contextUnavailable) throw new Error("PRIVATE_CONTEXT_AFTER_PRODUCER");
+        return { ...runtimeContext(), correlationId: "native-producer-correlation" };
+      },
+      governedPorts(),
+      {
+        nativeTextRead: producer,
+        invocationRegistry: registry,
+        catalogActivityLog: log,
+        catalogDiagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
+        },
+      },
+    );
+    const abort = new AbortController();
+    let returned = false;
+    const pending = facade.nativeTextRead
+      ?.readTextSnapshot({
+        capability: "runtime-capability-secret",
+        signal: abort.signal,
+        body: JSON.stringify({
+          action: "read",
+          actionId: "private-held-delegate",
+          idempotencyKey: "private-held-delegate",
+          relativePath: "fixture.ts",
+        }),
+      })
+      .then((result) => {
+        returned = true;
+        return result;
+      });
+    try {
+      await vi.waitFor(() => {
+        expect(producer.readTextSnapshot).toHaveBeenCalledOnce();
+      });
+      abort.abort();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(
+        log.events.some(
+          (event) =>
+            event.op === "tool-catalog.invocation-settled" && event.extra?.status === "cancelled",
+        ),
+      ).toBe(true);
+      expect(returned).toBe(false);
+      contextUnavailable = outcome === "technical-rejection";
+      finish();
+      expect(await pending).toEqual({ ok: false, reason: "dispatch-refused" });
+      if (outcome === "technical-rejection") {
+        const failure = log.events.find(
+          (event) => event.extra?.reason === "native-producer-failed",
+        );
+        expect(failure).toMatchObject({
+          op: "coding-runtime.tool-result",
+          correlationId: "native-producer-correlation",
+          errorKind: "unavailable",
+          extra: { reason: "native-producer-failed", state: "discarded" },
+        });
+        expect(diagnostics).toContainEqual(
+          expect.objectContaining({
+            correlationId: "native-producer-correlation",
+          }),
+        );
+      }
+      expect(JSON.stringify({ events: log.events, diagnostics })).not.toMatch(
+        /PRIVATE_LATE_NATIVE/u,
+      );
+    } finally {
+      finish();
+      await pending;
+      registry.dispose();
+    }
+  },
+);
+
+function nativeInvocationAuthorityFixture(nativeFileIO?: GovernedNativeFileIO): {
+  readonly facet: NonNullable<
+    NonNullable<ReturnType<typeof createRuntimeCodingToolFacade>["nativeTextRead"]>["invocations"]
+  >;
+  readonly producer: ReturnType<typeof vi.fn>;
+  readonly charges: ReturnType<typeof vi.fn>;
+  readonly settles: ReturnType<typeof vi.fn>;
+  readonly readGetter: ReturnType<typeof vi.fn>;
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly log: ReturnType<typeof createBufferedServerLogSink>;
+} {
+  const log = createBufferedServerLogSink();
+  const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+  const producer = vi.fn(() =>
+    Promise.resolve({
+      ok: true as const,
+      text: "PRIVATE_NATIVE_IO",
+      info: { type: "file" as const, size: 17, mtimeMs: 0 },
+    }),
+  );
+  const readGetter = vi.fn();
+  const settles = vi.fn();
+  const charges = vi.fn((): { readonly check: () => boolean; readonly settle: typeof settles } => ({
+    check: () => true,
+    settle: settles,
+  }));
+  const authority: Parameters<typeof createRuntimeCodingToolFacade>[0] = {
+    resolveCapabilityForDelegation: () => ({ ok: true, envelope: fullyAuthorizedEnvelope }),
+    revalidateCapabilityForMutation: () => ({ ok: true, envelope: fullyAuthorizedEnvelope }),
+  };
+  const facade = createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+    nativeFileIO,
+    nativeTextRead: {
+      get readTextSnapshot(): typeof producer {
+        readGetter();
+        if (readGetter.mock.calls.length > 1) throw new TypeError("PRIVATE_SECOND_PRODUCER_GETTER");
+        return producer;
+      },
+    },
+    invocationRegistry: registry,
+    catalogActivityLog: log,
+    ciRepairBudget: {
+      admitTool: charges,
+      canChargePrompt: () => ({ accepted: true }),
+      chargePrompt: () => ({ accepted: true }),
+      observed: () => undefined,
+    },
+  });
+  const facet = facade.nativeTextRead?.invocations;
+  if (facet === undefined) throw new TypeError("Expected private native invocation facet");
+  return { facet, producer, charges, settles, readGetter, registry, log };
+}
+
+function originalReadBeginInput(): import("./codingToolFacadePorts.js").CodingToolNativeReadBeginInput {
+  return {
+    capability: "runtime-capability-secret",
+    body: JSON.stringify({
+      action: "read",
+      relativePath: "fixture.ts",
+      actionId: "native-original",
+      idempotencyKey: "native-original",
+    }),
+    context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+  };
+}
+
+it("retains one CI lease across target and instruction reads, settling only at canonical completion", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  try {
+    const begun = await f.facet.begin(originalReadBeginInput());
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+    for (const ordinal of [1, 2, 3])
+      expect(
+        (await f.facet.readTextSnapshot(begun.identity, { ordinal, relativePath: "fixture.ts" }))
+          .ok,
+      ).toBe(true);
+    expect(f.charges).toHaveBeenCalledOnce();
+    expect(f.settles).not.toHaveBeenCalled();
+    expect(f.producer).toHaveBeenCalledTimes(3);
+    expect(f.readGetter).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(
+      f.log.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_NATIVE_IO");
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("records an original-read child failure without exposing its body and releases its parent at terminal settlement", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  f.producer.mockRejectedValueOnce(new Error("PRIVATE_NATIVE_CHILD_FAILURE"));
+  try {
+    const begun = await f.facet.begin(originalReadBeginInput());
+    if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+    expect(
+      await f.facet.readTextSnapshot(begun.identity, { ordinal: 1, relativePath: "fixture.ts" }),
+    ).toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(f.settles).not.toHaveBeenCalled();
+    expect(await f.facet.close(begun.identity, "failed")).toBe(false);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(
+      f.log.events.filter((event) => event.extra?.reason === "native-producer-failed"),
+    ).toMatchObject([
+      {
+        op: "coding-runtime.tool-result",
+        correlationId: "run-authority-a",
+        extra: {
+          actionKind: "read",
+          state: "discarded",
+          reason: "native-producer-failed",
+        },
+      },
+    ]);
+    expect(JSON.stringify(f.log.events)).not.toMatch(/PRIVATE_NATIVE_CHILD_FAILURE|fixture\.ts/u);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it.each(["accessor", "inherited", "symbol", "authority-claim", "header", "invalid-limit"] as const)(
+  "refuses %s original context or authority input before physical work",
+  async (kind) => {
+    const f = nativeInvocationAuthorityFixture();
+    const base = originalReadBeginInput();
+    const accessor = vi.fn(() => "PRIVATE_ACCESSOR");
+    const context = { ...base.context };
+    let input: import("./codingToolFacadePorts.js").CodingToolNativeReadBeginInput = {
+      ...base,
+      context,
+    };
+    if (kind === "accessor") Object.defineProperty(context, "id", { get: accessor });
+    else if (kind === "inherited") Object.setPrototypeOf(context, { PRIVATE_INHERITED: true });
+    else if (kind === "symbol") Object.assign(context, { [Symbol("PRIVATE_SYMBOL")]: true });
+    else if (kind === "authority-claim") input = { ...input, authority: "forged" } as typeof input;
+    else if (kind === "header") input = { ...input, headers: new Headers() };
+    else input = { ...input, limit: -1 };
+    try {
+      expect(await f.facet.begin(input)).toEqual({ ok: false, reason: "invalid-request" });
+      expect(accessor).not.toHaveBeenCalled();
+      expect(f.charges).not.toHaveBeenCalled();
+      expect(f.producer).not.toHaveBeenCalled();
+    } finally {
+      f.registry.dispose();
+    }
+  },
+);
+
+it("refuses forged identities and packet replay while retaining the real current parent", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  try {
+    const begun = await f.facet.begin(originalReadBeginInput());
+    if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+    const packet = { ordinal: 1, relativePath: "fixture.ts" };
+    expect(
+      (await f.facet.readTextSnapshot({ ...begun.identity, invocationId: "forged" }, packet)).ok,
+    ).toBe(false);
+    expect((await f.facet.readTextSnapshot(begun.identity, packet)).ok).toBe(true);
+    expect((await f.facet.readTextSnapshot(begun.identity, packet)).ok).toBe(false);
+    expect(
+      (await f.facet.readTextSnapshot(begun.identity, { ...packet, relativePath: "other.ts" })).ok,
+    ).toBe(false);
+    for (const relativePath of ["../escape", ".env", "/absolute", "a".repeat(513)])
+      expect(
+        (await f.facet.readTextSnapshot(begun.identity, { ordinal: 2, relativePath })).ok,
+      ).toBe(false);
+    expect(f.producer).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    expect(
+      (await f.facet.readTextSnapshot(begun.identity, { ordinal: 3, relativePath: "fixture.ts" }))
+        .ok,
+    ).toBe(false);
+    expect(await f.facet.begin(originalReadBeginInput())).toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.producer).toHaveBeenCalledOnce();
+    expect(f.charges).toHaveBeenCalledOnce();
+    const discarded = f.log.events.filter(
+      (event) => event.op === "coding-runtime.tool-result" && event.extra?.reason === "denied",
+    );
+    expect(discarded.length).toBeGreaterThanOrEqual(3);
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.tool-result.emitted-line",
+        formatActivityLogProofLine(discarded[0] ?? {}),
+      ),
+    ).toMatchObject({ actionKind: "read", state: "discarded", reason: "denied" });
+    expect(JSON.stringify(discarded)).not.toMatch(/fixture\.ts|other\.ts|forged/u);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("owns original native context and body before admission awaits, while refusing accessor child packets without reading them", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  const input = originalReadBeginInput();
+  const context = { ...input.context };
+  const body = Buffer.from(input.body);
+  const pending = f.facet.begin({ ...input, context, body });
+  context.id = "PRIVATE_MUTATED_NATIVE_CONTEXT";
+  body.fill(0);
+  try {
+    const begun = await pending;
+    if (!begun.ok) throw new TypeError("Expected captured native invocation");
+    const getter = vi.fn(() => "fixture.ts");
+    const packet = Object.defineProperty({ ordinal: 1 }, "relativePath", { get: getter }) as {
+      readonly ordinal: number;
+      readonly relativePath: string;
+    };
+    expect(await f.facet.readTextSnapshot(begun.identity, packet)).toEqual({
+      ok: false,
+      reason: "invalid-request",
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(f.producer).not.toHaveBeenCalled();
+    const forged = Object.defineProperty({ ...begun.identity }, "invocationId", { get: getter });
+    expect(f.facet.signalFor(forged)).toBeUndefined();
+    expect(getter).not.toHaveBeenCalled();
+    expect(
+      (await f.facet.readTextSnapshot(begun.identity, { ordinal: 1, relativePath: "fixture.ts" }))
+        .ok,
+    ).toBe(true);
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    expect(f.readGetter).toHaveBeenCalledOnce();
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_MUTATED_NATIVE_CONTEXT");
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_SECOND_PRODUCER_GETTER");
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it.each([
+  { relativePath: "long-segment/".repeat(50) + "é.ts", offset: 1, limit: 2000 },
+  { relativePath: "", offset: 0, limit: 0 },
+  { relativePath: "fixture.ts", offset: 0, limit: 0 },
+])("admits the original native path/page facts without the public text cap: %j", async (facts) => {
+  const f = nativeInvocationAuthorityFixture();
+  const original = originalReadBeginInput();
+  const input = {
+    ...original,
+    body: JSON.stringify({
+      action: "read",
+      relativePath: facts.relativePath,
+      actionId: "original-native-path",
+      idempotencyKey: "original-native-path",
+    }),
+    offset: facts.offset,
+    limit: facts.limit,
+  };
+  try {
+    const begun = await f.facet.begin(input);
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) throw new TypeError("Expected original native path admission");
+    expect(f.charges).toHaveBeenCalledOnce();
+    expect(f.producer).not.toHaveBeenCalled();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+function nativeFileAuthorityFixture(): ReturnType<typeof nativeInvocationAuthorityFixture> & {
+  readonly io: GovernedNativeFileIO;
+  readonly read: ReturnType<typeof vi.fn<GovernedNativeFileIO["readBytes"]>>;
+  readonly stat: ReturnType<typeof vi.fn<GovernedNativeFileIO["stat"]>>;
+  readonly list: ReturnType<typeof vi.fn<GovernedNativeFileIO["list"]>>;
+} {
+  const info = { type: "file" as const, size: 5, mtimeMs: 0 };
+  const read = vi.fn<GovernedNativeFileIO["readBytes"]>(() =>
+    Promise.resolve({ ok: true, bytes: Buffer.from([137, 80, 78, 71, 255]), info }),
+  );
+  const stat = vi.fn<GovernedNativeFileIO["stat"]>(() => Promise.resolve({ ok: true, info }));
+  const list = vi.fn<GovernedNativeFileIO["list"]>(() =>
+    Promise.resolve({
+      ok: true,
+      info: { ...info, type: "directory" },
+      entries: [{ name: "fixture.ts", type: "file" }],
+    }),
+  );
+  const io = { readBytes: read, stat, list };
+  return { ...nativeInvocationAuthorityFixture(io), io, read, stat, list };
+}
+
+async function beginFileAuthorityRead(
+  f: ReturnType<typeof nativeFileAuthorityFixture>,
+): Promise<
+  Extract<
+    import("./codingToolFacadePorts.js").CodingToolNativeReadBeginResult,
+    { readonly ok: true }
+  >
+> {
+  const begun = await f.facet.begin(originalReadBeginInput());
+  if (!begun.ok) throw new TypeError("Expected original Read parent");
+  return begun;
+}
+
+it("owns bytes, metadata, directory and instruction IO under one actual canonical CI lease", async () => {
+  const f = nativeFileAuthorityFixture();
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected private native file primitives");
+    const target = { ordinal: 1, relativePath: "fixture.png", purpose: "native-tool-io" as const };
+    expect(await io.readBytes(begun.identity, target)).toMatchObject({
+      ok: true,
+      bytes: Buffer.from([137, 80, 78, 71, 255]),
+    });
+    expect(await io.stat(begun.identity, { ...target, ordinal: 2 })).toMatchObject({ ok: true });
+    expect(
+      await io.list(begun.identity, { ...target, ordinal: 3, relativePath: "" }),
+    ).toMatchObject({
+      ok: true,
+      entries: [{ name: "fixture.ts", type: "file" }],
+    });
+    expect(
+      await io.readBytes(begun.identity, {
+        ...target,
+        ordinal: 4,
+        relativePath: "deep/AGENTS.md",
+        purpose: "native-instructions",
+        range: { offset: 0, length: 0 },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(f.charges).toHaveBeenCalledOnce();
+    expect(f.settles).not.toHaveBeenCalled();
+    expect(f.read).toHaveBeenCalledTimes(2);
+    expect(f.stat).toHaveBeenCalledOnce();
+    expect(f.list).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(f.facet.signalFor(begun.identity)).toBeUndefined();
+    expect(JSON.stringify(f.log.events)).not.toMatch(/fixture\.png|AGENTS\.md/u);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it.each(["duplicate", "operation", "range", "purpose", "path"] as const)(
+  "refuses %s packet reuse without a second physical effect",
+  async (fault) => {
+    const f = nativeFileAuthorityFixture();
+    try {
+      const begun = await beginFileAuthorityRead(f);
+      const io = f.facet.fileIO;
+      if (io === undefined) throw new TypeError("Expected native file primitives");
+      const packet = {
+        ordinal: 1,
+        relativePath: "fixture.ts",
+        purpose: "native-tool-io" as const,
+        range: { offset: 1, length: 2 },
+      };
+      expect((await io.readBytes(begun.identity, packet)).ok).toBe(true);
+      let result;
+      if (fault === "operation") {
+        const { range: _range, ...metadata } = packet;
+        result = await io.stat(begun.identity, metadata);
+      } else {
+        result = await io.readBytes(begun.identity, {
+          ...packet,
+          ...(fault === "range" ? { range: { offset: 2, length: 2 } } : {}),
+          ...(fault === "path" ? { relativePath: "other.ts" } : {}),
+          ...(fault === "purpose" ? { purpose: "native-instructions" } : {}),
+        });
+      }
+      expect(result).toEqual({ ok: false, reason: "dispatch-refused" });
+      expect(f.read).toHaveBeenCalledOnce();
+      expect(f.stat).not.toHaveBeenCalled();
+      expect(f.charges).toHaveBeenCalledOnce();
+      expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    } finally {
+      f.registry.dispose();
+    }
+  },
+);
+
+it("owns each primitive packet before awaiting and refuses accessor range/authority data", async () => {
+  const f = nativeFileAuthorityFixture();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const original = f.read.getMockImplementation();
+  f.read.mockImplementationOnce(async (request, signal, guard) => {
+    await held;
+    if (original === undefined) throw new TypeError("Expected primitive fixture");
+    return original(request, signal, guard);
+  });
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    const packet = {
+      ordinal: 1,
+      relativePath: "fixture.ts",
+      purpose: "native-tool-io" as const,
+      range: { offset: 0, length: 1 },
+    };
+    const reading = io.readBytes(begun.identity, packet);
+    packet.relativePath = "PRIVATE_MUTATED_PATH";
+    packet.range.offset = 3;
+    release();
+    expect((await reading).ok).toBe(true);
+    expect(f.read.mock.calls[0]?.[0]).toEqual({
+      ordinal: 1,
+      relativePath: "fixture.ts",
+      purpose: "native-tool-io",
+      range: { offset: 0, length: 1 },
+    });
+    const getter = vi.fn(() => 0);
+    const range = Object.defineProperty({ offset: 0, length: 1 }, "offset", { get: getter });
+    expect(await io.readBytes(begun.identity, { ...packet, ordinal: 2, range })).toEqual({
+      ok: false,
+      reason: "invalid-request",
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(f.read).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    release();
+    f.registry.dispose();
+  }
+});
+
+it("keeps actual private byte work pending after parent cancellation and withholds late bytes", async () => {
+  const f = nativeFileAuthorityFixture();
+  let release!: (result: Awaited<ReturnType<GovernedNativeFileIO["readBytes"]>>) => void;
+  const physical = new Promise<Awaited<ReturnType<GovernedNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  f.read.mockImplementationOnce(() => physical);
+  const abort = new AbortController();
+  try {
+    const begun = await f.facet.begin({ ...originalReadBeginInput(), signal: abort.signal });
+    if (!begun.ok || f.facet.fileIO === undefined) throw new TypeError("Expected private Read");
+    const reading = f.facet.fileIO.readBytes(begun.identity, {
+      ordinal: 1,
+      relativePath: "fixture.png",
+      purpose: "native-tool-io",
+    });
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    abort.abort();
+    expect(f.facet.signalFor(begun.identity)).toBeUndefined();
+    expect(f.settles).not.toHaveBeenCalled();
+    const bytes = Buffer.from("PRIVATE_LATE_NATIVE_BYTES");
+    release({ ok: true, bytes, info: { type: "file", size: bytes.length, mtimeMs: 0 } });
+    expect(await reading).toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(bytes).toEqual(Buffer.alloc(bytes.length));
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(f.settles).toHaveBeenLastCalledWith({ status: "failed" });
+  } finally {
+    release({ ok: false, reason: "cancelled" });
+    f.registry.dispose();
+  }
+});
+
+it("captures every supplied private native producer getter only once", async () => {
+  const f = nativeFileAuthorityFixture();
+  const getters = [vi.fn(), vi.fn(), vi.fn()];
+  const io = Object.defineProperties(
+    {},
+    Object.fromEntries(
+      (["readBytes", "stat", "list"] as const).map((method, index) => [
+        method,
+        {
+          get: (): GovernedNativeFileIO[typeof method] => {
+            const getter = getters[index];
+            getter?.();
+            if (getter?.mock.calls.length !== 1)
+              throw new TypeError("Repeated private producer getter");
+            return f.io[method].bind(f.io);
+          },
+        },
+      ]),
+    ),
+  ) as GovernedNativeFileIO;
+  const captured = nativeInvocationAuthorityFixture(io);
+  try {
+    const begun = await captured.facet.begin(originalReadBeginInput());
+    if (!begun.ok || captured.facet.fileIO === undefined) throw new TypeError("Expected Read");
+    expect(
+      (
+        await captured.facet.fileIO.stat(begun.identity, {
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io",
+        })
+      ).ok,
+    ).toBe(true);
+    for (const getter of getters) expect(getter).toHaveBeenCalledOnce();
+    expect(await captured.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    captured.registry.dispose();
+    f.registry.dispose();
+  }
+});
+
+it.each([
+  { relativePath: "../outside.ts" },
+  { relativePath: "/outside.ts" },
+  { relativePath: ".env" },
+  { relativePath: ".git/config" },
+  { relativePath: "a".repeat(4097) },
+  { relativePath: "é".repeat(2049) },
+  { relativePath: "nul\u0000file" },
+  { relativePath: "d/".repeat(64) + "file" },
+  { purpose: "arbitrary" },
+  { authority: "forged" },
+  { range: { offset: -1, length: 1 } },
+  { range: { offset: 0, length: 64 * 1024 * 1024 + 1 } },
+  { range: { offset: Number.MAX_SAFE_INTEGER, length: 1 } },
+  { range: { offset: 0.5, length: 1 } },
+] as const)("refuses malformed private primitive before physical IO (%#)", async (change) => {
+  const f = nativeFileAuthorityFixture();
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    const packet = { ordinal: 1, relativePath: "fixture.ts", purpose: "native-tool-io", ...change };
+    expect(
+      await io.readBytes(begun.identity, packet as Parameters<typeof io.readBytes>[1]),
+    ).toEqual({
+      ok: false,
+      reason: "invalid-request",
+    });
+    expect(f.read).not.toHaveBeenCalled();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("refuses private metadata ranges and forged or terminal parents before any physical IO", async () => {
+  const f = nativeFileAuthorityFixture();
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    const packet = { ordinal: 1, relativePath: "fixture.ts", purpose: "native-tool-io" as const };
+    for (const method of [io.stat.bind(io), io.list.bind(io)])
+      expect(await method(begun.identity, { ...packet, range: { offset: 0, length: 0 } })).toEqual({
+        ok: false,
+        reason: "invalid-request",
+      });
+    expect(await io.readBytes({ ...begun.identity, invocationId: "forged" }, packet)).toMatchObject(
+      { ok: false },
+    );
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    expect(await io.readBytes(begun.identity, packet)).toMatchObject({ ok: false });
+    expect(f.read).not.toHaveBeenCalled();
+    expect(f.stat).not.toHaveBeenCalled();
+    expect(f.list).not.toHaveBeenCalled();
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("emits the existing body-free failure proof for rejected real private byte work", async () => {
+  const f = nativeFileAuthorityFixture();
+  f.read.mockRejectedValueOnce(new Error("PRIVATE_NATIVE_BYTE_REJECTION_SENTINEL"));
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    expect(
+      await io.readBytes(begun.identity, {
+        ordinal: 1,
+        relativePath: "fixture.ts",
+        purpose: "native-tool-io",
+      }),
+    ).toEqual({ ok: false, reason: "dispatch-refused" });
+    const failure = f.log.events.find((event) => event.op === "coding-runtime.tool-result");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.tool-result.emitted-line",
+        formatActivityLogProofLine(failure ?? {}),
+      ),
+    ).toMatchObject({
+      actionKind: "read",
+      state: "discarded",
+      reason: "native-producer-failed",
+    });
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_NATIVE_BYTE_REJECTION_SENTINEL");
+    expect(await f.facet.close(begun.identity, "failed")).toBe(false);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+describe("private original-read request and failure boundaries", () => {
+  it.each(['{"action":"read"', "{}"])(
+    "classifies malformed begin %s before any authority or producer work",
+    async (body) => {
+      const f = nativeInvocationAuthorityFixture();
+      try {
+        expect(await f.facet.begin({ ...originalReadBeginInput(), body })).toEqual({
+          ok: false,
+          reason: "invalid-request",
+        });
+        expect(f.charges).not.toHaveBeenCalled();
+        expect(f.producer).not.toHaveBeenCalled();
+        expect(
+          f.log.events.filter((event) => event.op === "tool-catalog.dispatch-unbound"),
+        ).toHaveLength(1);
+        expect(
+          f.log.events.some((event) => event.extra?.reason === "authority-resolution-failed"),
+        ).toBe(false);
+      } finally {
+        f.registry.dispose();
+      }
+    },
+  );
+
+  it("preserves an unexpected parser fault as a body-free technical failure", async () => {
+    const f = nativeInvocationAuthorityFixture();
+    const input = originalReadBeginInput();
+    const parse = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+      throw new TypeError("PRIVATE_NATIVE_PARSE_FAULT");
+    });
+    try {
+      expect(await f.facet.begin(input)).toEqual({ ok: false, reason: "dispatch-refused" });
+      expect(f.charges).not.toHaveBeenCalled();
+      expect(f.producer).not.toHaveBeenCalled();
+      expect(f.log.events.find((event) => event.op === "coding-runtime.tool-result")).toMatchObject(
+        { errorKind: "unavailable", extra: { reason: "authority-resolution-failed" } },
+      );
+      expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_NATIVE_PARSE_FAULT");
+    } finally {
+      parse.mockRestore();
+      f.registry.dispose();
+    }
+  });
+
+  it.each(["actionId", "idempotencyKey"] as const)(
+    "rejects over-unit %s before CI admission while retaining matching boundary identities",
+    async (field) => {
+      for (const value of ["a".repeat(257), "a".repeat(300), "漢".repeat(256)]) {
+        const f = nativeInvocationAuthorityFixture();
+        const input = originalReadBeginInput();
+        try {
+          expect(
+            await f.facet.begin({
+              ...input,
+              body: JSON.stringify({
+                action: "read",
+                relativePath: "fixture.ts",
+                actionId: "native-original",
+                idempotencyKey: "native-original",
+                [field]: value,
+              }),
+            }),
+          ).toEqual({ ok: false, reason: "invalid-request" });
+          expect(f.charges).not.toHaveBeenCalled();
+          expect(f.producer).not.toHaveBeenCalled();
+        } finally {
+          f.registry.dispose();
+        }
+      }
+      for (const value of ["a".repeat(256), "é".repeat(256), "😀".repeat(128)]) {
+        const f = nativeInvocationAuthorityFixture();
+        try {
+          const begun = await f.facet.begin({
+            ...originalReadBeginInput(),
+            body: JSON.stringify({
+              action: "read",
+              relativePath: "fixture.ts",
+              actionId: "native-original",
+              idempotencyKey: "native-original",
+              [field]: value,
+            }),
+          });
+          expect(begun.ok).toBe(true);
+          if (!begun.ok) throw new TypeError("Expected valid boundary identity");
+          expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+          await begun.settled;
+          expect(f.charges).toHaveBeenCalledOnce();
+          expect(f.settles).toHaveBeenCalledOnce();
+        } finally {
+          f.registry.dispose();
+        }
+      }
+    },
+  );
+
+  it("records genuine child packet capacity as unavailable while replay and closed parents remain denied", async () => {
+    const f = nativeInvocationAuthorityFixture();
+    try {
+      const begun = await f.facet.begin(originalReadBeginInput());
+      if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+      let accepted = 0;
+      for (let ordinal = 1; ordinal <= 2_049; ordinal++) {
+        const result = await f.facet.readTextSnapshot(begun.identity, {
+          ordinal,
+          relativePath: "fixture.ts",
+        });
+        if (!result.ok) {
+          expect(result.reason).toBe("busy");
+          break;
+        }
+        accepted++;
+      }
+      expect(accepted).toBe(2_048);
+      expect(f.producer).toHaveBeenCalledTimes(accepted);
+      const capacity = f.log.events.at(-1);
+      expect(capacity).toMatchObject({
+        op: "coding-runtime.tool-result",
+        correlationId: "run-authority-a",
+        errorKind: "unavailable",
+        extra: { actionKind: "read", state: "discarded", reason: "unavailable" },
+      });
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.tool-result.emitted-line",
+          formatActivityLogProofLine(capacity ?? {}),
+        ),
+      ).toMatchObject({
+        reason: "unavailable",
+        errorKind: "unavailable",
+        correlationId: "run-authority-a",
+      });
+      for (const packet of [
+        { ordinal: 1, relativePath: "fixture.ts" },
+        { ordinal: 1, relativePath: "other.ts" },
+      ]) {
+        expect(await f.facet.readTextSnapshot(begun.identity, packet)).toEqual({
+          ok: false,
+          reason: "dispatch-refused",
+        });
+        expect(f.log.events.at(-1)).toMatchObject({
+          errorKind: "authority-denied",
+          extra: { reason: "denied" },
+        });
+      }
+      expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+      await begun.settled;
+      expect(
+        await f.facet.readTextSnapshot(begun.identity, {
+          ordinal: 2_049,
+          relativePath: "fixture.ts",
+        }),
+      ).toEqual({ ok: false, reason: "dispatch-refused" });
+      expect(f.log.events.at(-1)).toMatchObject({
+        errorKind: "authority-denied",
+        extra: { reason: "denied" },
+      });
+      expect(f.charges).toHaveBeenCalledOnce();
+      expect(f.settles).toHaveBeenCalledOnce();
+      expect(f.producer).toHaveBeenCalledTimes(accepted);
+    } finally {
+      f.registry.dispose();
+    }
+  });
+});
+
+it.each(["context", "producer"] as const)(
+  "records an undefined %s failure exactly once at its actual stage",
+  async (stage) => {
+    const log = createBufferedServerLogSink();
+    const diagnostics: unknown[] = [];
+    const producer = { readTextSnapshot: vi.fn().mockRejectedValue(undefined) };
+    const delegated = vi.fn(() => ({ ok: true as const, envelope: fullyAuthorizedEnvelope }));
+    const authority: Parameters<typeof createRuntimeCodingToolFacade>[0] = {
+      resolveCapabilityForDelegation: delegated,
+      revalidateCapabilityForMutation: () => ({ ok: true, envelope: fullyAuthorizedEnvelope }),
+    };
+    const contextFailure = (error: unknown): never => {
+      throw error;
+    };
+    const context = (): ReturnType<typeof runtimeContext> & { readonly correlationId: string } => {
+      if (stage === "context") contextFailure(undefined);
+      return { ...runtimeContext(), correlationId: "undefined-producer-correlation" };
+    };
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const facade = createRuntimeCodingToolFacade(authority, context, governedPorts(), {
+      nativeTextRead: producer,
+      invocationRegistry: registry,
+      catalogActivityLog: log,
+      catalogDiagnostics: {
+        record: (record): void => {
+          diagnostics.push(record);
+        },
+      },
+    });
+    try {
+      expect(
+        await facade.nativeTextRead?.readTextSnapshot({
+          body: originalReadBeginInput().body,
+          capability: "runtime-capability-secret",
+        }),
+      ).toEqual({ ok: false, reason: "dispatch-refused" });
+      const facts = log.events.filter((event) => event.op === "coding-runtime.tool-result");
+      expect(facts).toHaveLength(1);
+      expect(facts[0]).toMatchObject({
+        correlationId:
+          stage === "context" ? "unknown-correlation-id" : "undefined-producer-correlation",
+        extra: {
+          reason: stage === "context" ? "authority-resolution-failed" : "native-producer-failed",
+        },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(producer.readTextSnapshot).toHaveBeenCalledTimes(stage === "context" ? 0 : 1);
+      expect(delegated).toHaveBeenCalledTimes(stage === "context" ? 0 : 1);
+    } finally {
+      registry.dispose();
+    }
+  },
+);

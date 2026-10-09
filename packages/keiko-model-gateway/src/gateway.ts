@@ -291,6 +291,12 @@ const GATEWAY_TOOL_CATALOG_REPAIR_OPERATION = defineActivityLogOperation({
     },
     toolCallId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
     offeredAlias: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    transport: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["assistant-text"],
+    },
     missingRequiredCount: { type: "integer", dataClass: "count", required: false },
     invalidPathCount: { type: "integer", dataClass: "count", required: false },
     unexpectedPropertyCount: { type: "integer", dataClass: "count", required: false },
@@ -1134,6 +1140,9 @@ export function schemaMismatchGuidance(repair: GatewayToolCatalogError["repair"]
 function toolSchemaRepairMessage(error: GatewayToolCatalogError): string | undefined {
   const repair = error.repair;
   if (repair === undefined) return undefined;
+  if (repair.transport === "assistant-text") {
+    return `${TOOL_SCHEMA_REPAIR_PREFIX} The previous answer serialized a tool invocation as assistant text, which executes no tool. Call offered tool ${repair.offeredAlias} through native function tool_calls with JSON arguments matching its advertised schema. Do not write model transport markers or a tool invocation in answer text.`;
+  }
   return `${TOOL_SCHEMA_REPAIR_PREFIX} Retry tool call ${repair.toolCallId} for offered tool ${repair.offeredAlias} with arguments that match its advertised schema exactly.${schemaMismatchGuidance(repair)}`;
 }
 
@@ -1541,6 +1550,7 @@ export class Gateway {
           reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
           toolCallId: loggedToolCallId(repair.toolCallId),
           offeredAlias: repair.offeredAlias,
+          ...(repair.transport === undefined ? {} : { transport: repair.transport }),
           ...(repair.shape === undefined
             ? {}
             : {

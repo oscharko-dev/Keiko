@@ -1,3 +1,4 @@
+import { isCodingWorkbenchNativeRetry } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type {
   CodingWorkbenchGatewayEventKind,
@@ -44,6 +45,14 @@ export type CodingRuntimeEventHubInput =
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
       >["auxiliaryOutcome"];
+      readonly nativeRetry?: Extract<
+        CodingWorkbenchRuntimeSseEvent,
+        { kind: "runtime-event" }
+      >["nativeRetry"];
+      readonly verificationSummary?: Extract<
+        CodingWorkbenchRuntimeSseEvent,
+        { kind: "runtime-event" }
+      >["verificationSummary"];
       readonly contentTrust?: Extract<
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
@@ -157,18 +166,21 @@ export class CodingRuntimeEventHub {
   }
 
   publish(input: CodingRuntimeEventHubInput): CodingRuntimeEventHubPublishResult {
-    if (!isExactInput(input)) return { ok: false, reason: "invalid-event" };
+    if (!isExactInput(input) || !validNativeRetryInput(input))
+      return { ok: false, reason: "invalid-event" };
     const run = this.runs.get(input.runId) ?? this.newRun(input.runId);
     if (run.nextSequence >= Number.MAX_SAFE_INTEGER)
       return { ok: false, reason: "sequence-exhausted" };
 
     const sequence = run.nextSequence;
-    const event = {
+    const event = Object.freeze({
       ...input,
+      ...ownedVerificationSummary(input),
+      ...ownedNativeRetry(input),
       cursor: `${input.runId}:${String(sequence)}`,
       sequence,
       occurredAt: this.now().toISOString(),
-    } as CodingWorkbenchRuntimeSseEvent;
+    }) as CodingWorkbenchRuntimeSseEvent;
     if (!validateCodingWorkbenchRuntimeSseEvent(event).ok)
       return { ok: false, reason: "invalid-event" };
     const retained: RetainedEvent = {
@@ -452,6 +464,33 @@ function isContainment(event: CodingWorkbenchRuntimeSseEvent): boolean {
   return isTerminal(event) || event.state === "recovery-required";
 }
 
+// Own nested verifier facts before validation and publication. Caller or subscriber mutation
+// must not change a retained frame, its validated body-free shape, or its byte reservation.
+function ownedVerificationSummary(
+  input: CodingRuntimeEventHubInput,
+): Pick<Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>, "verificationSummary"> {
+  if (input.kind !== "runtime-event" || input.verificationSummary === undefined) return {};
+  return { verificationSummary: Object.freeze({ ...input.verificationSummary }) };
+}
+
+function validNativeRetryInput(input: CodingRuntimeEventHubInput): boolean {
+  return (
+    input.kind !== "runtime-event" ||
+    input.nativeRetry === undefined ||
+    input.nativeRetry === null ||
+    isCodingWorkbenchNativeRetry(input.nativeRetry)
+  );
+}
+
+function ownedNativeRetry(
+  input: CodingRuntimeEventHubInput,
+): Pick<Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>, "nativeRetry"> {
+  if (input.kind !== "runtime-event" || input.nativeRetry === undefined) return {};
+  return {
+    nativeRetry: input.nativeRetry === null ? null : Object.freeze({ ...input.nativeRetry }),
+  };
+}
+
 function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -465,6 +504,8 @@ function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
       ? [
           "auxiliaryOutcome",
           "contentTrust",
+          "verificationSummary",
+          "nativeRetry",
           "eventKind",
           "failureCode",
           "kind",

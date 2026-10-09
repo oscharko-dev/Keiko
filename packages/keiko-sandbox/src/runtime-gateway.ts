@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildGatewaySeatbeltCommand, type WrappedCommand } from "./backends.js";
-import type { NetworkGatewayPolicy } from "./types.js";
+import type { NetworkGatewayPolicy, RuntimeGatewayFilesystem } from "./types.js";
+import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
 
 /** Transient server-owned destination and identity; never persist the URL or wrapper profile. */
 export interface RuntimeGatewayConfinementInput {
@@ -10,6 +11,7 @@ export interface RuntimeGatewayConfinementInput {
   readonly envelopeDigest: string;
   readonly runtimeArtifactDigest: string;
   readonly modelProfileDigest: string;
+  readonly filesystem?: RuntimeGatewayFilesystem | undefined;
 }
 
 export interface RuntimeGatewayConfinement {
@@ -23,6 +25,7 @@ export interface RuntimeGatewayConfinement {
   readonly runtimeArtifactDigest: string;
   readonly modelProfileDigest: string;
   readonly policyDigest: string;
+  readonly filesystem?: RuntimeGatewayFilesystem | undefined;
 }
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -83,6 +86,15 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
         policy.runtimeArtifactDigest,
         policy.modelProfileDigest,
         "fork-allowed-exec-runtime-and-apple-git-only-no-mach-lookup-no-appleevents-no-lsopen",
+        ...(policy.filesystem === undefined
+          ? []
+          : [
+              "native-filesystem-root-union-v1",
+              policy.filesystem.workspaceRoot,
+              policy.filesystem.workspaceAccess,
+              policy.filesystem.privateStateRoot,
+              policy.filesystem.runtimeReadRoot,
+            ]),
       ]),
     )
     .digest("hex");
@@ -91,6 +103,7 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
 export function createRuntimeGatewayConfinement(
   input: RuntimeGatewayConfinementInput,
 ): RuntimeGatewayConfinement {
+  const filesystem = closedFilesystem(input.filesystem);
   const policy = {
     schemaVersion: 1,
     profile: "keiko-gateway",
@@ -100,10 +113,16 @@ export function createRuntimeGatewayConfinement(
     envelopeDigest: input.envelopeDigest,
     runtimeArtifactDigest: input.runtimeArtifactDigest,
     modelProfileDigest: input.modelProfileDigest,
+    ...(filesystem === undefined ? {} : { filesystem }),
   } as const;
   const result = Object.freeze({ ...policy, policyDigest: policyDigest(policy) });
   if (!isRuntimeGatewayConfinement(result)) invalidPolicy();
   return result;
+}
+
+function closedFilesystem(value: unknown): RuntimeGatewayFilesystem | undefined {
+  if (value === undefined) return undefined;
+  return copyRuntimeGatewayFilesystem(value) ?? invalidPolicy();
 }
 
 export function isRuntimeGatewayConfinement(value: unknown): value is RuntimeGatewayConfinement {
@@ -132,15 +151,21 @@ function ownPolicyData(value: unknown): Record<string, unknown> | undefined {
   const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return undefined;
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(descriptors).length !== POLICY_KEYS.size) return undefined;
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.length !== POLICY_KEYS.size && keys.length !== POLICY_KEYS.size + 1) return undefined;
   const entries = Object.entries(descriptors);
   if (
     !entries.every(
-      ([key, descriptor]) => POLICY_KEYS.has(key) && Object.hasOwn(descriptor, "value"),
+      ([key, descriptor]) =>
+        (POLICY_KEYS.has(key) || key === "filesystem") && Object.hasOwn(descriptor, "value"),
     )
   )
     return undefined;
-  return Object.fromEntries(entries.map(([key, descriptor]) => [key, descriptor.value as unknown]));
+  const record = Object.fromEntries(
+    entries.map(([key, descriptor]) => [key, descriptor.value as unknown]),
+  );
+  if (Object.hasOwn(record, "filesystem")) record.filesystem = closedFilesystem(record.filesystem);
+  return record;
 }
 
 function validPolicy(value: unknown): value is RuntimeGatewayConfinement {
@@ -161,8 +186,12 @@ function validPolicy(value: unknown): value is RuntimeGatewayConfinement {
 
 function hasPolicyKeys(record: Record<string, unknown>): boolean {
   return (
-    Object.keys(record).length === POLICY_KEYS.size &&
-    Object.keys(record).every((key) => POLICY_KEYS.has(key))
+    (Object.keys(record).length === POLICY_KEYS.size ||
+      Object.keys(record).length === POLICY_KEYS.size + 1) &&
+    [...POLICY_KEYS].every((key) => Object.hasOwn(record, key)) &&
+    Object.keys(record).every((key) => POLICY_KEYS.has(key) || key === "filesystem") &&
+    (!Object.hasOwn(record, "filesystem") ||
+      copyRuntimeGatewayFilesystem(record.filesystem) !== undefined)
   );
 }
 
@@ -203,5 +232,5 @@ export function buildRuntimeGatewaySeatbeltCommand(
     host: closed.addressFamily === "ipv4" ? "127.0.0.1" : "::1",
     port: closed.port,
   };
-  return buildGatewaySeatbeltCommand(gateway, command, args, gitExecutable);
+  return buildGatewaySeatbeltCommand(gateway, command, args, gitExecutable, closed.filesystem);
 }

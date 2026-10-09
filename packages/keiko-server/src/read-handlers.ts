@@ -76,7 +76,8 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 // process-local, so a hard `false` for never-probed models told the UI after every restart that
 // nothing was usable until a manual probe plus reload (customer field incident, 0.3.11). Absent
 // means "unknown — the on-demand probe at the conversation entry points decides honestly".
-export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleModels(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  if (ctx.url.searchParams.get("refresh") === "1") deps.refreshGatewayCatalog?.(ctx.correlationId);
   const config = currentGatewayConfig(deps);
   const models =
     config === undefined

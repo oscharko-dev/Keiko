@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+  encodeSecureWorkspaceNativeRequest,
+  encodeSecureWorkspaceNativeResponse,
+  encodeSecureWorkspaceNativeDirectory,
+  decodeSecureWorkspaceNativeResponse,
+  decodeSecureWorkspaceNativeDirectory,
+  encodeSecureWorkspaceSnapshotRequest,
+  encodeSecureWorkspaceSnapshotResponse,
+  decodeSecureWorkspaceSnapshotResponse,
   decodeSecureWorkspaceReadRequest,
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
@@ -8,7 +18,7 @@ import {
   encodeSecureWorkspaceReadResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 
-const MAX_TEXT_BYTES = 65_536;
+const MAX_TEXT_BYTES = SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
 const MAX_ROOT_BYTES = 32_768;
 const MAX_PATH_BYTES = 4_096;
 
@@ -65,7 +75,7 @@ describe("secure workspace text-read binary protocol", () => {
   });
 
   it.each([0, MAX_TEXT_BYTES - 1, MAX_TEXT_BYTES + 1, 0x1_0000_0000])(
-    "rejects a request cap other than the fixed 65,536 bytes (%d)",
+    "rejects a request cap other than the fixed resource ceiling (%d)",
     (byteCap) => {
       expect(() =>
         encodeSecureWorkspaceReadRequest({ root: "r", relativePath: "a.ts", byteCap }),
@@ -136,7 +146,7 @@ describe("secure workspace text-read binary protocol", () => {
     });
   });
 
-  it("denies text one byte above the exact 65,536-byte boundary", () => {
+  it("denies text one byte above the exact helper resource boundary", () => {
     expect(decodeSecureWorkspaceText(Buffer.alloc(MAX_TEXT_BYTES + 1, 0x61))).toEqual({
       ok: false,
       reason: "not-text",
@@ -218,5 +228,275 @@ describe("secure workspace text-read request decoding and response encoding", ()
         bytes: Buffer.alloc(MAX_TEXT_BYTES + 1),
       }),
     ).toThrow("secure-workspace-read-response-too-large");
+  });
+});
+
+describe("closed same-descriptor snapshot protocol", () => {
+  function success(): Buffer {
+    return encodeSecureWorkspaceSnapshotResponse({
+      status: "ok",
+      bytes: Buffer.from("safe\n"),
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+  }
+
+  it("retains producer-owned request bounds and exact snapshot metadata", () => {
+    const frame = encodeSecureWorkspaceSnapshotRequest({
+      root: "/workspace",
+      relativePath: "deep/a.ts",
+      byteCap: MAX_TEXT_BYTES,
+    });
+    expect(frame.subarray(0, 4).toString("ascii")).toBe("KSR2");
+    expect(frame.readUInt16LE(4)).toBe(2);
+    const decoded = decodeSecureWorkspaceSnapshotResponse(success());
+    expect(decoded).toEqual({
+      status: "ok",
+      bytes: Buffer.from("safe\n"),
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+    if (decoded.status !== "ok") throw new Error("expected snapshot");
+    expect(Object.isFrozen(decoded.info)).toBe(true);
+  });
+
+  it.each([
+    "size",
+    "nan",
+    "infinity",
+    "trailing",
+    "truncated",
+    "foreign-v1",
+    "unknown-status",
+  ] as const)("rejects %s without accepting partial snapshot facts", (kind) => {
+    let frame = success();
+    if (kind === "size") frame.writeBigUInt64LE(6n, 12);
+    else if (kind === "nan") frame.writeDoubleLE(Number.NaN, 20);
+    else if (kind === "infinity") frame.writeDoubleLE(Number.POSITIVE_INFINITY, 20);
+    else if (kind === "trailing") frame = Buffer.concat([frame, Buffer.of(0)]);
+    else if (kind === "truncated") frame = frame.subarray(0, 27);
+    else if (kind === "foreign-v1")
+      frame = encodeSecureWorkspaceReadResponse({ status: "ok", bytes: Buffer.from("safe\n") });
+    else frame.writeUInt16LE(100, 6);
+    expect(() => decodeSecureWorkspaceSnapshotResponse(frame)).toThrow(
+      "secure-workspace-read-malformed-response",
+    );
+  });
+
+  it("keeps refusal frames free of text and metadata", () => {
+    const frame = encodeSecureWorkspaceSnapshotResponse({ status: "access-denied" });
+    expect(frame).toHaveLength(12);
+    expect(decodeSecureWorkspaceSnapshotResponse(frame)).toEqual({ status: "access-denied" });
+    const malicious = Buffer.concat([frame, Buffer.alloc(16)]);
+    malicious.writeUInt32LE(16, 8);
+    expect(() => decodeSecureWorkspaceSnapshotResponse(malicious)).toThrow();
+  });
+
+  it("enforces the rich facet's unchanged 1 MiB content boundary", () => {
+    expect(() =>
+      encodeSecureWorkspaceSnapshotRequest({
+        root: "/workspace",
+        relativePath: "a.ts",
+        byteCap: 65_536,
+      }),
+    ).toThrow();
+    const bytes = Buffer.alloc(MAX_TEXT_BYTES, 0x61);
+    expect(
+      decodeSecureWorkspaceSnapshotResponse(
+        encodeSecureWorkspaceSnapshotResponse({
+          status: "ok",
+          bytes,
+          info: { type: "file", size: bytes.byteLength, mtimeMs: -1 },
+        }),
+      ),
+    ).toEqual({ status: "ok", bytes, info: { type: "file", size: MAX_TEXT_BYTES, mtimeMs: -1 } });
+  });
+});
+
+// A literal external wire fixture, not a copied response encoder: file, size 3, pre-epoch mtime.
+function nativeWireFixture(): Buffer {
+  return Buffer.from(
+    "4b53533303000000170000000100000003000000000000000000000000409fc000ff80",
+    "hex",
+  );
+}
+
+describe("separately pinned private native IO protocol", () => {
+  it("keeps binary, metadata and source frame ownership without text decoding", () => {
+    const frame = nativeWireFixture();
+    const response = decodeSecureWorkspaceNativeResponse(frame);
+    expect(response).toMatchObject({
+      status: "ok",
+      info: { type: "file", size: 3, mtimeMs: -2000 },
+      bytes: Buffer.from([0, 255, 128]),
+    });
+    frame.fill(0);
+    if (response.status !== "ok") throw new Error("expected-native-fixture");
+    expect(response.bytes).toEqual(Buffer.alloc(3));
+  });
+
+  it.each(["version", "kind", "reserved", "length", "size", "mtime", "status", "trailing"])(
+    "rejects malformed %s rather than returning partial native bytes",
+    (field) => {
+      let frame = nativeWireFixture();
+      if (field === "version") frame.writeUInt16LE(2, 4);
+      if (field === "kind") frame.writeUInt16LE(5, 12);
+      if (field === "reserved") frame.writeUInt16LE(1, 14);
+      if (field === "length") frame.writeUInt32LE(0, 8);
+      if (field === "size") frame.writeBigUInt64LE(9007199254740992n, 16);
+      if (field === "mtime") frame.writeDoubleLE(Number.NaN, 24);
+      if (field === "status") frame.writeUInt16LE(99, 6);
+      if (field === "trailing") frame = Buffer.concat([frame, Buffer.from([1])]);
+      expect(() => decodeSecureWorkspaceNativeResponse(frame)).toThrow(
+        "secure-workspace-read-malformed-response",
+      );
+    },
+  );
+
+  it("rejects cross-protocol frames and metadata on refusal responses", () => {
+    expect(() => decodeSecureWorkspaceReadResponse(nativeWireFixture())).toThrow();
+    const refused = nativeWireFixture();
+    refused.writeUInt16LE(4, 6);
+    expect(() => decodeSecureWorkspaceNativeResponse(refused)).toThrow();
+    refused.writeUInt16LE(10, 6);
+    expect(() => decodeSecureWorkspaceNativeResponse(refused)).toThrow();
+  });
+
+  it.each([
+    { offset: -1, length: 1 },
+    { offset: 0.5, length: 1 },
+    { offset: 0, length: -1 },
+    { offset: 0, length: SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1 },
+    { offset: Number.MAX_SAFE_INTEGER, length: 1 },
+  ])("refuses invalid native ranges %o", (range) => {
+    expect(() =>
+      encodeSecureWorkspaceNativeRequest({
+        root: "/root",
+        relativePath: "large.bin",
+        operation: "read",
+        range,
+      }),
+    ).toThrow("secure-workspace-read-invalid-request");
+  });
+
+  it("admits root metadata but refuses lossy Unicode and NUL request identities", () => {
+    expect(
+      encodeSecureWorkspaceNativeRequest({ root: "/root", relativePath: "", operation: "stat" }),
+    ).toBeInstanceOf(Buffer);
+    for (const relativePath of ["a\0b", "\ud800", "é".repeat(2049)])
+      expect(() =>
+        encodeSecureWorkspaceNativeRequest({ root: "/root", relativePath, operation: "stat" }),
+      ).toThrow();
+    expect(() =>
+      encodeSecureWorkspaceNativeRequest({ root: "/\ud800", relativePath: "a", operation: "stat" }),
+    ).toThrow();
+  });
+
+  it.each([
+    "00000000ff",
+    "0100000001010000002f",
+    "01000000000100000061",
+    "01000000010100000000",
+    "02000000010100000061010100000061",
+    "01000000010800000061",
+  ])("refuses malformed directory entries %s without silent omission", (hex) => {
+    expect(() => decodeSecureWorkspaceNativeDirectory(Buffer.from(hex, "hex"))).toThrow();
+  });
+});
+
+it("encodes actual native metadata and binary bytes through the canonical KSS3 producer", async () => {
+  const protocol = await import("./secureWorkspaceTextReadProtocol.js");
+  const encode = (
+    protocol as unknown as {
+      encodeSecureWorkspaceNativeResponse?: (value: {
+        status: "ok";
+        info: { type: "file"; size: number; mtimeMs: number };
+        bytes: Uint8Array;
+      }) => Uint8Array;
+    }
+  ).encodeSecureWorkspaceNativeResponse;
+  expect(encode).toBeTypeOf("function");
+  if (encode === undefined) throw new TypeError("Missing canonical native response encoder");
+  const bytes = new Uint8Array([0, 255, 137, 80, 78, 71]);
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -1000 };
+  const decoded = decodeSecureWorkspaceNativeResponse(encode({ status: "ok", bytes, info }));
+  expect(decoded.status).toBe("ok");
+  if (decoded.status !== "ok") throw new TypeError("Expected native response");
+  expect(decoded.info).toEqual(info);
+  expect(Array.from(decoded.bytes)).toEqual(Array.from(bytes));
+});
+
+describe("native same-codec response encoding", () => {
+  it.each(["\uFEFFvisible.ts", "\uFEFF"])("preserves leading BOM in the identity %j", (name) => {
+    const entries = [
+      { name, type: "file" as const },
+      { name: "visible.ts", type: "file" as const },
+    ];
+    expect(
+      decodeSecureWorkspaceNativeDirectory(encodeSecureWorkspaceNativeDirectory(entries)),
+    ).toEqual(entries);
+  });
+
+  it("preserves exact directory order, Unicode, newlines and entry types", () => {
+    const entries = [
+      { name: "é\n.ts", type: "file" as const },
+      { name: "nested", type: "directory" as const },
+      { name: "link", type: "symlink" as const },
+    ];
+    expect(
+      decodeSecureWorkspaceNativeDirectory(encodeSecureWorkspaceNativeDirectory(entries)),
+    ).toEqual(entries);
+  });
+  it.each(["", ".", "..", "child/name", "nul\0", "\ud800"])(
+    "refuses an unrepresentable directory name %j",
+    (name) => {
+      expect(() => encodeSecureWorkspaceNativeDirectory([{ name, type: "file" }])).toThrow();
+    },
+  );
+  it("refuses duplicate names without reporting a partial listing", () => {
+    expect(() =>
+      encodeSecureWorkspaceNativeDirectory([
+        { name: "file", type: "file" },
+        { name: "file", type: "directory" },
+      ]),
+    ).toThrow();
+  });
+  it("preserves whole-file empty bytes and larger-file range metadata", () => {
+    for (const bytes of [Buffer.alloc(0), Buffer.alloc(1_048_577, 255)]) {
+      const info = { type: "file" as const, size: 100_000_000, mtimeMs: -1000 };
+      const decoded = decodeSecureWorkspaceNativeResponse(
+        encodeSecureWorkspaceNativeResponse({ status: "ok", info, bytes }),
+      );
+      expect(decoded).toEqual({ status: "ok", info, bytes });
+    }
+  });
+  it("preserves wrong-kind metadata and exact helper closed failures", () => {
+    const info = { type: "directory" as const, size: 0, mtimeMs: -1 };
+    expect(
+      decodeSecureWorkspaceNativeResponse(
+        encodeSecureWorkspaceNativeResponse({ status: "wrong-kind", info }),
+      ),
+    ).toEqual({ status: "wrong-kind", info });
+    expect(
+      decodeSecureWorkspaceNativeResponse(
+        encodeSecureWorkspaceNativeResponse({ status: "io-failure" }),
+      ),
+    ).toEqual({ status: "io-failure" });
+  });
+  it.each([NaN, Infinity, -Infinity])("refuses non-finite timestamps (%j)", (mtimeMs) => {
+    expect(() =>
+      encodeSecureWorkspaceNativeResponse({
+        status: "ok",
+        info: { type: "file", size: 0, mtimeMs },
+        bytes: Buffer.alloc(0),
+      }),
+    ).toThrow();
+  });
+  it("refuses more than the original 64MiB byte ceiling", () => {
+    expect(() =>
+      encodeSecureWorkspaceNativeResponse({
+        status: "ok",
+        info: { type: "file", size: SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1, mtimeMs: 0 },
+        bytes: Buffer.alloc(SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1),
+      }),
+    ).toThrow();
   });
 });

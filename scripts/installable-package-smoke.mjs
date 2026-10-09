@@ -2918,10 +2918,20 @@ function lifecycleCommandRunner(tmp, bin, port, stateDir) {
     "10",
   ];
   return (command, extra = []) =>
-    run("node", [bin, command, ...commonArgs, ...extra], {
-      cwd: tmp,
-      timeout: LIFECYCLE_COMMAND_TIMEOUT_MS,
-    });
+    run(
+      "node",
+      [
+        bin,
+        command,
+        ...commonArgs,
+        ...(command === "start" || command === "restart" ? ["--no-open"] : []),
+        ...extra,
+      ],
+      {
+        cwd: tmp,
+        timeout: LIFECYCLE_COMMAND_TIMEOUT_MS,
+      },
+    );
 }
 
 function assertLifecycleStart(runLifecycle) {

@@ -2142,3 +2142,134 @@ it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
     ).toBe(sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES);
   },
 );
+
+describe("coding task composer submission evidence (#3877)", () => {
+  const submission = {
+    kind: "start",
+    outcome: "attempted",
+    normalization: "trim",
+    displayedDigest: "a".repeat(64),
+    submittedDigest: "b".repeat(64),
+    draftMatchesInput: false,
+    inputCharacterCount: 42,
+    submittedCharacterCount: 40,
+  };
+  const report = {
+    message: "Closed submission attempt",
+    clientTs: "2026-10-07T00:00:00.000Z",
+    composerActivity: "coding-task-submission",
+    composerSubmission: submission,
+  };
+  it("accepts captured input disagreement and explicit trim without a visibility or acceptance claim", () => {
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerSubmission: {
+          ...submission,
+          kind: "follow-up",
+          draftMatchesInput: true,
+        },
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { kind: "delete" },
+    { outcome: "accepted" },
+    { normalization: "rewrite" },
+    { displayedDigest: "PRIVATE_TASK_BODY" },
+    { submittedDigest: "a".repeat(63) },
+    { draftMatchesInput: "true" },
+    { inputCharacterCount: -1 },
+    { submittedCharacterCount: 65_537 },
+    { inputCharacterCount: 1.5 },
+    { privateBody: "PRIVATE_TASK_CANARY" },
+  ])("rejects unbounded or content-bearing context %j", (invalid) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerSubmission: { ...submission, ...invalid },
+      }),
+    ).toBe(false);
+  });
+  it("requires submission facts on that activity and refuses facts on a different activity", () => {
+    expect(isClientDiagnosticIngestRequest({ ...report, composerSubmission: undefined })).toBe(
+      false,
+    );
+    expect(
+      isClientDiagnosticIngestRequest({ ...report, composerActivity: "coding-task-reset" }),
+    ).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...report, composerActivity: undefined })).toBe(false);
+  });
+});
+
+it("accepts only closed catalog/selection stage evidence with truthful bounded counts", () => {
+  const modelCatalog = {
+    surface: "chat",
+    source: "background",
+    outcome: "held",
+    configuredModelCount: 2,
+    usableModelCount: 1,
+    selectionProvenance: "human",
+    selectionDigest: "a".repeat(64),
+  };
+  const request = {
+    kind: "stage",
+    stage: "model selection availability",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 0,
+    modelCatalog,
+  };
+  expect(isClientStageIngestRequest(request)).toBe(true);
+  for (const invalid of [
+    { ...modelCatalog, modelId: "PRIVATE_MODEL" },
+    { ...modelCatalog, usableModelCount: 3 },
+    { ...modelCatalog, configuredModelCount: 1_000_001 },
+    { ...modelCatalog, selectionDigest: "PRIVATE_MODEL" },
+    { ...modelCatalog, selectionProvenance: undefined },
+    { ...modelCatalog, outcome: "changed" },
+    { ...modelCatalog, source: "PRIVATE_ENDPOINT" },
+  ])
+    expect(isClientStageIngestRequest({ ...request, modelCatalog: invalid })).toBe(false);
+  expect(isClientStageIngestRequest({ ...request, stage: "chat bind" })).toBe(false);
+  expect(isClientStageIngestRequest({ ...request, phase: "started", durationMs: undefined })).toBe(
+    false,
+  );
+  expect(isClientStageIngestRequest({ ...request, modelCatalog: undefined })).toBe(false);
+  expect(
+    isClientStageIngestRequest({
+      ...request,
+      stage: "gateway catalog adoption",
+      modelCatalog: {
+        surface: "coding-workbench",
+        source: "workbench",
+        outcome: "adopted",
+        configuredModelCount: 2,
+        usableModelCount: 1,
+      },
+    }),
+  ).toBe(true);
+});
+
+it("accepts only stage-specific closed gateway profile outcomes", () => {
+  const report = {
+    kind: "stage",
+    stage: "gateway profile refresh",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 5,
+    correlationId: "profile-read-123",
+    parentCorrelationId: "catalog-read-123",
+    gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
+  };
+  expect(isClientStageIngestRequest(report)).toBe(true);
+  for (const gatewayProfile of [
+    { outcome: "adopted", catalogReread: "maybe" },
+    { outcome: "failed", catalogReread: "requested" },
+    { outcome: "adopted", catalogReread: "skipped", endpoint: "PRIVATE-URL" },
+  ])
+    expect(isClientStageIngestRequest({ ...report, gatewayProfile })).toBe(false);
+  expect(isClientStageIngestRequest({ ...report, stage: "window chunk" })).toBe(false);
+  expect(isClientStageIngestRequest({ ...report, phase: "started" })).toBe(false);
+});

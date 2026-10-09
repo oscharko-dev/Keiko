@@ -29,6 +29,7 @@ Rewrites package.json atomically (temp file + rename) and preserves the file's
 existing indentation style (2 spaces, 4 spaces, or tabs).
 
 Run this from the project where @oscharko-dev/keiko is installed.
+keiko:start opens an authenticated browser session by default; pass --no-open for headless use.
 `;
 
 interface InitOptions {

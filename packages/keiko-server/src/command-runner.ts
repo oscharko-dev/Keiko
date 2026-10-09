@@ -21,6 +21,7 @@ import {
   type CommandResult,
   type RunCommandDeps,
   type SandboxPolicy,
+  type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
@@ -46,7 +47,15 @@ import {
   buildCommandRunEvidenceEntry,
 } from "./command-runner-evidence.js";
 import type { Project, UiStore } from "./store/index.js";
-import { type ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
+import {
+  inspectWorkspaceRootIdentity,
+  type WorkspaceRootIdentity,
+} from "./workspace-root-identity.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -55,6 +64,8 @@ import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access
 // runner owns it; this runner asks it rather than restating the rule, so the two governed
 // script-spawn boundaries can never drift apart (PR #3381 review P1).
 import { decideScriptTrust } from "./editor/verificationRunner.js";
+import { resolveTrustBasisFact, trustBasisFactsMatch } from "./workspace-script-trust.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 const MAX_CONCURRENT_RUNS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -77,6 +88,8 @@ export interface CommandRunInput {
   readonly timeoutMs?: number | undefined;
   readonly requestId?: string | undefined;
   readonly signal?: AbortSignal | undefined;
+  /** Server-composed live authority check; deliberately absent from the wire request parser. */
+  readonly beforeSpawn?: (() => boolean) | undefined;
 }
 
 export type CommandRunnerEventEmitter = (event: CommandRunnerEvent) => void;
@@ -311,6 +324,74 @@ interface ResolvedCommandWorkspace {
   // execution cannot be spawned (ADR-0147 D3).
 }
 
+type CommandSpawnRefusal = "authority-revoked" | "root-changed" | "script-trust-revoked";
+
+class CommandSpawnAdmissionError extends CommandDeniedError {
+  public override readonly cause: unknown;
+
+  public constructor(
+    public readonly refusal: CommandSpawnRefusal,
+    cause?: unknown,
+  ) {
+    super("Command authority refused execution before spawn.", "npm");
+    this.cause = cause;
+  }
+}
+
+interface CommandSpawnContext {
+  readonly resolved: ResolvedCommandWorkspace;
+  readonly input: CommandRunInput;
+  readonly rootIdentity: WorkspaceRootIdentity;
+  readonly signal: AbortSignal;
+}
+
+interface CommandScriptTrustFacts {
+  readonly workspace: ReturnType<typeof resolveTrustBasisFact>;
+  readonly repository: ReturnType<typeof resolveTrustBasisFact> | undefined;
+}
+
+function scriptTrustFacts(
+  access: WorkspaceRootAccess,
+  repositoryFs: WorkspaceFs,
+): CommandScriptTrustFacts {
+  return {
+    workspace: resolveTrustBasisFact(access.fs, access.canonicalRoot),
+    repository:
+      access.kind === "managed-task"
+        ? resolveTrustBasisFact(repositoryFs, access.repositoryRoot)
+        : undefined,
+  };
+}
+
+function sameScriptTrustFacts(
+  left: CommandScriptTrustFacts,
+  right: CommandScriptTrustFacts,
+): boolean {
+  if (!trustBasisFactsMatch(left.workspace, right.workspace)) return false;
+  return left.repository === undefined
+    ? right.repository === undefined
+    : right.repository !== undefined && trustBasisFactsMatch(left.repository, right.repository);
+}
+
+function sameWorkspaceRootIdentity(
+  left: WorkspaceRootIdentity,
+  right: WorkspaceRootIdentity,
+): boolean {
+  return (
+    left.canonicalRoot === right.canonicalRoot &&
+    left.identityDigest === right.identityDigest &&
+    left.objectIdentityDigest === right.objectIdentityDigest
+  );
+}
+
+function sameWorkspaceAccess(left: WorkspaceRootAccess, right: WorkspaceRootAccess): boolean {
+  if (left.kind !== right.kind || left.canonicalRoot !== right.canonicalRoot) return false;
+  return (
+    left.kind !== "managed-task" ||
+    (right.kind === "managed-task" && left.repositoryRoot === right.repositoryRoot)
+  );
+}
+
 class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly store: UiStore;
   private readonly evidenceStore: EvidenceStore | undefined;
@@ -434,18 +515,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
 
   private resolveWorkspace(projectId: string): ResolvedCommandWorkspace {
     const project = projectFor(this.store, projectId);
-    if (project === undefined) {
-      throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project not found.");
-    }
-    const fallbackFs = this.fs();
-    const access =
-      this.rootAccessResolver === undefined
-        ? {
-            kind: "ordinary" as const,
-            canonicalRoot: projectRootOrThrow(project, fallbackFs),
-            fs: fallbackFs,
-          }
-        : this.rootAccessResolver(project.path);
+    const access = this.accessFor(projectId, project);
     if (access === undefined) {
       throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
     }
@@ -466,15 +536,51 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     };
   }
 
-  private buildRunDeps(workspace: WorkspaceInfo, fs: WorkspaceFs): RunCommandDeps {
+  private accessFor(
+    projectId: string,
+    project: Project | undefined,
+  ): WorkspaceRootAccess | undefined {
+    if (project === undefined) return this.managedAccessFor(projectId);
+    if (this.rootAccessResolver !== undefined) return this.rootAccessResolver(project.path);
+    const fs = this.fs();
+    return { kind: "ordinary", canonicalRoot: projectRootOrThrow(project, fs), fs };
+  }
+
+  private managedAccessFor(projectId: string): WorkspaceRootAccess | undefined {
+    try {
+      const access = this.rootAccessResolver?.(projectId);
+      return access?.kind === "managed-task" ? access : undefined;
+    } catch (error) {
+      emitServerDiagnostic(this.diagnostics, {
+        ...serverDiagnosticFromError({
+          correlationId: UNKNOWN_CORRELATION_ID,
+          operation: "command.workspace-root",
+          source: "command-runner",
+          error,
+          redact: (): string => "command-workspace-root-resolution-failed",
+          now: this.now,
+        }),
+        code: "command-workspace-root-resolution-failed",
+        diagnosticOutcome: "request-failed",
+      });
+      return undefined;
+    }
+  }
+
+  private buildRunDeps(context: CommandSpawnContext): RunCommandDeps {
+    const { resolved } = context;
+    const spawn = this.runDeps.spawn ?? nodeSpawnFn;
     return {
-      workspace,
+      workspace: resolved.workspace,
       policy: this.policy,
       commandRules: COMMAND_TASK_RULES,
-      spawn: this.runDeps.spawn ?? nodeSpawnFn,
+      spawn: (command, args, options): ReturnType<SpawnFn> => {
+        this.assertSpawnAdmission(context);
+        return spawn(command, args, options);
+      },
       processEnv: this.processEnv,
       now: this.runDeps.now ?? this.now,
-      fs,
+      fs: resolved.access.fs,
       ...(this.runDeps.resolveExecutable === undefined
         ? {}
         : { resolveExecutable: this.runDeps.resolveExecutable }),
@@ -486,11 +592,87 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     };
   }
 
+  private assertSpawnAdmission(context: CommandSpawnContext): void {
+    const current = this.assertBoundRoot(context);
+    const basis = scriptTrustFacts(current.access, this.fs());
+    this.assertCallerAuthority(context);
+    if (!this.trustedForScripts(current)) {
+      throw new CommandSpawnAdmissionError("script-trust-revoked");
+    }
+    // Trust and authority ports are synchronous callbacks. A callback may revoke the run or
+    // replace its root, so neither an earlier verdict nor a run-start event authorizes this spawn.
+    this.assertCallerAuthority(context);
+    const last = this.assertBoundRoot(context);
+    if (!this.trustedForScripts(last)) {
+      throw new CommandSpawnAdmissionError("script-trust-revoked");
+    }
+    this.assertCallerAuthority(context);
+    this.assertStableSpawnFacts(context, last, basis);
+  }
+
+  private assertStableSpawnFacts(
+    context: CommandSpawnContext,
+    current: ResolvedCommandWorkspace,
+    basis: CommandScriptTrustFacts,
+  ): void {
+    // No further caller or root-resolution callback follows this materialization. Producer-owned
+    // manifest facts catch rewrites inside even an allowed callback without a recheck loop.
+    if (!sameScriptTrustFacts(basis, scriptTrustFacts(current.access, this.fs()))) {
+      throw new CommandSpawnAdmissionError("script-trust-revoked");
+    }
+    this.assertRootIdentity(context.rootIdentity, current.access.canonicalRoot);
+    if (context.signal.aborted) throw new CommandCancelledError("Command cancelled before spawn.");
+  }
+
+  private assertRootIdentity(identity: WorkspaceRootIdentity, root: string): void {
+    try {
+      if (!sameWorkspaceRootIdentity(identity, inspectWorkspaceRootIdentity(root))) {
+        throw new CommandSpawnAdmissionError("root-changed");
+      }
+    } catch (error) {
+      if (error instanceof CommandSpawnAdmissionError) throw error;
+      throw new CommandSpawnAdmissionError("root-changed", error);
+    }
+  }
+
+  private assertBoundRoot(context: CommandSpawnContext): ResolvedCommandWorkspace {
+    const { resolved: bound, input, rootIdentity } = context;
+    let current: ResolvedCommandWorkspace;
+    try {
+      current = this.resolveWorkspace(input.projectId);
+      const currentIdentity = inspectWorkspaceRootIdentity(current.access.canonicalRoot);
+      if (
+        !sameWorkspaceAccess(bound.access, current.access) ||
+        !sameWorkspaceRootIdentity(rootIdentity, currentIdentity)
+      ) {
+        throw new CommandSpawnAdmissionError("root-changed");
+      }
+    } catch (error) {
+      if (error instanceof CommandSpawnAdmissionError) throw error;
+      throw new CommandSpawnAdmissionError("root-changed", error);
+    }
+    return current;
+  }
+
+  private assertCallerAuthority({ input, signal }: CommandSpawnContext): void {
+    if (signal.aborted) throw new CommandCancelledError("Command cancelled before spawn.");
+    try {
+      const approved: unknown = input.beforeSpawn?.();
+      if (input.beforeSpawn !== undefined && approved !== true) {
+        throw new CommandSpawnAdmissionError("authority-revoked");
+      }
+    } catch (error) {
+      if (error instanceof CommandSpawnAdmissionError) throw error;
+      throw new CommandSpawnAdmissionError("authority-revoked", error);
+    }
+  }
+
   private async runExecution(
     task: CommandTask,
     resolved: ResolvedCommandWorkspace,
     input: CommandRunInput,
   ): Promise<CommandTaskRunResult> {
+    const rootIdentity = inspectWorkspaceRootIdentity(resolved.access.canonicalRoot);
     const runId = randomUUID();
     const controller = new AbortController();
     const entry: InFlightRun = { controller, cancelledByUser: false };
@@ -507,7 +689,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       payload: { taskId: task.id, kind: task.kind, startedAt, ...requestIdPayload(input) },
     });
     try {
-      return await this.invoke(runId, task, resolved, input, entry, startedAt);
+      return await this.invoke(runId, task, resolved, input, entry, startedAt, rootIdentity);
     } finally {
       input.signal?.removeEventListener("abort", relayAbort);
       this.runs.delete(runId);
@@ -521,8 +703,14 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     input: CommandRunInput,
     entry: InFlightRun,
     startedAt: number,
+    rootIdentity: WorkspaceRootIdentity,
   ): Promise<CommandTaskRunResult> {
-    const deps = this.buildRunDeps(resolved.workspace, resolved.access.fs);
+    const deps = this.buildRunDeps({
+      resolved,
+      input,
+      rootIdentity,
+      signal: entry.controller.signal,
+    });
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
     let outcome: SettledOutcome;
     try {
@@ -541,9 +729,26 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       );
       outcome = outcomeFromResult(result);
     } catch (error) {
+      this.recordSpawnRefusal(runId, error);
       outcome = outcomeFromError(error, entry.cancelledByUser, this.now() - startedAt);
     }
     return this.finalize(runId, task, input, outcome, startedAt);
+  }
+
+  private recordSpawnRefusal(runId: string, error: unknown): void {
+    if (!(error instanceof CommandSpawnAdmissionError)) return;
+    emitServerDiagnostic(this.diagnostics, {
+      ...serverDiagnosticFromError({
+        correlationId: runId,
+        operation: "command.before-spawn",
+        source: "command-runner",
+        error,
+        redact: (): string => "command-spawn-admission-refused",
+        now: this.now,
+      }),
+      code: `command-spawn-${error.refusal}`,
+      diagnosticOutcome: "request-refused",
+    });
   }
 
   private finalize(

@@ -15,6 +15,7 @@ import {
 } from "../tool-catalog/catalogToolFacadeBridge.js";
 import {
   createCodingToolFacade,
+  codingToolEditPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -27,6 +28,12 @@ import type {
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import { codingToolDiscoveryText } from "./codingToolIpc.js";
+import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
+import { createCodingToolGovernedDelegate } from "./codingToolGovernedDelegate.js";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
+import { decodeGovernedToolModelContent } from "./governedToolModelContent.js";
+import { ScriptedGovernedTools } from "./opencodeFunctionalHarness/_governedTools.js";
 import { VERIFIED_COMMIT_BLOCKING_PATHS_MAX } from "../gitDelivery/verifiedCommitTypes.js";
 
 const capability = "capability-1-opaque-runtime-secret";
@@ -94,6 +101,184 @@ function facade(admitted = true): MutableFacadePorts {
     },
   };
 }
+
+function discoveryFacadeFixture(files: Readonly<Record<string, string>>): CodingToolFacade {
+  const root = "/discovery-model-content-fixture";
+  const fs = memFs(root, { "package.json": '{"name":"fixture"}', ...files });
+  const activityLog = createBufferedServerLogSink();
+  const ports = createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: { readText: vi.fn() },
+    editorAgentClient: { action: vi.fn() },
+    resolveEditorActionContext: vi.fn(),
+    resolveWorkspaceRootAccess: () => ({ kind: "ordinary", canonicalRoot: root, fs }),
+    activityLog,
+  });
+  const unused = {
+    execute: (): Promise<{ readonly status: "failed" }> => Promise.resolve({ status: "failed" }),
+  };
+  return createCodingToolFacade({
+    authority: facade().authority,
+    delegate: createCodingToolGovernedDelegate(
+      {
+        ...ports,
+        repositorySearch: unused,
+        commandRunner: unused,
+        verificationRunner: unused,
+        gitAuthority: unused,
+        deliveryAuthority: unused,
+        connectorAuthority: unused,
+        egressAuthority: unused,
+      },
+      undefined,
+      activityLog,
+    ),
+  });
+}
+
+function generatedDiscoveryTools(subject: CodingToolFacade): ScriptedGovernedTools {
+  return new ScriptedGovernedTools({
+    env: {
+      KEIKO_CODING_MODE: "supervised-coding",
+      KEIKO_TOOL_FACADE_URL: "http://127.0.0.1/api/coding-sidecar/tool",
+      KEIKO_TOOL_FACADE_CAPABILITY: capability,
+      KEIKO_CODING_RUN_ID: "run-discovery-content",
+    },
+    pluginVersion: "v2",
+    sessionId: "ses_discoverycontent",
+    broadcast: (): void => undefined,
+    fetch: async (_input, init): Promise<Response> => {
+      const body = init?.body;
+      if (typeof body !== "string") throw new TypeError("Expected generated IPC JSON body");
+      return new Response(JSON.stringify(await subject.execute({ body, capability })), {
+        status: 200,
+      });
+    },
+  });
+}
+
+describe("canonical discovery metadata projection", () => {
+  const entry = { relativePath: "src/target.ts", kind: "file", sizeBytes: 6 } as const;
+  const discovery = {
+    entries: [entry],
+    matchedCount: 1,
+    coverageIncomplete: false,
+    truncationReasons: [],
+  };
+
+  async function projectedDiscovery(change: Readonly<Record<string, unknown>>): Promise<unknown> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        read: {
+          text: codingToolDiscoveryText(discovery.entries),
+          byteCount: 14,
+          digest: "b".repeat(64),
+          totalLines: 1,
+          returnedPathCount: 1,
+          discovery,
+          ...change,
+        },
+      }),
+    );
+    return createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "discover", query: "target", maxResults: 10 }),
+      capability,
+    });
+  }
+
+  it("passes truthful partial coverage and canonical entries to the model", async () => {
+    expect(
+      await projectedDiscovery({
+        discovery: { ...discovery, coverageIncomplete: true, truncationReasons: ["io-error"] },
+      }),
+    ).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 1,
+        discovery: { ...discovery, coverageIncomplete: true, truncationReasons: ["io-error"] },
+      },
+    });
+  });
+
+  it.each([
+    { discovery: { ...discovery, matchedCount: 0 } },
+    { discovery: { ...discovery, coverageIncomplete: true } },
+    { discovery: { ...discovery, truncationReasons: ["future-reason"], coverageIncomplete: true } },
+    { discovery: { ...discovery, entries: [{ ...entry, relativePath: "../outside" }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, relativePath: ".env" }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, kind: "symlink" }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, sizeBytes: -1 }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, extra: "unknown" }] } },
+    { discovery: { ...discovery, extra: "unknown" } },
+    { returnedPathCount: 2 },
+    { returnedPathCount: undefined },
+    { totalLines: 2 },
+    { text: "other.ts\n" },
+  ])("refuses inconsistent or unadmitted discovery metadata: %j", async (change) => {
+    expect(await projectedDiscovery(change)).toMatchObject({ status: "failed" });
+  });
+
+  it("refuses sparse metadata arrays instead of admitting an unverified entry", async () => {
+    const entries: unknown[] = [];
+    entries.length = 1;
+    expect(await projectedDiscovery({ discovery: { ...discovery, entries } })).toMatchObject({
+      status: "failed",
+    });
+  });
+
+  it("refuses accessor metadata before reading or projecting its fields", async () => {
+    const path = vi.fn(() => entry.relativePath);
+    const accessor = { ...entry };
+    Object.defineProperty(accessor, "relativePath", { enumerable: true, get: path });
+    expect(
+      await projectedDiscovery({ discovery: { ...discovery, entries: [accessor] } }),
+    ).toMatchObject({ status: "failed" });
+    expect(path).not.toHaveBeenCalled();
+  });
+
+  it("refuses symbol metadata instead of silently dropping undeclared fields", async () => {
+    expect(
+      await projectedDiscovery({
+        discovery: { ...discovery, [Symbol("undeclared")]: "unexpected" },
+      }),
+    ).toMatchObject({ status: "failed" });
+  });
+
+  it("preserves the actual producer result through the generated V2 tool and model-content codec", async () => {
+    const subject = discoveryFacadeFixture({
+      "line\nfilename-target.ts": "source",
+      "second-target.ts": "source",
+    });
+    const expected = await subject.execute({
+      body: requestBody({ action: "discover", query: "target", maxResults: 1 }),
+      capability,
+    });
+    const content = await generatedDiscoveryTools(subject).execute(
+      {
+        id: "call_discovery_content",
+        name: "keiko_workspace_discover",
+        args: { query: "target", maxResults: 1 },
+      },
+      new AbortController().signal,
+    );
+    expect(decodeGovernedToolModelContent(content)).toEqual(expected);
+    expect(expected).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 1,
+        totalLines: 2,
+        discovery: {
+          entries: [{ relativePath: "line\nfilename-target.ts", kind: "file", sizeBytes: 6 }],
+          matchedCount: 2,
+          coverageIncomplete: true,
+          truncationReasons: ["result-limit"],
+        },
+      },
+    });
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(262_144);
+  });
+});
 
 describe("CodingToolFacade", () => {
   it("admits an exact edit request before making exactly one governed delegate call", async () => {
@@ -174,6 +359,33 @@ describe("CodingToolFacade", () => {
       status: "completed",
       evidence: [{ kind: "governed-delegate", code: "completed" }],
       skills: empty,
+    });
+  });
+
+  it("preserves canonical discovery item counts without treating text lines as paths", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        read: {
+          text: "one\nfilename.ts\nsecond.ts\n",
+          byteCount: 0,
+          digest: "b".repeat(64),
+          totalLines: 3,
+          returnedPathCount: 2,
+        },
+      }),
+    );
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "discover", query: "*", maxResults: 10 }),
+      capability,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      read: {
+        totalLines: 3,
+        returnedPathCount: 2,
+      },
     });
   });
 
@@ -441,7 +653,7 @@ describe("CodingToolFacade", () => {
 
   it("rechecks revocation immediately before dispatch", async () => {
     const ports = facade();
-    ports.authority.admit = vi.fn(() => ({
+    ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
       ok: true as const,
       mutationGuard: { check: (): false => false },
     }));
@@ -1643,6 +1855,23 @@ describe("CodingToolFacade", () => {
       return { subject: createCodingToolFacade(ports, { catalogBridge: bridge }), ports, log };
     }
 
+    it("observes the actual canonical catalog delegate after admission without exposing the callback", async () => {
+      const { subject, ports, log } = catalogBoundFacade();
+      const onDelegateStarted = vi.fn();
+      ports.delegate.execute = vi.fn(() => {
+        expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+        return Promise.resolve({ outcome: "completed" });
+      });
+      const result = await subject.execute({
+        body: requestBody({ action: "git", operation: "status" }),
+        capability,
+        onDelegateStarted,
+      });
+      expect(ports.delegate.execute).toHaveBeenCalledOnce();
+      expect(log.events.some((event) => event.op === "tool-catalog.invocation-settled")).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("onDelegateStarted");
+    });
+
     it("carries the structured failure payload through a red run instead of a bare dispatch fault", async () => {
       const { subject, ports, log } = catalogBoundFacade();
       const verificationFailure = {
@@ -1826,6 +2055,44 @@ describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
       readReason: "not-text",
     };
 
+    it.each(["src/deep/AFFECTED_FILE.ts", "../escape.ts", "/private/file.ts", ".env"])(
+      "projects only a safe authoritative refusal path and keeps it out of evidence: %s",
+      async (affectedRelativePath) => {
+        const { subject, outcomes } = observedFacade({ ...unreadable, affectedRelativePath });
+        const result = await subject.execute({
+          body: requestBody({ action: "edit", changeset }),
+          capability,
+        });
+        const expected =
+          affectedRelativePath === "src/deep/AFFECTED_FILE.ts"
+            ? { refusalReason: "EDIT_PREPARE_FAILED", affectedRelativePath }
+            : { refusalReason: "EDIT_PREPARE_FAILED" };
+        expect(codingToolEditPresentation(result)).toEqual(expected);
+        expect(JSON.stringify(result)).not.toContain(affectedRelativePath);
+        expect(JSON.stringify(outcomes)).not.toContain(affectedRelativePath);
+      },
+    );
+
+    it("keeps unknown refusals and a path without an authoritative read absent", async () => {
+      expect(
+        codingToolEditPresentation({
+          status: "failed",
+          evidence: [],
+          reasonCode: "RAW_PROVIDER_SENTINEL",
+        }),
+      ).toEqual({});
+      const { subject } = observedFacade({
+        ...unreadable,
+        prepareCause: "guard-denied",
+        affectedRelativePath: "src/UNPROVEN_CULPRIT.ts",
+      });
+      const result = await subject.execute({
+        body: requestBody({ action: "edit", changeset }),
+        capability,
+      });
+      expect(codingToolEditPresentation(result)).toEqual({ refusalReason: "EDIT_PREPARE_FAILED" });
+    });
+
     it("reports the closed prepare cause and read reason beside the code", async () => {
       const { subject, outcomes } = observedFacade(unreadable);
 
@@ -1904,7 +2171,7 @@ describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
     it("reports it for the staged edit production answers, whose binding it needs", async () => {
       const outcomes: CodingToolEditOutcome[] = [];
       const ports = facade();
-      ports.authority.admit = vi.fn(() => ({
+      ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
         ok: true as const,
         mutationGuard: { check: (): true => true },
         binding: {
@@ -2001,4 +2268,109 @@ describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
       ]);
     });
   });
+});
+
+describe("server-owned admitted delegate observation", () => {
+  it("observes a plain delegate only after genuine authority and guard admission", async () => {
+    const ports = facade();
+    const onDelegateStarted = vi.fn();
+    ports.delegate.execute = vi.fn(() => {
+      expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+      return Promise.resolve({ outcome: "completed" });
+    });
+    const input = {
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+      onDelegateStarted,
+    };
+    await expect(createCodingToolFacade(ports).execute(input)).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+    onDelegateStarted.mockClear();
+    await createCodingToolFacade(facade(false)).execute(input);
+    expect(onDelegateStarted).not.toHaveBeenCalled();
+  });
+});
+
+it("never emits an admitted delegate observation for revoked guards, cancellation or a wire field", async () => {
+  const onDelegateStarted = vi.fn();
+  const ports = facade();
+  ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+    ok: true,
+    mutationGuard: { check: () => false },
+  }));
+  const input = {
+    body: requestBody({ action: "command", commandId: "test" }),
+    capability,
+    onDelegateStarted,
+  };
+  const cancelled = facade();
+  const wire = facade();
+  await createCodingToolFacade(ports).execute(input);
+  await createCodingToolFacade(cancelled).execute({ ...input, signal: AbortSignal.abort() });
+  await createCodingToolFacade(wire).execute({
+    ...input,
+    body: requestBody({ action: "command", commandId: "test", onDelegateStarted: true }),
+  });
+  expect(onDelegateStarted).not.toHaveBeenCalled();
+  for (const subject of [ports, cancelled, wire])
+    expect(subject.delegate.execute).not.toHaveBeenCalled();
+});
+
+it("observes a claimed edit once while real in-flight duplicates and replay never execute again", async () => {
+  const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+  const ports = facade();
+  ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+    ok: true,
+    binding: {
+      runId: "run-1",
+      workspaceId: "workspace",
+      envelopeDigest: "a".repeat(64),
+      workspaceRootDigest: "b".repeat(64),
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    },
+    mutationGuard: { check: () => true },
+  }));
+  let resolve!: (result: unknown) => void;
+  ports.delegate.execute = vi.fn(
+    () =>
+      new Promise((accept) => {
+        resolve = accept;
+      }),
+  );
+  const onDelegateStarted = vi.fn();
+  const subject = createCodingToolFacade(ports, {
+    invocationRegistry: registry,
+    requireInvocationRegistryForEdits: true,
+  });
+  const input = { body: requestBody({ action: "edit", changeset }), capability, onDelegateStarted };
+  try {
+    const running = subject.execute(input);
+    await Promise.resolve();
+    expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+    expect((await subject.execute(input)).status).toBe("denied");
+    resolve({ outcome: "completed" });
+    expect((await running).status).toBe("completed");
+    expect((await subject.execute(input)).status).toBe("denied");
+    expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+    expect(ports.delegate.execute).toHaveBeenCalledTimes(1);
+  } finally {
+    registry.dispose();
+  }
+});
+
+it("keeps an observer technical failure outside the delegate catch and never executes", async () => {
+  const ports = facade();
+  const failure = new TypeError("private-observer-failure");
+  await expect(
+    createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+      onDelegateStarted: (): never => {
+        throw failure;
+      },
+    }),
+  ).rejects.toBe(failure);
+  expect(ports.delegate.execute).not.toHaveBeenCalled();
 });

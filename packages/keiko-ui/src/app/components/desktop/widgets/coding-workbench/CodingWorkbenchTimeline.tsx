@@ -21,6 +21,7 @@ import type {
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { useLocale } from "@/lib/i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
   useCodingWorkbenchTranslate,
@@ -28,6 +29,7 @@ import {
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
+import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -56,6 +58,7 @@ const ROW_HEIGHT_BY_KIND: Record<TimelineItemKind, number> = {
 const QUESTION_SUMMARY_STATES = new Set(["offline", "error", "stale", "unpaired"]);
 
 type TimelineItemKind = "message" | "tool" | "plan" | "event" | "group";
+type TurnFailureProgress = "active" | "gateway-retrying" | "finished" | "terminal";
 
 type TimelineItem =
   | {
@@ -100,6 +103,7 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly event: CodingWorkbenchRuntimeSseEvent;
+      readonly turnFailureProgress: TurnFailureProgress;
     };
 
 export interface CodingWorkbenchTimelineProps {
@@ -131,7 +135,7 @@ export function Timeline({
   const internalTitleRef = useRef<HTMLHeadingElement>(null);
   const titleRef = focusRef ?? internalTitleRef;
   const [showEvents, setShowEvents] = useState(false);
-  const allItems = useTimelineItems(events, activity.feed, generating);
+  const allItems = useTimelineItems(events, activity.feed, generating, active);
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items);
   if (
@@ -228,11 +232,63 @@ function useTimelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
   generating: boolean,
+  active: boolean,
 ): readonly TimelineItem[] {
   return useMemo(
-    () => timelineItems(events, feed, openMessageId(feed, generating)),
-    [events, feed, generating],
+    () =>
+      timelineItems(
+        events,
+        feed,
+        openMessageId(feed, generating),
+        active ? (feed?.runId ?? events.at(-1)?.runId) : undefined,
+      ),
+    [events, feed, generating, active],
   );
+}
+
+// A turn failure describes that step. Only the latest failure of a settled failed run offers
+// repair advice; an active run may recover natively. Automatic retry is claimed only from its fact.
+function timelineEventItems(
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+  activeRunId: string | undefined,
+): Extract<TimelineItem, { kind: "event" }>[] {
+  const newestByRun = new Map<string, CodingWorkbenchRuntimeSseEvent>();
+  const lastFailureByRun = new Map<string, string>();
+  for (const event of events) {
+    newestByRun.set(event.runId, event);
+    if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") {
+      lastFailureByRun.set(event.runId, event.cursor);
+    }
+  }
+  return events.map((event, index) => ({
+    kind: "event",
+    id: `event:${event.runId}:${event.cursor}`,
+    occurredAt: event.occurredAt,
+    order: index,
+    event,
+    turnFailureProgress: turnFailureProgress(
+      event,
+      newestByRun.get(event.runId),
+      lastFailureByRun.get(event.runId),
+      activeRunId,
+    ),
+  }));
+}
+
+function turnFailureProgress(
+  event: CodingWorkbenchRuntimeSseEvent,
+  newest: CodingWorkbenchRuntimeSseEvent | undefined,
+  lastFailureCursor: string | undefined,
+  activeRunId: string | undefined,
+): TurnFailureProgress {
+  if (newest === undefined) return "finished";
+  if (settledRunState(newest.state)) {
+    return newest.state === "failed" && event.cursor === lastFailureCursor
+      ? "terminal"
+      : "finished";
+  }
+  if (event.runId !== activeRunId) return "finished";
+  return modelGatewayRetrying([newest], event.runId) ? "gateway-retrying" : "active";
 }
 
 // The message that may still receive content: the newest message of the newest turn while the run
@@ -256,14 +312,9 @@ function timelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
   liveMessageId: string | undefined,
+  activeRunId: string | undefined,
 ): readonly TimelineItem[] {
-  const items: TimelineItem[] = events.map((event, index) => ({
-    kind: "event",
-    id: `event:${event.runId}:${event.cursor}`,
-    occurredAt: event.occurredAt,
-    order: index,
-    event,
-  }));
+  const items: TimelineItem[] = timelineEventItems(events, activeRunId);
   let order = events.length;
   for (const turn of feed?.turns ?? []) {
     if (feed === null) break;
@@ -378,7 +429,9 @@ function canMergeToolItem(
     previous?.kind === "tool" &&
     previous.tool.state === "succeeded" &&
     tool.state === "succeeded" &&
-    previous.tool.tool === tool.tool
+    previous.tool.tool === tool.tool &&
+    previous.tool.presentation === undefined &&
+    tool.presentation === undefined
   );
 }
 
@@ -868,6 +921,9 @@ function ToolRow({
           <span className={styles.toolIcon} aria-hidden="true" />
           <div className={styles.toolMeta}>
             <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
+            {item.tool.presentation?.relativePath === undefined ? null : (
+              <code className={styles.toolName}>{item.tool.presentation.relativePath}</code>
+            )}
           </div>
           {item.count > 1 ? (
             <span className={styles.toolCount}>
@@ -879,8 +935,46 @@ function ToolRow({
           </span>
         </summary>
         <code className={styles.toolName}>{item.tool.tool}</code>
+        <ToolPresentationDetails tool={item.tool} t={t} />
       </details>
     </li>
+  );
+}
+
+function ToolPresentationDetails({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const facts = tool.presentation;
+  if (facts === undefined) return null;
+  return (
+    <div className={styles.toolMeta}>
+      {facts.readByteCount === undefined ? null : (
+        <p>
+          {facts.totalFileLines === undefined
+            ? t("codingWorkbench.activity.readBytes", { bytes: facts.readByteCount })
+            : t("codingWorkbench.activity.readFacts", {
+                bytes: facts.readByteCount,
+                lines: facts.totalFileLines,
+              })}
+        </p>
+      )}
+      {facts.returnedPathCount === undefined ? null : (
+        <p>{t("codingWorkbench.activity.returnedPaths", { count: facts.returnedPathCount })}</p>
+      )}
+      {facts.refusalReason === undefined ? null : (
+        <p>{t("codingWorkbench.activity.editRefusal", { reason: facts.refusalReason })}</p>
+      )}
+      {facts.affectedRelativePath === undefined ? null : (
+        <p>{t("codingWorkbench.activity.affectedFile", { path: facts.affectedRelativePath })}</p>
+      )}
+      {facts.bridgeDurationMs === undefined ? null : (
+        <p>{t("codingWorkbench.activity.serviceDuration", { duration: facts.bridgeDurationMs })}</p>
+      )}
+    </div>
   );
 }
 
@@ -990,7 +1084,7 @@ function EventRow({
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
   const tone = eventTone(item.event);
-  const detail = eventDetail(item.event, t);
+  const detail = timelineEventDetail(item, t);
   return (
     <li
       ref={rowRef}
@@ -1007,14 +1101,84 @@ function EventRow({
       >
         <summary className={styles.cmpActivitySummary}>{eventTitle(item.event, t)}</summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
+        <VerificationDetail event={item.event} t={t} />
       </details>
     </li>
+  );
+}
+
+const TURN_FAILURE_CAUSE_KEYS: Readonly<Partial<Record<string, CodingWorkbenchMessageKey>>> = {
+  "provider-failed": "codingWorkbench.event.turnCause.provider-failed",
+  "stream-incomplete": "codingWorkbench.event.turnCause.stream-incomplete",
+  "turn-rejected": "codingWorkbench.event.turnCause.turn-rejected",
+  "output-exhausted": "codingWorkbench.event.turnCause.output-exhausted",
+  "empty-answer": "codingWorkbench.event.turnCause.empty-answer",
+  "invalid-tool-call": "codingWorkbench.event.turnCause.invalid-tool-call",
+};
+
+function timelineEventDetail(
+  item: Extract<TimelineItem, { kind: "event" }>,
+  t: CodingWorkbenchTranslate,
+): string {
+  const event = item.event;
+  if (
+    event.kind !== "runtime-event" ||
+    event.eventKind !== "failure-redacted" ||
+    item.turnFailureProgress === "terminal"
+  )
+    return eventDetail(event, t);
+  const key = TURN_FAILURE_CAUSE_KEYS[event.failureCode ?? ""];
+  if (key === undefined) return eventDetail(event, t);
+  const cause = t(key);
+  if (item.turnFailureProgress === "finished") return cause;
+  const progress = t(`codingWorkbench.event.turnProgress.${item.turnFailureProgress}`);
+  return `${cause} ${progress}`;
+}
+
+function VerificationDetail({
+  event,
+  t,
+}: {
+  readonly event: CodingWorkbenchRuntimeSseEvent;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const locale = useLocale();
+  const number = useMemo(
+    () => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }),
+    [locale],
+  );
+  const summary = event.kind === "runtime-event" ? event.verificationSummary : undefined;
+  if (summary === undefined) return null;
+  return (
+    <div className={styles.timelineDetail}>
+      <p>
+        {t("codingWorkbench.verification.result", {
+          verifier: t(`codingWorkbench.verification.verifier.${summary.verifierId}`),
+          status: t(`codingWorkbench.verification.status.${summary.status}`),
+        })}
+      </p>
+      <p>
+        {t("codingWorkbench.verification.checks", {
+          passed: number.format(summary.passedCount),
+          failed: number.format(summary.failedCount),
+          skipped: number.format(summary.skippedCount),
+        })}
+      </p>
+      <p>
+        {t("codingWorkbench.verification.duration", {
+          duration: number.format(summary.durationMs),
+        })}
+      </p>
+    </div>
   );
 }
 
 function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routine" | "success" {
   if (event.state === "failed" || event.failureCode !== undefined) return "attention";
   if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") return "attention";
+  if (event.kind === "runtime-event" && event.verificationSummary !== undefined) {
+    return event.verificationSummary.status === "passed" ? "success" : "attention";
+  }
   if (event.state === "succeeded") return "success";
   return "routine";
 }

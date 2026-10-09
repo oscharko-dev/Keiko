@@ -17,15 +17,18 @@ export type OpenCodeCompactionActivity =
       readonly event: "started";
       readonly compactionIdSha256: string;
       readonly auto: boolean;
-      readonly overflow: boolean;
+      /** V2 does not report overflow; absence is unknown, never false. */
+      readonly overflow?: boolean;
       readonly retainedTail: false;
     }
   | {
       readonly event: "tail-retained";
       readonly compactionIdSha256: string;
-      readonly tailStartIdSha256: string;
+      /** V2 exposes tail content, not its start ID. */
+      readonly tailStartIdSha256?: string;
       readonly auto: boolean;
-      readonly overflow: boolean;
+      /** V2 does not report overflow; absence is unknown, never false. */
+      readonly overflow?: boolean;
       readonly retainedTail: true;
     }
   | {
@@ -372,25 +375,21 @@ const COMPACTION_ACTIVITY_VALIDATORS: Readonly<
   Record<string, (value: CompactionActivityRecord) => boolean>
 > = {
   started: (value) =>
-    exactActivity(value, ["event", "compactionIdSha256", "auto", "overflow", "retainedTail"]) &&
+    exactActivity(value, ["event", "compactionIdSha256", "auto", "retainedTail"], ["overflow"]) &&
     validCompactionId(value) &&
     typeof value.auto === "boolean" &&
-    typeof value.overflow === "boolean" &&
+    optionalCompactionBoolean(value, "overflow") &&
     value.retainedTail === false,
   "tail-retained": (value) =>
-    exactActivity(value, [
-      "event",
-      "compactionIdSha256",
-      "tailStartIdSha256",
-      "auto",
-      "overflow",
-      "retainedTail",
-    ]) &&
+    exactActivity(
+      value,
+      ["event", "compactionIdSha256", "auto", "retainedTail"],
+      ["overflow", "tailStartIdSha256"],
+    ) &&
     validCompactionId(value) &&
-    typeof value.tailStartIdSha256 === "string" &&
-    /^[0-9a-f]{64}$/u.test(value.tailStartIdSha256) &&
+    optionalCompactionDigest(value, "tailStartIdSha256") &&
     typeof value.auto === "boolean" &&
-    typeof value.overflow === "boolean" &&
+    optionalCompactionBoolean(value, "overflow") &&
     value.retainedTail === true,
   completed: (value) =>
     exactActivity(value, ["event", "compactionIdSha256"]) && validCompactionId(value),
@@ -407,9 +406,27 @@ function recordValue(value: unknown): value is CompactionActivityRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function exactActivity(value: CompactionActivityRecord, keys: readonly string[]): boolean {
+function exactActivity(
+  value: CompactionActivityRecord,
+  keys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): boolean {
   const actual = Object.keys(value);
-  return actual.length === keys.length && keys.every((key) => actual.includes(key));
+  return (
+    keys.every((key) => actual.includes(key)) &&
+    actual.every((key) => keys.includes(key) || optionalKeys.includes(key))
+  );
+}
+
+function optionalCompactionBoolean(value: CompactionActivityRecord, key: string): boolean {
+  return !Object.hasOwn(value, key) || typeof value[key] === "boolean";
+}
+
+function optionalCompactionDigest(value: CompactionActivityRecord, key: string): boolean {
+  return (
+    !Object.hasOwn(value, key) ||
+    (typeof value[key] === "string" && /^[0-9a-f]{64}$/u.test(value[key]))
+  );
 }
 
 function validCompactionId(value: CompactionActivityRecord): boolean {

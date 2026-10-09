@@ -1,9 +1,20 @@
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  writeFileSync,
+  rmSync,
+  openSync,
+  closeSync,
+  fstatSync,
+  readFileSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Script } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -29,12 +40,31 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
-import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
+import {
+  createSecureWorkspaceTextReadPort,
+  secureWorkspaceTextDigest,
+} from "./secureWorkspaceTextRead.js";
+import type { SecureWorkspaceTextReadProcess } from "./secureWorkspaceTextReadProcess.js";
+import {
+  encodeSecureWorkspaceReadResponse,
+  encodeSecureWorkspaceSnapshotResponse,
+} from "./secureWorkspaceTextReadProtocol.js";
+import {
+  catalogRuntimeFixture,
+  RUNTIME_NOW,
+} from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
+import {
+  productionRuntimeAuthorityFacts,
+  type ProductionWorkspaceAuthorityInput,
+} from "./productionRuntimeWorkspaceAuthority.js";
+import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import { CODING_TOOL_MAX_READ_BYTES, CODING_TOOL_READ_MAX_WINDOW_LINES } from "./codingToolIpc.js";
 import {
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type {
   RepositorySemanticSearchLease,
   RepositorySemanticSearchResolver,
@@ -53,8 +83,20 @@ import {
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
-import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolEditOutcome,
+  CodingAcceptedInitializationReadPort,
+} from "./codingToolFacadePorts.js";
+import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
+import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
+import type {
+  SecureWorkspaceNativeFileIO,
+  SecureWorkspaceTextReadPort,
+} from "./secureWorkspaceTextRead.js";
 import { humanDecisionToolResult } from "./codingToolFacade.js";
+import { CodingRuntimeRunEffortLedger } from "./codingRuntimeRunEffort.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -83,6 +125,8 @@ import {
 } from "../editor/verificationRunner.js";
 import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { createInMemoryUiStore } from "../store/index.js";
+import { createCommandRunnerManager, type CommandRunnerManager } from "../command-runner.js";
+import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
@@ -492,6 +536,8 @@ describe("production managed worktree tools", () => {
   });
   it("does not publish or complete verification after its repair lease expires in the runner", async () => {
     let repairLive = true;
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const records: ServerDiagnosticRecord[] = [];
     const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
@@ -502,6 +548,8 @@ describe("production managed worktree tools", () => {
     const facade = verificationFacade({
       records,
       events,
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       verifiedCommitService: service,
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => repairLive, settle }),
@@ -528,6 +576,8 @@ describe("production managed worktree tools", () => {
     ).toMatchObject({ status: "failed" });
     expect(completeVerification).not.toHaveBeenCalled();
     expect(events).toEqual([]);
+    expect(executed).not.toHaveBeenCalled();
+    expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith("verification-authority-revoked");
     expect(records).toContainEqual(
       expect.objectContaining({
         operation: "coding-runtime.verification",
@@ -722,6 +772,114 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  it.each(["supervised-coding", "autonomous-delivery"] as const)(
+    "forwards the internal allowed changeset port in %s",
+    async (effectiveMode) => {
+      const browserAction = vi.fn();
+      const register = vi.fn((): true => true);
+      const apply = vi.fn<
+        NonNullable<ProductionManagedWorktreeToolInput["serverRuntimeChangeset"]>
+      >((input) =>
+        Promise.resolve({
+          schemaVersion: "1",
+          actionId: input.action.actionId,
+          sessionId: input.action.sessionId,
+          status: "succeeded",
+        }),
+      );
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(),
+          }),
+        },
+        authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode,
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => FACTS,
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: true as const, text: EDITED_TEXT }),
+        },
+        editorAgentClient: { action: browserAction },
+        serverRuntimeChangeset: apply,
+        mutationLeaseCoordinator: {
+          register,
+          discard: vi.fn(),
+          waitForMutation: () => Promise.resolve("succeeded"),
+        },
+        activityLog: { write: vi.fn() },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        verificationRunner: { runToReport: vi.fn() },
+        onRuntimeEvent: vi.fn(),
+      });
+      expect(
+        await facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "edit",
+            actionId: "direct-edit",
+            idempotencyKey: "direct-key",
+            changeset: replacementChangeset(),
+          }),
+        }),
+      ).toMatchObject({ status: "completed" });
+      expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview: false }));
+      expect(apply).toHaveBeenCalledOnce();
+      expect(browserAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["same-clock", "clock-moved"] as const)(
+    "captures original verification admission before a later edit (%s)",
+    async (clock) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const ledger = new CodingRuntimeRunEffortLedger();
+      ledger.begin("run-verification-3");
+      ledger.edit("run-verification-3");
+      const revision = (): number | undefined => ledger.verificationRevision("run-verification-3");
+      const admittedRevision = revision();
+      const events: CodingWorkbenchRuntimeEvent[] = [];
+      const facade = verificationFacade({
+        records: [],
+        events,
+        verificationRevision: revision,
+        runToReport: (): Promise<VerificationReport> => {
+          ledger.edit("run-verification-3");
+          if (clock === "clock-moved") vi.spyOn(Date, "now").mockReturnValue(1);
+          return Promise.resolve(verificationReport("passed"));
+        },
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "revision-proof",
+          idempotencyKey: "revision-proof",
+          verifierId: "test",
+        }),
+      });
+      const event = events.find((entry) => entry.kind === "verification-summarized");
+      expect(event?.verificationEditRevision).toBeDefined();
+      expect(event?.verificationEditRevision).toBe(admittedRevision);
+      ledger.verification(
+        "run-verification-3",
+        true,
+        event?.verificationTargetDigest,
+        event?.verificationEditRevision,
+      );
+      expect(ledger.needsVerification("run-verification-3")).toBe(true);
+      vi.restoreAllMocks();
+    },
+  );
+
   it("returns bounded actionable diagnostics for a failed verifier without exposing its workspace root", async () => {
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const facade = verificationFacade({
@@ -764,6 +922,14 @@ describe("production managed worktree tools", () => {
         failureLocationCount: 1,
         failureLocationsTruncated: true,
         verificationTargetDigest: codingVerificationTargetDigest("test"),
+        verificationSummary: {
+          verifierId: "test",
+          status: "failed",
+          passedCount: 0,
+          failedCount: 1,
+          skippedCount: 0,
+          durationMs: failedVerificationReport().durationMs,
+        },
       }),
     );
   });
@@ -1223,6 +1389,105 @@ describe("production managed worktree tools", () => {
     expect(registry.stats().entries).toBe(1);
   });
 
+  function realCommandFixture(): {
+    readonly root: string;
+    readonly manager: CommandRunnerManager;
+    readonly spawn: ReturnType<typeof vi.fn<SpawnFn>>;
+    readonly diagnostics: readonly ServerDiagnosticRecord[];
+    readonly dispose: () => void;
+  } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-command-live-")));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "command-live");
+    const spawn = vi.fn<SpawnFn>(() => {
+      throw new Error("CONTROLLED_UNEXPECTED_COMMAND_SPAWN");
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const manager = createCommandRunnerManager({
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      isWorkspaceTrustedForPackageScripts: () => true,
+      runDeps: {
+        spawn,
+        resolveExecutable: (command): string => command,
+        sandboxAvailability: {
+          bubblewrap: true,
+          unshare: false,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        },
+        platform: "linux",
+      },
+    });
+    return {
+      root,
+      diagnostics,
+      manager,
+      spawn,
+      dispose: (): void => {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it("refuses a real production command after authority revocation in run-started", async () => {
+    const f = realCommandFixture();
+    let authorized = true;
+    f.manager.subscribe((event) => {
+      if (event.kind === "run-started") authorized = false;
+    });
+    const resolveAuthority = (): ReturnType<
+      ProductionManagedWorktreeToolInput["authority"]["revalidateCapabilityForMutation"]
+    > =>
+      authorized
+        ? { ok: true, envelope: authorizedEnvelope() }
+        : { ok: false, reason: "workspace-drift" };
+    const facade = createProductionManagedWorktreeToolFacade({
+      ...baseEditAdmissionInput(),
+      authority: {
+        revalidateCapabilityForMutation: resolveAuthority,
+        resolveCapabilityForDelegation: resolveAuthority,
+      },
+      workspaceRoot: f.root,
+      resolveWorkspaceRootAccess: () => ({
+        kind: "ordinary",
+        canonicalRoot: f.root,
+        fs: nodeWorkspaceFs,
+      }),
+      commandRunner: f.manager,
+      editorAgentClient: { action: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+    });
+    try {
+      expect(
+        await facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "command",
+            actionId: "command-revoked",
+            idempotencyKey: "command-revoked",
+            commandId: "npm-script:test",
+          }),
+        }),
+      ).toMatchObject({ status: "failed" });
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(f.manager.inFlightCount()).toBe(0);
+      expect(f.diagnostics.at(-1)).toMatchObject({
+        operation: "command.before-spawn",
+        code: "command-spawn-authority-revoked",
+        diagnosticOutcome: "request-refused",
+      });
+      expect(JSON.stringify(f.diagnostics)).not.toContain(f.root);
+      expect(JSON.stringify(f.diagnostics)).not.toContain("CONTROLLED_UNEXPECTED_COMMAND_SPAWN");
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("completes a governed command through production wiring", async () => {
     const execute = vi.fn((): Promise<CommandTaskRunResult> =>
       Promise.resolve({
@@ -1297,6 +1562,119 @@ describe("production managed worktree tools", () => {
         timeoutMs: 10_000,
       }),
     );
+  });
+
+  it.each([
+    "PROJECT_NOT_FOUND",
+    "WORKSPACE_TRUST_REQUIRED",
+    "NO_RUNNABLE_STEPS",
+    "VERIFICATION_RUNNER_UNAVAILABLE",
+  ] as const)(
+    "reports actual impossible verification %s to the same run observer",
+    async (code) => {
+      const verificationBlocked = vi.fn();
+      const facade = verificationFacade({
+        records: [],
+        verificationBlocked,
+        runToReport: () => Promise.reject(new VerificationRunnerError(code, "PRIVATE_BLOCKER")),
+      });
+      await expect(
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "verification",
+            actionId: "verification-blocked",
+            idempotencyKey: "verification-blocked-key",
+            verifierId: "test",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "failed", reasonCode: code });
+      expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+        code,
+        codingVerificationTargetDigest("test"),
+      );
+    },
+  );
+
+  it.each(["skipped", "denied", "cancelled"] as const)(
+    "keeps an actual %s report blocked without claiming execution",
+    async (status) => {
+      const verificationBlocked = vi.fn();
+      const executed = vi.fn();
+      const facade = verificationFacade({
+        records: [],
+        verificationBlocked,
+        verificationAdmitted: () => executed,
+        runToReport: () => Promise.resolve(verificationReport(status)),
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-not-run",
+          idempotencyKey: "not-run-key",
+          verifierId: "test",
+        }),
+      });
+      expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+        "VERIFICATION_NOT_RUN",
+        codingVerificationTargetDigest("test"),
+      );
+      expect(executed).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["passed", "failed", "timed-out", "resource-exceeded"] as const)(
+    "acknowledges only actual executed %s checks at their admitted completion",
+    async (status) => {
+      const verificationBlocked = vi.fn();
+      const executed = vi.fn();
+      const admitted = vi.fn(() => executed);
+      const facade = verificationFacade({
+        records: [],
+        verificationBlocked,
+        verificationAdmitted: admitted,
+        runToReport: () => {
+          expect(admitted).toHaveBeenCalledOnce();
+          expect(executed).not.toHaveBeenCalled();
+          const report = verificationReport(status);
+          return Promise.resolve({
+            ...report,
+            results: verificationReport("passed").results.map((result) => ({ ...result, status })),
+          });
+        },
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-executed",
+          idempotencyKey: "executed-key",
+          verifierId: "test",
+        }),
+      });
+      expect(executed).toHaveBeenCalledExactlyOnceWith(codingVerificationTargetDigest("test"));
+      expect(verificationBlocked).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a generic runner execution fault retryable rather than calling it impossible", async () => {
+    const verificationBlocked = vi.fn();
+    const facade = verificationFacade({
+      records: [],
+      verificationBlocked,
+      runToReport: () => Promise.reject(new VerificationRunnerError("INTERNAL", "PRIVATE_FAULT")),
+    });
+    await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-fault",
+        idempotencyKey: "fault-key",
+        verifierId: "test",
+      }),
+    });
+    expect(verificationBlocked).not.toHaveBeenCalled();
   });
 
   // A refusal by the verification runner (no project row, missing script trust, nothing runnable)
@@ -1396,6 +1774,7 @@ describe("production managed worktree tools", () => {
     async (_label, verifierId, managedAccessLive, reasonCode) => {
       const records: ServerDiagnosticRecord[] = [];
       const runToReport = vi.fn();
+      const verificationBlocked = vi.fn();
       const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
         ...FACTS,
         actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
@@ -1412,6 +1791,7 @@ describe("production managed worktree tools", () => {
           }),
         },
         authorityRef: { runId: "run-verification-2", envelopeDigest: DIGEST },
+        verificationBlocked,
         workspaceRoot: "/managed/worktree",
         // Authority stays valid for decades, so a refusal here can only come from the liveness
         // recheck (or the unknown verifier), never from expiry.
@@ -1449,6 +1829,13 @@ describe("production managed worktree tools", () => {
         }),
       ).resolves.toMatchObject({ status: "failed", reasonCode });
       expect(runToReport).not.toHaveBeenCalled();
+      expect(verificationBlocked).toHaveBeenCalledOnce();
+      expect(verificationBlocked).toHaveBeenCalledWith(
+        reasonCode,
+        ...(reasonCode === "verification-verifier-unsupported"
+          ? [codingVerificationTargetDigest(verifierId)]
+          : []),
+      );
       expect(records).toEqual([
         expect.objectContaining({
           operation: "coding-runtime.verification",
@@ -1866,6 +2253,60 @@ describe("production managed worktree tools", () => {
     }
   });
 
+  it.each([
+    ["glob", "src/**/target.*", ["src/deep/target.ts", "src/target.ts"]],
+    ["directory", "*", ["src/deep", "src/target.ts"]],
+  ] as const)(
+    "preserves generated discovery %s scope through real catalog admission",
+    async (mode, query, paths) => {
+      const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-generated-discovery-")));
+      const log: ServerLogEvent[] = [];
+      try {
+        for (const path of ["src/target.ts", "src/deep/target.ts", "sibling/target.ts"]) {
+          mkdirSync(dirname(join(workspaceRoot, path)), { recursive: true });
+          writeFileSync(join(workspaceRoot, path), "export {};\n");
+        }
+        writeFileSync(join(workspaceRoot, ".env"), "PRIVATE_DENIED_CONTENT");
+        const facade = verificationFacade({
+          workspaceRoot,
+          log,
+          records: [],
+          runToReport: () => Promise.resolve(verificationReport("passed")),
+        });
+        const tool = await loadGeneratedGovernedTool((_url, init) => {
+          if (typeof init?.body !== "string")
+            throw new TypeError("Expected generated request body");
+          return facade
+            .execute({ capability: "runtime-capability", body: init.body })
+            .then((result) => new Response(JSON.stringify(result)));
+        }, "keiko_workspace_discover");
+        const result = await tool.execute(
+          { mode, directory: "src", query, maxResults: 10 },
+          generatedToolContext(`native-discovery-${mode}`),
+        );
+        expect(generatedGovernedContent(result)).toMatchObject({
+          status: "completed",
+          read: {
+            discovery: { entries: paths.map((relativePath) => ({ relativePath })) },
+            returnedPathCount: paths.length,
+          },
+        });
+        expect(
+          log.find((event) => event.op === "coding-runtime.workspace-discovery"),
+        ).toMatchObject({
+          op: "coding-runtime.workspace-discovery",
+          correlationId: "run-verification-3",
+          extra: { state: "completed", reason: "none", returnedPathCount: paths.length },
+        });
+        expect(JSON.stringify(log)).not.toContain(workspaceRoot);
+        expect(JSON.stringify(log)).not.toContain("src/target.ts");
+        expect(JSON.stringify(log)).not.toContain("PRIVATE_DENIED_CONTENT");
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("routes the generated native target through IPC, catalog admission, and the real verifier port", async () => {
     const report = verificationReport("passed");
     const runToReport = vi.fn(() =>
@@ -1875,7 +2316,7 @@ describe("production managed worktree tools", () => {
       }),
     );
     const facade = verificationFacade({ runToReport, records: [] });
-    const tool = await loadGeneratedVerificationTool((_url, init) => {
+    const tool = await loadGeneratedGovernedTool((_url, init) => {
       if (typeof init?.body !== "string") throw new TypeError("Expected generated request body");
       return facade
         .execute({ capability: "runtime-capability", body: init.body })
@@ -3530,7 +3971,11 @@ describe("verification waiting on the operator's package-script trust decision",
         : Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
     );
     const log: ServerLogEvent[] = [];
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const facade = verificationFacade({
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       runToReport,
       scriptTrustFor: trustRefusedThenGranted(() => granted),
       requestOperatorDecision: (decision, outcome): void => {
@@ -3547,6 +3992,8 @@ describe("verification waiting on the operator's package-script trust decision",
 
     await expect(pending).resolves.toMatchObject({ status: "completed" });
     expect(runToReport).toHaveBeenCalledTimes(2);
+    expect(verificationBlocked).not.toHaveBeenCalled();
+    expect(executed).toHaveBeenCalledExactlyOnceWith(codingVerificationTargetDigest("test"));
     expect(announced).toEqual([
       { decision: "workspace-script-trust" },
       { decision: "workspace-script-trust", outcome: "accepted" },
@@ -3627,7 +4074,11 @@ describe("verification waiting on the operator's package-script trust decision",
       Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
     );
     const log: ServerLogEvent[] = [];
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const facade = verificationFacade({
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       runToReport,
       scriptTrustFor: trustRefusedThenGranted(() => false),
       requestOperatorDecision: (decision, outcome): void => {
@@ -3648,6 +4099,11 @@ describe("verification waiting on the operator's package-script trust decision",
       reasonCode: "WORKSPACE_TRUST_REQUIRED",
     });
     expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+      "WORKSPACE_TRUST_REQUIRED",
+      codingVerificationTargetDigest("test"),
+    );
+    expect(executed).not.toHaveBeenCalled();
     expect(announced.at(-1)).toEqual({
       decision: "workspace-script-trust",
       outcome: "limit-reached",
@@ -3664,7 +4120,11 @@ describe("verification waiting on the operator's package-script trust decision",
     const runToReport = vi.fn(() =>
       Promise.reject(new WorkspaceTrustRequiredError("repository-not-trusted")),
     );
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const facade = verificationFacade({
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       runToReport,
       scriptTrustFor: trustRefusedThenGranted(() => false),
       records: [],
@@ -3674,6 +4134,11 @@ describe("verification waiting on the operator's package-script trust decision",
       facade.execute(verificationCall("verification-trust-none")),
     ).resolves.toMatchObject({ status: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" });
     expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+      "WORKSPACE_TRUST_REQUIRED",
+      codingVerificationTargetDigest("test"),
+    );
+    expect(executed).not.toHaveBeenCalled();
   });
 
   // The load-bearing relation between the wait and the ceilings the governed verification call is
@@ -3842,6 +4307,9 @@ function verificationRunnerOptions(options: {
 }
 
 function verificationFacade(options: {
+  readonly verificationBlocked?: ProductionManagedWorktreeToolInput["verificationBlocked"];
+  readonly verificationAdmitted?: ProductionManagedWorktreeToolInput["verificationAdmitted"];
+  readonly verificationRevision?: (() => number | undefined) | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: ReturnType<typeof createCodingToolApprovalBridge>;
   readonly verifiedCommitService?: VerifiedCommitService;
@@ -3861,6 +4329,9 @@ function verificationFacade(options: {
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
+    verificationRevision: options.verificationRevision,
+    verificationBlocked: options.verificationBlocked,
+    verificationAdmitted: options.verificationAdmitted,
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     ...(options.approvalProofVerifier === undefined
       ? {}
@@ -3925,9 +4396,20 @@ function verificationFacade(options: {
   });
 }
 
-interface GeneratedVerificationTool {
+function generatedGovernedContent(value: unknown): unknown {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("content" in value) ||
+    typeof value.content !== "string"
+  )
+    throw new TypeError("Expected native V2 tool content");
+  return JSON.parse(value.content.split("\n", 1)[0] ?? "") as unknown;
+}
+
+interface GeneratedGovernedTool {
   readonly execute: (
-    args: { readonly verifierId: string; readonly targetPath: string },
+    args: Readonly<Record<string, unknown>>,
     context: {
       readonly sessionID: string;
       readonly callID: string;
@@ -3937,7 +4419,7 @@ interface GeneratedVerificationTool {
   ) => Promise<unknown>;
 }
 
-function generatedToolContext(callID: string): Parameters<GeneratedVerificationTool["execute"]>[1] {
+function generatedToolContext(callID: string): Parameters<GeneratedGovernedTool["execute"]>[1] {
   return {
     sessionID: "session-native-target",
     callID,
@@ -3946,10 +4428,11 @@ function generatedToolContext(callID: string): Parameters<GeneratedVerificationT
   };
 }
 
-async function loadGeneratedVerificationTool(
+async function loadGeneratedGovernedTool(
   fetchImpl: typeof fetch,
-): Promise<GeneratedVerificationTool> {
-  const source = createGeneratedOpenCodeV2Plugins().keiko_verification;
+  name = "keiko_verification",
+): Promise<GeneratedGovernedTool> {
+  const source = createGeneratedOpenCodeV2Plugins().keiko_governed_tools;
   if (source === undefined) throw new Error("keiko_verification tool source missing");
   const value: unknown = new Script(
     `${source.replace("export default", "const generated =")}\ngenerated;`,
@@ -3962,6 +4445,7 @@ async function loadGeneratedVerificationTool(
       },
     },
     fetch: fetchImpl,
+    crypto: globalThis.crypto,
     AbortController,
     TextEncoder,
     TextDecoder,
@@ -3969,10 +4453,13 @@ async function loadGeneratedVerificationTool(
     setTimeout,
     clearTimeout,
   });
-  return registeredVerificationTool(value);
+  return registeredGovernedTool(value, name);
 }
 
-async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVerificationTool> {
+async function registeredGovernedTool(
+  plugin: unknown,
+  name: string,
+): Promise<GeneratedGovernedTool> {
   if (
     typeof plugin !== "object" ||
     plugin === null ||
@@ -3984,10 +4471,12 @@ async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVer
   const setup = plugin.setup as (ctx: unknown) => Promise<void>;
   await setup({
     tool: {
+      hook: (): Promise<unknown> => Promise.resolve({ dispose: (): void => undefined }),
       transform: (transform: (editor: unknown) => void): void => {
         transform({
           add: (tool: unknown): void => {
-            registered = tool;
+            if (typeof tool === "object" && tool !== null && "name" in tool && tool.name === name)
+              registered = tool;
           },
         });
       },
@@ -4000,7 +4489,7 @@ async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVer
     typeof registered.execute !== "function"
   )
     throw new TypeError("generated verification tool invalid");
-  return registered as GeneratedVerificationTool;
+  return registered as GeneratedGovernedTool;
 }
 
 const GOVERNED_RUN_ID = "run-governed-3625";
@@ -4163,5 +4652,982 @@ describe("verificationLivenessRefusal", () => {
     expect(
       verificationLivenessRefusal(liveInput, liveGuard, new AbortController().signal),
     ).toBeUndefined();
+  });
+});
+
+// Real minted runtime authority and the real snapshot codec, with a hermetic helper transport.
+function snapshotWorkspaceInput(
+  f: ReturnType<typeof catalogRuntimeFixture>,
+): ProductionWorkspaceAuthorityInput {
+  const c = f.trusted;
+  const active = {
+    instance: {
+      workspaceId: c.workspaceId,
+      repositoryId: c.projectId,
+      repositoryRoot: f.root,
+      managedWorktreePath: f.root,
+      taskId: c.taskId,
+      taskBranch: c.branchRef,
+      baseBranch: c.branch.baseRef,
+      lastVerifiedHead: "1".repeat(40),
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    },
+    binding: { activeRoot: f.root },
+  };
+  return {
+    workspaceLifecycle: { getActive: () => active } as unknown as WorkspaceLifecycleService,
+    managedTaskWorkspaceRoot: dirname(dirname(f.root)),
+    deploymentCeiling: "autonomous-delivery",
+    readWorkspaceHead: () => "1".repeat(40),
+    now: () => new Date(RUNTIME_NOW),
+  };
+}
+
+function snapshotFrame(path: string, rich = true): Buffer {
+  const fd = openSync(path, "r");
+  try {
+    const info = fstatSync(fd);
+    const bytes = readFileSync(fd);
+    if (!rich) return encodeSecureWorkspaceReadResponse({ status: "ok", bytes });
+    return encodeSecureWorkspaceSnapshotResponse({
+      status: "ok",
+      bytes,
+      info: { type: "file", size: info.size, mtimeMs: info.mtimeMs },
+    });
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function privateSnapshotFixture(
+  text: string,
+  options: {
+    readonly ciRepairBudget?: CiRepairExecutionBudget;
+    readonly snapshotAvailable?: boolean;
+  } = {},
+): {
+  readonly facade: ReturnType<typeof createProductionManagedWorktreeToolFacade>;
+  readonly runtime: ReturnType<typeof catalogRuntimeFixture>;
+  readonly processRun: ReturnType<typeof vi.fn<SecureWorkspaceTextReadProcess["run"]>>;
+  readonly activity: ServerLogEvent[];
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly liveFacts: () => CodingWorkbenchRuntimeAuthorityFacts;
+} {
+  const runtime = catalogRuntimeFixture("autonomous-delivery");
+  const input = snapshotWorkspaceInput(runtime);
+  writeFileSync(join(runtime.root, "fixture.ts"), text);
+  const processRun = vi.fn<SecureWorkspaceTextReadProcess["run"]>(({ stdin }) =>
+    Promise.resolve(
+      snapshotFrame(
+        join(runtime.root, "fixture.ts"),
+        Buffer.from(stdin.subarray(0, 4)).toString("ascii") === "KSR2",
+      ),
+    ),
+  );
+  const secureWorkspaceTextRead = createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot: () => runtime.root,
+    artifact: {
+      target: "darwin-arm64",
+      installRelativePath: "runtime/native/keiko-secure-workspace-read",
+      sha256: DIGEST,
+      protocol: "KSR1/KSS1",
+      snapshotProtocol: "KSR2/KSS2",
+      sourceCommit: "b".repeat(40),
+      sourceTreeSha256: DIGEST,
+      signed: true,
+    },
+    artifactVerifier: { verify: () => true },
+    platform: { os: "darwin", arch: "arm64" },
+    processFactory: { create: () => ({ run: processRun }) },
+  });
+  const activity: ServerLogEvent[] = [];
+  const registry = createCodingToolInvocationRegistry({ now: () => Date.parse(RUNTIME_NOW) });
+  const liveFacts = (): CodingWorkbenchRuntimeAuthorityFacts =>
+    productionRuntimeAuthorityFacts(input, runtime.trusted);
+  const facade = createProductionManagedWorktreeToolFacade({
+    authority: runtime.authority,
+    authorityRef: runtime.minted.authorityRef,
+    workspaceRoot: runtime.root,
+    authorityExpiresAt: runtime.trusted.expiresAt,
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: "autonomous-delivery",
+    liveFacts,
+    resolveWorkspaceRootAccess: () => ({
+      kind: "managed-task",
+      canonicalRoot: runtime.root,
+      repositoryRoot: runtime.root,
+      fs: nodeWorkspaceFs,
+    }),
+    secureWorkspaceTextRead:
+      options.snapshotAvailable === false
+        ? { readText: secureWorkspaceTextRead.readText.bind(secureWorkspaceTextRead) }
+        : secureWorkspaceTextRead,
+    ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
+    editorAgentClient: { action: vi.fn() },
+    onRuntimeEvent: vi.fn(),
+    verificationRunner: { runToReport: vi.fn() },
+    invocationRegistry: registry,
+    activityLog: { write: (event): void => void activity.push(event) },
+  });
+  return { facade, runtime, processRun, activity, registry, liveFacts };
+}
+
+function privateSnapshotInput(
+  f: ReturnType<typeof privateSnapshotFixture>,
+  overrides: Readonly<Record<string, unknown>> = {},
+): {
+  readonly capability: string;
+  readonly body: string;
+} {
+  return {
+    capability: f.runtime.minted.toolFacadeCapability,
+    body: JSON.stringify({
+      action: "read",
+      relativePath: "fixture.ts",
+      actionId: "native-snapshot-1",
+      idempotencyKey: "native-snapshot-1",
+      ...overrides,
+    }),
+  };
+}
+
+describe("inactive private native text snapshot admission", () => {
+  const disposals: (() => void)[] = [];
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const dispose of disposals.splice(0)) dispose();
+  });
+  function fixture(
+    text: string,
+    options: Parameters<typeof privateSnapshotFixture>[1] = {},
+  ): ReturnType<typeof privateSnapshotFixture> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(RUNTIME_NOW));
+    const f = privateSnapshotFixture(text, options);
+    disposals.push(f.runtime.dispose);
+    return f;
+  }
+
+  it.each([
+    ["bytes", "x".repeat(CODING_TOOL_MAX_READ_BYTES + 1)],
+    ["lines", "safe source\n".repeat(CODING_TOOL_READ_MAX_WINDOW_LINES + 1)],
+  ])(
+    "completes a whole-file %s snapshot beyond the public model read window",
+    async (_kind, text) => {
+      const f = fixture(text);
+      const result = await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f));
+      expect(result).toMatchObject({ ok: true, text, info: { type: "file" } });
+      expect(f.processRun).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("settles the actual same-FD pre-epoch timestamp snapshot without rewriting metadata", async () => {
+    const f = fixture("Pre-epoch file content");
+    const path = join(f.runtime.root, "fixture.ts");
+    const timestamp = new Date("1969-12-31T23:59:58.000Z");
+    utimesSync(path, timestamp, timestamp);
+    const fd = openSync(path, "r");
+    let mtimeMs: number;
+    try {
+      mtimeMs = fstatSync(fd).mtimeMs;
+    } finally {
+      closeSync(fd);
+    }
+    expect(Number.isFinite(mtimeMs)).toBe(true);
+    expect(mtimeMs).toBeLessThan(0);
+    const result = await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f));
+    expect(result).toMatchObject({ ok: true, info: { type: "file", mtimeMs } });
+    expect(f.processRun).toHaveBeenCalledOnce();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({
+      toolCanonicalId: "keiko.native.workspace.text.snapshot",
+      status: "completed",
+      reason: "none",
+    });
+  });
+
+  it("keeps the actual completion receipt compact and refuses receipt-only replay", async () => {
+    const text = "PRIVATE_NATIVE_TEXT_SENTINEL".repeat(3000);
+    const f = fixture(text);
+    const input = privateSnapshotInput(f);
+    const result = await f.facade.nativeTextRead?.readTextSnapshot(input);
+    expect(result).toMatchObject({ ok: true, text });
+    const retained = f.registry.inspect({
+      runId: f.runtime.minted.authorityRef.runId,
+      actionId: "native-snapshot-1",
+      idempotencyKey: "native-snapshot-1",
+    });
+    expect(retained).toMatchObject({
+      kind: "terminal",
+      receipt: { status: "completed", effectStarted: true, budgetDisposition: "committed" },
+    });
+    expect(JSON.stringify(retained)).not.toContain(text);
+    expect(JSON.stringify(retained)).not.toContain("snapshot");
+    const settled = f.activity.filter((event) => event.op === "tool-catalog.invocation-settled");
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.extra).toMatchObject({
+      toolCanonicalId: "keiko.native.workspace.text.snapshot",
+      toolContractVersion: 1,
+      status: "completed",
+      reason: "none",
+    });
+    expect(Number(settled[0]?.extra?.outputBytes)).toBeLessThan(1024);
+    const logs = JSON.stringify(f.activity);
+    expect(logs).not.toContain("PRIVATE_NATIVE_TEXT_SENTINEL");
+    expect(logs).not.toContain("fixture.ts");
+    expect(logs).not.toContain(f.runtime.minted.toolFacadeCapability);
+    await expect(f.facade.nativeTextRead?.readTextSnapshot(input)).resolves.toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.processRun).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { startLine: 1 },
+    { maxLines: 1 },
+    { startLine: 1, maxLines: 5000 },
+    { purpose: "native-instructions" },
+    { profile: "code-mode" },
+    { module: "private" },
+    { action: "discover", query: "*", maxResults: 1 },
+  ])("refuses windows and untrusted selectors before admission: %j", async (extra) => {
+    const f = fixture("safe source\n");
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f, extra)),
+    ).resolves.toEqual({ ok: false, reason: "invalid-request" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(f.activity.map((event) => event.op)).toContain("tool-catalog.dispatch-unbound");
+    expect(f.activity.map((event) => event.op)).not.toContain("tool-catalog.invocation-started");
+  });
+
+  it("refuses sensitive paths before the actual helper transport", async () => {
+    const f = fixture("safe source\n");
+    const result = await f.facade.nativeTextRead?.readTextSnapshot(
+      privateSnapshotInput(f, { relativePath: ".env" }),
+    );
+    expect(result).toMatchObject({ ok: false });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "invalid-request" });
+    expect(f.activity.map((event) => event.op)).toContain("tool-catalog.dispatch-unbound");
+  });
+
+  it("refuses an unavailable rich producer without calling legacy IO", async () => {
+    const f = fixture("safe source\n", { snapshotAvailable: false });
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f)),
+    ).resolves.toEqual({ ok: false, reason: "snapshot-unavailable" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "invalid", reason: "unsupported-capability" });
+  });
+
+  it("honors exhausted genuine runtime tool authority before IO", async () => {
+    const f = fixture("safe source\n");
+    const charged = f.runtime.authority.resolveCapabilityForDelegation({
+      capability: f.runtime.minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar",
+      liveFacts: f.liveFacts(),
+      delegationId: "consume-authorized-budget",
+      idempotencyKey: "consume-authorized-budget",
+      usage: { toolCalls: f.runtime.trusted.budget.maxToolCalls, patchBytes: 0, promptTokens: 0 },
+      workspaceRoot: f.runtime.root,
+      deploymentCeiling: "autonomous-delivery",
+      nowIso: RUNTIME_NOW,
+    });
+    expect(charged.ok).toBe(true);
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f)),
+    ).resolves.toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "denied", reason: "hard-denial" });
+  });
+
+  it("honors the existing CI repair budget before snapshot IO", async () => {
+    const admitTool = vi.fn(() => undefined);
+    const f = fixture("safe source\n", {
+      ciRepairBudget: {
+        admitTool,
+        canChargePrompt: () => ({ accepted: true }),
+        chargePrompt: () => ({ accepted: true }),
+        observed: vi.fn(),
+      },
+    });
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f)),
+    ).resolves.toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(admitTool).toHaveBeenCalledOnce();
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "denied", reason: "budget-exhausted" });
+  });
+
+  it.each(["revocation", "expiry", "cancellation"] as const)(
+    "discards whole-file bytes after actual %s during IO",
+    async (change) => {
+      const f = fixture("PRIVATE_NATIVE_TEXT_SENTINEL");
+      const abort = new AbortController();
+      f.processRun.mockImplementationOnce(() => {
+        if (change === "revocation") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+        else if (change === "expiry")
+          vi.setSystemTime(new Date(Date.parse(f.runtime.trusted.expiresAt) + 1));
+        else abort.abort();
+        return Promise.resolve(snapshotFrame(join(f.runtime.root, "fixture.ts")));
+      });
+      const result = await f.facade.nativeTextRead?.readTextSnapshot({
+        ...privateSnapshotInput(f),
+        signal: abort.signal,
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_NATIVE_TEXT_SENTINEL");
+      expect(f.processRun).toHaveBeenCalledOnce();
+      expect(
+        f.activity
+          .filter((event) => event.op === "tool-catalog.invocation-settled")
+          .every((event) => event.extra?.status !== "completed"),
+      ).toBe(true);
+    },
+  );
+
+  it("checks the same CI lease again before completing a genuine snapshot", async () => {
+    let leaseLive = true;
+    const settle = vi.fn();
+    const f = fixture("PRIVATE_NATIVE_TEXT_SENTINEL", {
+      ciRepairBudget: {
+        admitTool: () => ({ check: (): boolean => leaseLive, settle }),
+        canChargePrompt: () => ({ accepted: true }),
+        chargePrompt: () => ({ accepted: true }),
+        observed: vi.fn(),
+      },
+    });
+    f.processRun.mockImplementationOnce(() => {
+      leaseLive = false;
+      return Promise.resolve(snapshotFrame(join(f.runtime.root, "fixture.ts")));
+    });
+    expect(await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f))).toMatchObject({
+      ok: false,
+    });
+    expect(settle).toHaveBeenCalledOnce();
+    expect(
+      f.activity
+        .filter((event) => event.op === "tool-catalog.invocation-settled")
+        .every((event) => event.extra?.status !== "completed"),
+    ).toBe(true);
+  });
+
+  it("keeps public model reads bounded even with the private whole-file facet installed", async () => {
+    const f = fixture("x".repeat(CODING_TOOL_MAX_READ_BYTES + 1));
+    const result = await f.facade.execute(privateSnapshotInput(f, { startLine: 1, maxLines: 1 }));
+    expect(result).toMatchObject({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "workspace-read-too-large" }],
+    });
+    expect("snapshot" in result).toBe(false);
+    expect("text" in result).toBe(false);
+  });
+
+  it("refuses an in-flight duplicate without a second admitted snapshot", async () => {
+    const f = fixture("safe source\n");
+    let release!: (frame: Uint8Array) => void;
+    f.processRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const input = privateSnapshotInput(f);
+    const first = f.facade.nativeTextRead?.readTextSnapshot(input);
+    await vi.waitFor(() => {
+      expect(f.processRun).toHaveBeenCalledOnce();
+    });
+    await expect(f.facade.nativeTextRead?.readTextSnapshot(input)).resolves.toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.processRun).toHaveBeenCalledOnce();
+    release(snapshotFrame(join(f.runtime.root, "fixture.ts")));
+    await expect(first).resolves.toMatchObject({ ok: true, text: "safe source\n" });
+  });
+
+  it("refuses HTTP-origin material at the private server facet", async () => {
+    const f = fixture("safe source\n");
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot({
+        ...privateSnapshotInput(f),
+        headers: { origin: "https://private.invalid" },
+      }),
+    ).resolves.toEqual({ ok: false, reason: "invalid-request" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(f.activity.map((event) => event.op)).not.toContain("tool-catalog.invocation-started");
+  });
+});
+
+function startingInstructionMint(): ReturnType<typeof catalogRuntimeFixture> {
+  const base = catalogRuntimeFixture("autonomous-delivery");
+  const trusted = { ...base.trusted, budget: { ...base.trusted.budget, maxToolCalls: 1 } };
+  const registry = new EditorAgentAuthorityRegistry();
+  const authority = new CodingRuntimeAuthorityService(
+    registry,
+    () => "run-1",
+    () => "nonce-init",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.now() }),
+  );
+  const intent = {
+    schemaVersion: "1" as const,
+    requestId: "request-init",
+    command: "start" as const,
+    taskIntent: "Read accepted project instructions",
+    requestedMode: "autonomous-delivery" as const,
+    modelSource: "keiko-model-gateway" as const,
+  };
+  const confirmation = authority.confirmStart(
+    intent,
+    trusted.taskId,
+    trusted.operatorId,
+    RUNTIME_NOW,
+  );
+  const minted = authority.mintStart(intent, trusted, confirmation, RUNTIME_NOW);
+  if (!minted.ok) throw new TypeError("Expected actual STARTING mint");
+  return { ...base, trusted, registry, authority, minted };
+}
+
+interface InitialInstructionFixture {
+  readonly facade: ReturnType<typeof createProductionManagedWorktreeToolFacade>;
+  readonly facadeInput: ProductionManagedWorktreeToolInput;
+  readonly projectionInput: Parameters<typeof createProductionAcceptedInitializationAuthority>[0];
+  readonly runtime: ReturnType<typeof catalogRuntimeFixture>;
+  readonly read: ReturnType<typeof vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>>;
+  readonly bytes: Uint8Array;
+  readonly activity: ServerLogEvent[];
+  readonly diagnostics: ServerDiagnosticRecord[];
+  readonly controller: AbortController;
+  readonly moveRoot: () => void;
+}
+
+function initialInstructionFixture(
+  effect?: SecureWorkspaceNativeFileIO["readBytes"],
+  makeProjection = true,
+  secure?: SecureWorkspaceTextReadPort,
+): InitialInstructionFixture {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(RUNTIME_NOW));
+  const runtime = startingInstructionMint();
+  const workspace = snapshotWorkspaceInput(runtime);
+  const controller = new AbortController();
+  let root = runtime.root;
+  const access = (): WorkspaceRootAccess => ({
+    kind: "managed-task" as const,
+    canonicalRoot: root,
+    repositoryRoot: runtime.root,
+    fs: nodeWorkspaceFs,
+  });
+  const liveFacts = (): CodingWorkbenchRuntimeAuthorityFacts =>
+    productionRuntimeAuthorityFacts(workspace, runtime.trusted);
+  const projectionInput: InitialInstructionFixture["projectionInput"] = {
+    minted: runtime.minted,
+    authority: runtime.authority,
+    context: runtime.trusted,
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    signal: controller.signal,
+    now: () => new Date(),
+  };
+  const bytes = new TextEncoder().encode("PRIVATE_INITIAL_INSTRUCTIONS");
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -2000 };
+  const read = vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>(
+    effect ??
+      ((): Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>> =>
+        Promise.resolve({ ok: true, bytes, info })),
+  );
+  const activity: ServerLogEvent[] = [];
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const facadeInput: ProductionManagedWorktreeToolInput = {
+    authority: runtime.authority,
+    authorityRef: runtime.minted.authorityRef,
+    workspaceRoot: runtime.root,
+    authorityExpiresAt: runtime.trusted.expiresAt,
+    deploymentCeiling: "autonomous-delivery" as const,
+    effectiveMode: "autonomous-delivery" as const,
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    secureWorkspaceTextRead: secure ?? {
+      readText: () => Promise.resolve({ ok: true as const, text: "public-read", byteCount: 11 }),
+      nativeFileIO: {
+        readBytes: read,
+        stat: vi.fn(() => Promise.resolve({ ok: true as const, info })),
+        list: vi.fn(() =>
+          Promise.resolve({
+            ok: true as const,
+            info: { ...info, type: "directory" as const },
+            entries: [],
+          }),
+        ),
+      },
+    },
+    editorAgentClient: { action: vi.fn() },
+    onRuntimeEvent: vi.fn(),
+    verificationRunner: { runToReport: vi.fn() },
+    invocationRegistry: createCodingToolInvocationRegistry(),
+    activityLog: { write: (event: ServerLogEvent) => void activity.push(event) },
+    diagnostics: { record: (event: ServerDiagnosticRecord) => void diagnostics.push(event) },
+  };
+  const initializationAuthority = makeProjection
+    ? createProductionAcceptedInitializationAuthority(projectionInput)
+    : undefined;
+  const facade = createProductionManagedWorktreeToolFacade({
+    ...facadeInput,
+    initializationAuthority,
+  });
+  return {
+    facade,
+    facadeInput,
+    projectionInput,
+    runtime,
+    read,
+    bytes,
+    activity,
+    diagnostics,
+    controller,
+    moveRoot: (): void => {
+      root = runtime.root + "-moved";
+    },
+  };
+}
+
+function initialInstructionSecurePort(
+  resolveWorkspaceRoot: () => string,
+  run: SecureWorkspaceTextReadProcess["run"],
+): SecureWorkspaceTextReadPort {
+  return createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot,
+    artifact: {
+      target: "darwin-arm64",
+      installRelativePath: "runtime/native/keiko-secure-workspace-read",
+      sha256: DIGEST,
+      protocol: "KSR1/KSS1",
+      nativeProtocol: "KSR3/KSS3",
+      sourceCommit: "b".repeat(40),
+      sourceTreeSha256: DIGEST,
+      signed: true,
+    },
+    artifactVerifier: { verify: () => true },
+    platform: { os: "darwin", arch: "arm64" },
+    processFactory: { create: () => ({ run }) },
+  });
+}
+
+function initialInstructionWaiterCount(secure: SecureWorkspaceTextReadPort): number {
+  const waiters: unknown = Object.getOwnPropertyDescriptor(secure, "nativeWaiters")?.value;
+  if (!Array.isArray(waiters)) throw new TypeError("Expected the actual secure-port waiter owner");
+  return waiters.length;
+}
+
+describe("accepted initial instruction acquisition", () => {
+  const instructionFixtures: ReturnType<typeof initialInstructionFixture>[] = [];
+  afterEach(() => {
+    for (const f of instructionFixtures.splice(0)) {
+      f.facadeInput.invocationRegistry.dispose();
+      f.runtime.dispose();
+    }
+    vi.useRealTimers();
+  });
+  function fixture(
+    effect?: SecureWorkspaceNativeFileIO["readBytes"],
+    projection = true,
+    secure?: SecureWorkspaceTextReadPort,
+  ): InitialInstructionFixture {
+    const f = initialInstructionFixture(effect, projection, secure);
+    instructionFixtures.push(f);
+    return f;
+  }
+
+  it("retains the existing registered read formatter and redaction for initial metadata and bytes", async () => {
+    const f = fixture();
+    await f.facade.acceptedInitialization?.run(async (io) => {
+      expect((await io.stat({ relativePath: "PRIVATE_INITIAL_PATH.md" })).ok).toBe(true);
+      expect((await io.list({ relativePath: "PRIVATE_INITIAL_FOLDER" })).ok).toBe(true);
+      expect((await io.readBytes({ relativePath: "PRIVATE_INITIAL_PATH.md" })).ok).toBe(true);
+    });
+    const records = f.activity
+      .filter((e) => e.op === "coding-runtime.workspace-read")
+      .map((event) =>
+        expectActivityLogProof(
+          "coding-runtime.workspace-read.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      );
+    expect(records).toHaveLength(3);
+    for (const record of records)
+      expect(record).toMatchObject({
+        state: "completed",
+        purpose: "native-instructions",
+        correlationId: correlationIdOrUnknown(f.runtime.minted.authorityRef.runId),
+      });
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_INITIAL");
+    expect(JSON.stringify(records)).not.toContain(f.runtime.root);
+  });
+
+  it.each([".env", "../escape.md"])(
+    "refuses sensitive or escaped %s initial paths before private IO",
+    async (relativePath) => {
+      let root = "";
+      const run = vi.fn<SecureWorkspaceTextReadProcess["run"]>();
+      const secure = initialInstructionSecurePort(() => root, run);
+      const f = fixture(undefined, true, secure);
+      root = f.runtime.root;
+      const reason = relativePath === ".env" ? "preflight-refused" : "denied";
+      expect(
+        await f.facade.acceptedInitialization?.run((io) => io.readBytes({ relativePath })),
+      ).toEqual({ ok: true, value: { ok: false, reason } });
+      expect(run).not.toHaveBeenCalled();
+      expect(f.activity.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason,
+        purpose: "native-instructions",
+      });
+    },
+  );
+
+  it.each(["accessor", "inherited", "symbol", "range-extra", "range-accessor"])(
+    "rejects %s request properties without invoking getters or admitting IO",
+    async (shape) => {
+      const f = fixture();
+      const getter = vi.fn(() => "AGENTS.md");
+      const request = { relativePath: "AGENTS.md" };
+      if (shape === "accessor") Object.defineProperty(request, "relativePath", { get: getter });
+      if (shape === "inherited") Object.setPrototypeOf(request, { purpose: "native-tool-io" });
+      if (shape === "symbol") Object.defineProperty(request, Symbol("authority"), { value: true });
+      if (shape === "range-extra")
+        Object.assign(request, { range: { offset: 0, length: 1, purpose: "native-tool-io" } });
+      if (shape === "range-accessor")
+        Object.assign(request, {
+          range: {
+            get offset(): string {
+              return getter();
+            },
+            length: 1,
+          },
+        });
+      expect(await f.facade.acceptedInitialization?.run((io) => io.readBytes(request))).toEqual({
+        ok: false,
+        reason: "initialization-failed",
+      });
+      expect(getter).not.toHaveBeenCalled();
+      expect(f.read).not.toHaveBeenCalled();
+      expect(f.diagnostics.at(-1)?.errorClass).toBe("TypeError");
+    },
+  );
+
+  it.each(["acquisition", "postflight"])(
+    "reports an actual %s current-authority technical exception as a closed initialization failure",
+    async (phase) => {
+      const f = fixture(undefined, false);
+      let fail = false;
+      const authority = createProductionAcceptedInitializationAuthority({
+        ...f.projectionInput,
+        resolveWorkspaceRootAccess: () => {
+          if (fail) throw new Error("PRIVATE_CURRENT_AUTHORITY_ERROR_BODY");
+          return f.projectionInput.resolveWorkspaceRootAccess();
+        },
+      });
+      const facade = createProductionManagedWorktreeToolFacade({
+        ...f.facadeInput,
+        initializationAuthority: authority,
+      });
+      const initialize = vi.fn(async (io: CodingAcceptedInitializationReadPort) => {
+        const read = await io.readBytes({ relativePath: "AGENTS.md" });
+        expect(read.ok).toBe(true);
+        fail = true;
+        return "original-value";
+      });
+      fail = phase === "acquisition";
+      expect(await facade.acceptedInitialization?.run(initialize)).toEqual({
+        ok: false,
+        reason: "initialization-failed",
+      });
+      expect(initialize).toHaveBeenCalledTimes(phase === "acquisition" ? 0 : 1);
+      expect(f.read).toHaveBeenCalledTimes(phase === "acquisition" ? 0 : 1);
+      expect(f.diagnostics.at(-1)?.code).toBe("initialization-failed");
+      expect(f.diagnostics.at(-1)?.correlationId).toBe(
+        correlationIdOrUnknown(f.runtime.minted.authorityRef.runId),
+      );
+      expect(JSON.stringify(f.diagnostics)).not.toContain("PRIVATE_CURRENT_AUTHORITY_ERROR_BODY");
+    },
+  );
+
+  it("refuses selectors and logs the closed failure without exposing callback error bodies", async () => {
+    const f = fixture();
+    expect(
+      await f.facade.acceptedInitialization?.run((io) =>
+        io.readBytes({ relativePath: "AGENTS.md", purpose: "native-tool-io" } as never),
+      ),
+    ).toEqual({ ok: false, reason: "initialization-failed" });
+    expect(f.read).not.toHaveBeenCalled();
+    expect(f.diagnostics.at(-1)?.errorClass).toBe("TypeError");
+  });
+
+  it.each(["cancelled", "revoked", "expired", "root"] as const)(
+    "revalidates %s queued initial reads without releasing eight held raw helper slots",
+    async (change) => {
+      let root = "";
+      let release!: (packet: Buffer) => void;
+      const held = new Promise<Buffer>((resolve) => {
+        release = resolve;
+      });
+      const run = vi.fn<SecureWorkspaceTextReadProcess["run"]>(() => held);
+      const secure = initialInstructionSecurePort(() => root, run);
+      const f = fixture(undefined, true, secure);
+      root = f.runtime.root;
+      const native = secure.nativeFileIO;
+      if (native === undefined) throw new TypeError("Expected the private native IO producer");
+      const fills = Array.from({ length: 8 }, () =>
+        native.readBytes({ relativePath: "fixture.ts" }),
+      );
+      let queued = 0;
+      const pending = f.facade.acceptedInitialization?.run(async (io) => {
+        const reads = Array.from({ length: 8 }, (_, index) => {
+          queued++;
+          return io.readBytes({ relativePath: `nested${String(index)}/AGENTS.md` });
+        });
+        return await Promise.all(reads);
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(run).toHaveBeenCalledTimes(8);
+          expect(queued).toBe(8);
+          expect(initialInstructionWaiterCount(secure)).toBe(8);
+        });
+        if (change === "cancelled") f.controller.abort();
+        if (change === "revoked") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+        if (change === "root") f.moveRoot();
+        if (change === "expired") vi.setSystemTime(new Date(f.runtime.trusted.expiresAt));
+        if (change === "cancelled") {
+          expect(await pending).toEqual({ ok: false, reason: "cancelled" });
+          expect(initialInstructionWaiterCount(secure)).toBe(0);
+          expect(await secure.readText({ relativePath: "fixture.ts" })).toEqual({
+            ok: false,
+            reason: "busy",
+          });
+        }
+        release(Buffer.alloc(0));
+        await Promise.all(fills);
+        expect(await pending).toEqual({
+          ok: false,
+          reason: change === "cancelled" ? "cancelled" : "initialization-refused",
+        });
+        expect(run).toHaveBeenCalledTimes(8);
+        expect(
+          f.activity.filter(
+            (e) =>
+              e.op === "coding-runtime.workspace-read" &&
+              e.extra?.purpose === "native-instructions",
+          ),
+        ).toHaveLength(8);
+      } finally {
+        release(Buffer.alloc(0));
+        await Promise.all(fills);
+        await pending;
+      }
+    },
+  );
+
+  it("offers the inactive initial facet only with the actual accepted STARTING projection", () => {
+    const f = fixture();
+    expect(f.runtime.authority.state().state).toBe("starting");
+    expect(f.facade.acceptedInitialization?.run).toBeTypeOf("function");
+    expect(fixture(undefined, false).facade.acceptedInitialization).toBeUndefined();
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it("keeps actual one-tool mint usage zero for initial reads, then admits exactly one real tool", async () => {
+    const f = fixture();
+    const admit = vi.spyOn(f.runtime.authority, "resolveCapabilityForDelegation");
+    const fits = (): boolean =>
+      f.runtime.registry.runtimeDelegationFits(
+        f.runtime.minted.authorityRef,
+        f.runtime.root,
+        "autonomous-delivery",
+        { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        RUNTIME_NOW,
+      );
+    const result = await f.facade.acceptedInitialization?.run(async (io) => {
+      for (const relativePath of ["AGENTS.md", "nested/AGENTS.md"])
+        expect((await io.readBytes({ relativePath })).ok).toBe(true);
+      return "original-native-value";
+    });
+    expect(result).toEqual({ ok: true, value: "original-native-value" });
+    expect(f.read).toHaveBeenCalledTimes(2);
+    expect(admit).not.toHaveBeenCalled();
+    expect(fits()).toBe(true);
+    f.runtime.authority.transition("run-1", "ready", RUNTIME_NOW);
+    f.runtime.authority.transition("run-1", "running", RUNTIME_NOW);
+    const request = (id: string): { readonly capability: string; readonly body: string } => ({
+      capability: f.runtime.minted.toolFacadeCapability,
+      body: JSON.stringify({
+        action: "read",
+        relativePath: "fixture.ts",
+        actionId: id,
+        idempotencyKey: id,
+      }),
+    });
+    expect((await f.facade.execute(request("after-instructions"))).status).toBe("completed");
+    expect(fits()).toBe(false);
+    expect((await f.facade.execute(request("exhausted-next-read"))).status).toBe("denied");
+    expect(admit.mock.calls.reduce((sum, [input]) => sum + input.usage.toolCalls, 0)).toBe(2);
+    expect(f.read).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["root", "revoked", "expired", "cancelled", "ready"] as const)(
+    "refuses %s before initial acquisition and never borrows operator authority",
+    async (change) => {
+      const f = fixture();
+      if (change === "root") f.moveRoot();
+      if (change === "revoked") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+      if (change === "expired") vi.setSystemTime(new Date(f.runtime.trusted.expiresAt));
+      if (change === "cancelled") f.controller.abort();
+      if (change === "ready") f.runtime.authority.transition("run-1", "ready", RUNTIME_NOW);
+      const initialize = vi.fn(() => Promise.resolve("must-not-initialize"));
+      expect(await f.facade.acceptedInitialization?.run(initialize)).toEqual({
+        ok: false,
+        reason: "initialization-refused",
+      });
+      expect(initialize).not.toHaveBeenCalled();
+      expect(f.read).not.toHaveBeenCalled();
+      expect(f.diagnostics.at(-1)?.code).toBe("initialization-refused");
+    },
+  );
+
+  it.each(["root", "revoked", "expired", "cancelled"] as const)(
+    "refuses %s after raw work and wipes bytes rather than completing initial instructions",
+    async (change) => {
+      let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+      const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+        (resolve) => {
+          release = resolve;
+        },
+      );
+      const f = fixture(() => held);
+      const pending = f.facade.acceptedInitialization?.run(async (io) =>
+        io.readBytes({ relativePath: "AGENTS.md" }),
+      );
+      await vi.waitFor(() => {
+        expect(f.read).toHaveBeenCalledOnce();
+      });
+      if (change === "root") f.moveRoot();
+      if (change === "revoked") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+      if (change === "expired") vi.setSystemTime(new Date(f.runtime.trusted.expiresAt));
+      if (change === "cancelled") f.controller.abort();
+      release({
+        ok: true,
+        bytes: f.bytes,
+        info: { type: "file", size: f.bytes.length, mtimeMs: -2000 },
+      });
+      expect(await pending).toEqual({
+        ok: false,
+        reason: change === "cancelled" ? "cancelled" : "initialization-refused",
+      });
+      expect(f.bytes.every((byte) => byte === 0)).toBe(true);
+      expect(
+        f.activity.some(
+          (e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "failed",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("closes the original initialization IO after settlement and refuses a second/watch acquisition", async () => {
+    const f = fixture();
+    let captured!: CodingAcceptedInitializationReadPort;
+    expect(
+      await f.facade.acceptedInitialization?.run((io) => {
+        captured = io;
+        return Promise.resolve("done");
+      }),
+    ).toEqual({ ok: true, value: "done" });
+    expect(await captured.readBytes({ relativePath: "AGENTS.md" })).toEqual({
+      ok: false,
+      reason: "preflight-refused",
+    });
+    expect(
+      await f.facade.acceptedInitialization?.run(() => Promise.resolve("watch-refresh")),
+    ).toEqual({
+      ok: false,
+      reason: "initialization-closed",
+    });
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it("retains started raw IO even when the original callback fails and does not await it", async () => {
+    let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+    const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+      (resolve) => {
+        release = resolve;
+      },
+    );
+    const f = fixture(() => held);
+    let settled = false;
+    const pending = f.facade.acceptedInitialization
+      ?.run((io) => {
+        void io.readBytes({ relativePath: "AGENTS.md" });
+        return Promise.reject(new Error("PRIVATE_INITIALIZATION_ERROR_BODY"));
+      })
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    expect(settled).toBe(false);
+    release({
+      ok: true,
+      bytes: f.bytes,
+      info: { type: "file", size: f.bytes.length, mtimeMs: -2000 },
+    });
+    expect(await pending).toEqual({ ok: false, reason: "initialization-failed" });
+    expect(JSON.stringify(f.diagnostics)).not.toContain("PRIVATE_INITIALIZATION_ERROR_BODY");
+    expect(f.diagnostics.at(-1)?.code).toBe("initialization-failed");
+  });
+
+  it("preserves original instruction unavailable value instead of inventing successful source data", async () => {
+    const f = fixture(() => Promise.resolve({ ok: false, reason: "process-failed" }));
+    const result = await f.facade.acceptedInitialization?.run(async (io) => {
+      const read = await io.readBytes({ relativePath: "AGENTS.md" });
+      return read.ok ? { state: "available" } : { state: "unavailable" };
+    });
+    expect(result).toEqual({ ok: true, value: { state: "unavailable" } });
+    expect(
+      f.activity.some(
+        (e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("captures immutable request fields before a caller mutation and fixes the instructions purpose", async () => {
+    const f = fixture();
+    const request = { relativePath: "AGENTS.md", range: { offset: 1, length: 2 } };
+    await f.facade.acceptedInitialization?.run(async (io) => {
+      const pending = io.readBytes(request);
+      request.relativePath = "elsewhere.md";
+      request.range.offset = 9;
+      return await pending;
+    });
+    expect(f.read.mock.calls[0]?.[0]).toMatchObject({
+      relativePath: "AGENTS.md",
+      range: { offset: 1, length: 2 },
+    });
+    expect(
+      f.activity
+        .filter((e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "completed")
+        .at(-1)?.extra?.purpose,
+    ).toBe("native-instructions");
   });
 });

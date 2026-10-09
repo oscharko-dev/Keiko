@@ -2172,6 +2172,66 @@ describe("fetchModels", () => {
     vi.unstubAllGlobals();
   });
 
+  it("marks only the active catalog refresh with the existing CSRF header", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ models: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchModels("corr-trigger", true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models?refresh=1",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    await fetchModels("corr-projection");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/models",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+  });
+
+  it("reuses a refresh that starts before a passive read with the same correlation", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ models: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.all([fetchModels(undefined, true), fetchModels()]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/models?refresh=1", expect.any(Object));
+  });
+
+  it("retains each distinct caller correlation on simultaneous catalog refreshes", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ models: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.all([fetchModels("corr-first", true), fetchModels("corr-second", true)]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const correlationId of ["corr-first", "corr-second"]) {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/models?refresh=1",
+        expect.objectContaining({
+          headers: expect.objectContaining({ "X-Keiko-Correlation-Id": correlationId }),
+        }),
+      );
+    }
+  });
+
+  it("sends a reload refresh trigger even while a projection read is already in flight", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ models: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.all([
+      fetchModels(),
+      fetchModels("corr-reload", true),
+      fetchModels("corr-reload", true),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledWith("/api/models?refresh=1", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models?refresh=1",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Keiko-Correlation-Id": "corr-reload" }),
+      }),
+    );
+  });
+
   it("reuses the in-flight model registry request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ models: [] }));
     vi.stubGlobal("fetch", fetchMock);
@@ -2185,6 +2245,34 @@ describe("fetchModels", () => {
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
+  });
+
+  it("carries the background read correlation id to the BFF", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ models: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchModels("corr-background-models");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Keiko-Correlation-Id": "corr-background-models" }),
+        cache: "no-store",
+      }),
+    );
+  });
+
+  it("reads background readiness changes without visiting Settings", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ models: [{ id: "chat-model", conversationReady: false }] }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ models: [{ id: "chat-model", conversationReady: true }] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(fetchModels()).resolves.toMatchObject({ models: [{ conversationReady: false }] });
+    await expect(fetchModels()).resolves.toMatchObject({ models: [{ conversationReady: true }] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("clears the model registry cache after a failed request", async () => {

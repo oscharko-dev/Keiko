@@ -63,6 +63,8 @@ import {
   buildRedactor,
   buildUiHandlerDeps,
   currentContextProfileForModel,
+  currentConversationReady,
+  currentConversationReadinessObservation,
   createLiveCodingChildModelPortFactory,
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
@@ -3566,5 +3568,184 @@ describe("Local checkout activity projection composition", () => {
     } finally {
       await deps.dispose?.();
     }
+  });
+});
+
+describe("runtime gateway accepted source and active inventory", () => {
+  function inventoryDeps(): ReturnType<typeof buildUiHandlerDeps> {
+    return buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-inventory-owner-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+  }
+
+  function inventoryConfig(): GatewayConfig {
+    return parseGatewayConfig({
+      providers: ["retained-chat", "removed-chat"].map((modelId) => ({
+        modelId,
+        baseUrl: "https://inventory.example.invalid/v1",
+        apiKey: "synthetic-inventory-credential",
+        catalogOrigin: "discovered",
+        timeoutMs: 1000,
+        maxRetries: 0,
+        retryBaseDelayMs: 1,
+      })),
+    });
+  }
+
+  it("keeps accepted credentials and original checkedAt only for unchanged active providers", async () => {
+    const deps = inventoryDeps();
+    const holder = deps.gatewayConfig;
+    if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+    const configured = inventoryConfig();
+    holder.set(configured, true);
+    holder.recordVerifiedCapability(
+      "retained-chat",
+      { conversationReady: true },
+      "2026-10-08T07:00:00.000Z",
+    );
+    holder.recordVerifiedCapability(
+      "removed-chat",
+      { conversationReady: true },
+      "2026-10-08T07:01:00.000Z",
+    );
+    const observed = holder.generation();
+    expect(
+      holder.replaceCatalog(
+        { ...configured, providers: configured.providers.slice(0, 1) },
+        observed,
+      ),
+    ).toBe(true);
+    expect(holder.configured?.()?.providers).toEqual(configured.providers);
+    expect(holder.verifiedCapability("retained-chat")).toMatchObject({
+      generation: holder.generation(),
+      checkedAt: "2026-10-08T07:00:00.000Z",
+      fields: { conversationReady: true },
+    });
+    expect(holder.verifiedCapability("removed-chat")).toBeUndefined();
+    expect(holder.replaceCatalog(configured, observed)).toBe(false);
+    holder.recordVerifiedCapability(
+      "removed-chat",
+      { conversationReady: true },
+      "2026-10-08T08:00:00.000Z",
+    );
+    expect(holder.verifiedCapability("removed-chat")).toBeUndefined();
+    await deps.dispose?.();
+  });
+
+  it("retains an empty active view and rejects stale observations after credential rotation", async () => {
+    const deps = inventoryDeps();
+    const holder = deps.gatewayConfig;
+    if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+    const configured = inventoryConfig();
+    holder.set(configured, true);
+    const before = holder.generation();
+    expect(holder.replaceCatalog({ ...configured, providers: [], capabilities: [] }, before)).toBe(
+      true,
+    );
+    expect(holder.current()?.providers).toEqual([]);
+    expect(holder.forPersistence?.(holder.current() ?? configured).providers).toEqual(
+      configured.providers,
+    );
+    expect(currentRedactionSecrets(deps)).toContain("synthetic-inventory-credential");
+    holder.set(
+      {
+        ...configured,
+        providers: configured.providers.map((provider) => ({
+          ...provider,
+          apiKey: "rotated-synthetic-credential",
+        })),
+      },
+      true,
+    );
+    holder.recordVerifiedCapability(
+      "retained-chat",
+      { conversationReady: true },
+      "2026-10-08T08:00:00.000Z",
+      before,
+    );
+    expect(holder.verifiedCapability("retained-chat")).toBeUndefined();
+    expect(holder.configured?.()?.providers[0]?.apiKey).toBe("rotated-synthetic-credential");
+    await deps.dispose?.();
+  });
+  async function withFreshnessDeps(check: (deps: UiHandlerDeps) => void): Promise<void> {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          Response.json({
+            choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+          }),
+        ),
+      ),
+    );
+    const deps = inventoryDeps();
+    try {
+      deps.gatewayConfig?.set(inventoryConfig(), true);
+      check(deps);
+    } finally {
+      await deps.dispose?.();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it("expires a genuine chat success at five minutes without replacing its generation", async () => {
+    await withFreshnessDeps((deps): void => {
+      const holder = deps.gatewayConfig;
+      holder?.recordVerifiedCapability(
+        "retained-chat",
+        { conversationReady: true },
+        new Date().toISOString(),
+      );
+      const generation = holder?.generation();
+      vi.setSystemTime(new Date("2026-10-08T12:04:59.999Z"));
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
+      vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
+      expect(holder?.generation()).toBe(generation);
+      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+      expect(currentConversationReadinessObservation(deps, "retained-chat")).toBeUndefined();
+    });
+  });
+
+  it.each(["invalid-chat-time", "2026-10-08T12:05:00.000Z"])(
+    "does not trust a successful chat timestamp that cannot describe the present: %s",
+    async (checkedAt) => {
+      await withFreshnessDeps((deps): void => {
+        deps.gatewayConfig?.recordVerifiedCapability(
+          "retained-chat",
+          { conversationReady: true },
+          checkedAt,
+        );
+        expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+        expect(currentConversationReadinessObservation(deps, "retained-chat")).toBeUndefined();
+      });
+    },
+  );
+
+  it("dates chat freshness separately from preserved feature evidence", async () => {
+    await withFreshnessDeps((deps): void => {
+      const holder = deps.gatewayConfig;
+      const chatTime = new Date().toISOString();
+      holder?.recordVerifiedCapability(
+        "retained-chat",
+        { streaming: true, conversationReady: true },
+        "2026-10-07T12:00:00.000Z",
+        holder.generation(),
+        chatTime,
+      );
+      expect(holder?.verifiedCapability("retained-chat")).toMatchObject({
+        checkedAt: "2026-10-07T12:00:00.000Z",
+        conversationCheckedAt: chatTime,
+        fields: { streaming: true, conversationReady: true },
+      });
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
+      vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
+      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+    });
   });
 });

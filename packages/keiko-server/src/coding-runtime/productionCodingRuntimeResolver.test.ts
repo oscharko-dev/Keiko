@@ -1,14 +1,23 @@
+import type { ProductionManagedWorktreeToolInput } from "./productionManagedWorktreeTools.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local resolver fixtures are contextually typed. */
+import * as processLog from "../process-log-sink.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
+import {
+  openCodeGatewayCatalogProjection,
+  type OpenCodeToolProfile,
+} from "./opencodeToolSchemas.js";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
+  createProductionAcceptedInitializationAuthority,
   operatorDecisionRequester,
   runManifestAdmission,
 } from "./productionCodingRuntimeResolver.js";
@@ -63,6 +72,9 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
 // at the one production composition site so a test can play the facade's part.
 const editOutcomeCapture = vi.hoisted(() => ({
   observers: [] as ((outcome: { readonly kind: "refused"; readonly reasonCode: string }) => void)[],
+  revisions: [] as (() => number | undefined)[],
+  blocked: [] as NonNullable<ProductionManagedWorktreeToolInput["verificationBlocked"]>[],
+  admitted: [] as NonNullable<ProductionManagedWorktreeToolInput["verificationAdmitted"]>[],
 }));
 
 // PR #3876 review: the registry of rendered diffs the resolver hands each run's managed tool facade,
@@ -78,6 +90,12 @@ vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
     ): ReturnType<typeof original.createProductionManagedWorktreeToolFacade> => {
       const observe = args[0].observeEditOutcome;
       if (observe !== undefined) editOutcomeCapture.observers.push(observe);
+      if (args[0].verificationRevision !== undefined)
+        editOutcomeCapture.revisions.push(args[0].verificationRevision);
+      if (args[0].verificationBlocked !== undefined)
+        editOutcomeCapture.blocked.push(args[0].verificationBlocked);
+      if (args[0].verificationAdmitted !== undefined)
+        editOutcomeCapture.admitted.push(args[0].verificationAdmitted);
       materializedPatchesCapture.registries.push(args[0].materializedPatches);
       return original.createProductionManagedWorktreeToolFacade(...args);
     },
@@ -89,10 +107,89 @@ const roots: string[] = [];
 afterEach(() => {
   ciRepairBudgetOverride.current = undefined;
   vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("production coding runtime resolver", () => {
+  it.each(["direct", "code-mode"] as const)(
+    "binds actual facade lifecycle to the captured %s projection",
+    async (selected) => {
+      const log = createBufferedServerLogSink();
+      const originalSink = processLog.processServerLogSink();
+      vi.spyOn(processLog, "processServerLogSink").mockReturnValue({
+        ...originalSink,
+        write: log.write,
+      });
+      const fixture = workspaceFixture();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(fixture.nowMs());
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      let profile: OpenCodeToolProfile = selected;
+      const readProfile = vi.fn(() => profile);
+      const backend = {
+        createRun,
+        get toolProfile(): OpenCodeToolProfile {
+          return readProfile();
+        },
+      };
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, { backend }),
+      );
+      if (host === undefined) throw new Error("expected qualified composition");
+      profile = selected === "direct" ? "code-mode" : "direct";
+      const request = launchRequest(fixture.workspace);
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+      host.launchResolver.resolve(request);
+      const composed = createRun.mock.calls[0]?.[0];
+      if (composed === undefined) throw new Error("expected minted composition");
+      await expect(
+        composed.toolFacade.execute({
+          capability: composed.minted.toolFacadeCapability,
+          body: JSON.stringify({
+            action: "discover",
+            actionId: "profile-read",
+            idempotencyKey: "profile-read",
+            query: "source",
+            maxResults: 1,
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "denied" });
+      const expected = openCodeGatewayCatalogProjection(selected).projection;
+      const bindings = log.events.filter((event) => event.op.startsWith("tool-catalog.bind-"));
+      expect(bindings.length).toBeGreaterThan(0);
+      for (const event of bindings) {
+        const line: unknown = JSON.parse(formatActivityLogProofLine(event));
+        expect(line).toMatchObject({
+          profileId: expected.profile.id,
+          profileVersion: expected.profile.version,
+          projectionDigest: expected.projectionDigest,
+        });
+      }
+      expect(readProfile).toHaveBeenCalledOnce();
+      await expect(
+        composed.toolFacade.execute({
+          capability: composed.minted.toolFacadeCapability,
+          body: JSON.stringify({
+            action: "discover",
+            actionId: "profile-input",
+            idempotencyKey: "profile-input",
+            query: "source",
+            maxResults: 1,
+            toolProfile: profile,
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "invalid" });
+      expect(JSON.stringify(bindings)).not.toContain("source");
+      expect(JSON.stringify(bindings)).not.toContain(composed.minted.toolFacadeCapability);
+    },
+  );
+
   it("shares provider context usage between the backend and public host projection", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();
@@ -407,9 +504,20 @@ describe("production coding runtime resolver", () => {
     );
     if (host === undefined) throw new Error("expected qualified host");
     const first = vi.fn();
-    const latest = vi.fn();
+    const readRevision = vi.fn(() => 5);
+    const blocked = vi.fn();
+    const completed = vi.fn();
+    const admitted = vi.fn(() => completed);
+    const latest = Object.assign(vi.fn(), {
+      verificationRevision: readRevision,
+      verificationBlocked: blocked,
+      verificationAdmitted: admitted,
+    });
     host.attachEditOutcomeObserver?.(first);
     editOutcomeCapture.observers.length = 0;
+    editOutcomeCapture.revisions.length = 0;
+    editOutcomeCapture.blocked.length = 0;
+    editOutcomeCapture.admitted.length = 0;
     const request = launchRequest(fixture.workspace);
     confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
     host.launchResolver.resolve(request);
@@ -421,6 +529,16 @@ describe("production coding runtime resolver", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(latest).toHaveBeenCalledExactlyOnceWith(request.runId, outcome);
+    expect(editOutcomeCapture.revisions[0]?.()).toBe(5);
+    expect(readRevision).toHaveBeenCalledExactlyOnceWith(request.runId);
+    editOutcomeCapture.blocked[0]?.("NO_RUNNABLE_STEPS", "a".repeat(64));
+    expect(blocked).toHaveBeenCalledExactlyOnceWith(
+      request.runId,
+      "NO_RUNNABLE_STEPS",
+      "a".repeat(64),
+    );
+    expect(editOutcomeCapture.admitted[0]?.()).toBe(completed);
+    expect(admitted).toHaveBeenCalledExactlyOnceWith(request.runId);
   });
 
   // PR #3876 review: a run's edit port registers the diff it renders in the one registry the editor
@@ -1145,5 +1263,263 @@ describe("operatorDecisionRequester", () => {
         message: "coding-runtime-operator-decision-event-rejected",
       }),
     ]);
+  });
+});
+
+describe("production pending-spawn lease binding", () => {
+  it.each(["workspace-drift", "technical-resolver-fault"] as const)(
+    "distinguishes expected refusal from %s after real pending-spawn admission",
+    (kind) => {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const failure = new Error("PRIVATE_RESOLVER_TECHNICAL_CAUSE");
+      let fault = false;
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+          resolveWorkspaceRootAccess: (root) => {
+            if (fault) throw failure;
+            return {
+              kind: "managed-task",
+              canonicalRoot: root,
+              repositoryRoot: root,
+              fs: nodeWorkspaceFs,
+            };
+          },
+        }),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = launchRequest(fixture.workspace);
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+      const resolved = host.launchResolver.resolve(request);
+      const backend = createRun.mock.calls[0]?.[0];
+      if (backend?.canSpawnRuntime === undefined)
+        throw new Error("expected actual pending spawn guard");
+      const launch = {
+        ...resolved,
+        runId: request.runId,
+        workspaceRoot: fixture.workspace,
+        requestedMode: request.requestedMode,
+      };
+      expect(backend.canSpawnRuntime(launch)).toBe(true);
+      if (kind === "workspace-drift") {
+        fixture.setHead("2".repeat(40));
+        expect(backend.canSpawnRuntime(launch)).toBe(false);
+      } else {
+        fault = true;
+        expect(() => backend.canSpawnRuntime?.(launch)).toThrow(failure);
+      }
+    },
+  );
+
+  it.each(["revoked", "expired", "root-drift", "run", "tree", "envelope", "workspace"] as const)(
+    "rechecks %s using the minted starting authority",
+    async (kind) => {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = launchRequest(fixture.workspace);
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+      const resolved = host.launchResolver.resolve(request);
+      const backend = createRun.mock.calls[0]?.[0];
+      if (backend?.canSpawnRuntime === undefined)
+        throw new Error("expected server-owned spawn guard");
+      const launch = {
+        ...resolved,
+        runId: request.runId,
+        workspaceRoot: fixture.workspace,
+        requestedMode: request.requestedMode,
+      };
+      expect(backend.canSpawnRuntime(launch)).toBe(true);
+      if (kind === "revoked") await backend.authorityLifecycle.revokeRuntime(request.runId);
+      if (kind === "expired") fixture.advanceNow(121 * 60_000);
+      const replacements = {
+        run: { runId: "foreign-run" },
+        tree: { treeBindingId: "0".repeat(64) },
+        envelope: { authorityEnvelopeDigest: "0".repeat(64) },
+        workspace: { workspaceRoot: `${fixture.workspace}-foreign` },
+      };
+      const changed = {
+        ...launch,
+        ...(kind in replacements ? replacements[kind as keyof typeof replacements] : {}),
+      };
+      if (kind === "root-drift") fixture.revokeWorkspaceAccess();
+      expect(backend.canSpawnRuntime(changed)).toBe(false);
+    },
+  );
+});
+
+import {
+  catalogRuntimeFixture,
+  RUNTIME_NOW,
+} from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
+import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
+import { productionRuntimeAuthorityFacts } from "./productionRuntimeWorkspaceAuthority.js";
+
+function acceptedInitializationProjectionFixture() {
+  const base = catalogRuntimeFixture("autonomous-delivery");
+  roots.push(dirname(dirname(base.root)));
+  const authority = new CodingRuntimeAuthorityService(
+    new EditorAgentAuthorityRegistry(),
+    () => "run-1",
+    () => "nonce-init",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.now() }),
+  );
+  const intent = {
+    schemaVersion: "1" as const,
+    requestId: "request-init",
+    command: "start" as const,
+    taskIntent: "Read initial project instructions",
+    requestedMode: "autonomous-delivery" as const,
+    modelSource: "keiko-model-gateway" as const,
+  };
+  const confirmation = authority.confirmStart(
+    intent,
+    base.trusted.taskId,
+    base.trusted.operatorId,
+    RUNTIME_NOW,
+  );
+  const minted = authority.mintStart(intent, base.trusted, confirmation, RUNTIME_NOW);
+  if (!minted.ok) throw new TypeError("Expected actual initial mint");
+  const active = {
+    instance: {
+      workspaceId: base.trusted.workspaceId,
+      repositoryId: base.trusted.projectId,
+      repositoryRoot: base.root,
+      managedWorktreePath: base.root,
+      taskId: base.trusted.taskId,
+      taskBranch: base.trusted.branchRef,
+      baseBranch: "dev",
+      lastVerifiedHead: "1".repeat(40),
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    },
+    binding: { activeRoot: base.root },
+  };
+  const workspace = {
+    workspaceLifecycle: { getActive: () => active } as never,
+    managedTaskWorkspaceRoot: dirname(dirname(base.root)),
+    deploymentCeiling: "autonomous-delivery" as const,
+    readWorkspaceHead: () => "1".repeat(40),
+    now: () => new Date(),
+  };
+  const controller = new AbortController();
+  const input = {
+    minted,
+    authority,
+    context: base.trusted,
+    liveFacts: () => productionRuntimeAuthorityFacts(workspace, base.trusted),
+    resolveWorkspaceRootAccess: () => ({
+      kind: "managed-task" as const,
+      canonicalRoot: base.root,
+      repositoryRoot: base.root,
+      fs: nodeWorkspaceFs,
+    }),
+    signal: controller.signal,
+    now: () => new Date(),
+  };
+  return { input, controller, base, minted, authority };
+}
+
+describe("accepted initialization STARTING projection", () => {
+  function fixture() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(RUNTIME_NOW));
+    return acceptedInitializationProjectionFixture();
+  }
+  it("captures the actual accepted binding and budget without delegation or authority renewal", () => {
+    const f = fixture();
+    const delegation = vi.spyOn(f.authority, "resolveCapabilityForDelegation");
+    const projection = createProductionAcceptedInitializationAuthority(f.input);
+    const guard = projection?.resolve();
+    expect(guard?.check()).toBe(true);
+    expect(guard?.binding).toMatchObject({
+      ...f.minted.authorityRef,
+      workspaceId: f.input.liveFacts().binding.workspaceId,
+    });
+    expect(guard?.executionBudget?.deadlineAtMs).toBeLessThanOrEqual(
+      Date.parse(f.base.trusted.expiresAt),
+    );
+    expect(delegation).not.toHaveBeenCalled();
+    expect(projection?.resolve()).toBeUndefined();
+  });
+  it.each(["run", "digest", "audience"] as const)(
+    "refuses copied %s authority instead of granting an initialization guard",
+    (change) => {
+      const f = fixture();
+      const minted = {
+        ...f.minted,
+        authorityRef: {
+          ...f.minted.authorityRef,
+          ...(change === "run" ? { runId: "foreign-run" } : {}),
+          ...(change === "digest" ? { envelopeDigest: "f".repeat(64) } : {}),
+        },
+        ...(change === "audience" ? { toolFacadeCapability: f.minted.modelGatewayCapability } : {}),
+      };
+      expect(
+        createProductionAcceptedInitializationAuthority({ ...f.input, minted }),
+      ).toBeUndefined();
+    },
+  );
+  it("captures immutable mint/context/callback fields once while revalidating actual live facts", () => {
+    const f = fixture();
+    const reference = vi.fn(() => f.minted.authorityRef);
+    const projection = createProductionAcceptedInitializationAuthority({
+      ...f.input,
+      minted: {
+        ...f.minted,
+        get authorityRef() {
+          return reference();
+        },
+      },
+    });
+    const guard = projection?.resolve();
+    expect(reference).toHaveBeenCalledOnce();
+    expect(guard?.check()).toBe(true);
+    f.authority.transition("run-1", "ready", RUNTIME_NOW);
+    expect(guard?.check()).toBe(false);
+    expect(reference).toHaveBeenCalledOnce();
+  });
+  it("refuses changed envelope bytes on a later actual pending-spawn resolution", () => {
+    const f = fixture();
+    const revalidate = f.authority.revalidateCapabilityForPendingSpawn.bind(f.authority);
+    let changed = false;
+    vi.spyOn(f.authority, "revalidateCapabilityForPendingSpawn").mockImplementation((input) => {
+      const actual = revalidate(input);
+      if (!changed || !actual.ok) return actual;
+      return {
+        ...actual,
+        envelope: {
+          ...actual.envelope,
+          authority: { ...actual.envelope.authority, expiresAt: "2026-09-10T12:30:00.000Z" },
+        },
+      };
+    });
+    const guard = createProductionAcceptedInitializationAuthority(f.input)?.resolve();
+    expect(guard?.check()).toBe(true);
+    changed = true;
+    expect(guard?.check()).toBe(false);
+  });
+  it("refuses current-run duration exhaustion before expiry without widening operator phases", () => {
+    const f = fixture();
+    const guard = createProductionAcceptedInitializationAuthority(f.input)?.resolve();
+    expect(guard?.check()).toBe(true);
+    vi.setSystemTime(new Date(Date.parse(RUNTIME_NOW) + f.base.trusted.budget.maxRuntimeMs));
+    expect(guard?.check()).toBe(false);
   });
 });

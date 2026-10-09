@@ -11,6 +11,7 @@ import { translateCodingWorkbench, type CodingWorkbenchTranslate } from "./codin
 import {
   formatRunDuration,
   modelGatewayRetrying,
+  nativeRunRetry,
   runPhase,
   runSettledAt,
   runStartedAt,
@@ -308,5 +309,31 @@ describe("formatRunDuration", () => {
     [-5_000, "0 s"],
   ] as const)("formats %i ms as %s", (milliseconds, text) => {
     expect(formatRunDuration(milliseconds, t)).toBe(text);
+  });
+});
+
+describe("native physical retry facts", () => {
+  const fact: CodingWorkbenchRuntimeSseEvent = {
+    schemaVersion: "1",
+    cursor: "run-1:2",
+    sequence: 2,
+    occurredAt: STARTED,
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-retry-changed",
+    nativeRetry: { attempt: 2, scheduledAt: "2026-10-06T10:00:02.000Z" },
+  };
+  it("keeps the source fact across gateway progress and never derives an attempt from it", () => {
+    expect(nativeRunRetry(snapshot(), [gatewayFact(1, "model-gateway-retrying")])).toBeNull();
+    expect(nativeRunRetry(snapshot(), [fact, gatewayFact(3, "model-gateway-retrying")])).toEqual(
+      fact.nativeRetry,
+    );
+    expect(nativeRunRetry(snapshot({ runId: "run-other" }), [fact])).toBeNull();
+    expect(nativeRunRetry(snapshot({ state: "succeeded" }), [fact])).toBeNull();
+    expect(
+      nativeRunRetry(snapshot(), [fact, { ...fact, nativeRetry: null, sequence: 3 }]),
+    ).toBeNull();
   });
 });

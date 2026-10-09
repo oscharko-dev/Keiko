@@ -300,13 +300,13 @@ describe("dispatch collaborators", () => {
 describe("dirty-tree warning", () => {
   it("warns before the clock starts that uncommitted work is not measured", () => {
     const log = vi.fn();
-    const deps = {
+    const deps = injectedDeps({
       dirtyFiles: () => " M scripts/check-perf-evidence.mjs",
       makeWorkdir: () => "/tmp/x",
       run: vi.fn(),
       copyFile: vi.fn(),
       log,
-    };
+    });
 
     regenerateInContainer(deps);
 
@@ -317,13 +317,15 @@ describe("dirty-tree warning", () => {
   it("says nothing when the tree is clean", () => {
     const log = vi.fn();
 
-    regenerateInContainer({
-      dirtyFiles: () => "",
-      makeWorkdir: () => "/tmp/x",
-      run: vi.fn(),
-      copyFile: vi.fn(),
-      log,
-    });
+    regenerateInContainer(
+      injectedDeps({
+        dirtyFiles: () => "",
+        makeWorkdir: () => "/tmp/x",
+        run: vi.fn(),
+        copyFile: vi.fn(),
+        log,
+      }),
+    );
 
     // Across every message, not only the first: a warning emitted later must also fail this.
     expect(log.mock.calls.map(([message]) => message).join("\n")).not.toContain("uncommitted");

@@ -1,3 +1,8 @@
+import {
+  copyOpenCodeServiceHostApprovals,
+  type OpenCodeServiceHostApproval,
+} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+
 import type {
   UpdatePortableSidecarFailureCode,
   UpdatePortableSidecarSummary,
@@ -25,6 +30,8 @@ export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
   readonly payloadRootPath: string;
   readonly executablePath: string;
+  /** Declared host metadata only; existing CLI availability does not qualify or select this host. */
+  readonly serviceHost?: OpenCodeServiceHostApproval;
   readonly shippedExecutableSha256: string;
   readonly executableTreeSha256: string;
   readonly licenseEvidencePath: string;
@@ -491,6 +498,18 @@ function requiredEvidence(
   return evidence;
 }
 
+function supplementalServiceHost(
+  runtime: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): OpenCodeServiceHostApproval | undefined {
+  if (!Object.hasOwn(runtime, "serviceHost")) return undefined;
+  const hosts = copyOpenCodeServiceHostApprovals(runtime.serviceHost);
+  if (hosts === undefined) {
+    fail("sidecar-metadata-malformed", "sidecar service-host metadata is incomplete");
+  }
+  return hosts[target];
+}
+
 function parseNamedRuntime(
   runtime: Record<string, unknown>,
   target: UpdatePortableTarget,
@@ -500,6 +519,7 @@ function parseNamedRuntime(
   if (runtime.platformTarget !== target)
     fail("sidecar-platform-mismatch", "sidecar target mismatch");
   const payload = parsePayload(runtime, name);
+  const serviceHost = supplementalServiceHost(runtime, target);
   if (!portableProvenanceVerified(runtime, target)) {
     fail("sidecar-metadata-malformed", "sidecar portable provenance is incomplete");
   }
@@ -515,6 +535,7 @@ function parseNamedRuntime(
     summary,
     payloadRootPath: payload.payloadRootPath,
     executablePath: payload.executablePath,
+    ...(serviceHost === undefined ? {} : { serviceHost }),
     shippedExecutableSha256: shipped.sha256,
     executableTreeSha256: shipped.treeSha256,
     licenseEvidencePath: evidence.license.path,

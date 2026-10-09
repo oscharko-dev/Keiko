@@ -9,6 +9,8 @@ import {
   recordClientDiagnosticLoss,
   reportClientDiagnostic,
   reportFilesScopeDecision,
+  reportModelCatalogStage,
+  reportGatewayProfileRefresh,
   currentGlobalClientFailure,
   resetClientDiagnosticWriter,
   restoreClientDiagnosticLoss,
@@ -296,4 +298,60 @@ describe("clientDiagnosticFailureFacts", () => {
       errorEvidence,
     });
   });
+});
+
+it("emits one paired instant model decision without publishing a global failure", () => {
+  const received: (ClientDiagnosticMeta | undefined)[] = [];
+  setClientDiagnosticWriter((_message, meta) => received.push(meta));
+  reportModelCatalogStage(
+    "model selection availability",
+    {
+      surface: "chat",
+      source: "background",
+      outcome: "held",
+      configuredModelCount: 2,
+      usableModelCount: 1,
+      selectionProvenance: "human",
+    },
+    "catalog-request-123",
+  );
+  expect(received).toHaveLength(2);
+  expect(received[0]?.correlationId).toBe(received[1]?.correlationId);
+  expect(received.map((meta) => meta?.parentCorrelationId)).toEqual([
+    "catalog-request-123",
+    "catalog-request-123",
+  ]);
+  expect(received[0]?.stageReport).toEqual({
+    stage: "model selection availability",
+    phase: "started",
+    ordinal: 1,
+  });
+  expect(received[1]?.stageReport).toMatchObject({
+    stage: "model selection availability",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 0,
+    modelCatalog: { outcome: "held", selectionProvenance: "human" },
+  });
+  expect(currentGlobalClientFailure()).toBeNull();
+});
+
+it("keeps an actual profile read and its settlement on one supplied request identity", () => {
+  const received: (ClientDiagnosticMeta | undefined)[] = [];
+  setClientDiagnosticWriter((_message, meta) => received.push(meta));
+  reportGatewayProfileRefresh("profile-read-123", "catalog-read-123");
+  reportGatewayProfileRefresh("profile-read-123", "catalog-read-123", {
+    durationMs: 47,
+    evidence: { outcome: "adopted", catalogReread: "skipped" },
+  });
+  expect(received.map((meta) => meta?.correlationId)).toEqual([
+    "profile-read-123",
+    "profile-read-123",
+  ]);
+  expect(received[1]?.stageReport).toMatchObject({
+    phase: "settled",
+    durationMs: 47,
+    gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
+  });
+  expect(currentGlobalClientFailure()).toBeNull();
 });

@@ -20,6 +20,7 @@ import {
   codingWorkbenchProbesSettledForTests,
   ensureCodingWorkbenchContextWindows,
   isCodingWorkbenchProbePending,
+  initializeLiteLlmCodingReadiness,
   probeInconclusive,
   probeProvider,
   probeTimeoutEvidence,
@@ -279,6 +280,9 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
       await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
       await codingWorkbenchProbesSettledForTests();
       expect(calls()).toBe(2);
+      const current = holder.current();
+      if (current === undefined) throw new TypeError("Expected current gateway config");
+      expect(isCodingWorkbenchProbePending(current, "hosted-chat")).toBe(changed);
       await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
       await codingWorkbenchProbesSettledForTests();
       expect(calls()).toBe(changed ? 4 : 2);
@@ -480,4 +484,92 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(2);
   });
+});
+
+it("promotes an already queued elected model after the actual active probe without duplicates", async () => {
+  let release: ((response: Response) => void) | undefined;
+  const pending = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const { deps } = workbenchDeps(() => Promise.resolve(new Response()));
+  const holder = deps.gatewayConfig;
+  const original = holder?.current();
+  const model = original?.capabilities?.[0];
+  if (holder === undefined || original === undefined || model === undefined)
+    throw new TypeError("Expected original Workbench fixture.");
+  const ids = ["first-chat", "middle-chat", "elected-chat"];
+  const config = {
+    ...original,
+    providers: ids.map((modelId) => ({ ...provider(30_000), modelId })),
+    capabilities: ids.map((id) => ({ ...model, id })),
+  };
+  holder.current = (): GatewayConfig => config;
+  const observed: string[] = [];
+  Object.assign(deps, {
+    gatewayReadinessFetch: (
+      _input: Parameters<typeof fetch>[0],
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        model?: string;
+      };
+      observed.push(body.model ?? "absent");
+      return observed.length === 1
+        ? pending
+        : Promise.resolve(
+            Response.json({
+              choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }],
+            }),
+          );
+    },
+  });
+  const background = ensureCodingWorkbenchContextWindows(deps, undefined);
+  await vi.waitFor(() => {
+    expect(observed).toEqual(["first-chat"]);
+  });
+  const selected = ensureCodingWorkbenchContextWindows(deps, "elected-chat");
+  release?.(
+    Response.json({ choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }] }),
+  );
+  await background;
+  await selected;
+  await codingWorkbenchProbesSettledForTests();
+  expect(observed).toEqual([
+    "first-chat",
+    "first-chat",
+    "elected-chat",
+    "elected-chat",
+    "middle-chat",
+    "middle-chat",
+  ]);
+  resetCodingWorkbenchContextWindowProbesForTests();
+});
+
+it("does not mask a real tool refusal behind an inconclusive long-context result", async () => {
+  let calls = 0;
+  const { deps } = workbenchDeps(() => {
+    calls += 1;
+    return calls === 3
+      ? Promise.reject(new TimeoutError("Synthetic long-context outage"))
+      : Promise.resolve(
+          Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+        );
+  });
+  const holder = deps.gatewayConfig;
+  const original = holder?.current();
+  const model = original?.capabilities?.[0];
+  if (holder === undefined || original === undefined || model === undefined)
+    throw new TypeError("Expected original Workbench fixture.");
+  const config = {
+    ...original,
+    providers: original.providers.map((item) => ({ ...item, tokenCounter: "litellm" as const })),
+    capabilities: [
+      { ...model, maxOutputTokens: 2000, toolCalling: false, toolCallingVerification: undefined },
+    ],
+  };
+  holder.current = (): GatewayConfig => config;
+  await initializeLiteLlmCodingReadiness(deps, "corr-tool-refuted-long-inconclusive");
+  expect(calls).toBe(3);
+  expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
+  resetCodingWorkbenchContextWindowProbesForTests();
 });

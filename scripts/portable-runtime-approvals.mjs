@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { URL } from "node:url";
 
 import { PORTABLE_TARGET_NAMES, portableTargetByName } from "./portable-runtime.mjs";
+
+const require = createRequire(import.meta.url);
 
 export const PORTABLE_RUNTIME_APPROVALS_FILE = "portable-runtime-approvals.json";
 export const APPROVED_NODE_ARCHIVE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
@@ -36,8 +39,11 @@ const OPENCODE_PIN = Object.freeze({
 
 class ApprovalsError extends Error {}
 
-function fail(message) {
-  throw new ApprovalsError(`portable-runtime-approvals: ${message}`);
+function fail(message, cause) {
+  throw new ApprovalsError(
+    `portable-runtime-approvals: ${message}`,
+    cause === undefined ? undefined : { cause },
+  );
 }
 
 function isRecord(value) {
@@ -285,6 +291,27 @@ function validateSidecarArchives(rawArchives, context) {
   return archives;
 }
 
+function compiledServiceHostContract(context) {
+  // Existing CLI staging runs before package builds. Only the new supplemental host facet needs
+  // the compiled canonical contract; Node's synchronous ESM loader preserves the existing API.
+  try {
+    return require("../packages/keiko-contracts/dist/opencode-service-host.js");
+  } catch (error) {
+    fail(
+      `${context}.serviceHost requires the built keiko-contracts package; run npm run build:packages`,
+      error,
+    );
+  }
+}
+
+function supplementalServiceHost(runtime, context) {
+  if (!Object.hasOwn(runtime, "serviceHost")) return undefined;
+  const { copyOpenCodeServiceHostApprovals } = compiledServiceHostContract(context);
+  const result = copyOpenCodeServiceHostApprovals(runtime.serviceHost);
+  if (result === undefined) fail(`${context}.serviceHost has invalid fixed host metadata`);
+  return result;
+}
+
 function validateSidecarRuntime(runtime, index) {
   const context = `approvals.sidecarRuntimes[${String(index)}]`;
   exactKeys(
@@ -299,9 +326,11 @@ function validateSidecarRuntime(runtime, index) {
       "license",
       "executableTreeAlgorithm",
       "archives",
+      ...(isRecord(runtime) && Object.hasOwn(runtime, "serviceHost") ? ["serviceHost"] : []),
     ],
     context,
   );
+  const serviceHost = supplementalServiceHost(runtime, context);
   const name = validateLiteral(
     requiredString(runtime, "name", context),
     "opencode-compatible",
@@ -328,6 +357,7 @@ function validateSidecarRuntime(runtime, index) {
       `${context}.executableTreeAlgorithm`,
     ),
     archives: validateSidecarArchives(runtime.archives, `${context}.archives`),
+    ...(serviceHost === undefined ? {} : { serviceHost }),
   };
 }
 

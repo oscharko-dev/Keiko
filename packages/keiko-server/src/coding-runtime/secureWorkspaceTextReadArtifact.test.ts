@@ -96,3 +96,54 @@ describe("secure workspace text-read artifact proof", () => {
     expect(verify).toHaveBeenCalledOnce();
   });
 });
+
+it("rejects an unknown rich protocol capability before verifying the artifact", async () => {
+  const verify = vi.fn(() => true);
+  const candidate = artifact();
+  Reflect.set(candidate, "snapshotProtocol", "unapproved-snapshot");
+  await expect(
+    resolveSecureWorkspaceReadArtifact(candidate, { os: "darwin", arch: "arm64" }, { verify }),
+  ).resolves.toBeUndefined();
+  expect(verify).not.toHaveBeenCalled();
+});
+
+it("admits only the exact signed rich capability at the existing point-of-use verifier", async () => {
+  const verify = vi.fn(() => true);
+  const candidate = artifact({ snapshotProtocol: "KSR2/KSS2" });
+  await expect(
+    resolveSecureWorkspaceReadArtifact(candidate, { os: "darwin", arch: "arm64" }, { verify }),
+  ).resolves.toBe(candidate);
+  expect(verify).toHaveBeenCalledExactlyOnceWith(candidate);
+  verify.mockClear();
+  await expect(
+    resolveSecureWorkspaceReadArtifact(
+      artifact({ snapshotProtocol: "KSR2/KSS2", byteCap: 65_536 }),
+      { os: "darwin", arch: "arm64" },
+      { verify },
+    ),
+  ).resolves.toBeUndefined();
+  expect(verify).not.toHaveBeenCalled();
+});
+
+it("rejects an unapproved native capability before point-of-use verification", async () => {
+  const verify = vi.fn(() => true);
+  const candidate = artifact();
+  Reflect.set(candidate, "nativeProtocol", "unapproved-native");
+  await expect(
+    resolveSecureWorkspaceReadArtifact(candidate, { os: "darwin", arch: "arm64" }, { verify }),
+  ).resolves.toBeUndefined();
+  expect(verify).not.toHaveBeenCalled();
+});
+
+it("refuses native capability metadata on the unqualified Windows executor", async () => {
+  const verify = vi.fn(() => true);
+  const candidate = artifact({
+    target: "win32-x64",
+    installRelativePath: "runtime/native/keiko-secure-workspace-read.exe",
+  });
+  Reflect.set(candidate, "nativeProtocol", "KSR3/KSS3");
+  await expect(
+    resolveSecureWorkspaceReadArtifact(candidate, { os: "win32", arch: "x64" }, { verify }),
+  ).resolves.toBeUndefined();
+  expect(verify).not.toHaveBeenCalled();
+});

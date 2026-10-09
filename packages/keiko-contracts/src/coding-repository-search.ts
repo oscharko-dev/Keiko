@@ -181,6 +181,20 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+export function isValidCodingRepositoryGlob(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= CODING_REPOSITORY_LIMITS.globChars &&
+    !hasControlCharacter(value) &&
+    !value.startsWith("/") &&
+    !value.startsWith("~") &&
+    !value.includes(":") &&
+    !value.includes("\\") &&
+    !value.split("/").some((segment) => segment === "." || segment === "..")
+  );
+}
+
 function validGlobs(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) &&
@@ -190,18 +204,7 @@ function validGlobs(value: unknown): value is readonly string[] {
     Object.keys(value).length === value.length &&
     Object.keys(value).every((key, index) => key === String(index)) &&
     Object.values(Object.getOwnPropertyDescriptors(value)).every((entry) => "value" in entry) &&
-    value.every(
-      (glob: unknown) =>
-        typeof glob === "string" &&
-        glob.length > 0 &&
-        glob.length <= CODING_REPOSITORY_LIMITS.globChars &&
-        !hasControlCharacter(glob) &&
-        !glob.startsWith("/") &&
-        !glob.startsWith("~") &&
-        !glob.includes(":") &&
-        !glob.includes("\\") &&
-        !glob.split("/").some((segment) => segment === "." || segment === ".."),
-    )
+    value.every(isValidCodingRepositoryGlob)
   );
 }
 

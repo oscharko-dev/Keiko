@@ -5,7 +5,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { hashHelperSourceTree } from "./devLanePortableCodingRuntime.js";
-import { NPM_LANE_RUNTIME_APPROVALS } from "./npmLaneRuntimeApprovals.js";
+import {
+  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
+  NPM_LANE_RUNTIME_APPROVALS,
+} from "./npmLaneRuntimeApprovals.js";
+import {
+  SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES,
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+} from "./secureWorkspaceTextReadProtocol.js";
 
 // The npm lane's trust anchor is compiled into the server because an npm installation carries
 // neither the approvals catalog nor the helper source. That copy must never drift from the
@@ -66,4 +73,20 @@ describe("npm-lane runtime approvals", () => {
       expect(approval.helperSourceTreeSha256).toBe(current);
     }
   });
+
+  it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
+    "%s keeps the previously approved helper's narrower capability and source identity",
+    (target, approval) => {
+      const previous =
+        NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target as keyof typeof NPM_LANE_RUNTIME_APPROVALS];
+      expect(approval.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
+      expect(previous.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES);
+      expect(previous.helperSourceCommit).toBe("98b77857ecb39e936269f875f8ade3688870629f");
+      expect(previous.helperSourceTreeSha256).toBe(
+        "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa",
+      );
+      expect(previous.helperSha256).not.toBe(approval.helperSha256);
+      expect(previous.helperSourceTreeSha256).not.toBe(approval.helperSourceTreeSha256);
+    },
+  );
 });

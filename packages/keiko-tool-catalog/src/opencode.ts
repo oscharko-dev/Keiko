@@ -1,42 +1,17 @@
-// #3414 (extended by #3386/#3387/#3388): the "opencode" registration set. ADR-0175 D2 reserves the
-// sixteen managed-OpenCode canonical identities below (the original seven workspace/verification
-// tools, the eight Git status/diff/stage/commit, push/pull-request and CI-observation tools, plus
-// #3386's H1 local repository-search handler projected as `keiko.repo.search@1` / alias
-// `keiko_repository_search` -- see `repositorySearchSpec` below) plus the exhaustively-declared
-// native extension (`question` -- adapter-native, never a Keiko tool descriptor, per
-// D2's explicit "not Keiko tools or compatibility exceptions").
-// packages/keiko-server/src/coding-sidecar-gateway.ts uses this set to build the `toolCatalog`
-// advertisement it forwards to the real model provider (the schema shown to the underlying LLM as
-// a function-calling interface -- advisory only; the provider performs no server-side schema
-// enforcement of its own).
-//
-// `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` below is the single source for the native
-// extensions' exact pinned wire schemas. Unlike the sixteen managed tools, a native extension is
-// never compiled through the catalog dialect (no descriptor, no `pattern`-keyword gap: these are
-// plain literal JSON Schema objects, carried verbatim). packages/keiko-server/src/coding-runtime/
-// opencodeToolSchemas.ts imports them back to build `OPENCODE_MODEL_VISIBLE_TOOLS`, and
-// packages/keiko-model-gateway/src/toolCatalogBridge.ts imports it to append the native
-// extensions to a bound advertisement's model-visible tool list -- one copy, two consumers
-// (#3414 follow-up: the model-gateway bridge no longer drops a profile's native extensions).
-//
-// This set is intentionally NOT the source for
-// packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts's `OPENCODE_MODEL_VISIBLE_TOOLS`/
-// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 2.0.10 runtime
-// itself generates and enforces BEFORE a call ever reaches Keiko (owned by the concurrently-worked
-// opencodeRuntimeAdapter.ts) and must keep matching that generated adapter source exactly, pattern
-// keyword included, or the sidecar-gateway's incoming exact-set trust check
-// (`hasExactOpenCodeVisibleToolContract`) would start rejecting legitimate real traffic.
-//
-// Formerly-reported representability gap (ADR-0175 D3: "unsupported dialect semantics are
-// incompatibility, never silently omitted keywords"), now partially closed: schema.ts's closed
-// dialect gained a `pattern` keyword (TYPE_KEYS.string, enforced both at compile time and at
-// match time), so `relativePath` (path traversal), `expectedContentHash` (hex-64), `target`
-// (https-only) and `skillId` (skill-id shape) below now carry the exact same regex the real
-// OpenCode wire schemas use (opencodeToolSchemas.ts), rather than omitting the format check. This
-// projection is still NOT the source OPENCODE_MODEL_VISIBLE_TOOLS/OPENCODE_TOOL_SOURCE_DEFINITIONS
-// are generated from (see the header note above) — that consolidation, and matching
-// `codingToolIpc.ts`'s independent action vocabulary to this one, remain open (#3414 follow-up).
-// `keiko.file.read`'s `path` in legacy.ts stays pattern-free; that is a separate, still-open case.
+import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+// Canonical managed OpenCode descriptors, their profile and pinned native extension schemas.
+// The default profile exposes seventeen governed tools plus `question`. The explicit Code Mode
+// profile retains those same governed capabilities and describes original native question/execute
+// transport. It is an inactive advertisement prerequisite, not a runtime or network activation.
+// Native extensions are never managed descriptors and retain their exact pinned wire schemas.
+// The server's incoming contract matcher and the provider bridge consume this one declaration.
+// Managed source schemas still belong to opencodeToolSchemas.ts; the catalog dialect losslessly
+// projects their canonical descriptors and does not control the native engine or its tool loop.
+import {
+  OPENCODE_TOOL_PROFILES,
+  type OpenCodeToolProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
@@ -64,12 +39,13 @@ const OPENCODE_DISCOVER_MAX_RESULTS = 100;
 const OPENCODE_READ_MAX_START_LINE = 1_000_000;
 const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
+const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
 const OPENCODE_RUNTIME = { id: "opencode", version: "2.0.10" } as const;
 
 export interface OpenCodeNativeExtensionDefinition {
-  readonly alias: "question";
+  readonly alias: "question" | "execute";
   readonly contractVersion: 1;
   readonly description: string;
   readonly inputSchema: CatalogJsonObject;
@@ -114,19 +90,31 @@ const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
   type: "object",
 };
 
-/**
- * The OpenCode-native question extension (ADR-0175 D2), exhaustively declared: never a Keiko tool
- * descriptors, never compiled through the catalog dialect. This is the single source for their
- * pinned wire schemas -- packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts and
- * packages/keiko-model-gateway/src/toolCatalogBridge.ts both import this constant rather than
- * each holding their own copy.
- */
+/** Exact pinned native extension definitions, selected explicitly by a compiled profile. */
 export const OPENCODE_NATIVE_EXTENSION_DEFINITIONS: readonly OpenCodeNativeExtensionDefinition[] = [
   {
     alias: "question",
     contractVersion: 1,
     description: "Ask the operator one or more structured clarifying questions before proceeding.",
     inputSchema: QUESTION_EXTENSION_SCHEMA,
+  },
+  {
+    alias: "execute",
+    contractVersion: 1,
+    // Captured from original 2.0.10 Tool.Service.snapshot / OpenAIChat.fromRequest. This
+    // declaration describes an inactive profile; it does not qualify fetch or enable execution.
+    description:
+      'Run JavaScript in a confined Code Mode runtime to script tool calls and HTTP requests and compose their results.\n`fetch` is available for HTTP requests. Imports, direct filesystem access, and timers are unavailable; all other external access goes through `tools`.\nWithin `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the Code Mode catalog. They are not available in the Code Mode runtime.\nCall tools through `tools` using only exact paths and signatures from the catalog. Do not infer or normalize tool names; preserve bracket notation such as `tools.<namespace>["tool-name"](input)`.\nPrefer an explicit `return`; if omitted, the final top-level expression becomes the result.\nAwait every call whose completion matters; pending calls are interrupted when execution ends. Run independent calls concurrently with `Promise.all`.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+        },
+      },
+      required: ["code"],
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -199,14 +187,17 @@ const OPENCODE_RESULT_SCHEMA: CatalogJsonObject = {
   additionalProperties: true,
 };
 
-function entryFor(spec: OpenCodeToolSpec): CatalogSetEntry {
+function entryFor(
+  spec: OpenCodeToolSpec,
+  resultSchema: CatalogJsonObject = OPENCODE_RESULT_SCHEMA,
+): CatalogSetEntry {
   return {
     alias: spec.alias,
     descriptor: createToolDescriptor({
       toolRef: createToolRef(spec.canonicalId, 1),
       description: spec.description,
       inputSchema: spec.inputSchema,
-      resultSchema: OPENCODE_RESULT_SCHEMA,
+      resultSchema,
       effects: spec.effects,
       actionMapping: [{ action: spec.alias, effects: spec.effects }],
       policyReferences: spec.effects,
@@ -229,18 +220,35 @@ function discoverSpec(): OpenCodeToolSpec {
     alias: "keiko_workspace_discover",
     description:
       "Find exact workspace-relative file paths through bounded repository discovery. Search by " +
-      "short filename or path keywords; * returns a bounded overview. Denied and ignored paths " +
-      "never appear.",
+      "keywords, root-relative globs, or immediate directory entries. Set directory to a " +
+      "workspace-relative folder or empty for the root; directory mode uses query *. Denied " +
+      "and ignored paths never appear.",
     inputSchema: managedObjectSchema(
       {
+        mode: { type: "string", enum: WORKSPACE_PATH_DISCOVERY_MODES },
+        directory: {
+          type: "string",
+          minLength: 0,
+          maxLength: WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+          pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).*$`,
+        },
         query: { type: "string", minLength: 1, maxLength: 256 },
         maxResults: { type: "integer", minimum: 1, maximum: OPENCODE_DISCOVER_MAX_RESULTS },
       },
-      ["query", "maxResults"],
+      ["mode", "directory", "query", "maxResults"],
     ),
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-workspace-discover-port",
+  };
+}
+
+function workspaceTextPathSchema(): CatalogJsonObject {
+  return {
+    type: "string",
+    minLength: 1,
+    maxLength: 512,
+    pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
   };
 }
 
@@ -255,15 +263,7 @@ function readSpec(): OpenCodeToolSpec {
       "exactly; never calculate a hash from a partial window.",
     inputSchema: managedObjectSchema(
       {
-        relativePath: {
-          type: "string",
-          minLength: 1,
-          maxLength: 512,
-          // #3414 AC1: schema.ts now supports `pattern` — this is the exact real wire pattern
-          // (opencodeToolSchemas.ts WORKSPACE_READ_SCHEMA.relativePath), no longer a format check
-          // this advisory projection had to omit.
-          pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
-        },
+        relativePath: workspaceTextPathSchema(),
         startLine: { type: "integer", minimum: 1, maximum: OPENCODE_READ_MAX_START_LINE },
         maxLines: { type: "integer", minimum: 1, maximum: OPENCODE_READ_MAX_WINDOW_LINES },
       },
@@ -701,32 +701,21 @@ function ciStatusSpec(): OpenCodeToolSpec {
 }
 
 /**
- * The canonical "opencode" registration set (ADR-0175 D2). Declares the sixteen managed-OpenCode
- * governed tools plus the two exhaustively-declared native extensions (`nativeExtensions` is
- * derived from `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` above, the same single source consumers use
- * for their pinned wire schemas). `keiko_repository_search` (H1, #3386) is a member as of #3414:
- * its handler is implemented and mounted server-side; see `repositorySearchSpec` above.
- * `keiko.changeset.edit`'s descriptor is a structurally-equivalent, strictly LOOSER projection of
- * the real wire schema (all fields required, nested `additionalProperties` stripped-as-true) --
- * see `changesetEditSpec` above for exactly why and why that is safe for its one consumer; the
- * eight #3386/#3387/#3388 Git/CI specs above have the same relationship to their own hand-authored
- * real wire schemas.
- *
- * `packages/keiko-model-gateway/src/toolCatalogBridge.ts`'s bridge merges these native extensions
- * into a bound advertisement's model-visible tool list and passes a call to one of their aliases
- * straight through to the sidecar, unbound (#3414 follow-up); a caller that must NOT expose the
- * native extensions on its advertisement composes its own catalog from these same entries with
- * `nativeExtensions: []`.
+ * Default direct registrations remain unchanged. The explicit Code Mode profile retains every
+ * managed descriptor, bound and effect while advertising native question/execute separately.
+ * This declaration changes neither native tool membership/permissions nor product activation.
  */
-export function opencodeRegistrationSet(): CatalogRegistrationSet {
+export function opencodeRegistrationSet(
+  profile: OpenCodeToolProfile = "direct",
+): CatalogRegistrationSet {
+  if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
   return {
-    profile: OPENCODE_PROFILE,
+    profile: profile === "direct" ? OPENCODE_PROFILE : { id: "opencode-code-mode", version: 1 },
     adapterDialect: OPENCODE_DIALECT,
     adapterRuntime: OPENCODE_RUNTIME,
-    nativeExtensions: OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, contractVersion }) => ({
-      alias,
-      contractVersion,
-    })),
+    nativeExtensions: OPENCODE_NATIVE_EXTENSION_DEFINITIONS.filter(
+      (extension) => profile === "code-mode" || extension.alias === "question",
+    ).map(({ alias, contractVersion }) => ({ alias, contractVersion })),
     compatibility: [],
     entries: [
       discoverSpec(),
@@ -746,6 +735,149 @@ export function opencodeRegistrationSet(): CatalogRegistrationSet {
       gitPullRequestSpec(),
       gitExecuteSpec(),
       ciStatusSpec(),
-    ].map(entryFor),
+    ].map((spec) => entryFor(spec)),
   };
+}
+
+/** Server-private same-descriptor snapshot contract; never composed into a model advertisement. */
+export function nativeTextSnapshotRegistrationSet(
+  kind: "snapshot" | "invocation" = "snapshot",
+): CatalogRegistrationSet {
+  return {
+    profile: {
+      id: kind === "snapshot" ? "opencode-native-text-io" : "opencode-native-read-invocation",
+      version: 1,
+    },
+    adapterDialect: OPENCODE_DIALECT,
+    adapterRuntime: OPENCODE_RUNTIME,
+    nativeExtensions: [],
+    compatibility: [],
+    entries:
+      kind === "invocation"
+        ? [nativeReadInvocationEntry()]
+        : [
+            entryFor(
+              {
+                canonicalId: "keiko.native.workspace.text.snapshot",
+                alias: "native_workspace_text_snapshot",
+                description:
+                  "Capture one bounded whole-file UTF-8 snapshot for the private native file service. Only a compact receipt enters catalog settlement; source text stays invocation-local.",
+                inputSchema: managedObjectSchema({ relativePath: workspaceTextPathSchema() }, [
+                  "relativePath",
+                ]),
+                effects: ["workspace-read"],
+                idempotency: "read-only",
+                handlerId: "opencode-native-text-snapshot-port",
+              },
+              nativeTextSnapshotReceiptSchema(),
+            ),
+          ],
+  };
+}
+
+function nativeReadInvocationEntry(): CatalogRegistrationSet["entries"][number] {
+  return entryFor(
+    {
+      canonicalId: "keiko.native.workspace.read.invocation",
+      alias: "native_workspace_read_invocation",
+      description:
+        "Own one original native read and its internal file operations under one current authority and budget admission. Only a compact terminal receipt enters catalog settlement.",
+      inputSchema: nativeReadInvocationInputSchema(),
+      effects: ["workspace-read"],
+      idempotency: "read-only",
+      handlerId: "opencode-native-read-invocation-port",
+    },
+    managedObjectSchema(
+      {
+        status: { type: "string", enum: ["completed"] },
+        evidence: {
+          type: "array",
+          minItems: 1,
+          maxItems: 1,
+          items: managedObjectSchema(
+            {
+              kind: { type: "string", enum: ["native-read-invocation"] },
+              code: { type: "string", enum: ["completed"] },
+            },
+            ["kind", "code"],
+          ),
+        },
+      },
+      ["status", "evidence"],
+    ),
+  );
+}
+
+function nativeReadInvocationInputSchema(): CatalogJsonObject {
+  return managedObjectSchema(
+    {
+      relativePath: nativeReadInvocationPathSchema(),
+      context: managedObjectSchema(
+        Object.fromEntries(
+          ["sessionID", "messageID", "id", "agent"].map((name) => [
+            name,
+            { type: "string", minLength: 1, maxLength: 256 },
+          ]),
+        ),
+        ["sessionID", "messageID", "id", "agent"],
+      ),
+      offset: {
+        type: "array",
+        maxItems: 1,
+        items: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+      },
+      limit: {
+        type: "array",
+        maxItems: 1,
+        items: { type: "integer", minimum: 0, maximum: 2_000 },
+      },
+    },
+    ["relativePath", "context", "offset", "limit"],
+  );
+}
+
+function nativeReadInvocationPathSchema(): CatalogJsonObject {
+  // The private server owner additionally enforces the native helper's exact UTF-8 byte cap
+  // (secureWorkspaceTextReadProtocol.ts). This schema never replaces the original Read schema.
+  return {
+    type: "string",
+    maxLength: 4_096,
+    pattern: String.raw`^(?!/)(?![\s\S]*(?:^|/)\.\.?(/|$))(?![\s\S]*//)(?![\s\S]*/$)[^\u0000]*$`,
+  };
+}
+
+function nativeTextSnapshotReceiptSchema(): CatalogJsonObject {
+  return managedObjectSchema(
+    {
+      status: { type: "string", enum: ["completed"] },
+      evidence: {
+        type: "array",
+        minItems: 1,
+        maxItems: 1,
+        items: managedObjectSchema(
+          {
+            kind: { type: "string", enum: ["native-text-snapshot"] },
+            code: { type: "string", enum: ["completed"] },
+          },
+          ["kind", "code"],
+        ),
+      },
+      snapshot: managedObjectSchema(
+        {
+          digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          byteCount: { type: "integer", minimum: 0 },
+          info: managedObjectSchema(
+            {
+              type: { type: "string", enum: ["file"] },
+              size: { type: "integer", minimum: 0 },
+              mtimeMs: { type: "number" },
+            },
+            ["type", "size", "mtimeMs"],
+          ),
+        },
+        ["digest", "byteCount", "info"],
+      ),
+    },
+    ["status", "evidence", "snapshot"],
+  );
 }

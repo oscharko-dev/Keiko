@@ -22,6 +22,17 @@ CI rounds live in that difference:
 | `S7778` | one `Array#push` with several arguments, not consecutive pushes | no                    |
 | `S7776` | a `Set`, not `.includes()` on a constant array                  | no                    |
 
+PR #3895 also encountered these rules in SonarCloud while the pinned local analyzer registered
+none of them in either its JavaScript or TypeScript rule repository. All four affected product files
+were correctly classified as main sources, rather than tests. Review these shapes explicitly until
+the pinned local analyzer contains the rules; a clean local scan cannot check an absent rule.
+
+| Cloud rule | Required shape                                    | Preserved behavior                                                                                              |
+| ---------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `S9382`    | Avoid `await` directly inside a loop.             | Keep bounded, sequential catalog refresh and readiness probes; do not introduce uncontrolled parallel requests. |
+| `S9381`    | Flatten nested Promise handlers.                  | Retain handshake ordering and the existing rejection boundary.                                                  |
+| `S7503`    | Remove async callbacks without asynchronous work. | Return the existing Promise contract without an unnecessary async wrapper.                                      |
+
 Shell rules SonarCloud runs and no local tool reproduces — check these by hand on a changed `.sh`:
 
 | Rule             | What it wants                                      |

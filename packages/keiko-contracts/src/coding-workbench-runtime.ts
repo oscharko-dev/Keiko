@@ -358,7 +358,7 @@ const LEGAL_TRANSITIONS: Readonly<
   Record<CodingWorkbenchRuntimeStateName, readonly CodingWorkbenchRuntimeStateName[]>
 > = deepFreeze({
   idle: ["starting", "recovery-required"],
-  starting: ["ready", "failed", "cancelled", "taken-over", "recovery-required"],
+  starting: ["ready", "stopping", "failed", "cancelled", "taken-over", "recovery-required"],
   ready: ["running", "stopping", "failed", "taken-over", "recovery-required"],
   running: [
     "paused",

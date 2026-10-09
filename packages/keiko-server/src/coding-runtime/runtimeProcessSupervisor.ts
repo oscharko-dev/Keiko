@@ -29,6 +29,9 @@ export type RuntimeQualificationIdentity = LongLivedRuntimeQualification;
 export type RuntimeLaunchProfile = ClosedRuntimeLaunchProfile;
 export { CLOSED_RUNTIME_LAUNCH_PROFILE };
 
+/** Server-private process ownership; it grants no tool or workspace authority. */
+export type RuntimeParentLifetime = "stdin-eof";
+
 export interface RuntimeSupervisorLaunchRequest {
   readonly runId: string;
   readonly recoveryHandle: string;
@@ -43,6 +46,7 @@ export interface RuntimeSupervisorLaunchRequest {
   readonly modelSource: CodingWorkbenchModelSource;
   readonly authorityEnvelopeDigest: string;
   readonly egressPolicy: LongLivedRuntimeEgressPolicy;
+  readonly parentLifetime?: RuntimeParentLifetime | undefined;
 }
 
 export interface PreparedRuntimeSandboxLaunch {
@@ -64,6 +68,7 @@ export type RuntimeTreeSignal = "force" | "graceful";
 
 export interface RuntimeProcessBackend {
   readonly identity: Pick<RuntimeQualificationIdentity, "platform" | "arch" | "backend">;
+  readonly supportsStdinLifetime?: true | undefined;
   spawnOwnedTree(
     request: RuntimeSupervisorLaunchRequest,
     sandbox?: PreparedRuntimeSandboxLaunch,
@@ -125,6 +130,7 @@ export function verifyRuntimeReapReceipt(
 }
 
 export interface RuntimeProcessSupervisor {
+  readonly supportsStdinLifetime?: true | undefined;
   preflight(request: RuntimeSupervisorLaunchRequest): RuntimeSupervisorPreflightResult;
   spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeSupervisorSpawnResult;
   terminate(tree: RuntimeProcessTree, signal: RuntimeTreeSignal): void;
@@ -166,11 +172,16 @@ class RuntimeProcessSupervisorImpl implements RuntimeProcessSupervisor {
     ) => LongLivedRuntimeSandboxDecision,
   ) {}
 
+  public get supportsStdinLifetime(): true | undefined {
+    return this.backend.supportsStdinLifetime;
+  }
+
   public preflight(request: RuntimeSupervisorLaunchRequest): RuntimeSupervisorPreflightResult {
     if (!profileIsClosed(request.launchProfile)) {
       return { ok: false, failureCode: "runtime-profile-open" };
     }
     if (
+      (request.parentLifetime !== undefined && this.supportsStdinLifetime !== true) ||
       !backendMatches(this.backend, request.qualification) ||
       !qualifyLongLivedRuntime(request.qualification, this.qualifications).ok
     ) {

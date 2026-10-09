@@ -24,6 +24,8 @@ import {
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   LOCALE_LABELS,
+  translate,
+  type I18nTranslate as GlobalI18nTranslate,
   useLocale,
   useSetLocale,
   useTranslate as useGlobalTranslate,
@@ -476,16 +478,46 @@ function capabilityLine(report: GatewayReadinessReport): string {
 
 function probeLine(probe: GatewayReadinessProbeResult): string {
   const warning = probe.warning === undefined ? "" : ` Warning: ${probe.warning}`;
-  return `- ${probe.name}: ${probe.status} (${probe.latencyMs.toString()} ms) ${probe.evidence}${warning}`;
+  const model = probe.modelId === undefined ? "" : ` Probe model: ${probe.modelId}.`;
+  return `- ${probe.name}: ${probe.status} (${probe.latencyMs.toString()} ms) ${probe.evidence}${model}${warning}`;
 }
 
-export function formatGatewayReadinessReport(report: GatewayReadinessReport): string {
+function retrievalEmbeddingLines(
+  report: GatewayReadinessReport,
+  t: GlobalI18nTranslate,
+): readonly string[] {
+  const capabilities = report.verifiedCapabilities;
+  if (capabilities.embedding !== true) return [];
+  if (capabilities.embeddingModelId === undefined) {
+    return [t("settings.models.retrievalEmbeddingUnavailable")];
+  }
+  const dimensions = capabilities.embeddingDimensions;
+  const shape =
+    dimensions === undefined
+      ? ""
+      : t("settings.models.retrievalEmbeddingDimensions", { dimensions });
+  return [
+    t("settings.models.retrievalEmbeddingIdentity", {
+      modelId: capabilities.embeddingModelId,
+      shape,
+    }),
+  ];
+}
+
+const englishReadinessTranslate: GlobalI18nTranslate = (key, values): string =>
+  translate("en", key, values);
+
+export function formatGatewayReadinessReport(
+  report: GatewayReadinessReport,
+  t: GlobalI18nTranslate = englishReadinessTranslate,
+): string {
   return [
     "Keiko Gateway Readiness Report",
     `Model: ${report.modelId}`,
     `Checked at: ${report.checkedAt}`,
     `Overall status: ${report.overallStatus}`,
     `Verified capabilities: ${capabilityLine(report)}`,
+    ...retrievalEmbeddingLines(report, t),
     "",
     "Probes:",
     ...report.probes.map(probeLine),
@@ -705,12 +737,13 @@ function ReadinessReportCopyButton({
   readonly report: GatewayReadinessReport;
 }): ReactNode {
   const t = useTranslate();
+  const globalT = useGlobalTranslate();
   const [copyState, setCopyState] = useState<ReportCopyState>("idle");
   const [status, setStatus] = useState("");
 
   async function handleCopy(): Promise<void> {
     try {
-      await copyTextToClipboard(formatGatewayReadinessReport(report));
+      await copyTextToClipboard(formatGatewayReadinessReport(report, globalT));
       setCopyState("copied");
       setStatus(t("settings.models.reportCopied"));
     } catch {

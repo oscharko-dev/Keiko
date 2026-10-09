@@ -13,11 +13,24 @@ import {
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
   encodeSecureWorkspaceReadRequest,
+  encodeSecureWorkspaceSnapshotRequest,
+  decodeSecureWorkspaceSnapshotResponse,
+  encodeSecureWorkspaceNativeRequest,
+  decodeSecureWorkspaceNativeResponse,
+  decodeSecureWorkspaceNativeDirectory,
+  SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+  SECURE_WORKSPACE_NATIVE_MAX_PATH_COMPONENTS,
+  type SecureWorkspaceNativeFileInfo,
+  type SecureWorkspaceNativeDirEntry,
+  type SecureWorkspaceNativeRequest,
+  type SecureWorkspaceNativeResponse,
+  type SecureWorkspaceTextSnapshotInfo,
   type SecureWorkspaceReadClosedStatus,
   type SecureWorkspaceReadHelperResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 import {
   resolveSecureWorkspaceReadArtifact,
+  secureWorkspaceReadArtifactByteCap,
   secureWorkspaceReadTargetFor,
   type SecureWorkspaceTextReadArtifact,
   type SecureWorkspaceTextReadArtifactVerifier,
@@ -29,6 +42,11 @@ import {
   type SecureWorkspaceReadPlatform,
   type SecureWorkspaceTextReadProcessFactory,
 } from "./secureWorkspaceTextReadProcess.js";
+
+/** Same bound as the native path component scope, sufficient for one complete ancestor load. */
+export const SECURE_WORKSPACE_NATIVE_MAX_WAITERS = 64;
+
+type SecureWorkspaceNativeOperation = SecureWorkspaceNativeRequest["operation"];
 
 export type SecureWorkspaceTextReadFailure =
   | "unsupported-platform"
@@ -60,7 +78,54 @@ export type SecureWorkspaceTextReadResult =
       readonly absence?: WorkspacePathAbsence;
     };
 
+export type SecureWorkspaceTextSnapshotResult =
+  | { readonly ok: true; readonly text: string; readonly info: SecureWorkspaceTextSnapshotInfo }
+  | Extract<SecureWorkspaceTextReadResult, { readonly ok: false }>
+  | { readonly ok: false; readonly reason: "snapshot-unavailable" };
+
+export interface SecureWorkspaceTextReadRequest {
+  readonly relativePath: string;
+  readonly signal?: AbortSignal | undefined;
+}
+
+export type SecureWorkspaceNativeIOFailure =
+  | Extract<SecureWorkspaceTextReadResult, { readonly ok: false }>
+  | { readonly ok: false; readonly reason: "native-io-unavailable" }
+  | {
+      readonly ok: false;
+      readonly reason: "wrong-kind";
+      readonly info: SecureWorkspaceNativeFileInfo;
+    };
+
+export type SecureWorkspaceNativeBytesResult =
+  | { readonly ok: true; readonly bytes: Uint8Array; readonly info: SecureWorkspaceNativeFileInfo }
+  | SecureWorkspaceNativeIOFailure;
+export type SecureWorkspaceNativeStatResult =
+  | { readonly ok: true; readonly info: SecureWorkspaceNativeFileInfo }
+  | SecureWorkspaceNativeIOFailure;
+export type SecureWorkspaceNativeListResult =
+  | {
+      readonly ok: true;
+      readonly entries: readonly SecureWorkspaceNativeDirEntry[];
+      readonly info: SecureWorkspaceNativeFileInfo;
+    }
+  | SecureWorkspaceNativeIOFailure;
+export interface SecureWorkspaceNativeIORequest extends SecureWorkspaceTextReadRequest {
+  /** Additional veto from the same current parent owner; never grants authority. */
+  readonly isCurrent?: (() => boolean) | undefined;
+}
+export interface SecureWorkspaceNativeBytesRequest extends SecureWorkspaceNativeIORequest {
+  readonly range?: { readonly offset: number; readonly length: number };
+}
+/** Private, separately pinned IO primitives; no public model/IPC window or tool admission. */
+export interface SecureWorkspaceNativeFileIO {
+  readBytes(request: SecureWorkspaceNativeBytesRequest): Promise<SecureWorkspaceNativeBytesResult>;
+  stat(request: SecureWorkspaceNativeIORequest): Promise<SecureWorkspaceNativeStatResult>;
+  list(request: SecureWorkspaceNativeIORequest): Promise<SecureWorkspaceNativeListResult>;
+}
+
 export interface SecureWorkspaceTextReadPort {
+  readonly nativeFileIO?: SecureWorkspaceNativeFileIO;
   /**
    * The text of one workspace-relative file, or the closed reason it could not be read.
    *
@@ -71,10 +136,11 @@ export interface SecureWorkspaceTextReadPort {
    * live root proved the path absent after the helper refused it (F27, #3876). It is the precondition
    * of a file creation and of a rename target, and it never reaches past a link.
    */
-  readText(request: {
-    readonly relativePath: string;
-    readonly signal?: AbortSignal | undefined;
-  }): Promise<SecureWorkspaceTextReadResult>;
+  readText(request: SecureWorkspaceTextReadRequest): Promise<SecureWorkspaceTextReadResult>;
+  /** Optional same-descriptor text facet. Capability is separately pinned on the helper identity. */
+  readTextSnapshot?(
+    request: SecureWorkspaceTextReadRequest,
+  ): Promise<SecureWorkspaceTextSnapshotResult>;
 }
 
 /**
@@ -99,12 +165,28 @@ export function exactWorkspaceRead(
   isRunWorkspace: () => boolean,
   refusal: SecureWorkspaceTextReadFailure,
 ): SecureWorkspaceTextReadPort {
+  const readSnapshot = port.readTextSnapshot?.bind(port);
+  const nativeIO = port.nativeFileIO;
   return {
+    ...(nativeIO === undefined
+      ? {}
+      : { nativeFileIO: exactNativeFileIO(nativeIO, isRunWorkspace, refusal) }),
     readText: async (request): Promise<SecureWorkspaceTextReadResult> => {
       if (!isRunWorkspace()) return { ok: false, reason: refusal };
       const result = await port.readText(request);
       return isRunWorkspace() ? result : { ok: false, reason: refusal };
     },
+    ...(readSnapshot === undefined
+      ? {}
+      : {
+          readTextSnapshot: async (
+            request: SecureWorkspaceTextReadRequest,
+          ): Promise<SecureWorkspaceTextSnapshotResult> => {
+            if (!isRunWorkspace()) return { ok: false, reason: refusal };
+            const result = await readSnapshot(request);
+            return isRunWorkspace() ? result : { ok: false, reason: refusal };
+          },
+        }),
   };
 }
 
@@ -125,20 +207,221 @@ export function createSecureWorkspaceTextReadPort(
   return new SecureWorkspaceTextReadPortImpl(deps);
 }
 
+interface NativeSlotWaiter {
+  readonly signal: AbortSignal;
+  readonly abort: () => void;
+  readonly finish: (acquired: boolean) => void;
+}
+
 class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
   private live = 0;
+  /** Eight running plus at most sixty-four waiting; overflow remains an explicit technical refusal. */
+  private readonly nativeWaiters: NativeSlotWaiter[] = [];
 
-  public constructor(private readonly deps: SecureWorkspaceTextReadDeps) {}
+  public readonly nativeFileIO: SecureWorkspaceNativeFileIO;
 
-  public async readText(request: {
-    readonly relativePath: string;
-    readonly signal?: AbortSignal | undefined;
-  }): Promise<SecureWorkspaceTextReadResult> {
+  public constructor(private readonly deps: SecureWorkspaceTextReadDeps) {
+    this.nativeFileIO = Object.freeze({
+      readBytes: (request: SecureWorkspaceNativeBytesRequest) =>
+        this.nativeRead(captureNativeRequest(request), "read"),
+      stat: async (
+        request: SecureWorkspaceNativeIORequest,
+      ): Promise<SecureWorkspaceNativeStatResult> => {
+        const result = await this.nativeRead(captureNativeRequest(request), "stat");
+        return result.ok ? { ok: true, info: result.info } : result;
+      },
+      list: async (
+        request: SecureWorkspaceNativeIORequest,
+      ): Promise<SecureWorkspaceNativeListResult> => {
+        const captured = captureNativeRequest(request);
+        const result = await this.nativeRead(captured, "list");
+        return nativeListResult(result, captured.relativePath);
+      },
+    });
+  }
+
+  private async nativeRead(
+    request: SecureWorkspaceNativeBytesRequest,
+    operation: SecureWorkspaceNativeOperation,
+  ): Promise<SecureWorkspaceNativeBytesResult> {
+    if (!validNativeRequest(request, operation)) return { ok: false, reason: "denied" };
+    if (request.signal?.aborted === true) return { ok: false, reason: "cancelled" };
+    const platform = this.deps.platform ?? { os: process.platform, arch: process.arch };
+    if (secureWorkspaceReadTargetFor(platform) === undefined)
+      return { ok: false, reason: "unsupported-platform" };
+    return this.nativeGuarded(request, operation, readSignal(request.signal));
+  }
+
+  private async nativeGuarded(
+    request: SecureWorkspaceNativeBytesRequest,
+    operation: SecureWorkspaceNativeOperation,
+    signal: AbortSignal,
+  ): Promise<SecureWorkspaceNativeBytesResult> {
+    const material = await resolveVerifiedReadMaterial(this.deps);
+    if (!material.ok) return material;
+    if (material.verifiedArtifact.nativeProtocol !== "KSR3/KSS3")
+      return { ok: false, reason: "native-io-unavailable" };
+    if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+    if (request.isCurrent?.() === false) return { ok: false, reason: "denied" };
+    const artifact = Object.freeze({ ...material.verifiedArtifact });
+    if (!(await this.acquireNativeSlot(signal))) {
+      return callerCancelled(signal)
+        ? processRunFailure(undefined, signal, request.signal)
+        : { ok: false, reason: "busy" };
+    }
+    try {
+      return await this.nativeAcquired(
+        request,
+        operation,
+        signal,
+        material.workspaceRoot,
+        artifact,
+      );
+    } finally {
+      this.releaseSlot();
+    }
+  }
+
+  private async nativeAcquired(
+    request: SecureWorkspaceNativeBytesRequest,
+    operation: SecureWorkspaceNativeOperation,
+    signal: AbortSignal,
+    root: string,
+    artifact: SecureWorkspaceTextReadArtifact,
+  ): Promise<SecureWorkspaceNativeBytesResult> {
+    const verified = await resolveSecureWorkspaceReadArtifact(
+      artifact,
+      this.deps.platform ?? { os: process.platform, arch: process.arch },
+      this.deps.artifactVerifier,
+    );
+    if (verified === undefined) return { ok: false, reason: "artifact-unverified" };
+    const refusal = await this.nativePreflight(request, signal, root);
+    if (refusal !== undefined) return refusal;
+    const input: SecureWorkspaceNativeRequest = {
+      root,
+      relativePath: request.relativePath,
+      operation,
+      ...(operation === "read" && request.range !== undefined ? { range: request.range } : {}),
+    };
+    const frame = encodeSecureWorkspaceNativeRequest(input);
+    try {
+      return await this.nativeRun(request, input, verified, frame, signal);
+    } finally {
+      frame.fill(0);
+    }
+  }
+
+  private async nativePreflight(
+    request: SecureWorkspaceNativeBytesRequest,
+    signal: AbortSignal,
+    root: string,
+  ): Promise<Extract<SecureWorkspaceTextReadResult, { readonly ok: false }> | undefined> {
+    if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+    if ((await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot)) !== root)
+      return { ok: false, reason: "workspace-unavailable" };
+    if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+    return request.isCurrent?.() === false ? { ok: false, reason: "denied" } : undefined;
+  }
+
+  private acquireNativeSlot(signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+    if (this.live < SECURE_WORKSPACE_TEXT_READ_MAX_LIVE && this.nativeWaiters.length === 0) {
+      this.live += 1;
+      return Promise.resolve(true);
+    }
+    if (this.nativeWaiters.length >= SECURE_WORKSPACE_NATIVE_MAX_WAITERS)
+      return Promise.resolve(false);
+    return new Promise((finish) => {
+      const waiter: NativeSlotWaiter = {
+        signal,
+        finish,
+        abort: (): void => {
+          this.removeNativeWaiter(waiter);
+        },
+      };
+      this.nativeWaiters.push(waiter);
+      signal.addEventListener("abort", waiter.abort, { once: true });
+      if (signal.aborted) this.removeNativeWaiter(waiter);
+    });
+  }
+
+  private removeNativeWaiter(waiter: NativeSlotWaiter): void {
+    const index = this.nativeWaiters.indexOf(waiter);
+    if (index === -1) return;
+    this.nativeWaiters.splice(index, 1);
+    waiter.signal.removeEventListener("abort", waiter.abort);
+    waiter.finish(false);
+  }
+
+  private releaseSlot(): void {
+    this.live -= 1;
+    while (this.live < SECURE_WORKSPACE_TEXT_READ_MAX_LIVE && this.nativeWaiters.length > 0) {
+      const waiter = this.nativeWaiters.shift();
+      if (waiter === undefined) return;
+      waiter.signal.removeEventListener("abort", waiter.abort);
+      if (!waiter.signal.aborted) this.live += 1;
+      waiter.finish(!waiter.signal.aborted);
+    }
+  }
+
+  private async nativeRun(
+    request: SecureWorkspaceNativeBytesRequest,
+    input: SecureWorkspaceNativeRequest,
+    artifact: SecureWorkspaceTextReadArtifact,
+    frame: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<SecureWorkspaceNativeBytesResult> {
+    let response: Uint8Array;
+    try {
+      response = await this.deps.processFactory.create(artifact).run({ stdin: frame, signal });
+    } catch (error) {
+      return processRunFailure(error, signal, request.signal);
+    }
+    try {
+      if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+      if ((await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot)) !== input.root)
+        return { ok: false, reason: "workspace-unavailable" };
+      if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+      if (request.isCurrent?.() === false) return { ok: false, reason: "denied" };
+      const decoded = decodeNativeHelperResponse(response, input);
+      if (decoded.kind === "access-denied")
+        return await refinedAccessDenial(input.root, input.relativePath, signal, this.deps.lstat);
+      return decoded.result;
+    } finally {
+      response.fill(0);
+    }
+  }
+
+  public readText(request: SecureWorkspaceTextReadRequest): Promise<SecureWorkspaceTextReadResult> {
+    return this.read(request, false);
+  }
+
+  public readTextSnapshot(
+    request: SecureWorkspaceTextReadRequest,
+  ): Promise<SecureWorkspaceTextSnapshotResult> {
+    return this.read(request, true);
+  }
+
+  private read(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: false,
+  ): Promise<SecureWorkspaceTextReadResult>;
+  private read(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: true,
+  ): Promise<SecureWorkspaceTextSnapshotResult>;
+  private async read(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: boolean,
+  ): Promise<SecureWorkspaceTextReadResult | SecureWorkspaceTextSnapshotResult> {
     // The always-on deny list (ADR-0005 D3) is the wrapper's own, not only its callers': the helper
     // has no policy and reads a `.env` it can open, and the read-only child passes the model's path
     // straight through. A denied path answers `denied` before anything touches the filesystem, so
     // it is the same answer whether or not the path exists and cannot be used to probe for it.
-    if (!isNormalizedRelativePath(request.relativePath) || isDenied(request.relativePath)) {
+    if (
+      !isSecureWorkspaceTextRelativePath(request.relativePath) ||
+      isDenied(request.relativePath)
+    ) {
       return { ok: false, reason: "denied" };
     }
     if (request.signal?.aborted === true) return { ok: false, reason: "cancelled" };
@@ -148,29 +431,28 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     if (this.live >= SECURE_WORKSPACE_TEXT_READ_MAX_LIVE) return { ok: false, reason: "busy" };
     this.live += 1;
     try {
-      return await this.readTextGuarded(request);
+      return await this.readTextGuarded(request, snapshot);
     } finally {
-      this.live -= 1;
+      this.releaseSlot();
     }
   }
 
-  private async readTextGuarded(request: {
-    readonly relativePath: string;
-    readonly signal?: AbortSignal | undefined;
-  }): Promise<SecureWorkspaceTextReadResult> {
-    const platform = this.deps.platform ?? { os: process.platform, arch: process.arch };
-    const workspaceRoot = await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot);
-    if (workspaceRoot === undefined) return { ok: false, reason: "workspace-unavailable" };
-    const verifiedArtifact = await resolveSecureWorkspaceReadArtifact(
-      this.deps.artifact,
-      platform,
-      this.deps.artifactVerifier,
-    );
-    if (verifiedArtifact === undefined) return { ok: false, reason: "artifact-unverified" };
-    const frame = encodeSecureWorkspaceReadRequest({
+  private async readTextGuarded(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: boolean,
+  ): Promise<SecureWorkspaceTextReadResult | SecureWorkspaceTextSnapshotResult> {
+    const material = await resolveVerifiedReadMaterial(this.deps);
+    if (!material.ok) return material;
+    const { workspaceRoot, verifiedArtifact } = material;
+    if (snapshot && verifiedArtifact.snapshotProtocol !== "KSR2/KSS2")
+      return { ok: false, reason: "snapshot-unavailable" };
+    const encode = snapshot
+      ? encodeSecureWorkspaceSnapshotRequest
+      : encodeSecureWorkspaceReadRequest;
+    const frame = encode({
       root: workspaceRoot,
       relativePath: request.relativePath,
-      byteCap: 65_536,
+      byteCap: secureWorkspaceReadArtifactByteCap(verifiedArtifact),
     });
     try {
       const signal = readSignal(request.signal);
@@ -182,7 +464,13 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       } catch (error) {
         return processRunFailure(error, signal, request.signal);
       }
-      const answer = decodeHelperResponse(response);
+      if (snapshot && signal.aborted) {
+        response.fill(0);
+        return processRunFailure(undefined, signal, request.signal);
+      }
+      const answer = snapshot
+        ? decodeSnapshotHelperResponse(response)
+        : decodeHelperResponse(response, secureWorkspaceReadArtifactByteCap(verifiedArtifact));
       if (answer.kind === "settled") return answer.result;
       return await refinedAccessDenial(
         workspaceRoot,
@@ -205,7 +493,7 @@ function processRunFailure(
   error: unknown,
   signal: AbortSignal,
   callerSignal: AbortSignal | undefined,
-): SecureWorkspaceTextReadResult {
+): Extract<SecureWorkspaceTextReadResult, { readonly ok: false }> {
   if (error instanceof SecureWorkspaceReadProcessError && error.reason === "protocol-invalid")
     return { ok: false, reason: "protocol-invalid" };
   if (!signal.aborted) return { ok: false, reason: "process-failed" };
@@ -229,9 +517,12 @@ function isMappedResponse(
   return decoded.status !== "access-denied";
 }
 
-function decodeHelperResponse(response: Uint8Array): HelperAnswer {
+function decodeHelperResponse(response: Uint8Array, byteCap: number): HelperAnswer {
   try {
     const decoded = decodeSecureWorkspaceReadResponse(response);
+    if (decoded.status === "ok" && decoded.bytes.byteLength > byteCap) {
+      return { kind: "settled", result: { ok: false, reason: "protocol-invalid" } };
+    }
     return isMappedResponse(decoded)
       ? { kind: "settled", result: mappedHelperResult(decoded) }
       : { kind: "access-denied" };
@@ -273,7 +564,7 @@ async function refinedAccessDenial(
   relativePath: string,
   signal: AbortSignal,
   lstat: WorkspacePathLstat | undefined,
-): Promise<SecureWorkspaceTextReadResult> {
+): Promise<Extract<SecureWorkspaceTextReadResult, { readonly ok: false }>> {
   const absence = await proveWorkspacePathAbsent({
     root: workspaceRoot,
     relativePath,
@@ -320,7 +611,7 @@ function helperFailure(status: MappedHelperStatus): SecureWorkspaceTextReadFailu
   }
 }
 
-function isNormalizedRelativePath(value: string): boolean {
+export function isSecureWorkspaceTextRelativePath(value: string): boolean {
   if (
     value.length === 0 ||
     Buffer.byteLength(value, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES ||
@@ -329,6 +620,7 @@ function isNormalizedRelativePath(value: string): boolean {
     // workspace-relative; rejecting the colon keeps win32 resolution inside the workspace.
     value.includes(":") ||
     value.startsWith("/") ||
+    value.includes("\\") ||
     value.startsWith("\\")
   )
     return false;
@@ -346,4 +638,209 @@ function isUsableWorkspaceRoot(value: unknown): value is string {
     !value.includes("\0") &&
     Buffer.byteLength(value, "utf8") <= SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES
   );
+}
+
+function decodeSnapshotHelperResponse(
+  response: Uint8Array,
+):
+  | { readonly kind: "settled"; readonly result: SecureWorkspaceTextSnapshotResult }
+  | { readonly kind: "access-denied" } {
+  try {
+    const decoded = decodeSecureWorkspaceSnapshotResponse(response);
+    if (decoded.status === "access-denied") return { kind: "access-denied" };
+    if (decoded.status !== "ok")
+      return { kind: "settled", result: { ok: false, reason: helperFailure(decoded.status) } };
+    // Preserve physical UTF-8 bytes in rich snapshots; legacy text reads retain their BOM handling.
+    const text = decodeSecureWorkspaceText(decoded.bytes, true);
+    return {
+      kind: "settled",
+      result: text.ok ? { ok: true, text: text.text, info: decoded.info } : text,
+    };
+  } catch {
+    return { kind: "settled", result: { ok: false, reason: "protocol-invalid" } };
+  } finally {
+    response.fill(0);
+  }
+}
+
+async function resolveVerifiedReadMaterial(deps: SecureWorkspaceTextReadDeps): Promise<
+  | {
+      readonly ok: true;
+      readonly workspaceRoot: string;
+      readonly verifiedArtifact: SecureWorkspaceTextReadArtifact;
+    }
+  | { readonly ok: false; readonly reason: "workspace-unavailable" | "artifact-unverified" }
+> {
+  const platform = deps.platform ?? { os: process.platform, arch: process.arch };
+  const workspaceRoot = await resolveLiveWorkspaceRoot(deps.resolveWorkspaceRoot);
+  if (workspaceRoot === undefined) return { ok: false, reason: "workspace-unavailable" };
+  const verifiedArtifact = await resolveSecureWorkspaceReadArtifact(
+    deps.artifact,
+    platform,
+    deps.artifactVerifier,
+  );
+  return verifiedArtifact === undefined
+    ? { ok: false, reason: "artifact-unverified" }
+    : { ok: true, workspaceRoot, verifiedArtifact };
+}
+
+export function isSecureWorkspaceNativeRelativePath(value: string): boolean {
+  if (
+    Buffer.from(value, "utf8").toString("utf8") !== value ||
+    value.includes("\0") ||
+    value.startsWith("/") ||
+    Buffer.byteLength(value, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES
+  )
+    return false;
+  if (value === "") return true;
+  const parts = value.split("/");
+  return (
+    parts.length <= SECURE_WORKSPACE_NATIVE_MAX_PATH_COMPONENTS &&
+    parts.every((part) => part !== "" && part !== "." && part !== "..")
+  );
+}
+
+export function isSecureWorkspaceNativeRange(
+  range: SecureWorkspaceNativeBytesRequest["range"],
+): boolean {
+  return (
+    range === undefined ||
+    (Number.isSafeInteger(range.offset) &&
+      range.offset >= 0 &&
+      Number.isSafeInteger(range.length) &&
+      range.length >= 0 &&
+      range.length <= SECURE_WORKSPACE_NATIVE_MAX_BYTES &&
+      Number.isSafeInteger(range.offset + range.length))
+  );
+}
+
+function nativeResult(
+  decoded: SecureWorkspaceNativeResponse,
+  request: SecureWorkspaceNativeRequest,
+): SecureWorkspaceNativeBytesResult {
+  if (decoded.status === "wrong-kind") {
+    const invalid =
+      request.operation === "stat" ||
+      (request.operation === "read" && decoded.info.type === "file") ||
+      (request.operation === "list" && decoded.info.type === "directory");
+    return invalid
+      ? { ok: false, reason: "protocol-invalid" }
+      : { ok: false, reason: "wrong-kind", info: decoded.info };
+  }
+  if (decoded.status === "access-denied") return { ok: false, reason: "denied" };
+  if (decoded.status !== "ok") return { ok: false, reason: helperFailure(decoded.status) };
+  if (!validNativeContent(decoded, request)) return { ok: false, reason: "protocol-invalid" };
+  return { ok: true, bytes: Buffer.from(decoded.bytes), info: decoded.info };
+}
+
+function validNativeContent(
+  decoded: Extract<SecureWorkspaceNativeResponse, { readonly status: "ok" }>,
+  request: SecureWorkspaceNativeRequest,
+): boolean {
+  if (request.operation === "stat") return decoded.bytes.byteLength === 0;
+  if (request.operation === "list") return decoded.info.type === "directory";
+  if (decoded.info.type !== "file") return false;
+  const size =
+    request.range === undefined
+      ? decoded.info.size
+      : Math.min(request.range.length, Math.max(0, decoded.info.size - request.range.offset));
+  return decoded.bytes.byteLength === size;
+}
+
+function nativeListResult(
+  result: SecureWorkspaceNativeBytesResult,
+  relativePath: string,
+): SecureWorkspaceNativeListResult {
+  if (!result.ok) return result;
+  try {
+    const entries = decodeSecureWorkspaceNativeDirectory(result.bytes).filter(
+      (entry) => !isDenied(relativePath === "" ? entry.name : `${relativePath}/${entry.name}`),
+    );
+    return { ok: true, entries: Object.freeze(entries), info: result.info };
+  } catch {
+    return { ok: false, reason: "protocol-invalid" };
+  } finally {
+    result.bytes.fill(0);
+  }
+}
+
+function exactNativeFileIO(
+  io: SecureWorkspaceNativeFileIO,
+  current: () => boolean,
+  refusal: SecureWorkspaceTextReadFailure,
+): SecureWorkspaceNativeFileIO {
+  const read = io.readBytes.bind(io),
+    stat = io.stat.bind(io),
+    list = io.list.bind(io);
+  return Object.freeze({
+    readBytes: async (
+      request: SecureWorkspaceNativeBytesRequest,
+    ): Promise<SecureWorkspaceNativeBytesResult> => {
+      if (!current()) return { ok: false, reason: refusal };
+      const result = await read(captureNativeRequest(request, current));
+      if (current()) return result;
+      if (result.ok) result.bytes.fill(0);
+      return { ok: false, reason: refusal };
+    },
+    stat: async (
+      request: SecureWorkspaceNativeIORequest,
+    ): Promise<SecureWorkspaceNativeStatResult> => {
+      if (!current()) return { ok: false, reason: refusal };
+      const result = await stat(captureNativeRequest(request, current));
+      return current() ? result : { ok: false, reason: refusal };
+    },
+    list: async (
+      request: SecureWorkspaceNativeIORequest,
+    ): Promise<SecureWorkspaceNativeListResult> => {
+      if (!current()) return { ok: false, reason: refusal };
+      const result = await list(captureNativeRequest(request, current));
+      return current() ? result : { ok: false, reason: refusal };
+    },
+  });
+}
+
+function validNativeRequest(
+  request: SecureWorkspaceNativeBytesRequest,
+  operation: SecureWorkspaceNativeOperation,
+): boolean {
+  return (
+    isSecureWorkspaceNativeRelativePath(request.relativePath) &&
+    !isDenied(request.relativePath) &&
+    isSecureWorkspaceNativeRange(request.range) &&
+    (operation === "read" || request.range === undefined)
+  );
+}
+
+function decodeNativeHelperResponse(
+  response: Uint8Array,
+  request: SecureWorkspaceNativeRequest,
+):
+  | { readonly kind: "settled"; readonly result: SecureWorkspaceNativeBytesResult }
+  | { readonly kind: "access-denied" } {
+  try {
+    const decoded = decodeSecureWorkspaceNativeResponse(response);
+    return decoded.status === "access-denied"
+      ? { kind: "access-denied" }
+      : { kind: "settled", result: nativeResult(decoded, request) };
+  } catch {
+    return { kind: "settled", result: { ok: false, reason: "protocol-invalid" } };
+  }
+}
+
+function captureNativeRequest(
+  request: SecureWorkspaceNativeBytesRequest,
+  current?: () => boolean,
+): SecureWorkspaceNativeBytesRequest {
+  const relativePath = request.relativePath;
+  const signal = request.signal;
+  const range = request.range;
+  const guard = request.isCurrent;
+  return Object.freeze({
+    relativePath,
+    ...(signal === undefined ? {} : { signal }),
+    ...(range === undefined ? {} : { range: Object.freeze({ ...range }) }),
+    ...(current === undefined && guard === undefined
+      ? {}
+      : { isCurrent: (): boolean => current?.() !== false && guard?.() !== false }),
+  });
 }

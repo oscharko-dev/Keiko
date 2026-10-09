@@ -9,8 +9,10 @@ import {
   VERIFICATION_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
+import * as registrationOwners from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
+import { createCatalogProfileDeclaration } from "./profile.js";
 import { matchesCatalogSchema } from "./schema.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
@@ -134,6 +136,33 @@ describe("opencode registration set", () => {
     const aliases = projection.tools.map((tool) => tool.alias);
     for (const id of GIT_DELIVERY_CANONICAL_IDS) expect(canonicalIds).toContain(id);
     for (const alias of GIT_DELIVERY_ALIASES) expect(aliases).toContain(alias);
+  });
+
+  it("admits bounded scoped discovery in the canonical managed schema", () => {
+    const tool = compileToolProjection(
+      createKeikoToolCatalog([opencodeRegistrationSet()]),
+      OPENCODE_PROFILE,
+    ).tools.find((entry) => entry.alias === "keiko_workspace_discover");
+    if (tool === undefined) throw new Error("Missing discovery descriptor");
+    expect(
+      matchesCatalogSchema(tool.inputSchema, {
+        mode: "glob",
+        directory: "src",
+        query: "src/**/target.*",
+        maxResults: 10,
+      }),
+    ).toBe(true);
+    for (const invalid of [{ mode: "unknown" }, { directory: "../escape" }, { maxResults: 101 }]) {
+      expect(
+        matchesCatalogSchema(tool.inputSchema, {
+          mode: "directory",
+          directory: "src",
+          query: "*",
+          maxResults: 10,
+          ...invalid,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("requires the verification target sentinel on the managed provider wire", () => {
@@ -355,19 +384,193 @@ describe("OPENCODE_NATIVE_EXTENSION_DEFINITIONS", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     expect(projection.nativeExtensions).toEqual(
-      OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, contractVersion }) => ({
-        alias,
-        contractVersion,
-      })),
+      OPENCODE_NATIVE_EXTENSION_DEFINITIONS.filter((entry) => entry.alias === "question").map(
+        ({ alias, contractVersion }) => ({
+          alias,
+          contractVersion,
+        }),
+      ),
     );
   });
 
-  it("declares only question with a non-empty description and an object schema", () => {
-    expect(OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((entry) => entry.alias)).toEqual(["question"]);
+  it("keeps only question active by default and declares the inactive execute definition", () => {
+    expect(opencodeRegistrationSet().nativeExtensions).toEqual([
+      { alias: "question", contractVersion: 1 },
+    ]);
+    expect(OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((entry) => entry.alias)).toEqual([
+      "question",
+      "execute",
+    ]);
     for (const entry of OPENCODE_NATIVE_EXTENSION_DEFINITIONS) {
       expect(entry.contractVersion).toBe(1);
       expect(entry.description.length).toBeGreaterThan(0);
       expect(entry.inputSchema.type).toBe("object");
     }
   });
+});
+
+describe("inactive Code Mode catalog", () => {
+  it("keeps all governed descriptors in a separate explicit question/execute profile", () => {
+    const direct = opencodeRegistrationSet();
+    const grouped = opencodeRegistrationSet("code-mode");
+    expect(grouped.entries).toEqual(direct.entries);
+    expect(grouped.entries).toHaveLength(17);
+    expect(grouped.profile).toEqual({ id: "opencode-code-mode", version: 1 });
+    expect(grouped.nativeExtensions).toEqual([
+      { alias: "question", contractVersion: 1 },
+      { alias: "execute", contractVersion: 1 },
+    ]);
+  });
+});
+
+function codeModeProfileDeclaration(): Record<string, unknown> {
+  const set = opencodeRegistrationSet("code-mode");
+  const profile = createKeikoToolCatalog([set]).profiles[0];
+  if (profile === undefined) throw new TypeError("Missing producer profile");
+  return Object.fromEntries(Object.entries(profile).filter(([key]) => key !== "catalogRevision"));
+}
+
+describe("closed inactive native extension profile", () => {
+  it("compiles the exact governed descriptors and native extensions without granting effects", () => {
+    const set = opencodeRegistrationSet("code-mode");
+    const catalog = createKeikoToolCatalog([set]);
+    const projection = compileToolProjection(catalog, set.profile);
+    expect(projection.nativeExtensions).toEqual([
+      { alias: "execute", contractVersion: 1 },
+      { alias: "question", contractVersion: 1 },
+    ]);
+    expect(projection.tools.map((tool) => tool.descriptorDigest)).toEqual(
+      compileToolProjection(
+        createKeikoToolCatalog([opencodeRegistrationSet()]),
+        OPENCODE_PROFILE,
+      ).tools.map((tool) => tool.descriptorDigest),
+    );
+    expect(Object.isFrozen(projection.nativeExtensions)).toBe(true);
+  });
+  it.each([
+    { profile: { id: "opencode", version: 1 } },
+    { profile: { id: "opencode-code-mode", version: 2 } },
+    { adapterRuntime: { id: "opencode", version: "2.0.11" } },
+    { adapterRuntime: { id: "keiko", version: "1.1.1" } },
+    { nativeExtensions: [{ alias: "execute", contractVersion: 1 }] },
+    {
+      nativeExtensions: [
+        { alias: "question", contractVersion: 1 },
+        { alias: "execute", contractVersion: 2 },
+      ],
+    },
+    {
+      nativeExtensions: [
+        { alias: "question", contractVersion: 1 },
+        { alias: "shell", contractVersion: 1 },
+      ],
+    },
+    {
+      nativeExtensions: [
+        { alias: "question", contractVersion: 1 },
+        { alias: "execute", contractVersion: 1 },
+        { alias: "execute", contractVersion: 1 },
+      ],
+    },
+  ])("refuses an unqualified or ambiguous native declaration %j", (change) => {
+    expect(() =>
+      createCatalogProfileDeclaration({ ...codeModeProfileDeclaration(), ...change }),
+    ).toThrow();
+  });
+  it("refuses a caller-supplied unknown profile instead of selecting Code Mode", () => {
+    expect(() => {
+      Reflect.apply(opencodeRegistrationSet, undefined, ["unknown"]);
+    }).toThrow(TypeError);
+  });
+});
+
+describe("complete explicit Code Mode native declaration", () => {
+  it("refuses a qualified profile that lost execute", () => {
+    expect(() =>
+      createCatalogProfileDeclaration({
+        ...codeModeProfileDeclaration(),
+        nativeExtensions: [{ alias: "question", contractVersion: 1 }],
+      }),
+    ).toThrow("unrepresentable-projection");
+  });
+});
+
+describe("private native text snapshot registration", () => {
+  it("compiles one honest path-only private contract without changing model advertisements", () => {
+    expect(registrationOwners.nativeTextSnapshotRegistrationSet).toBeTypeOf("function");
+    const set = registrationOwners.nativeTextSnapshotRegistrationSet();
+    const catalog = createKeikoToolCatalog([set]);
+    const projection = compileToolProjection(catalog, set.profile);
+    expect(projection.tools).toHaveLength(1);
+    const tool = projection.tools[0];
+    if (tool === undefined) throw new TypeError("Expected private snapshot descriptor");
+    expect(tool.toolRef.canonicalId).toBe("keiko.native.workspace.text.snapshot");
+    expect(matchesCatalogSchema(tool.inputSchema, { relativePath: "src/deep/file.ts" })).toBe(true);
+    expect(
+      matchesCatalogSchema(tool.inputSchema, {
+        relativePath: "src/deep/file.ts",
+        startLine: 1,
+        maxLines: 1,
+      }),
+    ).toBe(false);
+    expect(matchesCatalogSchema(tool.inputSchema, { relativePath: "../secret.ts" })).toBe(false);
+    for (const profile of [undefined, "code-mode"] as const) {
+      const original = opencodeRegistrationSet(profile);
+      expect(
+        original.entries.some(
+          (entry) => entry.descriptor.toolRef.canonicalId === tool.toolRef.canonicalId,
+        ),
+      ).toBe(false);
+      expect(original.nativeExtensions).not.toContainEqual({
+        alias: tool.alias,
+        contractVersion: 1,
+      });
+    }
+  });
+});
+
+it("compiles an inactive original-read lifetime without advertising another model tool", () => {
+  const set = registrationOwners.nativeTextSnapshotRegistrationSet("invocation");
+  const projection = compileToolProjection(createKeikoToolCatalog([set]), set.profile);
+  const tool = projection.tools[0];
+  if (tool === undefined) throw new TypeError("Expected native invocation descriptor");
+  expect(tool.toolRef.canonicalId).toBe("keiko.native.workspace.read.invocation");
+  const input = {
+    relativePath: "src/file.ts",
+    context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+    offset: [],
+    limit: [],
+  };
+  expect(matchesCatalogSchema(tool.inputSchema, input)).toBe(true);
+  expect(matchesCatalogSchema(tool.inputSchema, { ...input, offset: [0], limit: [20] })).toBe(true);
+  for (const relativePath of ["", "long-segment/".repeat(50) + "é.ts", "colon:back\\slash\n.ts"])
+    expect(
+      matchesCatalogSchema(tool.inputSchema, { ...input, relativePath, offset: [0], limit: [0] }),
+    ).toBe(true);
+  for (const invalid of [
+    { ...input, context: { ...input.context, tool: "shell" } },
+    { ...input, limit: [-1] },
+    { ...input, limit: [2_001] },
+    { ...input, offset: [0, 1] },
+    { ...input, relativePath: "../escape" },
+    { ...input, capability: "forged" },
+  ])
+    expect(matchesCatalogSchema(tool.inputSchema, invalid)).toBe(false);
+  expect(
+    matchesCatalogSchema(tool.resultSchema, {
+      status: "completed",
+      evidence: [{ kind: "native-read-invocation", code: "completed" }],
+    }),
+  ).toBe(true);
+  expect(
+    matchesCatalogSchema(tool.resultSchema, {
+      status: "completed",
+      evidence: [{ kind: "native-read-invocation", code: "completed" }],
+      text: "PRIVATE_BYTES",
+    }),
+  ).toBe(false);
+  for (const profile of [undefined, "code-mode"] as const)
+    expect(
+      opencodeRegistrationSet(profile).entries.some((entry) => entry.alias === tool.alias),
+    ).toBe(false);
 });

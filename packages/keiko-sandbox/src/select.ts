@@ -11,6 +11,8 @@ function selectExecutionRootBackend(
   if (platform === "linux" && availability.bubblewrap) {
     return "bubblewrap";
   }
+  // Seatbelt cannot bind a detached descendant to the command lifetime. Assured macOS runs
+  // require the existing container PID namespace; network-only native routes remain separate.
   if (availability.docker) {
     return "container-docker";
   }

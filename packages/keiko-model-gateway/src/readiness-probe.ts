@@ -12,6 +12,7 @@ import {
 } from "./config.js";
 import { gatewayFetch, readJsonCapped } from "./http.js";
 import { reportedContextWindowTokens } from "./openai-adapter.js";
+export { readGatewayReadinessChatCompletionResponse } from "./openai-adapter.js";
 import {
   activityLogErrorKind,
   logEndpointHost,

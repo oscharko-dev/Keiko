@@ -8,6 +8,8 @@ import {
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
+  gatewayModelCatalogCorrelationId,
+  notifyGatewayModelCatalogUpdated,
   notifyGatewayConfigUpdated,
   notifyGatewayModelReadinessUpdated,
   requestGatewayModelCatalogRefresh,
@@ -87,4 +89,23 @@ describe("gatewaySetupBus", () => {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     }
   });
+});
+
+it("carries the actual catalog correlation and refuses malformed or accessor parents", () => {
+  const seen: (string | undefined)[] = [];
+  const observer = (event: Event): void => {
+    seen.push(gatewayModelCatalogCorrelationId(event));
+  };
+  window.addEventListener("keiko:gateway-model-catalog-updated", observer);
+  try {
+    notifyGatewayModelCatalogUpdated("actual-catalog-123");
+    notifyGatewayModelCatalogUpdated("PRIVATE UNSAFE PARENT");
+    const getter = vi.fn(() => "actual-catalog-123");
+    const detail = Object.defineProperty({}, "correlationId", { get: getter });
+    window.dispatchEvent(new CustomEvent("keiko:gateway-model-catalog-updated", { detail }));
+    expect(seen).toEqual(["actual-catalog-123", undefined, undefined]);
+    expect(getter).not.toHaveBeenCalled();
+  } finally {
+    window.removeEventListener("keiko:gateway-model-catalog-updated", observer);
+  }
 });

@@ -5,10 +5,38 @@ import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/kei
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import { createOpenCodeReconciler } from "./opencodeReconciler.js";
+import { recordCompactionActivity } from "./opencodeRuntimeAdapter.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+
+function historyMapCopies(): {
+  readonly read: () => { readonly count: number; readonly entries: number };
+  readonly restore: () => void;
+} {
+  const NativeMap = Map;
+  let count = 0;
+  let entries = 0;
+  class CountedMap<Key, Value> extends NativeMap<Key, Value> {
+    constructor(values?: Iterable<readonly [Key, Value]> | null) {
+      super(values);
+      if (!(values instanceof NativeMap)) return;
+      const first: unknown = values.values().next().value;
+      if (typeof first !== "object" || first === null || !("digest" in first)) return;
+      count += 1;
+      entries += values.size;
+    }
+  }
+  vi.stubGlobal("Map", CountedMap);
+  return {
+    read: (): { readonly count: number; readonly entries: number } => ({ count, entries }),
+    restore: (): void => {
+      vi.stubGlobal("Map", NativeMap);
+    },
+  };
+}
 
 function toolHistory(name: string, status = "completed"): readonly Record<string, unknown>[] {
   return [
@@ -475,6 +503,82 @@ describe("OpenCode V2 live streamed text", () => {
       );
   }
 
+  it("copies known history once per acknowledged live delta instead of copying the owned snapshot", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const completed = Array.from({ length: 24 }, (_, index) => [
+      { id: `msg_user_${String(index)}`, type: "user", time: { created: 1 }, text: "Task" },
+      {
+        id: `msg_done_${String(index)}`,
+        type: "assistant",
+        time: { created: 2 },
+        content: [part("text", "Completed answer.")],
+      },
+    ]).flat();
+    const messages = [...completed, ...liveHistory([empty("text")])];
+    const reconciler = createOpenCodeReconciler();
+    const first = projection.project(SESSION, messages, undefined);
+    expect(reconciler.ingest(first).ok).toBe(true);
+    const data = { sessionID: SESSION, assistantMessageID: ASSISTANT, ordinal: 0 };
+    projection.observeLiveEvent(SESSION, { id: "evt_start", type: "session.text.started", data });
+    const copies = historyMapCopies();
+    try {
+      for (let index = 0; index < 12; index += 1) {
+        projection.observeLiveEvent(SESSION, {
+          id: `evt_delta_${String(index)}`,
+          type: "session.text.delta",
+          data: { ...data, delta: "word " },
+        });
+        const events = projection.project(SESSION, messages, reconciler.checkpoints()[SESSION]);
+        expect(events).toHaveLength(1);
+        expect(reconciler.ingest(events)).toMatchObject({ ok: true, applied: 1 });
+        expect(
+          growth(
+            events.flatMap((event) => projection.takeSignal(event) ?? []),
+            "text",
+          ),
+        ).toEqual(["word "]);
+      }
+      expect(copies.read()).toEqual({ count: 12, entries: first.length * 12 });
+    } finally {
+      copies.restore();
+    }
+  });
+
+  it("keeps acknowledged state private while old pages are held and preserves replay after clearing signals", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    const initialHistory = liveHistory([part("text", "Initial answer")]);
+    const first = projection.project(SESSION, initialHistory, undefined);
+    const firstSignals = first.flatMap((event) => projection.takeSignal(event) ?? []);
+    expect(reconciler.ingest(first).ok).toBe(true);
+    const before = reconciler.checkpoints()[SESSION];
+    expect(projection.project(SESSION, initialHistory, before)).toEqual([]);
+
+    // A held public page and its consumed signal cannot mutate the adopted private known-state map.
+    Object.assign(first.at(-1) ?? {}, { digest: "e".repeat(64), sequence: 9_999 });
+    Object.assign(first, { length: 0 });
+    Object.assign(firstSignals.at(-1) ?? {}, { text: "Changed held signal" });
+    const nextHistory = liveHistory([part("text", "Initial answer continued")]);
+    const next = projection.project(SESSION, nextHistory, before);
+    expect(next).toHaveLength(1);
+    expect(projection.project(SESSION, nextHistory, before)).toBe(next);
+    expect(() => projection.project(SESSION, nextHistory, 9_999)).toThrow(
+      "opencode-v2-checkpoint-invalid",
+    );
+    const event = next[0];
+    if (event === undefined) throw new Error("Expected a continued answer event");
+    projection.clearSignals();
+    expect(projection.takeSignal(event)).toBeUndefined();
+    expect(projection.project(SESSION, nextHistory, before)).toBe(next);
+    expect(projection.takeSignal(event)).toMatchObject({ kind: "text", text: " continued" });
+    expect(projection.takeSignal(event)).toBeUndefined();
+    expect(reconciler.ingest(next)).toMatchObject({ ok: true, applied: 1 });
+    const after = reconciler.checkpoints()[SESSION];
+    expect(projection.project(SESSION, nextHistory, after)).toEqual([]);
+    Object.assign(next, { length: 0 });
+    expect(projection.project(SESSION, nextHistory, after)).toEqual([]);
+  });
+
   it("shows an answer as it streams while the history holds the part empty", () => {
     const live = streaming();
     expect(growth(live.pull([empty("text")]), "text")).toEqual([]);
@@ -841,4 +945,303 @@ describe("OpenCode V2 live streamed text", () => {
       expect(projectionLines(activityLog)[0]).not.toHaveProperty("mergedEventCount");
     });
   });
+});
+
+// OpenCode 2.0.10 session-message.ts CompactionRunning/Completed/Failed; no V1 overflow field.
+function nativeCompaction(status: string, recent = "", reason = "auto"): Record<string, unknown> {
+  const base = {
+    id: "msg_PRIVATE_COMPACTION_ID",
+    type: "compaction",
+    time: { created: 2 },
+    status,
+    reason,
+  };
+  return status === "failed"
+    ? { ...base, error: { type: "PRIVATE_ERROR_TYPE", message: "PRIVATE_ERROR_BODY", status: 503 } }
+    : { ...base, summary: "PRIVATE_COMPACTION_SUMMARY", recent };
+}
+
+describe("OpenCode V2 actual compaction history", () => {
+  it("records admitted native lifecycle metadata once without inventing overflow or exposing content", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    let checkpoint: number | undefined;
+    for (const message of [
+      nativeCompaction("running"),
+      nativeCompaction("running", "[User]: PRIVATE_RECENT_BODY /private/raw-path"),
+      nativeCompaction("completed", "[User]: PRIVATE_RECENT_BODY /private/raw-path"),
+    ]) {
+      const events = projection.project("ses_compaction", [message], checkpoint);
+      for (let replay = 0; replay < 2; replay += 1) {
+        const applied = reconciler.ingest(events);
+        if (!applied.ok) throw new Error("expected admitted compaction observations");
+        recordCompactionActivity(
+          { activityLog: sink, correlationId: "run-v2-compaction" },
+          applied.projections,
+        );
+      }
+      checkpoint = reconciler.checkpoints().ses_compaction;
+      expect(
+        projection.project(
+          "ses_compaction",
+          [{ ...message, summary: "PRIVATE_UPDATED_SUMMARY" }],
+          checkpoint,
+        ),
+      ).toEqual([]);
+    }
+    const lines = sink.events.filter((line) => line.op === "coding-runtime.compaction");
+    expect(lines.map((line) => line.extra?.event)).toEqual([
+      "started",
+      "tail-retained",
+      "completed",
+    ]);
+    expect(new Set(lines.map((line) => line.extra?.compactionIdSha256)).size).toBe(1);
+    for (const line of lines) {
+      expectActivityLogProof(
+        "coding-runtime.compaction.emitted-line",
+        formatActivityLogProofLine(line),
+      );
+      expect(line.extra).not.toHaveProperty("overflow");
+      expect(line.extra).not.toHaveProperty("tailStartIdSha256");
+    }
+    expect(JSON.stringify(lines)).not.toMatch(/PRIVATE_|summary|recentID/);
+  });
+
+  it("records failed compaction without exposing error text or turning it into task settlement", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection();
+    const events = projection.project("ses_compaction", [nativeCompaction("failed")], undefined);
+    const compaction = events.find((event) => event.compaction !== undefined);
+    expect(compaction).toMatchObject({
+      kind: "observation",
+      compaction: { event: "failed", finishReason: "error" },
+    });
+    const reconciler = createOpenCodeReconciler();
+    const applied = reconciler.ingest(events);
+    if (!applied.ok) throw new Error("expected admitted compaction failure observation");
+    recordCompactionActivity(
+      { activityLog: sink, correlationId: "run-v2-compaction" },
+      applied.projections,
+    );
+    const failure = sink.events.find((line) => line.op === "coding-runtime.compaction");
+    expect(failure).toMatchObject({
+      errorKind: "internal",
+      extra: {
+        event: "failed",
+        compactionErrorKind: "OpenCodeCompactionFailure",
+        finishReason: "error",
+      },
+    });
+    expect(JSON.stringify(sink.events)).not.toMatch(/PRIVATE_/);
+    expect(
+      events.some((event) => event.kind === "terminal" || event.kind === "terminal-failure"),
+    ).toBe(false);
+  });
+
+  it.each([
+    { status: "unknown" },
+    { reason: "unknown" },
+    { summary: undefined },
+    { recent: undefined },
+    { recent: 42 },
+    { status: "failed", error: undefined },
+    { status: "failed", error: { type: "failure" } },
+    {
+      status: "failed",
+      error: { type: "failure", message: "PRIVATE_ERROR", stdout: "PRIVATE_BODY" },
+    },
+  ])("rejects unknown or partial native compaction shapes %j", (invalid) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    expect(() =>
+      projection.project(
+        "ses_compaction",
+        [{ ...nativeCompaction(invalid.status === "failed" ? "failed" : "running"), ...invalid }],
+        undefined,
+      ),
+    ).toThrow("opencode-v2-history-invalid");
+  });
+});
+
+// OpenCode 2.0.10, b8cedc1a7a5e2916bbb65dc1d4b620729c261638:
+// core/test/session-projector.test.ts "projects retry state and clears it at the next step or
+// execution terminal" produces attempt=2, at=2000. message-updater.ts persists those facts;
+// schema/session-message.ts encodes DateTimeUtcFromMillis as milliseconds. No backoff is inferred.
+function nativeRetryHistory(retry: unknown): readonly Record<string, unknown>[] {
+  return [
+    { id: "msg_retry_user", type: "user", time: { created: 0 }, text: "Task" },
+    {
+      id: "msg_retry_first",
+      type: "assistant",
+      time: { created: 0 },
+      content: [],
+      ...(retry === undefined ? {} : { retry }),
+    },
+  ];
+}
+
+const NATIVE_RETRY = {
+  attempt: 2,
+  at: 2000,
+  error: { type: "provider.transport", message: "PRIVATE_PROVIDER_FAILURE" },
+};
+
+describe("OpenCode V2 native retry history", () => {
+  it("logs native schedule and clear counts once per committed page without provider bodies", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-native-retry",
+      activityLog: sink,
+    });
+    let checkpoint: number | undefined;
+    for (const retry of [NATIVE_RETRY, undefined]) {
+      const history = nativeRetryHistory(retry);
+      const events = projection.project("ses_retry", history, checkpoint);
+      projection.project("ses_retry", history, checkpoint);
+      checkpoint = events.at(-1)?.sequence;
+    }
+    const records = sink.events.map((event) =>
+      expectActivityLogProof(
+        "coding-runtime.history-projection.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    );
+    expect(records.map((event) => event.nativeRetrySignalCount)).toEqual([1, 1]);
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_PROVIDER_FAILURE");
+    expect(JSON.stringify(records)).not.toContain("provider.transport");
+  });
+
+  it("keeps durable assistant text when native retry metadata is projected separately", () => {
+    const captureMessages = vi.fn().mockReturnValue(true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-retry-capture",
+      activityLog: undefined,
+      captureMessages,
+    });
+    const history = nativeRetryHistory(NATIVE_RETRY).map((message) =>
+      message.type === "assistant"
+        ? { ...message, content: [{ type: "text", text: "Persisted answer before retry" }] }
+        : message,
+    );
+    projection.project("ses_retry", history, undefined);
+    expect(captureMessages).toHaveBeenCalledWith([
+      { messageId: "msg_retry_user", role: "user", content: "Task" },
+      { messageId: "msg_retry_first", role: "assistant", content: "Persisted answer before retry" },
+    ]);
+  });
+
+  it("commits repeated native schedule/clear episodes through the real reconciler", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    let checkpoint: number | undefined;
+    const identities = new Set<string>();
+    for (const retry of [
+      undefined,
+      NATIVE_RETRY,
+      undefined,
+      { ...NATIVE_RETRY, attempt: 3 },
+      undefined,
+    ]) {
+      const events = projection.project("ses_retry", nativeRetryHistory(retry), checkpoint);
+      const result = reconciler.ingest(events);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("Native retry reconciliation failed");
+      expect(result.applied).toBe(events.length);
+      for (const event of events) {
+        expect(identities.has(event.id)).toBe(false);
+        identities.add(event.id);
+      }
+      checkpoint = reconciler.checkpoints().ses_retry;
+    }
+  });
+
+  it("projects the producer's physical attempt and schedule, then its authoritative clear", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const first = projection.project("ses_retry", nativeRetryHistory(NATIVE_RETRY), undefined);
+    const signals = first.map((event) => projection.takeSignal(event)).filter(Boolean);
+    expect(signals).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        messageId: "msg_retry_first",
+        nativeRetry: { attempt: 2, scheduledAt: "1970-01-01T00:00:02.000Z" },
+      }),
+    );
+    const checkpoint = first.at(-1)?.sequence;
+    expect(
+      projection.project(
+        "ses_retry",
+        nativeRetryHistory({
+          ...NATIVE_RETRY,
+          error: { type: "provider.transport", message: "DIFFERENT_PRIVATE_ERROR" },
+        }),
+        checkpoint,
+      ),
+    ).toEqual([]);
+    const cleared = projection.project("ses_retry", nativeRetryHistory(undefined), checkpoint);
+    expect(cleared).toHaveLength(1);
+    const clear = cleared[0];
+    if (clear === undefined) throw new Error("Expected native retry clear");
+    expect(projection.takeSignal(clear)).toEqual({
+      kind: "message",
+      role: "assistant",
+      messageId: "msg_retry_first",
+      parentMessageId: "msg_retry_user",
+      occurredAt: "1970-01-01T00:00:00.000Z",
+    });
+    expect(JSON.stringify([first, signals, cleared])).not.toContain("PRIVATE");
+  });
+
+  it.each([
+    { ...NATIVE_RETRY, attempt: 0 },
+    { ...NATIVE_RETRY, attempt: 1.5 },
+    { ...NATIVE_RETRY, at: -1 },
+    { ...NATIVE_RETRY, at: Number.MAX_SAFE_INTEGER },
+    { ...NATIVE_RETRY, at: "2000" },
+    { ...NATIVE_RETRY, injected: "PRIVATE" },
+    { ...NATIVE_RETRY, error: "PRIVATE" },
+    null,
+  ])("refuses malformed native retry without publishing partial history: %j", (retry) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    expect(() => projection.project("ses_retry", nativeRetryHistory(retry), undefined)).toThrow(
+      "opencode-v2-history-invalid",
+    );
+    expect(projection.project("ses_retry", nativeRetryHistory(undefined), undefined)).not.toEqual(
+      [],
+    );
+  });
+});
+
+it("preserves only the original native execute parent in the captured inactive profile", () => {
+  const activity = {
+    runId: "code-mode-observer",
+    activityLog: undefined,
+    toolProfile: "code-mode" as "direct" | "code-mode",
+  };
+  const projection = createOpenCodeV2HistoryProjection(activity);
+  activity.toolProfile = "direct";
+  const events = projection.project(
+    "ses_native_parent",
+    toolHistory("execute", "running"),
+    undefined,
+  );
+  const tools = events
+    .map((event) => projection.takeSignal(event))
+    .filter((signal) => signal?.kind === "tool");
+  expect(tools).toEqual([
+    {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_question",
+      tool: "execute",
+      state: "running",
+      occurredAt: "1970-01-01T00:00:00.002Z",
+    },
+  ]);
+  expect(() =>
+    createOpenCodeV2HistoryProjection().project(
+      "ses_native_parent",
+      toolHistory("execute", "running"),
+      undefined,
+    ),
+  ).toThrow("opencode-v2-tool-invalid");
 });

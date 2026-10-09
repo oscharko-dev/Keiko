@@ -228,4 +228,48 @@ describe("secure workspace read compiler environment", () => {
       stdio: "inherit",
     });
   });
+
+  it.each([
+    { target: "macos-arm64", architecture: "arm64" },
+    { target: "macos-x64", architecture: "x86_64" },
+  ])("builds $target for the approved engine's macOS minimum", async ({ target, architecture }) => {
+    const root = await mkdtemp(join(tmpdir(), "keiko-secure-read-build-"));
+    temporaryDirectories.push(root);
+    const destination = join(root, "native", "keiko-secure-workspace-read");
+    let invocation;
+
+    const status = await runSecureWorkspaceReadBuild({
+      argv: ["node", "build-secure-workspace-read.mjs", target, destination],
+      environment: {
+        PATH: "/trusted/bin",
+        MACOSX_DEPLOYMENT_TARGET: "27.0",
+        SDKROOT: "/untrusted/sdk",
+        CFLAGS: "-mmacosx-version-min=27.0",
+        SECRET: "not-for-the-compiler",
+      },
+      spawnSyncImpl: (command, args, options) => {
+        invocation = { args, command, options };
+        return { status: 0 };
+      },
+    });
+
+    expect(status).toBe(0);
+    expect(invocation.command).toBe("xcrun");
+    expect(invocation.args).toEqual(
+      expect.arrayContaining([
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-D_DARWIN_C_SOURCE",
+        "-mmacosx-version-min=13.0",
+        "-arch",
+        architecture,
+        "-o",
+        destination,
+      ]),
+    );
+    expect(invocation.options).toEqual({ env: { PATH: "/trusted/bin" }, stdio: "inherit" });
+  });
 });

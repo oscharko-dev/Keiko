@@ -16,7 +16,7 @@ import {
   readBytes,
   response,
   streamReader,
-  waitGone,
+  waitForExit,
 } from "../protocol-harness.mjs";
 // Coderabbit 3793145636 on #3202: the C source scanner (line splicing, comment/literal
 // handling, disabled-preprocessor-branch state machine) used to be duplicated in this file
@@ -92,7 +92,7 @@ async function qualify(helper, fixture, root) {
     const proof = await response(responses);
     assert.equal(proof.kind, 2);
     assert.equal(proof.payload.readUInt32LE(4), 0);
-    await Promise.all(pids.map(waitGone));
+    await Promise.all(pids.map(waitForExit));
     assert.equal(await exited, 0);
     assert.equal(Buffer.concat(errors).length, 0);
     completed = true;
@@ -149,7 +149,7 @@ async function assertControlEofFailsClosed(helper, fixture, root) {
     child.stdio[3].end();
     const closure = await response(responses);
     assert.equal(closure.kind, 3);
-    await Promise.all(pids.map(waitGone));
+    await Promise.all(pids.map(waitForExit));
     await assertMacControlEofFinalization(exited, errors);
     completed = true;
   } finally {

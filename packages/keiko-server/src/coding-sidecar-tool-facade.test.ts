@@ -10,8 +10,10 @@ import {
 // request to the active run's tool bridge (`OpenCodeRuntimeComposition.toolBridge.handle`, exposed
 // here as `deps.toolFacadeBridge`), which already authenticates the bearer capability
 // (`preflightToolRequest` in opencodeRuntimeComposition.ts) and enforces its own admission gate.
-import { Readable } from "node:stream";
-import type { IncomingMessage } from "node:http";
+import { Readable, PassThrough } from "node:stream";
+import { createServer, request, type IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
+import { STREAMING } from "./route-outcome.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -19,7 +21,7 @@ import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runt
 import type { UiHandlerDeps } from "./deps.js";
 import type { CodingRuntimeToolFacadeBridge } from "./coding-runtime/codingRuntimeControlPlane.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import { API_ROUTES, matchRoute, type RouteContext } from "./routes.js";
+import { API_ROUTES, matchRoute, type RouteContext, type HandlerOutcome } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
@@ -449,4 +451,411 @@ describe("coding-sidecar tool facade route", () => {
       }),
     ]);
   });
+});
+
+it("delivers native binary responses without passing them through public JSON rendering", async () => {
+  const bytes = Buffer.from([0, 255, 137, 80, 78, 71]);
+  const expected = Buffer.from(bytes);
+  const handle = vi.fn(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }));
+  const response = mockResponse();
+  const ctx: RouteContext = {
+    ...toolFacadeContext({ bearer: "tool-capability-material" }),
+    res: response.res,
+  };
+  const chunks: Buffer[] = [];
+  ctx.res.on("data", (chunk: Buffer) => {
+    chunks.push(Buffer.from(chunk));
+  });
+  const result = await handleCodingSidecarToolFacade(ctx, depsWith(bridge(handle)));
+  expect(result).toBe(STREAMING);
+  expect(Buffer.concat(chunks)).toEqual(expected);
+  expect(response.headers.get("content-type")).toBe("application/octet-stream");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("content-length")).toBe(String(expected.length));
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
+});
+
+it("waits for actual backpressure drainage before wiping native bytes", async () => {
+  const bytes = Buffer.alloc(262144, 255);
+  const response = mockResponse({ captureBody: true });
+  nativeResponseStream(response).pause();
+  const ctx: RouteContext = { ...toolFacadeContext(), res: response.res };
+  const handle = vi.fn(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }));
+  let settled = false;
+  const pending = handleCodingSidecarToolFacade(ctx, depsWith(bridge(handle))).then((result) => {
+    settled = true;
+    return result;
+  });
+  await vi.waitFor(() => {
+    expect(response.statusCode()).toBe(200);
+  });
+  expect(settled).toBe(false);
+  expect(bytes[0]).toBe(255);
+  nativeResponseStream(response).resume();
+  expect(await pending).toBe(STREAMING);
+  expect(response.body()).toHaveLength(bytes.length);
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
+});
+
+it("wipes native payload and logs only the closed failure on a disconnected response", async () => {
+  const bytes = Buffer.alloc(262144, 65);
+  const response = mockResponse({ captureBody: true });
+  nativeResponseStream(response).pause();
+  const ctx: RouteContext = { ...toolFacadeContext(), res: response.res };
+  const log = captureServerLog();
+  const pending = handleCodingSidecarToolFacade(
+    ctx,
+    depsWith(bridge(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }))),
+  );
+  await vi.waitFor(() => {
+    expect(response.statusCode()).toBe(200);
+  });
+  ctx.res.destroy();
+  expect(await pending).toBe(STREAMING);
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-response-failed" });
+  expect(log.lines().join("\n")).not.toContain("AAAA");
+});
+
+it("preserves closed native refusal JSON instead of calling it a public model result", async () => {
+  const log = captureServerLog();
+  const result = await handleCodingSidecarToolFacade(
+    toolFacadeContext(),
+    depsWith(
+      bridge(() =>
+        Promise.resolve({
+          status: 409,
+          body: '{"ok":false,"reason":"initialization-closed"}',
+          nativeResult: true,
+        }),
+      ),
+    ),
+  );
+  expect(result).toEqual({ status: 409, body: { ok: false, reason: "initialization-closed" } });
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-initialization-refused" });
+});
+
+function nativeResponseStream(response: ReturnType<typeof mockResponse>): PassThrough {
+  if (!(response.res instanceof PassThrough)) throw new TypeError("Expected actual stream fixture");
+  return response.res;
+}
+
+it("forwards actual native write errors to exactly one owning closed failure log", async () => {
+  const bytes = Buffer.from([0, 128, 255]);
+  const response = mockResponse();
+  response.res.write = (): never => {
+    throw new Error("PRIVATE_NATIVE_WRITE_FAILURE");
+  };
+  const ctx: RouteContext = { ...toolFacadeContext(), res: response.res };
+  const log = captureServerLog();
+  expect(
+    await handleCodingSidecarToolFacade(
+      ctx,
+      depsWith(bridge(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }))),
+    ),
+  ).toBe(STREAMING);
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-response-failed" });
+  expect(log.lines().join("\n")).not.toContain("PRIVATE_NATIVE_WRITE_FAILURE");
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
+});
+
+it("logs a refused native Read transport using the closed owning rejection without payload", async () => {
+  const log = captureServerLog();
+  const result = await handleCodingSidecarToolFacade(
+    toolFacadeContext({
+      body: JSON.stringify({
+        action: "native-read-invocation",
+        phase: "stat",
+        runId: "run-private",
+        identity: "PRIVATE_NOT_AUTHORITY",
+      }),
+    }),
+    depsWith(
+      bridge(() =>
+        Promise.resolve({
+          status: 409,
+          body: '{"ok":false,"reason":"dispatch-refused"}',
+          nativeResult: true,
+        }),
+      ),
+    ),
+  );
+  expect(result).toEqual({ status: 409, body: { ok: false, reason: "dispatch-refused" } });
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-read-refused" });
+  expect(log.lines().join("\n")).not.toContain("PRIVATE_NOT_AUTHORITY");
+});
+
+interface OwnedNativeHttpDelivery {
+  readonly ctx: RouteContext;
+  readonly response: IncomingMessage;
+  readonly complete: Promise<HandlerOutcome>;
+  readonly settled: () => boolean;
+  readonly retainedFinishListeners: () => number;
+  readonly close: () => Promise<void>;
+}
+
+async function ownedNativeHttpDelivery(
+  bytes: Uint8Array,
+  deadlineMs: number,
+): Promise<OwnedNativeHttpDelivery> {
+  let ctx: RouteContext | undefined;
+  let settled = false;
+  let retainedFinishListeners = 0;
+  let completeDelivery: (result: HandlerOutcome) => void = (): void => undefined;
+  let rejectDelivery: (error: unknown) => void = (): void => undefined;
+  const complete = new Promise<HandlerOutcome>((resolve, reject) => {
+    completeDelivery = resolve;
+    rejectDelivery = reject;
+  });
+  const server = createServer((req, res) => {
+    ctx = {
+      req,
+      res,
+      params: {},
+      correlationId: "owned-native-http",
+      url: new URL("http://127.0.0.1/api/coding-sidecar/tool"),
+    };
+    retainedFinishListeners = res.listenerCount("finish");
+    void handleCodingSidecarToolFacade(
+      ctx,
+      depsWith(
+        bridge(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }), deadlineMs),
+      ),
+    ).then((result) => {
+      settled = true;
+      completeDelivery(result);
+    }, rejectDelivery);
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new TypeError("owned-listener-address");
+  const client = request({
+    host: "127.0.0.1",
+    port: address.port,
+    method: "POST",
+    path: "/api/coding-sidecar/tool",
+  });
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    client.once("error", reject);
+    client.once("response", (incoming) => {
+      incoming.pause();
+      resolve(incoming);
+    });
+    client.end('{"action":"native-initialization","phase":"stat"}');
+  });
+  if (ctx === undefined) throw new TypeError("owned-route-context");
+  return {
+    ctx,
+    response,
+    complete,
+    settled: (): boolean => settled,
+    retainedFinishListeners: (): number => retainedFinishListeners,
+    close: async (): Promise<void> => {
+      response.destroy();
+      client.destroy();
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error === undefined) resolve();
+          else reject(error);
+        });
+      });
+      await complete;
+    },
+  };
+}
+
+it("bounds an actually connected non-reading native HTTP client by the existing request deadline", async () => {
+  const log = captureServerLog();
+  const bytes = Buffer.alloc(8 * 1024 * 1024, 65);
+  const fixture = await ownedNativeHttpDelivery(bytes, 300);
+  try {
+    await vi.waitFor(() => {
+      expect(fixture.ctx.res.writableNeedDrain).toBe(true);
+    });
+    expect(fixture.settled()).toBe(false);
+    expect(bytes[0]).toBe(65);
+    await vi.waitFor(
+      () => {
+        expect(fixture.settled()).toBe(true);
+      },
+      { timeout: 1500 },
+    );
+    expect(await fixture.complete).toBe(STREAMING);
+    expect(fixture.ctx.res.destroyed).toBe(true);
+    expect(bytes.every((byte) => byte === 0)).toBe(true);
+    expect(fixture.ctx.res.listenerCount("drain")).toBe(0);
+    const failures = log.events.filter(
+      (event) => event.op === "coding-sidecar.tool-facade.rejected",
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      correlationId: "owned-native-http",
+      status: 408,
+      errorKind: "timeout",
+      extra: { reason: "deadline" },
+    });
+    expect(
+      activityLogEventRegistration(
+        failures[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
+    expect(log.lines().join("\n")).not.toContain("AAAA");
+  } finally {
+    await fixture.close();
+  }
+});
+
+function drainNativeHttpResponse(
+  response: IncomingMessage,
+): Promise<{ readonly bytes: number; readonly digest: string }> {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  return new Promise((resolve, reject) => {
+    response.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+      hash.update(chunk);
+    });
+    response.once("error", reject);
+    response.once("end", () => {
+      resolve({ bytes, digest: hash.digest("hex") });
+    });
+    response.resume();
+  });
+}
+
+it("preserves full actual HTTP bytes and wipe on timely native response consumption", async () => {
+  const log = captureServerLog();
+  const bytes = Buffer.alloc(8 * 1024 * 1024, 65);
+  const expected = {
+    bytes: bytes.length,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+  const fixture = await ownedNativeHttpDelivery(bytes, 2000);
+  try {
+    expect(await drainNativeHttpResponse(fixture.response)).toEqual(expected);
+    expect(await fixture.complete).toBe(STREAMING);
+    expect(bytes.every((byte) => byte === 0)).toBe(true);
+    expect(
+      log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected"),
+    ).toHaveLength(0);
+    expect(fixture.ctx.res.listenerCount("drain")).toBe(0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it("cancels actual blocked native HTTP delivery and removes its retained write listeners", async () => {
+  const log = captureServerLog();
+  const bytes = Buffer.alloc(8 * 1024 * 1024, 65);
+  const fixture = await ownedNativeHttpDelivery(bytes, 2000);
+  try {
+    await vi.waitFor(() => {
+      expect(fixture.ctx.res.writableNeedDrain).toBe(true);
+    });
+    fixture.response.destroy();
+    expect(await fixture.complete).toBe(STREAMING);
+    expect(bytes.every((byte) => byte === 0)).toBe(true);
+    expect(fixture.ctx.res.listenerCount("drain")).toBe(0);
+    expect(fixture.ctx.res.listenerCount("finish")).toBe(fixture.retainedFinishListeners());
+    expect(
+      log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected"),
+    ).toHaveLength(1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it("does not renew the existing execution deadline when native bridge work already consumed it", async () => {
+  const bytes = Buffer.alloc(262144, 65);
+  const response = mockResponse({ captureBody: true });
+  nativeResponseStream(response).pause();
+  const write = vi.spyOn(response.res, "write");
+  const log = captureServerLog();
+  let settled = false;
+  const pending = handleCodingSidecarToolFacade(
+    { ...toolFacadeContext(), res: response.res },
+    depsWith(
+      bridge(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 70);
+        });
+        return { status: 200, body: "", nativeBytes: bytes };
+      }, 30),
+    ),
+  ).then((result) => {
+    settled = true;
+    return result;
+  });
+  try {
+    await vi.waitFor(
+      () => {
+        expect(settled).toBe(true);
+      },
+      { timeout: 500 },
+    );
+    expect(await pending).toBe(STREAMING);
+    expect(write).not.toHaveBeenCalled();
+    expect(bytes.every((byte) => byte === 0)).toBe(true);
+    expect(
+      log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected"),
+    ).toEqual([
+      expect.objectContaining({
+        status: 408,
+        errorKind: "timeout",
+        extra: { reason: "deadline", completeness: "complete", loss: "none" },
+      }),
+    ]);
+  } finally {
+    response.res.destroy();
+    await pending;
+    write.mockRestore();
+  }
+});
+
+it("withholds late bridge bytes after the route has already disconnected", async () => {
+  const bytes = Buffer.alloc(262144, 65);
+  const response = mockResponse({ captureBody: true });
+  const write = vi.spyOn(response.res, "write");
+  let deliver: () => void = (): void => undefined;
+  const held = new Promise<void>((resolve) => {
+    deliver = resolve;
+  });
+  const handle = vi.fn(async (_request: Parameters<CodingRuntimeToolFacadeBridge["handle"]>[0]) => {
+    await held;
+    return { status: 200, body: "", nativeBytes: bytes };
+  });
+  const pending = handleCodingSidecarToolFacade(
+    { ...toolFacadeContext(), res: response.res },
+    depsWith(bridge(handle)),
+  );
+  try {
+    await vi.waitFor(() => {
+      expect(handle).toHaveBeenCalledOnce();
+    });
+    response.res.destroy();
+    await vi.waitFor(() => {
+      expect(handle.mock.calls[0]?.[0]?.signal?.aborted).toBe(true);
+    });
+    deliver();
+    expect(await pending).toBe(STREAMING);
+    expect(write).not.toHaveBeenCalled();
+    expect(bytes.every((byte) => byte === 0)).toBe(true);
+  } finally {
+    deliver();
+    response.res.destroy();
+    await pending;
+    write.mockRestore();
+  }
 });

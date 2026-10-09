@@ -1,5 +1,10 @@
-import type { Route } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import { describe, expect, it } from "vitest";
+import {
+  isCodingWorkbenchModel,
+  isToolCallingVerificationFresh,
+  type ModelCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
   parseEditorAgentSnapshotRequest,
@@ -9,6 +14,7 @@ import {
 import { createRuntimeFixture } from "./coding-workbench-live-runtime-fixtures.js";
 import {
   handleEditorSnapshotRoute,
+  installRuntimeRoutes,
   parseFixtureEditorSnapshotRequest,
 } from "./coding-workbench-live-runtime-routes.js";
 
@@ -136,5 +142,75 @@ describe("parseFixtureEditorSnapshotRequest", (): void => {
     });
     expect(fixture.validationErrors).toEqual(["request body must contain valid JSON"]);
     expect(fixture.editorSnapshotRegistrations).toBe(0);
+  });
+});
+
+type FixtureRouteHandler = (route: Route) => Promise<void>;
+
+async function installedRuntimeHandler(): Promise<FixtureRouteHandler> {
+  let handler: FixtureRouteHandler | undefined;
+  const page = {
+    route: (_pattern: string, installed: FixtureRouteHandler): Promise<void> => {
+      handler = installed;
+      return Promise.resolve();
+    },
+  } as unknown as Page;
+  await installRuntimeRoutes(page, {}, createRuntimeFixture({}));
+  if (handler === undefined) throw new Error("Runtime fixture did not install its API handler");
+  return handler;
+}
+
+function capturedCatalogRoute(
+  suffix: string,
+  method = "GET",
+): CapturedRoute & {
+  readonly continued: () => boolean;
+} {
+  const captured = capturedRoute(null);
+  let continued = false;
+  const route = {
+    request: () => ({
+      method: (): string => method,
+      url: (): string => `http://fixture.invalid/api/models${suffix}`,
+    }),
+    fulfill: (options: RouteFulfillOptions): Promise<void> => captured.route.fulfill(options),
+    continue: (): Promise<void> => {
+      continued = true;
+      return Promise.resolve();
+    },
+  } as unknown as Route;
+  return { route, fulfillment: captured.fulfillment, continued: () => continued };
+}
+
+describe("installed live runtime model catalog", (): void => {
+  it.each(["", "?refresh=1"])(
+    "serves a freshly verified ready model for GET /api/models%s",
+    async (suffix): Promise<void> => {
+      const route = capturedCatalogRoute(suffix);
+      const handler = await installedRuntimeHandler();
+      await handler(route.route);
+
+      expect(route.continued()).toBe(false);
+      expect(route.fulfillment()?.status).toBe(200);
+      const body = JSON.parse(route.fulfillment()?.body as string) as { models: ModelCapability[] };
+      expect(body.models).toHaveLength(1);
+      const model = body.models[0];
+      expect(model).toBeDefined();
+      if (model === undefined) throw new Error("Runtime fixture did not return a model");
+      expect(model.id).toBe("e2e-chat-model");
+      expect(model.conversationReady).toBe(true);
+      expect(isToolCallingVerificationFresh(model.toolCallingVerification)).toBe(true);
+      expect(isCodingWorkbenchModel(model)).toBe(true);
+      expect(isCodingWorkbenchModel({ ...model, toolCallingVerification: undefined })).toBe(false);
+      expect(isCodingWorkbenchModel({ ...model, conversationReady: false })).toBe(false);
+    },
+  );
+
+  it("leaves non-GET model requests to the real server", async (): Promise<void> => {
+    const route = capturedCatalogRoute("", "POST");
+    const handler = await installedRuntimeHandler();
+    await handler(route.route);
+    expect(route.continued()).toBe(true);
+    expect(route.fulfillment()).toBeUndefined();
   });
 });

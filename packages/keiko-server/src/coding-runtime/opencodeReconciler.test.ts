@@ -264,3 +264,45 @@ describe("OpenCode history reconciliation", () => {
     expect(reconciler.checkpoints()).toEqual({ ses_1: 2 });
   });
 });
+
+describe("OpenCode V2 compaction has no reported overflow fact", () => {
+  it("admits absence of the V1-only overflow boolean while rejecting a forged value", () => {
+    const compaction = {
+      event: "started" as const,
+      compactionIdSha256: "a".repeat(64),
+      auto: true,
+      retainedTail: false as const,
+    };
+    const admitted = { ...event("evt_started", 0), compaction };
+    expect(createOpenCodeReconciler().ingest([admitted])).toMatchObject({ ok: true, applied: 1 });
+    expect(
+      createOpenCodeReconciler().ingest([
+        {
+          ...admitted,
+          compaction: { ...compaction, overflow: "unknown" },
+        },
+      ] as unknown as OpenCodeReconciliationEvent[]),
+    ).toEqual({ ok: false, reason: "invalid-event" });
+  });
+});
+
+it("admits only the V2 retained-tail fact when its start ID is unavailable", () => {
+  const compaction = {
+    event: "tail-retained" as const,
+    compactionIdSha256: "a".repeat(64),
+    auto: false,
+    retainedTail: true as const,
+  };
+  const admitted = { ...event("evt_tail", 0), compaction };
+  expect(createOpenCodeReconciler().ingest([admitted])).toMatchObject({ ok: true, applied: 1 });
+  for (const tailStartIdSha256 of ["/private/raw-path", undefined]) {
+    expect(
+      createOpenCodeReconciler().ingest([
+        {
+          ...admitted,
+          compaction: { ...compaction, tailStartIdSha256 },
+        },
+      ] as unknown as OpenCodeReconciliationEvent[]),
+    ).toEqual({ ok: false, reason: "invalid-event" });
+  }
+});

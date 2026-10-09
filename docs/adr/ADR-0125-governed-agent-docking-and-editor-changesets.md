@@ -26,9 +26,11 @@ ADR-0125 was allocated after refreshing `origin/dev` and checking all open pull 
 2026-07-09. `origin/dev` ended at ADR-0124 and there were no open pull requests claiming ADR-0125.
 
 Epic #2091 trust-path hardening (2026-07-10) additionally binds browser decisions to a random,
-memory-only bridge capability whose digest is held by the live session registry. A changeset commit
-requires that valid live lease, a current matching snapshot, complete active-file version/hash
-counterparts, dirty checks, and the existing disk revalidation before the atomic transaction. This
+memory-only bridge capability whose digest is held by the live session registry. A browser-reviewed
+changeset commit requires that valid live bridge lease and a current matching snapshot. An already
+authorized Coding Workbench workspace changeset instead uses the server-owned runtime mutation
+lease and current run-root capability described in D3. Both paths retain complete applicable
+version/hash counterparts, dirty checks, and disk revalidation before the atomic transaction. This
 does not add per-action approval or change the three-mode policy.
 
 Issue #2121 (2026-07-10) wires that policy into the existing editor-agent decision path. An
@@ -117,8 +119,10 @@ approval baseline when no ceiling is configured.
 
 ### D2 - Dock onto the existing editor-agent control plane
 
-Agent producers call the existing `/api/editor/agent/*` route family and reuse the existing session
-registry, bounded queue, idempotency handling, SSE events, and browser bridge. This decision creates
+Agent producers reuse the existing editor-owned changeset transaction. Producers requiring human
+review call the existing `/api/editor/agent/*` route family and reuse its session registry, bounded
+queue, idempotency handling, SSE events, and browser bridge. Already authorized Workbench changesets
+reach the same transaction through an internal server-composed capability. This decision creates
 no second transport, session model, control plane, or external-file broker.
 
 The producer transport accepts only a loopback HTTP origin, follows no redirects, bounds response
@@ -149,7 +153,7 @@ does not change authority, approval, risk, or disposition.
 The explicit local **Apply to editor** command and its exclusive bridge-action wrapper are retired
 with the ordinary Editor integration (2026-10-03). The retained `origin` marker is provenance for
 the shared protocol, never authority. Independent producers continue to require their existing
-validated authority and live execution bridge.
+validated authority; producers requiring a browser decision also require a live execution bridge.
 
 For emitted `applyPatch` and `applyChangeset` actions, the server adds an optional
 `requiresReview` boolean derived from the composed decision. `review-required` always emits `true`;
@@ -250,9 +254,12 @@ pre-checks that raised it are removed.
 
 The server routes this through the existing `keiko-tools` patch validation and
 atomic apply/rollback path. Closed files may be changed by that governed server workspace
-transaction after the mode and Authority Envelope permit it. Open or dirty files remain governed by
-the live snapshot: version/hash and dirty-state conflicts are file-attributed, and successful server
-results trigger browser Monaco reconciliation so an open buffer cannot silently remain stale.
+transaction after the mode and Authority Envelope permit it. Dirty targets include retained,
+ownership-bound passive Editor safety publications, even when no Workbench browser is connected.
+Their roots are recorded canonically without changing the human's selected folder presentation;
+unrelated unavailable roots do not block another workspace, while unresolved overlapping roots
+fail closed. Version/hash and dirty-state conflicts remain file-attributed. Connected consumers
+reconcile from authoritative disk state through their existing refresh paths.
 Browser reconciliation is not a second apply engine.
 
 Normal contained edits and saves do not gain a new per-action review merely because they are editor
@@ -265,12 +272,21 @@ envelope.
 When the composed effect is `allowed`, `applyPatch` skips visible review but first checks the current
 browser content hash and sends the existing terminal confirmation. The server re-resolves authority
 and repeats structural preflight before the browser mutates the active buffer. An allowed
-`applyChangeset` likewise sends terminal confirmation immediately, commits through the same
-revalidated atomic server transaction, and reconciles Monaco from authoritative disk state. This
-changes only approval timing; structural, containment, version/hash, dirty-file, bridge-lease,
-transaction, and reconciliation gates are identical in reviewed and direct paths.
+Coding Workbench `applyChangeset` with an exact registered runtime lease whose server-owned
+`requiresReview` value is `false` reaches the same revalidated atomic server transaction directly.
+It needs no mounted Workbench, session-discovery wait, or browser acknowledgement. The transaction
+rechecks the matching run, envelope digest, workspace identity/root digest, action id, idempotency
+key, live authority guard, current granted root capability, target containment, dirty state and
+content preconditions before claiming the one-use lease and writing. Cancellation prevents forward
+effects; multi-file failures use the existing rollback. A successful tool outcome waits for this
+exact lease's terminal result. The internal transaction context is never published as an Editor
+agent session. An absent or `true` review requirement continues to require the actual human review
+channel; neither a model hint nor browser disconnection grants approval. Existing activity-log
+settled/refused operations record the body-free execution path (`server` or `browser`).
 
-Pane-scoped sessions remain the browser ownership boundary from ADR-0061. Discovery returns only
+The ordinary Editor remains a human-operated editor and its safety-only publications never make
+it discoverable or executable by agents. Pane-scoped sessions retained by active browser consumers
+remain the browser ownership boundary from ADR-0061. Discovery returns only
 sessions with a live authenticated SSE bridge. A random page-scoped stream id lets a reconnect
 supersede the same page's previous liveness contribution even if socket-close notification is
 delayed; the id and bridge capabilities are scrubbed from request URLs after authentication.
@@ -382,7 +398,8 @@ authority, launches a process, or grants network access by itself.
   policy-required review.
 - Partial acceptance, diagnostics detail, and file conflicts are representable without schema churn.
 - Runtime consumers use the tri-state evaluator and transaction/reconciliation design through the
-  existing editor-agent route, session, and browser bridge.
+  existing editor-owned transaction; browser review retains its route, session and bridge, while
+  already authorized Workbench changesets use the internal runtime capability.
 - New named symbols are additive module exports and remain covered by the package-surface gate.
 
 ## Alternatives considered

@@ -194,6 +194,9 @@ export interface CodingRuntimeToolFacadeBridge {
   }): Promise<{
     readonly status: number;
     readonly body: string;
+    /** Private canonical native frames; ordinary model JSON remains unchanged. */
+    readonly nativeBytes?: Uint8Array;
+    readonly nativeResult?: true;
     readonly rejection?: ToolBridgeApprovalRejection;
   }>;
 }
@@ -370,9 +373,25 @@ function attachEditOutcomeObserver(
   runtimeHost: CodingRuntimeHost | undefined,
   orchestrator: CodingRuntimeOrchestrator,
 ): void {
-  runtimeHost?.attachEditOutcomeObserver?.((runId, outcome): void => {
-    orchestrator.observeEditOutcome(runId, outcome);
-  });
+  const observe: CodingRuntimeEditOutcomeObserver = Object.assign(
+    (runId: string, outcome: Parameters<CodingRuntimeEditOutcomeObserver>[1]): void => {
+      orchestrator.observeEditOutcome(runId, outcome);
+    },
+    {
+      verificationRevision: (runId: string): number | undefined =>
+        orchestrator.verificationRevision(runId),
+      verificationBlocked: (
+        ...args: Parameters<CodingRuntimeOrchestrator["observeVerificationBlocked"]>
+      ): void => {
+        orchestrator.observeVerificationBlocked(...args);
+      },
+      verificationAdmitted: (
+        runId: string,
+      ): ReturnType<CodingRuntimeOrchestrator["verificationAdmitted"]> =>
+        orchestrator.verificationAdmitted(runId),
+    },
+  );
+  runtimeHost?.attachEditOutcomeObserver?.(observe);
 }
 
 function unavailableTaskDispatcher(): CodingRuntimeTaskDispatcher {

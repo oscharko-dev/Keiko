@@ -465,6 +465,8 @@ export const DE_MESSAGES = {
 
   // #3591: Gateway-Fehler auf den Desktop-Chat-Oberflächen (format-error.ts). Ein langsames Gateway
   // ist kein defektes Gateway, und keiner der Texte macht die Größe der Anfrage verantwortlich.
+  "chat.modelSelectionUnavailable":
+    "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
   "chat.error.scopeChanged.title": "Verbundene Quellen wurden geändert",
   "chat.error.scopeChanged.message":
     "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
@@ -923,4 +925,8 @@ export const DE_MESSAGES = {
     "Aus „{name}“ konnte kein Text extrahiert werden — deine Nachricht wird ohne Dokumenttext gesendet, und das Modell erhält die Datei selbst nicht.",
   "attachment.notice.imageUndeliverable":
     "„{name}“ wird nicht gesendet — das Modell erhält in dieser Unterhaltung keine Bildanhänge. Beschreibe stattdessen in deiner Nachricht, worauf es ankommt.",
+  "settings.models.retrievalEmbeddingUnavailable":
+    "Retrieval-Embedding: bestanden (Modellidentität in diesem Bericht nicht verfügbar)",
+  "settings.models.retrievalEmbeddingIdentity": "Retrieval-Embedding-Modell: {modelId}{shape}",
+  "settings.models.retrievalEmbeddingDimensions": " ({dimensions} Dimensionen)",
 } satisfies MessageCatalog;

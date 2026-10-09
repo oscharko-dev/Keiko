@@ -1,24 +1,23 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-10-07 from PR #3876 head
-`f9edf2dd58cc523a64d9ee10a60cff90d4783a92` after one localization key for the Coding Workbench's
-gateway-retry-stopped activity label (`activity.event.modelGatewayRetryStopped`) changed
-`i18n-messages.de.ts` and `i18n-messages.en.ts`, two of the eight bound sources. No updater behavior
-changed. All eight Chromium checks passed on the macOS arm64 checkout on Node 24.21.0, including the
-real-BFF outage journey, and the evidence freshness gate passed; only the progress-state capture
-changed bytes. The regeneration before it (2026-10-07, PR #3876 head
-`1fbaf9a83890375150faf9137a9d5b80c2711a43`) followed the two gateway-retry labels
-(`activity.event.modelGatewayRetrying`, `activity.event.modelGatewayRecovered`) in the same two files,
-with the same result on the same host. The earlier regeneration (2026-10-05, PR #3687 head
-`8b8f92e7dabcb3ae5b62f52cce6d2aa6149ef798`) followed shared UI API and
-localization changes that made the earlier source hashes stale. No updater behavior changed. All eight Chromium checks passed in an
-isolated Linux/amd64 checkout on Node 24.18.0, including the real-BFF outage journey. The unchanged
-producer refreshed all 17 tracked artifacts, and the evidence freshness gate passed. The eight
-source and four harness hashes match the current checkout. The tests prove the startup notice yields only while a visible, foreground **ready**
-Update window owns the same critical context and actions; the notice returns when that window is
-backgrounded or minimized, and remains available while the foreground updater is loading or
-contains only a load error. The background-window check establishes keyboard modality with a real
-Tab press before moving focus; programmatic focus after a pointer click must not steal the foreground.
+The browser evidence proves that the startup notice yields only while a visible, foreground
+**ready** Update window owns the same critical context and actions. The notice returns when that
+window is backgrounded or minimized and remains available while the foreground updater is loading
+or contains only a load error. Keyboard modality is established with a real Tab press before moving
+focus; programmatic focus after a pointer click must not steal the foreground.
+
+This set was regenerated on 2026-10-08 from PR #3895 source head
+`330a71436d0d739bac2cfe7f8dd4c577f6344cf9` in an isolated macOS arm64 checkout using Node 24.21.0,
+npm 11.19.0, Next.js 16.3.8, and Playwright 1.63.0. The unchanged eight-test Chromium suite passed
+in 57.5 seconds, including the real-BFF outage journey. The unchanged evidence freshness gate and
+its three focused contract controls also passed. All eight UI source hashes and four harness
+hashes match that inspected source head.
+
+The original producer recreated all 17 tracked artifacts: 14 screenshots and three JSON records.
+Only `11-progress-state.png` changed PNG bytes relative to the previous committed set; the other
+13 screenshots remained byte-identical. All three JSON records now bind the actual inspected
+sources. This is macOS browser and fixture qualification; it does not claim Linux execution,
+production update success, native N−1→N replacement, or final integrated-head acceptance.
 
 The current suite includes the real-BFF outage journey. Both the main server and the outage
 harness use isolated copies of the fake-key gateway fixture, preserving the tracked source

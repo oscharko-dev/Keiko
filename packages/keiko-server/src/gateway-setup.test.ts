@@ -26,6 +26,7 @@ import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import { openProviderCredentialVault, providerSecretRef } from "./credentialVault.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
@@ -150,6 +151,12 @@ function ctx(body: unknown, correlationId?: string): RouteContext {
 function fetchInputUrl(url: Parameters<typeof fetch>[0]): string {
   if (typeof url === "string") return url;
   return url instanceof URL ? url.href : url.url;
+}
+
+function requestModel(init: RequestInit | undefined): string | undefined {
+  const raw = init?.body ?? "{}";
+  if (typeof raw !== "string") throw new TypeError("expected JSON string request body");
+  return (JSON.parse(raw) as { model?: string }).model;
 }
 
 const NON_CONVERSATION_DEPLOYMENTS = new Set(["Mistral-Large-3", "text-embedding-3-large"]);
@@ -697,6 +704,7 @@ describe("handleGatewaySetup", () => {
     );
 
     expect("status" in report).toBe(false);
+    if ("status" in report) throw new TypeError("Expected actual readiness report.");
     expect(
       requiredCapability(requiredGatewayConfig(deps), provider.modelId).toolCallingVerification,
     ).toEqual(proof);
@@ -704,6 +712,7 @@ describe("handleGatewaySetup", () => {
       modelId: provider.modelId,
       generation: gatewayConfig.generation(),
       checkedAt: proof.checkedAt,
+      conversationCheckedAt: report.checkedAt,
       fields: { toolCalling: true, conversationReady: false },
     });
     deps.store.close();
@@ -1355,6 +1364,21 @@ describe("handleGatewaySetup", () => {
     });
     const gatewayConfig = deps.gatewayConfig;
     if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "model-one",
+            baseUrl: "https://gateway.example.invalid/v1",
+            apiKey: "synthetic-observation-credential",
+            timeoutMs: 1000,
+            maxRetries: 0,
+            retryBaseDelayMs: 1,
+          },
+        ],
+      }),
+      true,
+    );
     gatewayConfig.recordVerifiedCapability(
       "model-one",
       { toolCalling: true },
@@ -1368,7 +1392,7 @@ describe("handleGatewaySetup", () => {
 
     expect(gatewayConfig.verifiedCapability("model-one")).toEqual({
       modelId: "model-one",
-      generation: 0,
+      generation: gatewayConfig.generation(),
       checkedAt: "2026-08-02T08:01:00.000Z",
       fields: { streaming: true },
     });
@@ -8821,11 +8845,20 @@ describe("handleGatewaySetup", () => {
             ),
           );
         }
+        if (href.endsWith("/models"))
+          return Promise.resolve(
+            Response.json({
+              data: [
+                "litellm-chat-large",
+                "litellm-vision-chat",
+                "litellm-embedding",
+                "litellm-image",
+                "litellm-unknown-mode",
+              ].map((id) => ({ id })),
+            }),
+          );
         expect(href).toContain("/chat/completions");
-        if (init?.body !== undefined && typeof init.body !== "string") {
-          throw new Error("expected JSON string request body");
-        }
-        const body = JSON.parse(init?.body ?? "{}") as { model?: string };
+        const body = { model: requestModel(init) };
         if (body.model !== undefined) {
           seenModels.push(body.model);
         }
@@ -8860,7 +8893,7 @@ describe("handleGatewaySetup", () => {
         expect(result.status).toBe(200);
         expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
         expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
-        expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
+        expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(!explicit);
         expect(seenModels).toEqual([
           "litellm-chat-large",
           "litellm-vision-chat",
@@ -9005,6 +9038,10 @@ describe("handleGatewaySetup", () => {
       const href = fetchInputUrl(url);
       seenUrls.push(href);
       if (href.endsWith("/model/info")) return Promise.resolve(new Response(null, { status: 403 }));
+      if (href.endsWith("/models"))
+        return Promise.resolve(
+          Response.json({ data: [{ id: "customer-chat" }, { id: "customer-whisper" }] }),
+        );
       if (href.endsWith("/model_group/info")) {
         return Promise.resolve(
           new Response(
@@ -9041,7 +9078,7 @@ describe("handleGatewaySetup", () => {
       );
       expect(result.status).toBe(200);
       expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model_group/info");
-      expect(seenUrls).not.toContain("https://llm-gateway.example.com/v1/models");
+      expect(seenUrls).toContain("https://llm-gateway.example.com/v1/models");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"modelId": "customer-whisper"');
       const config = JSON.parse(saved) as {
@@ -12163,6 +12200,71 @@ describe("selected metadata responsiveness", () => {
     vi.unstubAllGlobals();
     resetServerLogger();
   });
+  it.each(["removed-metadata", "new-runtime-model"] as const)(
+    "uses the current key-scoped model list during fresh onboarding: %s",
+    async (scenario) => {
+      const deps = await metadataResponsivenessDeps();
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const runtimeIds =
+        scenario === "new-runtime-model" ? ["current-chat", "new-chat"] : ["current-chat"];
+      const requested: string[] = [];
+      vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+        const endpoint = new URL(fetchInputUrl(url)).pathname;
+        requested.push(endpoint);
+        if (endpoint.endsWith("/models"))
+          return Promise.resolve(Response.json({ data: runtimeIds.map((id) => ({ id })) }));
+        return Promise.resolve(
+          Response.json({
+            data: ["removed-chat", "current-chat"].map((model_name) => ({
+              model_name,
+              model_info: { mode: "chat", max_input_tokens: 32_768 },
+            })),
+          }),
+        );
+      });
+      const result = await handleGatewaySetup(metadataContextForSelection(false), deps);
+      expect(result.status).toBe(200);
+      expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual(
+        runtimeIds,
+      );
+      expect(requested.filter((endpoint) => endpoint.endsWith("/models"))).toHaveLength(1);
+      expect(requiredCapability(requiredGatewayConfig(deps), "current-chat").contextWindow).toBe(
+        32_768,
+      );
+    },
+  );
+
+  it.each(["forbidden", "empty"] as const)(
+    "does not replace the %s serving catalog with successful management metadata",
+    async (scenario) => {
+      const deps = await metadataResponsivenessDeps();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const tested: string[] = [];
+      Object.assign(deps, {
+        gatewaySetupTester: (
+          _config: unknown,
+          ids: readonly string[],
+        ): Promise<readonly string[]> => {
+          tested.push(...ids);
+          return Promise.resolve(ids);
+        },
+      });
+      vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+        if (fetchInputUrl(url).endsWith("/models"))
+          return Promise.resolve(
+            scenario === "forbidden"
+              ? new Response(null, { status: 403 })
+              : Response.json({ data: [] }),
+          );
+        return Promise.resolve(selectedMetadataResponse());
+      });
+      expect((await handleGatewaySetup(metadataContextForSelection(false), deps)).status).toBe(502);
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      expect(tested).toEqual([]);
+    },
+  );
+
   it("retains declared geometry from a management route responding after fourteen seconds", async () => {
     const deps = await metadataResponsivenessDeps();
     Object.assign(deps, { gatewayModelDiscovery: undefined });
@@ -12183,7 +12285,10 @@ describe("selected metadata responsiveness", () => {
       contextWindow: 32_768,
       maxOutputTokens: 4_096,
     });
-    expect(fetcher).toHaveBeenCalledOnce();
+    const metadataCalls = fetcher.mock.calls.filter(([url]) =>
+      fetchInputUrl(url).endsWith("/model/info"),
+    );
+    expect(metadataCalls).toHaveLength(1);
     const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
     expect(event?.extra).toMatchObject({
       outcome: "available",
@@ -12776,4 +12881,212 @@ it("cancels the embedding retry wait before starting another attempt", async () 
     vi.useRealTimers();
     vi.unstubAllGlobals();
   }
+});
+
+describe("gateway catalog source persistence", () => {
+  async function catalogSetupDeps(): Promise<UiHandlerDeps> {
+    const directory = await tempDir("keiko-catalog-source-");
+    return buildUiHandlerDeps({
+      configPath: join(directory, "keiko.config.json"),
+      evidenceDir: join(directory, "evidence"),
+      uiDbPath: join(directory, "ui.db"),
+      env: { ...VAULT_ENV },
+      gatewayModelDiscovery: () =>
+        Promise.resolve({
+          modelIds: ["catalog-chat", "hidden-chat"],
+          chatModelIds: ["catalog-chat", "hidden-chat"],
+          embeddingModelIds: [],
+        }),
+      gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+    });
+  }
+
+  it.each([false, true])(
+    "records actual submitted deployment origin explicit=%s",
+    async (explicit) => {
+      const deps = await catalogSetupDeps();
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://catalog.example.invalid/v1",
+          apiKey: "synthetic-catalog-secret",
+          ...(explicit ? { deploymentNames: ["catalog-chat"] } : {}),
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(requiredProvider(requiredGatewayConfig(deps), "catalog-chat").catalogOrigin).toBe(
+        explicit ? "explicit" : "discovered",
+      );
+      const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+      expect(saved).toContain(`"catalogOrigin": "${explicit ? "explicit" : "discovered"}"`);
+      await deps.dispose?.();
+    },
+  );
+
+  it("does not invent origin during a legacy metadata-only save", async () => {
+    const deps = await catalogSetupDeps();
+    const legacy = parseGatewayConfig({
+      providers: [
+        {
+          modelId: "catalog-chat",
+          baseUrl: "https://catalog.example.invalid/v1",
+          apiKey: "synthetic-catalog-secret",
+          timeoutMs: 1000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ],
+    });
+    deps.gatewayConfig?.set(legacy, true);
+    expect(
+      (await handleGatewaySetup(ctx({ preserveExisting: true, imageInputModelIds: [] }), deps))
+        .status,
+    ).toBe(200);
+    expect(
+      requiredProvider(requiredGatewayConfig(deps), "catalog-chat").catalogOrigin,
+    ).toBeUndefined();
+    expect(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")).not.toContain(
+      "catalogOrigin",
+    );
+    await deps.dispose?.();
+  });
+
+  it.each([false, true])(
+    "consumes unrelated tool-only evidence on apply, chat evidence present=%s",
+    async (withChatEvidence) => {
+      const deps = await catalogSetupDeps();
+      expect(
+        (
+          await handleGatewaySetup(
+            ctx({
+              baseUrl: "https://catalog.example.invalid/v1",
+              apiKey: "synthetic-catalog-secret",
+            }),
+            deps,
+          )
+        ).status,
+      ).toBe(200);
+      const holder = deps.gatewayConfig;
+      if (holder === undefined) throw new TypeError("Expected catalog owner.");
+      const checkedAt = new Date().toISOString();
+      holder.recordVerifiedCapability("catalog-chat", { toolCalling: true }, checkedAt);
+      holder.recordVerifiedCapability(
+        "hidden-chat",
+        { toolCalling: true, ...(withChatEvidence ? { conversationReady: true } : {}) },
+        checkedAt,
+      );
+      expect(
+        (
+          await handleApplyGatewayVerifiedCapabilities(
+            { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "catalog-chat" } },
+            deps,
+          )
+        ).status,
+      ).toBe(200);
+      expect(holder.verifiedCapability("hidden-chat")?.fields.toolCalling).toBeUndefined();
+      expect(
+        (
+          await handleApplyGatewayVerifiedCapabilities(
+            { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "hidden-chat" } },
+            deps,
+          )
+        ).status,
+      ).toBe(409);
+      await deps.dispose?.();
+    },
+  );
+
+  it("persists the accepted source without restoring removed active models during capability apply", async () => {
+    const deps = await catalogSetupDeps();
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://catalog.example.invalid/v1",
+            apiKey: "synthetic-catalog-secret",
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+    const holder = deps.gatewayConfig;
+    if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+    const configured = requiredGatewayConfig(deps);
+    expect(
+      holder.replaceCatalog(
+        {
+          ...configured,
+          providers: configured.providers.filter((provider) => provider.modelId === "catalog-chat"),
+          capabilities:
+            configured.capabilities?.filter((model) => model.id === "catalog-chat") ?? [],
+        },
+        holder.generation(),
+      ),
+    ).toBe(true);
+    holder.recordVerifiedCapability(
+      "catalog-chat",
+      { toolCalling: true },
+      "2026-10-08T08:00:00.000Z",
+    );
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "catalog-chat" } },
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual([
+      "catalog-chat",
+    ]);
+    const raw = JSON.parse(readFileSync(holder.storagePath, "utf8")) as {
+      providers: { modelId: string }[];
+    };
+    expect(raw.providers.map((provider) => provider.modelId)).toEqual([
+      "catalog-chat",
+      "hidden-chat",
+    ]);
+    expect(
+      openProviderCredentialVault({ configPath: holder.storagePath, env: VAULT_ENV }).get(
+        providerSecretRef("hidden-chat"),
+      ),
+    ).toBe("synthetic-catalog-secret");
+    await deps.dispose?.();
+  });
+  it("does not restore an empty active inventory on a metadata-only settings save", async () => {
+    const deps = await catalogSetupDeps();
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://catalog.example.invalid/v1",
+            apiKey: "synthetic-catalog-secret",
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+    const holder = deps.gatewayConfig;
+    if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+    const configured = requiredGatewayConfig(deps);
+    expect(
+      holder.replaceCatalog(
+        { ...configured, providers: [], capabilities: [] },
+        holder.generation(),
+      ),
+    ).toBe(true);
+    expect(
+      (await handleGatewaySetup(ctx({ preserveExisting: true, imageInputModelIds: [] }), deps))
+        .status,
+    ).toBe(200);
+    expect(holder.current()?.providers).toEqual([]);
+    expect(holder.configured?.()?.providers.map((provider) => provider.modelId)).toEqual([
+      "catalog-chat",
+      "hidden-chat",
+    ]);
+    expect(
+      openProviderCredentialVault({ configPath: holder.storagePath, env: VAULT_ENV }).get(
+        providerSecretRef("catalog-chat"),
+      ),
+    ).toBe("synthetic-catalog-secret");
+    await deps.dispose?.();
+  });
 });

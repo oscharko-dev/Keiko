@@ -53,6 +53,7 @@ async function modelContent(
 function readResult(text: string): Record<string, unknown> {
   return {
     status: "completed",
+    evidence: [],
     read: { text, byteCount: Buffer.byteLength(text, "utf8"), digest: DIGEST, totalLines: 3 },
   };
 }
@@ -107,6 +108,7 @@ describe("the model-facing governed tool result", () => {
   it("numbers several blocks in document order under one nonce", async () => {
     const body = {
       status: "failed",
+      evidence: [],
       reasonCode: "INVALID_EDITS",
       message: 'context mismatch at "src/a.ts" line 2',
       detail: "first line\nsecond line",
@@ -158,7 +160,7 @@ describe("the model-facing governed tool result", () => {
   });
 
   it("keeps a result without escaped strings byte-identical to the facade answer", async () => {
-    const body = { status: "failed", reasonCode: "OUT_OF_SCOPE" };
+    const body = { status: "failed", evidence: [], reasonCode: "OUT_OF_SCOPE" };
 
     const content = await modelContent(
       "keiko_workspace_read",
@@ -173,12 +175,13 @@ describe("the model-facing governed tool result", () => {
   it("reports the same framing facts the shim renders", async () => {
     const blocks = {
       status: "failed",
+      evidence: [],
       reasonCode: "INVALID_EDITS",
       message: 'mismatch at "x"',
       detail: "a\nb",
       plain: "unchanged",
     };
-    const plain = { status: "failed", reasonCode: "OUT_OF_SCOPE" };
+    const plain = { status: "failed", evidence: [], reasonCode: "OUT_OF_SCOPE" };
 
     const content = await modelContent("keiko_workspace_read", { relativePath: "a.ts" }, blocks);
 

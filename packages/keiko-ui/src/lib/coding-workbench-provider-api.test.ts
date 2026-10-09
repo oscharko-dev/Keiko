@@ -1,3 +1,4 @@
+import { CORRELATION_HEADER } from "./bff-correlation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchCodingWorkbenchSidecarGatewayProfile,
@@ -16,7 +17,7 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["no-tool-calling", "tool-calling-unverified"])(
+  it.each(["no-tool-calling", "tool-calling-unverified", "conversation-not-ready"])(
     "reads an unavailable %s profile without starting provider traffic",
     async (reason) => {
       const unavailable = { status: "unavailable", reason };
@@ -332,4 +333,15 @@ describe("prepareCodingWorkbenchCodexSubscriptionSetup", () => {
       prepareCodingWorkbenchCodexSubscriptionSetup("chatgpt-browser-login"),
     ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
   });
+});
+
+it("sends the profile read correlation that the owning stage records", async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(jsonResponse({ status: "unavailable", reason: "missing-config" }));
+  vi.stubGlobal("fetch", fetchMock);
+  await fetchCodingWorkbenchSidecarGatewayProfile("profile-read-123");
+  expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get(CORRELATION_HEADER)).toBe(
+    "profile-read-123",
+  );
 });

@@ -132,6 +132,51 @@ describe("POST /api/diagnostics/client", () => {
     resetClientDiagnosticsIngestStateForTests();
   });
 
+  it("persists captured Coding input and actual normalized payload digests without task bodies (#3877)", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_TASK_CANARY",
+          clientTs: CLIENT_TS,
+          composerActivity: "coding-task-submission",
+          correlationId: "task-submission-correlation",
+          composerSubmission: {
+            kind: "start",
+            outcome: "attempted",
+            normalization: "trim",
+            displayedDigest: "a".repeat(64),
+            submittedDigest: "b".repeat(64),
+            draftMatchesInput: false,
+            inputCharacterCount: 42,
+            submittedCharacterCount: 40,
+          },
+        }),
+      ),
+    );
+    const event = sink.events.find((entry) => entry.op === "client.composer.activity");
+    expect(event).toMatchObject({
+      correlationId: "task-submission-correlation",
+      extra: {
+        activity: "coding-task-submission",
+        submissionKind: "start",
+        submissionOutcome: "attempted",
+        normalization: "trim",
+        displayedDigest: "a".repeat(64),
+        submittedDigest: "b".repeat(64),
+        draftMatchesInput: false,
+        inputCharacterCount: 42,
+        submittedCharacterCount: 40,
+      },
+    });
+    expectActivityLogProof(
+      "client.composer.activity.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_TASK_CANARY");
+  });
+
   it.each([
     "scope-refusal-restored",
     "scope-refusal-skipped-owner",
@@ -3191,4 +3236,95 @@ describe("actual source reveal lifecycle", () => {
       expect(analyzeLogText(text).sufficiency.status).toBe("complete");
     },
   );
+});
+
+it("persists closed model selection stage evidence through the existing formatter at info", async () => {
+  const sink = captureServerLog();
+  const parentCorrelationId = "catalog-read-123";
+  const selectionDigest = "a".repeat(64);
+  const body = {
+    kind: "stage",
+    stage: "model selection availability",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 0,
+    correlationId: "model-decision-123",
+    parentCorrelationId,
+    modelCatalog: {
+      surface: "chat",
+      source: "background",
+      outcome: "held",
+      configuredModelCount: 2,
+      usableModelCount: 1,
+      selectionProvenance: "human",
+      selectionDigest,
+    },
+  };
+  expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+    status: 204,
+    body: null,
+  });
+  const events = clientStageEvents(sink, "client.stage.settled");
+  expect(events).toHaveLength(1);
+  const line = formatActivityLogProofLine(events[0] ?? {});
+  expectActivityLogProof("client.stage.settled.line", line);
+  expect(JSON.parse(line)).toMatchObject({
+    level: "info",
+    correlationId: "model-decision-123",
+    parentCorrelationId,
+    stage: "model-selection-availability",
+    modelSurface: "chat",
+    catalogSource: "background",
+    catalogOutcome: "held",
+    configuredModelCount: 2,
+    usableModelCount: 1,
+    selectionProvenance: "human",
+    selectionDigest,
+    completeness: "complete",
+    loss: "none",
+  });
+  expect(clientDiagnosticEvents(sink)).toEqual([]);
+  for (const invalid of [
+    { ...body.modelCatalog, modelId: "PRIVATE_MODEL" },
+    { ...body.modelCatalog, usableModelCount: 3 },
+    { ...body.modelCatalog, outcome: "changed" },
+  ]) {
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...body, modelCatalog: invalid })),
+        )
+      ).status,
+    ).toBe(400);
+  }
+  expect(clientStageEvents(sink, "client.stage.settled")).toHaveLength(1);
+});
+
+it("persists a real profile read outcome and skipped catalog reread without invented counts", async () => {
+  const sink = captureServerLog();
+  const body = {
+    kind: "stage",
+    stage: "gateway profile refresh",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 5,
+    correlationId: "profile-read-123",
+    parentCorrelationId: "catalog-read-123",
+    gatewayProfile: { outcome: "unavailable", catalogReread: "skipped" },
+  };
+  expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+  const event = clientStageEvents(sink, "client.stage.settled")[0];
+  const line = formatActivityLogProofLine(event ?? {});
+  expectActivityLogProof("client.stage.settled.line", line);
+  expect(JSON.parse(line)).toMatchObject({
+    level: "info",
+    stage: "gateway-profile-refresh",
+    durationMs: 5,
+    correlationId: body.correlationId,
+    parentCorrelationId: body.parentCorrelationId,
+    profileOutcome: "unavailable",
+    catalogReread: "skipped",
+  });
+  expect(JSON.parse(line)).not.toHaveProperty("configuredModelCount");
+  expect(clientDiagnosticEvents(sink)).toEqual([]);
 });

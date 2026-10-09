@@ -266,6 +266,63 @@ remain reviewed work. `set-version` does not replace historical version referenc
 independently published optional coding-runtime packages. Their pinned versions change only when
 those runtimes change.
 
+### Preparing an optional npm coding-runtime update
+
+The product publisher is root-only. It does not publish
+`@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64`, and the portable asset build
+does not publish them either. Keep the root manifest and lockfile on the existing public runtime
+versions until both replacement packages have been published and verified.
+
+Use `scripts/build-coding-runtime-npm-package.mjs` to build the approved payload and native helper
+into an empty absolute package directory. After the usual workspace build, its `--pack` mode
+checks an existing candidate against the server's compiled npm-lane approvals and the canonical
+helper source-tree digest, produces a real `npm pack --ignore-scripts` tarball, and writes a
+separate `receipt.json`. It checks the package name, version, architecture, six-file inventory,
+executable permissions, helper and OpenCode bytes, license and SBOM before sealing the artifacts.
+It verifies the actual archive's ordinary-file inventory, permissions and bounded file bodies
+without extracting files into the filesystem. Changing both a tarball and its receipt's integrity
+cannot authorize unapproved bytes. The artifact directory must be empty; prepared candidates are
+never overwritten.
+
+For example, prepare and independently recheck each private 1.1.4 candidate:
+
+```sh
+node scripts/build-coding-runtime-npm-package.mjs --pack macos-arm64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-arm64 /tmp/keiko-runtime-1.1.4/artifacts-arm64
+node scripts/build-coding-runtime-npm-package.mjs --verify macos-arm64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-arm64 /tmp/keiko-runtime-1.1.4/artifacts-arm64
+node scripts/build-coding-runtime-npm-package.mjs --pack macos-x64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-x64 /tmp/keiko-runtime-1.1.4/artifacts-x64
+node scripts/build-coding-runtime-npm-package.mjs --verify macos-x64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-x64 /tmp/keiko-runtime-1.1.4/artifacts-x64
+```
+
+The receipt records SHA-256 file hashes, exact helper and upstream OpenCode source commits,
+helper source-tree identity, native byte capability, and the actual tarball's SHA-256 and SHA-512
+integrity. The helper commit is its verified approved source binding, not the current preparation
+HEAD: an earlier binary must never acquire a fabricated latest-commit build history. The receipt
+is outside the published package and grants no runtime trust; installed Keiko still checks bytes
+against its independently compiled approvals. `--verify` rejects a missing or changed tarball,
+receipt, source binding or candidate. Read-only files and integrity checks preserve the exact
+prepared artifacts; changing a source or package requires a fresh artifact directory.
+
+Publication order is explicit:
+
+1. Qualify the private native candidates with the staged product, including a bounded read beyond
+   64 KiB, the existing `init` → project start script → authenticated browser journey, cold model
+   discovery and reload. Keep the approved 1.1.3 helper compatibility path.
+2. An authorized release owner publishes both exact native tarballs through the existing governed
+   npm credential path. Verify each public version and download's integrity against its receipt.
+   Native-package publishing credentials or Trusted Publisher bindings must cover those package
+   names; the root package's binding alone does not establish that authorization.
+3. Only then change both optional dependency pins and `package-lock.json` together. Run the
+   assembled npm and Yarn installation qualification against the resulting product and native
+   artifacts, then publish the corrected product under a new unpublished version through the
+   existing release workflow. A published product version cannot be replaced.
+
+The 1.1.4 preparation addresses F18's one-MiB secure-read helper. Public 1.1.3 remains capped at
+64 KiB even when the updated server accepts it. Private tarball preparation does not complete
+external native publication or final fresh npm/Yarn installation validation; those remain pending
+until the sequence above succeeds. The existing Yarn qualification uses the `node-modules`
+linker and does not prove Plug'n'Play support. Linux and Windows npm runtime availability is
+unchanged; their coding engines remain on the packaged lanes described by ADR-0140.
+
 Release notes are generated from the current version's approved catalog entries by
 `scripts/release-impact-notes.mjs` and published in GitHub Releases. Preview them with
 `npm run release:plan -- --tag latest`; do not create a second root `CHANGELOG.md`. Preserve source

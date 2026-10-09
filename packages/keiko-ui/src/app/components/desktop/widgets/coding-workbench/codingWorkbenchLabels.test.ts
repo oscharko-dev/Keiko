@@ -153,6 +153,27 @@ describe("readinessFacts source reason", () => {
     );
   });
 
+  it("announces an actual failed chat check without requiring Settings to wake it", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "conversation-not-ready",
+          verification: "unverified",
+        },
+      },
+    };
+    expect(readinessFacts(state, t)).toContain(
+      "codingWorkbench.source.unavailableReason.conversation-not-ready",
+    );
+  });
+
   it("stays silent about a reason the catalog does not know", () => {
     const state: CodingWorkbenchRuntimeState = {
       ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
@@ -283,6 +304,7 @@ describe("eventDetail auxiliary outcome", () => {
     ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
     ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
     ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+    ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
     ["runtime-failed", "codingWorkbench.event.failure.runtime"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });

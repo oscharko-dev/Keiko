@@ -25,8 +25,14 @@ import {
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
+  isCodingSafeActivityToolPresentation,
+  type CodingSafeActivityToolPresentation,
   type CodingSafeActivityReasoning,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import {
+  isCodingWorkbenchNativeRetry,
+  type CodingWorkbenchNativeRetry,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   activityLogEvent,
@@ -165,6 +171,8 @@ export type CodingSafeActivitySignal =
       readonly messageId: string;
       readonly role: CodingSafeActivityMessageRole;
       readonly parentMessageId?: string | undefined;
+      /** Committed native metadata; the backend projects it separately without retaining bodies. */
+      readonly nativeRetry?: CodingWorkbenchNativeRetry;
     })
   | (SignalBase & {
       readonly kind: "text";
@@ -183,6 +191,7 @@ export type CodingSafeActivitySignal =
       readonly callId: string;
       readonly tool?: string | undefined;
       readonly state: CodingSafeActivityToolState;
+      readonly presentation?: CodingSafeActivityToolPresentation;
     })
   | (SignalBase & {
       readonly kind: "plan";
@@ -1045,6 +1054,11 @@ function applyTool(
       ...existing,
       state: signal.state,
       occurredAt: signal.occurredAt,
+      ...(signal.presentation === undefined
+        ? {}
+        : {
+            presentation: Object.freeze({ ...signal.presentation }),
+          }),
     };
     return "accepted";
   }
@@ -1058,6 +1072,11 @@ function applyTool(
     tool: signal.tool,
     state: signal.state,
     occurredAt: signal.occurredAt,
+    ...(signal.presentation === undefined
+      ? {}
+      : {
+          presentation: Object.freeze({ ...signal.presentation }),
+        }),
   });
   return "accepted";
 }
@@ -1320,7 +1339,9 @@ function validMessageSignal(
 ): boolean {
   return (
     safeId(signal.messageId) &&
-    (signal.parentMessageId === undefined || safeId(signal.parentMessageId))
+    (signal.parentMessageId === undefined || safeId(signal.parentMessageId)) &&
+    (signal.nativeRetry === undefined ||
+      (signal.role === "assistant" && isCodingWorkbenchNativeRetry(signal.nativeRetry)))
   );
 }
 
@@ -1336,7 +1357,8 @@ function validToolSignal(
   return (
     (signal.messageId === undefined || safeId(signal.messageId)) &&
     safeId(signal.callId) &&
-    (signal.tool === undefined || safeId(signal.tool))
+    (signal.tool === undefined || safeId(signal.tool)) &&
+    (signal.presentation === undefined || isCodingSafeActivityToolPresentation(signal.presentation))
   );
 }
 
@@ -1407,11 +1429,11 @@ const COMMON_SIGNAL_KEYS = ["kind", "occurredAt", "signalId"] as const;
 
 /** Extra keys admitted per signal kind; anything else makes the signal structurally invalid. */
 const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readonly string[]>> = {
-  message: ["messageId", "role", "parentMessageId"],
+  message: ["messageId", "role", "parentMessageId", "nativeRetry"],
   text: ["messageId", "text"],
   reasoning: ["messageId", "text"],
   plan: ["anchorMessageId", "steps"],
-  tool: ["messageId", "callId", "tool", "state"],
+  tool: ["messageId", "callId", "tool", "state", "presentation"],
 };
 
 function exactSignalKeys(signal: CodingSafeActivitySignal): boolean {
@@ -1544,7 +1566,15 @@ function boundedDropIncrement(count: number, maximum: number): number {
 }
 
 function cloneFeed(feed: CodingSafeActivityFeed): CodingSafeActivityFeed {
-  return structuredClone(feed);
+  const copy = structuredClone(feed);
+  if (copy.availability === "available") {
+    for (const turn of copy.turns) {
+      for (const tool of turn.tools) {
+        if (tool.presentation !== undefined) Object.freeze(tool.presentation);
+      }
+    }
+  }
+  return copy;
 }
 
 function safeWorkspaceCheck(check: () => boolean): boolean {

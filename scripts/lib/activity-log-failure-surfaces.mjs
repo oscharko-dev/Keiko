@@ -48,6 +48,7 @@ export const ACTIVITY_LOG_FAILURE_MODES = ["rejection", "dependency-failure", "c
 export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-cli", emitterPrefix: "audit", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "install-layout", surface: "runtime-packages" },
+  { owner: "keiko-cli", emitterPrefix: "lifecycle-browser-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "portable-launch-notifier", surface: "lifecycle-crash" },
   { owner: "keiko-cli", emitterPrefix: "process-activity-log", surface: "lifecycle-crash" },
   { owner: "keiko-cli", emitterPrefix: "security-log", surface: "runtime-packages" },
@@ -120,6 +121,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "chat-context-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-continuity-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "gateway-setup", surface: "model-gateway" },
+  { owner: "keiko-server", emitterPrefix: "gateway-startup-activity", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-discovery-log", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-context-window", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-spend-budget", surface: "model-gateway" },

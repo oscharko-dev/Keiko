@@ -19,6 +19,10 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { GOVERNED_TOOL_MODEL_CONTENT_SOURCE } from "./governedToolModelContent.js";
 import {
+  createGeneratedOpenCodeNativeContextPlugin,
+  OPENCODE_NATIVE_CONTEXT_FACTS,
+} from "./opencodeNativeContext.js";
+import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
   runtimeMaxDurationMs,
 } from "./productionRuntimeWorkspaceAuthority.js";
@@ -41,6 +45,8 @@ import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_PINNED_VERSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
+  openCodeVisibleToolNames,
+  type OpenCodeToolProfile,
 } from "./opencodeToolSchemas.js";
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -137,6 +143,9 @@ const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
       values: ["conversation-text"],
     },
     configDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Configured V2 guidance, never a claim about provider receipt or model execution.
+    nativeContextSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    nativeContextUtf8Bytes: { type: "integer", dataClass: "count", required: false },
     dependencyInstallPolicy: {
       type: "string",
       dataClass: "closed-enum",
@@ -276,8 +285,9 @@ export interface OpenCodeRuntimeAdapterPorts {
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
+    readonly nativeContextConfigured?: true | undefined;
     readonly verifyTargetAttestation: () => Promise<boolean>;
-    readonly materialize: (bundle: GeneratedOpenCodeBundle) => Promise<boolean>;
+    readonly materialize: () => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
     readonly health: (
       authorization: "basic" | "none",
@@ -705,7 +715,7 @@ async function startAdapter(
       return fail("target-attestation");
     }
     phase = recordReadinessPhase(ports, "config-materialization");
-    if (!(await readiness.materialize(createGeneratedOpenCodeBundle()))) {
+    if (!(await readiness.materialize())) {
       return fail("config-materialization");
     }
     phase = recordReadinessPhase(ports, "endpoint");
@@ -773,6 +783,9 @@ function recordReadinessPhase(
               dependencyInstallPolicy: "offline",
               planningMode: "conversation-text",
               configDigest: ports.readiness.configDigest,
+              ...(ports.readiness.nativeContextConfigured === true
+                ? OPENCODE_NATIVE_CONTEXT_FACTS
+                : {}),
               ...(ports.contextGeometry === undefined
                 ? {}
                 : {
@@ -1181,8 +1194,8 @@ function runCleanup(safety: OpenCodeRuntimeAdapterPorts["safety"]): void {
 
 export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   return {
-    // The no-argument bundle is used only by the adapter's readiness shape and hermetic tool-source
-    // fixtures. Production materialization passes the per-run config built from admitted gateway
+    // Legacy and hermetic tool-source consumers request this bundle explicitly. Production
+    // materialization passes the per-run config built from admitted gateway
     // geometry in opencodeRuntimeComposition.ts.
     config: createFixedOpenCodeConfig({
       contextWindowTokens: 32_768,
@@ -1198,14 +1211,130 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
-/** V2 loads governed tools through plugin transforms instead of V1 tool files. */
-export function createGeneratedOpenCodeV2Plugins(): Readonly<Record<string, string>> {
-  return Object.fromEntries(
-    OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
-      name,
-      toolSource(action, schemas, name, "v2"),
-    ]),
-  );
+const cachedV2PluginSources = new Map<OpenCodeToolProfile, Readonly<Record<string, string>>>();
+
+/** Immutable source shared across runs; each supported setup creates fresh invocation state. */
+export function createGeneratedOpenCodeV2Plugins(
+  profile: OpenCodeToolProfile = "direct",
+): Readonly<Record<string, string>> {
+  openCodeVisibleToolNames(profile);
+  const cached = cachedV2PluginSources.get(profile);
+  if (cached !== undefined) return cached;
+  const sources = Object.freeze({
+    keiko_governed_tools: sharedV2ToolPluginSource(false, profile),
+    keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
+  });
+  cachedV2PluginSources.set(profile, sources);
+  return sources;
+}
+
+/** Fixed-source external host entry; it never selects or activates a runtime. */
+export function createGeneratedOpenCodeV2HostFactory(
+  profile: OpenCodeToolProfile = "direct",
+): string {
+  openCodeVisibleToolNames(profile);
+  return sharedV2ToolPluginSource(true, profile);
+}
+
+function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "direct"): string {
+  return [
+    ...(host
+      ? [
+          "export default (runtime) => {",
+          "  const { process, crypto, fetch, bindOwner, onParentClosed } = runtime;",
+          "  const plugin = {",
+        ]
+      : ["export default {"]),
+    '  id: "keiko.governed-tools",',
+    "  async setup(ctx) {",
+    ...v2InvocationIdentitySource(host),
+    ...(host
+      ? [
+          "    bindOwner(Object.freeze({ close: closeParent, assertOpen: assertInvocationOpen, capture: captureInvocationIdentity }));",
+        ]
+      : []),
+    '    await ctx.tool.hook("execute.before", (event) => {',
+    '      if (event.tool !== "execute") return;',
+    "      const key = directIdentity(event);",
+    '      if (disposed || parents.has(key) || closedParents.has(key) || parents.size >= MAX_IDENTITIES) throw new Error("keiko-tool-invalid");',
+    "      parents.set(key, { sessionID: event.sessionID, messageID: event.messageID, agent: event.agent, ordinal: 0 });",
+    "    });",
+    '    await ctx.tool.hook("execute.after", (event) => {',
+    '      if (event.tool !== "execute") return;',
+    "      closeParent(event);",
+    "    });",
+    "    await ctx.tool.transform((editor) => {",
+    ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) =>
+      toolSource(action, schemas, name, "v2", profile === "code-mode"),
+    ),
+    ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => `      register_${name}(editor);`),
+    "    });",
+    "    return () => { disposed = true; parents.clear(); closedParents.clear(); };",
+    "  },",
+    "};",
+    ...(host ? ["  return plugin;", "};"] : []),
+  ].join("\n");
+}
+
+function v2InvocationIdentitySource(host: boolean): readonly string[] {
+  return [
+    `    const MAX_IDENTITIES = ${String(MAX_RECENT_IDENTITIES)};`,
+    "    const parents = new Map();",
+    "    const closedParents = new Set();",
+    "    let disposed = false;",
+    "    const directIdentity = (context) => `${context.sessionID}:${context.id}`;",
+    "    function closeParent(context) {",
+    "      const key = directIdentity(context);",
+    "      if (!parents.has(key)) return false;",
+    "      parents.delete(key);",
+    "      closedParents.add(key);",
+    "      if (closedParents.size > MAX_IDENTITIES) closedParents.delete(closedParents.values().next().value);",
+    ...(host ? ["      onParentClosed?.(context);"] : []),
+    "      return true;",
+    "    }",
+    "    function assertInvocationOpen(context, requireParent = false) {",
+    "      const key = directIdentity(context);",
+    '      if (disposed || closedParents.has(key) || (requireParent && !parents.has(key))) throw new Error("keiko-tool-unavailable");',
+    "    }",
+    "    async function captureInvocationIdentity(context, requireParent = false) {",
+    '      if (disposed) throw new Error("keiko-tool-unavailable");',
+    "      const key = directIdentity(context);",
+    "      const parent = parents.get(key);",
+    "      if (!parent) {",
+    '        if (requireParent || closedParents.has(key)) throw new Error("keiko-tool-invalid");',
+    "        return key;",
+    "      }",
+    '      if (parent.agent !== context.agent || parent.messageID !== context.messageID) throw new Error("keiko-tool-invalid");',
+    "      const ordinal = ++parent.ordinal;",
+    '      if (ordinal > MAX_IDENTITIES) throw new Error("keiko-tool-invalid");',
+    '      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));',
+    '      const hash = Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "      const identity = `${parent.sessionID}:cm_${hash}_${ordinal}`;",
+    '      if (identity.length > 256) throw new Error("keiko-tool-invalid");',
+    "      assertInvocationOpen(context, true);",
+    "      return identity;",
+    "    }",
+  ];
+}
+
+function v2ResultEnvelopeSource(action: GeneratedToolAction): readonly string[] {
+  const schema = toolCatalogDescriptor(action).resultSchema;
+  return [
+    `const resultSchema = ${JSON.stringify(schema)};`,
+    "function validCanonicalEnvelope(value) {",
+    "  if (resultSchema.required.some((key) => !Object.hasOwn(value, key))) return false;",
+    "  if (!resultSchema.properties.status.enum.includes(value.status)) return false;",
+    "  const evidence = resultSchema.properties.evidence;",
+    "  if (!Array.isArray(value.evidence) || value.evidence.length > evidence.maxItems) return false;",
+    "  return value.evidence.every((entry) => {",
+    '    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;',
+    "    const item = evidence.items;",
+    "    return item.required.every((key) => Object.hasOwn(entry, key)) &&",
+    "      Object.keys(entry).every((key) => Object.hasOwn(item.properties, key)) &&",
+    '      Object.entries(item.properties).every(([key, property]) => typeof entry[key] === "string" && entry[key].length <= property.maxLength);',
+    "  });",
+    "}",
+  ];
 }
 
 // #3386/#3387/#3388: git-status/git-diff/git-stage/git-commit/git-push/git-pull-request/git-ci are
@@ -1371,7 +1500,7 @@ function v2GovernedAskSource(): readonly string[] {
     "  const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "  const runId = process.env.KEIKO_CODING_RUN_ID;",
     '  if (!endpoint || !capability || !runId) throw new Error("keiko-tool-unavailable");',
-    "  const seed = `${context.sessionID}:${context.id}`;",
+    "  const seed = approvalProof.actionId;",
     '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed));',
     '  const id = "per_" + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);',
     // #3612: the ask names its tool call, so the server can settle the call with the decision.
@@ -1386,8 +1515,62 @@ function v2GovernedAskSource(): readonly string[] {
     '  if (text.length > MAX_RESPONSE_BYTES) throw new Error("keiko-tool-oversized");',
     "  const result = JSON.parse(text);",
     '  if (!validResult(result)) throw new Error("keiko-tool-invalid");',
-    "  return modelContent(result, text);",
+    "  return { content: modelContent(result, text), output: result, metadata: {} };",
   ];
+}
+
+interface ToolSourceFormat {
+  readonly start: readonly string[];
+  readonly validation: readonly string[];
+  readonly statusGuard: string;
+  readonly identity: string;
+  readonly approval: readonly string[];
+  readonly assertOpen: readonly string[];
+  readonly subscribeAbort: readonly string[];
+  readonly unsubscribeAbort: readonly string[];
+  readonly result: string;
+  readonly registrationEnd: readonly string[];
+  readonly end: readonly string[];
+}
+
+function toolSourceFormat(
+  action: GeneratedToolAction,
+  name: string | undefined,
+  version: "v1" | "v2",
+  nativeCodeMode: boolean,
+): ToolSourceFormat {
+  if (version === "v1")
+    return {
+      start: [],
+      validation: [],
+      statusGuard:
+        '  if (!["completed", "failed", "denied", "invalid", "cancelled", "timeout", "busy", "observed"].includes(value.status)) return false;',
+      identity:
+        "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
+      approval: ["    await askForGovernedPermission(args, context, approvalProof);"],
+      assertOpen: [],
+      subscribeAbort: ['    context.abort.addEventListener("abort", abort, { once: true });'],
+      unsubscribeAbort: ['      context.abort.removeEventListener("abort", abort);'],
+      result: "      return { title: action, output: modelContent(result, text), metadata: {} };",
+      registrationEnd: ["};"],
+      end: [],
+    };
+  return {
+    start: [`function register_${name ?? action}(editor) {`],
+    validation: v2ResultEnvelopeSource(action),
+    statusGuard: "  if (!validCanonicalEnvelope(value)) return false;",
+    identity: `    args = JSON.parse(JSON.stringify(args)); const identity = await captureInvocationIdentity(context, ${String(nativeCodeMode)});`,
+    approval: [
+      "    const refusal = await askForGovernedPermission(args, context, approvalProof);",
+      "    if (refusal !== undefined) return refusal;",
+    ],
+    assertOpen: [`    assertInvocationOpen(context, ${String(nativeCodeMode)});`],
+    subscribeAbort: [],
+    unsubscribeAbort: [],
+    result: "      return { content: modelContent(result, text), output: result, metadata: {} };",
+    registrationEnd: ["      });"],
+    end: ["}"],
+  };
 }
 
 // eslint-disable-next-line max-lines-per-function -- emitted dependency-free tool source keeps all transport gates visible.
@@ -1396,14 +1579,17 @@ function toolSource(
   schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
   name?: string,
   version: "v1" | "v2" = "v1",
+  nativeCodeMode = false,
 ): string {
   const argumentNames = Object.keys(schemas);
+  const format = toolSourceFormat(action, name, version, nativeCodeMode);
   // The literal (non-model-supplied) wire fields for a fixed-shape git/delivery action, e.g.
   // `{ operation: "stage", phase: "propose" }`. `git-execute` builds its wire `action` and these
   // fields entirely from the model-supplied `kind` at call time instead (see the `wireAction`
   // override below), so it deliberately keeps the descriptive `action` literal here.
   const wire = wireRequestFor(action) ?? { action, literal: {} };
   return [
+    ...format.start,
     `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
     `const TIMEOUT_MS = ${String(toolClientTimeoutMs(action))};`,
     `const action = ${JSON.stringify(action)};`,
@@ -1411,9 +1597,10 @@ function toolSource(
     `const literalFields = ${JSON.stringify(wire.literal)};`,
     `const argumentNames = ${JSON.stringify(argumentNames)};`,
     `const inputSchemas = ${JSON.stringify(schemas)};`,
+    ...format.validation,
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
-    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "timeout", "busy", "observed"].includes(value.status)) return false;',
+    format.statusGuard,
     '  if ((action !== "read" && action !== "discover" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
@@ -1422,13 +1609,11 @@ function toolSource(
     "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",
     ...GOVERNED_TOOL_MODEL_CONTENT_SOURCE,
-    ...toolSourceRegistration(action, name, version),
+    ...toolSourceRegistration(action, name, version, nativeCodeMode),
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
-    version === "v2"
-      ? "    const identity = `${context.sessionID}:${context.id}`;"
-      : "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
+    format.identity,
     "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
     '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
@@ -1453,19 +1638,14 @@ function toolSource(
     "      for (const name of argumentNames) delete request[name];",
     "    }",
     "    const approvalProof = await toolApprovalProof(request);",
-    ...(version === "v1"
-      ? ["    await askForGovernedPermission(args, context, approvalProof);"]
-      : [
-          "    const refusal = await askForGovernedPermission(args, context, approvalProof);",
-          "    if (refusal !== undefined) return { content: refusal, metadata: {} };",
-        ]),
+    ...format.assertOpen,
+    ...format.approval,
     "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",
+    ...format.assertOpen,
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",
-    ...(version === "v1"
-      ? ['    context.abort.addEventListener("abort", abort, { once: true });']
-      : []),
+    ...format.subscribeAbort,
     "    const timeout = setTimeout(abort, TIMEOUT_MS);",
     "    try {",
     '      const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: controller.signal, headers: { Authorization: `Bearer ${capability}`, "Content-Type": "application/json" }, body });',
@@ -1486,17 +1666,15 @@ function toolSource(
     '      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);',
     "      const result = JSON.parse(text);",
     '      if (!validResult(result)) throw new Error("keiko-tool-invalid");',
-    version === "v2"
-      ? "      return { content: modelContent(result, text), metadata: {} };"
-      : "      return { title: action, output: modelContent(result, text), metadata: {} };",
+    format.result,
     "    } finally {",
     "      clearTimeout(timeout);",
-    ...(version === "v1" ? ['      context.abort.removeEventListener("abort", abort);'] : []),
+    ...format.unsubscribeAbort,
     "    }",
     "  },",
-    ...(version === "v2" ? ["      });", "    });", "  },"] : []),
-    "};",
+    ...format.registrationEnd,
     ...governedPermissionSource(version),
+    ...format.end,
   ].join("\n");
 }
 
@@ -1504,6 +1682,7 @@ function toolSourceRegistration(
   action: GeneratedToolAction,
   name: string | undefined,
   version: "v1" | "v2",
+  nativeCodeMode: boolean,
 ): readonly string[] {
   if (version === "v1") {
     return [
@@ -1513,17 +1692,13 @@ function toolSourceRegistration(
       "  async execute(args, context) {",
     ];
   }
-  const pluginId = `keiko.${name ?? action}`;
   return [
-    "export default {",
-    `  id: ${JSON.stringify(pluginId)},`,
-    "  async setup(ctx) {",
-    "    await ctx.tool.transform((editor) => {",
     "      editor.add({",
     `        name: ${JSON.stringify(name)},`,
     `        description: ${JSON.stringify(toolDescription(action))},`,
     "        input: { type: 'object', properties: inputSchemas, required: argumentNames, additionalProperties: false },",
-    `        options: { permission: ${JSON.stringify(name)}, codemode: false },`,
+    "        output: resultSchema,",
+    `        options: { permission: ${JSON.stringify(name)}, codemode: ${String(nativeCodeMode)} },`,
     "        async execute(args, context) {",
   ];
 }

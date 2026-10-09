@@ -1,4 +1,6 @@
-import { realpathSync } from "node:fs";
+import { realpathSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { describe, expect, it } from "vitest";
 import { runVerification, type VerificationDeps } from "./orchestrator.js";
 import type { VerificationPlan, VerificationStep } from "./types.js";
@@ -44,6 +46,161 @@ function depsWith(
 }
 
 describe("runVerification — repository filesystem containment", () => {
+  it("reports the original final project fault before refusing with zero spawns", async () => {
+    const ws = makeWorkspace();
+    try {
+      ws.writeFile("packages/ui/src/a.test.ts", "");
+      const cause = new TypeError("private nested cause");
+      const failure = new Error("private project fault", { cause });
+      const rec = recordingSpawn();
+      const observed: unknown[] = [];
+      const target = step({
+        kind: "targeted-test",
+        scriptName: undefined,
+        command: "npx",
+        args: ["vitest", "run", "--root", "packages/ui", "src/a.test.ts"],
+      });
+      const report = await runVerification(
+        planOf([target], ws.info.root),
+        depsWith(ws, rec.fn, {
+          fs: {
+            ...nodeWorkspaceFs,
+            stat: (path) => {
+              if (path === join(realpathSync(ws.root), "packages/ui")) throw failure;
+              return nodeWorkspaceFs.stat(path);
+            },
+          },
+          onTargetedProjectFailure: (error) => {
+            observed.push(error);
+          },
+        }),
+      );
+      expect(rec.calls()).toHaveLength(0);
+      expect(report.results[0]?.status).toBe("failed");
+      expect(observed).toEqual([failure]);
+    } finally {
+      rmSync(ws.root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs one nested Vitest test with the repository still mounted as the execution root", async () => {
+    const ws = makeWorkspace();
+    ws.writeFile("packages/ui/package.json", JSON.stringify({ scripts: { test: "vitest run" } }));
+    ws.writeFile("packages/ui/src/deep/Toggle.test.tsx", "");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const target = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["vitest", "run", "--root", "packages/ui", "src/deep/Toggle.test.tsx"],
+    });
+
+    const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("passed");
+    expect(rec.calls()[0]?.args).toEqual(
+      expect.arrayContaining(["--bind", realpathSync(ws.info.root), "/keiko-execution-root"]),
+    );
+    expect(rec.calls()[0]?.args).toEqual(expect.arrayContaining([...target.args]));
+  });
+
+  it("returns nested Vitest failure locations relative to the bound repository", async () => {
+    const ws = makeWorkspace();
+    ws.writeFile("packages/ui/src/deep/Toggle.test.tsx", "");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, {
+      exitCode: 1,
+      stdout:
+        " FAIL  src/deep/Toggle.test.tsx > keyboard behavior\n ❯ src/deep/Toggle.test.tsx:12:3",
+    });
+    const target = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["vitest", "run", "--root", "packages/ui", "src/deep/Toggle.test.tsx"],
+    });
+
+    const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("failed");
+    expect(report.results[0]?.locations).toEqual([
+      expect.objectContaining({ file: "packages/ui/src/deep/Toggle.test.tsx", line: 12 }),
+    ]);
+  });
+
+  it("retains repository sibling failure frames while resolving from the selected project", async () => {
+    const ws = makeWorkspace();
+    ws.writeFile("packages/ui/src/a.test.ts", "");
+    ws.writeFile("shared/assert.spec.ts", "");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, {
+      exitCode: 1,
+      stdout:
+        " FAIL src/a.test.ts > example\n ❯ ../../shared/assert.spec.ts:2:1\n ❯ src/a.test.ts:3:1\n ❯ ../../../outside.spec.ts:4:1",
+    });
+    const target = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["vitest", "run", "--root", "packages/ui", "src/a.test.ts"],
+    });
+    try {
+      const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+      expect(report.results[0]?.locations?.map((location) => location.file)).toEqual([
+        "shared/assert.spec.ts",
+        "packages/ui/src/a.test.ts",
+      ]);
+    } finally {
+      rmSync(ws.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["outward-link", "file"])(
+    "refuses a selected project replaced by %s before execution",
+    async (replacement) => {
+      const ws = makeWorkspace();
+      const outside = makeWorkspace();
+      ws.writeFile("packages/ui/src/a.test.ts", "");
+      const target = step({
+        kind: "targeted-test",
+        scriptName: undefined,
+        command: "npx",
+        args: ["vitest", "run", "--root", "packages/ui", "src/a.test.ts"],
+      });
+      const project = join(ws.root, "packages/ui");
+      rmSync(project, { recursive: true, force: true });
+      if (replacement === "outward-link") symlinkSync(outside.root, project, "junction");
+      else writeFileSync(project, "not a directory");
+      const rec = recordingSpawn();
+      try {
+        const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+        expect(report.results[0]?.status).toBe("failed");
+        expect(rec.calls()).toHaveLength(0);
+      } finally {
+        rmSync(ws.root, { recursive: true, force: true });
+        rmSync(outside.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["vitest", "run", "--root", "../outside", "src/a.test.ts"],
+    ["vitest", "run", "--root", "/outside", "src/a.test.ts"],
+    ["vitest", "run", "--root", "--config", "src/a.test.ts"],
+    ["vitest", "run", "--root", "packages/ui"],
+    ["vitest", "run", "--root", "packages/ui", "--passWithNoTests"],
+  ])("refuses malformed project selection before spawning: %j", async (...args) => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const target = step({ kind: "targeted-test", scriptName: undefined, command: "npx", args });
+
+    const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
   const strictBackend = {
     bubblewrap: true,
     unshare: false,

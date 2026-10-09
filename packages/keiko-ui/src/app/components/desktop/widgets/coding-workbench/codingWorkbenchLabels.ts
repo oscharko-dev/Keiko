@@ -59,6 +59,7 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
     "codingWorkbench.source.unavailableReason.model-verification-pending",
   // PR #3452 (F73): the coding model's forced tool-call proof is missing or older than 24 h.
   "tool-calling-unverified": "codingWorkbench.source.unavailableReason.tool-calling-unverified",
+  "conversation-not-ready": "codingWorkbench.source.unavailableReason.conversation-not-ready",
 };
 
 function sourceUnavailableReasonKey(
@@ -412,6 +413,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
   ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
   ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+  ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
   ["edits-blocked", "codingWorkbench.event.failure.edits-blocked"],
   ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
 ]);

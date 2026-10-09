@@ -61,7 +61,7 @@ describe("selectEnforcingBackend", () => {
     expect(selectEnforcingBackend("darwin", NONE)).toBe("none");
   });
 
-  it("requires strict bubblewrap or a container for execution-root isolation", () => {
+  it("requires a native filesystem boundary or a container for execution-root isolation", () => {
     expect(selectEnforcingBackend("linux", { ...NONE, unshare: true }, "execution-root")).toBe(
       "none",
     );
@@ -74,5 +74,20 @@ describe("selectEnforcingBackend", () => {
     expect(selectEnforcingBackend("darwin", { ...NONE, docker: true }, "execution-root")).toBe(
       "container-docker",
     );
+  });
+
+  it("requires the container lifetime owner for macOS execution-root runs", () => {
+    expect(
+      selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, docker: true }, "execution-root"),
+    ).toBe("container-docker");
+    expect(
+      selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, podman: true }, "execution-root"),
+    ).toBe("container-podman");
+  });
+
+  it("retains native macOS confinement for ordinary network-only runs", () => {
+    expect(
+      selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, docker: true }, "inherit"),
+    ).toBe("seatbelt");
   });
 });

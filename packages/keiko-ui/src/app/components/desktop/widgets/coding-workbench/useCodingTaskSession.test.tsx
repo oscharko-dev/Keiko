@@ -395,6 +395,63 @@ describe("coding task selection", () => {
     expect(result.current.error).toBe(true);
     expect(result.current.pending).toBe(false);
   });
+
+  it("resets the draft synchronously before awaiting new workspace creation (#3877)", async () => {
+    const pending = deferred<boolean>();
+    const workspace = activeWorkspace();
+    vi.mocked(workspace.provision).mockReturnValue(pending.promise);
+    const onDraftReset = vi.fn();
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: null,
+        active: false,
+        root: "/repo",
+        workspace,
+        selection: undefined,
+        onDraftReset,
+      }),
+    );
+    let settled = false;
+    let creation: Promise<void> | undefined;
+    act(() => {
+      creation = result.current.newTask().then((): void => {
+        settled = true;
+      });
+    });
+    expect(onDraftReset).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith("[keiko] coding task draft reset", {
+      correlationId: expect.any(String),
+      composerActivity: "coding-task-reset",
+    });
+    await act(async () => {
+      pending.resolve(true);
+      await creation;
+    });
+  });
+
+  it("resets the draft through New task history selection and refuses resets during an active run (#3877)", async () => {
+    const onDraftReset = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ active, selection }) =>
+        useCodingTaskSession({
+          snapshot: null,
+          active,
+          root: "/repo",
+          workspace: null,
+          location: "local",
+          selection,
+          onDraftReset,
+        }),
+      { initialProps: { active: false, selection: "new:task-one" } },
+    );
+    await waitFor(() => expect(onDraftReset).toHaveBeenCalledOnce());
+    rerender({ active: true, selection: "new:task-two" });
+    await act(async () => {
+      await result.current.newTask();
+    });
+    expect(onDraftReset).toHaveBeenCalledOnce();
+  });
 });
 
 describe("pending history activation scope", () => {

@@ -83,4 +83,5 @@ export type {
   NetworkPolicy,
   SandboxAttestation,
   SandboxBackend,
+  RuntimeGatewayFilesystem,
 } from "./types.js";

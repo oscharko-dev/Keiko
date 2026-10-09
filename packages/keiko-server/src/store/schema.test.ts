@@ -46,6 +46,35 @@ function applyMigrationsUpTo(db: DatabaseSync, uptoVersion: number): void {
   db.exec("COMMIT");
 }
 
+it("upgrades an existing v40 run and admits only the closed verification settlement cause", () => {
+  const db = openWithForeignKeys();
+  applyMigrationsUpTo(db, 40);
+  insertMinimalCodingRuntimeSnapshot(db, "run-v41");
+  const settle = (cause: string): void => {
+    db.prepare(
+      "UPDATE coding_runtime_snapshots SET state = 'failed', failure_code = ? WHERE run_id = ?",
+    ).run(cause, "run-v41");
+  };
+  expect(() => {
+    settle("verification-not-evidenced");
+  }).toThrow(/CHECK constraint failed/u);
+  const before = db
+    .prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = ?")
+    .get("run-v41");
+  runMigrations(db);
+  expect(
+    db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = ?").get("run-v41"),
+  ).toEqual(before);
+  settle("verification-not-evidenced");
+  expect(
+    db.prepare("SELECT failure_code FROM coding_runtime_snapshots WHERE run_id = ?").get("run-v41"),
+  ).toEqual({ failure_code: "verification-not-evidenced" });
+  expect(() => {
+    settle("invented-verification-success");
+  }).toThrow(/CHECK constraint failed/u);
+  db.close();
+});
+
 it("migrates existing chats to v39 and invalidates their history after an edit", () => {
   const db = openWithForeignKeys();
   applyMigrationsUpTo(db, 38);
