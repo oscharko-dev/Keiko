@@ -37,11 +37,15 @@ import {
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
+import {
+  isNoEvidenceAnswerText,
+  shouldUseGermanForSystemAnswer,
+} from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 export { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 import type {
   GroundedAnswerKind,
+  GroundedAnswerEvidenceDeclaration,
   GroundedInsufficiencyDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -98,6 +102,20 @@ function canonicalDeclarationPath(path: string): boolean {
   );
 }
 
+function boundedInsufficiencyPaths(answerText: string): readonly string[] {
+  const seen = new Set<string>();
+  for (const { path } of insufficiencyLines(answerText)) {
+    if (seen.size === MAX_INSUFFICIENCY_DECLARATIONS) break;
+    seen.add(path);
+  }
+  return [...seen];
+}
+
+/** Syntactic legacy continuity candidates only; actual admission still verifies scope membership. */
+export function declaredInsufficiencyPaths(answerText: string): readonly string[] {
+  return boundedInsufficiencyPaths(answerText).filter(canonicalDeclarationPath);
+}
+
 export interface InsufficiencyDeclarationResult {
   readonly declarations: readonly GroundedInsufficiencyDeclaration[];
   readonly declaredCount: number;
@@ -112,12 +130,9 @@ export function parseInsufficiencyDeclarations(
   scopeIndex: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
 ): InsufficiencyDeclarationResult {
   const declarations: GroundedInsufficiencyDeclaration[] = [];
-  const seen = new Set<string>();
+  const paths = boundedInsufficiencyPaths(answerText);
   let unreadInScopeCount = 0;
-  for (const { path } of insufficiencyLines(answerText)) {
-    if (seen.has(path)) continue;
-    if (seen.size === MAX_INSUFFICIENCY_DECLARATIONS) break;
-    seen.add(path);
+  for (const path of paths) {
     const state = canonicalDeclarationPath(path) ? scopeIndex.get(path) : undefined;
     if (state !== "read-in-this-turn" && state !== "unread-in-scope") continue;
     declarations.push({ scopePath: path, state });
@@ -125,10 +140,10 @@ export function parseInsufficiencyDeclarations(
   }
   return {
     declarations,
-    declaredCount: seen.size,
+    declaredCount: paths.length,
     inScopeCount: declarations.length,
     unreadInScopeCount,
-    notInScopeCount: seen.size - declarations.length,
+    notInScopeCount: paths.length - declarations.length,
   };
 }
 
@@ -151,6 +166,48 @@ export function sanitizeInsufficiencyDeclarations(
   }
   parts.push(answerText.slice(cursor));
   return parts.join("").trim();
+}
+
+/** Only actual sent excerpts establish read-state; discovered membership alone remains unread. */
+export function buildInsufficiencyScopeIndex(
+  sentPacks: readonly ConnectedContextPack[],
+  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
+): ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> {
+  const index = new Map<string, GroundedInsufficiencyDeclaration["state"]>();
+  for (const path of discovered?.keys() ?? []) index.set(path, "unread-in-scope");
+  for (const pack of sentPacks) {
+    for (const file of pack.files) {
+      if (file.excerpts.length > 0) index.set(file.scopePath, "read-in-this-turn");
+    }
+  }
+  return index;
+}
+
+export interface ValidatedGroundedAnswerEvidence extends GroundedAnswerEvidenceDeclaration {
+  readonly content: string;
+  readonly insufficiencyObservation: Omit<InsufficiencyDeclarationResult, "declarations">;
+}
+
+/** Derive classifications and observation before removing unverified path text. */
+export function validateGroundedAnswerEvidence(
+  answerText: string,
+  scopeIndex: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
+  question?: string,
+): ValidatedGroundedAnswerEvidence {
+  const { declarations, ...insufficiencyObservation } = parseInsufficiencyDeclarations(
+    answerText,
+    scopeIndex,
+  );
+  const clean = sanitizeInsufficiencyDeclarations(answerText, scopeIndex);
+  const fallback = shouldUseGermanForSystemAnswer(question)
+    ? "Der Hinweis auf fehlende Belege konnte im ausgewählten Bereich nicht bestätigt werden."
+    : "The missing-evidence declaration could not be verified in the selected scope.";
+  return {
+    content: clean.length === 0 ? fallback : clean,
+    answerKind: classifyGroundedAnswerKind(answerText),
+    ...(declarations.length === 0 ? {} : { insufficiencyDeclarations: declarations }),
+    insufficiencyObservation,
+  };
 }
 
 const CLARIFICATION_PATTERNS: readonly RegExp[] = [
@@ -859,10 +916,9 @@ export function missingCitationMarker(nowMs: number): UncertaintyMarker {
 export function missingCitationMarkerFor(
   answerText: string,
   nowMs: number,
+  answerKind: GroundedAnswerKind = classifyGroundedAnswerKind(answerText),
 ): UncertaintyMarker | undefined {
-  return classifyGroundedAnswerKind(answerText) === "answer"
-    ? missingCitationMarker(nowMs)
-    : undefined;
+  return answerKind === "answer" ? missingCitationMarker(nowMs) : undefined;
 }
 
 /**
