@@ -1191,8 +1191,8 @@ export interface OrchestratorDeps {
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
   // ContextBudget to pack.diagnostics.contextBudget? — an additive field no prompt builder reads.
   readonly contextProfile?: ContextProfile | undefined;
-  // Issue #1736 — optional production index provider for compatible finite searches. Uncapped
-  // searches deliberately use live traversal without consulting this finite index.
+  // Issue #1736 — optional production index provider. Uncapped searches keep live discovery
+  // authoritative while completed query matches may reuse the existing bounded index.
   readonly workspaceIndexForRoot?:
     ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
@@ -1518,6 +1518,13 @@ function unindexedWorkspaceSearchMode(
   return counters.bypassedSearchCount > 0 ? "live-scan" : "unused";
 }
 
+function failedUnusedWorkspaceIndex(counters: MutableWorkspaceIndexActivityCounters): boolean {
+  return (
+    counters.loadFailures + counters.saveFailures > 0 &&
+    counters.retainedEntries + counters.indexedRecords + counters.reusedRecords === 0
+  );
+}
+
 function workspaceIndexSearchMode(
   providerStatus: WorkspaceIndexProviderStatus,
   counters: MutableWorkspaceIndexActivityCounters,
@@ -1525,6 +1532,7 @@ function workspaceIndexSearchMode(
   if (providerStatus === "not-evaluated") return "not-evaluated";
   if (counters.searchCount === 0) return "unused";
   if (counters.reportCount === 0) return unindexedWorkspaceSearchMode(counters);
+  if (failedUnusedWorkspaceIndex(counters)) return "live-fallback";
   const reconciled = counters.staleRecords + counters.deletedEntries + counters.droppedRecords > 0;
   const persistent = workspaceIndexPersistenceSucceeded(providerStatus, counters);
   if (reconciled) return persistent ? "persistent-reconciled" : "request-local-reconciled";
@@ -1571,10 +1579,10 @@ function observedWorkspaceIndex(
   counters: MutableWorkspaceIndexActivityCounters,
 ): WorkspaceIndex {
   return {
-    loadSnapshot: async (scopeKey): ReturnType<WorkspaceIndex["loadSnapshot"]> => {
+    loadSnapshot: async (scopeKey, isActive): ReturnType<WorkspaceIndex["loadSnapshot"]> => {
       counters.loadAttempts += 1;
       try {
-        const snapshot = await source.loadSnapshot(scopeKey);
+        const snapshot = await source.loadSnapshot(scopeKey, isActive);
         if (snapshot === undefined) counters.loadMisses += 1;
         else counters.loadHits += 1;
         return snapshot;
@@ -1583,10 +1591,10 @@ function observedWorkspaceIndex(
         throw error;
       }
     },
-    saveSnapshot: async (scopeKey, snapshot): Promise<void> => {
+    saveSnapshot: async (scopeKey, snapshot, isActive): Promise<void> => {
       counters.saveAttempts += 1;
       try {
-        await source.saveSnapshot(scopeKey, snapshot);
+        await source.saveSnapshot(scopeKey, snapshot, isActive);
         counters.saveSuccesses += 1;
       } catch (error) {
         counters.saveFailures += 1;

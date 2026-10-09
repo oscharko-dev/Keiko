@@ -449,6 +449,8 @@ system that exists, never beside it:
   remains separate from healthy unaddressed basename diversity; safe reranker failure frames and
   causes use the existing failure-class contract. Pack, prompt, wire, and log share the same
   high/low selection vocabulary and actual observed scope/semantic dispositions.
+  Workspace-index failures with no retained, indexed or reused records report live fallback;
+  actual cold or warm request work remains visible even when saving its snapshot fails.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
   Leading `./` reference spellings are canonicalized before strict path admission; parent and

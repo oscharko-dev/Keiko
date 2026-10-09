@@ -59,7 +59,7 @@ describe("literal content prefilter through the public search producer", () => {
     });
     expect(new Set(observed)).toEqual(new Set(Object.keys(files)));
     expect(classify.mock.calls.filter(([text]) => text === nonmatching)).toHaveLength(0);
-    expect(classify.mock.calls.some(([text]) => text === partial)).toBe(true);
+    expect(classify.mock.calls.some(([text]) => text === partial)).toBe(false);
   });
 
   it("avoids line classification for every nonmatching file without dropping scan coverage", async () => {

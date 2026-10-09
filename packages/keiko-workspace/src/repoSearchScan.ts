@@ -65,6 +65,7 @@ import {
 } from "./structuralExecution.js";
 import { collectSemanticSearchDocument, type SemanticSearchSession } from "./repoSearchSemantic.js";
 import { repositorySourceLines } from "./repoSearchSourceClassification.js";
+import type { StreamingWorkspaceIndexSession } from "./workspaceIndexStreaming.js";
 import {
   extraIgnoreLinesForSearch,
   legacyDiscoveryPolicy,
@@ -89,6 +90,7 @@ import {
   isWorkspaceIndexRecordCurrent,
   workspaceIndexContentFingerprint,
   workspaceIndexFileMetadata,
+  isWorkspaceIndexFileMetadataCurrent,
 } from "./workspaceIndex.js";
 
 const BINARY_PROBE_BYTES = DEFAULT_BINARY_PROBE.maxProbeBytes;
@@ -707,6 +709,8 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
 }
 
 export interface SearchTextRunner {
+  readonly streamingWorkspaceIndex?: StreamingWorkspaceIndexSession | undefined;
+  readonly queryIdentitySha256?: string | undefined;
   readonly eligibleTextObserver?:
     | {
         active: boolean;
@@ -1104,6 +1108,10 @@ async function readBoundedRawText(
     return undefined;
   }
   const text = laneText(runner, decoded.text);
+  if (runner.eligibleTextObserver?.active !== true && !abortScanFile(runner, state))
+    runner.streamingWorkspaceIndex?.observeRead(
+      workspaceIndexFileMetadata(relativePath, read.stat),
+    );
   persistWorkspaceIndexRecord(runner, {
     kind: "text",
     scopePath: relativePath,
@@ -1261,10 +1269,13 @@ function filePathPolicyOmission(
   return policyOmissionReason(file.relativePath, runner.policy);
 }
 
-function filePolicyOmission(
-  runner: SearchTextRunner,
-  file: DiscoveredFile,
-): { readonly omitted?: CandidateOmissionReason | undefined; readonly path?: string | undefined } {
+interface ReadableFilePolicy {
+  readonly omitted?: CandidateOmissionReason | undefined;
+  readonly path?: string | undefined;
+  readonly metadata?: WorkspaceIndexDiscoveredFile | undefined;
+}
+
+function filePolicyOmission(runner: SearchTextRunner, file: DiscoveredFile): ReadableFilePolicy {
   const pathOmission = filePathPolicyOmission(runner, file);
   if (pathOmission !== undefined) {
     return { omitted: pathOmission };
@@ -1278,13 +1289,17 @@ function filePolicyOmission(
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
       return { omitted: "ignored" };
     }
+    return {
+      omitted: policyOmissionReason(file.relativePath, runner.policy),
+      path: contained.path,
+      metadata: workspaceIndexFileMetadata(file.relativePath, stat),
+    };
   } catch (err) {
     if (isIoError(err)) {
       return { omitted: "tool-unavailable" };
     }
     throw err;
   }
-  return { omitted: policyOmissionReason(file.relativePath, runner.policy), path: contained.path };
 }
 
 function fileContainmentOmission(
@@ -1490,10 +1505,60 @@ async function collectLiveFileMatches(
     return undefined;
   }
   state.filesScanned += 1;
+  const cached = await streamingCachedMatches(runner, file, policyPath, state, order);
+  if (cached !== undefined) return cached.best.length === 0 ? undefined : cached;
+  if (abortScanFile(runner, state)) return undefined;
   const text = await readForScan(runner, file.relativePath, state, candidates);
-  return text === undefined || abortScanFile(runner, state)
-    ? undefined
-    : textFileMatches(runner, file, state, order, text);
+  if (text === undefined || abortScanFile(runner, state)) return undefined;
+  return completedLiveFileMatches(runner, file, state, order, text);
+}
+
+async function completedLiveFileMatches(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  order: number,
+  text: string,
+): Promise<FileMatches | undefined> {
+  const fileState: RunState = { ...state, truncated: false, truncationReasons: new Set() };
+  const matches = textFileMatches(runner, file, fileState, order, text);
+  if (fileState.truncated) {
+    state.truncated = true;
+    for (const reason of fileState.truncationReasons ?? []) state.truncationReasons?.add(reason);
+  }
+  await runner.streamingWorkspaceIndex?.observeMatch(
+    file.relativePath,
+    matches,
+    !fileState.truncated,
+  );
+  return matches;
+}
+
+async function streamingCachedMatches(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  policy: ReadableFilePolicy,
+  state: RunState,
+  order: number,
+): Promise<FileMatches | undefined> {
+  const cache = runner.streamingWorkspaceIndex;
+  if (
+    cache === undefined ||
+    policy.metadata === undefined ||
+    runner.eligibleTextObserver?.active === true
+  )
+    return undefined;
+  const cached = await cache.lookup(policy.metadata);
+  if (cached === undefined || abortScanFile(runner, state)) return undefined;
+  const current = filePolicyOmission(runner, file);
+  if (
+    current.metadata === undefined ||
+    !isWorkspaceIndexFileMetadataCurrent(policy.metadata, current.metadata)
+  )
+    return undefined;
+  await cache.observeReuse(file.relativePath);
+  if (abortScanFile(runner, state)) return undefined;
+  return { relativePath: file.relativePath, order, ...cached };
 }
 
 async function readablePolicyPath(
@@ -1501,21 +1566,21 @@ async function readablePolicyPath(
   file: DiscoveredFile,
   state: RunState,
   candidates: CandidateFile[],
-): Promise<string | undefined> {
+): Promise<ReadableFilePolicy | undefined> {
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
     recordCandidateOmission(candidates, file.relativePath, policy.omitted, state);
     return undefined;
   }
   if (runner.limits.maxFilesScanned === null && runner.fs.readFileBytes !== undefined)
-    return policy.path;
+    return policy;
   const binary =
     policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
   if (binary !== undefined) {
     recordCandidateOmission(candidates, file.relativePath, binary, state);
     return undefined;
   }
-  return policy.path;
+  return policy;
 }
 
 function collectRankedSemanticDocument(

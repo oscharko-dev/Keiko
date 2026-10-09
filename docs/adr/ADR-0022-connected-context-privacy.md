@@ -244,8 +244,22 @@ still honor an explicit caller deadline or cancellation. Directory entries strea
 source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
 summaries survive the scan. These shared defaults also apply to manual Editor find-in-files, replace
 preview and symbol lookup, coding context lookups, and grounded symbol trace; explicit finite callers retain their
-bounds. An unlimited default lookup uses the live traversal rather than treating a finite workspace
-index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
+bounds. An unlimited default lookup uses fresh live traversal rather than treating a finite workspace
+index as complete coverage. It may reuse completed matching metadata from that same bounded index
+after fresh canonical-path, hard-link, file-identity and high-resolution modification/change-time
+validation. Each file retains at most one full-query-identity record containing physical line ranges,
+scores and definition status; bodies and previews are absent. The full identity reuses the diagnostic
+fingerprint producer and includes matching interpretation, effective result/line limits and policy
+intent. Snapshot identity additionally binds scope, ignore/candidate policy, byte grant and algorithm
+version. Partial, cancelled, timed-out, corrupt or incompatible records require live matching.
+Sixteen lazily loaded query shards retain the existing encrypted store's snapshot and entry bounds,
+an 8 KiB record bound and a 64 MiB aggregate request-record bound. They are partial acceleration
+metadata, never discovery authority. Capacity refusals remain visible as dropped records; retained
+and reused counts describe actual guarded index records, independently of source coverage counts.
+Positive evidence excerpts are still freshly read. Active known-fit observers, semantic/document
+inspection and Editor lanes retain their live content behavior; an observer may release this need
+only after it irrevocably stops. Thus a warm workspace search with no body reads does not imply that
+a grounded answer performs no known-fit or evidence reads. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary-folder recursive content searches do not inherit Git-oriented generated-directory
 exclusions merely from names such as `build` or `dist`. Query-named ordinary-folder documents use
 that same eligibility distinction; repository generated code remains excluded before unconditional
@@ -269,12 +283,19 @@ facts. They do not substitute another same-basename file or enumerate its conten
 source target or a requested relationship retains its existing retrieval flow.
 Existing correlated admission, skipped-ring, read and budget observations describe this path;
 non-Git folders cannot dispatch the Git-history ring, even when history was requested.
-An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
+An intentional index bypass is reported as `live-scan`, with its own count of completed
 text-search calls. It is not an index failure or evidence of index reuse. If no indexed result,
 snapshot load, or snapshot save was observed, both completion projections report the provider as
-`not-evaluated`, even when an index was injected. Actual finite indexed searches retain their
-cold, warm, reconciliation, and load/save-failure observations; the finite workspace-index tests
-own those guarantees. The bypass counter counts logical searches, not physical directory walks.
+`not-evaluated`, even when an index was injected. Both finite searches and compatible unlimited
+matching reuse retain their actual cold, warm, reconciliation and load/save-failure observations.
+Index failures preserve live source retrieval and its coverage; the observed adapter still records
+the failure. The bypass counter counts logical searches, not physical directory walks. Request
+abort/deadline controls race delayed index operations and fence every later snapshot chunk, write,
+sync and publication step. Owned descriptor closure and temporary-file cleanup remain permitted.
+Both server wrappers forward the request-active guard alongside the existing generation fence;
+late operations cannot publish or populate a reusable cache after request cancellation. Reported
+elapsed time includes finalization, and a deadline consumed there remains visible as incomplete
+coverage rather than disappearing from the request's time accounting.
 Raw directory entries must also satisfy the shared portable scope-path contract before resolution;
 unsupported names are never normalized into a different file or traversed. Unlike a sensitive-path
 policy denial, this exclusion means the requested tree could not be fully examined. Search reports
