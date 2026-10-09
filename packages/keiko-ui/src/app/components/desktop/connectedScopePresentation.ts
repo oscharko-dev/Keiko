@@ -27,17 +27,23 @@ function middleTruncated(value: string): string {
   return value.length <= 64 ? value : `${value.slice(0, 30)}…${value.slice(-30)}`;
 }
 
+function connectedFilesLabel(
+  scope: ChatConnectedScope,
+  rootName: string,
+  t: I18nTranslate,
+): string {
+  if (scope.relativePaths.length === 1) {
+    const name = scopePathBasename(scope.relativePaths[0] ?? "");
+    return name.length === 0 ? t("scope.pill.connectedFile") : t("scope.pill.file", { name });
+  }
+  return rootName.length === 0
+    ? t("scope.pill.filesConnected", { count: scope.relativePaths.length })
+    : t("scope.pill.filesInFolder", { count: scope.relativePaths.length, name: rootName });
+}
+
 export function connectedScopeLabel(scope: ChatConnectedScope, t: I18nTranslate): string {
   const rootName = scope.root === undefined ? "" : scopePathBasename(scope.root);
-  if (scope.kind === "files") {
-    if (scope.relativePaths.length === 1) {
-      const name = scopePathBasename(scope.relativePaths[0] ?? "");
-      return name.length === 0 ? t("scope.pill.connectedFile") : t("scope.pill.file", { name });
-    }
-    return rootName.length === 0
-      ? t("scope.pill.filesConnected", { count: scope.relativePaths.length })
-      : t("scope.pill.filesInFolder", { count: scope.relativePaths.length, name: rootName });
-  }
+  if (scope.kind === "files") return connectedFilesLabel(scope, rootName, t);
   if (scope.kind === "directory") {
     const relative = scope.relativePaths[0] ?? "";
     const name = rootName.length === 0 ? scopePathBasename(relative) : `${rootName}/${relative}`;

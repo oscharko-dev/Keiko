@@ -33,6 +33,7 @@ import {
 import type {
   ChatConnectedScope,
   GroundedAnswer,
+  GroundedAnswerContextPackSummary,
   GroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -67,7 +68,10 @@ import {
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
+import {
+  groundedSynthesisAttemptUsage,
+  normalizeGroundedAnswerPayload,
+} from "./grounded-answer.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
@@ -88,7 +92,12 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
-import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import type {
+  OrchestratorInput,
+  OrchestratorOutput,
+  RetrievalOnlyOutput,
+} from "./grounded-orchestrator.js";
+import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   PathDeniedError,
   RepoSearchUnsupportedFileError,
@@ -287,7 +296,7 @@ function coverageDiagnostics(
 
 function projectedBudget(
   budget: ConnectedContextPack["budget"],
-): GroundedAnswerContextSummary["budget"] {
+): GroundedAnswerContextPackSummary["budget"] {
   return buildGroundedAnswerContextPackSummary(
     { ...scopePack("src/fixture.ts", 1, "budget"), budget },
     0,
@@ -2623,7 +2632,7 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
 describe("multi-source bounded citation repair", () => {
   afterEach(resetServerLogger);
   interface RepairControls {
-    readonly failure?: unknown;
+    readonly failure?: Error;
     readonly inputMax?: number;
     readonly outputMax?: number;
     readonly promptTokens?: number;
@@ -2646,7 +2655,7 @@ describe("multi-source bounded citation repair", () => {
     controls: RepairControls,
   ): ModelPort {
     return {
-      call: (request) => {
+      call: (request): Promise<NormalizedResponse> => {
         calls.push(request);
         if (calls.length > 1 && controls.failure !== undefined)
           return Promise.reject(controls.failure);
@@ -2704,7 +2713,7 @@ describe("multi-source bounded citation repair", () => {
     });
     return {
       scopes,
-      retriever: async (input) => {
+      retriever: async (input): Promise<RetrievalOnlyOutput> => {
         const retrieved = await packPerScope(
           new Map(allocatedPacks.map((pack) => [pack.files[0]?.scopePath ?? "", pack])),
         )(input);
@@ -2754,6 +2763,16 @@ describe("multi-source bounded citation repair", () => {
     };
   }
 
+  function chargedRepairInput(calls: readonly GatewayCallRequest[]): number {
+    return calls.reduce(
+      (sum, call) =>
+        sum +
+        groundedSynthesisAttemptUsage(countGatewayPromptTokens(call), { promptTokens: 10 })
+          .promptTokens,
+      0,
+    );
+  }
+
   it("adds only supported source-two markers in one remaining-budget call", async () => {
     const repaired = "The implementation works [source:2|src/beta.ts:1-5].";
     const { calls, puts, answer, logLines } = await repairAsk(repaired);
@@ -2765,7 +2784,11 @@ describe("multi-source bounded citation repair", () => {
     );
     expect(prompts[1]).toMatchObject({
       correlationId: "corr-multi-repair",
-      inputBudget: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax - 10,
+      inputBudget:
+        DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax -
+        groundedSynthesisAttemptUsage(countGatewayPromptTokens(calls[0] ?? { messages: [] }), {
+          promptTokens: 10,
+        }).promptTokens,
     });
     expect(prompts[1]?.promptTokens).toBe(
       countGatewayPromptTokens({ messages: calls[1]?.messages ?? [] }),
@@ -2778,7 +2801,7 @@ describe("multi-source bounded citation repair", () => {
     expect(answer.citationBehaviour).toBe("cites-after-repair");
     expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
     expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
-    expect(answer.contextPack.usage.modelInputTokens).toBe(20);
+    expect(answer.contextPack.usage.modelInputTokens).toBe(chargedRepairInput(calls));
     expect(answer.contextPack.usage.modelOutputTokens).toBe(8);
     const details = logLines.filter((line) =>
       line.includes('"op":"search.connected-context.answer-details"'),
@@ -2819,7 +2842,7 @@ describe("multi-source bounded citation repair", () => {
     expect(answer.citationBehaviour).toBe("never");
     expect(answer.citations).toEqual([]);
     expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
-    expect(answer.contextPack.usage.modelInputTokens).toBe(20);
+    expect(answer.contextPack.usage.modelInputTokens).toBe(chargedRepairInput(calls));
   });
 
   it.each(["Which file should I inspect?", "No evidence found."])(
@@ -2950,11 +2973,12 @@ describe("multi-source final fitted citation authority", () => {
             filesInPrompt: sent.reduce((count, pack) => count + pack.files.length, 0),
           }),
         entailmentStageFactory: () => ({
-          evaluate: (_answer, evidence) => {
+          evaluate: (_answer, evidence): ReturnType<EntailmentStage["evaluate"]> => {
             judged.push(evidence);
             return Promise.resolve([]);
           },
-          evaluateNumeric: () => Promise.resolve([]),
+          evaluateNumeric: (): ReturnType<EntailmentStage["evaluateNumeric"]> =>
+            Promise.resolve([]),
         }),
       },
     );
@@ -3028,6 +3052,31 @@ describe("multi-source final fitted citation authority", () => {
 //
 // createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
 // MultiSourceSeam.answerer; unit-test it directly against a fake ModelPort that records the request.
+function zeroModelUsagePack(pack: ConnectedContextPack): ConnectedContextPack {
+  // This fixture derives its exact empty-prompt grant below. Prior model usage is deliberately
+  // zero here; nonzero retrieval usage is covered by the configured semantic-refresh handler proof.
+  return { ...pack, usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 } };
+}
+
+function assertFinalMultiSourceProjection(
+  result: ReturnType<typeof normalizeGroundedAnswerPayload>,
+  sentBody: string | undefined,
+): void {
+  expect(result.filesInPrompt).toBe(
+    result.sentEvidencePacks?.filter((pack) => pack.files.length > 0).length,
+  );
+  for (const pack of result.sentEvidencePacks ?? []) {
+    for (const file of pack.files) {
+      for (const excerpt of file.excerpts) expect(sentBody).toContain(excerpt.content);
+    }
+  }
+  for (const name of ["a", "b"]) {
+    expect(result.evidenceScopeIndex?.get(`src/${name}.ts`) === "read-in-this-turn").toBe(
+      sentBody?.includes(`${name} evidence`),
+    );
+  }
+}
+
 describe("createMultiSourceAnswerer correlation threading", () => {
   it("refuses a repair deadline that expires between timeout setup and actual dispatch", async () => {
     const call = vi.fn((): Promise<NormalizedResponse> =>
@@ -3085,7 +3134,7 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       const redactor = buildRedactor({});
       const labeled = ["alpha", "beta"].map((name) => ({
         label: name,
-        pack: scopePack(`src/${name}.ts`, 0.8, name),
+        pack: zeroModelUsagePack(scopePack(`src/${name}.ts`, 0.8, name)),
       }));
       const question = "What does the repository do?";
       const empty = labeled.map((entry) => ({
@@ -3306,21 +3355,7 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       expect(result.promptContext?.contextWindowTokens).toBe(8_192);
       expect(result.evidenceScopeIndex).toBeDefined();
       expect(result.sentEvidencePacks).toBeDefined();
-      expect(result.filesInPrompt).toBe(
-        result.sentEvidencePacks?.filter((pack) => pack.files.length > 0).length,
-      );
-      for (const pack of result.sentEvidencePacks ?? []) {
-        for (const file of pack.files) {
-          for (const excerpt of file.excerpts) {
-            expect(sentSourceBodies.at(-1)).toContain(excerpt.content);
-          }
-        }
-      }
-      for (const name of ["a", "b"]) {
-        expect(result.evidenceScopeIndex?.get(`src/${name}.ts`) === "read-in-this-turn").toBe(
-          sentSourceBodies.at(-1)?.includes(`${name} evidence`),
-        );
-      }
+      assertFinalMultiSourceProjection(result, sentSourceBodies.at(-1));
     } finally {
       await built.dispose?.();
     }

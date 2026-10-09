@@ -221,7 +221,7 @@ function ManifestInspection({
   const [open, setOpen] = useState(false);
   const state = useManifestInspection(runId, open, onReadPaths);
   return (
-    <details className={styles.files} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details className={styles.cmpFiles} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>{t("grounded.files.inspect")}</summary>
       {open && state.kind === "pending" ? <p role="status">{t("grounded.files.loading")}</p> : null}
       {open && state.kind === "failed" ? <p role="alert">{t("grounded.files.failed")}</p> : null}
@@ -273,7 +273,7 @@ export function ConnectedRetrievalNotice({
 export function ConnectedEvidenceInspection(props: ConnectedEvidenceInspectionProps): ReactNode {
   const t = useOptionalWidgetTranslate();
   return (
-    <section className={styles.inspection} aria-label={t("grounded.files.inspection")}>
+    <section className={styles.cmpInspection} aria-label={t("grounded.files.inspection")}>
       {props.citationBehaviour === "never" || props.citationBehaviour === "cites-after-repair" ? (
         <p>
           {t(

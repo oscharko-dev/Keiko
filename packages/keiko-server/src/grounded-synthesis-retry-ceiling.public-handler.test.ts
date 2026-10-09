@@ -369,6 +369,14 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     async (rejection) => {
       const turn = await scriptedProviderTurn([rejection, CITED]);
       expect(turn.requests).toHaveLength(2);
+      expect(turn.spendReservations).toBe(turn.requests.length);
+      const sentTokens = turn.requests.reduce(
+        (total, body) =>
+          total + countGatewayPromptTokens(JSON.parse(body) as GatewayPromptTokenInput),
+        0,
+      );
+      expect(turn.usage.modelInputTokens).toBeGreaterThanOrEqual(sentTokens);
+      expect(turn.usage.modelOutputTokens).toBe(1);
       expect(turn.records.some((record) => record.op === "chat.request.compatibility-retry")).toBe(
         true,
       );

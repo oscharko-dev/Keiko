@@ -1,3 +1,4 @@
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -38,6 +39,7 @@ function runtime(): UiHandlerDeps {
   return {
     config,
     configPresent: true,
+    evidenceStore: createInMemoryEvidenceStore(),
     env: {},
     store,
     registry: createRunRegistry(),

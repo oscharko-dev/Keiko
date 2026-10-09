@@ -157,7 +157,7 @@ function useScopeTransition(
       setNotice(transition);
       reportScopeNotice(transition.reason, transition.scope);
     }, 100);
-    return () => clearTimeout(timer);
+    return (): void => clearTimeout(timer);
   }, [chat.id, signature]);
   return { notice, dismiss: (): void => setNotice(null) };
 }
@@ -264,7 +264,7 @@ export function ChatScopeNotice(props: ChatScopeNoticeProps): ReactNode {
   const restoration = useFolderRestoration(props, notice, dismiss);
   if (notice === null) return null;
   return (
-    <div className={styles.notice}>
+    <div className={styles.cmpNotice}>
       <span role="status" aria-live="polite">
         {t(notice.reason === "widened" ? "scope.notice.widened" : "scope.notice.narrowed", {
           scope: connectedScopeLabel(notice.scope, t),

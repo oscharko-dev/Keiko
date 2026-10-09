@@ -1,42 +1,42 @@
-.inspection {
+.cmpInspection {
   display: grid;
   gap: 8px;
-  color: var(--ink);
+  color: var(--text-primary);
 }
-.files {
+.cmpFiles {
   min-width: 0;
   overflow-x: auto;
 }
-.files summary {
+.cmpFiles summary {
   cursor: pointer;
 }
-.files table {
+.cmpFiles table {
   border-collapse: collapse;
   width: 100%;
   margin-block: 8px;
 }
-.files caption {
+.cmpFiles caption {
   text-align: left;
   font-weight: 600;
 }
-.files th,
-.files td {
+.cmpFiles th,
+.cmpFiles td {
   padding: 6px;
-  border-bottom: 1px solid var(--stroke);
+  border-bottom: 1px solid var(--border-default);
   text-align: left;
   vertical-align: top;
 }
-.files code {
+.cmpFiles code {
   overflow-wrap: anywhere;
 }
-.files button {
-  color: var(--ink);
+.cmpFiles button {
+  color: var(--text-primary);
   background: var(--surface);
-  border: 1px solid var(--stroke);
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   padding: 4px 8px;
 }
-.files :is(button, summary):focus-visible {
+.cmpFiles :is(button, summary):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

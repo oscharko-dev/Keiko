@@ -1194,6 +1194,15 @@ function ChatBindPending(): ReactNode {
   );
 }
 
+interface BoundChatBodyProps {
+  readonly activeProjectPath: string | undefined;
+  readonly choice: RedactedChatChoice | undefined;
+  readonly ctx: WindowRenderContext;
+  readonly targetLookupFailed: boolean;
+  readonly targetMissing: boolean;
+  readonly waiting: boolean;
+}
+
 function BoundChatBody({
   activeProjectPath,
   choice,
@@ -1201,14 +1210,7 @@ function BoundChatBody({
   targetLookupFailed,
   targetMissing,
   waiting,
-}: {
-  readonly activeProjectPath: string | undefined;
-  readonly choice: RedactedChatChoice | undefined;
-  readonly ctx: WindowRenderContext;
-  readonly targetLookupFailed: boolean;
-  readonly targetMissing: boolean;
-  readonly waiting: boolean;
-}): ReactNode {
+}: BoundChatBodyProps): ReactNode {
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
       if (message.runId === undefined) return;

@@ -34,17 +34,24 @@ function inspectedEvidence(
   };
 }
 
-export function useConnectedEvidenceReferences(
-  answer: GroundedAnswer | undefined,
-  roots: readonly RepositoryReferenceRoot[],
-): {
+interface ConnectedEvidenceReferences {
   readonly evidence: RepositoryReferenceEvidence | undefined;
   readonly onReadPaths: (
     runId: string,
     paths: readonly string[],
     sourceScopeFingerprint?: string,
   ) => void;
-} {
+}
+
+interface ReadSnapshot {
+  readonly key: string;
+  readonly byRun: Readonly<Record<string, ReadSource>>;
+}
+
+export function useConnectedEvidenceReferences(
+  answer: GroundedAnswer | undefined,
+  roots: readonly RepositoryReferenceRoot[],
+): ConnectedEvidenceReferences {
   const connected = answer?.groundingKind === "local-knowledge" ? undefined : answer;
   const primaryId = connected?.evidenceRunId;
   const otherIds = connected?.evidenceRunIds;
@@ -62,10 +69,7 @@ export function useConnectedEvidenceReferences(
   useEffect(() => {
     currentKey.current = key;
   }, [key]);
-  const [snapshot, setSnapshot] = useState<{
-    readonly key: string;
-    readonly byRun: Readonly<Record<string, ReadSource>>;
-  }>({ key: "", byRun: {} });
+  const [snapshot, setSnapshot] = useState<ReadSnapshot>({ key: "", byRun: {} });
   const onReadPaths = useCallback(
     (runId: string, paths: readonly string[], sourceScopeFingerprint?: string): void => {
       if (currentKey.current !== key || !runIds.includes(runId)) return;
