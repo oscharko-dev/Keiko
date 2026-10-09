@@ -2971,8 +2971,6 @@ function elapsedDeadlineStop(
   };
 }
 
-const DOCUMENT_EVIDENCE_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
-
 function isCompleteExactLiteralLookup(
   query: RetrievalQuery,
   diagnostics: ContextPackDiagnostics | undefined,
@@ -2998,7 +2996,7 @@ function isOrdinaryDocumentLookup(
     !hasGitMetadata &&
     !requiresRelationshipOrHistoryRings(query) &&
     candidates.length > 0 &&
-    candidates.every((candidate) => DOCUMENT_EVIDENCE_PATH_RE.test(candidate.scopePath))
+    candidates.every((candidate) => isOrdinaryFolderDocumentPath(candidate.scopePath, false))
   );
 }
 
@@ -8767,6 +8765,7 @@ function focusedDocumentContext(
   deps: OrchestratorDeps,
   runtime: ConnectedContextRuntime,
   context: LiveRetrievalContext,
+  plan: ExplorationPlan,
   admission: ExplicitPathAdmission,
 ): LiveRetrievalContext {
   const selections = admission.selections;
@@ -8774,6 +8773,7 @@ function focusedDocumentContext(
     context.hasGitMetadata ||
     input.query.kind !== "natural-language" ||
     requiresRelationshipOrHistoryRings(input.query) ||
+    plan.targetDecision?.targets.some((target) => target.kind !== "path") !== false ||
     selections.length === 0 ||
     !selections.every(
       (selection) =>
@@ -9383,7 +9383,7 @@ async function retrieveLiveConnectedContext(
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "ring-retrieval";
   const admitted = await liveExplicitPathAdmission(input, deps, plan, governor, runtime, context);
-  const focused = focusedDocumentContext(input, deps, runtime, context, admitted.admission);
+  const focused = focusedDocumentContext(input, deps, runtime, context, plan, admitted.admission);
   const discovered = await runAllRings(
     plan.rings,
     connectedContextSearchInputs(input, deps, plan, runtime, focused),
