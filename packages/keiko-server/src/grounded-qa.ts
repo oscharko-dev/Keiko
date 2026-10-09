@@ -1,3 +1,5 @@
+import { evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
+import type { GroundedAnswerOptions } from "./grounded-orchestrator.js";
 import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RetrievalIntent, SearchReference } from "@oscharko-dev/keiko-workflows";
 import {
@@ -83,6 +85,7 @@ import {
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { GroundedAnswerEvidenceDeclaration } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
@@ -145,6 +148,7 @@ import {
 } from "./workspace-root-denial-log.js";
 import {
   uncitedMemoryContextMarker,
+  connectedSearchNoEvidenceAnswer,
   type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
 import {
@@ -901,8 +905,32 @@ function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPrompt
   return ranked;
 }
 
-function excerptWithContent(excerpt: ContextExcerpt, content: string): ContextExcerpt {
-  return { ...excerpt, content, contentBytes: Buffer.byteLength(content, "utf8") };
+function excerptWithContent(
+  excerpt: ContextExcerpt,
+  content: string,
+  scopeId: string,
+): ContextExcerpt {
+  const original = excerpt.atom.lineRange;
+  if (original === undefined || content.length === excerpt.content.length)
+    return { ...excerpt, content, contentBytes: Buffer.byteLength(content, "utf8") };
+  const lineCount = content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
+  const lineRange = {
+    startLine: original.startLine,
+    endLine: Math.min(original.endLine, original.startLine + Math.max(1, lineCount) - 1),
+  };
+  const atom = {
+    ...excerpt.atom,
+    lineRange,
+    stableId: evidenceAtomStableId({
+      scopeId,
+      scopePath: excerpt.atom.scopePath,
+      lineRange,
+      provenanceKind: excerpt.atom.provenance.kind,
+      provenanceTool: excerpt.atom.provenance.tool,
+      queryFingerprint: excerpt.atom.provenance.queryFingerprint,
+    }),
+  };
+  return { ...excerpt, atom, content, contentBytes: Buffer.byteLength(content, "utf8") };
 }
 
 function withPromptExcerptTotalByteBudget(
@@ -922,7 +950,7 @@ function withPromptExcerptTotalByteBudget(
         : clampUtf8Bytes(ranked.excerpt.content, remaining);
     if (content.length === 0) break;
     const bucket = byFile.get(ranked.fileIndex) ?? [];
-    bucket.push(excerptWithContent(ranked.excerpt, content));
+    bucket.push(excerptWithContent(ranked.excerpt, content, pack.scope.scopeId));
     byFile.set(ranked.fileIndex, bucket);
     remaining -= Buffer.byteLength(content, "utf8");
     if (fullBytes > Buffer.byteLength(content, "utf8")) break;
@@ -1085,6 +1113,7 @@ export function fittedGroundedGatewayPrompt(
   );
   return {
     messages: fitted.messages,
+    sentEvidencePacks: [fitted.pack],
     withoutSources: buildRawGroundedGatewayMessages(
       question,
       withPromptExcerptBudget(fitted.pack, 0),
@@ -1307,6 +1336,15 @@ export function buildGroundedGatewayMessages(
   return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages, options);
 }
 
+interface GroundedGatewayAnswerContext {
+  readonly deps: UiHandlerDeps;
+  readonly model: ModelPort;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly tokenAccounting: ContextProfile["tokenAccounting"];
+}
+
 function createGatewayAnswerer(
   deps: UiHandlerDeps,
   model: ModelPort,
@@ -1315,41 +1353,78 @@ function createGatewayAnswerer(
   correlationId: string | undefined,
   tokenAccounting: ContextProfile["tokenAccounting"],
 ): GroundedAnswerer {
-  // The input budget is read per attempt, not captured once: when the provider's overflow answer
-  // taught Keiko the model's real window, the retry re-budgets the excerpts to fit it. The prompt
-  // of the last attempt is kept for the context meter's share of this answer.
-  let sent: SentGroundedPrompt | undefined;
-  const call = (question: string, pack: ConnectedContextPack): Promise<NormalizedResponse> => {
-    const promptOptions = groundedPromptOptions(deps, modelId, tokenAccounting);
-    sent = fittedGroundedGatewayPrompt(question, pack, deps.redactor, promptOptions);
-    return model.call(
-      { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
-      signal,
-    );
-  };
+  const ctx = { deps, model, modelId, signal, correlationId, tokenAccounting };
   return {
-    answer: async (question, pack): Promise<GroundedAnswerResult> => {
-      ensureNotCancelled(signal);
-      const response = await withAdoptedContextWindowRetry(
-        deps,
-        { modelId, surface: "grounded", correlationId },
-        () => call(question, pack),
-      );
-      const content = response.content.trim();
-      assertUsableAssistantContent(content, modelId);
-      return {
-        content,
-        usage: {
-          promptTokens: response.usage.promptTokens,
-          completionTokens: response.usage.completionTokens,
-        },
-        // GEN-AI-GATEWAY-001 (RB-4): carry the finishReason so a truncated ("length") completion is
-        // surfaced by runGroundedExploration instead of being consumed as a complete answer.
-        finishReason: response.finishReason,
-        ...sentPromptContextField(sent, response, currentContextProfileForModel(deps, modelId)),
-      };
-    },
+    answer: (question, pack, options) => gatewayGroundedAnswer(ctx, question, pack, options ?? {}),
   };
+}
+
+async function gatewayGroundedAnswer(
+  ctx: GroundedGatewayAnswerContext,
+  question: string,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): Promise<GroundedAnswerResult> {
+  ensureNotCancelled(ctx.signal);
+  const attempt = await withAdoptedContextWindowRetry(
+    ctx.deps,
+    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
+    () => groundedGatewayAttempt(ctx, question, pack, options),
+  );
+  if (attempt.response === undefined)
+    return {
+      content: connectedSearchNoEvidenceAnswer(options.currentQuestion ?? question),
+      usage: { promptTokens: 0, completionTokens: 0 },
+      modelInvoked: false,
+      noEvidence: true,
+      sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
+      filesInPrompt: 0,
+    };
+  const response = attempt.response;
+  assertUsableAssistantContent(response.content.trim(), ctx.modelId);
+  return {
+    content: response.content.trim(),
+    usage: {
+      promptTokens: response.usage.promptTokens,
+      completionTokens: response.usage.completionTokens,
+    },
+    finishReason: response.finishReason,
+    modelInvoked: true,
+    sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
+    ...sentPromptContextField(
+      attempt.sent,
+      response,
+      currentContextProfileForModel(ctx.deps, ctx.modelId),
+    ),
+  };
+}
+
+async function groundedGatewayAttempt(
+  ctx: GroundedGatewayAnswerContext,
+  question: string,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): Promise<{ readonly sent: SentGroundedPrompt; readonly response?: NormalizedResponse }> {
+  const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
+  const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
+    ...promptOptions,
+    modelInputTokensMax: Math.min(
+      promptOptions.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+      options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    ),
+  });
+  if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
+  const response = await ctx.model.call(
+    {
+      modelId: ctx.modelId,
+      messages: sent.messages,
+      stream: false,
+      maxOutputTokens: options.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax,
+      logContext: { correlationId: ctx.correlationId },
+    },
+    ctx.signal,
+  );
+  return { sent, response };
 }
 
 // The input budget of one attempt, read from the model's current capability.
@@ -1878,6 +1953,31 @@ function registerSingleGroundedTurn(
   );
 }
 
+function singleAnswerEvidenceDeclaration(
+  output: OrchestratorOutput,
+): GroundedAnswerEvidenceDeclaration {
+  return {
+    ...(output.answerKind === undefined ? {} : { answerKind: output.answerKind }),
+    ...(output.insufficiencyDeclarations === undefined
+      ? {}
+      : { insufficiencyDeclarations: output.insufficiencyDeclarations }),
+  };
+}
+
+function singleAnswerContextSummary(
+  workerCtx: AskWorkerCtx,
+  output: OrchestratorOutput,
+  citationCount: number,
+): ReturnType<typeof buildGroundedAnswerContextPackSummary> {
+  return buildGroundedAnswerContextPackSummary(
+    output.pack,
+    citationCount,
+    output.elapsedMs,
+    groundedContextSummaryInput({ contextProfile: workerCtx.contextProfile }, output.pack),
+    output.filesInPrompt === undefined ? undefined : { filesInPrompt: output.filesInPrompt },
+  );
+}
+
 // Persists the exchange, projects citations/uncertainty, and assembles the wire answer for a
 // single-source folder ask. Split out of runAsk to keep both under the LOC bound.
 function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
@@ -1890,7 +1990,11 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   const sourceEvidenceAvailable = output.noEvidence !== true;
   const modelInvoked = output.modelInvoked ?? sourceEvidenceAvailable;
   const citations = modelInvoked
-    ? buildAnswerCitations(output.pack, output.assistantContent, deps.redactor)
+    ? buildAnswerCitations(
+        output.sentEvidencePacks?.[0] ?? output.pack,
+        output.assistantContent,
+        deps.redactor,
+      )
     : [];
   const evidenceRunId = sourceEvidenceAvailable
     ? persistGroundedAuditEvidence(workerCtx, output, citations.length)
@@ -1902,23 +2006,18 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     assistantContent,
     workerCtx.userMessage,
   );
-  const contextPack = buildGroundedAnswerContextPackSummary(
-    output.pack,
-    citations.length,
-    output.elapsedMs,
-    groundedContextSummaryInput({ contextProfile: workerCtx.contextProfile }, output.pack),
-  );
   const answer: GroundedAnswer = {
     groundingKind: "connected-context",
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
     ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
     content: assistantContent,
+    ...singleAnswerEvidenceDeclaration(output),
     citations,
     uncertainty: buildUncertainty(output.pack, deps.redactor),
     omittedCount: connectedContextOmittedCount(output.pack),
     elapsedMs: output.elapsedMs,
-    contextPack,
+    contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
     ...(modelInvoked && output.promptContext !== undefined
       ? { promptContext: output.promptContext }
       : {}),
@@ -2102,6 +2201,7 @@ async function dispatchMultiSourceAsk(
   );
   if ("status" in seam) return seam;
   return runMultiSourceAsk({
+    ...groundedRetrievalContinuityFields(input),
     chat,
     scopes,
     ...(args.sourceScopeFingerprints === undefined
@@ -2261,6 +2361,7 @@ async function dispatchHybridAsk(
   // path does: there is no real model port to validate. Production resolves the guardrails once.
   const modelId = groundedModelId(prepared);
   return runHybridGroundedAsk({
+    ...groundedRetrievalContinuityFields(input),
     chat,
     ...(prepared.sourceScopeFingerprints === undefined
       ? {}

@@ -135,6 +135,17 @@ describe("logCitationReconciliation", () => {
     logCitationReconciliation(
       evidence({ answer, attachedIndices: [1], weakOverlapCount: 1, referenceCount: 5 }),
       "citation-reconcile-proof-0001",
+      {
+        answerKind: "answer",
+        citationBehaviour: undefined,
+        scopeIdentitySha256: "a".repeat(64),
+        queryIdentitySha256: "b".repeat(64),
+        followUpPass: 0,
+        insufficiencyDeclaredCount: 2,
+        declaredInScopeCount: 1,
+        declaredUnreadInScopeCount: 1,
+        declaredNotInScopeCount: 1,
+      },
     );
 
     const [event] = sink.events;
@@ -158,7 +169,16 @@ describe("logCitationReconciliation", () => {
       danglingMarkerCount: 2,
       completeness: "complete",
       loss: "none",
+      answerKind: "answer",
+      scopeIdentitySha256: "a".repeat(64),
+      queryIdentitySha256: "b".repeat(64),
+      followUpPass: 0,
+      insufficiencyDeclaredCount: 2,
+      declaredInScopeCount: 1,
+      declaredUnreadInScopeCount: 1,
+      declaredNotInScopeCount: 1,
     });
+    expect(persisted).not.toHaveProperty("citationBehaviour");
     // Counts and one closed outcome only: never the answer, a marker literal or an excerpt.
     const serialized = sink.lines().join("\n");
     expect(serialized).not.toContain("Java 17");
