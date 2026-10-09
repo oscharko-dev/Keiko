@@ -59,6 +59,14 @@ export function groundedAnswerSourceText(answerText: string): string {
   return ownAssessmentSourceText(answerText);
 }
 
+/** A canonical block with no source projection carries only the existing assessment authority. */
+export function isGroundedAssessmentOnly(content: string): boolean {
+  return (
+    splitOwnAssessment(content).assessment !== undefined &&
+    groundedAnswerSourceText(content).trim().length === 0
+  );
+}
+
 /** Project only authoritative normalized declaration fields into public answer wires. */
 export function groundedAnswerEvidenceFields(
   answer: GroundedAnswerEvidenceDeclaration,
