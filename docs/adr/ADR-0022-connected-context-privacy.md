@@ -232,8 +232,9 @@ summaries survive the scan. These shared defaults also apply to manual Editor fi
 preview and symbol lookup, coding context lookups, and grounded symbol trace; explicit finite callers retain their
 bounds. An unlimited default lookup uses the live traversal rather than treating a finite workspace
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
-images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
-Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+images, binary content, unsafe aliases, and larger files are excluded. Ordinary-folder recursive content searches do not inherit Git-oriented generated-directory
+exclusions merely from names such as `build` or `dist`. Query-named explicit path admission applies
+the shared generated-path eligibility policy before it can inject an unconditional read candidate.
 An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
 text-search calls. It is not an index failure or evidence of index reuse. If no indexed result,
 snapshot load, or snapshot save was observed, both completion projections report the provider as
@@ -371,6 +372,20 @@ reported when that grant is spent; cancellation or a changed source prevents pub
 retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
 boosts; vague, diagnostic, relational, and semantic evidence retains ordinary relevance filtering.
+Query-named paths (relative, contained absolute, or local file URLs) are case-preserving explicit
+selections. A single admission seam applies selected-scope membership, canonical containment, deny
+and ignore rules, safe regular-file checks, and the existing binary/size classifier before injection.
+Its closed rejection vocabulary is `outside-scope`, `denied`, `missing`, `ignored`, `generated`,
+`binary`, `size-exceeded`, and `unsupported-format`. Human Files selections retain their existing
+safe ignored-file exemption; pasted paths cannot acquire it. Admitted paths reuse `repo.selectedFile`
+evidence, survive both relevance floors, and receive read-budget priority without widening byte or
+token grants. A valid line hint selects the existing located-source window; a hint beyond the file
+falls back to the default window and never claims an anchored read. Known dotted basenames use
+bounded shared filename discovery, retaining every eligible match independently.
+Admission counters and the closed reason list are projected on the existing
+`search.connected-context.source-details` sibling because the completed operation already occupies
+its bounded field contract. Its correlation joins the unchanged completion/read-budget evidence;
+the field cap and existing completed fields remain authoritative.
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,
 not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
 continue to report incomplete scope coverage; omitted evidence never proves a fact absent.

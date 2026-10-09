@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "52125c6a8bee814bac81113c377da0ded031521711b0c43b4a41363afc970134" as const;
+  "9cff70422cb0c3f75d909280d3ed2fa03aec30966e4801fd6b468475376346bf" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 342,
-  completeClassCount: 342,
+  supportedClassCount: 344,
+  completeClassCount: 344,
   completeness: "complete",
   classes: [
     {
@@ -4366,6 +4366,93 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "client-evidence-inspection",
+      requirementContract: "client-evidence-inspection",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["client.evidence.inspected"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.evidence.inspected",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.evidence.inspected"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.evidence.inspected",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "errorClass",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "omittedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "readFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["client.evidence.inspected.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "client-git-operation",
       requirementContract: "client-git-operation",
       productSurfaces: ["keiko-server"],
@@ -4522,6 +4609,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.knowledge-catalog.unavailable.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-scope-notice",
+      requirementContract: "client-scope-notice",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["client.scope.notice"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.scope.notice",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.scope.notice"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.scope.notice",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "pathCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "scopeKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.scope.notice.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -12992,9 +13141,57 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "basenameDiscoveryMatchCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "basenameDiscoveryTermCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "directEvidenceLookup",
               type: "boolean",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "explicitLineHintCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "explicitPathAdmittedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "explicitPathAnchorCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "explicitPathRejectedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "explicitPathRejectionReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "explicitSelectionAtomCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -13189,7 +13386,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             frames: false,
             causeChain: false,
           },
-          proofIds: ["search.connected-context.source-details.line"],
+          proofIds: [
+            "search.connected-context.source-details.line",
+            "search.connected-context.explicit-admission.line",
+          ],
           replayReferences: [],
           missingObligations: [],
         },
@@ -40599,11 +40799,13 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",
+    "client.evidence.inspected": "client-diagnostics",
     "client.files-scope.decision": "client-diagnostics",
     "client.git-operation.attempted": "client-diagnostics",
     "client.git-operation.settled": "client-diagnostics",
     "client.knowledge-catalog.unavailable": "client-diagnostics",
     "client.markdown.layout": "client-diagnostics",
+    "client.scope.notice": "client-diagnostics",
     "client.select.dismissed": "client-diagnostics",
     "client.session-repair.acknowledged": "client-diagnostics",
     "client.session-repair.failed": "client-diagnostics",
