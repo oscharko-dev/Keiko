@@ -1,3 +1,4 @@
+import { findCitationMarkerGroups } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import type { CitationRepairDisposition } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { OrchestratorDeps } from "./grounded-orchestrator.js";
@@ -6,10 +7,12 @@ import {
   buildPackCitationIndex,
   parseInlineCitations,
   reconcileInlineCitations,
+  reconcileNumericCitations,
 } from "./grounded-faithfulness.js";
 import { validateCitationRepair } from "./grounded-citation-repair.js";
 
 export interface GroundedRepairContext {
+  readonly numericMarkers?: ReadonlySet<number> | undefined;
   readonly question: string;
   readonly pack: ConnectedContextPack;
   readonly answer: GroundedAnswerResult;
@@ -34,18 +37,27 @@ function repairDisposition(ctx: GroundedRepairContext): CitationRepairDispositio
     (answer.filesInPrompt ?? 0) === 0
   )
     return "not-needed";
-  if (parseInlineCitations(answer.content).length > 0) return "not-needed";
+  if (hasParsedRepairCitations(ctx)) return "not-needed";
   if (ctx.deps.reliableCitationBehaviour === "cites" || ctx.deps.answerer.repair === undefined)
     return "skipped-capability";
   if (repairBudgetExhausted(ctx)) return "skipped-budget";
   return undefined;
 }
 
+function hasParsedRepairCitations(ctx: GroundedRepairContext): boolean {
+  return (
+    parseInlineCitations(ctx.answer.content).length > 0 ||
+    (ctx.numericMarkers !== undefined && findCitationMarkerGroups(ctx.answer.content).length > 0)
+  );
+}
+
 function repairBudgetExhausted(ctx: GroundedRepairContext): boolean {
   return (
     (ctx.deadlineAtMs !== undefined && ctx.nowMs() >= ctx.deadlineAtMs) ||
-    ctx.pack.budget.modelInputTokensMax <= ctx.answer.usage.promptTokens ||
-    ctx.pack.budget.modelOutputTokensMax <= ctx.answer.usage.completionTokens
+    ctx.pack.budget.modelInputTokensMax <=
+      ctx.pack.usage.modelInputTokens + ctx.answer.usage.promptTokens ||
+    ctx.pack.budget.modelOutputTokensMax <=
+      ctx.pack.usage.modelOutputTokens + ctx.answer.usage.completionTokens
   );
 }
 
@@ -56,7 +68,7 @@ function combinedRepairAnswer(
   const index = buildPackCitationIndex(ctx.answer.sentEvidencePacks ?? [ctx.pack]);
   const accepted =
     repaired.modelInvoked !== false &&
-    validateCitationRepair(ctx.answer.content, repaired.content, index);
+    validateCitationRepair(ctx.answer.content, repaired.content, index, ctx.numericMarkers);
   return {
     disposition: accepted ? "applied" : "rejected-content-changed",
     answer: {
@@ -86,9 +98,14 @@ export async function repairGroundedAnswer(
         ctx.answer.sentEvidencePacks?.[0] ?? ctx.pack,
         ctx.answer.content,
         {
-          modelInputTokensMax: ctx.pack.budget.modelInputTokensMax - ctx.answer.usage.promptTokens,
+          modelInputTokensMax:
+            ctx.pack.budget.modelInputTokensMax -
+            ctx.pack.usage.modelInputTokens -
+            ctx.answer.usage.promptTokens,
           modelOutputTokensMax:
-            ctx.pack.budget.modelOutputTokensMax - ctx.answer.usage.completionTokens,
+            ctx.pack.budget.modelOutputTokensMax -
+            ctx.pack.usage.modelOutputTokens -
+            ctx.answer.usage.completionTokens,
           signal: ctx.deps.signal,
           deadlineAtMs: ctx.deadlineAtMs,
         },
@@ -112,8 +129,15 @@ export function observeGroundedCitationBehaviour(ctx: GroundedRepairContext): Gr
     ctx.answer.content,
     buildPackCitationIndex(ctx.answer.sentEvidencePacks ?? [ctx.pack]),
   );
+  const numeric =
+    ctx.numericMarkers === undefined
+      ? undefined
+      : reconcileNumericCitations(ctx.answer.content, ctx.numericMarkers);
   const behaviour =
-    ctx.answer.citationBehaviour ?? (reconciliation.citedScopePaths.size > 0 ? "cites" : "never");
+    ctx.answer.citationBehaviour ??
+    (reconciliation.citedScopePaths.size > 0 || (numeric?.citedMarkers.size ?? 0) > 0
+      ? "cites"
+      : "never");
   ctx.deps.observeCitationBehaviour?.(behaviour);
   return { ...ctx.answer, citationBehaviour: behaviour };
 }

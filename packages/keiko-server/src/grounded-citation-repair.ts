@@ -2,6 +2,7 @@ import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citati
 import {
   parseInlineCitations,
   reconcileInlineCitations,
+  reconcileNumericCitations,
   type PackCitationIndex,
 } from "./grounded-faithfulness.js";
 
@@ -13,9 +14,12 @@ interface MarkerInsertion {
   readonly end: number;
 }
 
-export function buildCitationRepairPrompt(answerText: string): string {
+export function buildCitationRepairPrompt(
+  answerText: string,
+  kind: "file" | "numeric" = "file",
+): string {
   return [
-    "Return the original answer verbatim; only insert supported [path:line-range] citation markers.",
+    `Return the original answer verbatim; only insert supported ${kind === "file" ? "[path:line-range]" : "[n]"} citation markers.`,
     "Use only the supplied repository excerpts. Preserve every claim, code block and existing bracket.",
     "Do not add explanations, tools, missing-evidence declarations or unsupported locations.",
     "Original answer:",
@@ -23,14 +27,26 @@ export function buildCitationRepairPrompt(answerText: string): string {
   ].join("\n");
 }
 
-function supportedBracket(token: string, index: PackCitationIndex): boolean {
+function supportedBracket(
+  token: string,
+  index: PackCitationIndex,
+  numericMarkers?: ReadonlySet<number>,
+): boolean {
+  if (numericMarkers !== undefined) {
+    const numeric = reconcileNumericCitations(token, numericMarkers);
+    if (numeric.citedMarkers.size > 0) return numeric.unsupportedMarkers.length === 0;
+  }
   const parts = token.slice(1, -1).split(",");
   if (!parts.every((part) => parseInlineCitations(`[${part.trim()}]`).length === 1)) return false;
   const result = reconcileInlineCitations(token, index);
   return result.unsupported.length === 0 && result.citedScopePaths.size > 0;
 }
 
-function repairInsertions(text: string, index: PackCitationIndex): readonly MarkerInsertion[] {
+function repairInsertions(
+  text: string,
+  index: PackCitationIndex,
+  numericMarkers?: ReadonlySet<number>,
+): readonly MarkerInsertion[] {
   const code = markdownCodeRanges(text);
   const result: MarkerInsertion[] = [];
   for (const match of text.matchAll(/\[[^\]\r\n]{1,512}\]/gu)) {
@@ -39,7 +55,7 @@ function repairInsertions(text: string, index: PackCitationIndex): readonly Mark
     if (text.charAt(end) === "(" || text.charAt(end) === "[") continue;
     const lineStart = text.lastIndexOf("\n", match.index) + 1;
     if (/^\s*Missing evidence:/iu.test(text.slice(lineStart, match.index))) continue;
-    if (supportedBracket(match[0], index)) result.push({ start: match.index, end });
+    if (supportedBracket(match[0], index, numericMarkers)) result.push({ start: match.index, end });
     if (result.length > INSERTION_MAX) return [];
   }
   return result;
@@ -90,10 +106,19 @@ export function validateCitationRepair(
   original: string,
   repaired: string,
   index: PackCitationIndex,
+  numericMarkers?: ReadonlySet<number>,
 ): boolean {
   if (original.length > REPAIR_TEXT_MAX || repaired.length > REPAIR_TEXT_MAX) return false;
   const reconciliation = reconcileInlineCitations(repaired, index);
-  if (reconciliation.unsupported.length > 0 || reconciliation.citedScopePaths.size === 0)
+  if (reconciliation.unsupported.length > 0) return false;
+  const numeric =
+    numericMarkers === undefined ? undefined : reconcileNumericCitations(repaired, numericMarkers);
+  if ((numeric?.unsupportedMarkers.length ?? 0) > 0) return false;
+  if (reconciliation.citedScopePaths.size === 0 && (numeric?.citedMarkers.size ?? 0) === 0)
     return false;
-  return unchangedWithInsertions(original, repaired, repairInsertions(repaired, index));
+  return unchangedWithInsertions(
+    original,
+    repaired,
+    repairInsertions(repaired, index, numericMarkers),
+  );
 }
