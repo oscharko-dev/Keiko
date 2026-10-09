@@ -109,6 +109,7 @@ import {
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
+  currentOwnAssessmentPolicy,
   currentRedactionSecrets,
 } from "./deps.js";
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
@@ -149,7 +150,9 @@ import {
   type FolderRetriever,
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { GROUNDED_SYSTEM_PROMPT, groundedSystemPrompt } from "./grounded-prompt.js";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { singleSentEvidencePack } from "./grounded-answer-evidence.js";
 import {
   isExpectedWorkspaceRootFailure,
   recordWorkspaceRootDenial,
@@ -850,6 +853,7 @@ export function groundedPromptInputTokensForCapability(
 }
 
 export interface GroundedGatewayPromptOptions {
+  readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
   readonly modelInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
   readonly requiredEvidencePaths?: readonly string[] | undefined;
@@ -1137,7 +1141,7 @@ export function fittedGroundedGatewayPrompt(
     question,
     pack,
     redactor,
-    buildRawGroundedGatewayMessages,
+    groundedPromptBuilder(options),
     options,
   );
   return {
@@ -1148,6 +1152,7 @@ export function fittedGroundedGatewayPrompt(
       withPromptExcerptBudget(fitted.pack, 0),
       redactor,
       -1,
+      options?.ownAssessmentPolicy,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -1328,6 +1333,7 @@ function buildRawGroundedGatewayMessages(
   pack: ConnectedContextPack,
   redactor: Redactor,
   omissionPathBytes?: number,
+  ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
@@ -1351,7 +1357,7 @@ function buildRawGroundedGatewayMessages(
     ...uncertaintyLines(pack, redactor),
   ].join("\n");
   return [
-    { role: "system", content: GROUNDED_SYSTEM_PROMPT },
+    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
     { role: "user", content: userContent },
   ];
 }
@@ -1362,7 +1368,18 @@ export function buildGroundedGatewayMessages(
   redactor: Redactor,
   options?: GroundedGatewayPromptOptions,
 ): readonly GatewayChatMessage[] {
-  return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages, options);
+  return promptBudgetedMessages(question, pack, redactor, groundedPromptBuilder(options), options);
+}
+
+function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): GroundedPromptBuilder {
+  return (question, pack, redactor, omissionPathBytes): readonly GatewayChatMessage[] =>
+    buildRawGroundedGatewayMessages(
+      question,
+      pack,
+      redactor,
+      omissionPathBytes,
+      options?.ownAssessmentPolicy,
+    );
 }
 
 interface GroundedGatewayAnswerContext {
@@ -1509,7 +1526,12 @@ async function groundedGatewayAttempt(
     ),
   });
   if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
-  if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
+  if (
+    sent.sentReferenceCount === 0 &&
+    options.answerOnlyContextAvailable !== true &&
+    promptOptions.ownAssessmentPolicy !== "allowed"
+  )
+    return { sent };
   if ((remaining.modelOutputTokensMax ?? 0) <= 0) return { sent };
   const response = await dispatchGroundedSynthesis(ctx, sent, pack, options, remaining);
   return { sent, response };
@@ -1587,6 +1609,7 @@ export function groundedPromptOptions(
 ): GroundedGatewayPromptOptions {
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
   };
@@ -1644,6 +1667,7 @@ function runDefaultGroundedExploration(
   );
   const semanticLease = configuredGroundedSemanticRequest(deps, budgetedInput.workspaceRoot);
   return runGroundedExploration(budgetedInput, {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
     followUpConfigurationDisposition: connectedFollowUpConfiguration(
       deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
     ).disposition,
@@ -2148,7 +2172,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   const modelInvoked = output.modelInvoked ?? sourceEvidenceAvailable;
   const citations = modelInvoked
     ? buildAnswerCitations(
-        output.sentEvidencePacks?.[0] ?? output.pack,
+        singleSentEvidencePack(output, output.pack),
         output.assistantContent,
         deps.redactor,
       )

@@ -1,3 +1,8 @@
+import {
+  splitOwnAssessment,
+  composeOwnAssessment,
+  ownAssessmentSourceText,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 // Shared grounded-answer faithfulness + abstention enforcement (RB-4).
 //
 // This dependency-light LEAF module is imported by every grounded path (single-source
@@ -48,6 +53,19 @@ import type {
   GroundedAnswerEvidenceDeclaration,
   GroundedInsufficiencyDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+
+/** Only this authority may authenticate source claims, citations or missing-evidence requests. */
+export function groundedAnswerSourceText(answerText: string): string {
+  return ownAssessmentSourceText(answerText);
+}
+
+/** A canonical block with no source projection carries only the existing assessment authority. */
+export function isGroundedAssessmentOnly(content: string): boolean {
+  return (
+    splitOwnAssessment(content).assessment !== undefined &&
+    groundedAnswerSourceText(content).trim().length === 0
+  );
+}
 
 /** Project only authoritative normalized declaration fields into public answer wires. */
 export function groundedAnswerEvidenceFields(
@@ -108,6 +126,7 @@ function balancedDeclarationPath(path: string): boolean {
 
 /** Declaration syntax is metadata, even when its path is unknown or unsafe. */
 function withoutInsufficiencyDeclarations(text: string): string {
+  text = groundedAnswerSourceText(text);
   const parts: string[] = [];
   let cursor = 0;
   for (const line of insufficiencyLines(text)) {
@@ -130,7 +149,7 @@ function canonicalDeclarationPath(path: string): boolean {
 
 function boundedInsufficiencyPaths(answerText: string): readonly string[] {
   const seen = new Set<string>();
-  for (const { path } of insufficiencyLines(answerText)) {
+  for (const { path } of insufficiencyLines(groundedAnswerSourceText(answerText))) {
     if (seen.size === MAX_INSUFFICIENCY_DECLARATIONS) break;
     seen.add(path);
   }
@@ -178,6 +197,19 @@ export function sanitizeInsufficiencyDeclarations(
   answerText: string,
   scopeIndex: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
 ): string {
+  const split = splitOwnAssessment(answerText);
+  const grounded = sanitizeSourceDeclarations(groundedAnswerSourceText(answerText), scopeIndex);
+  const assessment =
+    split.assessment === undefined
+      ? undefined
+      : sanitizeSourceDeclarations(split.assessment, new Map());
+  return composeOwnAssessment(grounded, assessment, true);
+}
+
+function sanitizeSourceDeclarations(
+  answerText: string,
+  scopeIndex: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
+): string {
   const allowed = new Set(
     parseInsufficiencyDeclarations(answerText, scopeIndex).declarations.map(
       (declaration) => declaration.scopePath,
@@ -191,7 +223,8 @@ export function sanitizeInsufficiencyDeclarations(
     cursor = line.end;
   }
   parts.push(answerText.slice(cursor));
-  return parts.join("").trim();
+  const content = parts.join("");
+  return content.trim().length === 0 ? "" : content.trimEnd();
 }
 
 /** Only actual sent excerpts establish read-state; discovered membership alone remains unread. */
@@ -293,7 +326,7 @@ function substantiveAnswerText(prose: string): boolean {
 export function classifyGroundedAnswerKind(answerText: string): GroundedAnswerKind {
   const prose = withoutInsufficiencyDeclarations(answerText).trim();
   if (substantiveAnswerText(prose)) return "answer";
-  const declared = insufficiencyLines(answerText).length > 0;
+  const declared = insufficiencyLines(groundedAnswerSourceText(answerText)).length > 0;
   if (
     declared &&
     (prose.length === 0 || INSUFFICIENCY_PATTERNS.some((pattern) => pattern.test(prose)))
@@ -947,7 +980,9 @@ export function missingCitationMarkerFor(
   nowMs: number,
   answerKind: GroundedAnswerKind = classifyGroundedAnswerKind(answerText),
 ): UncertaintyMarker | undefined {
-  return answerKind === "answer" ? missingCitationMarker(nowMs) : undefined;
+  return answerKind === "answer" && groundedAnswerSourceText(answerText).trim().length > 0
+    ? missingCitationMarker(nowMs)
+    : undefined;
 }
 
 /**
@@ -1182,7 +1217,7 @@ function hidesBracketedProse(span: string): boolean {
 /** Segment an answer into the cited claims (spans that carry at least one inline citation). */
 export function segmentCitedClaims(answerText: string): readonly CitedClaim[] {
   const claims: CitedClaim[] = [];
-  for (const span of splitClaimSpans(answerText)) {
+  for (const span of splitClaimSpans(groundedAnswerSourceText(answerText))) {
     const citations = parseInlineCitations(span);
     if (citations.length > 0) {
       const claimText = stripInlineCitations(span);
@@ -1285,7 +1320,7 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
   let preceding: SupportedClaimText | undefined;
   // The claim the preceding span cited or continued: a span without claim text of its own extends it.
   let lastClaim: NumericClaimDraft | undefined;
-  for (const span of splitClaimSpans(answerText)) {
+  for (const span of splitClaimSpans(groundedAnswerSourceText(answerText))) {
     const markers = parseNumericCitations(span);
     const claimText = stripInlineCitations(span);
     const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);

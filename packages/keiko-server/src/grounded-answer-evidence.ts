@@ -5,6 +5,16 @@ import {
   validateGroundedAnswerEvidence,
 } from "./grounded-faithfulness.js";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
+import { sentGroundedFileCount } from "./grounded-prompt.js";
+
+/** Absent legacy metadata may use assembly; an authoritative empty inventory grants no support. */
+export function singleSentEvidencePack(
+  answer: Pick<GroundedAnswerResult, "sentEvidencePacks">,
+  assembled: ConnectedContextPack,
+): ConnectedContextPack {
+  if (answer.sentEvidencePacks === undefined) return assembled;
+  return answer.sentEvidencePacks[0] ?? { ...assembled, files: [] };
+}
 
 function verifiedPackInventory(
   pack: ConnectedContextPack,
@@ -22,7 +32,7 @@ export function validateSingleAnswerEvidence(
   answer: GroundedAnswerResult,
   pack: ConnectedContextPack,
   question: string,
-  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> | undefined,
+  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
 ): GroundedAnswerResult {
   const sentEvidencePacks = answer.sentEvidencePacks ?? [pack];
   const index =
@@ -32,6 +42,7 @@ export function validateSingleAnswerEvidence(
       new Map([...verifiedPackInventory(pack), ...(discovered ?? [])]),
     );
   const evidence = validateGroundedAnswerEvidence(answer.content, index, question);
+  const filesInPrompt = sentGroundedFileCount(sentEvidencePacks);
   return {
     ...answer,
     ...evidence,
@@ -39,10 +50,7 @@ export function validateSingleAnswerEvidence(
     insufficiencyObservation: answer.insufficiencyObservation ?? evidence.insufficiencyObservation,
     evidenceScopeIndex: index,
     sentEvidencePacks,
-    filesInPrompt: new Set(
-      sentEvidencePacks.flatMap((sent) =>
-        sent.files.filter((file) => file.excerpts.length > 0).map((file) => file.scopePath),
-      ),
-    ).size,
+    filesInPrompt,
+    ...(filesInPrompt === 0 ? { noEvidence: true } : {}),
   };
 }

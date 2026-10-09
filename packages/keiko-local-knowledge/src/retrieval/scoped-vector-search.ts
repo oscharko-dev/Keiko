@@ -144,6 +144,12 @@ export interface SearchOptions {
   readonly queryTransformTimeoutMs?: number;
   readonly maxExactVectorScanRows?: number;
   readonly vectorIndex?: VectorIndexOptions;
+  /** Request-private, validated query data; never persisted or emitted as activity evidence. */
+  readonly observeQueryEmbedding?: (observation: {
+    readonly identity: EmbeddingModelIdentity;
+    readonly query: string;
+    readonly vector: Float32Array;
+  }) => void;
 }
 
 interface QueryProfile {
@@ -1914,6 +1920,12 @@ async function ensureCapsuleQueryEmbedding(
   if (embedded.dimensions !== capsule.embeddingModelIdentity.vectorDimensions) {
     return { kind: "identity-incompatible" };
   }
+  if (options.signal?.aborted !== true)
+    options.observeQueryEmbedding?.({
+      identity: { ...capsule.embeddingModelIdentity },
+      query,
+      vector: Float32Array.from(embedded.vector),
+    });
   return { kind: "ready", embedded };
 }
 

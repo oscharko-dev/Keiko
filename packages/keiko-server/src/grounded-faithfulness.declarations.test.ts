@@ -276,3 +276,17 @@ describe("conservative grounded answer kinds", () => {
     expect(uncitedMemoryContextMarker(1).kind).toBe("uncited-memory-context");
   });
 });
+
+it("never turns a model-knowledge declaration into a source request", () => {
+  const text = "<assessment>My recommendation.\nMissing evidence: [src/unread.ts]\n</assessment>";
+  const index = new Map([["src/unread.ts", "unread-in-scope" as const]]);
+  expect(parseInsufficiencyDeclarations(text, index)).toEqual({
+    declarations: [],
+    declaredCount: 0,
+    inScopeCount: 0,
+    unreadInScopeCount: 0,
+    notInScopeCount: 0,
+  });
+  expect(sanitizeInsufficiencyDeclarations(text, index)).not.toContain("src/unread.ts");
+  expect(sanitizeInsufficiencyDeclarations(text, index)).toContain("My recommendation.");
+});
