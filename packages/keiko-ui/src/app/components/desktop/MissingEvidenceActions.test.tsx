@@ -148,7 +148,7 @@ function delayedScopeTransport(): {
       }
       current = {
         ...current,
-        connectedScopes: scopes ?? undefined,
+        connectedScopes: scopes ?? [],
         groundingScopeIdentity:
           added === undefined ? "gsi-v1:" + "b".repeat(64) : disconnectedIdentity,
         updatedAt: current.updatedAt + 1,
