@@ -162,27 +162,37 @@ export interface DiagnosticTraceText {
   readonly detected: boolean;
 }
 
+function hasTracePrefix(line: string): boolean {
+  return line.startsWith("at ") || line.startsWith('File "') || line.startsWith("❯ ");
+}
+
+function unparsedTraceLine(line: string): boolean {
+  return (
+    hasTracePrefix(line) ||
+    (!line.includes(" ") && line.includes(":") && ALL_DIGITS.test(line.slice(-1)))
+  );
+}
+
 /** Source locations and assertion output stay separate from the human's request terms. */
 export function parseDiagnosticTraceText(text: string): DiagnosticTraceText {
   const acc: Accumulator = { frames: [], messages: [], seen: new Set() };
   const question: string[] = [];
   let start = 0;
   let detected = false;
-  for (let scanned = 0; scanned < MAX_LINES_SCANNED && start <= text.length; scanned += 1) {
+  // Only source-location parsing is capped. Continue a linear pass over the admitted request
+  // to preserve human terms after a long trace or blank prefix, without admitting later frames.
+  for (let scanned = 0; start <= text.length; scanned += 1) {
     const newline = text.indexOf("\n", start);
     const end = newline === -1 ? text.length : newline;
     const line = text.slice(start, end);
     const trimmed = line.trim();
-    const frame = parseFailureFrame(line);
+    const frame = scanned < MAX_LINES_SCANNED ? parseFailureFrame(line) : undefined;
     const traceLine =
-      frame !== undefined &&
-      (trimmed.startsWith("at ") ||
-        trimmed.startsWith('File "') ||
-        trimmed.startsWith("❯ ") ||
-        !trimmed.includes(" "));
-    if (traceLine && frame !== undefined) {
+      (frame !== undefined && (hasTracePrefix(trimmed) || !trimmed.includes(" "))) ||
+      (scanned >= MAX_LINES_SCANNED && unparsedTraceLine(trimmed));
+    if (traceLine) {
       detected = true;
-      pushFrame(acc, frame);
+      if (frame !== undefined) pushFrame(acc, frame);
     } else if (!trimmed.startsWith("AssertionError:") && !trimmed.startsWith("FAIL "))
       question.push(line);
     if (newline === -1) break;
