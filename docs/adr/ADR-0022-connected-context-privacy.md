@@ -564,9 +564,13 @@ violations and unexpected failures still propagate. The existing metadata-unavai
 scope-incomplete uncertainty remain visible.
 The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared
 legacy HTML charsets supported by the platform's fatal `TextDecoder`, including Shift-JIS, Big5,
-and ISO-2022-JP. HTML declarations are inspected within the first 1,024 bytes; `http-equiv` charset
-parameters are case-insensitive, and standard aliases such as `iso_8859-1` resolve through the platform
-decoder. Empty charset values are absent hints, allowing a later supported declaration; nonempty
+and ISO-2022-JP. Declarations are inspected within the first 1,024 bytes. An initial XHTML XML
+encoding declaration precedes HTML metadata; byte-order marks and recognizable UTF-16 patterns
+retain precedence over either declaration. The existing quote-aware attribute cursor consumes
+complete tags and skips comments and raw-text bodies, so script strings or quoted attribute
+examples cannot declare a codec. `http-equiv` charset parameters are case-insensitive, and standard
+aliases such as `iso_8859-1` resolve through the platform decoder. Empty charset values are absent
+hints, allowing a later supported declaration; nonempty
 unsupported declarations still refuse decoding. HTML metadata labels resolving to UTF-16LE/BE map
 to UTF-8, while actual BOM or recognizable-pattern detection retains precedence. A UTF-8 BOM does
 not bypass the bounded decoded NUL/control probe. No undeclared legacy encoding is guessed. Unknown or
