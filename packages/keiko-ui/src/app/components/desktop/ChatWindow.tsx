@@ -1,5 +1,7 @@
 "use client";
 
+import { ChatScopeNotice } from "./ChatScopeNotice";
+import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
 
 /**
@@ -209,6 +211,7 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
@@ -2076,7 +2079,9 @@ function RepositoryReferenceStrip({
             <FileIcon name={reference.name} />
           </span>
           <span className="repo-token-main">
-            <span className="repo-token-name">{reference.name}</span>
+            <span className="repo-token-name">
+              {t("scope.pill.file", { name: reference.name })}
+            </span>
             <span className="repo-token-path">
               {reference.directory.length === 0
                 ? repositoryRootLabel(reference.root)
@@ -4449,8 +4454,10 @@ function ChatScopeHeaderImpl({
   onChatChanged,
   memoryControl,
   pendingGitChangeComparisons,
+  onKeepFolderChange,
 }: {
   readonly chat: Chat;
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly onChatChanged: (chat: Chat) => void;
   readonly memoryControl?: ReactNode;
   readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
@@ -4470,6 +4477,16 @@ function ChatScopeHeaderImpl({
         onChatChanged={onChatChanged}
         catalog={catalog}
         connected={connected}
+      />
+      {effectiveConnectedScopes(chat).length === 0 ? null : (
+        <p className={scopeNoticeStyles.help} data-testid="grounding-help">
+          {t("chat.grounding.help")}
+        </p>
+      )}
+      <ChatScopeNotice
+        chat={chat}
+        onChatChanged={onChatChanged}
+        onKeepFolderChange={onKeepFolderChange}
       />
       <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
       <ConnectorScopePill
@@ -5256,6 +5273,7 @@ function composerPlaceholder(visibleCount: number, loading: boolean, t: I18nTran
 // Extracted from ChatWindow (SonarCloud S3776) — the chat-scope header, memory panel, and
 // no-model/loading alerts that sit above the scrollable log.
 function ChatWindowStatusHeader({
+  onKeepFolderChange,
   activeChat,
   replaceChat,
   memoryControl,
@@ -5270,6 +5288,7 @@ function ChatWindowStatusHeader({
   noEligibleModels,
   loading,
 }: {
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly activeChat: Chat | undefined;
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
@@ -5290,6 +5309,7 @@ function ChatWindowStatusHeader({
         <ChatScopeHeader
           chat={activeChat}
           onChatChanged={replaceChat}
+          onKeepFolderChange={onKeepFolderChange}
           memoryControl={memoryControl}
           pendingGitChangeComparisons={pendingGitChangeComparisons}
         />
@@ -5635,6 +5655,7 @@ function ChatWindowComposerFooter({
 }
 
 export function ChatWindow({
+  onKeepFolderChange,
   windowId,
   suspended = false,
   mini = false,
@@ -5821,6 +5842,7 @@ export function ChatWindow({
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
       <ChatWindowStatusHeader
+        onKeepFolderChange={onKeepFolderChange}
         activeChat={activeChat}
         replaceChat={replaceChat}
         memoryControl={memoryControl}
