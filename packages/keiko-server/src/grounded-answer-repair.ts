@@ -11,6 +11,8 @@ import type {
 } from "./grounded-orchestrator.js";
 import {
   normalizeGroundedAnswerPayload,
+  combinedGroundedSynthesisFields,
+  retainFailedGroundedSynthesis,
   type GroundedAnswerPayload,
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
@@ -60,6 +62,7 @@ function repairDisposition(ctx: GroundedRepairContext): CitationRepairDispositio
   if (hasParsedRepairCitations(ctx)) return "not-needed";
   if (ctx.deps.reliableCitationBehaviour === "cites" || repairInvoker(ctx) === undefined)
     return "skipped-capability";
+  if (ctx.deps.answerer?.remainingSynthesisCalls?.() === 0) return "skipped-budget";
   if (repairBudgetExhausted(ctx)) return "skipped-budget";
   return undefined;
 }
@@ -111,10 +114,7 @@ function combinedRepairAnswer(
       ...(accepted
         ? { content: repaired.content, citationBehaviour: "cites-after-repair" as const }
         : {}),
-      usage: {
-        promptTokens: ctx.answer.usage.promptTokens + repaired.usage.promptTokens,
-        completionTokens: ctx.answer.usage.completionTokens + repaired.usage.completionTokens,
-      },
+      ...combinedGroundedSynthesisFields(ctx.answer, repaired),
     },
   };
 }
@@ -133,7 +133,11 @@ export async function repairGroundedAnswer(
     return combinedRepairAnswer(ctx, repaired);
   } catch (failure) {
     if (ctx.deps.signal?.aborted === true) throw failure;
-    return { answer: ctx.answer, disposition: "failed", failure };
+    return {
+      answer: retainFailedGroundedSynthesis(ctx.answer, ctx.deps.answerer),
+      disposition: "failed",
+      failure,
+    };
   }
 }
 

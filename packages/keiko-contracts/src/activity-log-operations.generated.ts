@@ -27329,6 +27329,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      synthesisCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      synthesisReservedOutputTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       answerKind: {
         type: "string",
         dataClass: "closed-enum",

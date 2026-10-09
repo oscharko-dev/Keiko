@@ -121,7 +121,12 @@ import {
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
 import { createEntailmentStage, type EntailmentStage } from "./grounded-entailment-stage.js";
-import type { GroundedAnswerResult } from "./grounded-answer.js";
+import {
+  createGroundedSynthesisCallBudget,
+  createGroundedSynthesisAttemptAdmission,
+  type GroundedSynthesisCallBudget,
+  type GroundedAnswerResult,
+} from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
@@ -1361,6 +1366,7 @@ export function buildGroundedGatewayMessages(
 }
 
 interface GroundedGatewayAnswerContext {
+  readonly synthesis: GroundedSynthesisCallBudget;
   readonly deps: UiHandlerDeps;
   readonly model: ModelPort;
   readonly modelId: string;
@@ -1377,8 +1383,13 @@ function createGatewayAnswerer(
   correlationId: string | undefined,
   tokenAccounting: ContextProfile["tokenAccounting"],
 ): GroundedAnswerer {
-  const ctx = { deps, model, modelId, signal, correlationId, tokenAccounting };
+  const synthesis = createGroundedSynthesisCallBudget();
+  const ctx = { deps, model, modelId, signal, correlationId, tokenAccounting, synthesis };
   return {
+    remainingSynthesisCalls: synthesis.remaining,
+    pendingSynthesisUsage: synthesis.pendingUsage,
+    takeFailedSynthesisUsage: synthesis.takeUsage,
+    reservedSynthesisOutputTokens: synthesis.reservedOutputTokens,
     answer: (question, pack, options) => gatewayGroundedAnswer(ctx, question, pack, options ?? {}),
     repair: (question, pack, original, options) =>
       gatewayGroundedAnswer(
@@ -1409,6 +1420,8 @@ async function gatewayGroundedAnswer(
 ): Promise<GroundedAnswerResult> {
   ctx = groundedAnswerContextSignal(ctx, options);
   ensureNotCancelled(ctx.signal);
+  const remainingBefore = ctx.synthesis.remaining();
+  const reservedBefore = ctx.synthesis.reservedOutputTokens();
   const attempt = await withAdoptedContextWindowRetry(
     ctx.deps,
     { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
@@ -1417,7 +1430,7 @@ async function gatewayGroundedAnswer(
   if (attempt.response === undefined)
     return {
       content: connectedSearchNoEvidenceAnswer(options.currentQuestion ?? question),
-      usage: { promptTokens: 0, completionTokens: 0 },
+      ...settledSynthesisFields(ctx, remainingBefore, reservedBefore),
       modelInvoked: false,
       noEvidence: true,
       sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
@@ -1427,10 +1440,7 @@ async function gatewayGroundedAnswer(
   assertUsableAssistantContent(response.content.trim(), ctx.modelId);
   return {
     content: response.content.trim(),
-    usage: {
-      promptTokens: response.usage.promptTokens,
-      completionTokens: response.usage.completionTokens,
-    },
+    ...settledSynthesisFields(ctx, remainingBefore, reservedBefore),
     finishReason: response.finishReason,
     modelInvoked: true,
     sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
@@ -1442,42 +1452,102 @@ async function gatewayGroundedAnswer(
   };
 }
 
+function settledSynthesisFields(
+  ctx: GroundedGatewayAnswerContext,
+  remainingBefore: number,
+  reservedBefore: number,
+): Pick<GroundedAnswerResult, "usage" | "synthesisCallCount" | "synthesisReservedOutputTokens"> {
+  return {
+    usage: ctx.synthesis.takeUsage(),
+    synthesisCallCount: remainingBefore - ctx.synthesis.remaining(),
+    synthesisReservedOutputTokens: ctx.synthesis.reservedOutputTokens() - reservedBefore,
+  };
+}
+
+function groundedRemainingOptions(
+  ctx: GroundedGatewayAnswerContext,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): GroundedAnswerOptions {
+  const pending = ctx.synthesis.pendingUsage();
+  return {
+    ...options,
+    modelInputTokensMax: Math.max(
+      0,
+      (options.modelInputTokensMax ?? pack.budget.modelInputTokensMax) - pending.promptTokens,
+    ),
+    modelOutputTokensMax: Math.max(
+      0,
+      (options.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax) - pending.completionTokens,
+    ),
+  };
+}
+
 async function groundedGatewayAttempt(
   ctx: GroundedGatewayAnswerContext,
   question: string,
   pack: ConnectedContextPack,
   options: GroundedAnswerOptions,
 ): Promise<{ readonly sent: SentGroundedPrompt; readonly response?: NormalizedResponse }> {
+  if (ctx.synthesis.remaining() <= 0)
+    throw new ContextOverflowError("Grounded synthesis attempt allowance exhausted");
+  const remaining = groundedRemainingOptions(ctx, pack, options);
   const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
   const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
     ...promptOptions,
     requiredEvidencePaths: options.requiredEvidencePaths,
     modelInputTokensMax: Math.min(
       promptOptions.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
-      options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+      remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
     ),
   });
   if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
   if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
-  assertGroundedGatewayDispatchActive(ctx, options);
+  if ((remaining.modelOutputTokensMax ?? 0) <= 0) return { sent };
+  const response = await dispatchGroundedSynthesis(ctx, sent, pack, options, remaining);
+  return { sent, response };
+}
+
+async function dispatchGroundedSynthesis(
+  ctx: GroundedGatewayAnswerContext,
+  sent: SentGroundedPrompt,
+  pack: ConnectedContextPack,
+  original: GroundedAnswerOptions,
+  remaining: GroundedAnswerOptions,
+): Promise<NormalizedResponse> {
+  assertGroundedGatewayDispatchActive(ctx, original);
   logGroundedPromptSelection(
     ctx.correlationId,
     sent,
-    options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    remaining.modelInputTokensMax ?? 0,
     ctx.tokenAccounting,
   );
-  assertGroundedGatewayDispatchActive(ctx, options);
-  const response = await ctx.model.call(
-    {
-      modelId: ctx.modelId,
-      messages: sent.messages,
-      stream: false,
-      maxOutputTokens: options.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax,
-      logContext: { correlationId: ctx.correlationId },
-    },
-    ctx.signal,
-  );
-  return { sent, response };
+  assertGroundedGatewayDispatchActive(ctx, original);
+  const tracker = createGroundedSynthesisAttemptAdmission(ctx.synthesis, {
+    inputTokensMax: original.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    outputTokensMax: original.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax,
+    signal: ctx.signal,
+    deadlineAtMs: original.deadlineAtMs,
+  });
+  const promptTokens = countGatewayPromptTokens({ messages: sent.messages }, ctx.tokenAccounting);
+  try {
+    const response = await ctx.model.call(
+      {
+        modelId: ctx.modelId,
+        messages: sent.messages,
+        stream: false,
+        maxOutputTokens: remaining.modelOutputTokensMax,
+        logContext: { correlationId: ctx.correlationId },
+        attemptAdmission: tracker.admission,
+      },
+      ctx.signal,
+    );
+    tracker.settleFallback(promptTokens, response.usage);
+    return response;
+  } catch (failure) {
+    tracker.settleFallbackFailure(promptTokens, failure);
+    throw failure;
+  }
 }
 
 function assertGroundedGatewayDispatchActive(

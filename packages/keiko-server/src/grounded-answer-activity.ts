@@ -63,6 +63,8 @@ const ANSWER_DETAILS_OPERATION = defineActivityLogOperation({
       ],
     },
     filesInPrompt: { type: "integer", dataClass: "count", required: true },
+    synthesisCallCount: { type: "integer", dataClass: "count", required: false },
+    synthesisReservedOutputTokens: { type: "integer", dataClass: "count", required: false },
     answerKind: {
       type: "string",
       dataClass: "closed-enum",
@@ -159,6 +161,19 @@ function failureEnvelope(failure: unknown): { readonly errorKind?: ActivityLogEr
     : { errorKind: activityLogErrorKindOr(classifyErrorKind(failure), "internal") };
 }
 
+function synthesisActivityFields(
+  answer: GroundedAnswerResult,
+): Partial<ActivityLogFields<typeof ANSWER_DETAILS_OPERATION>> {
+  return {
+    ...(answer.synthesisCallCount === undefined
+      ? {}
+      : { synthesisCallCount: answer.synthesisCallCount }),
+    ...(answer.synthesisReservedOutputTokens === undefined
+      ? {}
+      : { synthesisReservedOutputTokens: answer.synthesisReservedOutputTokens }),
+  };
+}
+
 export function logGroundedAnswerActivity(
   correlationId: string | undefined,
   input: GroundedAnswerActivity,
@@ -180,6 +195,7 @@ export function logGroundedAnswerActivity(
       followUpOutcome: followUp.outcome,
       citationRepairDisposition: input.repairDisposition,
       filesInPrompt: answer.filesInPrompt ?? 0,
+      ...synthesisActivityFields(answer),
       insufficiencyDeclaredCount: answer.insufficiencyObservation?.declaredCount ?? 0,
       declaredUnreadInScopeCount: answer.insufficiencyObservation?.unreadInScopeCount ?? 0,
       ...(answer.answerKind === undefined ? {} : { answerKind: answer.answerKind }),
