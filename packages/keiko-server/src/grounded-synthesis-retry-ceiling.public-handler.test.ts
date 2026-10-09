@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  countGatewayPromptTokens,
+  type GatewayPromptTokenInput,
+} from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
@@ -23,6 +28,7 @@ const UNCITED = "Feature returns true.";
 const FOLLOW_UP = "Companion is 42 [lib/Companion.ts:1].";
 const OVERFLOW = "context-overflow";
 const TRANSIENT = "transient-provider-fault";
+const PARTIAL_USAGE_FAULT = "transport-after-reported-usage";
 let root = "";
 let stateDir = "";
 const disposals: UiHandlerDeps[] = [];
@@ -53,6 +59,7 @@ afterEach(async () => {
 });
 
 function providerResponse(content: string): Response {
+  if (content === PARTIAL_USAGE_FAULT) return responseWithReportedUsageThenTransportFailure();
   if (content === TRANSIENT)
     return new Response(
       JSON.stringify({ error: { message: "Synthetic temporary unavailability" } }),
@@ -81,6 +88,23 @@ function providerResponse(content: string): Response {
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+}
+
+function responseWithReportedUsageThenTransportFailure(): Response {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller): void {
+      if (reads === 0)
+        controller.enqueue(
+          new TextEncoder().encode(
+            `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 41, completion_tokens: 7 } })}\n\n`,
+          ),
+        );
+      else controller.error(new TypeError("Synthetic socket reset after reported usage"));
+      reads += 1;
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
 function configuredRuntime(maxRetries = 0): {
@@ -176,6 +200,7 @@ async function scriptedProviderTurn(
   readonly requests: readonly string[];
   readonly records: readonly Record<string, unknown>[];
   readonly spendReservations: number;
+  readonly usage: { readonly modelInputTokens: number; readonly modelOutputTokens: number };
 }> {
   const requests = installProvider(answers);
   const { deps, chatId } = configuredRuntime(maxRetries);
@@ -184,12 +209,20 @@ async function scriptedProviderTurn(
   const reserve = vi.spyOn(budget, "reserve");
   const result = await handleGroundedAsk(route(chatId), deps);
   expect(result.status).toBe(200);
+  const answer = result.body as GroundedAnswer;
+  if (answer.groundingKind !== "connected-context")
+    throw new TypeError("Expected folder grounding");
   const records = readPersistedActivityLog(stateDir)
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   expect(records.map((record) => record.op)).not.toContain("server-log.write-failed");
-  return { requests, records, spendReservations: reserve.mock.calls.length };
+  return {
+    requests,
+    records,
+    spendReservations: reserve.mock.calls.length,
+    usage: answer.contextPack.usage,
+  };
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
@@ -238,6 +271,20 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(answer.content).toBe(CITED);
     expect(requests).toHaveLength(2);
     expect(reserve).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains the actual provider-reported discarded attempt usage in original turn accounting", async () => {
+    const turn = await scriptedProviderTurn([PARTIAL_USAGE_FAULT, CITED], 1);
+    expect(turn.requests).toHaveLength(2);
+    expect(turn.spendReservations).toBe(2);
+    const canonicalDispatchedTokens = turn.requests.reduce(
+      (total, body) =>
+        total + countGatewayPromptTokens(JSON.parse(body) as GatewayPromptTokenInput),
+      0,
+    );
+    expect(turn.usage.modelInputTokens).toBeGreaterThanOrEqual(42);
+    expect(turn.usage.modelInputTokens).toBeGreaterThanOrEqual(canonicalDispatchedTokens);
+    expect(turn.usage.modelOutputTokens).toBe(8);
   });
 
   it.each([
