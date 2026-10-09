@@ -28,6 +28,7 @@ export interface ScoringWeights {
   readonly symbolDefinition?: number;
   readonly gitRecency?: number;
   readonly gitChurn?: number;
+  readonly gitWorktreeRecency?: number;
 }
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
@@ -116,6 +117,7 @@ const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
   "symbol-definition": "symbolDefinition",
   "git-recency": "gitRecency",
   "git-churn": "gitChurn",
+  "git-worktree-recency": "gitWorktreeRecency",
 };
 
 function clampUnit(value: number): number {

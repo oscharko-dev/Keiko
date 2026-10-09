@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "30528a70a8f4aa63bb8b3b0fa7f06bce5ce602809c913db59644c0ee220e83fa" as const;
+  "c2dce52c9d27c7b695323ebc656ddbc66a694b308674d854d80875e4e8c63c9b" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13377,6 +13377,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "recentPathHintCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "recentPathHitCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "relativeFloorPermille",
               type: "integer",
               dataClass: "count",
@@ -13438,6 +13450,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "strongestOrdinaryScorePermille",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "worktreeDeletedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "worktreeObservedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "worktreeStatusDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "worktreeStatusDurationMs",
               type: "integer",
               dataClass: "count",
               required: false,

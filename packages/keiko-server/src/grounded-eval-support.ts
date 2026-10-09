@@ -14,6 +14,7 @@ import {
   retrieveConnectedContextPack,
   runGroundedExploration,
   type OrchestratorDeps,
+  type OrchestratorInput,
   type GroundedAnswerer,
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
@@ -144,6 +145,7 @@ export function buildEvalContextPack(
 
 /** The incident gate drives the real conversation and retrieval composition, with fixture-owned IO. */
 export interface ConnectedRetrievalEvalInput {
+  readonly contextProfile?: OrchestratorDeps["contextProfile"];
   readonly nowMs?: OrchestratorDeps["nowMs"];
   readonly signal?: AbortSignal | undefined;
   readonly answerer?: GroundedAnswerer | undefined;
@@ -234,10 +236,48 @@ async function initializeConnectedFixtureRepository(root: string): Promise<void>
   }
 }
 
-/** No private continuity formula is copied into the gate; every history resolves through its owner. */
-export async function runConnectedRetrievalEval(
+function connectedEvalInput(
   fixture: ConnectedRetrievalEvalInput,
-): Promise<{
+  root: string,
+  continuity: ReturnType<typeof groundedConversationContinuity>,
+  conversationId: string,
+): OrchestratorInput {
+  return {
+    scope: {
+      ...EVAL_SCOPE,
+      scopeId: "incident-retrieval-miss",
+      workspaceRoot: root,
+      kind: "workspace-root" as const,
+      conversationId: conversationId,
+    },
+    query: { ...EVAL_QUERY, text: continuity.retrievalContent, maxResults: 100 },
+    currentQuestion: fixture.query,
+    ...(fixture.budget === undefined ? {} : { budget: fixture.budget }),
+    assistantReferents: continuity.assistantReferents,
+    continuityReferentSource: continuity.continuityReferentSource,
+    ...(continuity.previousRetrievalIntent === undefined
+      ? {}
+      : { previousRetrievalIntent: continuity.previousRetrievalIntent }),
+    workspaceRoot: root,
+  };
+}
+
+function connectedEvalRetrievalDeps(fixture: ConnectedRetrievalEvalInput): OrchestratorDeps {
+  return {
+    contextProfile: fixture.contextProfile,
+    ...(fixture.nowMs === undefined ? {} : { nowMs: fixture.nowMs }),
+    signal: fixture.signal,
+    correlationId: fixture.correlationId,
+    activityLog: fixture.activityLog,
+    ...(fixture.detectWorkspace === undefined ? {} : { detectWorkspace: fixture.detectWorkspace }),
+    answerer: fixture.answerer ?? {
+      answer: (): Promise<string> => Promise.resolve(fixture.answer ?? ""),
+    },
+  };
+}
+
+/** No private continuity formula is copied into the gate; every history resolves through its owner. */
+export async function runConnectedRetrievalEval(fixture: ConnectedRetrievalEvalInput): Promise<{
   readonly pack: ConnectedContextPack;
   readonly retrievalContent: string;
   readonly answer?: OrchestratorOutput;
@@ -253,36 +293,8 @@ export async function runConnectedRetrievalEval(
       evalChatMessage(deps, chat.id, message.role, message.content, timestamp++);
     const user = evalChatMessage(deps, chat.id, "user", fixture.query, timestamp);
     const continuity = groundedConversationContinuity(deps, user, "fixture", fixture.correlationId);
-    const input = {
-      scope: {
-        ...EVAL_SCOPE,
-        scopeId: "incident-retrieval-miss",
-        workspaceRoot: root,
-        kind: "workspace-root" as const,
-        conversationId: user.chatId,
-      },
-      query: { ...EVAL_QUERY, text: continuity.retrievalContent, maxResults: 100 },
-      currentQuestion: fixture.query,
-      ...(fixture.budget === undefined ? {} : { budget: fixture.budget }),
-      assistantReferents: continuity.assistantReferents,
-      continuityReferentSource: continuity.continuityReferentSource,
-      ...(continuity.previousRetrievalIntent === undefined
-        ? {}
-        : { previousRetrievalIntent: continuity.previousRetrievalIntent }),
-      workspaceRoot: root,
-    };
-    const retrievalDeps = {
-      ...(fixture.nowMs === undefined ? {} : { nowMs: fixture.nowMs }),
-      signal: fixture.signal,
-      correlationId: fixture.correlationId,
-      activityLog: fixture.activityLog,
-      ...(fixture.detectWorkspace === undefined
-        ? {}
-        : { detectWorkspace: fixture.detectWorkspace }),
-      answerer: fixture.answerer ?? {
-        answer: (): Promise<string> => Promise.resolve(fixture.answer ?? ""),
-      },
-    };
+    const input = connectedEvalInput(fixture, root, continuity, user.chatId);
+    const retrievalDeps = connectedEvalRetrievalDeps(fixture);
     const result =
       fixture.answer === undefined && fixture.answerer === undefined
         ? await retrieveConnectedContextPack(input, retrievalDeps)

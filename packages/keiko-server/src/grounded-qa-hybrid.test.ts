@@ -1,3 +1,6 @@
+import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { reliableCitationRuntime } from "../../../tests/support/reliable-citation-runtime.js";
+import { citationBehaviourFor } from "./grounded-citation-capability.js";
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 // Tests for the hybrid grounded path (Epic #189 Slice 2). Drives `handleGroundedAsk` with
 // injected seams (no real embeddings, no real workspace) while keeping a REAL KnowledgeStore so
@@ -2230,7 +2233,46 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 });
 
 describe("hybrid bounded citation repair", () => {
-  async function repairAsk(repaired: string, folders: boolean) {
+  interface RepairControls {
+    readonly failure?: unknown;
+    readonly original?: string;
+    readonly promptTokens?: number;
+    readonly completionTokens?: number;
+    readonly gatewayConfig?: UiHandlerDeps["gatewayConfig"];
+  }
+
+  function repairModel(
+    calls: GatewayCallRequest[],
+    repaired: string,
+    controls: RepairControls,
+  ): ModelPort {
+    return {
+      call: (request) => {
+        calls.push(request);
+        if (calls.length > 1 && controls.failure !== undefined)
+          return Promise.reject(controls.failure);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content:
+            calls.length === 1 ? (controls.original ?? "The implementation works.") : repaired,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "hybrid-repair",
+            promptTokens: controls.promptTokens ?? 10,
+            completionTokens: controls.completionTokens ?? 4,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+  }
+
+  async function repairChat(
+    folders: boolean,
+  ): Promise<NonNullable<ReturnType<UiStore["findChatById"]>>> {
     const { capsuleId: capA } = await seedReadyCapsule("Repair A Docs");
     const { capsuleId: capB } = await seedReadyCapsule("Repair B Docs");
     const folderScopes: ChatConnectedScope[] = folders
@@ -2244,44 +2286,45 @@ describe("hybrid bounded citation repair", () => {
         ]
       : [];
     const connectorScopes: ChatLocalKnowledgeScope[] = (folders ? [capA] : [capA, capB]).map(
-      (capsuleId) => ({
-        kind: "capsule",
-        capsuleId,
-        connectedAtMs: NOW,
-      }),
+      (capsuleId) => ({ kind: "capsule", capsuleId, connectedAtMs: NOW }),
     );
     const chat = store.findChatById(makeHybridChat(folderScopes, connectorScopes));
     if (chat === undefined) throw new TypeError("Missing hybrid repair chat");
+    return chat;
+  }
+
+  async function repairAsk(
+    repaired: string,
+    folders: boolean,
+    controls: RepairControls = {},
+  ): Promise<{
+    readonly calls: GatewayCallRequest[];
+    readonly diagnostics: ServerDiagnosticRecord[];
+    readonly answer: HybridGroundedAnswer;
+  }> {
+    const chat = await repairChat(folders);
     const calls: GatewayCallRequest[] = [];
-    const model: ModelPort = {
-      call: (request) => {
-        calls.push(request);
-        return Promise.resolve({
-          modelId: CHAT_MODEL,
-          content: calls.length === 1 ? "The implementation works." : repaired,
-          finishReason: "stop",
-          toolCalls: [],
-          structuredOutput: null,
-          usage: {
-            requestId: "hybrid-repair",
-            promptTokens: 10,
-            completionTokens: 4,
-            latencyMs: 1,
-            costClass: "medium",
-          },
-        });
-      },
-    };
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = hybridDeps({
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      ...(controls.gatewayConfig === undefined ? {} : { gatewayConfig: controls.gatewayConfig }),
+    });
     const signal = new AbortController().signal;
     const result = await runHybridGroundedAsk({
       chat,
       content: "How does the implementation work?",
       modelId: CHAT_MODEL,
       contextProfile: undefined,
-      deps: hybridDeps(),
+      deps,
       signal,
       correlationId: "corr-hybrid-repair",
-      answer: createHybridAnswerer(model, CHAT_MODEL, signal, "corr-hybrid-repair"),
+      answer: createHybridAnswerer(
+        repairModel(calls, repaired, controls),
+        CHAT_MODEL,
+        signal,
+        "corr-hybrid-repair",
+        deps,
+      ),
       folderRetriever: folderRetrieverFor(
         new Map([["src/repair.ts", folderPack("src/repair.ts", 0.9, "repair")]]),
       ),
@@ -2296,7 +2339,7 @@ describe("hybrid bounded citation repair", () => {
       },
     });
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    return { calls, answer: asHybrid(result.body as GroundedAnswer) };
+    return { calls, diagnostics, answer: asHybrid(result.body as GroundedAnswer) };
   }
 
   it.each([false, true])(
@@ -2320,6 +2363,63 @@ describe("hybrid bounded citation repair", () => {
     expect(answer.citationBehaviour).toBe("never");
     expect(answer.citations).toEqual([]);
     expect(answer.knowledgeCitations).toEqual([]);
+  });
+  it.each(["Which file should I inspect?", "No evidence found."])(
+    "does not repair a non-claim numeric answer: %s",
+    async (original) => {
+      const { calls, answer } = await repairAsk("Changed content.", false, { original });
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe(original);
+      expect(answer.citationBehaviour).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { promptTokens: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax - 100 },
+    { completionTokens: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax },
+  ])("does not dispatch numeric repair beyond the original shared budget: %j", async (controls) => {
+    const { calls, answer } = await repairAsk("The implementation works [1].", false, controls);
+    expect(calls).toHaveLength(1);
+    expect(answer.content).toBe("The implementation works.");
+    expect(answer.citationBehaviour).toBe("never");
+    expect(answer.knowledgeCitations).toEqual([]);
+  });
+
+  it("skips numeric repair only for three current reliable citation observations", async () => {
+    const configured = reliableCitationRuntime(tmp, CHAT_MODEL);
+    try {
+      expect(citationBehaviourFor(configured, CHAT_MODEL)).toBe("cites");
+      const { calls, answer } = await repairAsk("The implementation works [1].", false, {
+        gatewayConfig: configured.gatewayConfig,
+      });
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe("The implementation works.");
+      expect(answer.citationBehaviour).toBe("never");
+      expect(citationBehaviourFor(configured, CHAT_MODEL)).toBeUndefined();
+    } finally {
+      await configured.dispose?.();
+    }
+  });
+
+  it("preserves a connector-only repair failure's body-free error frames and cause chain", async () => {
+    const failure = new TypeError("private-model-response", {
+      cause: new Error("private-provider-detail"),
+    });
+    const { calls, answer, diagnostics } = await repairAsk("", false, { failure });
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    const repairFailures = diagnostics.filter(
+      (record) => record.code === "GROUNDED_CITATION_REPAIR_FAILED",
+    );
+    expect(repairFailures).toHaveLength(1);
+    expect(repairFailures[0]).toMatchObject({
+      correlationId: "corr-hybrid-repair",
+      errorClass: "TypeError",
+    });
+    expect(repairFailures[0]?.frames?.length).toBeGreaterThan(0);
+    expect(repairFailures[0]?.causeChain?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(diagnostics)).not.toContain("private-model-response");
+    expect(JSON.stringify(diagnostics)).not.toContain("private-provider-detail");
   });
 });
 
@@ -2419,7 +2519,16 @@ describe("hybrid model budget and runtime truth", () => {
     });
     expect(result.status).toBe(200);
     expect(budgets).toEqual([modelWindowAwareBudget(deps, CHAT_MODEL)]);
-    expect(asHybrid(result.body as GroundedAnswer).contextPack.folder.budget).toEqual(budgets[0]);
+    expect(asHybrid(result.body as GroundedAnswer).contextPack.folder.budget).toEqual(
+      buildGroundedAnswerContextPackSummary(
+        {
+          ...folderPack("src/budget.ts", 1, "budget"),
+          budget: modelWindowAwareBudget(deps, CHAT_MODEL),
+        },
+        0,
+        0,
+      ).budget,
+    );
   });
 
   it("includes safe size-exclusion metadata in the actual model prompt", async () => {
@@ -4824,6 +4933,49 @@ describe("hybrid entailment forwards the retrieved folder packs (KEIKO-0237)", (
 // model.call site fixed here, so it is unit-tested directly against a fake ModelPort that records
 // the request it receives.
 describe("createHybridAnswerer correlation threading", () => {
+  it("refuses a numeric repair deadline that expires immediately before actual dispatch", async () => {
+    const call = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve({
+        modelId: CHAT_MODEL,
+        content: "The implementation works.",
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "hybrid-deadline-race",
+          promptTokens: 10,
+          completionTokens: 4,
+          latencyMs: 1,
+          costClass: "medium",
+        },
+      }),
+    );
+    const answerer = createHybridAnswerer(
+      { call },
+      CHAT_MODEL,
+      new AbortController().signal,
+      "hybrid-repair-deadline",
+    );
+    const main = normalizeGroundedAnswerPayload(
+      await answerer("System prompt", "Evidence [1]: sentinel73."),
+    );
+    const repair = answerer.repair;
+    if (repair === undefined) throw new TypeError("Missing repair callback");
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(99).mockReturnValue(100);
+    try {
+      const result = normalizeGroundedAnswerPayload(
+        await repair(main.content, {
+          modelInputTokensMax: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+          modelOutputTokensMax: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
+          deadlineAtMs: 100,
+        }),
+      );
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(result.modelInvoked).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+  });
   it("stamps the caller's correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
     const seenRequests: GatewayCallRequest[] = [];
     const recordingModel: ModelPort = {

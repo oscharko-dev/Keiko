@@ -28440,6 +28440,37 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 64,
       },
+      worktreeStatusDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["not-git", "unavailable", "applied", "skipped-budget"],
+      },
+      worktreeStatusDurationMs: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      recentPathHintCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      recentPathHitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      worktreeObservedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      worktreeDeletedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       basenameCollisionGroupCount: {
         type: "integer",
         dataClass: "count",

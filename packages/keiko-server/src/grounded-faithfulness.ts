@@ -49,6 +49,21 @@ import type {
   GroundedInsufficiencyDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
+/** Project only authoritative normalized declaration fields into public answer wires. */
+export function groundedAnswerEvidenceFields(
+  answer: GroundedAnswerEvidenceDeclaration,
+): GroundedAnswerEvidenceDeclaration {
+  return {
+    answerKind: answer.answerKind,
+    ...(answer.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: answer.citationBehaviour }),
+    ...(answer.insufficiencyDeclarations === undefined
+      ? {}
+      : { insufficiencyDeclarations: answer.insufficiencyDeclarations }),
+  };
+}
+
 const MAX_INSUFFICIENCY_DECLARATIONS = 3;
 const MAX_ANSWER_KIND_CHARS = 1_200;
 const DECLARATION_PREFIX = "Missing evidence: [";
