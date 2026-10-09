@@ -6,6 +6,7 @@ import {
   type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
+import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RerankerExecutionContext, RerankerSeam } from "@oscharko-dev/keiko-workflows";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
@@ -118,8 +119,10 @@ export function configuredContextPackRerankerFor(
   if (reranker === undefined) {
     return undefined;
   }
+  let diagnostics: GroundedRerankerDiagnostics | undefined;
   return {
     name: "configured-model-reranker",
+    getDiagnostics: (): GroundedRerankerDiagnostics | undefined => diagnostics,
     isAvailable: () => Promise.resolve({ available: true, modelLabel: reranker.modelId }),
     rerank: async (candidates, atomsByPath, topK, context): Promise<readonly CandidateFile[]> => {
       const requestSignal = executionSignal(signal, context);
@@ -146,6 +149,7 @@ export function configuredContextPackRerankerFor(
         applyScore: withRerankerSignal,
         fallbackMode: "identity",
       });
+      diagnostics = result.diagnostics;
       return result.selected;
     },
   };

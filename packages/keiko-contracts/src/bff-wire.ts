@@ -1564,7 +1564,16 @@ export function buildGroundedAnswerContextPackSummary(
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
     ...(coverage !== undefined ? { coverage } : {}),
     ...(contextSummary !== undefined ? { contextSummary } : {}),
-    ...retrievalDiagnosticSummary(retrievalDiagnostics),
+    ...retrievalDiagnosticSummary({
+      ...(pack.diagnostics?.selection === undefined
+        ? {}
+        : {
+            selectionConfidence:
+              pack.diagnostics.selection.selectionConfidence === "low" ? "low" : "normal",
+            reranker: pack.diagnostics.selection.reranker,
+          }),
+      ...retrievalDiagnostics,
+    }),
   };
 }
 
