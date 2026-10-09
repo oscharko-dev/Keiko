@@ -52,6 +52,14 @@ describe("bounded actual markup encoding declarations", () => {
     expect(decodedLegacy(text, "manual.xhtml")).toEqual({ encoding: "windows-1252", text });
   });
 
+  it.each(['"', "'"])("preserves a valid UTF-8 XML declaration with %s quotes", (quote) => {
+    const text = `<?xml version=${quote}1.0${quote} encoding=${quote}UTF-8${quote}?><p>Öl 中文</p>`;
+    expect(decodeTextFileBytes(Buffer.from(text), { scopePath: "manual.xhtml" })).toEqual({
+      encoding: "utf-8",
+      text,
+    });
+  });
+
   it.each(["manual.html", "manual.txt"])("does not apply XML codecs to %s", (scopePath) => {
     const text = '<?xml version="1.0" encoding="windows-1252"?><p>Öl</p>';
     expect(decodedLegacy(text, scopePath)).toBeUndefined();
@@ -92,5 +100,27 @@ describe("bounded actual markup encoding declarations", () => {
     const text =
       '<script>"</scripture><meta charset=\'unknown-codec\'>";</script><meta charset="windows-1252">Öl';
     expect(decodedLegacy(text)).toEqual({ encoding: "windows-1252", text });
+  });
+
+  it("recognizes an actual declaration after an XHTML self-closing script", () => {
+    const text = '<script/><meta charset="windows-1252">Öl';
+    expect(decodedLegacy(text, "manual.xhtml")).toEqual({ encoding: "windows-1252", text });
+  });
+
+  it("does not treat an HTML script slash as a self-closing XML element", () => {
+    const text = '<script/><meta charset="unknown-codec"></script><meta charset="windows-1252">Öl';
+    expect(decodedLegacy(text)).toEqual({ encoding: "windows-1252", text });
+  });
+
+  it.each([
+    '<!-- <meta charset="unknown-codec">',
+    "<script>const sample = '<meta charset=\"unknown-codec\">';",
+    '<div title=\'<meta charset="unknown-codec">',
+  ])("does not grant a declaration in unfinished markup (%#)", (prefix) => {
+    const text = `${prefix}\n<p>Öl 中文</p>`;
+    expect(decodeTextFileBytes(Buffer.from(text), { scopePath: "manual.html" })).toEqual({
+      encoding: "utf-8",
+      text,
+    });
   });
 });

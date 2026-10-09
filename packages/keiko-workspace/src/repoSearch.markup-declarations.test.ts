@@ -60,4 +60,29 @@ describe("actual markup declaration search and physical excerpts", () => {
     });
     expect(excerpt.content).toBe(`${line}\r`);
   });
+
+  it("retains truthful unavailable-codec coverage for an actual XHTML XML declaration", async () => {
+    const path = "manual.xhtml";
+    writeFileSync(
+      join(root, path),
+      '<?xml version="1.0" encoding="unknown-codec"?>\n<p>CodecServiceProbe 937 hours</p>\n',
+    );
+    const selected = scope();
+    const result = await searchText(selected, {
+      kind: "exact-symbol",
+      text: "CodecServiceProbe",
+      maxResults: 8,
+      caseSensitive: true,
+      emittedAtMs: 0,
+    });
+    expect(result.atoms).toEqual([]);
+    expect(result.coverage.incomplete).toBe(true);
+    expect(result.coverage.reasons).toContain("io-error");
+    expect(result.candidates).toContainEqual(
+      expect.objectContaining({ scopePath: path, omitted: "tool-unavailable" }),
+    );
+    await expect(
+      readExcerpt(selected, { scopePath: path, startLine: 2, endLine: 2, maxBytes: 512 }),
+    ).rejects.toMatchObject({ reason: "io-error" });
+  });
 });
