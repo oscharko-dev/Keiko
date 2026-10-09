@@ -2211,6 +2211,7 @@ function resolveMultiSourceSeam(
   signal: AbortSignal,
   override: MultiSourceSeam | undefined,
   correlationId: string | undefined,
+  answerOptions: Pick<GroundedAnswerOptions, "currentQuestion" | "answerOnlyContextAvailable">,
 ): MultiSourceSeam | RouteResult {
   if (override !== undefined) return override;
   const resolvedModel = deps.modelPortFactory(modelId);
@@ -2225,7 +2226,7 @@ function resolveMultiSourceSeam(
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
-    answerer: createMultiSourceAnswerer(deps, model, modelId, signal, correlationId),
+    answerer: createMultiSourceAnswerer(deps, model, modelId, signal, correlationId, answerOptions),
   };
 }
 
@@ -2248,6 +2249,7 @@ async function dispatchMultiSourceAsk(
     signal,
     seamOverride,
     args.correlationId,
+    { currentQuestion: input.content, answerOnlyContextAvailable: hasAnswerOnlyContext(args) },
   );
   if ("status" in seam) return seam;
   return runMultiSourceAsk({

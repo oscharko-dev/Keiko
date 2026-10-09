@@ -1,5 +1,8 @@
 import {
   activityLogEvent,
+  activityLogErrorKindOr,
+  classifyErrorKind,
+  type ActivityLogErrorKind,
   defineActivityLogOperation,
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -150,40 +153,45 @@ function failureFields(
   };
 }
 
+function failureEnvelope(failure: unknown): { readonly errorKind?: ActivityLogErrorKind } {
+  return failure === undefined
+    ? {}
+    : { errorKind: activityLogErrorKindOr(classifyErrorKind(failure), "internal") };
+}
+
 export function logGroundedAnswerActivity(
   correlationId: string | undefined,
   input: GroundedAnswerActivity,
 ): void {
   const { answer, followUp } = input;
-  getServerLogger().info(
-    activityLogEvent(
-      ANSWER_DETAILS_OPERATION,
-      {
-        correlationId: correlationIdOrUnknown(correlationId),
-      },
-      {
-        scopeIdentitySha256: input.scopeIdentitySha256,
-        queryIdentitySha256: input.queryIdentitySha256,
-        followUpPass: followUp.passCount,
-        followUpPassCount: followUp.passCount,
-        followUpAdmittedPathCount: followUp.admittedPathCount,
-        followUpTrigger: followUp.trigger,
-        followUpOutcome: followUp.outcome,
-        citationRepairDisposition: input.repairDisposition,
-        filesInPrompt: answer.filesInPrompt ?? 0,
-        insufficiencyDeclaredCount: answer.insufficiencyObservation?.declaredCount ?? 0,
-        declaredUnreadInScopeCount: answer.insufficiencyObservation?.unreadInScopeCount ?? 0,
-        ...(answer.answerKind === undefined ? {} : { answerKind: answer.answerKind }),
-        ...(answer.citationBehaviour === undefined
-          ? {}
-          : { citationBehaviour: answer.citationBehaviour }),
-        ...(input.configuration === undefined
-          ? {}
-          : { followUpConfiguration: input.configuration }),
-        ...failureFields(input.failure),
-        completeness: "complete",
-        loss: "none",
-      },
-    ),
+  const event = activityLogEvent(
+    ANSWER_DETAILS_OPERATION,
+    {
+      correlationId: correlationIdOrUnknown(correlationId),
+      ...failureEnvelope(input.failure),
+    },
+    {
+      scopeIdentitySha256: input.scopeIdentitySha256,
+      queryIdentitySha256: input.queryIdentitySha256,
+      followUpPass: followUp.passCount,
+      followUpPassCount: followUp.passCount,
+      followUpAdmittedPathCount: followUp.admittedPathCount,
+      followUpTrigger: followUp.trigger,
+      followUpOutcome: followUp.outcome,
+      citationRepairDisposition: input.repairDisposition,
+      filesInPrompt: answer.filesInPrompt ?? 0,
+      insufficiencyDeclaredCount: answer.insufficiencyObservation?.declaredCount ?? 0,
+      declaredUnreadInScopeCount: answer.insufficiencyObservation?.unreadInScopeCount ?? 0,
+      ...(answer.answerKind === undefined ? {} : { answerKind: answer.answerKind }),
+      ...(answer.citationBehaviour === undefined
+        ? {}
+        : { citationBehaviour: answer.citationBehaviour }),
+      ...(input.configuration === undefined ? {} : { followUpConfiguration: input.configuration }),
+      ...failureFields(input.failure),
+      completeness: "complete",
+      loss: "none",
+    },
   );
+  if (input.failure === undefined) getServerLogger().info(event);
+  else getServerLogger().warn(event);
 }

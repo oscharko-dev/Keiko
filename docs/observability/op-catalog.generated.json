@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "30528a70a8f4aa63bb8b3b0fa7f06bce5ce602809c913db59644c0ee220e83fa",
+    "catalogDigest": "994b91b28a64b8cead448e79e32571e7dce91c8fc464e9561d4e359d5d9d35c4",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -28680,8 +28680,8 @@
         "failureClasses": ["connected-context-retrieval"],
         "proofIds": ["search.connected-context.answer-details.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-answer-activity.ts:17",
-        "emitterSites": ["packages/keiko-server/src/grounded-answer-activity.ts:159"]
+        "registrationSite": "packages/keiko-server/src/grounded-answer-activity.ts:20",
+        "emitterSites": ["packages/keiko-server/src/grounded-answer-activity.ts:167"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -90154,7 +90154,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2766",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2768",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92455,7 +92455,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3062",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3064",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92882,7 +92882,7 @@
     {
       "op": "search.connected-context.answer-details",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-answer-activity.ts:20",
+      "site": "packages/keiko-server/src/grounded-answer-activity.ts:23",
       "package": "keiko-server"
     },
     {

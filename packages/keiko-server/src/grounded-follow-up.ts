@@ -4,6 +4,7 @@ import type {
   ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
+import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import type {
   OrchestratorInput,
   OrchestratorDeps,
@@ -96,8 +97,16 @@ function followUpRefusal(
     return "elapsed-refused";
   if (paths.length === 0) return "not-needed";
   if (ctx.pack.budget.followUpPassesMax === 0) return "disabled";
+  if (highContextBudgetPressure(ctx)) return "budget-refused";
   if (followUpBudgetExhausted(remainingTurnBudget(ctx))) return "budget-refused";
   return undefined;
+}
+
+function highContextBudgetPressure(ctx: FollowUpContext): boolean {
+  const profile = ctx.pack.diagnostics?.contextBudget?.profile;
+  if (profile === undefined) return false;
+  const pressure = deriveGroundedContextAssembly(ctx.pack, profile).budgetPressure;
+  return pressure === "high" || pressure === "exceeded";
 }
 
 function followUpBudgetExhausted(budget: ExplorationBudget): boolean {
@@ -179,7 +188,7 @@ async function executeFollowUp(
       passCount: 1,
       admittedPathCount: admitted,
       trigger: "insufficiency-declared",
-      outcome: answered.answerKind === "insufficiency" ? "still-insufficient" : "answered",
+      outcome: answered.answerKind === "answer" ? "answered" : "still-insufficient",
       firstDeclarations: ctx.initial.insufficiencyDeclarations ?? [],
     },
   };

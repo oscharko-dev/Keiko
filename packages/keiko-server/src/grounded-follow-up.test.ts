@@ -1,3 +1,6 @@
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
+import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { withPromptExcerptByteLimit } from "./grounded-qa.js";
@@ -85,6 +88,53 @@ describe("one server-owned follow-up under the original turn budgets", () => {
     expect(result.pack.usage.filesRead).toBe(1);
   });
 
+  it("refuses canonical high context pressure with positive remaining grants", async () => {
+    const profile = deriveContextProfile({
+      maxInputTokens: 1500,
+      inputTokenLimit: 1000,
+      reservedOutputTokens: 100,
+      safetyMarginTokens: 0,
+    });
+    let calls = 0;
+    let pressure: string | undefined;
+    const result = await runConnectedRetrievalEval({
+      files: {
+        ...files,
+        "src/Feature.ts": `export function Feature() { return true; }\n${"// Feature details are intentionally long for the canonical context allocator.\n".repeat(200)}`,
+      },
+      query: "Explain src/Feature.ts",
+      contextProfile: profile,
+      answerer: {
+        answer: async (_question, pack) => {
+          await Promise.resolve();
+          calls += 1;
+          pressure = deriveGroundedContextAssembly(pack, profile).budgetPressure;
+          return first;
+        },
+      },
+    });
+    expect(["high", "exceeded"]).toContain(pressure);
+    expect(calls).toBe(1);
+    expect(result.pack.usage.modelInputTokens).toBeLessThan(result.pack.budget.modelInputTokensMax);
+    expect(result.answer?.followUp).toMatchObject({ passCount: 0, outcome: "budget-refused" });
+  });
+
+  it.each([
+    "Which function do you mean?",
+    connectedSearchNoEvidenceAnswer("Explain src/Feature.ts"),
+  ])(
+    "returns a second non-answer honestly without resolving the original declared miss: %s",
+    async (second) => {
+      const { result, received } = await scriptedTurn(1, second);
+      expect(received).toHaveLength(2);
+      expect(result.answer?.answerKind).not.toBe("answer");
+      expect(result.answer?.followUp).toMatchObject({
+        passCount: 1,
+        outcome: "still-insufficient",
+      });
+    },
+  );
+
   it("refuses an elapsed pass without another content read or answer call", async () => {
     let now = 0;
     let calls = 0;
@@ -152,6 +202,7 @@ describe("one server-owned follow-up under the original turn budgets", () => {
     expect(result.answer).toMatchObject({
       assistantContent: "Companion is 42.",
       citationBehaviour: "never",
+      followUp: { passCount: 1, outcome: "answered" },
     });
     expect(result.pack.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(true);
   });

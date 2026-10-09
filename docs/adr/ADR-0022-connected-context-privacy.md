@@ -400,6 +400,25 @@ reference-channel, and closed metadata-injection observations. Total/external fr
 registered `search.connected-context.selection-details` sibling on the same log port and
 correlation. This companion accommodates later selection observations without dropping existing
 fields or expanding the formatter's contextual-field cap.
+The registered `search.connected-context.answer-details` companion uses the same canonical
+scope/query digests and correlation to reconstruct answer kind, observed citation behaviour,
+actual final-prompt file count, bounded declared/unread counts, citation-repair disposition, and
+follow-up trigger, pass/admission counts, outcome, and configuration disposition. No declaration
+path or answer body enters this log. Technical failures retain the existing closed error header,
+body-free frames, and causes. Normalized synthesis output is buffered before publication; unsafe,
+unknown, or excess declaration lines are removed before client delivery and history persistence.
+Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
+read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
+two-slot synthesis ceiling and the original remaining search/read/token/spend/time grants. A file
+already physically read does not acquire another read through an unread-in-prompt declaration.
+The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
+from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
+while retaining an honest uncited warning, and never obtains a third synthesis slot. Separately
+bounded gateway/context retries and entailment verification retain their existing contracts.
+`KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` is default-enabled with one follow-up pass: absent means `1`,
+explicit `1` enables, explicit `0` disables, and every other explicit value fails closed to zero
+passes with a body-free invalid configuration observation (ADR-0180).
 Supported document basenames use the existing bounded path-only discovery port, then the same
 admission and document-extraction boundaries; ZIP containers never require text classification.
 Only extraction-owned files are removed from ordinary code evidence. An ordinary text file with
