@@ -2,11 +2,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import { normalizeGroundedAnswerAssessment } from "./grounded-answer-assessment.js";
+import {
+  isGroundedAssessmentOnly,
+  normalizeGroundedAnswerAssessment,
+} from "./grounded-answer-assessment.js";
 
 afterEach(resetServerLogger);
 
 describe("shared grounded assessment normalization", () => {
+  it.each([
+    ["<assessment>General recommendation.</assessment>", true],
+    ["Fact. <assessment>General recommendation.</assessment>", false],
+    ["Missing evidence: [src/a.ts]\n<assessment>General view.</assessment>", false],
+    ["`<assessment>General recommendation.</assessment>`", false],
+    ["My own assessment: General recommendation.", false],
+  ])("classifies canonical assessment-only authority: %s", (content, expected) => {
+    expect(isGroundedAssessmentOnly(content)).toBe(expected);
+  });
   it.each(["allowed", "disabled"] as const)(
     "projects %s authority and existing body-free evidence",
     (policy) => {

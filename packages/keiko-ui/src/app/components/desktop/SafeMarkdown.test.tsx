@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { SafeMarkdown } from "./SafeMarkdown";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import { repositoryReferenceRootsForScopes } from "./repositoryReferences";
 import type { LocalKnowledgeEvidenceCitation } from "@/lib/types";
 
 describe("prose evidence links", () => {
@@ -30,7 +32,9 @@ describe("prose evidence links", () => {
     const link = screen.getByRole("button", { name: new RegExp(label) });
     expect(link).toHaveAttribute("data-evidence-state", state);
     expect(link).toHaveAttribute("title", expect.stringContaining(label));
-    expect(link.className).toContain(state === "read-uncited" ? "readUncited" : state);
+    expect(link.className).toContain(
+      state === "read-uncited" ? "cmpReadUncited" : state === "cited" ? "cmpCited" : "cmpUnread",
+    );
     expect({
       state: link.dataset["evidenceState"],
       title: link.title,
@@ -1068,5 +1072,79 @@ describe("SafeMarkdown spaced source table", () => {
         lineEnd: 182,
       }),
     );
+  });
+});
+
+describe("source-qualified native citations", () => {
+  const path = "Handbücher/Guide#Part%.html";
+  const scopes = ["/manuals/alpha", "/manuals/beta"].map((root) => ({
+    kind: "workspace-root" as const,
+    root,
+    relativePaths: [],
+    connectedAtMs: 1,
+  }));
+  it.each([1, 2])("retains exact source %s through SafeMarkdown and duplicate paths", (ordinal) => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "qualified-citation" }));
+    render(
+      <SafeMarkdown
+        source={`Inspect [source:${String(ordinal)}|${path}:180-182].`}
+        repositoryRoots={[...repositoryReferenceRootsForScopes(scopes, "/manuals/alpha")].reverse()}
+        openRepositoryReference={openReference}
+        repositoryEvidence={{
+          citations: scopes
+            .map((scope, index) => ({
+              scopePath: path,
+              sourceId: String(index + 1),
+              lineRange: { startLine: 180, endLine: 182 },
+              stableId: `atom-${String(index)}`,
+              score: 1,
+              sourceScopeFingerprint: connectedScopeFingerprint(scope),
+            }))
+            .reverse(),
+          readPaths: [],
+        }}
+      />,
+    );
+    const button = screen.getByRole("button", { name: /Open .*Guide#Part%.*Cited evidence/ });
+    fireEvent.click(button);
+    expect(openReference).toHaveBeenCalledExactlyOnceWith({
+      root: scopes[ordinal - 1]?.root,
+      path,
+      lineStart: 180,
+      lineEnd: 182,
+    });
+    expect(screen.queryByRole("button", { name: /Select repository source/ })).toBeNull();
+  });
+});
+
+describe("source-qualified citation safety", () => {
+  it.each(["0", "01", "-1", "9007199254740992", "unknown"])(
+    "never guesses a source from invalid qualifier %s",
+    (sourceId) => {
+      const openReference = vi.fn(() => ({ ok: true as const, windowId: "invalid-source" }));
+      render(
+        <SafeMarkdown
+          source={`Inspect [source:${sourceId}|Handbücher/Guide#Part%.html:180-182].`}
+          repositoryRoots={[{ root: "/manual", label: "Manual" }]}
+          openRepositoryReference={openReference}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: /Open / })).toBeNull();
+      expect(openReference).not.toHaveBeenCalled();
+    },
+  );
+  it("requires explicit source choice when a valid qualifier has no matching persisted citation", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "unknown-source" }));
+    render(
+      <SafeMarkdown
+        source="Inspect [source:2|manual/chapter.html:180-182]."
+        repositoryRoots={[{ root: "/manual", label: "Manual" }]}
+        openRepositoryReference={openReference}
+        repositoryEvidence={{ citations: [], readPaths: [] }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Open / }));
+    expect(openReference).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Select repository source/ })).toBeInTheDocument();
   });
 });

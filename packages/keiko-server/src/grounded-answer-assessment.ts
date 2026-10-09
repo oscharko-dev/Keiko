@@ -6,6 +6,7 @@ import {
 import { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { logAnswerAssessment } from "./grounded-citation-log.js";
+export { isGroundedAssessmentOnly } from "./grounded-faithfulness.js";
 
 /** Canonical assessment authority before source validation; the existing log stores sizes only. */
 export function normalizeGroundedAnswerAssessment(

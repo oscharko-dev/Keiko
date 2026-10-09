@@ -66,6 +66,7 @@ export function citationRootOptions(
 export interface RepositoryReference {
   readonly label: string;
   readonly path: string;
+  readonly sourceId?: string;
   readonly lineStart?: number | undefined;
   readonly lineEnd?: number | undefined;
 }
@@ -114,10 +115,24 @@ function proseCitation(
   const matching =
     evidence?.citations.filter(
       (citation) =>
-        normalizeReferencePath(citation.scopePath) === normalizeReferencePath(reference.path),
+        normalizeReferencePath(citation.scopePath) === normalizeReferencePath(reference.path) &&
+        (reference.sourceId === undefined || citation.sourceId === reference.sourceId) &&
+        citationContainsReferenceLines(citation, reference),
     ) ?? [];
   const fingerprints = new Set(matching.map((citation) => citation.sourceScopeFingerprint));
   return fingerprints.size === 1 ? matching[0] : undefined;
+}
+
+function citationContainsReferenceLines(
+  citation: GroundedEvidenceCitation,
+  reference: RepositoryReference,
+): boolean {
+  if (reference.lineStart === undefined) return true;
+  return (
+    citation.lineRange !== undefined &&
+    reference.lineStart >= citation.lineRange.startLine &&
+    (reference.lineEnd ?? reference.lineStart) <= citation.lineRange.endLine
+  );
 }
 
 export function proseReferenceEvidenceState(
@@ -126,7 +141,10 @@ export function proseReferenceEvidenceState(
   roots: readonly RepositoryReferenceRoot[],
 ): RepositoryReferenceEvidenceState {
   const path = normalizeReferencePath(reference.path);
-  if (evidence.citations.some((citation) => normalizeReferencePath(citation.scopePath) === path))
+  if (
+    (reference.sourceId === undefined || proseCitation(reference, evidence) !== undefined) &&
+    evidence.citations.some((citation) => normalizeReferencePath(citation.scopePath) === path)
+  )
     return "cited";
   const attributed =
     evidence.inspectedPaths === undefined
@@ -170,6 +188,10 @@ export function ProseRepositoryReference({
     <RepositoryReferenceInline
       {...props}
       {...options}
+      requireRootChoice={
+        options.requireRootChoice ||
+        (props.reference.sourceId !== undefined && citation === undefined)
+      }
       rootRelative={citation !== undefined || options.citationActivation.reason === "matched"}
       evidenceState={
         evidence === undefined
@@ -369,6 +391,7 @@ function tidyEvidenceText(source: string): string {
 function stripEvidenceSourceLabel(raw: string): string {
   const contents = raw.slice(1, -1);
   const value = contents.slice(contents.indexOf(":") + 1).trim();
+  if (/^source:[^|]*\|/u.test(contents)) return raw;
   return parseExactRepositoryReference(value, true) === null ? "" : raw;
 }
 
@@ -489,6 +512,10 @@ function containsUnsafeBracketPath(contents: string): boolean {
 
 function bracketReferenceParts(contents: string): readonly RepositoryReferenceTextPart[] {
   if (containsUnsafeBracketPath(contents)) return [];
+  if (contents.startsWith("source:")) {
+    const reference = parseExactRepositoryReference(contents, true);
+    return reference === null ? [] : referenceParts([reference]);
+  }
   const members = contents.split(",");
   const references = members.map((member) => parseExactRepositoryReference(member.trim(), true));
   if (members.length > 1 && references.every((reference) => reference !== null)) {
@@ -548,16 +575,40 @@ export function repositoryReferenceTextParts(
   return parts;
 }
 
+function qualifiedReferenceSource(
+  source: string,
+): { readonly source: string; readonly sourceId?: string } | null {
+  if (!source.startsWith("source:")) return { source };
+  const qualifier = /^source:([1-9]\d{0,15})\|/u.exec(source);
+  const sourceId = qualifier?.[1];
+  if (qualifier === null || sourceId === undefined || !Number.isSafeInteger(Number(sourceId)))
+    return null;
+  return { source: source.slice(qualifier[0].length), sourceId };
+}
+
+function parseUnsourcedRepositoryReference(
+  source: string,
+  allowSpaces: boolean,
+): RepositoryReference | null {
+  const match = EXACT_REPOSITORY_REFERENCE_PATTERN.exec(source);
+  if (match?.index !== 0 || (match[0]?.length ?? 0) !== source.length) return null;
+  if (!allowSpaces && /\s/u.test(match[1] ?? "")) return null;
+  return referenceFromMatch(match, source);
+}
+
 export function parseExactRepositoryReference(
   source: string,
   allowSpaces = false,
 ): RepositoryReference | null {
-  const match = EXACT_REPOSITORY_REFERENCE_PATTERN.exec(source);
-  if (match?.index !== 0 || (match[0]?.length ?? 0) !== source.length) {
-    return null;
-  }
-  if (!allowSpaces && /\s/u.test(match[1] ?? "")) return null;
-  return referenceFromMatch(match, source);
+  const qualified = qualifiedReferenceSource(source);
+  if (qualified === null) return null;
+  const reference = parseUnsourcedRepositoryReference(qualified.source, allowSpaces);
+  if (reference === null) return null;
+  return {
+    ...reference,
+    label: source,
+    ...(qualified.sourceId === undefined ? {} : { sourceId: qualified.sourceId }),
+  };
 }
 
 /** A line suffix must be immediately adjacent to the code-wrapped path in the same text node. */

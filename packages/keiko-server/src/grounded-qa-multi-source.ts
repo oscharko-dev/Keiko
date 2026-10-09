@@ -1352,10 +1352,12 @@ function labelAnswerCitations(
   sourceLabel: string,
   redactor: Redactor,
   sourceScopeFingerprint?: string,
+  sourceId?: string,
 ): readonly GroundedEvidenceCitation[] {
   return citations.map((citation) => ({
     ...citation,
     source: redactString(redactor, sourceLabel),
+    ...(sourceId === undefined ? {} : { sourceId }),
     ...(sourceScopeFingerprint === undefined ? {} : { sourceScopeFingerprint }),
   }));
 }
@@ -1395,6 +1397,7 @@ function sourceCitationBundles(
         source.label,
         redactor,
         source.sourceScopeFingerprint,
+        sourceId,
       ),
     };
   });
