@@ -199,6 +199,14 @@ report availability reason. Unknown facts are omitted rather than inferred from 
    by default; `--correlation-id` selects another known timeline, and with `--json` emits only that
    validated timeline (`keiko.support.report-timeline`) for `keiko investigate --from-timeline`.
    Each analysis records body-free `support.report.*` lines in the CLI control state.
+   For connected-folder answers, inspect optional `analysis.findings` and timeline `findings` for
+   `kind: retrieval-miss`. Each closed sub-reason carries its triggering fields and available
+   process/scope/query identities. Follow-up outcome `answered` disposes the first unread
+   declaration in that same logical turn and scope. General basename diversity and an unavailable
+   semantic provider do not establish a miss without the corresponding failure evidence. Older
+   records missing these fields cannot retroactively establish the finding. Use the
+   [connected-folder troubleshooting entry](../troubleshooting/chat-connected-folder-file-not-read.md)
+   to distinguish ranking, scope eligibility, and exhausted budgets.
    `--emit-fixture PATH` prepares
    an existing safe gateway replay fixture and never overwrites a target. Follow the
    [red/green reproduction recipe](reproduction-harness.md); no user-authored reproduction text
