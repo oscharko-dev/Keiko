@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type KnowledgeCapsuleId, type KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
@@ -26,7 +26,10 @@ import {
   type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
-import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   EMBEDDING_INSTRUCTION_VERSION,
   l2NormalizeVector,
@@ -270,6 +273,7 @@ async function seedRepositoryPod(
   paths: readonly string[],
   tracked = true,
   dbPath = ":memory:",
+  repositoryRoot = ROOT,
 ): Promise<SeededRepositoryPod> {
   const store = openKnowledgeStore({ dbPath });
   const request = deps.localKnowledgeEmbeddingRequest;
@@ -293,7 +297,7 @@ async function seedRepositoryPod(
     { store, capsuleId: POD_CAPSULE_ID, sourceId: POD_SOURCE_ID },
     {
       displayName: "Repository semantic test",
-      repositoryRoot: ROOT,
+      repositoryRoot,
       embeddingModelIdentity: verified.identity,
     },
   );
@@ -435,6 +439,93 @@ async function leaseFixture(): Promise<{
     close: (): void => {
       fixture.close();
       rmSync(runtimeDir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function realFingerprintFixture(): Promise<{
+  readonly root: string;
+  readonly files: Record<string, string>;
+  readonly deps: UiHandlerDeps;
+  readonly pod: SeededRepositoryPod;
+  readonly close: () => void;
+}> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-semantic-cancellation-"));
+  const files = Object.fromEntries(
+    Array.from({ length: 8 }, (_, index) => [
+      `src/file-${String(index)}.ts`,
+      `export const sessionRenewal${String(index)} = true;\n`,
+    ]),
+  );
+  mkdirSync(join(root, "src"));
+  for (const [path, text] of Object.entries(files)) writeFileSync(join(root, path), text);
+  const deps = depsWith(config(true), (request) =>
+    Promise.resolve({
+      ok: true,
+      value: { vector: vectorFor(request.input), modelId: request.modelId },
+    }),
+  );
+  const pod = await seedRepositoryPod(
+    deps,
+    nodeWorkspaceFs,
+    Object.keys(files),
+    true,
+    ":memory:",
+    root,
+  );
+  return {
+    root,
+    files,
+    deps,
+    pod,
+    close: (): void => {
+      pod.store.close();
+      deps.store.close();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function pausedFingerprintRead(
+  fixture: StaleFixture,
+  sameSize = true,
+): {
+  readonly fs: WorkspaceFs;
+  readonly entered: Promise<void>;
+  readonly finish: () => void;
+  readonly stat: ReturnType<typeof vi.fn<WorkspaceFs["stat"]>>;
+  readonly realPath: ReturnType<typeof vi.fn<WorkspaceFs["realPath"]>>;
+  readonly cleanup: ReturnType<typeof vi.fn>;
+} {
+  if (sameSize) fixture.files["src/auth.ts"] = "export const sessionState = 'changed';\n";
+  let enter: () => void = () => undefined;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let release: (bytes: Uint8Array) => void = () => undefined;
+  const read = new Promise<Uint8Array>((resolve) => {
+    release = resolve;
+  });
+  const cleanup = vi.fn();
+  const stat = vi.fn(fixture.fs.stat);
+  const realPath = vi.fn(fixture.fs.realPath);
+  const fs: WorkspaceFs = {
+    ...fixture.fs,
+    stat,
+    realPath,
+    readFileBytes: (): Promise<Uint8Array> => {
+      enter();
+      return read.finally(cleanup);
+    },
+  };
+  return {
+    fs,
+    entered,
+    cleanup,
+    stat,
+    realPath,
+    finish: (): void => {
+      release(new TextEncoder().encode(fixture.files["src/auth.ts"] ?? ""));
     },
   };
 }
@@ -1183,12 +1274,159 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     }
   });
 
-  it("reports stale fallback but sends no embedding request after the explicit refresh deadline", async () => {
+  it.each(["healthy", "pre-aborted", "first-read-aborted"])(
+    "bounds real eight-file pod fingerprint reads when %s",
+    async (state) => {
+      const fixture = await realFingerprintFixture();
+      const controller = new AbortController();
+      let completedReads = 0;
+      const readFileBytes = vi.fn<NonNullable<WorkspaceFs["readFileBytes"]>>(async (...args) => {
+        const bytes = await nodeWorkspaceFs.readFileBytes?.(...args);
+        if (bytes === undefined) throw new Error("expected bounded node reader");
+        completedReads += 1;
+        if (state === "first-read-aborted" && completedReads === 1) controller.abort();
+        return bytes;
+      });
+      const provider = configuredRepoSemanticSearchProviderFor(fixture.deps, undefined, {
+        fs: { ...nodeWorkspaceFs, readFileBytes },
+        repositoryPod: { store: fixture.pod.store, repositoryRoot: fixture.root },
+      });
+      if (provider === undefined) throw new Error("expected configured provider");
+      try {
+        if (state === "pre-aborted") controller.abort();
+        const result = await provider.search({
+          query: QUERY,
+          signal: controller.signal,
+          documents: Object.entries(fixture.files).map(([scopePath, text]) => ({
+            scopePath,
+            text,
+          })),
+        });
+        expect(readFileBytes).toHaveBeenCalledTimes(
+          state === "healthy" ? 8 : state === "pre-aborted" ? 0 : 1,
+        );
+        if (state !== "healthy") expect(result).toEqual([]);
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it.each(["elapsed", "aborted"])(
+    "stops freshness I/O after a deferred fingerprint read is %s",
+    async (stop) => {
+      const fixture = await staleFixture();
+      const paused = pausedFingerprintRead(fixture);
+      const controller = new AbortController();
+      let now = 1;
+      const provider = refreshProviderFor(fixture, {
+        fs: paused.fs,
+        nowMs: (): number => now,
+        deadlineAtMs: 100,
+        semanticRefreshFilesMax: 8,
+      });
+      let settled = false;
+      const search = provider
+        .search({
+          query: QUERY,
+          signal: controller.signal,
+          documents: Object.entries(fixture.files).map(([scopePath, text]) => ({
+            scopePath,
+            text,
+          })),
+        })
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await paused.entered;
+        paused.stat.mockClear();
+        paused.realPath.mockClear();
+        if (stop === "elapsed") {
+          now = 100;
+          paused.finish();
+        } else controller.abort();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(true);
+        expect(await search).toEqual([]);
+        expect(paused.stat).not.toHaveBeenCalled();
+        expect(paused.realPath).not.toHaveBeenCalled();
+        expect(fixture.embedding).not.toHaveBeenCalled();
+        const observationCount = fixture.observed.mock.calls.length;
+        paused.finish();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(fixture.observed).toHaveBeenCalledTimes(observationCount);
+        expect(paused.stat).not.toHaveBeenCalled();
+        expect(paused.realPath).not.toHaveBeenCalled();
+        expect(fixture.embedding).not.toHaveBeenCalled();
+      } finally {
+        paused.finish();
+        await search;
+        expect(paused.cleanup).toHaveBeenCalledTimes(1);
+        fixture.close();
+      }
+    },
+  );
+
+  it("cancels a deferred live refresh read before document embedding or later metadata", async () => {
+    const fixture = await staleFixture();
+    const paused = pausedFingerprintRead(fixture, false);
+    const controller = new AbortController();
+    const provider = refreshProviderFor(fixture, {
+      fs: paused.fs,
+      nowMs: (): number => 1,
+      deadlineAtMs: 100,
+      semanticRefreshFilesMax: 8,
+    });
+    let settled = false;
+    const search = provider
+      .search({
+        query: QUERY,
+        signal: controller.signal,
+        documents: Object.entries(fixture.files).map(([scopePath, text]) => ({ scopePath, text })),
+      })
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      await paused.entered;
+      paused.stat.mockClear();
+      paused.realPath.mockClear();
+      controller.abort();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(true);
+      expect(await search).toEqual([]);
+      expect(fixture.embedding).toHaveBeenCalledTimes(1);
+      paused.finish();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(paused.stat).not.toHaveBeenCalled();
+      expect(paused.realPath).not.toHaveBeenCalled();
+      expect(fixture.embedding).toHaveBeenCalledTimes(1);
+    } finally {
+      paused.finish();
+      await search;
+      expect(paused.cleanup).toHaveBeenCalledTimes(1);
+      fixture.close();
+    }
+  });
+
+  it("keeps freshness unknown and performs no I/O after the explicit request deadline", async () => {
     const fixture = await staleFixture({
       semanticRefreshFilesMax: 8,
       deadlineAtMs: 1,
       nowMs: (): number => 1,
     });
+    const stat = vi.spyOn(fixture.fs, "stat");
+    const realPath = vi.spyOn(fixture.fs, "realPath");
+    const read = vi.spyOn(fixture.fs, "readFileBytes");
     try {
       await expect(
         fixture.provider.search({
@@ -1200,11 +1438,10 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         }),
       ).resolves.toEqual([]);
       expect(fixture.embedding).not.toHaveBeenCalled();
-      expect(fixture.observed).toHaveBeenLastCalledWith({
-        stalePaths: ["src/auth.ts", "src/peer.ts"],
-        refreshedPaths: [],
-        unavailableFileCount: 0,
-      });
+      expect(fixture.observed).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+      expect(realPath).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
     } finally {
       fixture.close();
     }
