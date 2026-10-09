@@ -1,9 +1,10 @@
-import type {
-  CandidateFile,
-  EvidenceAtom,
-  OmittedContextEntry,
-  SelectedScope,
-} from "@oscharko-dev/keiko-contracts";
+import {
+  CONNECTED_CONTEXT_RELATIVE_SELECTION_FLOOR_PERMILLE,
+  type CandidateFile,
+  type EvidenceAtom,
+  type OmittedContextEntry,
+  type SelectedScope,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 export interface ContentEvidenceIdentity {
@@ -33,7 +34,61 @@ export function certifiedContentPaths(
   );
 }
 
-const MIN_RELATIVE_CANDIDATE_SCORE = 0.55;
+export type FloorReferenceKind = "ordinary-p75" | "no-ordinary" | "files-scope";
+
+export interface RelativeFloorObservation {
+  readonly floorReferenceKind: FloorReferenceKind;
+  readonly relativeFloorPermille: number;
+  readonly strongestOrdinaryScore: number;
+  readonly referenceScore: number;
+}
+
+function isOrdinaryCandidate(
+  candidate: CandidateFile,
+  input: GroundedCandidateSelectionInput,
+): boolean {
+  return (
+    input.priorityPaths?.has(candidate.scopePath) !== true &&
+    input.protectedContentPaths?.has(candidate.scopePath) !== true &&
+    !candidate.signals.some(
+      (signal) =>
+        (signal.name === "symbol-definition" || signal.name === "canonical-metadata") &&
+        signal.value >= 0.8,
+    )
+  );
+}
+
+export function ordinaryRelativeFloor(
+  input: GroundedCandidateSelectionInput,
+): RelativeFloorObservation {
+  if (input.scopeKind === "files")
+    return {
+      floorReferenceKind: "files-scope",
+      relativeFloorPermille: 0,
+      strongestOrdinaryScore: 0,
+      referenceScore: 0,
+    };
+  const scores = input.kept
+    .filter((candidate) => isOrdinaryCandidate(candidate, input))
+    .map((candidate) => candidate.score)
+    .sort((a, b) => a - b);
+  if (scores.length === 0)
+    return {
+      floorReferenceKind: "no-ordinary",
+      relativeFloorPermille: CONNECTED_CONTEXT_RELATIVE_SELECTION_FLOOR_PERMILLE,
+      strongestOrdinaryScore: 0,
+      referenceScore: 0,
+    };
+  const position = (scores.length - 1) * 0.75;
+  const lower = scores[Math.floor(position)] ?? 0;
+  const upper = scores[Math.ceil(position)] ?? lower;
+  return {
+    floorReferenceKind: "ordinary-p75",
+    relativeFloorPermille: CONNECTED_CONTEXT_RELATIVE_SELECTION_FLOOR_PERMILLE,
+    strongestOrdinaryScore: scores.at(-1) ?? 0,
+    referenceScore: lower + (upper - lower) * (position - Math.floor(position)),
+  };
+}
 
 export interface GroundedCandidateSelectionInput {
   readonly kept: readonly CandidateFile[];
@@ -104,8 +159,8 @@ export function pathOnlyEvidencePaths(atoms: readonly EvidenceAtom[]): ReadonlyS
 
 function relativeScoreFloor(input: GroundedCandidateSelectionInput): number | undefined {
   if (input.scopeKind === "files" || input.kept.length === 0) return undefined;
-  const strongest = input.kept.reduce((score, candidate) => Math.max(score, candidate.score), 0);
-  return strongest * MIN_RELATIVE_CANDIDATE_SCORE;
+  const ordinary = ordinaryRelativeFloor(input);
+  return (ordinary.referenceScore * ordinary.relativeFloorPermille) / 1000;
 }
 
 function selectionReasonFor(
