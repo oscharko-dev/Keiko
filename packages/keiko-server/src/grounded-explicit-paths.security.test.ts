@@ -254,6 +254,19 @@ describe("explicit-path trust boundary", () => {
     });
     expect(selected.output.pack.files.map((file) => file.scopePath)).toEqual([path]);
   });
+
+  it.each(["Explain ignored/selected.ts", "Explain selected.ts"])(
+    "preserves the human-selected ignored file when the query names it: %s",
+    async (text) => {
+      const path = "ignored/selected.ts";
+      writeFixture(path, "export const manuallySelectedFact = 19;\n");
+      const result = await retrieve(text, { kind: "files", relativePaths: [path] });
+      expect(result.output.pack.files.map((file) => file.scopePath)).toEqual([path]);
+      expect(result.output.pack.files[0]?.excerpts[0]?.content).toContain(
+        "manuallySelectedFact = 19",
+      );
+    },
+  );
 });
 
 describe("bounded explicit basename discovery", () => {
