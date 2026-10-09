@@ -18,6 +18,7 @@ import { createRunRegistry } from "./runs.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 
 const MODEL = "bracket-reference-proof";
 const BRACKET_PATH = "app/z-users/[id]/page.tsx";
@@ -128,6 +129,14 @@ async function ask(query: string, path: string): Promise<string> {
   };
   const response = await handleGroundedAsk(ctx, deps);
   expect(response.status).toBe(200);
+  const records = readPersistedActivityLog(stateDir)
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const details = records.find((record) => record.op === "search.connected-context.source-details");
+  expect(details?.explicitPathAdmittedCount).toBe(1);
+  expect(details?.explicitPathRejectedCount).toBe(0);
+  expect(records.map((record) => record.op)).not.toContain("server-log.write-failed");
   expect(requests[0]?.stream).toBe(false);
   const prompt = requests[0]?.messages[1]?.content;
   if (typeof prompt !== "string") throw new TypeError("Expected the actual fitted grounded prompt");

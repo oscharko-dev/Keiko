@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { extractAnchors } from "./anchors.js";
 import { extractPathReferences, extractRetrievalChannels } from "./references.js";
 
 describe("literal bracket path references precede anchor fragmentation", () => {
@@ -36,7 +37,7 @@ describe("literal bracket path references precede anchor fragmentation", () => {
       8,
     );
     expect(result.references).toEqual([{ path: "app/z-users/[id]/page.tsx", origin: "query" }]);
-    expect(result.anchors.map((anchor) => anchor.term)).toEqual(["invoicevalidator"]);
+    expect(result.anchors).toEqual(extractRetrievalChannels("Explain InvoiceValidator", 8).anchors);
   });
 
   it("keeps separate explicit fragment references in their original occurrence order", () => {
@@ -46,6 +47,16 @@ describe("literal bracket path references precede anchor fragmentation", () => {
       { path: "app/z-users/[id]/page.tsx", origin: "query" },
       { path: "/page.tsx", origin: "query" },
       { path: "src/Other.ts", origin: "query" },
+    ]);
+  });
+
+  it.each([
+    "Explain app/(auth)/z-users/[id]/page.tsx:17",
+    "Explain (app/(auth)/z-users/[id]/page.tsx:17)",
+    "Explain (app/(auth)/z-users/[id]/page.tsx:17).",
+  ])("does not reintroduce located path fragments after full-token admission: %s", (query) => {
+    expect(extractPathReferences(query)).toEqual([
+      { path: "app/(auth)/z-users/[id]/page.tsx", line: 17, origin: "query" },
     ]);
   });
 
@@ -66,5 +77,20 @@ describe("literal bracket path references precede anchor fragmentation", () => {
   it("keeps the existing anchor producer's metadata limit", () => {
     const path = `app/${"folder/".repeat(700)}[id]/page.tsx`;
     expect(extractPathReferences(`Explain ${path}`)).not.toContainEqual({ path, origin: "query" });
+  });
+
+  it("shares the aggregate target-metadata budget with the existing quote producer", () => {
+    const paths = Array.from(
+      { length: 3 },
+      (_, index) => `app/${"folder/".repeat(250)}[id${String(index)}]/page.tsx`,
+    );
+    const produced = extractAnchors({
+      text: paths.map((path) => `\`${path}\``).join(" "),
+      maxAnchors: paths.length,
+      caseSensitive: true,
+    });
+    expect(extractPathReferences(paths.join(" "))).toEqual(
+      produced.anchors.map((anchor) => ({ path: anchor.term, origin: "query" })),
+    );
   });
 });
