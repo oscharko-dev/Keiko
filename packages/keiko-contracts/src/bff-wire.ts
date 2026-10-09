@@ -17,6 +17,7 @@ import type { ModelCapability } from "./gateway.js";
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
 import {
+  CANDIDATE_OMISSION_REASONS,
   connectedContextOmittedCount,
   connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -1376,7 +1377,38 @@ export interface GroundedAnswerContextSummary {
 // optional `rankingSummary` is likewise path-free (bucket/ecosystem aggregate counts only). The
 // sentinel `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set)
 // from directory/files scopes that always report `relativePaths.length` (>= 1).
-export interface GroundedAnswerContextPackSummary {
+export interface GroundedAnswerRetrievalDiagnostics {
+  readonly filesInPrompt?: number | undefined;
+  readonly semanticProviderDisposition?:
+    "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected" | undefined;
+  readonly scopeContextState?:
+    "applied" | "overflow" | "gate-refused" | "incomplete-traversal" | undefined;
+}
+
+export interface GroundedOmissionGroups {
+  readonly ranking: number;
+  readonly eligibility: number;
+}
+
+const RANKING_OMISSION_REASONS: ReadonlySet<CandidateOmissionReason> = new Set([
+  "low-relevance",
+  "budget-exhausted",
+  "near-duplicate",
+]);
+
+export function groupConnectedContextOmissions(
+  counts: Readonly<Record<CandidateOmissionReason, number>>,
+): GroundedOmissionGroups {
+  let ranking = 0;
+  let eligibility = 0;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    if (RANKING_OMISSION_REASONS.has(reason)) ranking += counts[reason];
+    else eligibility += counts[reason];
+  }
+  return { ranking, eligibility };
+}
+
+export interface GroundedAnswerContextPackSummary extends GroundedAnswerRetrievalDiagnostics {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
   // Deterministic display fingerprint, not the raw SelectedScope.scopeId.
   readonly scopeId: string;
@@ -1508,6 +1540,7 @@ export function buildGroundedAnswerContextPackSummary(
   citationCount: number,
   elapsedMs: number,
   assemblyDiagnostics?: ContextAssemblyDiagnostics,
+  retrievalDiagnostics?: GroundedAnswerRetrievalDiagnostics,
 ): GroundedAnswerContextPackSummary {
   const rankingSummary = buildRankingSummary(pack);
   const coverage = pack.diagnostics?.coverage;
@@ -1529,10 +1562,38 @@ export function buildGroundedAnswerContextPackSummary(
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
     ...(coverage !== undefined ? { coverage } : {}),
     ...(contextSummary !== undefined ? { contextSummary } : {}),
+    ...retrievalDiagnosticSummary(retrievalDiagnostics),
   };
 }
 
-export interface ConnectedContextGroundedAnswer {
+function retrievalDiagnosticSummary(
+  diagnostics: GroundedAnswerRetrievalDiagnostics | undefined,
+): GroundedAnswerRetrievalDiagnostics {
+  return {
+    ...(diagnostics?.filesInPrompt === undefined
+      ? {}
+      : { filesInPrompt: diagnostics.filesInPrompt }),
+    ...(diagnostics?.semanticProviderDisposition === undefined
+      ? {}
+      : { semanticProviderDisposition: diagnostics.semanticProviderDisposition }),
+    ...(diagnostics?.scopeContextState === undefined
+      ? {}
+      : { scopeContextState: diagnostics.scopeContextState }),
+  };
+}
+
+export interface GroundedInsufficiencyDeclaration {
+  readonly scopePath: string;
+  readonly state: "read-in-this-turn" | "unread-in-scope";
+}
+
+export interface GroundedAnswerEvidenceDeclaration {
+  readonly answerKind?: "answer" | "refusal" | "clarification" | "insufficiency" | undefined;
+  readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
+  readonly insufficiencyDeclarations?: readonly GroundedInsufficiencyDeclaration[] | undefined;
+}
+
+export interface ConnectedContextGroundedAnswer extends GroundedAnswerEvidenceDeclaration {
   readonly groundingKind: "connected-context";
   readonly userMessageId: string;
   readonly assistantMessageId: string;
@@ -1636,7 +1697,7 @@ export interface HybridGroundedAnswerContextSummary {
   readonly reranker?: GroundedRerankerDiagnostics | undefined;
 }
 
-export interface HybridGroundedAnswer {
+export interface HybridGroundedAnswer extends GroundedAnswerEvidenceDeclaration {
   readonly groundingKind: "hybrid";
   readonly userMessageId: string;
   readonly assistantMessageId: string;
