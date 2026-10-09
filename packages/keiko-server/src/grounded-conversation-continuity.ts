@@ -287,6 +287,15 @@ function resolvedRetrievalContent(
   return `${content}\n${prefix}`;
 }
 
+function referencesEarlierAnswer(question: string): boolean {
+  if (needsReferentResolution(question)) return true;
+  const classification = classifyRetrievalIntent(question);
+  return (
+    classification.intent === "repository-overview" &&
+    classification.normalizedTerms.includes("orientation")
+  );
+}
+
 function retrievalContinuity(
   content: string,
   query: string,
@@ -298,7 +307,7 @@ function retrievalContinuity(
   const previous = previousUserQuestion(history);
   const question = extractRetrievalChannels(query, 8).questionText;
   const retrievalContent = resolvedRetrievalContent(content, question, previous);
-  if (hasIndependentQueryTarget(question))
+  if (hasIndependentQueryTarget(question) || !referencesEarlierAnswer(question))
     return { retrievalContent, assistantReferents: [], continuityReferentSource: "none" };
   const referents = assistantRetrievalReferents(history, needsReferentResolution(question));
   const intent = previous === undefined ? undefined : classifyRetrievalIntent(previous).intent;
