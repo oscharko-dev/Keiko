@@ -685,6 +685,16 @@ Partial counters never become a manufactured zero total. Seeds warn that file bo
 inputs were never logged; a replay needs a separately supplied allowed fixture. See
 [Restore connected-folder file grounding](../troubleshooting/chat-connected-folder-file-not-read.md).
 
+An intentional source-free assessment can dispose only incidental low-confidence selection or an
+empty semantic lookup. The actual `search.answer.assessed` observation must carry `policy: allowed`,
+`outcome: assessment-only`, zero `sourceBackedChars`, a nonempty assessment, and `phase: accepted-final`.
+The reader requires the same process, correlation, scope/query digests and witnessed request
+lifecycle. A candidate repair is not accepted-answer authority, and missing starts, overlapping
+requests or later partial records cannot inherit an earlier turn's assessment. Historical unbound
+fields remain unknown. Explicit source demand, rejected paths, unread declarations and an unresolved
+follow-up remain retrieval-miss evidence even when the delivered response also contains learned
+knowledge.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
