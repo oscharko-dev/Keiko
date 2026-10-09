@@ -6,6 +6,16 @@
 // `excerpts.length`, and `uncertainty[].kind`; the remaining fields carry deterministic placeholders
 // and never influence a score.
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { groundedConversationContinuity } from "./grounded-conversation-continuity.js";
+import { retrieveConnectedContextPack, runGroundedExploration } from "./grounded-orchestrator.js";
+import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
+import { createRunRegistry } from "./runs.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+
 import type {
   ConnectedContextPack,
   ConnectedFileEntry,
@@ -123,4 +133,98 @@ export function buildEvalContextPack(
     emittedAtMs: 0,
     ledgerRef: undefined,
   };
+}
+
+/** The incident gate drives the real conversation and retrieval composition, with fixture-owned IO. */
+export interface ConnectedRetrievalEvalInput {
+  readonly files: Readonly<Record<string, string>>;
+  readonly query: string;
+  readonly history?: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
+  readonly correlationId?: string;
+  readonly activityLog?: ServerLogSink;
+  readonly answer?: string;
+}
+
+function connectedEvalRuntime(): UiHandlerDeps {
+  const store = createInMemoryUiStore();
+  return {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store,
+  };
+}
+
+function evalChatMessage(
+  deps: UiHandlerDeps,
+  chatId: string,
+  role: "user" | "assistant",
+  content: string,
+  timestamp: number,
+): ChatMessage {
+  return deps.store.createMessage({
+    chatId,
+    role,
+    content,
+    timestamp,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+}
+
+function materializeConnectedFixture(root: string, files: Readonly<Record<string, string>>): void {
+  for (const [path, content] of Object.entries(files)) {
+    const target = join(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  }
+}
+
+/** No private continuity formula is copied into the gate; every history resolves through its owner. */
+export async function runConnectedRetrievalEval(
+  fixture: ConnectedRetrievalEvalInput,
+): Promise<{ readonly pack: ConnectedContextPack; readonly retrievalContent: string }> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-connected-retrieval-eval-"));
+  const deps = connectedEvalRuntime();
+  try {
+    materializeConnectedFixture(root, fixture.files);
+    deps.store.createProject(root, "Connected retrieval fixture");
+    const chat = deps.store.createChat(root, "Connected retrieval fixture", "fixture");
+    let timestamp = 1_700_000_000_000;
+    for (const message of fixture.history ?? [])
+      evalChatMessage(deps, chat.id, message.role, message.content, timestamp++);
+    const user = evalChatMessage(deps, chat.id, "user", fixture.query, timestamp);
+    const continuity = groundedConversationContinuity(deps, user, "fixture", fixture.correlationId);
+    const input = {
+      scope: {
+        ...EVAL_SCOPE,
+        scopeId: "incident-retrieval-miss",
+        workspaceRoot: root,
+        kind: "workspace-root" as const,
+      },
+      query: { ...EVAL_QUERY, text: continuity.retrievalContent, maxResults: 100 },
+      currentQuestion: fixture.query,
+      workspaceRoot: root,
+    };
+    const retrievalDeps = {
+      correlationId: fixture.correlationId,
+      activityLog: fixture.activityLog,
+      answerer: { answer: (): Promise<string> => Promise.resolve(fixture.answer ?? "") },
+    };
+    const result =
+      fixture.answer === undefined
+        ? await retrieveConnectedContextPack(input, retrievalDeps)
+        : await runGroundedExploration(input, retrievalDeps);
+    return { pack: result.pack, retrievalContent: continuity.retrievalContent };
+  } finally {
+    deps.store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 }

@@ -78,7 +78,11 @@ const EVAL_CAPSULE_ID = "grounded-retrieval-eval" as KnowledgeCapsuleId;
 const EVAL_SOURCE_ID = "grounded-retrieval-eval-source" as KnowledgeSourceId;
 
 export type GroundedRetrievalEvalMode =
-  "baseline" | "reranker-off" | "reranker-reversed" | "embedding-flat";
+  | "baseline"
+  | "reranker-off"
+  | "reranker-reversed"
+  | "embedding-flat"
+  | "basename-tie-alphabetical";
 
 // ─── Concept (semantic) embedding ─────────────────────────────────────────────
 // Per concept: a scopePath, plus DISJOINT document vs query vocabularies. A document and its query
@@ -92,12 +96,27 @@ interface ConceptModel {
   readonly scopePath: string;
   readonly docWords: readonly string[];
   readonly queryWords: readonly string[];
+  readonly queryPath?: boolean;
 }
 
 const DOCUMENT_SYSTEM_WORD = "service";
 const QUERY_SYSTEM_WORD = "system";
 
 const CONCEPT_MODEL: readonly ConceptModel[] = [
+  {
+    id: "featureconditions",
+    scopePath: "src/form/busObj/feature/feature-conditions/validation.ts",
+    docWords: ["consent", "eligibility", "qualification"],
+    queryWords: ["approval", "permitted", "authorisation"],
+    queryPath: true,
+  },
+  {
+    id: "otherconditions",
+    scopePath: "src/form/busObj/aaa-other/other-conditions/validation.ts",
+    docWords: ["aggregate", "balance", "threshold"],
+    queryWords: ["total", "remainder", "limit"],
+    queryPath: true,
+  },
   {
     id: "auth",
     scopePath: "src/auth/session.ts",
@@ -220,7 +239,7 @@ interface EvalCase {
 }
 
 // Generated from CONCEPT_MODEL so the doc/query vocabularies stay provably disjoint. Every document
-// carries the embedding-synonymous `service`/`system` concept, so all ten are returned for EVERY
+// carries the embedding-synonymous `service`/`system` concept, so all corpus documents are returned for EVERY
 // query with a non-zero cosine while lexical overlap remains zero — a genuine distractor-dense set
 // where SEMANTIC RANKING (not presence or lexical fallback) decides the winner.
 const CORPUS: readonly EvalDocument[] = CONCEPT_MODEL.map((concept) => ({
@@ -232,7 +251,7 @@ const CORPUS: readonly EvalDocument[] = CONCEPT_MODEL.map((concept) => ({
 
 const CASES: readonly EvalCase[] = CONCEPT_MODEL.map((concept) => ({
   id: concept.id,
-  query: `In the ${QUERY_SYSTEM_WORD}, which module handles ${concept.queryWords.join(" ")}?`,
+  query: `In the ${QUERY_SYSTEM_WORD}, which module handles ${concept.queryWords.join(" ")}${concept.queryPath === true ? ` in ${concept.scopePath}` : ""}?`,
   relevantPath: concept.scopePath,
 }));
 
@@ -270,7 +289,11 @@ function scriptedRerankPort(
     // back to the semantic + RRF retrieval order. `reranker-off` proves that fallback ranks
     // correctly on its own; `embedding-flat` breaks the retrieval embedding underneath it so the
     // fallback has nothing to rank on — isolating the semantic path as load-bearing.
-    if (mode === "reranker-off" || mode === "embedding-flat") {
+    if (
+      mode === "reranker-off" ||
+      mode === "embedding-flat" ||
+      mode === "basename-tie-alphabetical"
+    ) {
       return Promise.resolve({ ok: false, kind: "transport" });
     }
     const queryVector = conceptVector(request.query);
@@ -537,6 +560,7 @@ async function rankCase(
   deps: UiHandlerDeps,
   provider: SemanticSearchProvider,
   evalCase: EvalCase,
+  mode: GroundedRetrievalEvalMode,
 ): Promise<readonly SelectedCandidate<CasePayload>[]> {
   const matches = await provider.search({
     query: {
@@ -552,7 +576,7 @@ async function rankCase(
     (match): RerankInput<CasePayload> => ({
       kind: "connector",
       redactedText: CORPUS.find((doc) => doc.scopePath === match.scopePath)?.text ?? "",
-      engineScore: match.score,
+      engineScore: mode === "basename-tie-alphabetical" ? 1 : match.score,
       sourceLabel: match.scopePath,
       tieKey: match.scopePath,
       payload: { scopePath: match.scopePath },
@@ -562,7 +586,8 @@ async function rankCase(
     (doc): RerankInput<CasePayload> => ({
       kind: "folder",
       redactedText: doc.text,
-      engineScore: lexicalScore(evalCase.query, doc.text),
+      engineScore:
+        mode === "basename-tie-alphabetical" ? 1 : lexicalScore(evalCase.query, doc.text),
       sourceLabel: doc.scopePath,
       tieKey: doc.scopePath,
       payload: { scopePath: doc.scopePath },
@@ -658,7 +683,7 @@ export async function runGroundedRetrievalQualityEval(
     runtime.audit.askPhase = true;
     const perCase = await Promise.all(
       CASES.map(async (evalCase) => {
-        const paths = rankedPaths(await rankCase(deps, provider, evalCase));
+        const paths = rankedPaths(await rankCase(deps, provider, evalCase, mode));
         const top1 = paths[0] === evalCase.relevantPath ? 1 : 0;
         const recall = paths.slice(0, EVAL_K).includes(evalCase.relevantPath) ? 1 : 0;
         return {
@@ -749,4 +774,5 @@ export function evaluateGroundedRetrievalBudget(
 export const GROUNDED_RETRIEVAL_REGRESSION_MODES: readonly GroundedRetrievalEvalMode[] = [
   "reranker-reversed",
   "embedding-flat",
+  "basename-tie-alphabetical",
 ];
