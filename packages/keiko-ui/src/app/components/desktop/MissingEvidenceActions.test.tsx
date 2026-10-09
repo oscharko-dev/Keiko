@@ -77,6 +77,56 @@ function answer(path: string): GroundedAnswer {
 }
 
 describe("declared missing evidence", () => {
+  it("uses the sole remaining eligible root after an acknowledged two-to-one transition", async () => {
+    const persist = vi.fn().mockResolvedValue({ chat });
+    const common = {
+      answer: answer("src/validation.ts"),
+      onChatChanged: vi.fn(),
+      setDraft: vi.fn(),
+      focusComposer: vi.fn(),
+      updateScopes: persist,
+    };
+    const multiple = {
+      ...chat,
+      connectedScopes: [
+        ...(chat.connectedScopes ?? []),
+        { kind: "workspace-root" as const, root: "/other", relativePaths: [], connectedAtMs: 2 },
+      ],
+    };
+    const view = render(<MissingEvidenceActions {...common} chat={multiple} />);
+    expect(screen.getByRole("button", { name: "Add file to scope" })).toBeDisabled();
+    view.rerender(<MissingEvidenceActions {...common} chat={chat} />);
+    const add = screen.getByRole("button", { name: "Add file to scope" });
+    expect(add).toBeEnabled();
+    fireEvent.click(add);
+    await waitFor(() => expect(persist).toHaveBeenCalled());
+    expect(persist.mock.calls[0]?.[1]).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "files", root: "/repo" })]),
+    );
+  });
+  it("requires an explicit choice when a previously sole root becomes ambiguous", () => {
+    const common = {
+      answer: answer("src/validation.ts"),
+      onChatChanged: vi.fn(),
+      setDraft: vi.fn(),
+      focusComposer: vi.fn(),
+    };
+    const view = render(<MissingEvidenceActions {...common} chat={chat} />);
+    expect(screen.getByRole("button", { name: "Add file to scope" })).toBeEnabled();
+    view.rerender(
+      <MissingEvidenceActions
+        {...common}
+        chat={{
+          ...chat,
+          connectedScopes: [
+            ...(chat.connectedScopes ?? []),
+            { kind: "workspace-root", root: "/other", relativePaths: [], connectedAtMs: 2 },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Add file to scope" })).toBeDisabled();
+  });
   it("adds a validated in-scope file using the existing merge and prefills a focused unsent follow-up", async () => {
     const updateScopes = vi.fn().mockResolvedValue({ chat });
     const changed = vi.fn();

@@ -35,6 +35,32 @@ afterEach(() => {
 });
 
 describe("acknowledged scope notice", () => {
+  it.each([true, false])(
+    "invalidates a %s-settled file notice and saved pin after disconnect ACK",
+    (settled) => {
+      vi.useFakeTimers();
+      const keep = vi.fn();
+      const changed = vi.fn();
+      const view = render(
+        <ChatScopeNotice chat={chat(folder)} onChatChanged={changed} onKeepFolderChange={keep} />,
+      );
+      view.rerender(
+        <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={keep} />,
+      );
+      if (settled) settle();
+      view.rerender(
+        <ChatScopeNotice
+          chat={{ ...chat(file), connectedScopes: [] }}
+          onChatChanged={changed}
+          onKeepFolderChange={keep}
+        />,
+      );
+      settle();
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Keep folder" })).toBeNull();
+      expect(keep).toHaveBeenCalledWith(false);
+    },
+  );
   it("coalesces previews, announces the new file and restores the prior folder with body-free evidence", async () => {
     vi.useFakeTimers();
     const diagnostic = vi.fn();
