@@ -23,7 +23,10 @@ import {
   type FollowUpObservation,
   type FollowUpResult,
 } from "./grounded-follow-up.js";
-import { admissibleDeclaredScopePath } from "./grounded-explicit-paths.js";
+import {
+  admissibleDeclaredScopePath,
+  isOrdinaryFolderDocumentPath,
+} from "./grounded-explicit-paths.js";
 import { declaredInsufficiencyPaths } from "./grounded-faithfulness.js";
 import {
   repairGroundedAnswer,
@@ -1087,6 +1090,7 @@ export interface GroundedAnswerOptions {
 }
 
 export interface GroundedAnswerer {
+  readonly completedSynthesisCalls?: (() => number) | undefined;
   /** Actual factory dispatch slots, shared by synthesis, window retry and repair. */
   readonly remainingSynthesisCalls?: (() => number) | undefined;
   /** Drain charged failed-attempt usage once when the factory rejects without a result. */
@@ -1184,6 +1188,7 @@ export interface OrchestratorDeps {
 }
 
 export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
+  readonly completedSynthesisCallCount?: number | undefined;
   readonly followUp?: FollowUpObservation | undefined;
   readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
@@ -3038,6 +3043,7 @@ function optionalRingSkipReason(
   inputs: SearchInputs,
   evidence: RingEvidenceAccumulator,
 ): RingSkipReason | undefined {
+  if (ring.kind === "git-history" && !inputs.hasGitMetadata) return "no-git-metadata";
   if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
   if (evidence.verifiedDefinitionContext === true) return "verified-target-context";
   if (
@@ -3049,7 +3055,7 @@ function optionalRingSkipReason(
     isCompleteExactLiteralLookup(inputs.query, evidence.diagnostics, inputs.targetDecision)
   )
     return "complete-exact-lookup";
-  if (ring.kind === "git-history") return inputs.hasGitMetadata ? undefined : "no-git-metadata";
+  if (ring.kind === "git-history") return undefined;
   return lookupAugmentationSkipReason(
     inputs.query,
     inputs.anchors,
@@ -7443,6 +7449,7 @@ async function assembleGroundedPack(
     await augmentRingsWithDeterministicAtoms(args),
     input.scope,
     nowMs(),
+    args.hasGitMetadata,
   );
 
   const prepared = await preparePackAssembly(args, augmentedRings);
@@ -8755,6 +8762,45 @@ function connectedContextSearchInputs(
   };
 }
 
+function focusedDocumentContext(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+  admission: ExplicitPathAdmission,
+): LiveRetrievalContext {
+  const selections = admission.selections;
+  if (
+    context.hasGitMetadata ||
+    input.query.kind !== "natural-language" ||
+    requiresRelationshipOrHistoryRings(input.query) ||
+    selections.length === 0 ||
+    !selections.every(
+      (selection) =>
+        selection.path.includes("/") &&
+        selection.origin === "query" &&
+        isOrdinaryFolderDocumentPath(selection.path, false),
+    )
+  )
+    return context;
+  // Admission has already established canonical selected-scope membership. Focus discovery on
+  // the named documents; a repeated navigation vocabulary cannot broaden this factual lookup.
+  const searchScope = {
+    ...context.searchScope,
+    relativePaths: [...new Set(selections.map((selection) => selection.path))],
+  };
+  const structuralContexts = liveStructuralContexts(
+    searchScope,
+    context.ringFs,
+    runtime,
+    context.deadlineAtMs,
+    context.workspaceIndexActivity,
+    deps.signal,
+  );
+  runtime.progress.structuralContexts = structuralContexts;
+  return { ...context, searchScope, structuralContexts };
+}
+
 function emptyWorkspaceIoActivityDiagnostics(): WorkspaceIoActivityDiagnostics {
   return {
     readDirCalls: 0,
@@ -9337,9 +9383,10 @@ async function retrieveLiveConnectedContext(
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "ring-retrieval";
   const admitted = await liveExplicitPathAdmission(input, deps, plan, governor, runtime, context);
+  const focused = focusedDocumentContext(input, deps, runtime, context, admitted.admission);
   const discovered = await runAllRings(
     plan.rings,
-    connectedContextSearchInputs(input, deps, plan, runtime, context),
+    connectedContextSearchInputs(input, deps, plan, runtime, focused),
     admitted.governor,
   );
   const rings = withAdmittedExplicitPaths(
@@ -9347,11 +9394,12 @@ async function retrieveLiveConnectedContext(
     admitted.admission,
     input,
     runtime.nowMs,
+    context.hasGitMetadata,
   );
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "pack-assembly";
   const assembled = await assembleGroundedPack(
-    liveGroundedPackInputs(input, deps, plan, runtime, context, rings),
+    liveGroundedPackInputs(input, deps, plan, runtime, focused, rings),
   );
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
@@ -9409,6 +9457,7 @@ function declarationScopeIndex(
         scope: input.scope,
         searchScope: context.searchScope,
         fs: runtime.fs,
+        hasGitMetadata: context.hasGitMetadata,
       })
     )
       verified.set(path, "unread-in-scope");
@@ -9466,6 +9515,7 @@ async function liveExplicitPathAdmission(
 }> {
   const budget = createAugmentationBudgetMeter(plan, governor, runtime.nowMs, context.deadlineAtMs);
   const result = await admitDiagnosticReferences({
+    hasGitMetadata: context.hasGitMetadata,
     plan,
     assistantReferents: input.assistantReferents,
     continuityReferentSource: input.continuityReferentSource,
@@ -9489,6 +9539,7 @@ function withAdmittedExplicitPaths(
   admission: ExplicitPathAdmission,
   input: OrchestratorInput,
   nowMs: () => number,
+  hasGitMetadata: boolean,
 ): RingRunSummary {
   const fingerprint = selectedFileQueryFingerprint(input.query);
   return filterRejectedExplicitPaths(
@@ -9507,6 +9558,7 @@ function withAdmittedExplicitPaths(
     },
     input.scope,
     nowMs(),
+    hasGitMetadata,
   );
 }
 
@@ -9514,6 +9566,7 @@ function filterRejectedExplicitPaths(
   rings: RingRunSummary,
   scope: SelectedScope,
   nowMs: number,
+  hasGitMetadata: boolean,
 ): RingRunSummary {
   const admission = rings.explicitAdmission;
   if (admission === undefined || admission.observation.explicitPathAnchorCount === 0) return rings;
@@ -9523,6 +9576,7 @@ function filterRejectedExplicitPaths(
       .filter(
         (atom) =>
           !humanPaths.has(atom.scopePath) &&
+          !isOrdinaryFolderDocumentPath(atom.scopePath, hasGitMetadata) &&
           (isGeneratedArtifactPath(atom.scopePath) || isGeneratedRankingPath(atom.scopePath)),
       )
       .map((atom) => atom.scopePath),
@@ -10100,6 +10154,7 @@ function answerEvidenceFields(
   | "insufficiencyObservation"
   | "sentEvidencePacks"
   | "filesInPrompt"
+  | "completedSynthesisCallCount"
 > {
   return {
     ...(answer.citationBehaviour === undefined
@@ -10118,6 +10173,9 @@ function answerEvidenceFields(
       ? {}
       : { sentEvidencePacks: answer.sentEvidencePacks }),
     ...(answer.filesInPrompt === undefined ? {} : { filesInPrompt: answer.filesInPrompt }),
+    ...(answer.completedSynthesisCallCount === undefined
+      ? {}
+      : { completedSynthesisCallCount: answer.completedSynthesisCallCount }),
   };
 }
 

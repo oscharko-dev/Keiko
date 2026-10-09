@@ -1,6 +1,7 @@
 import {
   LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS,
   LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import {
   isDenied,
@@ -30,6 +31,7 @@ export interface RetrievalChannels extends AnchorExtractionResult {
 const KNOWN_EXTENSIONS: ReadonlySet<string> = new Set([
   ...LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS,
   ...LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS,
+  ...LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
 ]);
 const REFERENCE_CAP = 6;
 const REFERENCE_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
@@ -96,7 +98,12 @@ function pathReferenceExtraction(text: string): {
   for (const token of text.split(/[\s`"'()<>,;!?]+/u)) {
     if (token.startsWith(".") && isDenied(token)) terms.add(token);
     const located = parsePathReference(token);
-    if (located.line !== undefined && filenameReference(located.path) && !bracketPath(token)) {
+    if (
+      located.line !== undefined &&
+      (terms.has(located.path) || terms.has(token)) &&
+      filenameReference(located.path) &&
+      !bracketPath(token)
+    ) {
       terms.delete(located.path);
       terms.add(token);
     }

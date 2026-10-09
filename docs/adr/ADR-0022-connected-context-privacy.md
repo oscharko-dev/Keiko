@@ -233,8 +233,16 @@ preview and symbol lookup, coding context lookups, and grounded symbol trace; ex
 bounds. An unlimited default lookup uses the live traversal rather than treating a finite workspace
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary-folder recursive content searches do not inherit Git-oriented generated-directory
-exclusions merely from names such as `build` or `dist`. Query-named explicit path admission applies
-the shared generated-path eligibility policy before it can inject an unconditional read candidate.
+exclusions merely from names such as `build` or `dist`. Query-named ordinary-folder documents use
+that same eligibility distinction; repository generated code remains excluded before unconditional
+read admission. Hard denials, containment, ignore, binary, size and budget checks still apply.
+Complete extracted document paths are target data, so their `reference`, `history` or `caller`
+directory segments cannot request relationship/history rings. Actual relationship/history words
+outside the path retain their routing. An ordinary factual lookup with admitted named document
+paths focuses discovery on those paths and binds its existing structural request context to that
+narrower search scope. It does not enumerate navigation neighbours or widen the human's scope.
+Existing correlated admission, skipped-ring, read and budget observations describe this path;
+non-Git folders cannot dispatch the Git-history ring, even when history was requested.
 An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
 text-search calls. It is not an index failure or evidence of index reuse. If no indexed result,
 snapshot load, or snapshot save was observed, both completion projections report the provider as
@@ -741,7 +749,14 @@ test will catch it.
 
 Synthesis accounting refines the two-call rule at the actual attempt boundary: initial answers,
 marker repair, follow-up, and context/provider retries share the same turn-owned allowance. The
-answer-details sibling records optional `synthesisCallCount` and `synthesisReservedOutputTokens`.
+answer-details sibling records optional `synthesisCallCount`, `completedSynthesisCallCount` and
+`synthesisReservedOutputTokens`. Physical synthesis attempts remain separate from completed
+responses: overflow, transient and compatibility failures consume attempt and token/spend grants
+without incrementing completed-response count. A completed marker repair increments that count
+even when its content is rejected; a completed follow-up does likewise. The common grounded
+evidence producer receives the completed count for `usageTotals.requestCount` and the human report
+(ADR-0010 D7); unchanged callers retain the existing one-request default. The existing factory
+ledger owns the lifetime completed counter, per-result deltas and caught-repair recovery.
 Input charges use the canonical sent-prompt estimate as a floor and retain larger reported counts.
 Reported partial output is charged; an uncertain interrupted stream retains its requested output
 upper reservation. A definitive HTTP rejection before generation leaves the spare output grant

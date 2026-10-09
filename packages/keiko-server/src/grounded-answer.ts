@@ -35,6 +35,8 @@ export function groundedSynthesisAttemptUsage(
 
 /** Factory-owned synthesis attempts, including context-window retries; not gateway authority. */
 export interface GroundedSynthesisCallBudget {
+  readonly completed: () => number;
+  readonly recordCompleted: () => void;
   readonly remaining: () => number;
   readonly tryReserve: () => boolean;
   readonly pendingUsage: () => GroundedAnswerUsage;
@@ -47,9 +49,14 @@ export interface GroundedSynthesisCallBudget {
 
 export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget {
   let calls = 0;
+  let completed = 0;
   let reservedOutput = 0;
   let usage: GroundedAnswerUsage = { promptTokens: 0, completionTokens: 0 };
   return {
+    completed: (): number => completed,
+    recordCompleted(): void {
+      completed += 1;
+    },
     remaining: (): number => 2 - calls,
     reservedOutputTokens: (): number => reservedOutput,
     recordOutputReservation(tokens): void {
@@ -191,7 +198,10 @@ function synthesisAttemptReservation(
 export function combinedGroundedSynthesisFields(
   first: GroundedAnswerResult,
   next: GroundedAnswerResult,
-): Pick<GroundedAnswerResult, "usage" | "synthesisCallCount" | "synthesisReservedOutputTokens"> {
+): Pick<
+  GroundedAnswerResult,
+  "usage" | "synthesisCallCount" | "completedSynthesisCallCount" | "synthesisReservedOutputTokens"
+> {
   return {
     usage: {
       promptTokens: first.usage.promptTokens + next.usage.promptTokens,
@@ -200,6 +210,8 @@ export function combinedGroundedSynthesisFields(
     ...(first.synthesisCallCount === undefined && next.synthesisCallCount === undefined
       ? {}
       : { synthesisCallCount: (first.synthesisCallCount ?? 0) + (next.synthesisCallCount ?? 0) }),
+    completedSynthesisCallCount:
+      completedGroundedSynthesisCount(first) + completedGroundedSynthesisCount(next),
     ...(first.synthesisReservedOutputTokens === undefined &&
     next.synthesisReservedOutputTokens === undefined
       ? {}
@@ -210,32 +222,50 @@ export function combinedGroundedSynthesisFields(
   };
 }
 
+interface FailedSynthesisAccounting {
+  readonly completedSynthesisCalls?: (() => number) | undefined;
+  readonly remainingSynthesisCalls?: (() => number) | undefined;
+  readonly takeFailedSynthesisUsage?: (() => GroundedAnswerUsage) | undefined;
+  readonly reservedSynthesisOutputTokens?: (() => number) | undefined;
+}
+
+function failedSynthesisCountFields(
+  accounting: FailedSynthesisAccounting | undefined,
+): Pick<
+  GroundedAnswerResult,
+  "synthesisCallCount" | "completedSynthesisCallCount" | "synthesisReservedOutputTokens"
+> {
+  const remaining = accounting?.remainingSynthesisCalls?.();
+  const reserved = accounting?.reservedSynthesisOutputTokens?.();
+  const completed = accounting?.completedSynthesisCalls?.();
+  return {
+    ...(remaining === undefined ? {} : { synthesisCallCount: 2 - remaining }),
+    ...(reserved === undefined ? {} : { synthesisReservedOutputTokens: reserved }),
+    ...(completed === undefined ? {} : { completedSynthesisCallCount: completed }),
+  };
+}
+
 export function retainFailedGroundedSynthesis(
   answer: GroundedAnswerResult,
-  accounting?: {
-    readonly remainingSynthesisCalls?: (() => number) | undefined;
-    readonly takeFailedSynthesisUsage?: (() => GroundedAnswerUsage) | undefined;
-    readonly reservedSynthesisOutputTokens?: (() => number) | undefined;
-  },
+  accounting?: FailedSynthesisAccounting,
 ): GroundedAnswerResult {
   const usage = accounting?.takeFailedSynthesisUsage?.() ?? {
     promptTokens: 0,
     completionTokens: 0,
   };
-  const remaining = accounting?.remainingSynthesisCalls?.();
-  const reserved = accounting?.reservedSynthesisOutputTokens?.();
   return {
     ...answer,
     usage: {
       promptTokens: answer.usage.promptTokens + usage.promptTokens,
       completionTokens: answer.usage.completionTokens + usage.completionTokens,
     },
-    ...(remaining === undefined ? {} : { synthesisCallCount: 2 - remaining }),
-    ...(reserved === undefined ? {} : { synthesisReservedOutputTokens: reserved }),
+    ...failedSynthesisCountFields(accounting),
   };
 }
 
 export interface GroundedAnswerResult extends GroundedAnswerEvidenceDeclaration {
+  /** Completed synthesis responses; failed physical retry attempts are not completed calls. */
+  readonly completedSynthesisCallCount?: number | undefined;
   readonly synthesisCallCount?: number | undefined;
   readonly synthesisReservedOutputTokens?: number | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
@@ -258,6 +288,10 @@ export interface GroundedAnswerResult extends GroundedAnswerEvidenceDeclaration 
 }
 
 export type GroundedAnswerPayload = string | GroundedAnswerResult;
+
+export function completedGroundedSynthesisCount(answer: GroundedAnswerResult): number {
+  return answer.completedSynthesisCallCount ?? (answer.modelInvoked === false ? 0 : 1);
+}
 
 const SAFE_GROUNDED_FALLBACK =
   "I could not produce a clean grounded answer from the retrieved repository evidence.";
@@ -349,6 +383,9 @@ export function normalizeGroundedAnswerPayload(
     ...(payload.synthesisCallCount === undefined
       ? {}
       : { synthesisCallCount: payload.synthesisCallCount }),
+    ...(payload.completedSynthesisCallCount === undefined
+      ? {}
+      : { completedSynthesisCallCount: payload.completedSynthesisCallCount }),
     ...(payload.synthesisReservedOutputTokens === undefined
       ? {}
       : { synthesisReservedOutputTokens: payload.synthesisReservedOutputTokens }),

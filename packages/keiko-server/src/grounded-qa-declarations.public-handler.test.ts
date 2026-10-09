@@ -154,7 +154,10 @@ function answerModel(calls: GatewayCallRequest[], content: string): ModelPort {
   };
 }
 
-async function ask(deps: UiHandlerDeps, chatId: string): Promise<GroundedAnswer> {
+async function ask(
+  deps: UiHandlerDeps,
+  chatId: string,
+): Promise<Exclude<GroundedAnswer, { groundingKind: "local-knowledge" }>> {
   const result = await handleGroundedAsk(
     {
       correlationId: "public-declaration-membership",
@@ -168,7 +171,10 @@ async function ask(deps: UiHandlerDeps, chatId: string): Promise<GroundedAnswer>
     deps,
   );
   expect(result.status, JSON.stringify(result.body)).toBe(200);
-  return result.body as GroundedAnswer;
+  const answer = result.body as GroundedAnswer;
+  if (answer.groundingKind === "local-knowledge")
+    throw new TypeError("Expected a folder-grounded answer");
+  return answer;
 }
 
 describe("public declaration membership", () => {

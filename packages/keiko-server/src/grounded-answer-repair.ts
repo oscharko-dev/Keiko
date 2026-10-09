@@ -45,6 +45,7 @@ export interface GroundedRepairContext {
           | "pendingSynthesisUsage"
           | "takeFailedSynthesisUsage"
           | "reservedSynthesisOutputTokens"
+          | "completedSynthesisCalls"
         >
       | undefined;
   };

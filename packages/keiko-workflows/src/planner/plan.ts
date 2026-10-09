@@ -34,6 +34,7 @@ import {
 } from "./intent.js";
 import {
   extractRetrievalChannels,
+  extractPathReferences,
   searchReferenceAnchors,
   type SearchReference,
 } from "./references.js";
@@ -313,11 +314,11 @@ function isDirectRouteLookup(query: RetrievalQuery): boolean {
 }
 
 export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
-  return (
-    hasHistoryQuery(query.text) ||
-    hasSymbolRelation(query.text) ||
-    ROUTE_TRAVERSAL_RE.test(query.text)
+  const prose = extractPathReferences(query.text).reduce(
+    (text, reference) => text.split(reference.path).join(" "),
+    query.text,
   );
+  return hasHistoryQuery(prose) || hasSymbolRelation(prose) || ROUTE_TRAVERSAL_RE.test(prose);
 }
 
 const DIRECT_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
@@ -713,6 +714,27 @@ function buildScopeInvalidPlan(
   };
 }
 
+function readyPlanSeed(
+  input: CreatePlanInput,
+  classification: RetrievalIntentClassification,
+  anchors: readonly SearchAnchor[],
+  references: readonly SearchReference[],
+  rings: readonly RetrievalRing[],
+): PlanSeed {
+  return {
+    scopeId: input.scope.scopeId,
+    queryKind: input.query.kind,
+    queryText: input.query.text,
+    retrievalIntent: classification.intent,
+    anchorTerms: anchors.map((anchor) => anchor.term),
+    references,
+    ...(classification.effectiveIntent === undefined
+      ? {}
+      : { effectiveIntent: classification.effectiveIntent }),
+    ringKinds: rings.map((ring) => ring.kind),
+  };
+}
+
 export function createExplorationPlan(
   input: CreatePlanInput,
   deps?: CreatePlanDeps,
@@ -738,18 +760,7 @@ export function createExplorationPlan(
     decision.state === "ready"
       ? composeRings(searchAnchors, input.scope, input.query, resolved.budget, targetDecision)
       : { rings: [], directEvidenceLookup: false };
-  const seed: PlanSeed = {
-    scopeId: input.scope.scopeId,
-    queryKind: input.query.kind,
-    queryText: input.query.text,
-    retrievalIntent: classification.intent,
-    anchorTerms: searchAnchors.map((a) => a.term),
-    references: extraction.references,
-    ...(classification.effectiveIntent === undefined
-      ? {}
-      : { effectiveIntent: classification.effectiveIntent }),
-    ringKinds: rings.map((r) => r.kind),
-  };
+  const seed = readyPlanSeed(input, classification, searchAnchors, extraction.references, rings);
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     planId: derivePlanId(seed),

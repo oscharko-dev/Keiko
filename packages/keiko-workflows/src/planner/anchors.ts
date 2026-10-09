@@ -166,18 +166,16 @@ const QUOTED_SINGLE_RE =
   /(?<!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])'([^'\n]+)'(?!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])/gu;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
-// Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
-// realistic repository path, but it caps the worst-case backtracking work a single scan position
-// can spend to a fixed constant instead of one growing with input length. The previous unbounded
-// `(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}` let the trailing `[\w.-]+` and the group's inner
-// `[\w.-]+` trade the same run of characters back and forth across an unbounded number of split
-// points, which is quadratic on adversarial input (measured empirically before this change).
-// Extensions use the same finite 16-character bound as filename targets; the token boundary
-// rejects an oversized extension instead of admitting a shortened, nonexistent path.
-// Exported (module-internal, not re-exported from index.ts) solely so the co-located test can
-// exercise the pattern directly for the S8786 regression test.
-export const PATH_RE =
-  /(?:file:\/\/)?\/?(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z0-9]{1,16}(?::\d{1,9}(?::\d{1,9})?)?(?![\w$-]|\.[\w$-])/g;
+// Inspect complete whitespace-delimited tokens once. Depth/segment regex bounds used to
+// silently turn valid long or Unicode paths into suffixes; the existing total metadata budget
+// remains authoritative. No nested repetition or rescanning from every slash is necessary.
+const PATH_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
+const PRESENTATION_PATTERNS: readonly RegExp[] = [
+  /\bcite(?:\s+(?:the|a|an|any|authoritative|relevant|supporting|source|sources|manual|manuals|file|files|and|line|lines|evidence)){1,16}\b/giu,
+  /\bkeep\s+(?:the|your)\s+answer\s+(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b/giu,
+  /\b(?:answer|respond)\s+(?:briefly|concisely)\b/giu,
+  /\bantworte\s+(?:kurz|knapp)(?:\s+mit\s+(?:quellenangabe|quellen|belegen))?\b/giu,
+];
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
 const DEFINITION_TARGET_BEFORE_VERB_RE =
@@ -378,6 +376,38 @@ function tokenizeRemaining(remaining: string, out: AnchorAccumulator): number {
   return considered;
 }
 
+function completePathToken(raw: string): string {
+  const term = raw.endsWith(".") ? raw.slice(0, -1) : raw;
+  if (term.startsWith("(") && term.endsWith(")")) return term.slice(1, -1);
+  return term.endsWith(")") ? term.slice(0, -1) : term;
+}
+
+function isFilePathToken(term: string): boolean {
+  const path = term.replace(/(?::\d{1,9}){1,2}$/u, "");
+  if (!path.includes("/") || path.includes("\\")) return false;
+  const localPath = path.startsWith("file://") ? path.slice(7) : path;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(localPath)) return false;
+  const name = localPath.slice(localPath.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && /^[A-Za-z0-9]{1,16}$/u.test(name.slice(dot + 1));
+}
+
+function collectFilePathTokens(source: string, out: AnchorAccumulator): string {
+  return source.replace(PATH_TOKEN_RE, (raw: string) => {
+    const term = completePathToken(raw);
+    if (!isFilePathToken(term)) return raw;
+    pushAnchor(out, term, "path", 0.95);
+    return " ".repeat(raw.length);
+  });
+}
+
+function withoutPresentationInstructions(source: string): string {
+  return PRESENTATION_PATTERNS.reduce(
+    (remaining, pattern) => remaining.replace(pattern, (match) => " ".repeat(match.length)),
+    source,
+  );
+}
+
 function dedup(anchors: readonly MutableAnchor[], caseSensitive: boolean): MutableAnchor[] {
   const best = new Map<string, MutableAnchor>();
   for (const anchor of anchors) {
@@ -463,8 +493,8 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   const collected: AnchorAccumulator = { anchors: [], truncated: false };
   let remaining = collectQuotedTargets(text, collected);
   remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
+  remaining = collectFilePathTokens(remaining, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
-  remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
   remaining = collectMatches(
     remaining,
     DEFINITION_TARGET_BEFORE_VERB_RE,
@@ -497,7 +527,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
-  const tokensConsidered = tokenizeRemaining(remaining, collected);
+  const tokensConsidered = tokenizeRemaining(withoutPresentationInstructions(remaining), collected);
   const selected = selectBoundedAnchors(collected, maxAnchors, caseSensitive);
   return { ...selected, tokensConsidered };
 }

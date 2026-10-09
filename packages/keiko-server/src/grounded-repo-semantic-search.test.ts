@@ -374,7 +374,9 @@ async function staleFixture(
   readonly embedding: ReturnType<
     typeof vi.fn<(request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>>
   >;
-  readonly observed: ReturnType<typeof vi.fn<(observation: unknown) => void>>;
+  readonly observed: ReturnType<
+    typeof vi.fn<NonNullable<ConfiguredRepoSemanticSearchOptions["observeSemanticFreshness"]>>
+  >;
   readonly close: () => void;
 }> {
   const files: Record<string, string> = {
@@ -397,7 +399,9 @@ async function staleFixture(
   for (let index = 2; index < fileCount; index += 1)
     files[`src/changed-${String(index)}.ts`] =
       "export const changed = 'session renewal changed';\n";
-  const observed = vi.fn((_observation: unknown): void => undefined);
+  const observed = vi.fn<
+    NonNullable<ConfiguredRepoSemanticSearchOptions["observeSemanticFreshness"]>
+  >((): void => undefined);
   const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
     fs,
     maxCandidates: 8,
@@ -426,13 +430,15 @@ async function staleFixture(
 type StaleFixture = Awaited<ReturnType<typeof staleFixture>>;
 
 function pricedRefreshFixture(fixture: StaleFixture): StaleFixture {
+  const configured = fixture.deps.config;
+  if (configured === undefined) throw new TypeError("Expected a configured refresh fixture");
   return {
     ...fixture,
     deps: {
       ...fixture.deps,
       config: {
-        ...fixture.deps.config,
-        capabilities: (fixture.deps.config.capabilities ?? []).map((capability) => ({
+        ...configured,
+        capabilities: (configured.capabilities ?? []).map((capability) => ({
           ...capability,
           pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 0 },
         })),

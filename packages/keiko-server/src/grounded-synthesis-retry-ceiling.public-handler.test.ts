@@ -7,6 +7,11 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  buildEvidenceReport,
+  loadEvidence,
+  renderEvidenceReport,
+} from "@oscharko-dev/keiko-evidence";
+import {
   countGatewayPromptTokens,
   type GatewayPromptTokenInput,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
@@ -242,6 +247,8 @@ async function scriptedProviderTurn(
   readonly requests: readonly string[];
   readonly records: readonly Record<string, unknown>[];
   readonly spendReservations: number;
+  readonly completedCount: number | undefined;
+  readonly report: string | undefined;
   readonly usage: { readonly modelInputTokens: number; readonly modelOutputTokens: number };
 }> {
   const turn = await configuredProviderTurn(answers, maxRetries);
@@ -260,6 +267,8 @@ async function configuredProviderTurn(
   readonly requests: readonly string[];
   readonly records: readonly Record<string, unknown>[];
   readonly spendReservations: number;
+  readonly completedCount: number | undefined;
+  readonly report: string | undefined;
 }> {
   const requests = installProvider(answers);
   const { deps, chatId } = configuredRuntime(maxRetries);
@@ -272,7 +281,19 @@ async function configuredProviderTurn(
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   expect(records.map((record) => record.op)).not.toContain("server-log.write-failed");
-  return { result, requests, records, spendReservations: reserve.mock.calls.length };
+  const runId = deps.evidenceStore.list()[0];
+  const manifest = runId === undefined ? undefined : loadEvidence(deps.evidenceStore, runId);
+  return {
+    result,
+    requests,
+    records,
+    spendReservations: reserve.mock.calls.length,
+    completedCount: manifest?.usageTotals.requestCount,
+    report:
+      manifest === undefined
+        ? undefined
+        : renderEvidenceReport(buildEvidenceReport(manifest, "fixture-evidence")),
+  };
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
@@ -284,6 +305,15 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     const turn = await scriptedProviderTurn(answers);
     expect(turn.requests).toHaveLength(count);
     expect(turn.spendReservations).toBe(count);
+    expect(turn.completedCount).toBe(count);
+    expect(turn.report).toContain(`${String(count)} request(s)`);
+  });
+
+  it("counts a completed rejected repair while retaining the original answer", async () => {
+    const turn = await scriptedProviderTurn([UNCITED, "Feature returns false [src/Feature.ts:1]."]);
+    expect(turn.requests).toHaveLength(2);
+    expect(turn.completedCount).toBe(2);
+    expect(turn.report).toContain("2 request(s)");
   });
 
   it.each([
@@ -302,6 +332,8 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(turn.requests).toHaveLength(2);
     expect(turn.spendReservations).toBe(2);
     expect(turn.records.some((record) => record.op === "gateway.retry.scheduled")).toBe(true);
+    expect(turn.completedCount).toBe(1);
+    expect(turn.report).toContain("1 request(s)");
   });
 
   it("preserves unrelated buffered gateway recovery under the configured retry policy", async () => {
@@ -312,12 +344,15 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     if (port === undefined || budget === undefined)
       throw new TypeError("Expected configured gateway");
     const reserve = vi.spyOn(budget, "reserve");
-    const answer = await port.call({
-      modelId: MODEL,
-      messages: [{ role: "user", content: "File: src/Feature.ts" }],
-      stream: false,
-      maxOutputTokens: 1024,
-    });
+    const answer = await port.call(
+      {
+        modelId: MODEL,
+        messages: [{ role: "user", content: "File: src/Feature.ts" }],
+        stream: false,
+        maxOutputTokens: 1024,
+      },
+      new AbortController().signal,
+    );
     expect(answer.content).toBe(CITED);
     expect(requests).toHaveLength(2);
     expect(reserve).toHaveBeenCalledTimes(2);
@@ -418,12 +453,15 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     const { deps } = configuredRuntime();
     const port = deps.modelPortFactory(MODEL);
     if (port === undefined) throw new TypeError("Expected configured gateway");
-    const answer = await port.call({
-      modelId: MODEL,
-      messages: [{ role: "user", content: "File: src/Feature.ts" }],
-      stream: false,
-      maxOutputTokens: 1024,
-    });
+    const answer = await port.call(
+      {
+        modelId: MODEL,
+        messages: [{ role: "user", content: "File: src/Feature.ts" }],
+        stream: false,
+        maxOutputTokens: 1024,
+      },
+      new AbortController().signal,
+    );
     expect(answer.content).toBe(CITED);
     expect(requests).toHaveLength(3);
   });

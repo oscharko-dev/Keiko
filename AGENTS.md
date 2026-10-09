@@ -451,6 +451,12 @@ system that exists, never beside it:
   high/low selection vocabulary and actual observed scope/semantic dispositions.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  Complete document path references are data when classifying relationship/history requests;
+  directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
+  factual lookup focuses discovery on canonically admitted named documents with a scope-bound
+  request context. Its source/read/ring observations reuse the same registered retrieval siblings.
+  Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
+  generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
   Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
   into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
   observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
@@ -480,6 +486,11 @@ system that exists, never beside it:
   closed to zero passes with an invalid configuration observation. Final sent packs and ranges
   authenticate citations; assembled reads remain separate physical-usage and audit evidence.
   The same answer-details line optionally records `synthesisCallCount` and
+  `completedSynthesisCallCount`; the former counts physical attempts and the latter completed
+  responses. Grounded evidence reports use completed responses for `usageTotals.requestCount`,
+  including completed marker repairs and follow-up answers; failed retries do not become completed
+  requests. Legacy evidence callers retain their one-request default.
+  It also records
   `synthesisReservedOutputTokens`. Synthesis input usage charges the greater of the canonical sent
   prompt estimate and reported provider usage. Reported discarded output is retained; an interrupted
   stream without output measurement retains its requested output reservation instead of granting an
