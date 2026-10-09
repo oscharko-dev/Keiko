@@ -1379,6 +1379,8 @@ export interface GroundedAnswerContextSummary {
 // from directory/files scopes that always report `relativePaths.length` (>= 1).
 export interface GroundedAnswerRetrievalDiagnostics {
   readonly filesInPrompt?: number | undefined;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
+  readonly selectionConfidence?: "low" | "normal" | undefined;
   readonly semanticProviderDisposition?:
     "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected" | undefined;
   readonly scopeContextState?:
@@ -1570,6 +1572,10 @@ function retrievalDiagnosticSummary(
   diagnostics: GroundedAnswerRetrievalDiagnostics | undefined,
 ): GroundedAnswerRetrievalDiagnostics {
   return {
+    ...(diagnostics?.reranker === undefined ? {} : { reranker: diagnostics.reranker }),
+    ...(diagnostics?.selectionConfidence === undefined
+      ? {}
+      : { selectionConfidence: diagnostics.selectionConfidence }),
     ...(diagnostics?.filesInPrompt === undefined
       ? {}
       : { filesInPrompt: diagnostics.filesInPrompt }),

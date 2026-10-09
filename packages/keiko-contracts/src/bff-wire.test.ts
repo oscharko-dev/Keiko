@@ -1432,6 +1432,23 @@ describe("UNKNOWN_REPOSITORY_ERROR_CODE", () => {
 });
 
 describe("retrieval diagnostics projection", () => {
+  it("projects canonical reranker and selection confidence without inventing defaults", () => {
+    const reranker: GroundedRerankerDiagnostics = {
+      status: "applied",
+      mode: "local-only",
+      candidateCount: 9,
+      documentCount: 3,
+      keptCount: 2,
+    };
+    const baseline = buildGroundedAnswerContextPackSummary(pack(), 2, 3);
+    expect(baseline).not.toHaveProperty("reranker");
+    expect(baseline).not.toHaveProperty("selectionConfidence");
+    const actual = buildGroundedAnswerContextPackSummary(pack(), 2, 3, undefined, {
+      reranker,
+      selectionConfidence: "low",
+    });
+    expect(actual).toMatchObject({ reranker, selectionConfidence: "low" });
+  });
   it("preserves old summary shape and projects prompt-reaching counts and canonical dispositions", () => {
     const diagnostics = {
       filesInPrompt: 1,

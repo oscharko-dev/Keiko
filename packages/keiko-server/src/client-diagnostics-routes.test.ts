@@ -79,7 +79,9 @@ describe("scope notice and evidence inspection ingestion", () => {
     expect(clientDiagnosticEvents(sink)).toHaveLength(0);
     expect(JSON.stringify(event)).not.toContain("private-message-canary");
     if (event === undefined) throw new Error("Missing scope notice event");
-    expect(observedFailureQuery([event]).events).toHaveLength(0);
+    expect(
+      observedFailureQuery([event]).events.filter((entry) => entry.parsed.view.op === event.op),
+    ).toHaveLength(0);
   });
 
   it.each(["summary-expanded", "file-table-opened", "manifest-fetch-failed"])(

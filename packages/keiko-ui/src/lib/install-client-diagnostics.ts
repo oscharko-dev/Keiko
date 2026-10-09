@@ -291,6 +291,8 @@ function clientMessagePostBody(
     answerCopy: meta.answerCopy,
     answerSpeech: meta.answerSpeech,
     citationActivation: meta.citationActivation,
+    scopeNotice: meta.scopeNotice,
+    evidenceInspection: meta.evidenceInspection,
     supportReportDelivery: meta.supportReportDelivery,
     supportReportPreparation: meta.supportReportPreparation,
     filesScopeDecision: meta.filesScopeDecision,
@@ -382,7 +384,8 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.supportReportPreparation !== undefined ||
     meta.filesScopeDecision !== undefined ||
     meta.codingRunRestore !== undefined ||
-    meta.citationActivation !== undefined
+    meta.citationActivation !== undefined ||
+    meta.scopeNotice !== undefined
   );
 }
 
@@ -392,6 +395,9 @@ function closedReportPostBudget(
   if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
   if (meta.selectDismissal !== undefined || meta.knowledgeCatalog !== undefined) return "routine";
   if (meta.answerSpeech !== undefined || routineSupportReportEvidence(meta)) return "routine";
+  if (meta.evidenceInspection !== undefined) {
+    return meta.evidenceInspection.reason === "manifest-fetch-failed" ? "failure" : "routine";
+  }
   if (meta.answerCopy === undefined) return undefined;
   return meta.answerCopy.outcome === "failed" ? "failure" : "routine";
 }
