@@ -10,7 +10,12 @@ import {
 import {
   buildGroundedAnswerContextPackSummary,
   groupConnectedContextOmissions,
+  type GroundedAnswerRetrievalDiagnostics,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CANDIDATE_OMISSION_REASONS,
+  type ConnectedContextPack,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import { GroundedAnswer } from "./GroundedAnswer";
 import {
   resetClientDiagnosticWriter,
@@ -101,6 +106,29 @@ describe("honest connected evidence", () => {
       ),
     ).toHaveAttribute("title", expect.stringContaining("low relevance: 2"));
   });
+  it("renders the production summary projection with all canonical omission reasons and measured prompt membership", () => {
+    const summary = producedEmptyScopeSummary(
+      contextPack({ usage: { ...contextPack().usage, filesRead: 9 } }),
+      { filesInPrompt: 0 },
+      CANDIDATE_OMISSION_REASONS.map((reason, index) => ({
+        scopePath: `src/omitted-${String(index)}.ts`,
+        reason,
+        omittedAtMs: 0,
+      })),
+    );
+    const groups = groupConnectedContextOmissions(summary.omittedCounts);
+    expect(summary.usage.filesRead).toBe(9);
+    expect(summary.omittedCount).toBe(CANDIDATE_OMISSION_REASONS.length);
+    render(
+      <GroundedAnswer answer={answer({ citations: [], contextPack: summary })} busy={false} />,
+    );
+    expect(
+      screen.getByText(
+        `0 citations · 0 files in prompt · ${String(groups.ranking)} omitted for relevance or budget · ${String(groups.eligibility)} ineligible`,
+      ),
+    ).toHaveAttribute("title", expect.stringContaining("low relevance: 1"));
+  });
+
   it.each([
     [{ semanticProviderDisposition: "unavailable" as const }, "Retrieval used text matching only."],
     [
@@ -121,7 +149,10 @@ describe("honest connected evidence", () => {
     [{ selectionConfidence: "low" as const }, "No confident evidence match was found."],
   ])("shows a plain-language retrieval notice for %j", (diagnostics, message) => {
     render(
-      <GroundedAnswer answer={answer({ contextPack: contextPack(diagnostics) })} busy={false} />,
+      <GroundedAnswer
+        answer={answer({ contextPack: producedEmptyScopeSummary(contextPack(), diagnostics) })}
+        busy={false}
+      />,
     );
     expect(screen.getByText(message)).toHaveAttribute("title");
   });
@@ -333,6 +364,8 @@ function fullMatchLimitedCoverage(
 
 function producedEmptyScopeSummary(
   summary: GroundedAnswerContextPackSummary,
+  retrievalDiagnostics?: GroundedAnswerRetrievalDiagnostics,
+  omitted: ConnectedContextPack["omitted"] = [],
 ): GroundedAnswerContextPackSummary {
   return buildGroundedAnswerContextPackSummary(
     {
@@ -358,7 +391,7 @@ function producedEmptyScopeSummary(
       budget: summary.budget,
       usage: summary.usage,
       files: [],
-      omitted: [],
+      omitted,
       uncertainty: [],
       emittedAtMs: 0,
       ledgerRef: undefined,
@@ -366,6 +399,8 @@ function producedEmptyScopeSummary(
     },
     0,
     summary.elapsedMs,
+    undefined,
+    retrievalDiagnostics,
   );
 }
 

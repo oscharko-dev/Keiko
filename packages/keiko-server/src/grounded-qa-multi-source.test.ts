@@ -18,6 +18,7 @@ import type { ContextLaneId } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_LANE_IDS,
   DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
   maxUtf8BytesForTokenBudget,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
@@ -38,6 +39,7 @@ import {
   buildSelectedScopeFrom,
   handleGroundedAsk,
   modelWindowAwareBudget,
+  modelInputPromptByteLimit,
   withPromptExcerptByteLimit,
   promptByteLength,
   type GroundedRunner,
@@ -2604,6 +2606,98 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
   });
 });
 
+describe("multi-source bounded citation repair", () => {
+  async function repairAsk(repaired: string, original = "The implementation works.") {
+    const calls: GatewayCallRequest[] = [];
+    const puts: PutCall[] = [];
+    const packs = ["alpha", "beta"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.8, name);
+      return { ...pack, usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 } };
+    });
+    const scopes = packs.map((pack, index) => ({
+      kind: "files" as const,
+      relativePaths: [pack.files[0]?.scopePath ?? ""],
+      connectedAtMs: NOW,
+      root: tempRoot(`repair-${String(index)}`),
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("Missing repair chat");
+    const deps = recordingDeps(puts);
+    const signal = new AbortController().signal;
+    const model: ModelPort = {
+      call: (request) => {
+        calls.push(request);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content: calls.length === 1 ? original : repaired,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "bounded-repair",
+            promptTokens: 10,
+            completionTokens: 4,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "How does the implementation work?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps,
+      signal,
+      correlationId: "corr-multi-repair",
+      retriever: packPerScope(new Map(packs.map((pack) => [pack.files[0]?.scopePath ?? "", pack]))),
+      answerer: createMultiSourceAnswerer(deps, model, CHAT_MODEL, signal, "corr-multi-repair"),
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return { calls, puts, answer: asConnectedAnswer(result.body as GroundedAnswer) };
+  }
+
+  it("adds only supported source-two markers in one remaining-budget call", async () => {
+    const repaired = "The implementation works [source:2|src/beta.ts:1-5].";
+    const { calls, puts, answer } = await repairAsk(repaired);
+    expect(calls).toHaveLength(2);
+    const repairPrompt = calls[1]?.messages.map((message) => message.content).join("\n");
+    expect(repairPrompt).toContain("body of src/alpha.ts");
+    expect(repairPrompt).toContain("body of src/beta.ts");
+    expect(calls[1]?.maxOutputTokens).toBe(DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax - 4);
+    expect(answer.content).toBe(repaired);
+    expect(answer.citationBehaviour).toBe("cites-after-repair");
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
+    expect(answer.contextPack.usage.modelInputTokens).toBe(20);
+    expect(answer.contextPack.usage.modelOutputTokens).toBe(8);
+  });
+
+  it("retains original prose after a repair changes its claim and never attempts a third call", async () => {
+    const { calls, answer } = await repairAsk(
+      "The implementation fails [source:2|src/beta.ts:1-5].",
+    );
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    expect(answer.citationBehaviour).toBe("never");
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
+    expect(answer.contextPack.usage.modelInputTokens).toBe(20);
+  });
+
+  it.each(["Which file should I inspect?", "No evidence found."])(
+    "does not repair a non-claim answer: %s",
+    async (original) => {
+      const { calls, answer } = await repairAsk("Changed content.", original);
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe(original);
+      expect(answer.citationBehaviour).toBeUndefined();
+    },
+  );
+});
+
 describe("multi-source final fitted citation authority", () => {
   function sourcePacks(): readonly ConnectedContextPack[] {
     return ["alpha", "beta"].map((name) => {
@@ -2628,6 +2722,7 @@ describe("multi-source final fitted citation authority", () => {
     packs: readonly ConnectedContextPack[],
     sent: readonly ConnectedContextPack[],
     content: string,
+    invocation: { readonly modelInvoked?: boolean; readonly noEvidence?: boolean } = {},
   ): Promise<{
     readonly answer: Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>;
     readonly puts: readonly PutCall[];
@@ -2652,6 +2747,7 @@ describe("multi-source final fitted citation authority", () => {
         answerer: () =>
           Promise.resolve({
             content,
+            ...invocation,
             usage: { promptTokens: 0, completionTokens: 0 },
             sentEvidencePacks: sent,
             filesInPrompt: sent.reduce((count, pack) => count + pack.files.length, 0),
@@ -2703,6 +2799,21 @@ describe("multi-source final fitted citation authority", () => {
     expect(judged).toEqual([sent]);
   });
 
+  it("retains physical reads but attaches no manifest or entailment after final-fit abstention", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack) => withPromptExcerptByteLimit(pack, 0));
+    const { answer, puts, judged } = await fittedAsk(packs, sent, "No evidence found.", {
+      modelInvoked: false,
+      noEvidence: true,
+    });
+    expect(puts).toEqual([]);
+    expect(judged).toEqual([]);
+    expect(answer.citations).toEqual([]);
+    expect(answer.evidenceRunIds).toEqual([]);
+    expect(answer.contextPack.usage.filesRead).toBe(2);
+    expect(answer.contextPack.filesInPrompt).toBe(0);
+  });
+
   it("keeps source two attributable when source one has no sent file", async () => {
     const packs = sourcePacks();
     const sent = packs.map((pack, index) =>
@@ -2721,6 +2832,81 @@ describe("multi-source final fitted citation authority", () => {
 // createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
 // MultiSourceSeam.answerer; unit-test it directly against a fake ModelPort that records the request.
 describe("createMultiSourceAnswerer correlation threading", () => {
+  it.each([false, true])(
+    "avoids an empty fitted model call unless memory context is available (%s)",
+    async (memory) => {
+      const redactor = buildRedactor({});
+      const labeled = ["alpha", "beta"].map((name) => ({
+        label: name,
+        pack: scopePack(`src/${name}.ts`, 0.8, name),
+      }));
+      const question = "What does the repository do?";
+      const empty = labeled.map((entry) => ({
+        ...entry,
+        pack: withPromptExcerptByteLimit(entry.pack, 0),
+      }));
+      const emptyMessages = buildMultiSourceGatewayMessages(question, empty, redactor);
+      let budget = countGatewayPromptTokens({ messages: emptyMessages });
+      while (modelInputPromptByteLimit(budget) < promptByteLength(emptyMessages)) budget += 1;
+      const first = labeled[0]?.pack;
+      if (first === undefined) throw new TypeError("Missing source fixture");
+      const allocations = splitExplorationBudgets(
+        { ...first.budget, modelInputTokensMax: budget },
+        labeled.map((entry) => ({
+          root: entry.pack.scope.workspaceRoot,
+          kind: "directory",
+          relativePaths: ["src"],
+          connectedAtMs: NOW,
+        })),
+        first.query,
+      );
+      const budgeted = labeled.map((entry, index) => {
+        const allocation = allocations[index];
+        if (allocation === undefined) throw new TypeError("Missing source allocation");
+        return { ...entry, pack: { ...entry.pack, budget: allocation } };
+      });
+      const fitted = fittedMultiSourcePrompt(question, budgeted, redactor, {
+        modelInputTokensMax: budget,
+      });
+      expect(fitted.sentReferenceCount).toBe(0);
+      const profile = deriveContextProfile({
+        maxInputTokens: budget + 512 + 64,
+        reservedOutputTokens: 512,
+        safetyMarginTokens: 64,
+      });
+      const call = vi.fn((request: GatewayCallRequest): Promise<NormalizedResponse> =>
+        Promise.resolve({
+          modelId: request.modelId,
+          content: "Personal preference.",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "zero-source",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        }),
+      );
+      const answerer = createMultiSourceAnswerer(
+        recordingDeps([], { redactor, contextProfileForModel: () => profile }),
+        { call },
+        CHAT_MODEL,
+        new AbortController().signal,
+        "zero-source",
+        { currentQuestion: question, answerOnlyContextAvailable: memory },
+      );
+      const result = normalizeGroundedAnswerPayload(await answerer(question, budgeted));
+      expect(call).toHaveBeenCalledTimes(memory ? 1 : 0);
+      expect(result.modelInvoked).toBe(memory);
+      expect(result.noEvidence).toBe(true);
+      expect(result.filesInPrompt).toBe(0);
+      if (memory) expect(result.content).toBe("Personal preference.");
+    },
+  );
+
   it("stamps the caller's correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
     const seenRequests: GatewayCallRequest[] = [];
     const recordingModel: ModelPort = {
@@ -2749,6 +2935,7 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       "example-chat-model",
       new AbortController().signal,
       "cid-multi-source-answerer-000001",
+      { answerOnlyContextAvailable: true },
     );
     // `MultiSourceAnswerer`'s declared return type is `Promise<GroundedAnswerPayload>` (a
     // `string | GroundedAnswerResult` union), even though `createMultiSourceAnswerer`'s own

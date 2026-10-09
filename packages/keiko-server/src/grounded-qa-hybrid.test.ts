@@ -672,6 +672,82 @@ function asLocalKnowledge(answer: GroundedAnswer): LocalKnowledgeGroundedAnswer 
 // ─── Window fit: a folder path the prompt left out supports nothing ───────────
 
 describe("hybrid grounded ask — folder evidence the window fit left out", () => {
+  function boundaryAsk(
+    capsuleId: KnowledgeCapsuleId,
+    pack: ConnectedContextPack,
+    deps: UiHandlerDeps,
+    memory: boolean,
+    answer: NonNullable<HybridSeam["answer"]>,
+  ): ReturnType<typeof runHybridGroundedAsk> {
+    const chatId = makeHybridChat(
+      [
+        {
+          kind: "files",
+          relativePaths: ["src/only.ts"],
+          connectedAtMs: NOW,
+          root: tempRoot("zero-window"),
+        },
+      ],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("Missing chat");
+    return runHybridGroundedAsk({
+      chat,
+      content: "What can you establish?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps,
+      signal: new AbortController().signal,
+      answerOnlyContextAvailable: memory,
+      folderRetriever: folderRetrieverFor(new Map([["src/only.ts", pack]])),
+      connectorRetrieve: () => Promise.resolve({ references: [], noEvidence: true }),
+      answer,
+    });
+  }
+
+  it.each([false, true])(
+    "refuses a window that cannot fit any hybrid reference before invocation (memory=%s)",
+    async (memory) => {
+      const { capsuleId } = await seedReadyCapsule("Empty Window Docs");
+      const pack = folderPack("src/only.ts", 0.9, "only-window");
+      let emptyTokens = 0;
+      const probe = await boundaryAsk(
+        capsuleId,
+        { ...pack, files: [] },
+        hybridDeps(),
+        true,
+        (system, user) => {
+          emptyTokens = countGatewayPromptTokens({
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          });
+          return Promise.resolve("Personal preference.");
+        },
+      );
+      expect(probe.status).toBe(200);
+      expect(emptyTokens).toBeGreaterThan(0);
+      const profile = deriveContextProfile({
+        maxInputTokens: emptyTokens + 512 + 64,
+        reservedOutputTokens: 512,
+        safetyMarginTokens: 64,
+      });
+      const call = vi.fn(sentinelAnswerer("Personal preference."));
+      const result = await boundaryAsk(
+        capsuleId,
+        pack,
+        hybridDeps({ contextProfileForModel: () => profile }),
+        memory,
+        call,
+      );
+      expect(result.status).toBe(502);
+      expect(result.body).toMatchObject({ error: { code: "GATEWAY_CONTEXT_OVERFLOW" } });
+      expect(call).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([1, 5])(
     "authenticates only a sent partial folder range (cited line %s)",
     async (line) => {
@@ -2151,6 +2227,100 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
       expect(promptContext?.sentReferenceCount).toBe(0);
     },
   );
+});
+
+describe("hybrid bounded citation repair", () => {
+  async function repairAsk(repaired: string, folders: boolean) {
+    const { capsuleId: capA } = await seedReadyCapsule("Repair A Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Repair B Docs");
+    const folderScopes: ChatConnectedScope[] = folders
+      ? [
+          {
+            kind: "files",
+            root: tempRoot("repair"),
+            relativePaths: ["src/repair.ts"],
+            connectedAtMs: NOW,
+          },
+        ]
+      : [];
+    const connectorScopes: ChatLocalKnowledgeScope[] = (folders ? [capA] : [capA, capB]).map(
+      (capsuleId) => ({
+        kind: "capsule",
+        capsuleId,
+        connectedAtMs: NOW,
+      }),
+    );
+    const chat = store.findChatById(makeHybridChat(folderScopes, connectorScopes));
+    if (chat === undefined) throw new TypeError("Missing hybrid repair chat");
+    const calls: GatewayCallRequest[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        calls.push(request);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content: calls.length === 1 ? "The implementation works." : repaired,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "hybrid-repair",
+            promptTokens: 10,
+            completionTokens: 4,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+    const signal = new AbortController().signal;
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "How does the implementation work?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: hybridDeps(),
+      signal,
+      correlationId: "corr-hybrid-repair",
+      answer: createHybridAnswerer(model, CHAT_MODEL, signal, "corr-hybrid-repair"),
+      folderRetriever: folderRetrieverFor(
+        new Map([["src/repair.ts", folderPack("src/repair.ts", 0.9, "repair")]]),
+      ),
+      connectorRetrieve: (knowledgeStore, scope, selected, connectorSignal) => {
+        if (scope.kind !== "capsule") throw new TypeError("Missing capsule");
+        return singleConnectorRetrieve(scope.capsuleId)(
+          knowledgeStore,
+          scope,
+          selected,
+          connectorSignal,
+        );
+      },
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return { calls, answer: asHybrid(result.body as GroundedAnswer) };
+  }
+
+  it.each([false, true])(
+    "repairs one supported numeric marker without changing prose (folders=%s)",
+    async (folders) => {
+      const { calls, answer } = await repairAsk("The implementation works [1].", folders);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.messages[1]?.content).toContain("The implementation works.");
+      expect(calls[1]?.messages[1]?.content).toContain("[1]");
+      expect(answer.content).toBe("The implementation works [1].");
+      expect(answer.citationBehaviour).toBe("cites-after-repair");
+      expect(answer.citations.length + answer.knowledgeCitations.length).toBe(1);
+      if (!folders) expect(answer.contextPack.folder.filesInPrompt).toBe(0);
+    },
+  );
+
+  it("rejects an invented numeric source after exactly one repair", async () => {
+    const { calls, answer } = await repairAsk("The implementation works [99].", true);
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    expect(answer.citationBehaviour).toBe("never");
+    expect(answer.citations).toEqual([]);
+    expect(answer.knowledgeCitations).toEqual([]);
+  });
 });
 
 async function hybridReviewContext(): Promise<HybridGroundedAskCtx> {
