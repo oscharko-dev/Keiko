@@ -40,6 +40,190 @@ import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 export { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
+import type {
+  GroundedAnswerKind,
+  GroundedInsufficiencyDeclaration,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+
+const MAX_INSUFFICIENCY_DECLARATIONS = 3;
+const MAX_ANSWER_KIND_CHARS = 1_200;
+const DECLARATION_PREFIX = "Missing evidence: [";
+
+interface InsufficiencyLine {
+  readonly start: number;
+  readonly end: number;
+  readonly path: string;
+}
+
+/** Exact prose lines only; quoted, indented, fenced and inline examples cannot request files. */
+function insufficiencyLines(text: string): readonly InsufficiencyLine[] {
+  const code = markdownCodeRanges(text);
+  const lines: InsufficiencyLine[] = [];
+  let offset = 0;
+  let codeCursor = 0;
+  for (const raw of text.split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    codeCursor = skipCompletedCodeRanges(code, codeCursor, offset);
+    const outsideCode =
+      (code[codeCursor]?.start ?? Number.POSITIVE_INFINITY) >= offset + line.length;
+    if (outsideCode && line.startsWith(DECLARATION_PREFIX) && line.endsWith("]")) {
+      const path = line.slice(DECLARATION_PREFIX.length, -1);
+      if (path.length > 0 && !/[\[\],]/u.test(path))
+        lines.push({ start: offset, end: offset + line.length, path });
+    }
+    offset += raw.length + 1;
+  }
+  return lines;
+}
+
+/** Declaration syntax is metadata, even when its path is unknown or unsafe. */
+function withoutInsufficiencyDeclarations(text: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const line of insufficiencyLines(text)) {
+    parts.push(text.slice(cursor, line.start));
+    cursor = line.end;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join("");
+}
+
+function canonicalDeclarationPath(path: string): boolean {
+  return (
+    path === path.trim() &&
+    !path.includes(":") &&
+    !hasControlCharacter(path) &&
+    stripUnsafeFormatChars(path) === path &&
+    isValidScopePath(path, { mustBeRelative: true })
+  );
+}
+
+export interface InsufficiencyDeclarationResult {
+  readonly declarations: readonly GroundedInsufficiencyDeclaration[];
+  readonly declaredCount: number;
+  readonly inScopeCount: number;
+  readonly unreadInScopeCount: number;
+  readonly notInScopeCount: number;
+}
+
+/** Project at most three distinct declarations against verified discovery/prompt membership. */
+export function parseInsufficiencyDeclarations(
+  answerText: string,
+  scopeIndex: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
+): InsufficiencyDeclarationResult {
+  const declarations: GroundedInsufficiencyDeclaration[] = [];
+  const seen = new Set<string>();
+  let unreadInScopeCount = 0;
+  for (const { path } of insufficiencyLines(answerText)) {
+    if (seen.has(path)) continue;
+    if (seen.size === MAX_INSUFFICIENCY_DECLARATIONS) break;
+    seen.add(path);
+    const state = canonicalDeclarationPath(path) ? scopeIndex.get(path) : undefined;
+    if (state !== "read-in-this-turn" && state !== "unread-in-scope") continue;
+    declarations.push({ scopePath: path, state });
+    if (state === "unread-in-scope") unreadInScopeCount += 1;
+  }
+  return {
+    declarations,
+    declaredCount: seen.size,
+    inScopeCount: declarations.length,
+    unreadInScopeCount,
+    notInScopeCount: seen.size - declarations.length,
+  };
+}
+
+/** Remove unverified declaration text before projecting content into UI or stored history. */
+export function sanitizeInsufficiencyDeclarations(
+  answerText: string,
+  scopeIndex: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
+): string {
+  const allowed = new Set(
+    parseInsufficiencyDeclarations(answerText, scopeIndex).declarations.map(
+      (declaration) => declaration.scopePath,
+    ),
+  );
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const line of insufficiencyLines(answerText)) {
+    parts.push(answerText.slice(cursor, line.start));
+    if (allowed.delete(line.path)) parts.push(answerText.slice(line.start, line.end));
+    cursor = line.end;
+  }
+  parts.push(answerText.slice(cursor));
+  return parts.join("").trim();
+}
+
+const CLARIFICATION_PATTERNS: readonly RegExp[] = [
+  /^(?:which|what)\b[^.!\n]{0,600}\b(?:do you mean|should I (?:use|inspect|explain))\?$/iu,
+  /^(?:do you mean|did you mean|could you clarify|can you clarify|could you specify|can you specify)\b[^.!\n]{0,600}\?$/iu,
+  /^(?:welche[rns]?|was)\b[^.!\n]{0,600}\b(?:meinst du|meinen sie|soll ich (?:verwenden|prüfen|erklären))\?$/iu,
+  /^(?:meinst du|meinen sie|kannst du (?:präzisieren|klarstellen)|können sie (?:präzisieren|klarstellen))\b[^.!\n]{0,600}\?$/iu,
+];
+const INSUFFICIENCY_PATTERNS: readonly RegExp[] = [
+  /^I (?:need|require) (?:(?:the|a|additional|more|missing|relevant) ){0,4}(?:file|files|evidence|information|context)(?: (?:to answer(?: (?:this|the|your) question)?|for (?:this|the|your) (?:question|answer)))?[.!]?$/iu,
+  /^(?:Für|Fuer) (?:die|diese) Antwort (?:fehlen|fehlt) (?:mir )?(?:(?:die|weitere|zusätzliche) ){0,3}(?:Belege|Datei|Dateien|Informationen|Kontext)[.!]?$/iu,
+  /^(?:Mir fehlen|Ich (?:benötige|brauche)) (?:(?:die|weitere|zusätzliche) ){0,3}(?:Belege|Datei|Dateien|Informationen|Kontext)(?: für (?:die|diese) Antwort)?[.!]?$/iu,
+];
+
+function evidenceRequestOnly(text: string): boolean {
+  const request =
+    /^(?:please (?:paste|provide|share)|bitte (?:zeige|teile|sende)) ([^\s!?]{1,600})[.!]?$/iu.exec(
+      text,
+    );
+  const path = request?.[1]?.replace(/[.]$/u, "");
+  return path !== undefined && canonicalDeclarationPath(path);
+}
+
+function clarificationOnly(text: string): boolean {
+  const spans = splitClaimSpans(text)
+    .map((span) => span.trim())
+    .filter((span) => span.length > 0);
+  return (
+    spans.length > 0 &&
+    spans.every((span) => CLARIFICATION_PATTERNS.some((pattern) => pattern.test(span)))
+  );
+}
+
+function refusalOnly(text: string): boolean {
+  const spans = splitClaimSpans(text)
+    .map((span) => span.trim())
+    .filter((span) => span.length > 0);
+  return (
+    spans.length > 0 &&
+    spans.every(
+      (span) =>
+        !/\b(?:but|however|although|aber|jedoch|allerdings)\b/iu.test(span) &&
+        isNoEvidenceAnswerText(span),
+    )
+  );
+}
+
+function substantiveAnswerText(prose: string): boolean {
+  return (
+    prose.length > MAX_ANSWER_KIND_CHARS ||
+    parseInlineCitations(prose).length > 0 ||
+    citationMarkerIndices(prose).length > 0
+  );
+}
+
+/** Bounded, conservative DE/EN classification: any substantive residue remains an answer. */
+export function classifyGroundedAnswerKind(answerText: string): GroundedAnswerKind {
+  const prose = withoutInsufficiencyDeclarations(answerText).trim();
+  if (substantiveAnswerText(prose)) return "answer";
+  const declared = insufficiencyLines(answerText).length > 0;
+  if (
+    declared &&
+    (prose.length === 0 || INSUFFICIENCY_PATTERNS.some((pattern) => pattern.test(prose)))
+  )
+    return "insufficiency";
+  if (refusalOnly(prose)) return declared ? "insufficiency" : "refusal";
+  return clarificationOnly(prose) ||
+    evidenceRequestOnly(prose) ||
+    INSUFFICIENCY_PATTERNS.some((pattern) => pattern.test(prose))
+    ? "clarification"
+    : "answer";
+}
+
 // ─── Evidence-presence predicates ─────────────────────────────────────────────
 
 /** Total excerpt count across every file in the pack. */
@@ -394,6 +578,7 @@ function scanInlineCitations(
   answerText: string,
   counts?: InlineCitationScanCounts,
 ): readonly ParsedInlineCitation[] {
+  answerText = withoutInsufficiencyDeclarations(answerText);
   const out: ParsedInlineCitation[] = [];
   const seen = new Set<string>();
   const code = markdownCodeRanges(answerText);
@@ -422,7 +607,9 @@ export interface NumericCitationReconciliation {
 // dropped marker, and one parser cannot drift from itself. Grouped markers (`[1, 7, 8]`) expand to
 // one index each; an index of zero or below is never a reference.
 function parseNumericCitations(answerText: string): readonly number[] {
-  return citationMarkerIndices(answerText).filter((marker) => marker > 0);
+  return citationMarkerIndices(withoutInsufficiencyDeclarations(answerText)).filter(
+    (marker) => marker > 0,
+  );
 }
 
 /** Reconcile hybrid `[n]` markers against the exact selected evidence marker set. */
@@ -667,24 +854,25 @@ export function missingCitationMarker(nowMs: number): UncertaintyMarker {
 
 /**
  * The missing-citation warning for a concrete answer text, or `undefined` when the answer is a
- * refusal ("nothing about this in the documents"). A refusal makes no source-backed claim, so there
- * is nothing to cite and nothing to warn about; the shared detector lives in keiko-contracts.
+ * clarification, refusal or missing-evidence declaration. Only substantive answers claim evidence.
  */
 export function missingCitationMarkerFor(
   answerText: string,
   nowMs: number,
 ): UncertaintyMarker | undefined {
-  return isNoEvidenceAnswerText(answerText) ? undefined : missingCitationMarker(nowMs);
+  return classifyGroundedAnswerKind(answerText) === "answer"
+    ? missingCitationMarker(nowMs)
+    : undefined;
 }
 
 /**
  * Body-free uncertainty for a grounded answer that received governed memory outside the evidence
  * pack. A valid repository citation does not authenticate a separate memory-derived assertion, so
- * those claims are uncited (`uncited-answer`) — they cite no fabricated source.
+ * those claims are uncited (`uncited-memory-context`) — they cite no fabricated source.
  */
 export function uncitedMemoryContextMarker(nowMs: number): UncertaintyMarker {
   return {
-    kind: "uncited-answer",
+    kind: "uncited-memory-context",
     claim:
       "The answer received governed memory context outside retrieved evidence. Treat claims " +
       "derived from that memory as uncited and unverified.",
@@ -823,6 +1011,7 @@ function citationBracketDepth(depth: number, character: string): number {
  * citation never splits mid-citation. A span ends at `.`/`!`/`?`/newline only at bracket depth 0.
  */
 export function splitClaimSpans(text: string): readonly string[] {
+  text = withoutInsufficiencyDeclarations(text);
   const spans: string[] = [];
   let depth = 0;
   let start = 0;

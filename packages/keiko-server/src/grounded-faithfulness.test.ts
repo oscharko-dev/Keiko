@@ -751,7 +751,7 @@ describe("unsupportedCitationMarker", () => {
   });
 
   it("reports governed memory context outside the evidence as uncited, not as a fabricated citation", () => {
-    expect(uncitedMemoryContextMarker(NOW).kind).toBe("uncited-answer");
+    expect(uncitedMemoryContextMarker(NOW).kind).toBe("uncited-memory-context");
   });
 });
 
