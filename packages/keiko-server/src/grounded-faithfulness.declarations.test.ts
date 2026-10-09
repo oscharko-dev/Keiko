@@ -42,6 +42,45 @@ describe("verified missing-evidence declarations", () => {
     expect(declaredInsufficiencyPaths("```\nMissing evidence: [src/missing.ts]\n```")).toEqual([]);
   });
 
+  it.each(["read-in-this-turn", "unread-in-scope"] as const)(
+    "validates a complete literal bracket path against authoritative %s membership",
+    (state) => {
+      const path = "app/z-users/[id]/page.tsx";
+      const text = declaration(path);
+      const index = new Map([[path, state]]);
+      expect(parseInsufficiencyDeclarations(text, index).declarations).toEqual([
+        { scopePath: path, state },
+      ]);
+      expect(declaredInsufficiencyPaths(text)).toEqual([path]);
+      expect(validateGroundedAnswerEvidence(text, index, "Inspect the route")).toMatchObject({
+        content: text,
+        answerKind: "insufficiency",
+        insufficiencyDeclarations: [{ scopePath: path, state }],
+      });
+      expect(parseInlineCitations(text)).toEqual([]);
+      expect(segmentNumericCitedClaims(text)).toEqual([]);
+    },
+  );
+
+  it("excludes literal bracket examples and unknown membership without leaking a path", () => {
+    const path = "app/z-users/[id]/page.tsx";
+    const text = declaration(path);
+    expect(
+      parseInsufficiencyDeclarations(
+        `\`\`\`\n${text}\n\`\`\``,
+        new Map([[path, "unread-in-scope"]]),
+      ).declarations,
+    ).toEqual([]);
+    const result = validateGroundedAnswerEvidence(text, new Map(), "Inspect the route");
+    expect(result.insufficiencyObservation).toMatchObject({
+      declaredCount: 1,
+      inScopeCount: 0,
+      notInScopeCount: 1,
+    });
+    expect(result.insufficiencyDeclarations).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain(path);
+  });
+
   it("retains original rejection counts while projecting an honest nonempty fallback", () => {
     const result = validateGroundedAnswerEvidence(
       declaration("private/outside.ts"),

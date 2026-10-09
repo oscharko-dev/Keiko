@@ -410,8 +410,12 @@ unknown, or excess declaration lines are removed before client delivery and hist
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
-two-slot synthesis ceiling and the original remaining search/read/token/spend/time grants. A file
-already physically read does not acquire another read through an unread-in-prompt declaration.
+maximum of two synthesis calls and the original remaining search/read/token/spend/time grants.
+Declared unread targets receive priority during final prompt fitting;
+the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
+fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
+against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
+A file already physically read does not acquire another read through an unread-in-prompt declaration.
 The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
 from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
 while retaining an honest uncited warning, and never obtains a third synthesis slot. Separately
@@ -552,6 +556,18 @@ candidates precede unaddressed alternatives; only unaddressed candidates use bas
 Their score ties use shared-parent proximity, segment affinity, then path spelling. Collision,
 diversity-demotion, signal, and proximity observations are count-only fields on the same
 correlated selection-details Activity Log operation.
+Request-local semantic leases open only for an admitted semantic lookup. Existing index fingerprint
+verification is part of that bounded logical search, while optional new live refresh consumes the
+same exploration governor's remaining file, excerpt-byte, and model-input grants. Each new read
+reserves the validated observed file size; each embedding reserves a conservative UTF-8-byte input
+token bound and uses the existing gateway spend reservation with exactly-once settlement. Rejected
+grants do not charge an attempt or start new refresh I/O. `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX`
+defaults to zero, invalid explicit values remain zero, and enabled integer values are capped at
+eight. Refresh shares the original request signal and remaining deadline, capped again at five
+seconds; it never mutates the persisted pod. Selection-details records actual embedding/read
+attempt counts separately from byte/input-token upper reservations. Refreshed-file counts include
+only usable files retained in the assembled pack; stale retained files receive the canonical
+`stale-evidence` marker with a `stale-semantic:` count-only claim and keep current lexical evidence.
 Addressed-file demotion is recorded separately from legitimate unaddressed basename diversity;
 an unaddressed collision cannot by itself diagnose a missed explicit target.
 The active-intent absolute floor derives from the scoring weight table: ninety percent of a

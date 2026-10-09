@@ -11,6 +11,11 @@ import {
 } from "./grounded-orchestrator.js";
 import type { GroundedSemanticRequest } from "./grounded-semantic-request.js";
 import { captureActivityLog } from "./activityLogCapture.test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const ROOT = "/semantic-budget-fixture";
 const PATH = "related.ts";
@@ -154,5 +159,38 @@ describe("actual semantic refresh governor admission", () => {
       },
     });
     expect(inputCap).toBe(DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax - 7);
+  });
+
+  it("logs actual refresh attempts separately from reserved upper bounds and usable files", async () => {
+    const log = createBufferedServerLogSink();
+    await retrieveConnectedContextPack(input(), {
+      ...deps((request) => {
+        request.observeSemanticFreshness({
+          stalePaths: [PATH, "not-retained.ts"],
+          refreshedPaths: [PATH, "not-retained.ts"],
+          unavailableFileCount: 0,
+          refreshUsage: { embeddingCallCount: 3, readFileCount: 2, readBytes: 80, inputTokens: 96 },
+        });
+      }),
+      activityLog: log,
+    });
+    const event = log.events.find(
+      (item) => item.op === "search.connected-context.selection-details",
+    );
+    expect(event?.extra).toMatchObject({
+      semanticStaleFallbackCount: 0,
+      semanticRefreshedFileCount: 1,
+      semanticRefreshEmbeddingCallCount: 3,
+      semanticRefreshReadFileCount: 2,
+      semanticRefreshReadBytesUpperBound: 80,
+      semanticRefreshInputTokenUpperBound: 96,
+    });
+    const line = expectActivityLogProof(
+      "search.connected-context.selection-details.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(line).toHaveProperty("semanticRefreshReadBytesUpperBound", 80);
+    expect(JSON.stringify(log.events)).not.toContain(PATH);
+    expect(JSON.stringify(log.events)).not.toContain("not-retained.ts");
   });
 });

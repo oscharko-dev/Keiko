@@ -453,6 +453,14 @@ system that exists, never beside it:
   into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
   observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
   private status digest stay outside logs; observation cannot admit evidence or bypass a floor.
+  Optional semantic live refresh reuses the original exploration governor and gateway spend ledger.
+  Each new read reserves a file and its observed byte upper bound; each embedding attempt reserves
+  a UTF-8 input-token upper bound before dispatch. Selection-details distinguishes actual read/call
+  attempts from reserved byte/token bounds and counts only retained refreshed files. Baseline index
+  fingerprint verification remains part of the existing logical semantic lookup. Live document
+  refresh defaults off; `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX` explicitly enables at most eight
+  files, within the original remaining deadline and a five-second ceiling. Missing or denied
+  remaining grants perform no new refresh I/O, and stale vectors retain honest lexical fallback.
   The typed `search.connected-context.answer-details` sibling joins the same scope/query digests
   and correlation. It records actual final-prompt file counts, answer kind, observed citation
   behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,

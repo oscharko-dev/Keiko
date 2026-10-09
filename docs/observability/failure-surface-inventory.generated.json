@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ffecf3e25828c8e611b5089ab5a17abee313febb1b1c39863c480e819931a56f"
+    "catalogDigest": "489c9f90cb29bbe88af4231dda49e90f36d4b51f2274dea1cb1a902e95a74541"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1800,9 +1800,15 @@
     ],
     "gateway.setup.metadata.resolved.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "gateway.spend.ceiling.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
-    "gateway.spend.rejected.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
+    "gateway.spend.rejected.line": [
+      "packages/keiko-server/src/gateway-spend-budget.test.ts",
+      "packages/keiko-server/src/grounded-repo-semantic-search.test.ts"
+    ],
     "gateway.spend.reserved.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
-    "gateway.spend.settled.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
+    "gateway.spend.settled.line": [
+      "packages/keiko-server/src/gateway-spend-budget.test.ts",
+      "packages/keiko-server/src/grounded-repo-semantic-search.test.ts"
+    ],
     "gateway.stream.abandoned.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],

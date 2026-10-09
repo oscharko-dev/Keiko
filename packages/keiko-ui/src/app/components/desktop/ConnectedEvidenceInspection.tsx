@@ -48,18 +48,48 @@ type InspectionState =
   | { readonly kind: "failed" }
   | { readonly kind: "loaded"; readonly audit: EvidenceConnectedContextAudit };
 
+function recordLoadedInspection(
+  runId: string,
+  audit: EvidenceConnectedContextAudit,
+  onRead: ConnectedEvidenceInspectionProps["onReadPaths"],
+): void {
+  onRead?.(
+    runId,
+    audit.files.map((file) => file.scopePath).filter(isRootRelativeFileIdentifier),
+    audit.scope.selectedPaths,
+    audit.scope.sourceScopeFingerprint,
+  );
+  reportEvidenceInspection({
+    reason: "file-table-opened",
+    readFileCount: audit.files.length,
+    omittedFileCount: audit.omitted.length,
+  });
+}
+
 function useManifestInspection(
   runId: string,
   open: boolean,
   onReadPaths: ConnectedEvidenceInspectionProps["onReadPaths"],
 ): InspectionState {
   const [state, setState] = useState<InspectionState>({ kind: "pending" });
+  const completed = useRef<
+    | {
+        readonly runId: string;
+        readonly audit: EvidenceConnectedContextAudit;
+      }
+    | undefined
+  >(undefined);
   const onRead = useRef(onReadPaths);
   useEffect(() => {
     onRead.current = onReadPaths;
   }, [onReadPaths]);
   useEffect(() => {
     if (!open) return;
+    if (completed.current?.runId === runId) {
+      setState({ kind: "loaded", audit: completed.current.audit });
+      recordLoadedInspection(runId, completed.current.audit, onRead.current);
+      return;
+    }
     let current = true;
     const notifyRead = onRead.current;
     setState({ kind: "pending" });
@@ -69,18 +99,9 @@ function useManifestInspection(
         const audit = response.manifest.connectedContext;
         if (response.manifest.run.runId !== runId || audit === undefined)
           throw new TypeError("INVALID_CONNECTED_EVIDENCE_MANIFEST");
+        completed.current = { runId, audit };
         setState({ kind: "loaded", audit });
-        notifyRead?.(
-          runId,
-          audit.files.map((file) => file.scopePath).filter(isRootRelativeFileIdentifier),
-          audit.scope.selectedPaths,
-          audit.scope.sourceScopeFingerprint,
-        );
-        reportEvidenceInspection({
-          reason: "file-table-opened",
-          readFileCount: audit.files.length,
-          omittedFileCount: audit.omitted.length,
-        });
+        recordLoadedInspection(runId, audit, notifyRead);
       })
       .catch((failure: unknown) => {
         if (!current) return;

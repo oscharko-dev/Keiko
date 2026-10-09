@@ -30,6 +30,7 @@ export interface FollowUpContext {
   readonly answer: (
     input: OrchestratorInput,
     retrieved: RetrievalOnlyOutput,
+    requiredEvidencePaths: readonly string[],
   ) => Promise<GroundedAnswerResult>;
 }
 
@@ -175,6 +176,8 @@ async function executeFollowUp(
   const answered = await answerFollowUp(ctx, input, retrieved, pack, admitted);
   if ("observation" in answered) return answered;
   if (answered.modelInvoked === false) return { ...originalResult(ctx, "budget-refused"), pack };
+  if (!followUpTargetsSent(answered, retrieved.pack, paths))
+    return unsentFollowUpResult(ctx, pack, answered, admitted);
   return {
     pack,
     answer: {
@@ -194,6 +197,42 @@ async function executeFollowUp(
   };
 }
 
+function followUpTargetsSent(
+  answer: GroundedAnswerResult,
+  pack: ConnectedContextPack,
+  paths: readonly string[],
+): boolean {
+  const present = new Set(
+    (answer.sentEvidencePacks ?? [pack]).flatMap((sent) =>
+      sent.files
+        .filter((file) => file.excerpts.some((excerpt) => excerpt.content.length > 0))
+        .map((file) => file.scopePath),
+    ),
+  );
+  return paths.every((path) => present.has(path));
+}
+
+function unsentFollowUpResult(
+  ctx: FollowUpContext,
+  pack: ConnectedContextPack,
+  attempted: GroundedAnswerResult,
+  admitted: number,
+): FollowUpResult {
+  const retained = originalResult(ctx, "budget-refused");
+  return {
+    ...retained,
+    pack,
+    answer: {
+      ...ctx.initial,
+      usage: {
+        promptTokens: ctx.initial.usage.promptTokens + attempted.usage.promptTokens,
+        completionTokens: ctx.initial.usage.completionTokens + attempted.usage.completionTokens,
+      },
+    },
+    observation: { ...retained.observation, passCount: 1, admittedPathCount: admitted },
+  };
+}
+
 async function answerFollowUp(
   ctx: FollowUpContext,
   input: OrchestratorInput,
@@ -202,7 +241,7 @@ async function answerFollowUp(
   admitted: number,
 ): Promise<GroundedAnswerResult | FollowUpResult> {
   try {
-    return await ctx.answer(input, retrieved);
+    return await ctx.answer(input, retrieved, genuineUnreadPaths(ctx));
   } catch (failure) {
     if (ctx.deps.signal?.aborted === true) throw failure;
     const retained = originalResult(
