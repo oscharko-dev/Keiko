@@ -34,7 +34,18 @@ export interface GroundedRepairContext {
   readonly deps: Pick<
     OrchestratorDeps,
     "signal" | "reliableCitationBehaviour" | "observeCitationBehaviour"
-  > & { readonly answerer?: GroundedAnswerer | undefined };
+  > & {
+    readonly answerer?:
+      | Pick<
+          GroundedAnswerer,
+          | "repair"
+          | "remainingSynthesisCalls"
+          | "pendingSynthesisUsage"
+          | "takeFailedSynthesisUsage"
+          | "reservedSynthesisOutputTokens"
+        >
+      | undefined;
+  };
   readonly nowMs: () => number;
   readonly deadlineAtMs?: number | undefined;
 }

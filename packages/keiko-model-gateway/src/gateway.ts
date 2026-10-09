@@ -102,7 +102,7 @@ function settleCallerAttempt(
   reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
   usage: Pick<UsageMetadata, "promptTokens" | "completionTokens"> | undefined,
   dispatched: boolean,
-  outputState: "observed" | "none" | "unknown" = "observed",
+  outputState: "observed" | "none" | "unknown" = usage === undefined ? "unknown" : "observed",
 ): void {
   reservation?.settle(usage, dispatched, outputState);
 }
@@ -118,6 +118,14 @@ function settleFailedCallerAttempt(
     dispatched,
     failedCallerOutputState(failure),
   );
+}
+
+function callerAdmittedRequest(
+  request: GatewayCallRequest,
+  reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
+): GatewayCallRequest {
+  const limit = reservation?.maxOutputTokens;
+  return limit === undefined ? request : { ...request, maxOutputTokens: limit };
 }
 
 function failedCallerOutputState(failure: unknown): "observed" | "none" | "unknown" {
@@ -198,6 +206,7 @@ export interface GatewayCallRequest extends GatewayRequest {
   readonly attemptAdmission?:
     | ((input: { readonly promptTokens: number; readonly maxOutputTokens: number }) =>
         | {
+            readonly maxOutputTokens?: number | undefined;
             settle(
               usage: Pick<UsageMetadata, "promptTokens" | "completionTokens"> | undefined,
               dispatched: boolean,
@@ -2146,22 +2155,20 @@ export class Gateway {
     admission: CircuitBreakerAdmission,
   ): AsyncGenerator<GatewayStreamChunk> {
     const { adapter, route, ids, promptAdmission } = state;
-    const schemaRepair = state.attempts.schemaRepair;
     let reservation: GatewaySpendReservation | undefined;
     let callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     let received = false;
     let terminal: GatewayStreamChunk | undefined;
-    const logRepair = (state: "scheduled" | "denied"): void => {
-      this.logRequestRepair(route.capability, ids.correlationId, schemaRepair, request, state);
-    };
+    const logRepair = this.streamRepairLogger(state, request);
     try {
       const attemptBudget = streamAttemptBudgetMs(adapter, route, bounds);
       const remaining = await promptAdmission.admit(request, attemptBudget);
       logRepair("scheduled");
       bounds = { budgetMs: remaining, silenceMs: Math.min(bounds.silenceMs, remaining) };
       callerReservation = this.callerAttemptReservation(request, route.capability);
+      request = callerAdmittedRequest(request, callerReservation);
       reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       admitted = true;
       const stream = this.readProviderStream(adapter, request, route.provider, ids, bounds);
@@ -2189,6 +2196,21 @@ export class Gateway {
       settleCallerAttempt(callerReservation, usage, admitted);
     }
     if (terminal !== undefined) yield terminal;
+  }
+
+  private streamRepairLogger(
+    state: PreparedStream,
+    request: GatewayCallRequest,
+  ): (repairState: "scheduled" | "denied") => void {
+    return (repairState): void => {
+      this.logRequestRepair(
+        state.route.capability,
+        state.ids.correlationId,
+        state.attempts.schemaRepair,
+        request,
+        repairState,
+      );
+    };
   }
 
   private async *readProviderStream(
@@ -2283,7 +2305,7 @@ export class Gateway {
   ): Promise<NormalizedResponse> {
     const { adapter, correlationId } = attempt;
     const { capability } = attempt.route;
-    const request = attempt.state.request;
+    let request = attempt.state.request;
     const { admission, remainingMs } = await this.admitAttempt(
       provider,
       request,
@@ -2303,6 +2325,7 @@ export class Gateway {
       ({ provider, bounds } = await this.admitBufferedPrompt(attempt, provider, bounds));
       this.logAttemptRepair(attempt, "scheduled");
       callerReservation = this.callerAttemptReservation(request, capability);
+      request = callerAdmittedRequest(request, callerReservation);
       reservation = this.spendBudget?.reserve(capability, request, correlationId);
       admitted = true;
       const response = await readAnswer(adapter, request, provider, bounds);
