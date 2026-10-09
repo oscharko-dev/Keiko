@@ -35,3 +35,30 @@ describe("manual subject anchors survive presentation instructions", () => {
     },
   );
 });
+
+describe("presentation directives retain substantive question syntax", () => {
+  it.each([
+    "How do I cite the manual?",
+    "Can I cite the authoritative manual?",
+    "Where should I answer briefly?",
+    "How can I keep the answer under 100 words?",
+    "Warum antworte kurz mit Quellenangabe?",
+  ])("does not mask the requested subject in %s", (text) => {
+    const result = extractRetrievalChannels(text, 8);
+    expect(result.anchors.length).toBeGreaterThan(0);
+    expect(result.anchors.map((anchor) => anchor.term)).toContain(
+      text.includes("cite") ? "cite" : text.includes("answer") ? "answer" : "antworte",
+    );
+  });
+
+  it.each([". ", "; ", "\n", "? Please "])(
+    "recognizes a separate imperative after %j",
+    (boundary) => {
+      const result = extractRetrievalChannels(
+        `Vesper temperature${boundary}Cite the authoritative manual. Keep the answer under 100 words.`,
+        8,
+      );
+      expect(result.anchors.map((anchor) => anchor.term)).toEqual(["temperature", "vesper"]);
+    },
+  );
+});
