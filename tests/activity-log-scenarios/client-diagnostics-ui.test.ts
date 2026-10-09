@@ -148,18 +148,19 @@ describe("Activity Log scenario: client-diagnostics", () => {
     );
     const log = readPersistedActivityLog(stateDir);
     expect(log).not.toContain("private-client-text-canary");
-    expect(
-      parsedLine(persistedActivityLogLines(log, "client.evidence.inspected")[0]),
-    ).toMatchObject({
+    const inspected = parsedLine(persistedActivityLogLines(log, "client.evidence.inspected")[0]);
+    expect(inspected).toMatchObject({
       reason: "manifest-fetch-failed",
       errorKind: "unavailable",
-      frames: expect.arrayContaining([
+      causeChain: ["TypeError"],
+    });
+    expect(inspected.frames).toEqual(
+      expect.arrayContaining([
         expect.stringMatching(
           /^dist\/ui\/static\/_next\/static\/chunks\/sha256-[a-f0-9]+\.js:12:345$/u,
         ),
       ]),
-      causeChain: ["TypeError"],
-    });
+    );
   });
 
   // Fault injection: the browser reports its EventSource transport closing unexpectedly (readyState

@@ -80,6 +80,7 @@ import {
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
+import { createSemanticRefreshDocumentBudget } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
 import { groundedSystemPrompt, sentGroundedFileCount } from "./grounded-prompt.js";
@@ -734,12 +735,14 @@ export function defaultRetriever(
   deps?: UiHandlerDeps,
   correlationId?: string,
 ): GroundedRetriever {
+  const refreshDocuments =
+    deps === undefined ? undefined : createSemanticRefreshDocumentBudget(deps);
   return (input: OrchestratorInput, childSignal = signal): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
     const semanticLease =
       deps === undefined
         ? { providerFor: undefined, close: (): void => undefined }
-        : configuredGroundedSemanticRequest(deps, input.workspaceRoot);
+        : configuredGroundedSemanticRequest(deps, input.workspaceRoot, refreshDocuments);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,

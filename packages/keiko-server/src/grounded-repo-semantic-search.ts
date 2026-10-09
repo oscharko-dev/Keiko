@@ -80,7 +80,13 @@ interface SemanticRefreshUsage {
   inputTokens: number;
 }
 
+export interface SemanticRefreshDocumentBudget {
+  readonly remaining: () => number;
+  readonly tryReserve: () => boolean;
+}
+
 interface SemanticRefreshOptions {
+  readonly semanticRefreshDocumentBudget?: SemanticRefreshDocumentBudget | undefined;
   readonly tryReserveRefreshUsage?:
     ((delta: Readonly<Partial<ExplorationUsage>>) => boolean) | undefined;
   readonly semanticRefreshFilesMax?: number | undefined;
@@ -854,6 +860,21 @@ function configuredRefreshFileLimit(deps: UiHandlerDeps, options: SemanticRefres
   });
 }
 
+/** One logical ask shares these permits across its root leases, searches and follow-up. */
+export function createSemanticRefreshDocumentBudget(
+  deps: UiHandlerDeps,
+): SemanticRefreshDocumentBudget {
+  let remaining = configuredRefreshFileLimit(deps, {});
+  return {
+    remaining: (): number => remaining,
+    tryReserve: (): boolean => {
+      if (remaining === 0) return false;
+      remaining -= 1;
+      return true;
+    },
+  };
+}
+
 function refreshDeadline(ctx: SemanticRefreshOptions): number {
   const now = (ctx.nowMs ?? Date.now)();
   const deadline = ctx.deadlineAtMs;
@@ -895,6 +916,23 @@ function observeRefreshRead(ctx: EmbeddingContext, size: number): void {
   ctx.refreshUsage.readBytes += size;
 }
 
+function reserveRefreshRead(
+  ctx: EmbeddingContext,
+  file: LiveFingerprintFile,
+  deadlineAtMs: number,
+): boolean {
+  if (
+    refreshStopped(ctx, ctx.signal, deadlineAtMs) ||
+    ctx.semanticRefreshDocumentBudget?.remaining() === 0 ||
+    ctx.tryReserveRefreshUsage?.({ filesRead: 1, excerptBytes: file.before.size }) !== true
+  )
+    return false;
+  if (refreshStopped(ctx, ctx.signal, deadlineAtMs)) return false;
+  // Synchronous admission immediately precedes the read. A failed/cancelled attempt keeps its
+  // permit: another root or a later pass must not reopen the original document allowance.
+  return ctx.semanticRefreshDocumentBudget?.tryReserve() !== false;
+}
+
 async function liveRefreshFragment(
   ctx: EmbeddingContext,
   document: CandidateDocument,
@@ -904,12 +942,7 @@ async function liveRefreshFragment(
   try {
     const file = liveFingerprintFile(ctx, ctx.repositoryPod, document.scopePath);
     if (!boundedRefreshFile(file)) return undefined;
-    if (
-      refreshStopped(ctx, ctx.signal, deadlineAtMs) ||
-      ctx.tryReserveRefreshUsage?.({ filesRead: 1, excerptBytes: file.before.size }) !== true
-    )
-      return undefined;
-    if (refreshStopped(ctx, ctx.signal, deadlineAtMs)) return undefined;
+    if (!reserveRefreshRead(ctx, file, deadlineAtMs)) return undefined;
     const bytes = await readSemanticFileBytes(
       ctx,
       file,
@@ -1078,6 +1111,7 @@ function refreshAllowed(
 ): boolean {
   return (
     ctx.tryReserveRefreshUsage !== undefined &&
+    ctx.semanticRefreshDocumentBudget?.remaining() !== 0 &&
     limit > 0 &&
     staleCount > 0 &&
     !refreshStopped(ctx, prepared.signal, deadlineAtMs)

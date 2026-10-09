@@ -43,8 +43,10 @@ const REFERENCE_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
 const PATH_QUOTE_CHARACTERS = new Set(["`", '"', "'"]);
 
 function filenameReference(path: string): boolean {
-  const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-  return KNOWN_EXTENSIONS.has(extension) || isEcosystemSourceFile(path);
+  const basename = path.slice(path.lastIndexOf("/") + 1);
+  const dot = basename.lastIndexOf(".");
+  const extension = basename.slice(dot + 1).toLowerCase();
+  return (dot > 0 && KNOWN_EXTENSIONS.has(extension)) || isEcosystemSourceFile(path);
 }
 
 function parsePathReference(term: string): SearchReference {
@@ -87,7 +89,7 @@ function bracketReferenceAnchorText(text: string): string {
     const term = bracketReferenceTerm(raw);
     const located = parsePathReference(term);
     const locatedPath = located.line !== undefined && filenameReference(located.path);
-    if (!bracketPath(term) && !locatedPath) return raw;
+    if (!filenameReference(located.path)) return raw;
     const quote = text.charAt(offset - 1);
     if (PATH_QUOTE_CHARACTERS.has(quote) && quote === text.charAt(offset + raw.length)) return raw;
     const canonical = locatedPath ? `${located.path}:${String(located.line)}` : term;

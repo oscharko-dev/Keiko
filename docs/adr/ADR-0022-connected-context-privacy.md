@@ -653,7 +653,9 @@ reserves the validated observed file size; each embedding reserves a conservativ
 token bound and uses the existing gateway spend reservation with exactly-once settlement. Rejected
 grants do not charge an attempt or start new refresh I/O. `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX`
 defaults to zero, invalid explicit values remain zero, and enabled integer values are capped at
-eight. Refresh shares the original request signal and remaining deadline, capped again at five
+eight across the entire logical ask. One request-local document permit counter is shared by every
+root lease, semantic lookup and follow-up; failed or cancelled refresh attempts do not reopen it.
+Refresh shares the original request signal and remaining deadline, capped again at five
 seconds; it never mutates the persisted pod. Selection-details records actual embedding/read
 attempt counts separately from byte/input-token upper reservations. Refreshed-file counts include
 only usable files retained in the assembled pack; stale retained files receive the canonical
