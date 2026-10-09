@@ -101,6 +101,41 @@ it("searches the independent diagnostic question while preserving the original t
   expect(logLines.join("\n")).not.toContain("node_modules/vitest");
 });
 
+it.each(["source/missing.ts", ".env"])(
+  "does not search raw frames when a questionless diagnostic target is unadmitted: %s",
+  async (path) => {
+    const trace =
+      `AssertionError: expected 1 to be 2\n    at Object.get (${path}:1:1)\n` +
+      "    at execute (node_modules/vitest/runner.js:10:3)";
+    const { pack, semanticQueries, logLines } = await retrieve(trace);
+    expect(pack.query.text).toBe(trace);
+    expect(pack.files.map((file) => file.scopePath)).not.toContain(path);
+    expect(
+      pack.files.flatMap((file) => file.excerpts.map((excerpt) => excerpt.atom.provenance.kind)),
+    ).not.toContain("lexical-search");
+    expect(semanticQueries).toEqual([]);
+    expect(logLines.join("\n")).not.toContain("node_modules/vitest");
+  },
+);
+
+it.each([
+  "    at Object.get (source/failure.ts:1:1)",
+  "AssertionError: expected 1 to be 2\n    at Object.get (source/failure.ts:1:1)",
+  "AssertionError: expected 1 to be 2\n    at Object.get (source/failure.ts:1:1)\n" +
+    "    at execute (node_modules/vitest/runner.js:10:3)",
+])("retains admitted source evidence for a questionless diagnostic paste: %s", async (trace) => {
+  const { pack, semanticQueries, logLines } = await retrieve(trace);
+  expect(pack.query.text).toBe(trace);
+  expect(pack.files.map((file) => file.scopePath)).toContain("source/failure.ts");
+  expect(pack.files.map((file) => file.scopePath)).not.toContain("package.json");
+  expect(semanticQueries).toEqual(["source/failure.ts"]);
+  expect(JSON.stringify(buildGroundedGatewayMessages(trace, pack, (value) => value))).toContain(
+    "BUILD_ERR_17",
+  );
+  expect(logLines.join("\n")).not.toContain("source/failure.ts");
+  expect(logLines.join("\n")).not.toContain("node_modules/vitest");
+});
+
 it.each([
   "How exactly does `retry_count` get applied by the scheduler?",
   "What exactly does `retry_count` do?",

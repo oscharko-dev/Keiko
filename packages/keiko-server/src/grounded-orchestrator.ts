@@ -2408,15 +2408,21 @@ function lexicalQuery(
     ...inputs.query,
     text:
       terms.length === 0 || inputs.targetDecision.kind === "contextual"
-        ? lexicalQuestionText(inputs.query)
+        ? lexicalQuestionText(inputs)
         : terms.join(" "),
   };
 }
 
-function lexicalQuestionText(query: RetrievalQuery): string {
+function lexicalQuestionText(inputs: SearchInputs): string {
+  const query = inputs.query;
   if (query.kind !== "natural-language") return query.text;
   const channels = extractRetrievalChannels(query.text, 8);
-  return channels.stackTraceDetected ? channels.questionText : query.text;
+  if (!channels.stackTraceDetected) return query.text;
+  // A source-only diagnostic paste has no independent prose. Only freshly admitted references
+  // may supply its lexical query; a raw-frame fallback would restore external runtime noise.
+  return channels.questionText.trim().length > 0
+    ? channels.questionText
+    : (inputs.admittedPaths ?? []).join(" ");
 }
 
 function observedLexicalSemanticProvider(
@@ -2615,6 +2621,10 @@ function withoutNamedSemanticSubstitution(
 }
 
 async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
+  if (lexicalQuestionText(inputs).trim().length === 0) {
+    inputs.observeSourceDecision(emptySourceDecision("suppressed"));
+    return { atoms: [], omitted: [], uncertainty: [], usage: usageDelta({ elapsedMs: 0 }) };
+  }
   const result = withoutNamedSemanticSubstitution(await lexicalRingSearch(ring, inputs), inputs);
   const primaryContentIdentities = certifiedLexicalContent(result, inputs);
   const sourceDecision = result.sourceDecision ?? emptySourceDecision("not-evaluated");

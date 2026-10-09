@@ -463,7 +463,9 @@ casing and numeric source locations survive admission; the primary frame and its
 structural test/source pair receive the same eligibility and read-budget checks. Ordinary lexical
 search uses the independent question channel; the original trace remains model context and query
 identity, while external runtime frames cannot introduce ordinary search terms. Tool names inside
-trace bodies never request project metadata. For a diagnostic question with admitted or discovered
+trace bodies never request project metadata. A diagnostic paste without an independent question
+searches only its freshly admitted references; when none are admitted, its lexical ring performs no
+search rather than forwarding an invalid empty query or restoring raw frames. For a diagnostic question with admitted or discovered
 source candidates, optional Git history is restricted to those candidates and their discovered
 dependencies within the original selected scope. Advisory atoms cannot enlarge directory or file
 membership. Sharing a commit cannot independently nominate unrelated source or metadata files;
