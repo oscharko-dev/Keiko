@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import {
   type KnowledgeCapsule,
+  type EmbeddingModelIdentity,
   type KnowledgeSource,
   type RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
@@ -14,6 +15,8 @@ import {
   readRepositoryFileFingerprints,
   repositoryContentFingerprint,
   searchVectorsForScope,
+  scoreVector,
+  shapeEmbeddingQuery,
   vectorIndexPortAsRepoAdapter,
   type KnowledgeStore,
   type RepositoryChunkLineRange,
@@ -21,15 +24,25 @@ import {
   type VectorIndexOptions,
 } from "@oscharko-dev/keiko-local-knowledge";
 import {
+  assertCompatibleEmbeddingIdentity,
+  l2NormalizeVector,
+  type OpenAIEmbeddingSuccess,
+} from "@oscharko-dev/keiko-model-gateway";
+import {
   type SemanticSearchInput,
   type SemanticSearchMatch,
   type SemanticSearchProvider,
   type WorkspaceFs,
+  containedRealPathInfo,
+  isDenied,
 } from "@oscharko-dev/keiko-workspace";
 import {
   isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import { raceAbortDeadline } from "./abort-race.js";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import {
   configuredEmbeddingProviders,
@@ -40,9 +53,28 @@ import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 const MAX_SEMANTIC_CANDIDATES = 32;
 const SEMANTIC_CANDIDATE_RESULT_MULTIPLIER = 4;
 const POD_FRESHNESS_MAX_BYTES = 64 * 1024 * 1024;
+const SEMANTIC_REFRESH_FILE_CAP = 8;
+const SEMANTIC_REFRESH_FRAGMENT_BYTES = 16_384;
 
-interface EmbeddingContext {
+export interface RepositorySemanticFreshnessObservation {
+  // Request-private paths, never activity-log fields. The orchestrator projects counts only.
+  readonly stalePaths: readonly string[];
+  readonly refreshedPaths: readonly string[];
+  readonly unavailableFileCount: number;
+}
+
+interface SemanticRefreshOptions {
+  readonly semanticRefreshFilesMax?: number | undefined;
+  readonly deadlineAtMs?: number | undefined;
+  readonly nowMs?: (() => number) | undefined;
+  readonly correlationId?: string | undefined;
+  readonly observeSemanticFreshness?:
+    ((observation: RepositorySemanticFreshnessObservation) => void) | undefined;
+}
+
+interface EmbeddingContext extends SemanticRefreshOptions {
   readonly fs: WorkspaceFs;
+  readonly redactText: (text: string) => string;
   readonly signal?: AbortSignal | undefined;
   readonly maxCandidates: number;
   readonly localKnowledgeEmbeddingAdapter: ReturnType<
@@ -79,7 +111,7 @@ type RepositoryPodResolution =
   | { readonly kind: "failed" }
   | { readonly kind: "ready"; readonly pod: ResolvedRepositoryPod };
 
-export interface ConfiguredRepoSemanticSearchOptions {
+export interface ConfiguredRepoSemanticSearchOptions extends SemanticRefreshOptions {
   /**
    * Called once with the identity of the pod that answered, when one resolved. The same observation
    * idiom as `observePodRetrieval` below, and the only way a caller learns WHICH index it read
@@ -339,11 +371,6 @@ function containedDocumentPath(repositoryRoot: string, scopePath: string): strin
   return candidate;
 }
 
-function isContainedPath(root: string, candidate: string): boolean {
-  const fromRoot = relative(root, candidate);
-  return fromRoot.length > 0 && !fromRoot.startsWith("..") && !isAbsolute(fromRoot);
-}
-
 function fingerprintByteLength(fingerprint: RepositoryFileFingerprint): number | undefined {
   const byteLength = fingerprint.byteLength;
   return Number.isSafeInteger(byteLength) &&
@@ -363,15 +390,17 @@ function liveFingerprintFile(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   scopePath: string,
-  byteLength: number,
 ): LiveFingerprintFile | undefined {
+  if (!isValidScopePath(scopePath, { mustBeRelative: true }) || isDenied(scopePath))
+    return undefined;
   const absolutePath = containedDocumentPath(pod.context.repositoryRoot, scopePath);
   if (absolutePath === undefined) return undefined;
-  const rootRealPath = ctx.fs.realPath(resolve(pod.context.repositoryRoot));
-  const realPath = ctx.fs.realPath(absolutePath);
-  if (!isContainedPath(rootRealPath, realPath)) return undefined;
+  const contained = containedRealPathInfo(ctx.fs, pod.context.repositoryRoot, absolutePath);
+  if (!isCanonicalAllowedContainedPath(contained, pod.context.repositoryRoot, scopePath))
+    return undefined;
+  const realPath = contained.path;
   const before = ctx.fs.stat(absolutePath);
-  if (!before.isFile || before.isSymbolicLink || before.size !== byteLength) return undefined;
+  if (!before.isFile || before.isSymbolicLink || (before.hardLinkCount ?? 1) > 1) return undefined;
   return { absolutePath, realPath, before };
 }
 
@@ -384,8 +413,8 @@ async function readLiveFingerprintBytes(
   const byteLength = fingerprintByteLength(fingerprint);
   if (byteLength === undefined || ctx.fs.readFileBytes === undefined) return undefined;
   try {
-    const file = liveFingerprintFile(ctx, pod, scopePath, byteLength);
-    if (file === undefined) return undefined;
+    const file = liveFingerprintFile(ctx, pod, scopePath);
+    if (file?.before.size !== byteLength) return undefined;
     const bytes = await ctx.fs.readFileBytes(file.realPath, byteLength + 1, "reject", file.before);
     return bytes.byteLength === byteLength &&
       isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
@@ -396,32 +425,57 @@ async function readLiveFingerprintBytes(
   }
 }
 
-async function podDocumentIsFresh(
+type FreshnessState = "fresh" | "stale" | "unindexed" | "unavailable";
+
+async function podDocumentFreshness(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   document: CandidateDocument,
-): Promise<boolean> {
-  if (!pod.indexedPaths.has(document.scopePath)) return false;
+): Promise<FreshnessState> {
+  if (!pod.indexedPaths.has(document.scopePath)) return "unindexed";
   const fingerprint = pod.fingerprints.get(document.scopePath);
-  if (fingerprint === undefined) return false;
+  if (fingerprint === undefined || fingerprintByteLength(fingerprint) === undefined)
+    return "unavailable";
+  try {
+    const file = liveFingerprintFile(ctx, pod, document.scopePath);
+    if (
+      file === undefined ||
+      !isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
+    )
+      return "unavailable";
+    if (file.before.size !== fingerprint.byteLength) return "stale";
+  } catch {
+    return "unavailable";
+  }
   const bytes = await readLiveFingerprintBytes(ctx, pod, document.scopePath, fingerprint);
-  return (
-    bytes !== undefined &&
-    repositoryContentFingerprint(bytes, fingerprint.fingerprintKind) ===
-      fingerprint.contentFingerprint
-  );
+  if (bytes === undefined) return "unavailable";
+  return repositoryContentFingerprint(bytes, fingerprint.fingerprintKind) ===
+    fingerprint.contentFingerprint
+    ? "fresh"
+    : "stale";
+}
+
+interface ClassifiedPodDocuments {
+  readonly fresh: readonly CandidateDocument[];
+  readonly stale: readonly CandidateDocument[];
+  readonly unavailableFileCount: number;
 }
 
 async function freshPodDocuments(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   documents: readonly CandidateDocument[],
-): Promise<readonly CandidateDocument[]> {
-  const indexed: CandidateDocument[] = [];
+): Promise<ClassifiedPodDocuments> {
+  const fresh: CandidateDocument[] = [];
+  const stale: CandidateDocument[] = [];
+  let unavailableFileCount = 0;
   for (const document of documents) {
-    if (await podDocumentIsFresh(ctx, pod, document)) indexed.push(document);
+    const state = await podDocumentFreshness(ctx, pod, document);
+    if (state === "fresh") fresh.push(document);
+    else if (state === "stale") stale.push(document);
+    else if (state === "unavailable") unavailableFileCount += 1;
   }
-  return indexed;
+  return { fresh, stale, unavailableFileCount };
 }
 
 function chunkAnchoredLine(
@@ -618,17 +672,221 @@ async function semanticSearch(
   const prepared = prepareSemanticSearch(ctx, request);
   if (prepared === undefined) return [];
   const { documents, signal } = prepared;
-  const freshDocuments = await freshPodDocuments(ctx, ctx.repositoryPod, documents);
-  if (freshDocuments.length === 0) {
-    observePodDegradation(ctx, "pod-no-fresh-candidates");
-    return [];
-  }
+  const classified = await freshPodDocuments(ctx, ctx.repositoryPod, documents);
+  const refreshed: SemanticSearchMatch[] = [];
   try {
-    return await podRankedHits(ctx, ctx.repositoryPod, prepared, freshDocuments);
+    const hits =
+      classified.fresh.length === 0
+        ? []
+        : await podRankedHits(ctx, ctx.repositoryPod, prepared, classified.fresh);
+    refreshed.push(...(await refreshedSemanticHits(ctx, prepared, classified.stale)));
+    if (classified.fresh.length === 0) observePodDegradation(ctx, "pod-no-fresh-candidates");
+    return rankHits([...hits, ...refreshed], documents, prepared.maxResults);
   } catch {
     if (!isAborted(signal)) observePodDegradation(ctx, "pod-query-failed");
     return [];
+  } finally {
+    ctx.observeSemanticFreshness?.({
+      stalePaths: classified.stale.map((document) => document.scopePath),
+      refreshedPaths: refreshed.map((hit) => hit.scopePath),
+      unavailableFileCount: classified.unavailableFileCount,
+    });
   }
+}
+
+function refreshFileLimit(ctx: SemanticRefreshOptions): number {
+  const cap = ctx.semanticRefreshFilesMax;
+  return cap !== undefined && Number.isInteger(cap) && cap >= 0
+    ? Math.min(SEMANTIC_REFRESH_FILE_CAP, cap)
+    : 0;
+}
+
+// Document embedding is a separate, explicit opt-in from query embedding. Missing, malformed,
+// fractional, or negative values stay off; enabled requests still need a live elapsed budget.
+function configuredRefreshFileLimit(deps: UiHandlerDeps, options: SemanticRefreshOptions): number {
+  return refreshFileLimit({
+    semanticRefreshFilesMax:
+      options.semanticRefreshFilesMax ?? Number(deps.env.KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX),
+  });
+}
+
+function refreshDeadline(ctx: SemanticRefreshOptions): number {
+  const now = (ctx.nowMs ?? Date.now)();
+  const deadline = ctx.deadlineAtMs;
+  return deadline === undefined || Number.isNaN(deadline) ? now : Math.min(deadline, now + 5_000);
+}
+
+interface RefreshFragment {
+  readonly document: CandidateDocument;
+  readonly file: LiveFingerprintFile;
+}
+
+async function liveRefreshFragment(
+  ctx: EmbeddingContext,
+  document: CandidateDocument,
+): Promise<RefreshFragment | undefined> {
+  if (ctx.fs.readFileBytes === undefined) return undefined;
+  try {
+    const file = liveFingerprintFile(ctx, ctx.repositoryPod, document.scopePath);
+    if (file === undefined || file.before.size > SEMANTIC_REFRESH_FRAGMENT_BYTES) return undefined;
+    const bytes = await ctx.fs.readFileBytes(
+      file.realPath,
+      SEMANTIC_REFRESH_FRAGMENT_BYTES + 1,
+      "reject",
+      file.before,
+    );
+    if (
+      bytes.byteLength !== file.before.size ||
+      bytes.includes(0) ||
+      !isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
+    )
+      return undefined;
+    const sourceText = ctx.redactText(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return { file, document: { ...document, sourceText, startLine: 1 } };
+  } catch {
+    return undefined;
+  }
+}
+
+function compatibleRefreshVector(
+  identity: EmbeddingModelIdentity,
+  outcome: OpenAIEmbeddingSuccess,
+): Float32Array | undefined {
+  if (outcome.vector.length === 0 || !outcome.vector.every(Number.isFinite)) return undefined;
+  const current: EmbeddingModelIdentity = {
+    ...identity,
+    modelId: outcome.modelId,
+    vectorDimensions: outcome.vector.length,
+    ...(outcome.modelRevision === undefined ? {} : { modelRevision: outcome.modelRevision }),
+  };
+  if (!assertCompatibleEmbeddingIdentity(identity, current).ok) return undefined;
+  return identity.normalization === "l2" ? l2NormalizeVector(outcome.vector) : outcome.vector;
+}
+
+async function refreshEmbedding(
+  ctx: EmbeddingContext,
+  input: string,
+  signal: AbortSignal | undefined,
+  deadlineAtMs: number,
+): Promise<Float32Array | undefined> {
+  const adapter = ctx.localKnowledgeEmbeddingAdapter;
+  const identity = ctx.repositoryPod.capsule.embeddingModelIdentity;
+  const outcome = await raceAbortDeadline(
+    ({ signal: boundedSignal, timeoutMs }) =>
+      adapter.request({
+        endpoint: adapter.endpoint,
+        apiKey: adapter.apiKey,
+        modelId: identity.modelId,
+        input,
+        ...(adapter.apiKeyHeaderName === undefined
+          ? {}
+          : { apiKeyHeaderName: adapter.apiKeyHeaderName }),
+        ...(identity.dimensionsParam === undefined ? {} : { dimensions: identity.dimensionsParam }),
+        ...(ctx.correlationId === undefined
+          ? {}
+          : { logContext: { correlationId: ctx.correlationId } }),
+        signal: boundedSignal,
+        timeoutMs,
+      }),
+    { deadlineAtMs, nowMs: ctx.nowMs ?? Date.now, signal },
+  );
+  return outcome.ok ? compatibleRefreshVector(identity, outcome.value) : undefined;
+}
+
+function refreshMatch(
+  ctx: EmbeddingContext,
+  fragment: RefreshFragment,
+  query: Float32Array,
+  vector: Float32Array,
+  terms: readonly string[],
+): SemanticSearchMatch | undefined {
+  if (
+    !isWorkspacePathSnapshotCurrent(
+      ctx.fs,
+      fragment.file.absolutePath,
+      fragment.file.realPath,
+      fragment.file.before,
+    )
+  )
+    return undefined;
+  const metric = ctx.repositoryPod.capsule.embeddingModelIdentity.vectorMetric;
+  const rawScore = scoreVector(metric, query, vector);
+  const score = metric === "euclidean" ? 1 / (1 - rawScore) : Math.max(0, Math.min(1, rawScore));
+  return Number.isFinite(score) && score > 0
+    ? {
+        scopePath: fragment.document.scopePath,
+        line: localizeMatchLine(fragment.document.sourceText, terms),
+        score,
+      }
+    : undefined;
+}
+
+async function refreshedSemanticHits(
+  ctx: EmbeddingContext,
+  prepared: PreparedSemanticSearch,
+  stale: readonly CandidateDocument[],
+): Promise<readonly SemanticSearchMatch[]> {
+  const limit = refreshFileLimit(ctx);
+  const deadlineAtMs = refreshDeadline(ctx);
+  if (!refreshAllowed(ctx, prepared, stale.length, limit, deadlineAtMs)) return [];
+  const hits: SemanticSearchMatch[] = [];
+  try {
+    const identity = ctx.repositoryPod.capsule.embeddingModelIdentity;
+    const query = await refreshEmbedding(
+      ctx,
+      shapeEmbeddingQuery(identity, prepared.queryText),
+      prepared.signal,
+      deadlineAtMs,
+    );
+    if (query === undefined) return [];
+    for (const document of stale.slice(0, limit)) {
+      if (refreshStopped(ctx, prepared.signal, deadlineAtMs)) break;
+      const hit = await refreshedDocumentHit(ctx, prepared, document, query, deadlineAtMs);
+      if (hit !== undefined) hits.push(hit);
+    }
+  } catch {
+    return hits;
+  }
+  return hits;
+}
+
+function refreshStopped(
+  ctx: SemanticRefreshOptions,
+  signal: AbortSignal | undefined,
+  deadlineAtMs: number,
+): boolean {
+  return (ctx.nowMs ?? Date.now)() >= deadlineAtMs || isAborted(signal);
+}
+
+function refreshAllowed(
+  ctx: SemanticRefreshOptions,
+  prepared: PreparedSemanticSearch,
+  staleCount: number,
+  limit: number,
+  deadlineAtMs: number,
+): boolean {
+  return limit > 0 && staleCount > 0 && !refreshStopped(ctx, prepared.signal, deadlineAtMs);
+}
+
+async function refreshedDocumentHit(
+  ctx: EmbeddingContext,
+  prepared: PreparedSemanticSearch,
+  document: CandidateDocument,
+  query: Float32Array,
+  deadlineAtMs: number,
+): Promise<SemanticSearchMatch | undefined> {
+  const fragment = await liveRefreshFragment(ctx, document);
+  if (fragment === undefined || refreshStopped(ctx, prepared.signal, deadlineAtMs))
+    return undefined;
+  const vector = await refreshEmbedding(
+    ctx,
+    `Path: ${document.scopePath}\n${fragment.document.sourceText}`,
+    prepared.signal,
+    deadlineAtMs,
+  );
+  return vector === undefined || refreshStopped(ctx, prepared.signal, deadlineAtMs)
+    ? undefined
+    : refreshMatch(ctx, fragment, query, vector, prepared.queryTerms);
 }
 
 // Reports the resolved pod's identity to a caller that asked for it, and returns the resolution
@@ -667,7 +925,10 @@ export function configuredRepoSemanticSearchProviderFor(
     return undefined;
   }
   const ctx: EmbeddingContext = {
+    ...options,
+    semanticRefreshFilesMax: configuredRefreshFileLimit(deps, options),
     fs,
+    redactText: (text): string => String(deps.redactor(text)),
     signal,
     maxCandidates: Math.max(
       0,
@@ -689,6 +950,7 @@ export function configuredRepoSemanticSearchProviderLeaseFor(
   deps: UiHandlerDeps,
   signal: AbortSignal | undefined,
   repositoryRoot: string,
+  options: ConfiguredRepoSemanticSearchOptions = {},
 ): ConfiguredRepoSemanticSearchProviderLease {
   try {
     const opened = openKnowledgeStoreForDeps(deps);
@@ -709,6 +971,7 @@ export function configuredRepoSemanticSearchProviderLeaseFor(
     };
     let indexIdentityDigest: string | undefined;
     const provider = configuredRepoSemanticSearchProviderFor(deps, signal, {
+      ...options,
       repositoryPod: {
         store: opened.store,
         repositoryRoot,
@@ -718,6 +981,7 @@ export function configuredRepoSemanticSearchProviderLeaseFor(
         indexIdentityDigest = createHash("sha256")
           .update(`${identity.capsuleId}\n${identity.sourceId}`)
           .digest("hex");
+        options.observePodIdentity?.(identity);
       },
     });
     return {
