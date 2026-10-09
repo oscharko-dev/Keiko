@@ -22,6 +22,7 @@ const CITED = "Feature returns true [src/Feature.ts:1].";
 const UNCITED = "Feature returns true.";
 const FOLLOW_UP = "Companion is 42 [lib/Companion.ts:1].";
 const OVERFLOW = "context-overflow";
+const TRANSIENT = "transient-provider-fault";
 let root = "";
 let stateDir = "";
 const disposals: UiHandlerDeps[] = [];
@@ -52,6 +53,14 @@ afterEach(async () => {
 });
 
 function providerResponse(content: string): Response {
+  if (content === TRANSIENT)
+    return new Response(
+      JSON.stringify({ error: { message: "Synthetic temporary unavailability" } }),
+      {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      },
+    );
   if (content === OVERFLOW)
     return new Response(
       JSON.stringify({
@@ -74,7 +83,10 @@ function providerResponse(content: string): Response {
   );
 }
 
-function configuredRuntime(): { readonly deps: UiHandlerDeps; readonly chatId: string } {
+function configuredRuntime(maxRetries = 0): {
+  readonly deps: UiHandlerDeps;
+  readonly chatId: string;
+} {
   const env = {
     [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "100",
     [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.db"),
@@ -93,7 +105,8 @@ function configuredRuntime(): { readonly deps: UiHandlerDeps; readonly chatId: s
           modelId: MODEL,
           baseUrl: "https://synthesis.example.invalid/v1",
           apiKey: "fixture",
-          maxRetries: 0,
+          maxRetries,
+          retryBaseDelayMs: 1,
         },
       ],
       capabilities: [
@@ -142,11 +155,7 @@ function route(chatId: string): RouteContext {
   };
 }
 
-async function scriptedProviderTurn(answers: readonly string[]): Promise<{
-  readonly requests: readonly string[];
-  readonly records: readonly Record<string, unknown>[];
-  readonly spendReservations: number;
-}> {
+function installProvider(answers: readonly string[]): string[] {
   const requests: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -157,7 +166,19 @@ async function scriptedProviderTurn(answers: readonly string[]): Promise<{
       return Promise.resolve(providerResponse(answers[requests.length - 1] ?? CITED));
     }),
   );
-  const { deps, chatId } = configuredRuntime();
+  return requests;
+}
+
+async function scriptedProviderTurn(
+  answers: readonly string[],
+  maxRetries = 0,
+): Promise<{
+  readonly requests: readonly string[];
+  readonly records: readonly Record<string, unknown>[];
+  readonly spendReservations: number;
+}> {
+  const requests = installProvider(answers);
+  const { deps, chatId } = configuredRuntime(maxRetries);
   const budget = deps.gatewayConfig?.spendBudget;
   if (budget === undefined) throw new TypeError("Expected the real durable spend budget");
   const reserve = vi.spyOn(budget, "reserve");
@@ -189,6 +210,43 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
   ] as const)("never dispatches a third synthesis after %s", async (_label, answers) => {
     const turn = await scriptedProviderTurn(answers);
     expect(turn.records.some((record) => record.op === "gateway.context-window.retry")).toBe(true);
+    expect(turn.spendReservations).toBe(turn.requests.length);
+    expect(turn.requests.length).toBeLessThanOrEqual(2);
+  });
+
+  it("retains the actual configured transient retry healthy control", async () => {
+    const turn = await scriptedProviderTurn([TRANSIENT, CITED], 1);
+    expect(turn.requests).toHaveLength(2);
+    expect(turn.spendReservations).toBe(2);
+    expect(turn.records.some((record) => record.op === "gateway.retry.scheduled")).toBe(true);
+  });
+
+  it("preserves unrelated buffered gateway recovery under the configured retry policy", async () => {
+    const requests = installProvider([TRANSIENT, CITED]);
+    const { deps } = configuredRuntime(1);
+    const port = deps.modelPortFactory(MODEL);
+    const budget = deps.gatewayConfig?.spendBudget;
+    if (port === undefined || budget === undefined)
+      throw new TypeError("Expected configured gateway");
+    const reserve = vi.spyOn(budget, "reserve");
+    const answer = await port.call({
+      modelId: MODEL,
+      messages: [{ role: "user", content: "File: src/Feature.ts" }],
+      stream: false,
+      maxOutputTokens: 1024,
+    });
+    expect(answer.content).toBe(CITED);
+    expect(requests).toHaveLength(2);
+    expect(reserve).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["internal transient retry followed by unread declaration", [TRANSIENT, MISSING, FOLLOW_UP]],
+    ["internal transient retry followed by marker repair", [TRANSIENT, UNCITED, CITED]],
+    ["unread declaration followed by internal transient retry", [MISSING, TRANSIENT, FOLLOW_UP]],
+  ] as const)("never dispatches a third synthesis after %s", async (_label, answers) => {
+    const turn = await scriptedProviderTurn(answers, 1);
+    expect(turn.records.some((record) => record.op === "gateway.retry.scheduled")).toBe(true);
     expect(turn.spendReservations).toBe(turn.requests.length);
     expect(turn.requests.length).toBeLessThanOrEqual(2);
   });
