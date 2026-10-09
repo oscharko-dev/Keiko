@@ -1,3 +1,4 @@
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import type { EvidenceManifest } from "@oscharko-dev/keiko-contracts/evidence";
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -53,6 +54,12 @@ const INSPECTION_MANIFEST: EvidenceManifest = {
     scope: {
       schemaVersion: "1",
       scopeIdHash: "hash",
+      sourceScopeFingerprint: connectedScopeFingerprint({
+        kind: "directory",
+        root: "/proj",
+        relativePaths: ["src"],
+        connectedAtMs: 1,
+      }),
       scopeKind: "directory",
       selectedPathCount: 1,
       selectedPaths: ["src/feature"],

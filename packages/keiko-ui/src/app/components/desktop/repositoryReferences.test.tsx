@@ -109,6 +109,7 @@ describe("explicit repository source choice", () => {
         reference={{ path: "manual/chapter.txt", label: "chapter.txt:9", lineStart: 9 }}
         roots={[{ root: "/repo/manual", label: "Manual" }]}
         sourceLabel={"Archived manual\u202e"}
+        rootRelative
         requireRootChoice
         openReference={openReference}
       />,

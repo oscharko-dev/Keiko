@@ -121,6 +121,8 @@ import {
   sizeExclusionLines,
   fitPromptOmissionMetadata,
   withPromptExcerptByteLimit,
+  groundedRetrievalContinuityFields,
+  type GroundedRetrievalContinuityInput,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
@@ -782,7 +784,7 @@ interface RetrievalOutcome {
   readonly firstError: RouteResult | undefined;
 }
 
-export interface MultiSourceAskInput {
+export interface MultiSourceAskInput extends GroundedRetrievalContinuityInput {
   /** Verified discovered paths; only actual sent evidence promotes a path to read-state. */
   readonly insufficiencyScopeIndex?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>;
   readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
@@ -922,6 +924,7 @@ async function retrieveOneSource(
         query,
         workspaceRoot: scope.workspaceRoot,
         budget,
+        ...groundedRetrievalContinuityFields(ctx),
         ...(workspaceFs === undefined ? {} : { workspaceFs }),
       },
       ctx.signal,
@@ -1121,6 +1124,7 @@ function persistPerSourceEvidence(
         runId,
         modelId: ctx.modelId,
         workspaceRoot: src.scope.workspaceRoot,
+        sourceScopeFingerprint: src.sourceScopeFingerprint,
         chatId: ctx.chat.id,
         plan: src.plan,
         pack: src.pack,

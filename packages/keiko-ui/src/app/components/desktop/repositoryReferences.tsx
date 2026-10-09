@@ -80,6 +80,12 @@ export type RepositoryReferenceEvidenceState = "cited" | "read-uncited" | "unrea
 export interface RepositoryReferenceEvidence {
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly readPaths: readonly string[];
+  readonly inspectedPaths?:
+    | readonly {
+        readonly scopePath: string;
+        readonly sourceScopeFingerprint?: string | undefined;
+      }[]
+    | undefined;
 }
 
 const EVIDENCE_CLASSES = {
@@ -122,10 +128,30 @@ export function proseReferenceEvidenceState(
   const path = normalizeReferencePath(reference.path);
   if (evidence.citations.some((citation) => normalizeReferencePath(citation.scopePath) === path))
     return "cited";
-  return roots.length === 1 &&
-    evidence.readPaths.some((read) => normalizeReferencePath(read) === path)
+  const attributed =
+    evidence.inspectedPaths === undefined
+      ? roots.length === 1
+      : inspectedReferenceOptions(reference, evidence, roots)?.citationActivation.reason ===
+        "matched";
+  return attributed && evidence.readPaths.some((read) => normalizeReferencePath(read) === path)
     ? "read-uncited"
     : "unread";
+}
+
+function inspectedReferenceOptions(
+  reference: RepositoryReference,
+  evidence: RepositoryReferenceEvidence | undefined,
+  roots: readonly RepositoryReferenceRoot[],
+): ReturnType<typeof citationRootOptions> | undefined {
+  const matching =
+    evidence?.inspectedPaths?.filter(
+      (entry) => normalizeReferencePath(entry.scopePath) === normalizeReferencePath(reference.path),
+    ) ?? [];
+  if (matching.length === 0) return undefined;
+  const fingerprints = new Set(matching.map((entry) => entry.sourceScopeFingerprint));
+  const fingerprint = fingerprints.size === 1 ? matching[0]?.sourceScopeFingerprint : undefined;
+  const options = citationRootOptions({ sourceScopeFingerprint: fingerprint }, roots);
+  return { ...options, requireRootChoice: options.citationActivation.reason !== "matched" };
 }
 
 export function ProseRepositoryReference({
@@ -135,12 +161,16 @@ export function ProseRepositoryReference({
   readonly evidence?: RepositoryReferenceEvidence | undefined;
 }): ReactNode {
   const citation = proseCitation(props.reference, evidence);
-  const options = citationRootOptions(citation ?? {}, props.roots);
+  const options =
+    citation !== undefined
+      ? citationRootOptions(citation, props.roots)
+      : (inspectedReferenceOptions(props.reference, evidence, props.roots) ??
+        citationRootOptions({}, props.roots));
   return (
     <RepositoryReferenceInline
       {...props}
       {...options}
-      rootRelative={citation !== undefined}
+      rootRelative={citation !== undefined || options.citationActivation.reason === "matched"}
       evidenceState={
         evidence === undefined
           ? undefined
@@ -892,15 +922,21 @@ export function RepositoryReferenceInline({
   const rankedRootOptions = useMemo(
     () =>
       requireRootChoice || rootRelative
-        ? rootOptions.map((root) => ({ ...root, openPath: normalizeReferencePath(reference.path) }))
+        ? rootOptions.map((root) => ({
+            ...root,
+            openPath: rootRelative
+              ? normalizeReferencePath(reference.path)
+              : referencePathForRoot(reference.path, root.root),
+          }))
         : rankedRootsForReference(reference, rootOptions),
     [reference, requireRootChoice, rootOptions, rootRelative],
   );
   const bestRootOptions = useMemo(() => {
+    if (requireRootChoice) return rankedRootOptions;
     const best = rankedRootOptions[0];
     if (best === undefined) return [];
     return rankedRootOptions.filter((root) => root.openPath.length === best.openPath.length);
-  }, [rankedRootOptions]);
+  }, [rankedRootOptions, requireRootChoice]);
 
   const openForRoot = useCallback(
     (root: RankedRepositoryRoot): void => {

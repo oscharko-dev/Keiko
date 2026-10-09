@@ -84,7 +84,9 @@ type OpenDocumentationTarget = (target: string) => boolean;
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
   readonly busy: boolean;
-  readonly onReadPaths?: ((runId: string, paths: readonly string[]) => void) | undefined;
+  readonly onReadPaths?:
+    | ((runId: string, paths: readonly string[], sourceScopeFingerprint?: string) => void)
+    | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
@@ -1828,16 +1830,13 @@ type FolderAuditDetailsProps = Omit<GroundedAnswerProps, "answer" | "busy"> & {
   readonly answer: ConnectedGroundedAnswer | HybridGroundedAnswer;
 };
 
-function useInspectedFolderScope({
-  answer,
-  repositoryRoots = [],
-  onReadPaths,
-}: FolderAuditDetailsProps): {
+function useInspectedFolderScope({ answer, onReadPaths }: FolderAuditDetailsProps): {
   readonly scopeLabel: string | undefined;
   readonly onRead: (
     runId: string,
     paths: readonly string[],
     selectedPaths: readonly string[],
+    sourceScopeFingerprint?: string,
   ) => void;
 } {
   const pack = answer.groundingKind === "hybrid" ? answer.contextPack.folder : answer.contextPack;
@@ -1848,19 +1847,20 @@ function useInspectedFolderScope({
     readonly paths: readonly string[];
   }>({ key: "", paths: [] });
   const onRead = useCallback(
-    (runId: string, paths: readonly string[], selectedPaths: readonly string[]): void => {
+    (
+      runId: string,
+      paths: readonly string[],
+      selectedPaths: readonly string[],
+      sourceScopeFingerprint?: string,
+    ): void => {
       if (runId === primaryId) setSelection({ key, paths: selectedPaths });
-      onReadPaths?.(runId, paths);
+      onReadPaths?.(runId, paths, sourceScopeFingerprint);
     },
     [key, primaryId, onReadPaths],
   );
   return {
     scopeLabel:
-      selection.key === key && selection.paths.length > 0
-        ? selection.paths.join(", ")
-        : repositoryRoots.length === 1
-          ? repositoryRoots[0]?.label
-          : undefined,
+      selection.key === key && selection.paths.length > 0 ? selection.paths.join(", ") : undefined,
     onRead,
   };
 }
