@@ -1191,8 +1191,8 @@ export interface OrchestratorDeps {
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
   // ContextBudget to pack.diagnostics.contextBudget? — an additive field no prompt builder reads.
   readonly contextProfile?: ContextProfile | undefined;
-  // Issue #1736 — optional production index provider for compatible finite searches. Uncapped
-  // searches deliberately use live traversal without consulting this finite index.
+  // Issue #1736 — optional production index provider. Uncapped searches keep live discovery
+  // authoritative while completed query matches may reuse the existing bounded index.
   readonly workspaceIndexForRoot?:
     ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
@@ -1571,10 +1571,10 @@ function observedWorkspaceIndex(
   counters: MutableWorkspaceIndexActivityCounters,
 ): WorkspaceIndex {
   return {
-    loadSnapshot: async (scopeKey): ReturnType<WorkspaceIndex["loadSnapshot"]> => {
+    loadSnapshot: async (scopeKey, isActive): ReturnType<WorkspaceIndex["loadSnapshot"]> => {
       counters.loadAttempts += 1;
       try {
-        const snapshot = await source.loadSnapshot(scopeKey);
+        const snapshot = await source.loadSnapshot(scopeKey, isActive);
         if (snapshot === undefined) counters.loadMisses += 1;
         else counters.loadHits += 1;
         return snapshot;
@@ -1583,10 +1583,10 @@ function observedWorkspaceIndex(
         throw error;
       }
     },
-    saveSnapshot: async (scopeKey, snapshot): Promise<void> => {
+    saveSnapshot: async (scopeKey, snapshot, isActive): Promise<void> => {
       counters.saveAttempts += 1;
       try {
-        await source.saveSnapshot(scopeKey, snapshot);
+        await source.saveSnapshot(scopeKey, snapshot, isActive);
         counters.saveSuccesses += 1;
       } catch (error) {
         counters.saveFailures += 1;
