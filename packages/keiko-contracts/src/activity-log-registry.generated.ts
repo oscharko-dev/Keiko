@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b0ea17ce82525d8a0e5a917aa55fc097c7bf5749bc1ff5fc4a031f44be3f98af" as const;
+  "91b7358b0082cda03bb6f6fb807392e150cc7b5fb6102a15425cf9aff8def260" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -28905,10 +28905,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "answerKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "attachedCount",
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "citationBehaviour",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "citationKind",
@@ -28923,7 +28935,31 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "declaredInScopeCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "declaredNotInScopeCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "declaredUnreadInScopeCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "droppedImplicitCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "followUpPass",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -28935,10 +28971,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "insufficiencyDeclaredCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "queryIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
             {
               name: "referenceCount",
@@ -28947,13 +28995,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "scopeIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "weakOverlapCount",
               type: "integer",
               dataClass: "count",
               required: false,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
