@@ -183,3 +183,15 @@ selection; the test does not invent a fault to call that selection complete. The
 failure report is complete with no sufficiency gaps. Every new incident case also passes through
 the shared regression-probe runner with an omitted-addressed-file or generated-leak bad-output
 injection, preserving its golden paths and the existing correctness floors.
+
+Canonical-report revalidation additionally exposed a genuine `git.process.failed` from the eval's
+unborn Git fixture. Although the raw analyzer reported supported, complete evidence, the private
+report honestly retained `evidence-partial`; these are distinct verdicts. The eval now initializes
+and commits its synthetic repository through the existing bounded, config-isolated Git runner,
+with an empty template and fixture-owned identity. Source contents and the four eligible-history
+continuity rows are unchanged. The healthy scenario proves no Git process failure, supported and
+complete analysis, no retrieval finding, and `no-registered-failure` incident selection. The genuine
+dependency-failure scenario remains separate. `3893-healthy-unborn-git-before.json`,
+`3893-healthy-selection-probe.log`, `3893-healthy-git-fixture-after.log` and the unchanged four-row
+`3884-valid-git-history-after.log` retain the body-free setup correction evidence; no privacy
+projection, operation registry or correctness threshold was weakened.
