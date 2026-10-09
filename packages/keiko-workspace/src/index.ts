@@ -201,6 +201,7 @@ export type {
   EcosystemStructureProfile,
   EcosystemVersionDeclaration,
 } from "./ecosystems.js";
+export { decodeXmlEntities } from "./xmlEntities.js";
 export { decodeTextFileBytes, looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 export type { BinaryProbeOptions } from "./binaryDetect.js";
 export {

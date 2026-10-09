@@ -97,7 +97,7 @@ describe("HTML character-reference search with raw source evidence", () => {
           maxBytes: 512,
         })
       ).content,
-    ).toBe("<p>Protection&#10;&#220;berhitzungsschutz&#13;61.2 C</p>");
+    ).toBe("<p>Protection&#10;&#220;berhitzungsschutz&#13;61.2 C</p>\r");
   });
 
   it("does not accept old raw hashed cache negatives as proof of an absent decoded HTML term", async () => {
