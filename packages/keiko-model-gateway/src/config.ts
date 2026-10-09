@@ -1329,6 +1329,7 @@ function buildProviderCapabilityBody(
     ...flags,
     ...optionalToolCallingVerification(raw, path, kind),
     ...optionalChatModeDeclaredFlag(raw, path),
+    ...optionalCitationBehaviour(raw, path, kind),
     ...optionalContextWindowAssumedFlag(raw, path, kind),
     ...optionalReasoningEfforts(raw.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
@@ -1414,6 +1415,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "supportsInfilling",
   "infillingAlignment",
   "chatModeDeclared",
+  "citationBehaviour",
   "supportsSpeechInput",
   "supportsSpeechOutput",
   "supportsSpeechSynthesisInstructions",
@@ -1493,6 +1495,23 @@ function optionalChatModeDeclaredFlag(
   return value.chatModeDeclared !== undefined
     ? { chatModeDeclared: requireBoolean(value.chatModeDeclared, `${path}.chatModeDeclared`) }
     : {};
+}
+
+function optionalCitationBehaviour(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): Pick<ModelCapability, "citationBehaviour"> {
+  if (value.citationBehaviour === undefined) return {};
+  if (kind !== "chat")
+    throw new ConfigInvalidError(`${path}.citationBehaviour is only valid for chat models`);
+  return {
+    citationBehaviour: requireEnum<NonNullable<ModelCapability["citationBehaviour"]>>(
+      value.citationBehaviour,
+      `${path}.citationBehaviour`,
+      ["cites", "cites-after-repair", "never"],
+    ),
+  };
 }
 
 // Optional "window not yet measured" flag — preserved only when true so a declared or verified
@@ -1709,6 +1728,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     ...optionalDeterminismFlags(value, path),
     ...optionalReasoningEfforts(value.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...optionalChatModeDeclaredFlag(value, path),
+    ...optionalCitationBehaviour(value, path, kind),
     ...optionalContextWindowAssumedFlag(value, path, kind),
     ...optionalInfillingFlags(value, path, kind),
     ...parseVoiceCapabilityFields(value, path, kind),
