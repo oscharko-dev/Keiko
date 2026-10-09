@@ -8752,6 +8752,73 @@ export function persistAdoptedContextWindow(
   };
 }
 
+/** Refines observed citation metadata through the existing sealed capability persistence path. */
+export function persistObservedCitationBehaviour(
+  deps: UiHandlerDeps,
+  modelId: string,
+  citationBehaviour: ModelCapability["citationBehaviour"],
+  observedGeneration: number,
+  deploymentIdentitySha256: string,
+  correlationId: string = UNKNOWN_CORRELATION_ID,
+): boolean {
+  const reconciliation = currentToolCallingReconciliation(deps, observedGeneration);
+  if (reconciliation === undefined) return false;
+  const { current, gatewayConfig } = reconciliation;
+  const refine = gatewayConfig.refine;
+  if (refine === undefined) return false;
+  const provider = current.providers.find((candidate) => candidate.modelId === modelId);
+  const stored = findConfiguredCapability(current, modelId);
+  if (
+    provider === undefined ||
+    stored?.kind !== "chat" ||
+    toolCallingConfigurationFingerprint(provider) !== deploymentIdentitySha256
+  )
+    return false;
+  if (stored.citationBehaviour === citationBehaviour) return true;
+  const updated = withObservedCitationBehaviour(current, stored, citationBehaviour);
+  try {
+    const raw = rawConfigForVerifiedCapabilityUpdate(updated, gatewayConfig.storagePath, deps);
+    persistGatewayConfig(raw, gatewayConfig.storagePath, deps, correlationId);
+    refine.call(gatewayConfig, updated, correlationId);
+    return true;
+  } catch (error) {
+    refine.call(
+      gatewayConfig,
+      withObservedCitationBehaviour(current, stored, undefined),
+      correlationId,
+    );
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.capability",
+        source: "gateway-setup.citation-behaviour",
+        error,
+        summary: "Audit or evidence persistence failed.",
+        redact: (): string => "Observed citation metadata could not be persisted.",
+      }),
+    );
+    return false;
+  }
+}
+
+function withObservedCitationBehaviour(
+  current: GatewayConfig,
+  stored: ModelCapability,
+  citationBehaviour: ModelCapability["citationBehaviour"],
+): GatewayConfig {
+  const { citationBehaviour: _previous, ...withoutObservation } = stored;
+  const replacement = {
+    ...withoutObservation,
+    ...(citationBehaviour === undefined ? {} : { citationBehaviour }),
+  };
+  const capabilities = [...(current.capabilities ?? [])];
+  const index = capabilities.findIndex((capability) => capability.id === stored.id);
+  if (index === -1) capabilities.push(replacement);
+  else capabilities[index] = replacement;
+  return { ...current, capabilities };
+}
+
 function applyContextWindowRefinement(
   gatewayConfig: RuntimeGatewayConfig,
   deps: UiHandlerDeps,
