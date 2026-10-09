@@ -218,3 +218,8 @@ records the actual two-reason disabled result that corrected the initial one-rea
 expectation; `3893-current-producer-customer-shape-green.log` records the unchanged behavior after
 that truthful expectation refinement. This pointed evidence does not claim the final gate matrix or
 the real-model lab journey is complete.
+
+The [signed-history provenance record](evidence/3881/README.md) preserves all 170 old-to-new commit
+references across the source-identical replacement of archived PR #3912 by PR #3913. It keeps earlier
+review and producer evidence traceable without importing unsigned synchronization ancestry or
+claiming that historical setup artifacts satisfy corrected fixture eligibility.
