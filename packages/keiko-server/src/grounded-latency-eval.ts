@@ -49,9 +49,22 @@ export interface GroundedLatencySample {
   /** Claims actually submitted to the judge; guards against a vacuous fixture. */
   readonly judgedClaims: number;
   readonly totalMs: number;
+  /** Actual bounded follow-up work; absent from the historical semantic-entailment scenario. */
+  readonly followUp?: {
+    readonly passCount: number;
+    readonly admittedPathCount: number;
+    readonly synthesisCalls: number;
+    readonly synthesisMs: number;
+    readonly filesRead: number;
+    readonly searchCalls: number;
+    readonly excerptBytes: number;
+  };
 }
 
 export interface GroundedLatencyEvalOptions {
+  readonly scenario?: "semantic-entailment" | "bounded-follow-up";
+  /** Regression probe delay on the actual second synthesis, never on the initial answer. */
+  readonly injectedFollowUpDelayMs?: number;
   /**
    * Milliseconds of artificial delay added to every judge call. Exists only so the gate can prove
    * it is not tautological: an injected regression MUST push the observed percentile past the

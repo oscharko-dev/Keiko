@@ -157,6 +157,33 @@ describe("assertMeasurableBudget", () => {
   it("accepts the committed budget", () => {
     expect(assertMeasurableBudget(budget)).toBe(budget);
   });
+
+  it.each([
+    ["iterations", 0],
+    ["warmupIterations", -1],
+    ["p50BudgetMs", "disabled"],
+    ["p95BudgetMs", 0],
+  ])("rejects a bounded follow-up budget whose %s is %p", (field, value) => {
+    expect(() =>
+      assertMeasurableBudget({
+        ...budget,
+        boundedFollowUp: {
+          warmupIterations: 0,
+          iterations: 1,
+          p50BudgetMs: 400,
+          p95BudgetMs: 800,
+          regressionProbe: { followUpDelayMs: 1300 },
+          [field]: value,
+        },
+      }),
+    ).toThrow(/boundedFollowUp/u);
+  });
+
+  it("rejects an absent bounded follow-up budget", () => {
+    const missing = { ...budget };
+    delete missing.boundedFollowUp;
+    expect(() => assertMeasurableBudget(missing)).toThrow(/boundedFollowUp/u);
+  });
 });
 
 // The runner, driven end to end over the REAL pipeline with a one-iteration budget so the suite pays
@@ -270,6 +297,18 @@ describe("runGroundedRetrievalLatencyGate", () => {
 });
 
 describe("committed budget document", () => {
+  it("declares an independently measured bounded follow-up scenario and regression probe", () => {
+    expect(budget.boundedFollowUp).toMatchObject({
+      warmupIterations: 3,
+      iterations: 12,
+      p50BudgetMs: 400,
+      p95BudgetMs: 800,
+      regressionProbe: { followUpDelayMs: 1300 },
+    });
+    expect(budget.boundedFollowUp.regressionProbe.followUpDelayMs).toBeGreaterThan(
+      budget.boundedFollowUp.p95BudgetMs * 1.5,
+    );
+  });
   it("declares warmup, iterations and both percentile ceilings", () => {
     expect(budget.warmupIterations).toBeGreaterThan(0);
     expect(budget.iterations).toBeGreaterThan(0);

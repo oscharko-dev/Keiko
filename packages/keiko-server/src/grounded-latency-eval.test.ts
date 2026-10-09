@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 
 import { FIXTURE_ANSWER_CLAIMS, runGroundedRetrievalLatencyEval } from "./grounded-latency-eval.js";
 
@@ -45,4 +46,38 @@ describe("runGroundedRetrievalLatencyEval", () => {
     // visible once per stage rather than once per claim.
     expect(delayed.entailmentMs - clean.entailmentMs).toBeGreaterThan(delayMs / 2);
   }, 30_000);
+
+  it("measures a genuinely unread file admitted by the actual bounded follow-up", async () => {
+    const sample = await runGroundedRetrievalLatencyEval({ scenario: "bounded-follow-up" });
+
+    expect(sample.totalMs).toBeGreaterThan(0);
+    expect(sample.retrievalMs).toBe(sample.totalMs);
+    expect(sample.entailmentMs).toBe(0);
+    expect(sample.judgedClaims).toBe(0);
+    expect(sample.followUp).toMatchObject({ passCount: 1, admittedPathCount: 1, synthesisCalls: 2 });
+    expect(sample.followUp?.filesRead).toBeGreaterThan(0);
+    expect(sample.followUp?.filesRead).toBeLessThanOrEqual(DEFAULT_EXPLORATION_BUDGET.filesReadMax);
+    expect(sample.followUp?.searchCalls).toBeGreaterThan(0);
+    expect(sample.followUp?.searchCalls).toBeLessThanOrEqual(DEFAULT_EXPLORATION_BUDGET.searchCallsMax);
+    expect(sample.followUp?.excerptBytes).toBeGreaterThan(0);
+    expect(sample.followUp?.excerptBytes).toBeLessThanOrEqual(
+      DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
+    );
+  });
+
+  it("injects the follow-up regression into the actual second synthesis", async () => {
+    const injectedFollowUpDelayMs = 40;
+    const clean = await runGroundedRetrievalLatencyEval({ scenario: "bounded-follow-up" });
+    const delayed = await runGroundedRetrievalLatencyEval({
+      scenario: "bounded-follow-up",
+      injectedFollowUpDelayMs,
+    });
+
+    expect(clean.followUp).toBeDefined();
+    expect(delayed.followUp).toBeDefined();
+    expect(delayed.followUp?.synthesisCalls).toBe(2);
+    const cleanMs = clean.followUp?.synthesisMs ?? 0;
+    const delayedMs = delayed.followUp?.synthesisMs ?? 0;
+    expect(delayedMs - cleanMs).toBeGreaterThan(injectedFollowUpDelayMs / 2);
+  });
 });
