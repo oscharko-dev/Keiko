@@ -13,6 +13,14 @@ assertOperationContract("connected-chat-record", {
     "tokensBefore",
     "tokensAfter",
   ],
+  "chat.continuity.capture": [
+    "historyRevision",
+    "checkpointDisposition",
+    "foldedItems",
+    "retainedItems",
+    "contextWindowTokens",
+    "effectiveInputBudgetTokens",
+  ],
   "search.connected-context.answer-details": [
     "scopeIdentitySha256",
     "queryIdentitySha256",
@@ -87,7 +95,8 @@ function sameActualProcess(rows) {
 }
 
 function selectedObservation(rows) {
-  const context = rows.filter((row) => row.op === "chat.context.selected").at(-1);
+  const contexts = rows.filter((row) => row.op === "chat.context.selected");
+  const context = contexts.findLast((row) => row.state === "compacted") ?? contexts.at(-1);
   const details = rows.filter((row) => row.op === "search.connected-context.answer-details");
   return {
     compaction:
@@ -100,6 +109,7 @@ function selectedObservation(rows) {
             tokensBefore: context.tokensBefore,
             tokensAfter: context.tokensAfter,
           },
+    contextSelections: contexts.map(contextSelectionObservation),
     answerDetails: details.map((row) => ({
       scopeIdentitySha256: row.scopeIdentitySha256,
       queryIdentitySha256: row.queryIdentitySha256,
@@ -127,6 +137,189 @@ function selectedObservation(rows) {
         .map((op) => [op, rows.filter((row) => row.op === op).length]),
     ),
   };
+}
+
+function contextSelectionObservation(row) {
+  return {
+    state: row.state,
+    compactedHistoryMessages: row.compactedHistoryMessages,
+    retainedHistoryMessages: row.retainedHistoryMessages,
+    tokensBefore: row.tokensBefore,
+    tokensAfter: row.tokensAfter,
+    promptTokens: row.promptTokens,
+    inputBudget: row.inputBudget,
+  };
+}
+
+function unobservedCompaction(cause) {
+  return { disposition: "unobserved", cause };
+}
+
+function requestMessagesBound(binding, result) {
+  const messages = binding.persistedMessages ?? [];
+  const user = messages.some(
+    (message) =>
+      message.chatId === binding.chatId &&
+      message.role === "user" &&
+      message.content === binding.question &&
+      message.timestamp >= binding.startedAt &&
+      message.timestamp <= binding.finishedAt,
+  );
+  const assistant = messages.some(
+    (message) =>
+      message.chatId === binding.chatId &&
+      message.role === "assistant" &&
+      message.id === result.json.assistantMessageId,
+  );
+  return user && assistant;
+}
+
+function capturedCheckpointStore(store, manifests) {
+  return {
+    list: () => store.list(),
+    ...(store.listByPrefix === undefined
+      ? {}
+      : { listByPrefix: (prefix) => store.listByPrefix(prefix) }),
+    get: (runId) => {
+      const json = store.get(runId);
+      if (json !== undefined) manifests.push({ runId, json });
+      return json;
+    },
+  };
+}
+
+function matchingCheckpointManifest(manifests, checkpoint) {
+  return manifests.find(({ json }) => {
+    try {
+      const manifest = JSON.parse(json);
+      return manifest.compaction?.some(
+        (record) =>
+          record.conversationCoverage?.throughMessageId ===
+            checkpoint.conversationCoverage?.throughMessageId &&
+          record.conversationCoverage?.historyRevision ===
+            checkpoint.conversationCoverage?.historyRevision &&
+          record.itemsBefore === checkpoint.itemsBefore &&
+          record.tokensBefore === checkpoint.tokensBefore,
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+function checkpointStatusBound(binding, checkpoint) {
+  const status = binding.contextStatus;
+  return (
+    status?.modelId === binding.modelId &&
+    status.compaction?.messagesCompacted === checkpoint.itemsBefore &&
+    status.compaction.tokensBefore === checkpoint.tokensBefore &&
+    status.conversationInputBudgetTokens === checkpoint.conversationCoverage?.effectiveInputBudget
+  );
+}
+
+function checkpointObservation(binding, result, capture, checkpoint, inspected) {
+  const coverage = checkpoint.conversationCoverage;
+  if (
+    !(binding.persistedMessages ?? []).some(
+      (message) => message.chatId === binding.chatId && message.id === coverage?.throughMessageId,
+    )
+  )
+    return unobservedCompaction("history-boundary-unobserved");
+  if (!checkpointStatusBound(binding, checkpoint))
+    return unobservedCompaction("context-status-unobserved");
+  const source = matchingCheckpointManifest(inspected, checkpoint);
+  if (source === undefined) return unobservedCompaction("checkpoint-manifest-unobserved");
+  const manifest = JSON.parse(source.json);
+  const currentTurn =
+    manifest.run.startedAt >= binding.startedAt && manifest.run.finishedAt <= binding.finishedAt;
+  if (
+    manifest.model.modelId !== binding.modelId ||
+    (!currentTurn && capture.checkpointDisposition !== "restored")
+  )
+    return unobservedCompaction("checkpoint-time-unbound");
+  return {
+    disposition: "observed",
+    cause: currentTurn ? "persisted-checkpoint" : "restored-checkpoint",
+    requestMessagesBound: true,
+    scopeUnchanged: true,
+    contextStatusBound: true,
+    chatIdSha256: createHash("sha256").update(binding.chatId).digest("hex"),
+    requestQuestionSha256: createHash("sha256").update(binding.question).digest("hex"),
+    groundingScopeIdentity: binding.scopeIdentityAfter,
+    manifestSha256: createHash("sha256").update(source.json).digest("hex"),
+    requestStartedAt: binding.startedAt,
+    requestFinishedAt: binding.finishedAt,
+    manifestStartedAt: manifest.run.startedAt,
+    manifestFinishedAt: manifest.run.finishedAt,
+    historyRevision: coverage.historyRevision,
+    throughMessageIdSha256: createHash("sha256").update(coverage.throughMessageId).digest("hex"),
+    contextWindowTokens: coverage.contextWindowTokens,
+    effectiveInputBudgetTokens: coverage.effectiveInputBudget,
+    checkpointDisposition: capture.checkpointDisposition,
+    foldedItems: capture.foldedItems,
+    retainedItems: capture.retainedItems,
+    ...checkpointMetrics(checkpoint, result),
+  };
+}
+
+function checkpointMetrics(checkpoint, result) {
+  return {
+    itemsBefore: checkpoint.itemsBefore,
+    itemsAfter: checkpoint.itemsAfter,
+    tokensBefore: checkpoint.tokensBefore,
+    tokensAfter: checkpoint.tokensAfter,
+    summaryRefHash: /^[a-f0-9]{64}$/u.test(checkpoint.summaryRefHash ?? "")
+      ? checkpoint.summaryRefHash
+      : undefined,
+    modelSummaryObserved: checkpoint.modelSummary !== undefined,
+    wireCompactionActive: result.json.contextPack?.contextSummary?.compactionActive,
+  };
+}
+
+function compactionBindingFailure(binding, result, isGroundingScopeIdentity) {
+  if (
+    !isGroundingScopeIdentity(binding.scopeIdentityBefore) ||
+    binding.scopeIdentityBefore !== binding.scopeIdentityAfter
+  )
+    return "scope-changed";
+  if (result.status !== 200 || !requestMessagesBound(binding, result))
+    return "request-messages-unobserved";
+  if (
+    typeof binding.evidenceStore?.get !== "function" ||
+    typeof binding.evidenceStore?.list !== "function"
+  )
+    return "checkpoint-store-unobserved";
+  return undefined;
+}
+
+async function historyCompactionObservation(binding, result, rows) {
+  if (binding === undefined) return unobservedCompaction("request-binding-unobserved");
+  const { isGroundingScopeIdentity } = await importBuilt("keiko-contracts", "bff-wire.js");
+  const bindingFailure = compactionBindingFailure(binding, result, isGroundingScopeIdentity);
+  if (bindingFailure !== undefined) return unobservedCompaction(bindingFailure);
+  const capture = rows.findLast((row) => row.op === "chat.continuity.capture");
+  if (capture === undefined || capture.completeness !== "complete" || capture.loss !== "none")
+    return unobservedCompaction("history-capture-unobserved");
+  const inspected = [];
+  const { loadChatContinuityCheckpoint } = await importBuilt(
+    "keiko-server",
+    "chat-compaction-resurfacing.js",
+  );
+  let disposition;
+  const checkpoint = loadChatContinuityCheckpoint(
+    capturedCheckpointStore(binding.evidenceStore, inspected),
+    binding.chatId,
+    capture.historyRevision,
+    result.correlationId,
+    (value) => {
+      disposition = value;
+    },
+  );
+  if (checkpoint === undefined || checkpoint.itemsBefore === 0)
+    return unobservedCompaction(
+      disposition === "read-failed" ? "checkpoint-read-failed" : "checkpoint-unobserved",
+    );
+  return checkpointObservation(binding, result, capture, checkpoint, inspected);
 }
 
 function usageObservation(usage) {
@@ -244,7 +437,7 @@ async function logAnalysis(stateDir, correlationId) {
   return { analysis, seed };
 }
 
-export async function connectedChatObservation(runtime, result, manifests, target) {
+export async function connectedChatObservation(runtime, result, manifests, target, binding) {
   const { splitOwnAssessment } = await importBuilt("keiko-contracts", "grounded-assessment.js");
   const { analysis, seed } = await logAnalysis(runtime.stateDir, result.correlationId);
   const rows = (seed?.timeline ?? []).map(flatten);
@@ -255,6 +448,7 @@ export async function connectedChatObservation(runtime, result, manifests, targe
     ...evidenceObservation(manifests, target),
     ...targetPromptObservation(result.json, target),
     ...selectedObservation(rows),
+    historyCompaction: await historyCompactionObservation(binding, result, rows),
     ...retrievalObservation(rows, result.json),
     expectedTargetCited: expectedTargetCited(result.json, target),
     findingKinds: (seed?.findings ?? []).map((finding) => finding.reason),

@@ -65,8 +65,11 @@ node scripts/testing/coding-workbench-lab/connected-chat-run.mjs \
   --output /private/lab/knowledge-observations.jsonl
 ```
 
-Use the canonical incident-fixture root for `customer`, and the held Keiko root for `knowledge`
-and `compaction`. The prepared fixture must be materialized from the existing producer, with real
+Use the canonical incident-fixture root for `customer`, and a complete normal Git clone of the
+held Keiko source outside sensitive runtime directories for `knowledge` and `compaction`. Verify
+its exact HEAD, tracked tree, tracked-file census and clean state before and after each campaign;
+the runtime still executes the held checkout. Preserve any denied sensitive-root observation.
+The prepared fixture must be materialized from the existing producer, with real
 Git metadata created separately; do not execute its generated or dependency decoys. The existing
 100,000-file non-Git HTML corpus for `manual`. That corpus has an external witness digest and
 retained original questions, but no retained exact materialization generator; do not invent one or
@@ -108,6 +111,19 @@ target membership in the final prompt; `filesInPrompt: 0` witnesses its absence.
 membership remains unobserved. Declaration states are separate observations. Target-specific
 physical reads remain unobserved; aggregate dedicated excerpt reads and index/search body reads
 must remain distinct counts.
+
+Compaction is a separate history observation. A grounded answer persists its chat checkpoint in
+a separate evidence manifest; its source manifest need not contain a `compaction` array. The
+reader retains every context-selection observation so a later synthesis event with zero history
+counters cannot overwrite earlier compaction evidence. It loads the checkpoint through the
+canonical checkpoint reader, using the request's actual `chat.continuity.capture` history revision,
+and checks its coverage boundary against persisted messages from that same chat. The actual
+request user message and returned assistant identity, unchanged acknowledged grounding identity,
+manifest timing/model, and authenticated context-status compaction counts must agree. Retain only
+hashes, counts, times and closed dispositions, including whether a model-summary field was present;
+do not infer model authorship merely from a deterministic history digest. Missing, mismatched or
+unreadable checkpoints remain `unobserved` with a cause. Padding and a pending-compaction meter
+projection alone do not establish persisted compaction.
 
 Read the actual writer/formatter output through the canonical validated support reader. Preserve
 malformed persisted lines and per-file termination through its hardened line iterator, and report
