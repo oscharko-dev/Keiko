@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultGitProcessRunner, type GitProcessRunner } from "@oscharko-dev/keiko-git";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { retrieveConnectedContextPack, type OrchestratorInput } from "./grounded-orchestrator.js";
@@ -74,7 +75,124 @@ function input(filesReadMax = 1): OrchestratorInput {
   };
 }
 
+function nestedRoot(depth: number): string {
+  const selectedRoot = join(root, ...Array.from({ length: depth }, () => "nested"));
+  for (const dir of ["a", "z"]) {
+    mkdirSync(join(selectedRoot, dir), { recursive: true });
+    writeFileSync(join(selectedRoot, dir, "validation.ts"), "export const validation = 1;\n");
+  }
+  return selectedRoot;
+}
+
+function connectedRoot(selectedRoot: string): OrchestratorInput {
+  const original = input();
+  return {
+    ...original,
+    workspaceRoot: selectedRoot,
+    scope: { ...original.scope, workspaceRoot: selectedRoot },
+  };
+}
+
 describe("production working-tree retrieval hints", () => {
+  it.each([32, 72])(
+    "observes edits from a directly connected Git folder %i levels below the repository",
+    async (depth) => {
+      const selectedRoot = nestedRoot(depth);
+      await repository();
+      writeFileSync(join(selectedRoot, "z/validation.ts"), "export const validation = 42;\n");
+      const runner = vi.fn<GitProcessRunner>(defaultGitProcessRunner);
+      const log = captureActivityLog();
+      const retrieved = await retrieveConnectedContextPack(connectedRoot(selectedRoot), {
+        answerer: { answer: () => Promise.resolve("") },
+        correlationId: "worktree-deep-folder",
+        worktreeGitRunner: runner,
+        activityLog: log.sink,
+      });
+      expect(retrieved.pack.scope.workspaceRoot).toBe(selectedRoot);
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.selection-details")
+          ?.extra,
+      ).toMatchObject({
+        worktreeStatusDisposition: "applied",
+        recentPathHintCount: 1,
+        recentPathHitCount: 1,
+      });
+      expect(retrieved.pack.files.map((file) => file.scopePath)).toEqual(["z/validation.ts"]);
+      expect(runner).toHaveBeenCalled();
+      expect(runner.mock.calls.every(([, options]) => options.cwd === selectedRoot)).toBe(true);
+      expect(retrieved.pack.usage.filesRead).toBe(1);
+    },
+  );
+
+  it("spawns no Git process for an ordinary folder 72 levels below its root", async () => {
+    const selectedRoot = nestedRoot(72);
+    const runner = vi.fn<GitProcessRunner>(defaultGitProcessRunner);
+    const log = captureActivityLog();
+    const retrieved = await retrieveConnectedContextPack(connectedRoot(selectedRoot), {
+      answerer: { answer: () => Promise.resolve("") },
+      correlationId: "worktree-deep-ordinary",
+      worktreeGitRunner: runner,
+      activityLog: log.sink,
+    });
+    expect(runner).not.toHaveBeenCalled();
+    expect(retrieved.pack.scope.workspaceRoot).toBe(selectedRoot);
+    expect(retrieved.pack.files).toHaveLength(1);
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.selection-details")?.extra,
+    ).toMatchObject({ worktreeStatusDisposition: "not-git", recentPathHintCount: 0 });
+  });
+
+  it("retains cancellation between ancestor metadata checks", async () => {
+    const selectedRoot = nestedRoot(72);
+    const controller = new AbortController();
+    const runner = vi.fn<GitProcessRunner>(defaultGitProcessRunner);
+    const crossingPath = join(selectedRoot, "..", "..", ".git");
+    const exists = vi.fn((path: string): boolean => {
+      const result = nodeWorkspaceFs.exists(path);
+      if (path === crossingPath) controller.abort();
+      return result;
+    });
+    await expect(
+      retrieveConnectedContextPack(connectedRoot(selectedRoot), {
+        answerer: { answer: () => Promise.resolve("") },
+        correlationId: "worktree-ancestor-cancel",
+        fs: { ...nodeWorkspaceFs, exists },
+        signal: controller.signal,
+        worktreeGitRunner: runner,
+      }),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(controller.signal.aborted).toBe(true);
+    expect(runner).not.toHaveBeenCalled();
+    expect(exists.mock.calls.at(-1)).toEqual([crossingPath]);
+  });
+
+  it("retains the original deadline between ancestor metadata checks", async () => {
+    const selectedRoot = nestedRoot(72);
+    const runner = vi.fn<GitProcessRunner>(defaultGitProcessRunner);
+    const crossingPath = join(selectedRoot, "..", "..", ".git");
+    let nowMs = 0;
+    const exists = vi.fn((path: string): boolean => {
+      const result = nodeWorkspaceFs.exists(path);
+      if (path === crossingPath) nowMs = 1;
+      return result;
+    });
+    const original = connectedRoot(selectedRoot);
+    const retrieved = await retrieveConnectedContextPack(
+      { ...original, budget: { ...original.budget, elapsedMsMax: 1 } },
+      {
+        answerer: { answer: () => Promise.resolve("") },
+        correlationId: "worktree-ancestor-deadline",
+        fs: { ...nodeWorkspaceFs, exists },
+        nowMs: () => nowMs,
+        worktreeGitRunner: runner,
+      },
+    );
+    expect(nowMs).toBe(1);
+    expect(runner).not.toHaveBeenCalled();
+    expect(exists.mock.calls.at(-1)).toEqual([crossingPath]);
+    expect(retrieved.pack.files).toEqual([]);
+    expect(retrieved.pack.usage.elapsedMs).toBe(1);
+  });
   it("prefers an actually edited same-basename source over an equivalent unedited decoy", async () => {
     await repository();
     writeFileSync(
