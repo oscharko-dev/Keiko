@@ -209,6 +209,8 @@ export interface EvidenceBrowserCapture {
 }
 
 export interface EvidenceConnectedContextScope {
+  /** Canonical source identity supplied by the producer; absent on legacy manifests. */
+  readonly sourceScopeFingerprint?: string | undefined;
   readonly schemaVersion: "1";
   readonly scopeIdHash: string;
   readonly scopeKind: string;

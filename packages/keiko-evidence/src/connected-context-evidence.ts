@@ -34,6 +34,7 @@ import {
 type Redactor = (input: string) => string;
 
 export interface ConnectedContextEvidenceInput {
+  readonly sourceScopeFingerprint?: string | undefined;
   readonly runId: string;
   readonly modelId: string;
   readonly workspaceRoot: string;
@@ -175,6 +176,10 @@ function scopeOf(
   return {
     schemaVersion: input.pack.scope.schemaVersion,
     scopeIdHash: sha256Hex(redactString(redact, input.pack.scope.scopeId)),
+    ...(input.sourceScopeFingerprint !== undefined &&
+    /^[0-9a-f]{64}$/u.test(input.sourceScopeFingerprint)
+      ? { sourceScopeFingerprint: input.sourceScopeFingerprint }
+      : {}),
     scopeKind: input.pack.scope.kind,
     selectedPathCount: input.pack.scope.relativePaths.length,
     selectedPaths: input.pack.scope.relativePaths.map((path) => redactString(redact, path)),
