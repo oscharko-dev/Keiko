@@ -21,6 +21,7 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
 import { createRunRegistry } from "./runs.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 
 import type {
   ConnectedContextPack,
@@ -188,15 +189,46 @@ function evalChatMessage(
   });
 }
 
-function materializeConnectedFixture(root: string, files: Readonly<Record<string, string>>): void {
-  if (files[".git/HEAD"] !== undefined) {
-    mkdirSync(join(root, ".git", "objects"), { recursive: true });
-    mkdirSync(join(root, ".git", "refs"), { recursive: true });
-  }
+async function materializeConnectedFixture(
+  root: string,
+  files: Readonly<Record<string, string>>,
+): Promise<void> {
+  const gitFixture = files[".git/HEAD"] !== undefined;
   for (const [path, content] of Object.entries(files)) {
+    if (gitFixture && path.startsWith(".git/")) continue;
     const target = join(root, path);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
+  }
+  if (gitFixture) await initializeConnectedFixtureRepository(root);
+}
+
+async function initializeConnectedFixtureRepository(root: string): Promise<void> {
+  const commands = [
+    ["init", "--quiet", "--initial-branch=fixture", "--template="],
+    ["add", "--", "."],
+    [
+      "-c",
+      "user.name=Keiko Fixture",
+      "-c",
+      "user.email=fixture@keiko.invalid",
+      "commit",
+      "--quiet",
+      "--no-verify",
+      "--no-gpg-sign",
+      "--allow-empty",
+      "-m",
+      "Connected retrieval fixture baseline",
+    ],
+  ];
+  for (const args of commands) {
+    const result = await defaultGitProcessRunner(args, {
+      cwd: root,
+      maxBytes: 65_536,
+      timeoutMs: 3_000,
+    });
+    if (result.exitCode !== 0 || result.truncated)
+      throw new Error("Connected retrieval fixture Git initialization failed");
   }
 }
 
@@ -211,7 +243,7 @@ export async function runConnectedRetrievalEval(
   const root = mkdtempSync(join(tmpdir(), "keiko-connected-retrieval-eval-"));
   const deps = connectedEvalRuntime();
   try {
-    materializeConnectedFixture(root, fixture.files);
+    await materializeConnectedFixture(root, fixture.files);
     deps.store.createProject(root, "Connected retrieval fixture");
     const chat = deps.store.createChat(root, "Connected retrieval fixture", "fixture");
     let timestamp = 1_700_000_000_000;
