@@ -112,6 +112,7 @@ describe("Activity Log scenario: client-diagnostics", () => {
 
   it("reconstructs a scope notice and evidence inspection failure in one complete private report", async () => {
     const startedAtMs = Date.now();
+    const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"];
     const envelope = {
       message: "private-client-text-canary",
       clientTs: CLIENT_TS,
@@ -131,7 +132,7 @@ describe("Activity Log scenario: client-diagnostics", () => {
           ...envelope,
           evidenceInspection: { reason: "manifest-fetch-failed" },
           errorKind: "unavailable",
-          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+          errorEvidence: { errorClass: "TypeError", frames, causeChain: ["TypeError"] },
         }),
       ),
     );
@@ -152,7 +153,12 @@ describe("Activity Log scenario: client-diagnostics", () => {
     ).toMatchObject({
       reason: "manifest-fetch-failed",
       errorKind: "unavailable",
-      frames: [],
+      frames: expect.arrayContaining([
+        expect.stringMatching(
+          /^dist\/ui\/static\/_next\/static\/chunks\/sha256-[a-f0-9]+\.js:12:345$/u,
+        ),
+      ]),
+      causeChain: ["TypeError"],
     });
   });
 
