@@ -67,6 +67,16 @@ function paddingEnd(text: string, offset: number): number {
   return end;
 }
 
+function splitsSubstantiveToken(text: string, offset: number): boolean {
+  const word = /[\p{L}\p{M}\p{N}_$]/u;
+  const separator = /[.,/:\\-]/u;
+  const before = text.charAt(offset - 1);
+  const after = text.charAt(offset);
+  if (word.test(before) && word.test(after)) return true;
+  if (word.test(before) && separator.test(after) && word.test(text.charAt(offset + 1))) return true;
+  return separator.test(before) && word.test(text.charAt(offset - 2)) && word.test(after);
+}
+
 function unchangedWithInsertions(
   original: string,
   repaired: string,
@@ -87,6 +97,7 @@ function unchangedWithInsertions(
     const padded = paddingEnd(repaired, right);
     const end = byStart.get(right) ?? byStart.get(padded);
     if (end !== undefined) {
+      if (splitsSubstantiveToken(original, left)) return false;
       right = end;
       inserted += 1;
       paddingAllowed = true;

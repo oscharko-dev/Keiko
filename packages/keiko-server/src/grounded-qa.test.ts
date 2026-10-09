@@ -5381,6 +5381,32 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
 });
 
 describe("actual fitted repository evidence authority", () => {
+  it("rejects numeric-token splitting from the actual second grounded gateway answer", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    let calls = 0;
+    const model: ModelPort = {
+      call: (request) => {
+        calls += 1;
+        return fakeModel(
+          calls === 1 ? "The threshold is 1000." : "The threshold is 10 [src/validation.ts:1] 00.",
+          requests,
+        ).call(request);
+      },
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+      deps(model),
+    );
+    expect(calls).toBe(2);
+    expect(result.body).toMatchObject({ content: "The threshold is 1000.", citations: [] });
+    expect(result.body).not.toMatchObject({ citationBehaviour: "cites-after-repair" });
+  });
   it("abstains when a 970-token input ceiling fits away every source excerpt", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });
