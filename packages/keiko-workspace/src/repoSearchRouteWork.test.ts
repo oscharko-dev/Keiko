@@ -200,6 +200,18 @@ describe("route content scoring reuses per-file line segmentation", () => {
     expect(starts).toHaveLength(lineCount);
   });
 
+  it("stops preparation at the first accepted window instead of scanning the remaining file", () => {
+    const text = 'router.post("/orders/{id}", save);\n' + "export const later = 211;\n".repeat(64);
+    const spy = vi.spyOn(String.prototype, "matchAll");
+    expect(scoreContentForSearch(QUERY, text, POLICY, "src/routes.ts")).toBe(
+      PREPARATION_BASELINE[0]?.score,
+    );
+    const starts = spy.mock.calls.filter(([pattern]) =>
+      pattern.source.startsWith("\\b(?:router|app|server|r)\\."),
+    );
+    expect(starts).toHaveLength(4);
+  });
+
   it("preserves scores captured from the production scorer before preparation reuse", () => {
     const scores = CASES.map((row) => ({
       name: row.name,
