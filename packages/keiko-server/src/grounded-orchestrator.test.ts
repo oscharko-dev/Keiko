@@ -4723,13 +4723,16 @@ describe("runGroundedExploration", () => {
   });
 
   it("uses file-scoped git-history atoms as rankable evidence", async () => {
+    mkdirSync(join(ROOT, ".git"));
     writeFileSync(join(ROOT, "src/recent.ts"), "export const recentlyChanged = true;\n");
     const gitFileHistoryEvidence: GitFileHistoryEvidenceProvider = ({ nowMs }) =>
       Promise.resolve([gitHistoryAtom("src/recent.ts", nowMs())]);
     const out = await retrieveConnectedContextPack(
       input({
         scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
-        query: happyQuery({ text: "Investigate src/foo.ts and src/recent.ts recent git history" }),
+        // The recent file is introduced by history, rather than by an explicit-path atom that
+        // correctly owns the retained excerpt when both sources describe the same line.
+        query: happyQuery({ text: "Investigate src/foo.ts and recent git history" }),
       }),
       {
         correlationId: undefined,
@@ -4756,6 +4759,7 @@ describe("runGroundedExploration", () => {
     // line stamped with the UNKNOWN_CORRELATION_ID fallback could not be joined back to the ask
     // whose history ring it degraded — which is the only question that line answers. This pins the
     // hop the provider cannot check for itself: OrchestratorDeps -> SearchInputs -> provider input.
+    mkdirSync(join(ROOT, ".git"));
     writeFileSync(join(ROOT, "src/recent.ts"), "export const recentlyChanged = true;\n");
     const seen: (string | undefined)[] = [];
     const gitFileHistoryEvidence: GitFileHistoryEvidenceProvider = ({ nowMs, correlationId }) => {
@@ -4782,6 +4786,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("cancels a non-cooperative git-history provider at the orchestration boundary", async () => {
+    mkdirSync(join(ROOT, ".git"));
     const controller = new AbortController();
     let providerSignal: AbortSignal | undefined;
     let rejectProvider: (error: unknown) => void = () => undefined;

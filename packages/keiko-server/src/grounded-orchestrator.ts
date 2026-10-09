@@ -1296,6 +1296,7 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
 }
 
 interface SearchInputs {
+  readonly admittedPaths?: readonly string[] | undefined;
   readonly repoSemanticSearchProviderFor?:
     ((grant: SemanticRefreshUsageGrant) => SemanticSearchProvider | undefined) | undefined;
   readonly resolveRepoSemanticSearchProvider?:
@@ -2407,9 +2408,15 @@ function lexicalQuery(
     ...inputs.query,
     text:
       terms.length === 0 || inputs.targetDecision.kind === "contextual"
-        ? inputs.query.text
+        ? lexicalQuestionText(inputs.query)
         : terms.join(" "),
   };
+}
+
+function lexicalQuestionText(query: RetrievalQuery): string {
+  if (query.kind !== "natural-language") return query.text;
+  const channels = extractRetrievalChannels(query.text, 8);
+  return channels.stackTraceDetected ? channels.questionText : query.text;
 }
 
 function observedLexicalSemanticProvider(
@@ -3283,7 +3290,12 @@ async function runAllRings(
     if (!canContinue(governor)) {
       break;
     }
-    const execution = await runReservedRing(ring, inputs, governor, decisions);
+    const execution = await runReservedRing(
+      ring,
+      diagnosticHistoryInputs(ring, inputs, evidence),
+      governor,
+      decisions,
+    );
     governor = execution.governor;
     if (execution.marker !== undefined) {
       evidence.uncertainty.push(execution.marker);
@@ -3307,6 +3319,29 @@ async function runAllRings(
   }
   recordStoppedRings(rings, decisions);
   return { ...evidence, governor, decisions };
+}
+
+function diagnosticHistoryInputs(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+): SearchInputs {
+  if (
+    ring.kind !== "git-history" ||
+    inputs.retrievalIntent !== "diagnostic-search" ||
+    requiresRelationshipOrHistoryRings({
+      ...inputs.query,
+      text: extractRetrievalChannels(inputs.query.text, 8).questionText,
+    })
+  )
+    return inputs;
+  const paths = [
+    ...new Set([...(inputs.admittedPaths ?? []), ...evidence.atoms.map((atom) => atom.scopePath)]),
+  ].filter((path) => isAdmittedMetadataPath(path, inputs.searchScope, undefined));
+  if (paths.length === 0) return inputs;
+  // History enriches already admitted/discovered diagnostic candidates. A shared commit is not
+  // evidence that another file is relevant to this failure; explicit history requests stay broad.
+  return { ...inputs, searchScope: { ...inputs.searchScope, relativePaths: paths } };
 }
 
 async function discoverRequiredDefinitionsForRing(
@@ -9513,7 +9548,10 @@ async function retrieveAdmittedLiveRings(
     unavailable ??
     (await runAllRings(
       plan.rings,
-      connectedContextSearchInputs(input, deps, plan, runtime, focused),
+      {
+        ...connectedContextSearchInputs(input, deps, plan, runtime, focused),
+        admittedPaths: admitted.admission.selections.map((selection) => selection.path),
+      },
       admitted.governor,
     ));
   const rings = withAdmittedExplicitPaths(
