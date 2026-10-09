@@ -1,4 +1,13 @@
-import { linkSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +15,11 @@ import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-con
 import { detectWorkspaceAt } from "./detect.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText, type SearchScope } from "./repoSearch.js";
-import { createWorkspaceIndex } from "./workspaceIndex.js";
+import {
+  createFileWorkspaceIndexStore,
+  createWorkspaceIndex,
+  type WorkspaceIndex,
+} from "./workspaceIndex.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -164,5 +177,236 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
     expect(load).not.toHaveBeenCalled();
     expect(stat).not.toHaveBeenCalled();
     expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("persists only encrypted matching metadata and reuses it through a new store instance", async () => {
+    const { scope, fs, reads } = fixture();
+    const runtimeDir = mkdtempSync(join(tmpdir(), "keiko-streaming-index-runtime-"));
+    roots.push(runtimeDir);
+    const index = (): WorkspaceIndex =>
+      createWorkspaceIndex(
+        createFileWorkspaceIndexStore({
+          runtimeDir,
+          workspaceRoot: scope.workspace.root,
+          encryptionKey: Buffer.alloc(32, 31),
+        }),
+      );
+    const cold = await searchText(scope, QUERY, LIMITS, {
+      fs,
+      workspaceIndex: index(),
+      nowMs: () => 0,
+    });
+    for (const entry of readdirSync(runtimeDir)) {
+      const encrypted = readFileSync(join(runtimeDir, entry), "utf8");
+      expect(encrypted).not.toContain("Vesper");
+      expect(encrypted).not.toContain("73.5");
+      expect(encrypted).not.toContain("manual-11.html");
+    }
+    reads.mockClear();
+    const warm = await searchText(scope, QUERY, LIMITS, {
+      fs,
+      workspaceIndex: index(),
+      nowMs: () => 0,
+    });
+    expect(warm.atoms).toEqual(cold.atoms);
+    expect(reads).not.toHaveBeenCalled();
+    for (const entry of readdirSync(runtimeDir)) writeFileSync(join(runtimeDir, entry), "corrupt");
+    reads.mockClear();
+    const repaired = await searchText(scope, QUERY, LIMITS, {
+      fs,
+      workspaceIndex: index(),
+      nowMs: () => 0,
+    });
+    expect(repaired.atoms).toEqual(cold.atoms);
+    expect(reads).toHaveBeenCalledTimes(12);
+  });
+
+  it.each(["aborted", "timeout"])(
+    "does no follow-on work after %s during an index load",
+    async (reason) => {
+      const { scope, fs, reads } = fixture();
+      const workspaceIndex = createWorkspaceIndex();
+      await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+      reads.mockClear();
+      const controller = new AbortController();
+      let now = 0;
+      const save = vi.fn(workspaceIndex.saveSnapshot);
+      const guarded: WorkspaceIndex = {
+        saveSnapshot: save,
+        loadSnapshot: async (key, isActive) => {
+          const snapshot = await workspaceIndex.loadSnapshot(key, isActive);
+          if (reason === "aborted") controller.abort();
+          else now = 20;
+          return snapshot;
+        },
+      };
+      const result = await searchText(scope, QUERY, LIMITS, {
+        fs,
+        workspaceIndex: guarded,
+        signal: controller.signal,
+        nowMs: () => now,
+        deadlineAtMs: 10,
+      });
+      expect(result.coverage.reasons).toContain(reason);
+      expect(reads).not.toHaveBeenCalled();
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not make a partial per-file match scan authoritative on the next request", async () => {
+    const { scope, fs, reads } = fixture();
+    writeFileSync(join(scope.workspace.root, "manual-11.html"), "Vesper temperature\n".repeat(300));
+    const workspaceIndex = createWorkspaceIndex();
+    const cold = await searchText(
+      scope,
+      QUERY,
+      { ...LIMITS, maxMatchesReturned: 2 },
+      { fs, workspaceIndex, nowMs: () => 0 },
+    );
+    expect(cold.coverage.reasons).toContain("match-cap");
+    const partialReadCount = reads.mock.calls.filter(([path]) =>
+      path.endsWith("manual-11.html"),
+    ).length;
+    expect(partialReadCount).toBeGreaterThan(0);
+    reads.mockClear();
+    const warm = await searchText(
+      scope,
+      QUERY,
+      { ...LIMITS, maxMatchesReturned: 2 },
+      { fs, workspaceIndex, nowMs: () => 0 },
+    );
+    expect(warm.atoms).toEqual(cold.atoms);
+    expect(warm.coverage.reasons).toContain("match-cap");
+    expect(reads).toHaveBeenCalledTimes(partialReadCount);
+    expect(reads.mock.calls.every(([path]) => path.endsWith("manual-11.html"))).toBe(true);
+  });
+
+  it("never treats cached paths as discovery authority for deletions or newly added files", async () => {
+    const { scope, fs, reads } = fixture();
+    const workspaceIndex = createWorkspaceIndex();
+    await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+    unlinkSync(join(scope.workspace.root, "manual-11.html"));
+    writeFileSync(join(scope.workspace.root, "new-manual.html"), "Vesper temperature is 49.0 C.\n");
+    reads.mockClear();
+    const warm = await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+    expect(warm.atoms.map((atom) => atom.scopePath)).toEqual(["new-manual.html"]);
+    expect(reads).toHaveBeenCalledOnce();
+  });
+
+  it("keeps changed matching policy and byte grants live", async () => {
+    const { scope, fs, reads } = fixture();
+    const workspaceIndex = createWorkspaceIndex();
+    await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+    reads.mockClear();
+    await searchText(scope, QUERY, LIMITS, {
+      fs,
+      workspaceIndex,
+      nowMs: () => 0,
+      searchHints: { retrievalIntent: "project-metadata" },
+    });
+    expect(reads).toHaveBeenCalledTimes(12);
+    const limited = { ...LIMITS, maxBytesPerFileScanned: 32 };
+    reads.mockClear();
+    const live = await searchText(scope, QUERY, limited, { fs, nowMs: () => 0 });
+    const liveReads = reads.mock.calls.length;
+    reads.mockClear();
+    const cached = await searchText(scope, QUERY, limited, { fs, workspaceIndex, nowMs: () => 0 });
+    expect(cached.atoms).toEqual(live.atoms);
+    expect(reads).toHaveBeenCalledTimes(liveReads);
+  });
+
+  it.each(["load", "save"])(
+    "keeps live source search available when index %s throws",
+    async (stage) => {
+      const { scope, fs } = fixture();
+      const live = await searchText(scope, QUERY, LIMITS, { fs, nowMs: () => 0 });
+      const workspaceIndex = createWorkspaceIndex();
+      const failing: WorkspaceIndex = {
+        loadSnapshot: async (key, isActive) => {
+          if (stage === "load") throw new Error("synthetic index load failure");
+          return workspaceIndex.loadSnapshot(key, isActive);
+        },
+        saveSnapshot: async (key, snapshot, isActive) => {
+          if (stage === "save") throw new Error("synthetic index save failure");
+          await workspaceIndex.saveSnapshot(key, snapshot, isActive);
+        },
+      };
+      const result = await searchText(scope, QUERY, LIMITS, {
+        fs,
+        workspaceIndex: failing,
+        nowMs: () => 0,
+      });
+      expect(result.atoms).toEqual(live.atoms);
+      expect(result.coverage).toEqual(live.coverage);
+    },
+  );
+
+  it.each([false, true])(
+    "reports finalization time and timeout truthfully (deadline=%s)",
+    async (bounded) => {
+      const { scope, fs } = fixture();
+      const workspaceIndex = createWorkspaceIndex();
+      let now = 0;
+      const save = vi.fn(async (): Promise<void> => {
+        now = 20;
+      });
+      const result = await searchText(scope, QUERY, LIMITS, {
+        fs,
+        workspaceIndex: { loadSnapshot: workspaceIndex.loadSnapshot, saveSnapshot: save },
+        nowMs: () => now,
+        ...(bounded ? { deadlineAtMs: 10 } : {}),
+      });
+      expect(save).toHaveBeenCalled();
+      expect(result.elapsedMs).toBe(20);
+      expect(result.coverage.elapsedMs).toBe(20);
+      expect(result.coverage.reasons.includes("timeout")).toBe(bounded);
+      expect(result.truncated).toBe(bounded);
+      if (bounded) expect(save).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("counts a cached record as reused only after live post-load identity revalidation", async () => {
+    const { scope, fs, reads } = fixture();
+    for (let index = 0; index < 11; index += 1)
+      unlinkSync(join(scope.workspace.root, `manual-${String(index)}.html`));
+    const workspaceIndex = createWorkspaceIndex();
+    await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+    reads.mockClear();
+    const result = await searchText(scope, QUERY, LIMITS, {
+      fs,
+      nowMs: () => 0,
+      workspaceIndex: {
+        saveSnapshot: workspaceIndex.saveSnapshot,
+        loadSnapshot: async (key, isActive) => {
+          const snapshot = await workspaceIndex.loadSnapshot(key, isActive);
+          writeFileSync(
+            join(scope.workspace.root, "manual-11.html"),
+            "Vesper temperature is now 19.2 C.\n",
+          );
+          return snapshot;
+        },
+      },
+    });
+    expect(result.atoms[0]?.scopePath).toBe("manual-11.html");
+    expect(reads).toHaveBeenCalledOnce();
+    expect(result.workspaceIndex?.reusedRecords).toBe(0);
+  });
+
+  it("distinguishes complete discovery from bounded retained matching records", async () => {
+    const { scope, fs } = fixture();
+    writeFileSync(join(scope.workspace.root, "manual-11.html"), "Vesper temperature\n".repeat(130));
+    const result = await searchText(scope, { ...QUERY, maxResults: 200 }, LIMITS, {
+      fs,
+      workspaceIndex: createWorkspaceIndex(),
+      nowMs: () => 0,
+    });
+    expect(result.filesScanned).toBe(12);
+    expect(result.coverage.reasons).not.toContain("match-cap");
+    expect(result.workspaceIndex).toMatchObject({
+      discoveredEntries: 12,
+      retainedEntries: 11,
+      indexedRecords: 11,
+      droppedRecords: 1,
+    });
   });
 });
