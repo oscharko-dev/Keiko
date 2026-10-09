@@ -96,7 +96,11 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "package-json", pattern: /\bpackage\.json\b/iu },
   { term: "package-manager", pattern: /\bpackage[\s_-]?manager\b/iu },
   { term: "package-manager", pattern: /\bpaket[\s_-]?manager\b/iu },
-  { term: "manifest-inventory", pattern: /\b(?:package|project|workspace)[\s_-]+manifests?\b/iu },
+  {
+    term: "manifest-inventory",
+    pattern:
+      /\b(?:(?:package|project|workspace)[\s_-]+manifests?|(?:paket|projekt|workspace)[\s_-]*manifeste?)\b/iu,
+  },
   { term: "tsconfig", pattern: /\btsconfig(?:\.[a-z0-9]+)?\b/iu },
   { term: "dependency", pattern: /\bdevdependencies\b|\bdependencies\b|\bdependency\b/iu },
   { term: "dependency", pattern: /\babhaengigkeit(?:en)?\b|\babhängigkeit(?:en)?\b/iu },
@@ -121,6 +125,13 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   // The established JS/TS terms above stay in place for compatibility; registry duplicates are
   // harmless because matched terms are de-duplicated before classification.
   ...ecosystemMetadataIntentPatterns,
+];
+
+// A manifest noun is also a source-domain term. Only a complete enumeration request selects
+// the metadata route; validation, loading and mixed inventory/behavior questions keep code search.
+const MANIFEST_INVENTORY_REQUESTS: readonly RegExp[] = [
+  /^(?:(?:please\s+)?(?:list|enumerate|show)\s+(?:(?:all|the)\s+)?|(?:which|what)\s+)(?:package|project|workspace)[\s_-]+manifests?(?:\s+(?:defines?\s+(?:this|the|our)\s+(?:workspace|project)|(?:in|for|of)\s+(?:this|the|our)\s+(?:workspace|project)))?[.!?\s]*$/iu,
+  /^(?:(?:bitte\s+)?(?:liste|zeige)\s+(?:(?:alle|die)\s+)?|welche\s+)(?:paket|projekt|workspace)[\s_-]*manifeste?(?:\s+(?:definier(?:en|t)\s+(?:dieses|das)\s+(?:workspace|projekt)|(?:in|f[üu]r)\s+(?:dieses|das)\s+(?:workspace|projekt)))?[.!?\s]*$/iu,
 ];
 
 const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [
@@ -263,7 +274,8 @@ function classifyProjectMetadata(
 ): RetrievalIntentClassification | undefined {
   const matched = matchedTerms(text, normalized, PROJECT_METADATA_PATTERNS);
   const terms =
-    matched.includes("manifest-inventory") && hasConcreteSourceTarget(text)
+    matched.includes("manifest-inventory") &&
+    !MANIFEST_INVENTORY_REQUESTS.some((pattern) => pattern.test(text))
       ? matched.filter((term) => term !== "manifest-inventory")
       : matched;
   return terms.length === 0 ? undefined : { intent: "project-metadata", normalizedTerms: terms };
