@@ -251,7 +251,9 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
       if (!this.usable()) return;
       const shard = await pending;
       if (!this.active()) return;
-      if (!shard.dirty) continue;
+      // Unseen advisory records may release capacity even when every new record was refused.
+      // Eviction never asserts file deletion or changes fresh traversal's coverage authority.
+      if (!shard.dirty && shard.seen.size === shard.records.size) continue;
       const snapshot = this.snapshot(shard);
       if (!this.active()) return;
       try {

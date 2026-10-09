@@ -83,8 +83,13 @@ describe("bounded matching-index capacity under ordinary-folder churn", () => {
     const first = await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex: index, nowMs: NOW });
     expect(first.filesScanned).toBe(1);
     expect(first.coverage.reasons).toEqual([]);
+    expect(first.coverage.incomplete).toBe(false);
     expect(first.atoms[0]?.scopePath).toBe("manual.html");
-    expect(first.workspaceIndex).toMatchObject({ indexedRecords: 0, droppedRecords: 1 });
+    expect(first.workspaceIndex).toMatchObject({
+      indexedRecords: 0,
+      droppedRecords: 1,
+      deletedEntries: 0,
+    });
     expect(reads).toHaveBeenCalledOnce();
     const second = await searchText(scope, QUERY, LIMITS, {
       fs,
