@@ -5396,6 +5396,65 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
 });
 
 describe("actual fitted repository evidence authority", () => {
+  it("keeps a newly declared follow-up source in the actual second prompt under cumulative tokens", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    mkdirSync(join(tmp, "lib"), { recursive: true });
+    writeFileSync(
+      join(tmp, "src/Feature.ts"),
+      `export const Feature = 1;\n${"// Feature validation details repeat.\n".repeat(160)}`,
+    );
+    writeFileSync(join(tmp, "lib/ConfigurationOrchid.ts"), "42;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        requests.push(request);
+        const tokens = countGatewayPromptTokens(request);
+        return Promise.resolve({
+          content:
+            requests.length === 1
+              ? "I need more evidence.\nMissing evidence: [lib/ConfigurationOrchid.ts]"
+              : "Configuration is 42 [lib/ConfigurationOrchid.ts:1].",
+          usage: { promptTokens: tokens, completionTokens: 20, totalTokens: tokens + 20 },
+          toolCalls: [],
+          finishReason: "stop",
+          structuredOutput: null,
+          modelId: CHAT_MODEL,
+        });
+      },
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain src/Feature.ts" })),
+      deps(
+        model,
+        {},
+        {
+          config: customModelConfig(CHAT_MODEL, {
+            contextWindow: 32768,
+            maxInputTokens: 5000,
+            maxOutputTokens: 1024,
+          }),
+        },
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.messages.map((message) => message.content).join("\n")).not.toContain(
+      "File: lib/ConfigurationOrchid.ts",
+    );
+    expect(requests[1]?.messages.map((message) => message.content).join("\n")).toContain(
+      "File: lib/ConfigurationOrchid.ts",
+    );
+    expect(
+      requests.reduce((sum, request) => sum + countGatewayPromptTokens(request), 0),
+    ).toBeLessThanOrEqual(5000);
+    expect(result.body).toMatchObject({
+      content: "Configuration is 42 [lib/ConfigurationOrchid.ts:1].",
+    });
+  });
   it("forwards original current-question and answer-context authority through the actual plural dispatcher", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });
