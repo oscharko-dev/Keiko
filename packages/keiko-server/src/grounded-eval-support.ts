@@ -195,7 +195,7 @@ function evalChatMessage(
   });
 }
 
-async function materializeConnectedFixture(
+export async function materializeConnectedFixture(
   root: string,
   files: Readonly<Record<string, string>>,
 ): Promise<void> {
