@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   composeOwnAssessment,
+  ownAssessmentPromptRule,
+  splitOwnAssessmentForPolicy,
   hasOwnAssessmentTag,
   ownAssessmentPlainText,
   splitOwnAssessment,
@@ -130,5 +132,41 @@ describe("tag handling for reading and a disabled policy", () => {
       "Fact [1].\n\nMine.",
     );
     expect(ownAssessmentPlainText("Plain answer.")).toBe("Plain answer.");
+  });
+});
+
+describe("shared assessment authority", () => {
+  it.each(["file", "numeric"] as const)(
+    "uses actual %s citation grammar and honest freshness",
+    (kind) => {
+      const rule = ownAssessmentPromptRule(kind);
+      expect(rule).toContain(kind === "file" ? "[path/to/file:line]" : "[n]");
+      expect(rule).toContain("learned knowledge");
+      expect(rule).toContain("even without matching excerpts");
+      expect(rule).toContain("Source-specific claims stay outside");
+      expect(rule).toContain("Do not claim current or live verification");
+    },
+  );
+  it("retains allowed model knowledge without presenting it as a source", () => {
+    expect(
+      splitOwnAssessmentForPolicy(
+        "Fact [1]. <assessment>My recommendation.</assessment>",
+        "allowed",
+      ),
+    ).toEqual({ grounded: "Fact [1].", assessment: "My recommendation.", neutralized: false });
+  });
+  it("drops disabled model knowledge rather than promoting it to evidence", () => {
+    expect(
+      splitOwnAssessmentForPolicy(
+        "Fact [1]. <assessment>My recommendation.</assessment>",
+        "disabled",
+      ),
+    ).toEqual({ grounded: "Fact [1].", neutralized: true });
+  });
+  it("preserves literal code tags under disabled policy", () => {
+    expect(splitOwnAssessmentForPolicy("Use `<assessment>` [1].", "disabled")).toEqual({
+      grounded: "Use `<assessment>` [1].",
+      neutralized: false,
+    });
   });
 });
