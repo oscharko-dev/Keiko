@@ -73,7 +73,7 @@ import {
   logGroundedAnswerForPack,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
-import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
+import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT, sentGroundedFileCount } from "./grounded-prompt.js";
@@ -89,6 +89,7 @@ import {
   connectedSearchNoEvidenceAnswer,
   groundedAnswerEvidenceFields,
   buildInsufficiencyScopeIndex,
+  declaredInsufficiencyPaths,
   validateGroundedAnswerEvidence,
   buildPackCitationIndex,
   citationSourceIdForIndex,
@@ -705,12 +706,13 @@ export function defaultRetriever(
     const nowMs = Date.now;
     const semanticLease =
       deps === undefined
-        ? { provider: undefined, close: (): void => undefined }
-        : configuredRepoSemanticSearchProviderLeaseFor(deps, childSignal, input.workspaceRoot);
+        ? { providerFor: undefined, close: (): void => undefined }
+        : configuredGroundedSemanticRequest(deps, input.workspaceRoot);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
       signal: childSignal,
+      declarationVerificationSignal: signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source
@@ -719,9 +721,10 @@ export function defaultRetriever(
       ...(deps?.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndexForRoot: deps.workspaceIndexForRoot }),
-      ...(semanticLease.provider === undefined
+      diagnostics: deps?.diagnostics,
+      ...(semanticLease.providerFor === undefined
         ? {}
-        : { repoSemanticSearchProvider: semanticLease.provider }),
+        : { repoSemanticSearchProviderFor: semanticLease.providerFor }),
     }).finally(() => {
       semanticLease.close();
     });
@@ -963,6 +966,24 @@ interface RetrievedSource {
   readonly elapsedMs: number;
   readonly scope: SelectedScope;
   readonly plan: RetrievalOnlyOutput["plan"];
+  readonly declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"];
+}
+
+/** Reuse canonical admission for declared paths; only final sent excerpts establish read-state. */
+export function verifiedPluralInsufficiencyScopeIndex(
+  sources: readonly Pick<RetrievalOnlyOutput, "declarationScopeIndexFor">[],
+  content: string,
+  sentPacks: readonly ConnectedContextPack[],
+  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
+): ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> {
+  const paths = declaredInsufficiencyPaths(content);
+  const inventory = new Map(buildInsufficiencyScopeIndex([], discovered));
+  for (const source of sources) {
+    for (const [path, state] of source.declarationScopeIndexFor?.(paths) ?? []) {
+      inventory.set(path, state);
+    }
+  }
+  return buildInsufficiencyScopeIndex(sentPacks, inventory);
 }
 
 interface SkippedScope {
@@ -1139,6 +1160,7 @@ async function retrieveOneSource(
     elapsedMs: out.elapsedMs,
     scope,
     plan: out.plan,
+    declarationScopeIndexFor: out.declarationScopeIndexFor,
     sourceScopeFingerprint: groundedSourceScopeFingerprint(scope, cs, ctx.sourceScopeFingerprints),
   };
 }
@@ -1644,8 +1666,12 @@ async function answerMultiSource(
       ),
     );
     ensureNotCancelled(ctx.signal);
-    const scopeIndex = new Map(buildInsufficiencyScopeIndex([], ctx.insufficiencyScopeIndex));
-    for (const [path, state] of assistant.evidenceScopeIndex ?? []) scopeIndex.set(path, state);
+    const scopeIndex = verifiedPluralInsufficiencyScopeIndex(
+      retrieved,
+      assistant.content,
+      assistant.sentEvidencePacks ?? [],
+      ctx.insufficiencyScopeIndex,
+    );
     const validated = {
       ...assistant,
       insufficiencyDeclarations: undefined,
