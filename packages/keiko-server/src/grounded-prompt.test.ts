@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { GROUNDED_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT_VERSION } from "./grounded-prompt.js";
 import {
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
 } from "./local-knowledge-grounded-qa.js";
 
 describe("grounded answer prompts", () => {
+  it("versions the shared bounded missing-file instruction without requesting pasted contents", () => {
+    expect(GROUNDED_SYSTEM_PROMPT_VERSION).toBe("connected-evidence-v2");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("Missing evidence: [src/example.ts]");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("at most three separate lines");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("selected scope");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("Never ask the user to paste file contents");
+  });
   it("describes read-only retrieval while respecting the repository's test framework", () => {
     expect(GROUNDED_SYSTEM_PROMPT).toContain("ordinary folders without Git");
     expect(GROUNDED_SYSTEM_PROMPT).toContain("server-owned retrieval");
