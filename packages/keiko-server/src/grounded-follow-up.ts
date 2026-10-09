@@ -3,7 +3,11 @@ import type {
   ConnectedContextPack,
   ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { GroundedAnswerResult } from "./grounded-answer.js";
+import {
+  combinedGroundedSynthesisFields,
+  retainFailedGroundedSynthesis,
+  type GroundedAnswerResult,
+} from "./grounded-answer.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import type {
   OrchestratorInput,
@@ -21,7 +25,9 @@ export interface FollowUpResult {
 }
 export interface FollowUpContext {
   readonly input: OrchestratorInput;
-  readonly deps: Pick<OrchestratorDeps, "signal">;
+  readonly deps: Pick<OrchestratorDeps, "signal"> & {
+    readonly answerer?: OrchestratorDeps["answerer"] | undefined;
+  };
   readonly pack: ConnectedContextPack;
   readonly initial: GroundedAnswerResult;
   readonly nowMs: () => number;
@@ -98,9 +104,16 @@ function followUpRefusal(
     return "elapsed-refused";
   if (paths.length === 0) return "not-needed";
   if (ctx.pack.budget.followUpPassesMax === 0) return "disabled";
-  if (highContextBudgetPressure(ctx)) return "budget-refused";
-  if (followUpBudgetExhausted(remainingTurnBudget(ctx))) return "budget-refused";
+  if (followUpGrantExhausted(ctx)) return "budget-refused";
   return undefined;
+}
+
+function followUpGrantExhausted(ctx: FollowUpContext): boolean {
+  return (
+    ctx.deps.answerer?.remainingSynthesisCalls?.() === 0 ||
+    highContextBudgetPressure(ctx) ||
+    followUpBudgetExhausted(remainingTurnBudget(ctx))
+  );
 }
 
 function highContextBudgetPressure(ctx: FollowUpContext): boolean {
@@ -176,18 +189,14 @@ async function executeFollowUp(
     return completedRetrievalRefusal(ctx, pack, "elapsed-refused", admitted);
   const answered = await answerFollowUp(ctx, input, retrieved, pack, admitted);
   if ("observation" in answered) return answered;
-  if (answered.modelInvoked === false)
-    return completedRetrievalRefusal(ctx, pack, "budget-refused", admitted);
+  if (answered.modelInvoked === false) return unsentFollowUpResult(ctx, pack, answered, admitted);
   if (!followUpTargetsSent(answered, retrieved.pack, paths))
     return unsentFollowUpResult(ctx, pack, answered, admitted);
   return {
     pack,
     answer: {
       ...answered,
-      usage: {
-        promptTokens: ctx.initial.usage.promptTokens + answered.usage.promptTokens,
-        completionTokens: ctx.initial.usage.completionTokens + answered.usage.completionTokens,
-      },
+      ...combinedGroundedSynthesisFields(ctx.initial, answered),
     },
     observation: {
       passCount: 1,
@@ -241,10 +250,7 @@ function unsentFollowUpResult(
     pack,
     answer: {
       ...ctx.initial,
-      usage: {
-        promptTokens: ctx.initial.usage.promptTokens + attempted.usage.promptTokens,
-        completionTokens: ctx.initial.usage.completionTokens + attempted.usage.completionTokens,
-      },
+      ...combinedGroundedSynthesisFields(ctx.initial, attempted),
     },
     observation: { ...retained.observation, passCount: 1, admittedPathCount: admitted },
   };
@@ -268,6 +274,7 @@ async function answerFollowUp(
     );
     return {
       ...retained,
+      answer: retainFailedGroundedSynthesis(ctx.initial, ctx.deps.answerer),
       pack,
       observation: { ...retained.observation, passCount: 1, admittedPathCount: admitted },
     };
