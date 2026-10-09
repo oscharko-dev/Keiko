@@ -525,6 +525,25 @@ candidates precede unaddressed alternatives; only unaddressed candidates use bas
 Their score ties use shared-parent proximity, segment affinity, then path spelling. Collision,
 diversity-demotion, signal, and proximity observations are count-only fields on the same
 correlated selection-details Activity Log operation.
+Addressed-file demotion is recorded separately from legitimate unaddressed basename diversity;
+an unaddressed collision cannot by itself diagnose a missed explicit target.
+The active-intent absolute floor derives from the scoring weight table: ninety percent of a
+normalized full lexical hit's provenance and lexical signal contribution. Depth contributes only
+above that baseline. The relative floor remains 550 permille of the interpolated 75th percentile
+of ordinary candidates, excluding selected/priority/protected paths and flat definition or
+canonical-metadata bonuses. Explicit Files scopes retain their no-floor behavior.
+Optional reranking receives at most 64 eligible pre-floor candidates and metadata only, before
+either relevance cut or excerpt reads. It shares the existing call/time budget and Activity Log;
+the assembler does not invoke it again. Provider failure preserves identity ordering and is
+recorded as failed, rather than applied. Attempted calls still consume the call grant. An elapsed
+deadline stops subsequent reads, including when a late reranker result would otherwise arrive;
+identity fallback is pinned on the preselection producer, and orchestration pins enforce no
+post-deadline work. Ordinary keep-one fallback records low selection confidence and the
+`low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,
+and log. Selection-details carries the calibrated floor, confidence, disposition, failed-call,
+and safe platform failure evidence. Wire semantic/scope dispositions are actual observations,
+including known-fit overflow, and absent observations remain absent. Existing latency ceilings
+are unchanged; the only new stage cost is a bounded metadata batch moved before the cut.
 When distinct explicit anchors identify different candidate paths, bounded selection
 prioritizes coverage of those paths before additional alternatives for an already covered anchor.
 Ordinary-folder factual
