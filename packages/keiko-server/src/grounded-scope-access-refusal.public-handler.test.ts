@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -46,14 +46,22 @@ function scriptedAnswer(calls: GatewayCallRequest[], content: string): ModelPort
   };
 }
 
-function fixture(content: string): {
+function fixture(
+  content: string,
+  path = "src/Feature.ts",
+): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
   readonly calls: GatewayCallRequest[];
 } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-access-refusal-")));
-  mkdirSync(join(root, "src"));
-  writeFileSync(join(root, "src/Feature.ts"), "export function Feature() { return true; }\n");
+  mkdirSync(dirname(join(root, path)), { recursive: true });
+  writeFileSync(
+    join(root, path),
+    path === "src/Feature.ts"
+      ? "export function Feature() { return true; }\n"
+      : "// Fixture\n".repeat(179) + "export function Feature() { return true; }\n// End\n// End\n",
+  );
   const store = createInMemoryUiStore();
   cleanups.push(() => {
     store.close();
@@ -62,7 +70,9 @@ function fixture(content: string): {
   store.createProject(root, "Scope access refusal");
   const chat = store.createChat(root, "Scope access refusal", MODEL);
   store.updateChat(chat.id, {
-    connectedScopes: [{ kind: "directory", root, relativePaths: ["src"], connectedAtMs: 1 }],
+    connectedScopes: [
+      { kind: "directory", root, relativePaths: [path.split("/")[0] ?? "src"], connectedAtMs: 1 },
+    ],
   });
   const calls: GatewayCallRequest[] = [];
   const config = parseGatewayConfig({
@@ -92,11 +102,12 @@ function fixture(content: string): {
 async function ask(
   content: string,
   german: boolean,
+  path = "src/Feature.ts",
 ): Promise<{
   readonly answer: Extract<GroundedAnswer, { groundingKind: "connected-context" }>;
   readonly calls: readonly GatewayCallRequest[];
 }> {
-  const setup = fixture(content);
+  const setup = fixture(content, path);
   const result = await handleGroundedAsk(
     {
       params: {},
@@ -105,7 +116,7 @@ async function ask(
       req: mockRequest({
         body: JSON.stringify({
           chatId: setup.chatId,
-          content: german ? "Erkläre src/Feature.ts" : "Explain src/Feature.ts",
+          content: german ? `Erkläre ${path}` : `Explain ${path}`,
         }),
       }),
       res: mockResponse().res,
@@ -198,4 +209,23 @@ describe("public selected-scope access refusals", () => {
         "Insert citation markers",
       );
   });
+});
+
+describe("public literal bracket citations", () => {
+  it.each([false, true])(
+    "accepts the actual dynamic page marker without repair (German: %s)",
+    async (german) => {
+      const path = "app/users/[id]/page.tsx";
+      const content = `${german ? "Feature gibt true zurück" : "Feature returns true"} [${path}:180-182].`;
+      const turn = await ask(content, german, path);
+      expect(turn.calls).toHaveLength(1);
+      expect(turn.answer.citations).toMatchObject([
+        { scopePath: path, lineRange: { startLine: 180, endLine: 182 } },
+      ]);
+      expect(turn.answer.uncertainty.map((marker) => marker.kind)).not.toContain("uncited-answer");
+      expect(turn.answer.uncertainty.map((marker) => marker.kind)).not.toContain(
+        "unsupported-citation",
+      );
+    },
+  );
 });
