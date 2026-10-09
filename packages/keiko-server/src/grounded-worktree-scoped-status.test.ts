@@ -106,6 +106,22 @@ function inputs(): WorktreeRecencyInputs {
 }
 
 describe("selected-scope Git status before the raw record cap", () => {
+  it("treats bracket segments as literal selected paths", async () => {
+    await repository(0);
+    const path = "src/[id]/validation.ts";
+    write(path, SOURCE);
+    write("src/i/validation.ts", SOURCE);
+    const request = inputs();
+    const scope = { ...request.scope, relativePaths: ["src/[id]"] };
+    const observed = await observeWorktreeRecency({
+      ...request,
+      scope,
+      searchScope: { ...request.searchScope, relativePaths: scope.relativePaths },
+    });
+    expect(observed.paths).toEqual([{ path, status: "untracked" }]);
+    expect(observed.observation.worktreeObservedFileCount).toBe(1);
+  });
+
   it.each([0, 511, 512])(
     "retains the sole in-scope edit after %i unrelated changed files",
     async (count) => {
