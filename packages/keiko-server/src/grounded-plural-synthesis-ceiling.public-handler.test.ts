@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EvidenceManifest } from "@oscharko-dev/keiko-contracts/evidence";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   createDefaultChatCapability,
@@ -187,6 +188,9 @@ async function scriptedTurn(
     | "transient-repair"
     | "transient-cited"
     | "repair"
+    | "initial-cited"
+    | "repair-rejected"
+    | "repair-failed"
     | "unknown-output"
     | "usage-repair"
     | "usage-cited"
@@ -198,6 +202,7 @@ async function scriptedTurn(
   readonly reservations: number;
   readonly answer: GroundedAnswer;
   readonly synthesisCounts: readonly number[];
+  readonly completedCounts: readonly number[];
   readonly body: unknown;
 }> {
   const calls: { readonly messages: GatewayCallRequest["messages"] }[] = [];
@@ -247,11 +252,37 @@ async function scriptedTurn(
     reservations: reserve.mock.calls.length,
     answer: result.body as GroundedAnswer,
     synthesisCounts,
+    completedCounts: completedEvidenceCounts(deps, result.body as GroundedAnswer),
     body: result.body,
   };
 }
 
+function completedEvidenceCounts(deps: UiHandlerDeps, answer: GroundedAnswer): readonly number[] {
+  if (answer.groundingKind === "local-knowledge") return [];
+  const ids = new Set([
+    ...(answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]),
+    ...(answer.evidenceRunIds ?? []),
+  ]);
+  return [...ids].map((runId) => {
+    const json = deps.evidenceStore.get(runId);
+    if (json === undefined) throw new TypeError("Missing actual source evidence");
+    return (JSON.parse(json) as EvidenceManifest).usageTotals.requestCount;
+  });
+}
+
+function successfulResponseSequence(
+  sequence: string,
+  cited: string,
+): readonly string[] | undefined {
+  if (sequence === "initial-cited") return [cited];
+  if (sequence === "repair-rejected") return [UNCITED, cited.replace("true", "false")];
+  if (sequence === "repair-failed") return [UNCITED, UNAVAILABLE];
+  return undefined;
+}
+
 function providerSequence(sequence: string, cited: string): readonly string[] {
+  const completed = successfulResponseSequence(sequence, cited);
+  if (completed !== undefined) return completed;
   if (sequence === "unknown-output") return [UNKNOWN_OUTPUT, cited];
   if (sequence.startsWith("usage-"))
     return [UNSUPPORTED_USAGE, ...(sequence.endsWith("cited") ? [cited] : [UNCITED, cited])];
@@ -264,6 +295,28 @@ function providerSequence(sequence: string, cited: string): readonly string[] {
 }
 
 describe("actual configured plural synthesis dispatches", () => {
+  it.each(
+    [false, true].flatMap((hybrid) => [
+      { hybrid, sequence: "initial-cited", completed: 1, physical: 1 },
+      { hybrid, sequence: "repair", completed: 2, physical: 2 },
+      { hybrid, sequence: "repair-rejected", completed: 2, physical: 2 },
+      { hybrid, sequence: "overflow-repair", completed: 1, physical: 2 },
+      { hybrid, sequence: "transient-cited", completed: 1, physical: 2 },
+      { hybrid, sequence: "repair-failed", completed: 1, physical: 2 },
+    ]),
+  )(
+    "persists completed synthesis calls separately from physical attempts (%j)",
+    async ({ hybrid, sequence, completed, physical }) => {
+      const turn = await scriptedTurn(hybrid, sequence);
+      expect(turn.calls).toHaveLength(physical);
+      expect(turn.completedCounts).not.toHaveLength(0);
+      expect(
+        turn.completedCounts.every((count) => count === completed),
+        JSON.stringify(turn.completedCounts),
+      ).toBe(true);
+    },
+  );
+
   it.each([false, true])(
     "refuses retry after unknown output exhausted the original grant (hybrid=%s)",
     async (hybrid) => {
