@@ -19,7 +19,13 @@ import {
   type FilterOptions,
   type FilterResult,
 } from "./filter.js";
-import { computeScore, weightsForIntent, type ScoringWeights } from "./scoring.js";
+import {
+  absoluteRelevanceFloor,
+  isIntentBoosted,
+  computeScore,
+  weightsForIntent,
+  type ScoringWeights,
+} from "./scoring.js";
 import {
   DEFAULT_GENERATED_PATTERNS,
   extractSignals,
@@ -103,7 +109,13 @@ function buildAnnotated(
 ): AnnotatedCandidate[] {
   const annotated: AnnotatedCandidate[] = [];
   for (const [scopePath, atomsForPath] of group) {
-    const signals = extractSignals(atomsForPath, input.anchors, hints, input.context);
+    const signals = extractSignals(
+      atomsForPath,
+      input.anchors,
+      hints,
+      input.context,
+      input.references,
+    );
     const score = computeScore(signals, weights);
     const candidate: CandidateFile = {
       scopePath,
@@ -152,7 +164,10 @@ export function rankCandidates(input: RankingInput, options: RankingOptions = {}
   const weights = options.weights ?? weightsForIntent(input.context?.retrievalIntent);
   const { valid, invalidPaths } = groupAtomsByPath(input.atoms);
   const annotated = buildAnnotated(valid, input, hints, weights);
-  const filterOptions = resolveFilterOptions(options.filter, frozenStartMs);
+  const intentFilter = isIntentBoosted(input.context?.retrievalIntent)
+    ? { ...DEFAULT_FILTER_OPTIONS, minScore: absoluteRelevanceFloor(weights) }
+    : undefined;
+  const filterOptions = resolveFilterOptions(options.filter ?? intentFilter, frozenStartMs);
   const filterResult = filterCandidates(annotated, filterOptions);
   // Invalid paths cannot be represented as OmittedContextEntry values without breaking
   // ConnectedContextPack validation, so keep them diagnostics-only.

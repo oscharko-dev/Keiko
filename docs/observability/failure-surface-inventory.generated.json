@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "bc2396bd44f4d04ffefcd81c1e6cd19a3ccf5679b1f95cb20562dd326ca5e0d4"
+    "catalogDigest": "e236a3b029d0acdd87e017bfb402bc91696516d716db5202efb42b1f81031c36"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 534,
-    "proofCount": 542,
-    "resolvedProofCount": 542,
+    "operationCount": 535,
+    "proofCount": 545,
+    "resolvedProofCount": 545,
     "failureClassCount": 344,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -478,6 +478,7 @@
         "search.connected-context.completion-details",
         "search.connected-context.failed",
         "search.connected-context.metadata-unavailable",
+        "search.connected-context.selection-details",
         "search.connected-context.source-details",
         "search.connected-context.started",
         "search.entailment.judged",
@@ -2270,6 +2271,12 @@
     "search.connected-context.metadata-unavailable.line": [
       "packages/keiko-server/src/grounded-metadata-failure.activity-log.test.ts"
     ],
+    "search.connected-context.selection-details.line": [
+      "packages/keiko-server/src/grounded-diagnostic-references.activity-log.test.ts"
+    ],
+    "search.connected-context.path-ranking.line": [
+      "packages/keiko-server/src/grounded-path-ranking.activity-log.test.ts"
+    ],
     "search.connected-context.source-details.line": [
       "packages/keiko-server/src/grounded-binary-probe.activity-log.test.ts",
       "packages/keiko-server/src/grounded-definition-provenance.test.ts",
@@ -2283,6 +2290,9 @@
     ],
     "search.connected-context.explicit-admission.line": [
       "packages/keiko-server/src/grounded-explicit-paths.test.ts"
+    ],
+    "search.connected-context.diagnostic-references.line": [
+      "packages/keiko-server/src/grounded-diagnostic-references.activity-log.test.ts"
     ],
     "search.connected-context.started.line": [
       "packages/keiko-server/src/grounded-case-sensitive.test.ts",

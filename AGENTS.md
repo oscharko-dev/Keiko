@@ -438,7 +438,10 @@ system that exists, never beside it:
   Connected-context explicit path admission emits anchor/admitted/rejected/line-hint and bounded
   basename discovery counts, a closed rejection-reason list, and selected atom counts on the existing
   `search.connected-context.source-details` operation; the shared correlation joins its completed
-  read-window and budget evidence without exceeding the operation field cap.
+  read-window and budget evidence without exceeding the operation field cap. Diagnostic-reference
+  selection uses the final six available source-detail fields. Additional selection observations
+  use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
+  correlation; existing completed fields and the contextual-field cap remain unchanged.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or

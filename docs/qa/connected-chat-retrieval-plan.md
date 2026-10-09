@@ -27,6 +27,11 @@ Never push to `dev`, force-push, weaken a gate, widen authority, or publish priv
 
 ## Current-code corrections
 
+- Runtime admission fields use the existing `source-details` sibling because completed already
+  occupies its contextual-field cap. Diagnostic reference counters consume its final six available
+  slots; additional selection counters use one typed `selection-details` companion on the same
+  Activity Log and correlation. Preserve the established completed/source fields and the cap.
+
 - The proposed fixture has **five** `validation.ts` files: three factories, the addressed feature,
   and another-feature decoy. Basename discovery must preserve all five eligible matches.
 - The lexical gate exercises workspace search, whereas explicit admission, continuity and excerpt

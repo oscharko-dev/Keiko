@@ -1,10 +1,9 @@
 // Weighted scoring composition for ranked candidates (Epic #177, Issue #182).
 // Pure function: signal vector × weight vector → clamped unit score. The generated penalty
-// weight is 0.30; the filter layer's
-// `omitGenerated` default keeps generated files OUT of the kept set regardless of score,
-// so the scoring penalty is a secondary defence (a fully-positive generated file scores
-// 0.65). Callers may override weights to tune ring-specific behaviour; never uses
-// parseFloat or .toFixed.
+// weight is 0.30; the filter layer's `omitGenerated` default excludes generated files regardless
+// of score. Exact paths, directory segments and basenames contribute independent weighted signals.
+// The weight table derives normalization headroom while preserving the configured definition
+// share. Callers may override weights to tune ring-specific behaviour.
 
 import type { ExtractedSignals } from "./signals.js";
 
@@ -15,11 +14,14 @@ export interface ScoringWeights {
   readonly provenanceCount: number;
   readonly anchorOverlap: number;
   readonly pathDepthAffinity: number;
+  readonly exactPathMatch?: number;
+  readonly pathSegmentAffinity?: number;
+  readonly basenameMatch?: number;
   readonly testPairBonus: number;
   readonly stacktracePositionBonus: number;
   readonly generatedPenalty: number;
   // Intent-conditioned signals (enterprise retrieval M4). OPTIONAL so existing weight literals stay
-  // valid and DEFAULT_SCORING_WEIGHTS is unchanged; weight 0 / undefined ⇒ inert (computeScore
+  // valid; weight 0 / undefined ⇒ inert (computeScore
   // skips an absent weight). Non-zero only for the intents weightsForIntent boosts.
   readonly canonicalMetadata?: number;
   readonly structuralEdge?: number;
@@ -34,16 +36,17 @@ export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
   provenanceCount: 0.1,
   anchorOverlap: 0.25,
   pathDepthAffinity: 0.1,
+  exactPathMatch: 0.3,
+  pathSegmentAffinity: 0.15,
+  basenameMatch: 0.1,
   testPairBonus: 0.1,
   stacktracePositionBonus: 0.05,
   generatedPenalty: 0.3,
 } as const;
 
 // Intent-conditioned weight overrides (M4). Only the named intents receive non-default weights for
-// the new canonical-metadata / structural-edge signals; every other intent (and the no-intent
-// default path) returns DEFAULT_SCORING_WEIGHTS verbatim, so ranking is byte-identical there.
-// Weights are deliberately modest (tie-breaker magnitude) to nudge, not dominate, the established
-// provenance/anchor signals.
+// canonical-metadata / structural-edge and path signals; every other intent (and the no-intent
+// default path) returns DEFAULT_SCORING_WEIGHTS verbatim.
 const INTENT_BOOSTED: ReadonlySet<string> = new Set([
   "project-metadata",
   "repository-overview",
@@ -63,6 +66,16 @@ function isCodeSearchIntent(intent: string): boolean {
   return intent === "targeted-code-search" || intent === "diagnostic-search";
 }
 
+function pathWeights(
+  codeSearchIntent: boolean,
+): Pick<ScoringWeights, "exactPathMatch" | "pathSegmentAffinity" | "basenameMatch"> {
+  return {
+    exactPathMatch: codeSearchIntent ? 0.4 : 0.1,
+    pathSegmentAffinity: codeSearchIntent ? 0.2 : 0.1,
+    basenameMatch: codeSearchIntent ? 0.1 : 0.05,
+  };
+}
+
 export function weightsForIntent(intent: string | undefined): ScoringWeights {
   if (intent === undefined || !INTENT_BOOSTED.has(intent)) {
     return DEFAULT_SCORING_WEIGHTS;
@@ -76,6 +89,7 @@ export function weightsForIntent(intent: string | undefined): ScoringWeights {
   const gitChurn = codeSearchIntent ? 0.08 : 0.04;
   return {
     ...DEFAULT_SCORING_WEIGHTS,
+    ...pathWeights(codeSearchIntent),
     canonicalMetadata,
     structuralEdge,
     symbolDefinition,
@@ -91,6 +105,9 @@ const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
   "provenance-count": "provenanceCount",
   "anchor-overlap": "anchorOverlap",
   "path-depth-affinity": "pathDepthAffinity",
+  "exact-path-match": "exactPathMatch",
+  "path-segment-affinity": "pathSegmentAffinity",
+  "basename-match": "basenameMatch",
   "test-pair-bonus": "testPairBonus",
   "stacktrace-position-bonus": "stacktracePositionBonus",
   "generated-penalty": "generatedPenalty",
@@ -105,24 +122,10 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function nonDefinitionPositiveWeightTotal(weights: ScoringWeights): number {
-  const positiveWeights = [
-    weights.provenanceBestScore,
-    weights.lexicalScore,
-    weights.semanticScore,
-    weights.provenanceCount,
-    weights.anchorOverlap,
-    weights.pathDepthAffinity,
-    weights.testPairBonus,
-    weights.stacktracePositionBonus,
-    weights.canonicalMetadata,
-    weights.structuralEdge,
-    weights.gitRecency,
-    weights.gitChurn,
-  ];
+export function positiveWeightTotal(weights: ScoringWeights): number {
   let total = 0;
-  for (const weight of positiveWeights) {
-    total += Math.max(0, weight ?? 0);
+  for (const key of Object.keys(weights) as (keyof ScoringWeights)[]) {
+    if (key !== "generatedPenalty") total += Math.max(0, weights[key] ?? 0);
   }
   return total;
 }
@@ -132,9 +135,9 @@ function normalizeNonDefinitionScore(raw: number, weights: ScoringWeights): numb
   if (definitionWeight === 0) return raw;
   const headroom = Math.max(0, 1 - Math.min(1, definitionWeight));
   if (headroom === 0) return 0;
-  const positiveWeightTotal = nonDefinitionPositiveWeightTotal(weights);
-  if (positiveWeightTotal <= headroom) return raw;
-  return (raw * headroom) / positiveWeightTotal;
+  const nonDefinitionTotal = positiveWeightTotal(weights) - definitionWeight;
+  if (nonDefinitionTotal <= headroom) return raw;
+  return (raw * headroom) / nonDefinitionTotal;
 }
 
 export function computeScore(
@@ -169,5 +172,27 @@ export function computeScore(
     normalizeNonDefinitionScore(nonDefinitionRaw, weights) +
       definitionContribution +
       generatedPenalty,
+  );
+}
+
+// The floor reserves 90% of the full lexical contribution alone, computed through the same
+// normalization as the score. Targeted intent: provenance weight .35, definition headroom .70,
+// non-definition positive total 2.40 => full lexical baseline .10208, floor .091875. A depth-six
+// full hit adds depth/count evidence and clears this; a half-hit shallow decoy remains below it.
+export function absoluteRelevanceFloor(weights: ScoringWeights): number {
+  return (
+    0.9 *
+    computeScore(
+      {
+        scopePath: "",
+        baseScore: 0,
+        generatedHint: false,
+        signals: [
+          { name: "provenance-best-score", value: 1 },
+          { name: "lexical-score", value: 1 },
+        ],
+      },
+      weights,
+    )
   );
 }
