@@ -154,3 +154,14 @@ scores before production fusion and disables the scripted reranker, so productio
 must fail the unchanged grounded floors. The shared regression probe runner checks that this
 injected ranking defect cannot pass unnoticed. Existing `reranker-off`, `reranker-reversed` and
 `embedding-flat` controls remain in place.
+
+The Activity Log incident scenario drives a healthy grounded ask through the real producer,
+persisted writer and `analyzeLogText` reader. It asserts supported evidence, complete evidence
+classes, one correlation and the registered read/omission/coverage counters without fixture bodies
+or paths in the log. A second scenario injects a genuine workspace-detection dependency failure
+beside that healthy control and exercises the existing canonical support-report reconstruction.
+Healthy user-reported reports intentionally retain `no-registered-failure` on their incident
+selection; the test does not invent a fault to call that selection complete. The actual dependency
+failure report is complete with no sufficiency gaps. Every new incident case also passes through
+the shared regression-probe runner with an omitted-addressed-file or generated-leak bad-output
+injection, preserving its golden paths and the existing correctness floors.

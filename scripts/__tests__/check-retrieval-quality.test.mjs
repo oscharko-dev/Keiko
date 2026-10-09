@@ -8,6 +8,7 @@ import {
   evaluateQualityBudget,
   evaluateCase,
   INCIDENT_RETRIEVAL_CASES,
+  runIncidentRegressionProbes,
   INCIDENT_RETRIEVAL_FILES,
   INCIDENT_TEST_PATH,
   WORKSPACE_QUALITY_CASES,
@@ -378,6 +379,17 @@ describe("incident retrieval fixture schema (#3882)", () => {
     const fixture = WORKSPACE_QUALITY_CASES[0];
     const original = await evaluateCase(fixture);
     expect(await evaluateCase({ ...fixture, history: [] })).toEqual(original);
+  });
+
+  it("detects omitted addressed evidence and generated leakage without changing goldens", async () => {
+    const fixtures = INCIDENT_RETRIEVAL_CASES.filter(
+      (entry) =>
+        entry.id === "explicit-relative-path-en" ||
+        entry.id === "generated-and-node-modules-ignored",
+    );
+    const result = await runIncidentRegressionProbes(() => undefined, fixtures);
+    expect(result).toEqual({ ok: true, tautological: [], probed: 2, unresolved: [], skipped: [] });
+    expect(fixtures[0].relevantPaths).toHaveLength(1);
   });
 
   it("keeps the generated-file exclusion as a reachable healthy control", async () => {
