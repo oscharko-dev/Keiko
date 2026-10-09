@@ -88,6 +88,10 @@ export const INCIDENT_RETRIEVAL_FILES = {
 
 const INCIDENT_HISTORY = [
   {
+    role: "user",
+    content: "Explain the connected feature validation routine.",
+  },
+  {
     role: "assistant",
     content: `I need the content of ${INCIDENT_FEATURE_PATH} to check the required feature conditions.`,
   },
