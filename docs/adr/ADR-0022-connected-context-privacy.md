@@ -465,8 +465,10 @@ against their actual sent packs; an unusable attempted answer retains its charge
 Follow-up pass count observes a completed retrieval pass even if its additional synthesis is refused;
 admitted-path count records physical target reads, separately from final sent membership.
 A file already physically read does not acquire another read through an unread-in-prompt declaration.
-The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
-from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
+The existing allocator's high/exceeded context pressure refuses follow-up; refusal, clarification,
+or assessment-only content from a second answer remains still-insufficient. Permitted learned
+knowledge may still be returned, but it cannot claim that the unresolved source question was answered.
+A substantive second source answer can resolve retrieval
 while retaining an honest uncited warning, and never obtains a third synthesis slot. Gateway and context-window retries consume the same physical attempt slots. Separately
 bounded entailment verification cannot grant another synthesis attempt.
 `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` is default-enabled with one follow-up pass: absent means `1`,
