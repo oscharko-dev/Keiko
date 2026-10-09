@@ -11,9 +11,14 @@ The owner accepted one bounded server-owned follow-up pass for #3889 with the no
 default **on**, recorded in the [owner decision](https://github.com/oscharko-dev/Keiko/issues/3889#issuecomment-6076008027).
 Only admitted, unread, in-scope declarations may trigger the pass; the original authority and
 remaining search, byte, token, elapsed, and spend budgets still apply. Cancellation propagates and
-there is never a third pass. Citation repair and follow-up answer generation share a maximum of
-two application-level model-call slots per turn, including the initial answer; consuming the second
-slot for one leaves no slot for the other. Models do not receive workspace tools.
+there is never a third pass. Initial synthesis, citation repair, follow-up and their gateway transport
+or context-window retries share at most two physical adapter attempts per turn; consuming the second
+attempt leaves no synthesis allowance for another purpose. This physical count is a current-code
+refinement of the accepted #3889 never-third-model-call criterion following the configured-producer
+audit, not a new owner decision about transient provider recovery. Each dispatch uses the original
+cumulative input/output and remaining elapsed grants. Canonical input estimates and retained
+unknown-output reservations are conservative budget charges, distinct from provider-measured
+usage. Models do not receive workspace tools.
 
 All children meet on one integration branch through child-branch merges. One non-draft pull
 request targets `dev`, with native auto-merge **off**; the owner integrates it. Agents commit and
