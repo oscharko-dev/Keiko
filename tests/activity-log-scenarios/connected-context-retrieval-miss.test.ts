@@ -161,11 +161,7 @@ async function driveCustomerShape(followUpPassesMax: 0 | 1, correlationId: strin
       continue;
     }
     expect(receivedPaths[0]).not.toContain(COMPANION_PATH);
-    const followUp: unknown = Object.getOwnPropertyDescriptor(
-      result.answer ?? {},
-      "followUp",
-    )?.value;
-    expect(followUp).toMatchObject({
+    expect(result.answer?.followUp).toMatchObject({
       passCount: followUpPassesMax,
       outcome: followUpPassesMax ? "answered" : "disabled",
     });
@@ -232,17 +228,26 @@ describe("Activity Log scenario: connected-context retrieval incident (#3882)", 
       const report = await reconstructUserReportedAsk(stateDir, correlationId);
       expect(report.analysis.evidence.classification).toBe("supported");
       expect(report.analysis.sufficiency.status).toBe("complete");
-      expect(report.analysis.findings ?? []).toEqual(
+      const findings = report.analysis.findings ?? [];
+      expect(findings.map((finding) => finding.reason)).toEqual(
         followUpPassesMax === 0
-          ? [
-              expect.objectContaining({
-                kind: "retrieval-miss",
-                reason: "declared-unread-in-scope",
-                fields: { declaredUnreadInScopeCount: 1 },
-              }),
-            ]
+          ? ["declared-unread-in-scope", "semantic-unavailable-with-miss"]
           : [],
       );
+      if (followUpPassesMax === 0) {
+        expect(findings[0]).toMatchObject({
+          kind: "retrieval-miss",
+          fields: { declaredUnreadInScopeCount: 1 },
+        });
+        expect(findings[1]).toMatchObject({
+          kind: "retrieval-miss",
+          fields: {
+            declaredUnreadInScopeCount: 1,
+            semanticProviderDisposition: "unavailable",
+            followUpOutcome: "disabled",
+          },
+        });
+      }
       const text = readPersistedActivityLog(stateDir);
       expect(text).not.toContain(COMPANION_PATH);
       expect(text).not.toContain(INCIDENT_FEATURE_PATH);
