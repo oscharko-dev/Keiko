@@ -391,6 +391,7 @@ function liveFingerprintFile(
   pod: ResolvedRepositoryPod,
   scopePath: string,
 ): LiveFingerprintFile | undefined {
+  if (semanticOperationStopped(ctx)) return undefined;
   if (!isValidScopePath(scopePath, { mustBeRelative: true }) || isDenied(scopePath))
     return undefined;
   const absolutePath = containedDocumentPath(pod.context.repositoryRoot, scopePath);
@@ -411,18 +412,48 @@ async function readLiveFingerprintBytes(
   fingerprint: RepositoryFileFingerprint,
 ): Promise<Uint8Array | undefined> {
   const byteLength = fingerprintByteLength(fingerprint);
-  if (byteLength === undefined || ctx.fs.readFileBytes === undefined) return undefined;
+  if (
+    byteLength === undefined ||
+    ctx.fs.readFileBytes === undefined ||
+    semanticOperationStopped(ctx)
+  )
+    return undefined;
   try {
     const file = liveFingerprintFile(ctx, pod, scopePath);
     if (file?.before.size !== byteLength) return undefined;
-    const bytes = await ctx.fs.readFileBytes(file.realPath, byteLength + 1, "reject", file.before);
-    return bytes.byteLength === byteLength &&
-      isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
-      ? bytes
-      : undefined;
+    const bytes = await readSemanticFileBytes(ctx, file, byteLength + 1);
+    return verifiedLiveBytes(ctx, file, bytes, byteLength);
   } catch {
     return undefined;
   }
+}
+
+function verifiedLiveBytes(
+  ctx: EmbeddingContext,
+  file: LiveFingerprintFile,
+  bytes: Uint8Array | undefined,
+  byteLength: number,
+): Uint8Array | undefined {
+  return bytes !== undefined &&
+    !semanticOperationStopped(ctx) &&
+    bytes.byteLength === byteLength &&
+    isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
+    ? bytes
+    : undefined;
+}
+
+async function readSemanticFileBytes(
+  ctx: EmbeddingContext,
+  file: LiveFingerprintFile,
+  maxBytes: number,
+  deadlineAtMs = ctx.deadlineAtMs ?? Infinity,
+): Promise<Uint8Array | undefined> {
+  const read = ctx.fs.readFileBytes;
+  if (read === undefined) return undefined;
+  return raceAbortDeadline(
+    () => read.call(ctx.fs, file.realPath, maxBytes, "reject", file.before),
+    { deadlineAtMs, nowMs: ctx.nowMs ?? Date.now, signal: ctx.signal },
+  );
 }
 
 type FreshnessState = "fresh" | "stale" | "unindexed" | "unavailable";
@@ -436,10 +467,27 @@ async function podDocumentFreshness(
   const fingerprint = pod.fingerprints.get(document.scopePath);
   if (fingerprint === undefined || fingerprintByteLength(fingerprint) === undefined)
     return "unavailable";
+  const preflight = fingerprintPreflight(ctx, pod, document.scopePath, fingerprint);
+  if (preflight !== undefined) return preflight;
+  const bytes = await readLiveFingerprintBytes(ctx, pod, document.scopePath, fingerprint);
+  if (bytes === undefined || semanticOperationStopped(ctx)) return "unavailable";
+  return repositoryContentFingerprint(bytes, fingerprint.fingerprintKind) ===
+    fingerprint.contentFingerprint
+    ? "fresh"
+    : "stale";
+}
+
+function fingerprintPreflight(
+  ctx: EmbeddingContext,
+  pod: ResolvedRepositoryPod,
+  scopePath: string,
+  fingerprint: RepositoryFileFingerprint,
+): "stale" | "unavailable" | undefined {
   try {
-    const file = liveFingerprintFile(ctx, pod, document.scopePath);
+    const file = liveFingerprintFile(ctx, pod, scopePath);
     if (
       file === undefined ||
+      semanticOperationStopped(ctx) ||
       !isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
     )
       return "unavailable";
@@ -447,12 +495,7 @@ async function podDocumentFreshness(
   } catch {
     return "unavailable";
   }
-  const bytes = await readLiveFingerprintBytes(ctx, pod, document.scopePath, fingerprint);
-  if (bytes === undefined) return "unavailable";
-  return repositoryContentFingerprint(bytes, fingerprint.fingerprintKind) ===
-    fingerprint.contentFingerprint
-    ? "fresh"
-    : "stale";
+  return undefined;
 }
 
 interface ClassifiedPodDocuments {
@@ -470,6 +513,7 @@ async function freshPodDocuments(
   const stale: CandidateDocument[] = [];
   let unavailableFileCount = 0;
   for (const document of documents) {
+    if (semanticOperationStopped(ctx)) break;
     const state = await podDocumentFreshness(ctx, pod, document);
     if (state === "fresh") fresh.push(document);
     else if (state === "stale") stale.push(document);
@@ -613,9 +657,13 @@ function prepareSemanticSearch(
   ctx: EmbeddingContext,
   request: SemanticSearchInput,
 ): PreparedSemanticSearch | undefined {
-  const signal = request.signal ?? ctx.signal;
+  const signal = combinedSemanticSignal(ctx.signal, request.signal);
   const maxResults = Math.max(0, Math.min(request.query.maxResults, ctx.maxCandidates));
-  if (maxResults <= 0 || request.query.text.trim().length === 0 || isAborted(signal))
+  if (
+    maxResults <= 0 ||
+    request.query.text.trim().length === 0 ||
+    semanticOperationStopped(ctx, signal)
+  )
     return undefined;
   const documents = candidateDocuments(ctx, request, signal);
   if (documents.length === 0 || isAborted(signal)) return undefined;
@@ -630,9 +678,28 @@ function prepareSemanticSearch(
   };
 }
 
-// Repository semantic search is index-only. Missing, stale, or unreadable pod state degrades to the
-// orchestrator's lexical lane and is recorded content-free; it never embeds whole candidate files
-// at ask time.
+function combinedSemanticSignal(
+  outer: AbortSignal | undefined,
+  request: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (outer === undefined) return request;
+  return request === undefined ? outer : AbortSignal.any([outer, request]);
+}
+
+function semanticOperationStopped(
+  ctx: EmbeddingContext,
+  signal: AbortSignal | undefined = ctx.signal,
+): boolean {
+  const deadline = ctx.deadlineAtMs;
+  return (
+    isAborted(signal) ||
+    (deadline !== undefined && (Number.isNaN(deadline) || (ctx.nowMs ?? Date.now)() >= deadline))
+  );
+}
+
+// Repository semantic search reuses indexed vectors by default. Missing, stale, or unreadable pod
+// state degrades to the lexical lane; explicitly enabled bounded refresh may embed safe live
+// fragments without mutating the pod. Freshness observations remain request-private.
 function observePodDegradation(
   ctx: Pick<EmbeddingContext, "observePodRetrieval">,
   mode: string,
@@ -672,14 +739,16 @@ async function semanticSearch(
   const prepared = prepareSemanticSearch(ctx, request);
   if (prepared === undefined) return [];
   const { documents, signal } = prepared;
-  const classified = await freshPodDocuments(ctx, ctx.repositoryPod, documents);
+  const active = { ...ctx, signal };
+  const classified = await freshPodDocuments(active, active.repositoryPod, documents);
   const refreshed: SemanticSearchMatch[] = [];
   try {
+    if (semanticOperationStopped(active, signal)) return [];
     const hits =
       classified.fresh.length === 0
         ? []
-        : await podRankedHits(ctx, ctx.repositoryPod, prepared, classified.fresh);
-    refreshed.push(...(await refreshedSemanticHits(ctx, prepared, classified.stale)));
+        : await podRankedHits(active, active.repositoryPod, prepared, classified.fresh);
+    refreshed.push(...(await refreshedSemanticHits(active, prepared, classified.stale)));
     if (classified.fresh.length === 0) observePodDegradation(ctx, "pod-no-fresh-candidates");
     return rankHits([...hits, ...refreshed], documents, prepared.maxResults);
   } catch {
@@ -724,18 +793,21 @@ interface RefreshFragment {
 async function liveRefreshFragment(
   ctx: EmbeddingContext,
   document: CandidateDocument,
+  deadlineAtMs: number,
 ): Promise<RefreshFragment | undefined> {
   if (ctx.fs.readFileBytes === undefined) return undefined;
   try {
     const file = liveFingerprintFile(ctx, ctx.repositoryPod, document.scopePath);
     if (file === undefined || file.before.size > SEMANTIC_REFRESH_FRAGMENT_BYTES) return undefined;
-    const bytes = await ctx.fs.readFileBytes(
-      file.realPath,
+    const bytes = await readSemanticFileBytes(
+      ctx,
+      file,
       SEMANTIC_REFRESH_FRAGMENT_BYTES + 1,
-      "reject",
-      file.before,
+      deadlineAtMs,
     );
     if (
+      bytes === undefined ||
+      refreshStopped(ctx, ctx.signal, deadlineAtMs) ||
       bytes.byteLength !== file.before.size ||
       bytes.includes(0) ||
       !isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
@@ -875,7 +947,7 @@ async function refreshedDocumentHit(
   query: Float32Array,
   deadlineAtMs: number,
 ): Promise<SemanticSearchMatch | undefined> {
-  const fragment = await liveRefreshFragment(ctx, document);
+  const fragment = await liveRefreshFragment(ctx, document, deadlineAtMs);
   if (fragment === undefined || refreshStopped(ctx, prepared.signal, deadlineAtMs))
     return undefined;
   const vector = await refreshEmbedding(
