@@ -7,7 +7,11 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
+import {
+  LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_TEXT_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import {
   extractPathReferences,
   isGeneratedRankingPath,
@@ -109,11 +113,19 @@ interface AdmissionState {
 
 const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS);
 const BASENAME_MATCH_CAP = 96;
-const TEXT_DOCUMENT_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
+const ORDINARY_DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
+  ...LOCAL_KNOWLEDGE_TEXT_DOCUMENT_FILE_EXTENSIONS,
+  ...LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
+  "xml",
+]);
 
 /** Ordinary document folders do not infer repository noise from directory names. */
 export function isOrdinaryFolderDocumentPath(path: string, hasGitMetadata: boolean): boolean {
-  return !hasGitMetadata && (TEXT_DOCUMENT_PATH_RE.test(path) || isConnectedDocumentPath(path));
+  const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+  return (
+    !hasGitMetadata &&
+    (ORDINARY_DOCUMENT_EXTENSIONS.has(extension) || isConnectedDocumentPath(path))
+  );
 }
 
 export function explicitPathReferences(text: string): readonly ExplicitPathReference[] {
@@ -132,6 +144,9 @@ export function normalizedExplicitReferencePath(
     path = localFileUrlPath(url) ?? "";
   }
   if (isAbsolute(path)) path = relative(root, path);
+  // A leading current-directory spelling does not change the target. Keep all interior and
+  // parent segments for the strict canonical validator; path.normalize would erase that evidence.
+  path = path.replace(/^(?:\.\/)+/u, "");
   return isValidScopePath(path, { mustBeRelative: true }) ? path : undefined;
 }
 

@@ -6,6 +6,9 @@ import {
 import type { GatewayCallRequest } from "./gateway.js";
 import type { UsageMetadata } from "./types.js";
 
+/** Caller authority refusal, even when an earlier compatibility request reached the provider. */
+export class CallerAttemptAdmissionError extends ContextOverflowError {}
+
 export function settleCallerAttempt(
   reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
   usage: Pick<UsageMetadata, "promptTokens" | "completionTokens"> | undefined,
@@ -39,7 +42,7 @@ export function callerAdmittedRequest(
     limit <= 0 ||
     (request.maxOutputTokens !== undefined && limit > request.maxOutputTokens)
   )
-    throw new ContextOverflowError("Caller output grant must narrow the requested cap");
+    throw new CallerAttemptAdmissionError("Caller output grant must narrow the requested cap");
   return { ...request, maxOutputTokens: limit };
 }
 

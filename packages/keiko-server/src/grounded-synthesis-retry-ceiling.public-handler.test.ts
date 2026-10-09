@@ -1,11 +1,16 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  buildEvidenceReport,
+  loadEvidence,
+  renderEvidenceReport,
+} from "@oscharko-dev/keiko-evidence";
 import {
   countGatewayPromptTokens,
   type GatewayPromptTokenInput,
@@ -149,7 +154,10 @@ function responseWithReportedUsageThenTransportFailure(): Response {
   return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-function configuredRuntime(maxRetries = 0): {
+function configuredRuntime(
+  maxRetries = 0,
+  baseUrl = "https://synthesis.example.invalid/v1",
+): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
 } {
@@ -169,7 +177,7 @@ function configuredRuntime(maxRetries = 0): {
       providers: [
         {
           modelId: MODEL,
-          baseUrl: "https://synthesis.example.invalid/v1",
+          baseUrl,
           apiKey: "fixture",
           maxRetries,
           retryBaseDelayMs: 1,
@@ -198,6 +206,98 @@ function configuredRuntime(maxRetries = 0): {
     connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
   });
   return { deps, chatId: chat.id };
+}
+
+interface CompatibilityLoopbackState {
+  mode: "shape" | "healthy" | "provider-failure";
+  readonly requests: string[];
+}
+
+function replyCompatibilityLoopback(
+  res: ServerResponse,
+  request: Record<string, unknown>,
+  state: CompatibilityLoopbackState,
+): void {
+  if (state.mode === "provider-failure") {
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "Synthetic provider outage" } }));
+    return;
+  }
+  const param =
+    state.mode === "healthy"
+      ? undefined
+      : "stream_options" in request
+        ? "stream_options"
+        : "max_tokens" in request
+          ? "max_tokens"
+          : undefined;
+  res.writeHead(param === undefined ? 200 : 400, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify(
+      param === undefined
+        ? {
+            id: "breaker-proof",
+            model: MODEL,
+            choices: [
+              { index: 0, message: { role: "assistant", content: CITED }, finish_reason: "stop" },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }
+        : { error: { param, code: "unsupported_parameter" } },
+    ),
+  );
+}
+
+function serveCompatibilityLoopback(
+  req: IncomingMessage,
+  res: ServerResponse,
+  state: CompatibilityLoopbackState,
+): void {
+  const chunks: Buffer[] = [];
+  req.on("data", (chunk: Buffer): void => {
+    chunks.push(chunk);
+  });
+  req.on("end", (): void => {
+    const body = Buffer.concat(chunks).toString();
+    state.requests.push(body);
+    replyCompatibilityLoopback(res, JSON.parse(body) as Record<string, unknown>, state);
+  });
+}
+
+async function compatibilityLoopback(): Promise<{
+  readonly baseUrl: string;
+  readonly requests: readonly string[];
+  readonly enableHealthy: () => void;
+  readonly enableProviderFailure: () => void;
+  readonly close: () => Promise<void>;
+}> {
+  const state: CompatibilityLoopbackState = { mode: "shape", requests: [] };
+  const server = createServer((req, res): void => {
+    serveCompatibilityLoopback(req, res, state);
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new TypeError("Expected loopback port");
+  return {
+    baseUrl: `http://127.0.0.1:${String(address.port)}/v1`,
+    requests: state.requests,
+    enableHealthy: (): void => {
+      state.mode = "healthy";
+    },
+    enableProviderFailure: (): void => {
+      state.mode = "provider-failure";
+    },
+    close: (): Promise<void> =>
+      new Promise((resolve, reject) => {
+        server.close((error) => {
+          if (error === undefined) resolve();
+          else reject(error);
+        });
+      }),
+  };
 }
 
 function route(chatId: string): RouteContext {
@@ -242,6 +342,8 @@ async function scriptedProviderTurn(
   readonly requests: readonly string[];
   readonly records: readonly Record<string, unknown>[];
   readonly spendReservations: number;
+  readonly completedCount: number | undefined;
+  readonly report: string | undefined;
   readonly usage: { readonly modelInputTokens: number; readonly modelOutputTokens: number };
 }> {
   const turn = await configuredProviderTurn(answers, maxRetries);
@@ -260,6 +362,8 @@ async function configuredProviderTurn(
   readonly requests: readonly string[];
   readonly records: readonly Record<string, unknown>[];
   readonly spendReservations: number;
+  readonly completedCount: number | undefined;
+  readonly report: string | undefined;
 }> {
   const requests = installProvider(answers);
   const { deps, chatId } = configuredRuntime(maxRetries);
@@ -272,10 +376,63 @@ async function configuredProviderTurn(
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   expect(records.map((record) => record.op)).not.toContain("server-log.write-failed");
-  return { result, requests, records, spendReservations: reserve.mock.calls.length };
+  const runId = deps.evidenceStore.list()[0];
+  const manifest = runId === undefined ? undefined : loadEvidence(deps.evidenceStore, runId);
+  return {
+    result,
+    requests,
+    records,
+    spendReservations: reserve.mock.calls.length,
+    completedCount: manifest?.usageTotals.requestCount,
+    report:
+      manifest === undefined
+        ? undefined
+        : renderEvidenceReport(buildEvidenceReport(manifest, "fixture-evidence")),
+  };
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
+  it("does not open the provider breaker after repeated local attempt-grant refusals", async () => {
+    const provider = await compatibilityLoopback();
+    try {
+      const { deps, chatId } = configuredRuntime(0, provider.baseUrl);
+      for (let index = 0; index < 5; index += 1) {
+        const result = await handleGroundedAsk(route(chatId), deps);
+        expect(result.status).toBe(502);
+      }
+      expect(provider.requests).toHaveLength(10);
+      const failedRecords = readPersistedActivityLog(stateDir);
+      expect(failedRecords).toContain("GATEWAY_CONTEXT_OVERFLOW");
+      provider.enableHealthy();
+      const chat = deps.store.createChat(root, "Healthy after local refusal", MODEL);
+      deps.store.updateChat(chat.id, {
+        connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
+      });
+      const result = await handleGroundedAsk(route(chat.id), deps);
+      expect(result.status).toBe(200);
+      expect(provider.requests).toHaveLength(11);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("retains the default provider breaker for genuine dispatched provider failures", async () => {
+    const provider = await compatibilityLoopback();
+    try {
+      provider.enableProviderFailure();
+      const { deps, chatId } = configuredRuntime(0, provider.baseUrl);
+      for (let index = 0; index < 5; index += 1)
+        expect((await handleGroundedAsk(route(chatId), deps)).status).toBe(503);
+      expect(provider.requests).toHaveLength(5);
+      provider.enableHealthy();
+      expect((await handleGroundedAsk(route(chatId), deps)).status).toBe(502);
+      expect(provider.requests).toHaveLength(5);
+      expect(readPersistedActivityLog(stateDir)).toContain("GATEWAY_CIRCUIT_OPEN");
+    } finally {
+      await provider.close();
+    }
+  });
+
   it.each([
     ["ordinary cited answer", [CITED], 1],
     ["ordinary follow-up", [MISSING, FOLLOW_UP], 2],
@@ -284,6 +441,15 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     const turn = await scriptedProviderTurn(answers);
     expect(turn.requests).toHaveLength(count);
     expect(turn.spendReservations).toBe(count);
+    expect(turn.completedCount).toBe(count);
+    expect(turn.report).toContain(`${String(count)} request(s)`);
+  });
+
+  it("counts a completed rejected repair while retaining the original answer", async () => {
+    const turn = await scriptedProviderTurn([UNCITED, "Feature returns false [src/Feature.ts:1]."]);
+    expect(turn.requests).toHaveLength(2);
+    expect(turn.completedCount).toBe(2);
+    expect(turn.report).toContain("2 request(s)");
   });
 
   it.each([
@@ -302,6 +468,8 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(turn.requests).toHaveLength(2);
     expect(turn.spendReservations).toBe(2);
     expect(turn.records.some((record) => record.op === "gateway.retry.scheduled")).toBe(true);
+    expect(turn.completedCount).toBe(1);
+    expect(turn.report).toContain("1 request(s)");
   });
 
   it("preserves unrelated buffered gateway recovery under the configured retry policy", async () => {

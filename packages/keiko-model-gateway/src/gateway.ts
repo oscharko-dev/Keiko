@@ -3,6 +3,7 @@ import {
   settleCallerAttempt,
   settleFailedCallerAttempt,
   onceCallerReservation,
+  CallerAttemptAdmissionError,
 } from "./gateway-attempt-admission.js";
 // Orchestrator: routes a request through the capability registry, then through the
 // circuit breaker, bounded retry, and the provider adapter. Usage metadata
@@ -2403,7 +2404,9 @@ export class Gateway {
       maxOutputTokens: request.maxOutputTokens ?? profile.reservedOutputTokens,
     });
     if (reservation === undefined)
-      throw new ContextOverflowError("Caller synthesis attempt grant exhausted before dispatch");
+      throw new CallerAttemptAdmissionError(
+        "Caller synthesis attempt grant exhausted before dispatch",
+      );
     return onceCallerReservation(reservation);
   }
 

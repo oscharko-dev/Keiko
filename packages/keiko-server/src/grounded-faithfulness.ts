@@ -345,7 +345,10 @@ export interface ParsedInlineCitation {
 // markdown links (`[text](url)`) are NOT misread as citations.
 // The shared path bound plus bounded source ordinal and safe-integer line suffixes.
 const CITATION_TOKEN_MAX_CHARS = WORKSPACE_PORTABLE_PATH_MAX_BYTES + 64;
-const BRACKET_PATTERN = String.raw`\[([^\[\]\n]{1,${CITATION_TOKEN_MAX_CHARS}})\]`;
+// Balanced literal path segments such as Next.js [id] are part of a file path, not delimiters.
+// Inner segments are bounded by the portable filename limit; each alternative starts differently.
+const LITERAL_PATH_BRACKET = String.raw`\[[^\[\]\r\n]{1,255}\]`;
+const BRACKET_PATTERN = String.raw`\[((?:[^\[\]\r\n]|${LITERAL_PATH_BRACKET}){1,${CITATION_TOKEN_MAX_CHARS}})\]`;
 const FOLLOWING_BRACKET_RE = new RegExp(BRACKET_PATTERN, "y");
 // Formatting whitespace belongs to citation punctuation, never to the actual cited path.
 const CITATION_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
@@ -1128,7 +1131,7 @@ export function splitClaimSpans(text: string): readonly string[] {
 
 // Every bracketed span the claim stripper removes, a citation or not.
 const CLAIM_BRACKET_RE = new RegExp(
-  String.raw`[[［【][^\[［【\]］】\n]{1,${CITATION_TOKEN_MAX_CHARS}}[\]］】]`,
+  String.raw`${BRACKET_PATTERN}|[[［【][^\[［【\]］】\n]{1,${CITATION_TOKEN_MAX_CHARS}}[\]］】]`,
   "g",
 );
 

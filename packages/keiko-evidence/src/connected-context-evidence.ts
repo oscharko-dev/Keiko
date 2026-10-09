@@ -38,6 +38,7 @@ import type { EvidenceConnectedContextFollowUp } from "@oscharko-dev/keiko-contr
 type Redactor = (input: string) => string;
 
 export interface ConnectedContextEvidenceInput {
+  readonly completedSynthesisCallCount?: number | undefined;
   readonly followUp?: EvidenceConnectedContextFollowUp | undefined;
   readonly sourceScopeFingerprint?: string | undefined;
   readonly runId: string;
@@ -356,7 +357,7 @@ function buildConnectedContextEvidenceManifest(
     usageTotals: {
       promptTokens: input.pack.usage.modelInputTokens,
       completionTokens: input.pack.usage.modelOutputTokens,
-      requestCount: 1,
+      requestCount: input.completedSynthesisCallCount ?? 1,
       totalLatencyMs: input.elapsedMs,
     },
     context: contextOf(input, redact),

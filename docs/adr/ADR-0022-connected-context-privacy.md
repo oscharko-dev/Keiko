@@ -236,11 +236,23 @@ images, binary content, unsafe aliases, and larger files are excluded. Ordinary-
 exclusions merely from names such as `build` or `dist`. Query-named ordinary-folder documents use
 that same eligibility distinction; repository generated code remains excluded before unconditional
 read admission. Hard denials, containment, ignore, binary, size and budget checks still apply.
+Leading `./` in a query reference denotes the same scope-relative target and is removed before
+strict canonical validation. Parent traversal and interior dot segments are not normalized away;
+canonical sensitive names still pass through the existing hard-denial policy.
 Complete extracted document paths are target data, so their `reference`, `history` or `caller`
 directory segments cannot request relationship/history rings. Actual relationship/history words
 outside the path retain their routing. An ordinary factual lookup with admitted named document
-paths focuses discovery on those paths and binds its existing structural request context to that
-narrower search scope. It does not enumerate navigation neighbours or widen the human's scope.
+paths focuses discovery on those paths only when its canonical planner decision contains no
+independent non-path target, and binds its existing structural request context to that narrower
+search scope. Mixed document/implementation lookups retain discovery of the independent target.
+Ordinary document eligibility reuses the shared web/text-document extension groups, including
+XHTML and Markdown, alongside XML and existing bounded document extraction. It does not enumerate
+navigation neighbours or widen the human's scope.
+Quoted document targets match their extracted reference identity rather than their anchor kind.
+If all complete document targets have closed admission rejections, the existing ring and
+augmentation decision events record `explicit-target-unavailable` and retain those rejection
+facts. They do not substitute another same-basename file or enumerate its contents. An independent
+source target or a requested relationship retains its existing retrieval flow.
 Existing correlated admission, skipped-ring, read and budget observations describe this path;
 non-Git folders cannot dispatch the Git-history ring, even when history was requested.
 An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
@@ -749,7 +761,14 @@ test will catch it.
 
 Synthesis accounting refines the two-call rule at the actual attempt boundary: initial answers,
 marker repair, follow-up, and context/provider retries share the same turn-owned allowance. The
-answer-details sibling records optional `synthesisCallCount` and `synthesisReservedOutputTokens`.
+answer-details sibling records optional `synthesisCallCount`, `completedSynthesisCallCount` and
+`synthesisReservedOutputTokens`. Physical synthesis attempts remain separate from completed
+responses: overflow, transient and compatibility failures consume attempt and token/spend grants
+without incrementing completed-response count. A completed marker repair increments that count
+even when its content is rejected; a completed follow-up does likewise. The common grounded
+evidence producer receives the completed count for `usageTotals.requestCount` and the human report
+(ADR-0010 D7); unchanged callers retain the existing one-request default. The existing factory
+ledger owns the lifetime completed counter, per-result deltas and caught-repair recovery.
 Input charges use the canonical sent-prompt estimate as a floor and retain larger reported counts.
 Reported partial output is charged; an uncertain interrupted stream retains its requested output
 upper reservation. A definitive HTTP rejection before generation leaves the spare output grant
@@ -758,7 +777,10 @@ available for bounded recovery. These admission charges do not claim exact measu
 OpenAI-compatible adapters invoke the same optional caller admission and durable spend lifecycle
 for each physical synthesis HTTP POST, including stream-shape and output-token-field compatibility
 fallbacks. This avoids double-reserving the first request at both gateway and adapter boundaries.
-Other adapters retain the gateway-owned attempt boundary. Each reservation settles once; early
+Other adapters retain the gateway-owned attempt boundary. Each reservation settles once.
+Terminal caller attempt/cap refusals are classified independently of prior compatibility
+dispatches and cannot increment the shared provider breaker. Genuine provider errors retain
+their existing resilience classification. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token

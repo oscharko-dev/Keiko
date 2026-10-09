@@ -451,10 +451,17 @@ system that exists, never beside it:
   high/low selection vocabulary and actual observed scope/semantic dispositions.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  Leading `./` reference spellings are canonicalized before strict path admission; parent and
+  interior dot segments remain subject to the existing validator and every sensitive-path denial.
   Complete document path references are data when classifying relationship/history requests;
   directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
   factual lookup focuses discovery on canonically admitted named documents with a scope-bound
-  request context. Its source/read/ring observations reuse the same registered retrieval siblings.
+  request context only when the planner has no independent non-path target. Its source/read/ring
+  observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
+  canonical web/text-document extension groups, alongside XML and bounded document extraction.
+  Quoted targets use the same canonical reference identity. When every complete factual document
+  target is rejected, `explicit-target-unavailable` records skipped rings and augmentation; other
+  same-basename files cannot substitute for the unavailable target.
   Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
   generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
   Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
@@ -486,6 +493,11 @@ system that exists, never beside it:
   closed to zero passes with an invalid configuration observation. Final sent packs and ranges
   authenticate citations; assembled reads remain separate physical-usage and audit evidence.
   The same answer-details line optionally records `synthesisCallCount` and
+  `completedSynthesisCallCount`; the former counts physical attempts and the latter completed
+  responses. Grounded evidence reports use completed responses for `usageTotals.requestCount`,
+  including completed marker repairs and follow-up answers; failed retries do not become completed
+  requests. Legacy evidence callers retain their one-request default.
+  It also records
   `synthesisReservedOutputTokens`. Synthesis input usage charges the greater of the canonical sent
   prompt estimate and reported provider usage. Reported discarded output is retained; an interrupted
   stream without output measurement retains its requested output reservation instead of granting an
@@ -495,6 +507,9 @@ system that exists, never beside it:
   OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
   caller and durable spend admission for each actual POST; adapters without that transport hook
   retain the existing gateway boundary. No nested compatibility path grants another attempt.
+  A terminal caller attempt/cap refusal remains a local fault even after an earlier compatibility
+  dispatch; it cannot open the shared provider breaker. Genuine provider failures retain the
+  existing breaker and retry classification.
   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity

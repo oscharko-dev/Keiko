@@ -421,6 +421,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
         "literal-absence",
         "complete-exact-lookup",
         "verified-target-context",
+        "explicit-target-unavailable",
       ],
     },
     augmentationSkipped: { type: "boolean", dataClass: "closed-enum", required: false },
@@ -519,6 +520,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
         "complete-exact-lookup",
         "verified-target-context",
         "budget-exhausted",
+        "explicit-target-unavailable",
       ],
     },
     activityDetailStatus: {
@@ -1090,6 +1092,7 @@ export interface GroundedAnswerOptions {
 }
 
 export interface GroundedAnswerer {
+  readonly completedSynthesisCalls?: (() => number) | undefined;
   /** Actual factory dispatch slots, shared by synthesis, window retry and repair. */
   readonly remainingSynthesisCalls?: (() => number) | undefined;
   /** Drain charged failed-attempt usage once when the factory rejects without a result. */
@@ -1187,6 +1190,7 @@ export interface OrchestratorDeps {
 }
 
 export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
+  readonly completedSynthesisCallCount?: number | undefined;
   readonly followUp?: FollowUpObservation | undefined;
   readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
@@ -2824,7 +2828,8 @@ type RingSkipReason =
   | "ordinary-document"
   | "literal-absence"
   | "complete-exact-lookup"
-  | "verified-target-context";
+  | "verified-target-context"
+  | "explicit-target-unavailable";
 interface RingDecisionAudit {
   readonly executedRingKinds: RetrievalRing["kind"][];
   readonly skippedRingKinds: RetrievalRing["kind"][];
@@ -2969,8 +2974,6 @@ function elapsedDeadlineStop(
   };
 }
 
-const DOCUMENT_EVIDENCE_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
-
 function isCompleteExactLiteralLookup(
   query: RetrievalQuery,
   diagnostics: ContextPackDiagnostics | undefined,
@@ -2996,7 +2999,7 @@ function isOrdinaryDocumentLookup(
     !hasGitMetadata &&
     !requiresRelationshipOrHistoryRings(query) &&
     candidates.length > 0 &&
-    candidates.every((candidate) => DOCUMENT_EVIDENCE_PATH_RE.test(candidate.scopePath))
+    candidates.every((candidate) => isOrdinaryFolderDocumentPath(candidate.scopePath, false))
   );
 }
 
@@ -7238,6 +7241,10 @@ function markAugmentationUsed(rings: RingRunSummary): void {
 }
 
 function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRunSummary): boolean {
+  if (rings.decisions?.ringSkipReasons.includes("explicit-target-unavailable")) {
+    markAugmentationSkipped(rings, "explicit-target-unavailable");
+    return true;
+  }
   const decision =
     args.plan.targetDecision ?? resolveQueryTargetDecision(args.input.query, args.plan.anchors);
   if (hasVerifiedTargetContext(args.input.query, decision, args.plan.retrievalIntent, rings)) {
@@ -8760,18 +8767,62 @@ function connectedContextSearchInputs(
   };
 }
 
+function isFocusedDocumentQuery(
+  input: OrchestratorInput,
+  context: LiveRetrievalContext,
+  plan: ExplorationPlan,
+): boolean {
+  const references = plan.references?.filter((reference) => reference.origin === "query") ?? [];
+  return (
+    !context.hasGitMetadata &&
+    input.query.kind === "natural-language" &&
+    !requiresRelationshipOrHistoryRings(input.query) &&
+    plan.targetDecision?.definitionRequested === false &&
+    references.length > 0 &&
+    references.every(
+      (reference) =>
+        reference.path.includes("/") && isOrdinaryFolderDocumentPath(reference.path, false),
+    ) &&
+    plan.targetDecision.targets.every((target) =>
+      references.some((reference) => reference.path.toLowerCase() === target.term),
+    )
+  );
+}
+
+function unavailableDocumentTargetSummary(
+  input: OrchestratorInput,
+  context: LiveRetrievalContext,
+  plan: ExplorationPlan,
+  admission: ExplicitPathAdmission,
+  governor: GovernorState,
+): RingRunSummary | undefined {
+  if (!isFocusedDocumentQuery(input, context, plan) || admission.selections.length !== 0)
+    return undefined;
+  const { explicitPathRejectedCount, explicitPathAnchorCount } = admission.observation;
+  if (explicitPathRejectedCount === 0 || explicitPathRejectedCount !== explicitPathAnchorCount)
+    return undefined;
+  return {
+    ...newRingEvidence(),
+    governor: complete(governor),
+    decisions: {
+      ...newRingDecisions(),
+      skippedRingKinds: plan.rings.map((ring) => ring.kind),
+      ringSkipReasons: ["explicit-target-unavailable"],
+    },
+  };
+}
+
 function focusedDocumentContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   runtime: ConnectedContextRuntime,
   context: LiveRetrievalContext,
+  plan: ExplorationPlan,
   admission: ExplicitPathAdmission,
 ): LiveRetrievalContext {
   const selections = admission.selections;
   if (
-    context.hasGitMetadata ||
-    input.query.kind !== "natural-language" ||
-    requiresRelationshipOrHistoryRings(input.query) ||
+    !isFocusedDocumentQuery(input, context, plan) ||
     selections.length === 0 ||
     !selections.every(
       (selection) =>
@@ -9371,6 +9422,40 @@ function liveGroundedPackInputs(
   };
 }
 
+async function retrieveAdmittedLiveRings(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  governor: GovernorState,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): Promise<{ readonly context: LiveRetrievalContext; readonly rings: RingRunSummary }> {
+  const admitted = await liveExplicitPathAdmission(input, deps, plan, governor, runtime, context);
+  const focused = focusedDocumentContext(input, deps, runtime, context, plan, admitted.admission);
+  const unavailable = unavailableDocumentTargetSummary(
+    input,
+    context,
+    plan,
+    admitted.admission,
+    admitted.governor,
+  );
+  const discovered =
+    unavailable ??
+    (await runAllRings(
+      plan.rings,
+      connectedContextSearchInputs(input, deps, plan, runtime, focused),
+      admitted.governor,
+    ));
+  const rings = withAdmittedExplicitPaths(
+    { ...discovered, referenceObservation: admitted.observation },
+    admitted.admission,
+    input,
+    runtime.nowMs,
+    context.hasGitMetadata,
+  );
+  return { context: focused, rings };
+}
+
 async function retrieveLiveConnectedContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -9380,19 +9465,13 @@ async function retrieveLiveConnectedContext(
   context: LiveRetrievalContext,
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "ring-retrieval";
-  const admitted = await liveExplicitPathAdmission(input, deps, plan, governor, runtime, context);
-  const focused = focusedDocumentContext(input, deps, runtime, context, admitted.admission);
-  const discovered = await runAllRings(
-    plan.rings,
-    connectedContextSearchInputs(input, deps, plan, runtime, focused),
-    admitted.governor,
-  );
-  const rings = withAdmittedExplicitPaths(
-    { ...discovered, referenceObservation: admitted.observation },
-    admitted.admission,
+  const { context: focused, rings } = await retrieveAdmittedLiveRings(
     input,
-    runtime.nowMs,
-    context.hasGitMetadata,
+    deps,
+    plan,
+    governor,
+    runtime,
+    context,
   );
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "pack-assembly";
@@ -10152,6 +10231,7 @@ function answerEvidenceFields(
   | "insufficiencyObservation"
   | "sentEvidencePacks"
   | "filesInPrompt"
+  | "completedSynthesisCallCount"
 > {
   return {
     ...(answer.citationBehaviour === undefined
@@ -10170,6 +10250,9 @@ function answerEvidenceFields(
       ? {}
       : { sentEvidencePacks: answer.sentEvidencePacks }),
     ...(answer.filesInPrompt === undefined ? {} : { filesInPrompt: answer.filesInPrompt }),
+    ...(answer.completedSynthesisCallCount === undefined
+      ? {}
+      : { completedSynthesisCallCount: answer.completedSynthesisCallCount }),
   };
 }
 

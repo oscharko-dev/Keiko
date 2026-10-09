@@ -1386,6 +1386,7 @@ function createGatewayAnswerer(
   const synthesis = createGroundedSynthesisCallBudget();
   const ctx = { deps, model, modelId, signal, correlationId, tokenAccounting, synthesis };
   return {
+    completedSynthesisCalls: synthesis.completed,
     remainingSynthesisCalls: synthesis.remaining,
     pendingSynthesisUsage: synthesis.pendingUsage,
     takeFailedSynthesisUsage: synthesis.takeUsage,
@@ -1422,6 +1423,7 @@ async function gatewayGroundedAnswer(
   ensureNotCancelled(ctx.signal);
   const remainingBefore = ctx.synthesis.remaining();
   const reservedBefore = ctx.synthesis.reservedOutputTokens();
+  const completedBefore = ctx.synthesis.completed();
   const attempt = await withAdoptedContextWindowRetry(
     ctx.deps,
     { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
@@ -1430,7 +1432,7 @@ async function gatewayGroundedAnswer(
   if (attempt.response === undefined)
     return {
       content: connectedSearchNoEvidenceAnswer(options.currentQuestion ?? question),
-      ...settledSynthesisFields(ctx, remainingBefore, reservedBefore),
+      ...settledSynthesisFields(ctx, remainingBefore, reservedBefore, completedBefore),
       modelInvoked: false,
       noEvidence: true,
       sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
@@ -1440,7 +1442,7 @@ async function gatewayGroundedAnswer(
   assertUsableAssistantContent(response.content.trim(), ctx.modelId);
   return {
     content: response.content.trim(),
-    ...settledSynthesisFields(ctx, remainingBefore, reservedBefore),
+    ...settledSynthesisFields(ctx, remainingBefore, reservedBefore, completedBefore),
     finishReason: response.finishReason,
     modelInvoked: true,
     sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
@@ -1456,10 +1458,15 @@ function settledSynthesisFields(
   ctx: GroundedGatewayAnswerContext,
   remainingBefore: number,
   reservedBefore: number,
-): Pick<GroundedAnswerResult, "usage" | "synthesisCallCount" | "synthesisReservedOutputTokens"> {
+  completedBefore: number,
+): Pick<
+  GroundedAnswerResult,
+  "usage" | "synthesisCallCount" | "completedSynthesisCallCount" | "synthesisReservedOutputTokens"
+> {
   return {
     usage: ctx.synthesis.takeUsage(),
     synthesisCallCount: remainingBefore - ctx.synthesis.remaining(),
+    completedSynthesisCallCount: ctx.synthesis.completed() - completedBefore,
     synthesisReservedOutputTokens: ctx.synthesis.reservedOutputTokens() - reservedBefore,
   };
 }
@@ -1542,6 +1549,7 @@ async function dispatchGroundedSynthesis(
       },
       ctx.signal,
     );
+    ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
     return response;
   } catch (failure) {
@@ -2040,6 +2048,7 @@ function persistGroundedAuditEvidence(
       chatId: workerCtx.chat.id,
       sourceScopeFingerprint: groundedSourceScopeFingerprint(output.pack.scope),
       followUp: output.followUp,
+      completedSynthesisCallCount: output.completedSynthesisCallCount,
       plan: output.plan,
       pack: output.pack,
       citationCount,

@@ -27345,6 +27345,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      completedSynthesisCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       synthesisReservedOutputTokens: {
         type: "integer",
         dataClass: "count",
@@ -27604,6 +27609,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "literal-absence",
           "complete-exact-lookup",
           "verified-target-context",
+          "explicit-target-unavailable",
         ],
       },
       augmentationSkipped: {
@@ -27844,6 +27850,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "complete-exact-lookup",
           "verified-target-context",
           "budget-exhausted",
+          "explicit-target-unavailable",
         ],
       },
       activityDetailStatus: {

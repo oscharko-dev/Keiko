@@ -353,6 +353,13 @@ function withoutAttributions(sentence: string): string {
 const CONTRAST_PATTERN =
   /\b(?:aber|jedoch|allerdings|sondern|dagegen|außer|however|but|although|whereas|except)\b/iu;
 
+// Access to selected evidence is distinct from a negative fact about the product. Match only a
+// complete first-person refusal with a closed object/scope clause; claims or examples leave residue.
+const SCOPE_ACCESS_REFUSAL_PATTERNS: readonly RegExp[] = [
+  /^i (?:cannot|can['’]t|am unable to) (?:inspect|read|access|open|view|see) (?:the |this |that )(?:(?:previously referenced|referenced|selected|requested|connected) )?(?:file|folder|directory|document|repository) (?:within|in|from) (?:this |the |my )(?:(?:selected|current|connected|available) )?(?:scope|context|folder|workspace)[.!]?$/iu,
+  /^ich kann (?:die|diese|jene|den|diesen|das) (?:(?:zuvor referenzierte|referenzierte|ausgewählte|angeforderte|verbundene)[nr]? )?(?:datei|ordner|verzeichnis|dokument|repository) (?:in (?:diesem|dem) |im |innerhalb (?:dieses|des) )(?:(?:ausgewählten|aktuellen|verbundenen|verfügbaren) )?(?:scope|kontext|ordner|arbeitsbereich|umfang|geltungsbereich)s? nicht (?:einsehen|lesen|prüfen|öffnen|sehen)[.!]?$/iu,
+];
+
 function collapseWhitespace(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
 }
@@ -367,6 +374,7 @@ export function isNoEvidenceAnswerText(answer: string): boolean {
   const compact = collapseWhitespace(answer);
   if (compact.length === 0 || compact.length > NO_EVIDENCE_ANSWER_MAX_CHARS) return false;
   if (findCitationMarkerGroups(compact).length > 0) return false;
+  if (SCOPE_ACCESS_REFUSAL_PATTERNS.some((pattern) => pattern.test(compact))) return true;
   const text = withoutInlineMarkdown(compact);
   if (STOCK_REFUSAL_PATTERNS.some((pattern) => pattern.test(text))) return true;
   if (CONTRAST_PATTERN.test(text)) return false;
