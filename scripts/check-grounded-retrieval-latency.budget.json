@@ -8,6 +8,17 @@
     "judgeDelayMs": 1300,
     "$comment": "The eight cited claims run in bounded parallel. A 1300ms interval clears the 800ms p95 ceiling by more than 1.5x, so detection does not depend on machine speed or serial execution."
   },
+  "boundedFollowUp": {
+    "$comment": "Epic #3881/#3889: independent end-to-end cost of the actual server-owned bounded follow-up, including safely materialized fixture Git metadata, first synthesis, unread in-scope admission, remaining-budget retrieval, second synthesis and citation reconciliation. Reuses runConnectedRetrievalEval and ordinary exploration ceilings; a first answer declares a file absent from its actual evidence, and the second actual pack must contain its current content. No entailment judge is configured for this scenario, so no judged claims are claimed. Deterministic synthesis ports remove model-serving variance. The separate probe delays only the actual second synthesis, and must breach this scenario's p95 ceiling. Historical semantic-entailment ceilings and methodology remain unchanged.",
+    "warmupIterations": 3,
+    "iterations": 12,
+    "p50BudgetMs": 400,
+    "p95BudgetMs": 800,
+    "regressionProbe": {
+      "followUpDelayMs": 1300,
+      "$comment": "The second actual synthesis is delayed by 1300ms, greater than 1.5x its 800ms p95 ceiling. An unexecuted follow-up or an absorbed delay fails the gate."
+    }
+  },
   "observed": {
     "$comment": "Local darwin/arm64, 16 logical cores. Informational provenance only; the gate compares against the budgets above.",
     "p50Ms": 35,

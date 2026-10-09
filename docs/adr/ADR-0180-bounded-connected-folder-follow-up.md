@@ -70,7 +70,9 @@ Allowing a follow-up neither grants document embedding nor rewrites a Knowledge 
 
 The existing answerer uses `stream: false` and retains a bounded provider response through
 classification, declaration reconciliation and sanitization before delivery or assistant-history
-persistence. Provider output limits and the existing result sanitizer bound the retained answer.
+persistence. The existing Gateway adapters' finite response-byte and output limits bound the
+retained answer. The result sanitizer trims text and removes orchestration lines within that bound;
+it does not supply a separate size limit.
 The first insufficiency answer therefore cannot appear as a partial client answer while the server
 is still deciding whether to replace it.
 

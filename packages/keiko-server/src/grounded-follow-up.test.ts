@@ -232,6 +232,34 @@ describe("one server-owned follow-up under the original turn budgets", () => {
     expect(result.pack.usage.filesRead).toBe(1);
   });
 
+  it("retains first insufficiency when an injected second answer omitted the newly read source", async () => {
+    let calls = 0;
+    const result = await runConnectedRetrievalEval({
+      files,
+      query: "Explain src/Feature.ts",
+      answerer: {
+        answer: async (_question, pack) => {
+          await Promise.resolve();
+          calls += 1;
+          return calls === 1
+            ? first
+            : {
+                content: "Companion is 42.",
+                usage: { promptTokens: 10, completionTokens: 10 },
+                sentEvidencePacks: [withPromptExcerptByteLimit(pack, 0)],
+              };
+        },
+      },
+    });
+    expect(calls).toBe(2);
+    expect(result.answer).toMatchObject({
+      assistantContent: first,
+      followUp: { passCount: 1, outcome: "budget-refused", admittedPathCount: 1 },
+    });
+    expect(result.pack.usage.modelInputTokens).toBe(10);
+    expect(result.pack.usage.modelOutputTokens).toBe(10);
+  });
+
   it("keeps actual second-pass read usage when its provider fails", async () => {
     let calls = 0;
     const result = await runConnectedRetrievalEval({

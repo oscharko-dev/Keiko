@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "994b91b28a64b8cead448e79e32571e7dce91c8fc464e9561d4e359d5d9d35c4" as const;
+  "489c9f90cb29bbe88af4231dda49e90f36d4b51f2274dea1cb1a902e95a74541" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13377,6 +13377,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "recentPathHintCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "recentPathHitCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "relativeFloorPermille",
               type: "integer",
               dataClass: "count",
@@ -13425,6 +13437,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "semanticRefreshEmbeddingCallCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "semanticRefreshInputTokenUpperBound",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "semanticRefreshReadBytesUpperBound",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "semanticRefreshReadFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "semanticRefreshedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "semanticStaleFallbackCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "stackTraceExternalFrameCount",
               type: "integer",
               dataClass: "count",
@@ -13438,6 +13486,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "strongestOrdinaryScorePermille",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "worktreeDeletedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "worktreeObservedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "worktreeStatusDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "worktreeStatusDurationMs",
               type: "integer",
               dataClass: "count",
               required: false,

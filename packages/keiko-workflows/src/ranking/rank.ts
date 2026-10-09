@@ -60,6 +60,7 @@ function resolveHints(hints: RankingHints | undefined): Required<RankingHints> {
   return {
     generatedPathPatterns: hints?.generatedPathPatterns ?? DEFAULT_GENERATED_PATTERNS,
     duplicateOf: hints?.duplicateOf ?? new Map<string, string>(),
+    recentPaths: hints?.recentPaths ?? [],
   };
 }
 
@@ -161,7 +162,7 @@ export function rankCandidates(input: RankingInput, options: RankingOptions = {}
   const hints = resolveHints(input.hints);
   // Explicit weights still win (existing callers/tests unaffected); otherwise the intent picks the
   // weights — DEFAULT for non-boosted intents and the no-intent path, so behavior is unchanged there.
-  const weights = options.weights ?? weightsForIntent(input.context?.retrievalIntent);
+  const weights = rankingWeights(input, options);
   const { valid, invalidPaths } = groupAtomsByPath(input.atoms);
   const annotated = buildAnnotated(valid, input, hints, weights);
   const intentFilter = isIntentBoosted(input.context?.retrievalIntent)
@@ -181,4 +182,17 @@ export function rankCandidates(input: RankingInput, options: RankingOptions = {}
     elapsedMs,
   };
   return { kept: filterResult.kept, omitted: filterResult.omitted, diagnostics };
+}
+
+function rankingWeights(input: RankingInput, options: RankingOptions): ScoringWeights {
+  const weights = options.weights ?? weightsForIntent(input.context?.retrievalIntent);
+  if (options.weights !== undefined || !hasWorktreeHints(input)) return weights;
+  const intent = input.context?.retrievalIntent;
+  return intent === "targeted-code-search" || intent === "diagnostic-search"
+    ? { ...weights, gitWorktreeRecency: 0.04 }
+    : weights;
+}
+
+function hasWorktreeHints(input: RankingInput): boolean {
+  return (input.hints?.recentPaths?.length ?? 0) > 0;
 }

@@ -410,8 +410,12 @@ unknown, or excess declaration lines are removed before client delivery and hist
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
-two-slot synthesis ceiling and the original remaining search/read/token/spend/time grants. A file
-already physically read does not acquire another read through an unread-in-prompt declaration.
+maximum of two synthesis calls and the original remaining search/read/token/spend/time grants.
+Declared unread targets receive priority during final prompt fitting;
+the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
+fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
+against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
+A file already physically read does not acquire another read through an unread-in-prompt declaration.
 The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
 from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
 while retaining an honest uncited warning, and never obtains a third synthesis slot. Separately
@@ -419,6 +423,14 @@ bounded gateway/context retries and entailment verification retain their existin
 `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` is default-enabled with one follow-up pass: absent means `1`,
 explicit `1` enables, explicit `0` disables, and every other explicit value fails closed to zero
 passes with a body-free invalid configuration observation (ADR-0180).
+Working-tree recency uses one scope-bound request-local snapshot from the existing observed Git
+runner, capped at 64 admitted paths and a shared 1.5-second ceiling further bounded by the remaining
+request deadline. Ordinary folders spawn no process; exhausted grants and elapsed deadlines refuse
+observation. Allowed paths feed the existing recent-path search policy and a small targeted/diagnostic
+ranking signal without changing provenance, admission, or floor exemptions. Selection-details
+records only the closed status disposition, measured duration, observed/deleted counts and hint/hit
+counts. Private scope/status cache identity and path values never enter activity evidence. Status
+dependency failures retain the existing structured diagnostics and degrade to ordinary retrieval.
 Supported document basenames use the existing bounded path-only discovery port, then the same
 admission and document-extraction boundaries; ZIP containers never require text classification.
 Only extraction-owned files are removed from ordinary code evidence. An ordinary text file with
@@ -544,6 +556,18 @@ candidates precede unaddressed alternatives; only unaddressed candidates use bas
 Their score ties use shared-parent proximity, segment affinity, then path spelling. Collision,
 diversity-demotion, signal, and proximity observations are count-only fields on the same
 correlated selection-details Activity Log operation.
+Request-local semantic leases open only for an admitted semantic lookup. Existing index fingerprint
+verification is part of that bounded logical search, while optional new live refresh consumes the
+same exploration governor's remaining file, excerpt-byte, and model-input grants. Each new read
+reserves the validated observed file size; each embedding reserves a conservative UTF-8-byte input
+token bound and uses the existing gateway spend reservation with exactly-once settlement. Rejected
+grants do not charge an attempt or start new refresh I/O. `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX`
+defaults to zero, invalid explicit values remain zero, and enabled integer values are capped at
+eight. Refresh shares the original request signal and remaining deadline, capped again at five
+seconds; it never mutates the persisted pod. Selection-details records actual embedding/read
+attempt counts separately from byte/input-token upper reservations. Refreshed-file counts include
+only usable files retained in the assembled pack; stale retained files receive the canonical
+`stale-evidence` marker with a `stale-semantic:` count-only claim and keep current lexical evidence.
 Addressed-file demotion is recorded separately from legitimate unaddressed basename diversity;
 an unaddressed collision cannot by itself diagnose a missed explicit target.
 The active-intent absolute floor derives from the scoring weight table: ninety percent of a

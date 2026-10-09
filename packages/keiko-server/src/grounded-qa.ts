@@ -125,7 +125,7 @@ import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
-import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
+import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -847,6 +847,7 @@ export function groundedPromptInputTokensForCapability(
 export interface GroundedGatewayPromptOptions {
   readonly modelInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
+  readonly requiredEvidencePaths?: readonly string[] | undefined;
 }
 
 function withPromptModelInputBudget(
@@ -896,7 +897,10 @@ interface RankedPromptExcerpt {
   readonly excerpt: ContextExcerpt;
 }
 
-function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPromptExcerpt[] {
+function rankedPromptExcerpts(
+  pack: ConnectedContextPack,
+  requiredEvidencePaths: readonly string[] = [],
+): readonly RankedPromptExcerpt[] {
   const ranked: RankedPromptExcerpt[] = [];
   for (let fileIndex = 0; fileIndex < pack.files.length; fileIndex += 1) {
     const file = pack.files[fileIndex];
@@ -909,6 +913,8 @@ function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPrompt
   }
   ranked.sort(
     (a, b) =>
+      Number(requiredEvidencePaths.includes(b.excerpt.atom.scopePath)) -
+        Number(requiredEvidencePaths.includes(a.excerpt.atom.scopePath)) ||
       promptExcerptScore(b.excerpt) - promptExcerptScore(a.excerpt) ||
       promptExcerptProvenancePriority(b.excerpt) - promptExcerptProvenancePriority(a.excerpt) ||
       a.fileIndex - b.fileIndex ||
@@ -948,11 +954,12 @@ function excerptWithContent(
 function withPromptExcerptTotalByteBudget(
   pack: ConnectedContextPack,
   maxExcerptBytes: number,
+  requiredEvidencePaths: readonly string[] = [],
 ): ConnectedContextPack {
   if (maxExcerptBytes <= 0) return { ...pack, files: [] };
   const byFile = new Map<number, ContextExcerpt[]>();
   let remaining = Math.floor(maxExcerptBytes);
-  for (const ranked of rankedPromptExcerpts(pack)) {
+  for (const ranked of rankedPromptExcerpts(pack, requiredEvidencePaths)) {
     if (remaining <= 0) break;
     const fullBytes = Buffer.byteLength(ranked.excerpt.content, "utf8");
     if (fullBytes === 0) continue;
@@ -991,8 +998,9 @@ function withPromptExcerptTotalByteBudget(
 export function withPromptExcerptBudget(
   pack: ConnectedContextPack,
   totalExcerptBytes: number,
+  requiredEvidencePaths?: readonly string[],
 ): ConnectedContextPack {
-  return withPromptExcerptTotalByteBudget(pack, totalExcerptBytes);
+  return withPromptExcerptTotalByteBudget(pack, totalExcerptBytes, requiredEvidencePaths);
 }
 
 type GroundedPromptBuilder = (
@@ -1069,7 +1077,11 @@ function fitGroundedPrompt(
   let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack, omissionPathBytes: 0 };
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
-    const candidatePack = withPromptExcerptBudget(budgetedPack, totalExcerptBytes);
+    const candidatePack = withPromptExcerptBudget(
+      budgetedPack,
+      totalExcerptBytes,
+      options.requiredEvidencePaths,
+    );
     const candidate = build(question, candidatePack, redactor, 0);
     if (fits(candidate)) {
       best = { messages: candidate, pack: candidatePack, omissionPathBytes: 0 };
@@ -1439,11 +1451,13 @@ async function groundedGatewayAttempt(
   const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
   const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
     ...promptOptions,
+    requiredEvidencePaths: options.requiredEvidencePaths,
     modelInputTokensMax: Math.min(
       promptOptions.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
       options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
     ),
   });
+  if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
   if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
   ensureNotCancelled(ctx.signal);
   if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) {
@@ -1466,6 +1480,17 @@ async function groundedGatewayAttempt(
     ctx.signal,
   );
   return { sent, response };
+}
+
+function requiredEvidenceSent(sent: SentGroundedPrompt, paths: readonly string[] = []): boolean {
+  const present = new Set(
+    sent.sentEvidencePacks?.flatMap((pack) =>
+      pack.files
+        .filter((file) => file.excerpts.some((excerpt) => excerpt.content.length > 0))
+        .map((file) => file.scopePath),
+    ),
+  );
+  return paths.every((path) => present.has(path));
 }
 
 // The input budget of one attempt, read from the model's current capability.
@@ -1531,11 +1556,7 @@ function runDefaultGroundedExploration(
     signal,
     budgetedInput.budget.excerptBytesMax,
   );
-  const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
-    deps,
-    signal,
-    budgetedInput.workspaceRoot,
-  );
+  const semanticLease = configuredGroundedSemanticRequest(deps, budgetedInput.workspaceRoot);
   return runGroundedExploration(budgetedInput, {
     followUpConfigurationDisposition: connectedFollowUpConfiguration(
       deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
@@ -1558,9 +1579,8 @@ function runDefaultGroundedExploration(
     microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
     workspaceIndexForRoot: deps.workspaceIndexForRoot,
     ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
-    ...(semanticLease.provider === undefined
-      ? {}
-      : { repoSemanticSearchProvider: semanticLease.provider }),
+    repoSemanticSearchProviderFor: semanticLease.providerFor,
+    diagnostics: deps.diagnostics,
     ...(entailmentStage === undefined ? {} : { entailmentStage }),
     // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
     // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so

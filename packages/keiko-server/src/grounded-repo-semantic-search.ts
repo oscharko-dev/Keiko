@@ -6,6 +6,7 @@ import {
   type EmbeddingModelIdentity,
   type KnowledgeSource,
   type RetrievalReference,
+  type ExplorationUsage,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createLocalKnowledgeStoreVectorIndexPort,
@@ -27,6 +28,8 @@ import {
   assertCompatibleEmbeddingIdentity,
   l2NormalizeVector,
   type OpenAIEmbeddingSuccess,
+  type OpenAIEmbeddingOutcome,
+  type GatewaySpendReservation,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   type SemanticSearchInput,
@@ -49,6 +52,8 @@ import {
   localKnowledgeEmbeddingAdapterForProvider,
 } from "./local-knowledge-handlers.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
+import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 const MAX_SEMANTIC_CANDIDATES = 32;
 const SEMANTIC_CANDIDATE_RESULT_MULTIPLIER = 4;
@@ -61,9 +66,20 @@ export interface RepositorySemanticFreshnessObservation {
   readonly stalePaths: readonly string[];
   readonly refreshedPaths: readonly string[];
   readonly unavailableFileCount: number;
+  /** Attempted optional work; token/byte values are conservative admission bounds, not usage reports. */
+  readonly refreshUsage?: Readonly<SemanticRefreshUsage> | undefined;
+}
+
+interface SemanticRefreshUsage {
+  embeddingCallCount: number;
+  readFileCount: number;
+  readBytes: number;
+  inputTokens: number;
 }
 
 interface SemanticRefreshOptions {
+  readonly tryReserveRefreshUsage?:
+    ((delta: Readonly<Partial<ExplorationUsage>>) => boolean) | undefined;
   readonly semanticRefreshFilesMax?: number | undefined;
   readonly deadlineAtMs?: number | undefined;
   readonly nowMs?: (() => number) | undefined;
@@ -73,6 +89,8 @@ interface SemanticRefreshOptions {
 }
 
 interface EmbeddingContext extends SemanticRefreshOptions {
+  readonly reserveRefreshSpend: (input: string) => GatewaySpendReservation | undefined;
+  readonly refreshUsage?: SemanticRefreshUsage | undefined;
   readonly fs: WorkspaceFs;
   readonly redactText: (text: string) => string;
   readonly signal?: AbortSignal | undefined;
@@ -407,8 +425,7 @@ function liveFingerprintFile(
 
 async function readLiveFingerprintBytes(
   ctx: EmbeddingContext,
-  pod: ResolvedRepositoryPod,
-  scopePath: string,
+  file: LiveFingerprintFile,
   fingerprint: RepositoryFileFingerprint,
 ): Promise<Uint8Array | undefined> {
   const byteLength = fingerprintByteLength(fingerprint);
@@ -419,8 +436,7 @@ async function readLiveFingerprintBytes(
   )
     return undefined;
   try {
-    const file = liveFingerprintFile(ctx, pod, scopePath);
-    if (file?.before.size !== byteLength) return undefined;
+    if (file.before.size !== byteLength) return undefined;
     const bytes = await readSemanticFileBytes(ctx, file, byteLength + 1);
     return verifiedLiveBytes(ctx, file, bytes, byteLength);
   } catch {
@@ -447,11 +463,15 @@ async function readSemanticFileBytes(
   file: LiveFingerprintFile,
   maxBytes: number,
   deadlineAtMs = ctx.deadlineAtMs ?? Infinity,
+  onRead?: () => void,
 ): Promise<Uint8Array | undefined> {
   const read = ctx.fs.readFileBytes;
   if (read === undefined) return undefined;
   return raceAbortDeadline(
-    () => read.call(ctx.fs, file.realPath, maxBytes, "reject", file.before),
+    () => {
+      onRead?.();
+      return read.call(ctx.fs, file.realPath, maxBytes, "reject", file.before);
+    },
     { deadlineAtMs, nowMs: ctx.nowMs ?? Date.now, signal: ctx.signal },
   );
 }
@@ -468,8 +488,10 @@ async function podDocumentFreshness(
   if (fingerprint === undefined || fingerprintByteLength(fingerprint) === undefined)
     return "unavailable";
   const preflight = fingerprintPreflight(ctx, pod, document.scopePath, fingerprint);
-  if (preflight !== undefined) return preflight;
-  const bytes = await readLiveFingerprintBytes(ctx, pod, document.scopePath, fingerprint);
+  if (preflight.kind !== "ready") return preflight.kind;
+  // Reuse this validated snapshot. The descriptor reader and post-read pathname/metadata check
+  // still reject replacement; reconstructing the same preflight would add metadata I/O only.
+  const bytes = await readLiveFingerprintBytes(ctx, preflight.file, fingerprint);
   if (bytes === undefined || semanticOperationStopped(ctx)) return "unavailable";
   return repositoryContentFingerprint(bytes, fingerprint.fingerprintKind) ===
     fingerprint.contentFingerprint
@@ -477,12 +499,16 @@ async function podDocumentFreshness(
     : "stale";
 }
 
+type FingerprintPreflight =
+  | { readonly kind: "ready"; readonly file: LiveFingerprintFile }
+  | { readonly kind: "stale" | "unavailable" };
+
 function fingerprintPreflight(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   scopePath: string,
   fingerprint: RepositoryFileFingerprint,
-): "stale" | "unavailable" | undefined {
+): FingerprintPreflight {
   try {
     const file = liveFingerprintFile(ctx, pod, scopePath);
     if (
@@ -490,12 +516,12 @@ function fingerprintPreflight(
       semanticOperationStopped(ctx) ||
       !isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
     )
-      return "unavailable";
-    if (file.before.size !== fingerprint.byteLength) return "stale";
+      return { kind: "unavailable" };
+    if (file.before.size !== fingerprint.byteLength) return { kind: "stale" };
+    return { kind: "ready", file };
   } catch {
-    return "unavailable";
+    return { kind: "unavailable" };
   }
-  return undefined;
 }
 
 interface ClassifiedPodDocuments {
@@ -739,7 +765,11 @@ async function semanticSearch(
   const prepared = prepareSemanticSearch(ctx, request);
   if (prepared === undefined) return [];
   const { documents, signal } = prepared;
-  const active = { ...ctx, signal };
+  const active = {
+    ...ctx,
+    signal,
+    refreshUsage: { embeddingCallCount: 0, readFileCount: 0, readBytes: 0, inputTokens: 0 },
+  };
   const classified = await freshPodDocuments(active, active.repositoryPod, documents);
   const refreshed: SemanticSearchMatch[] = [];
   try {
@@ -759,6 +789,9 @@ async function semanticSearch(
       stalePaths: classified.stale.map((document) => document.scopePath),
       refreshedPaths: refreshed.map((hit) => hit.scopePath),
       unavailableFileCount: classified.unavailableFileCount,
+      ...(active.refreshUsage.embeddingCallCount + active.refreshUsage.readFileCount === 0
+        ? {}
+        : { refreshUsage: { ...active.refreshUsage } }),
     });
   }
 }
@@ -790,6 +823,36 @@ interface RefreshFragment {
   readonly file: LiveFingerprintFile;
 }
 
+function boundedRefreshFile(file: LiveFingerprintFile | undefined): file is LiveFingerprintFile {
+  return (
+    file !== undefined &&
+    Number.isSafeInteger(file.before.size) &&
+    file.before.size >= 0 &&
+    file.before.size <= SEMANTIC_REFRESH_FRAGMENT_BYTES
+  );
+}
+
+function verifiedRefreshBytes(
+  ctx: EmbeddingContext,
+  file: LiveFingerprintFile,
+  bytes: Uint8Array | undefined,
+  deadlineAtMs: number,
+): bytes is Uint8Array {
+  return (
+    bytes !== undefined &&
+    !refreshStopped(ctx, ctx.signal, deadlineAtMs) &&
+    bytes.byteLength === file.before.size &&
+    !bytes.includes(0) &&
+    isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
+  );
+}
+
+function observeRefreshRead(ctx: EmbeddingContext, size: number): void {
+  if (ctx.refreshUsage === undefined) return;
+  ctx.refreshUsage.readFileCount += 1;
+  ctx.refreshUsage.readBytes += size;
+}
+
 async function liveRefreshFragment(
   ctx: EmbeddingContext,
   document: CandidateDocument,
@@ -798,21 +861,23 @@ async function liveRefreshFragment(
   if (ctx.fs.readFileBytes === undefined) return undefined;
   try {
     const file = liveFingerprintFile(ctx, ctx.repositoryPod, document.scopePath);
-    if (file === undefined || file.before.size > SEMANTIC_REFRESH_FRAGMENT_BYTES) return undefined;
+    if (!boundedRefreshFile(file)) return undefined;
+    if (
+      refreshStopped(ctx, ctx.signal, deadlineAtMs) ||
+      ctx.tryReserveRefreshUsage?.({ filesRead: 1, excerptBytes: file.before.size }) !== true
+    )
+      return undefined;
+    if (refreshStopped(ctx, ctx.signal, deadlineAtMs)) return undefined;
     const bytes = await readSemanticFileBytes(
       ctx,
       file,
       SEMANTIC_REFRESH_FRAGMENT_BYTES + 1,
       deadlineAtMs,
+      () => {
+        observeRefreshRead(ctx, file.before.size);
+      },
     );
-    if (
-      bytes === undefined ||
-      refreshStopped(ctx, ctx.signal, deadlineAtMs) ||
-      bytes.byteLength !== file.before.size ||
-      bytes.includes(0) ||
-      !isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
-    )
-      return undefined;
+    if (!verifiedRefreshBytes(ctx, file, bytes, deadlineAtMs)) return undefined;
     const sourceText = ctx.redactText(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     return { file, document: { ...document, sourceText, startLine: 1 } };
   } catch {
@@ -835,34 +900,63 @@ function compatibleRefreshVector(
   return identity.normalization === "l2" ? l2NormalizeVector(outcome.vector) : outcome.vector;
 }
 
+function callRefreshEmbedding(
+  ctx: EmbeddingContext,
+  input: string,
+  signal: AbortSignal,
+  timeoutMs: number | undefined,
+  inputTokens: number,
+): Promise<OpenAIEmbeddingOutcome> {
+  const adapter = ctx.localKnowledgeEmbeddingAdapter;
+  const identity = ctx.repositoryPod.capsule.embeddingModelIdentity;
+  if (ctx.refreshUsage !== undefined) {
+    ctx.refreshUsage.embeddingCallCount += 1;
+    ctx.refreshUsage.inputTokens += inputTokens;
+  }
+  return adapter.request({
+    endpoint: adapter.endpoint,
+    apiKey: adapter.apiKey,
+    modelId: identity.modelId,
+    input,
+    ...(adapter.apiKeyHeaderName === undefined
+      ? {}
+      : { apiKeyHeaderName: adapter.apiKeyHeaderName }),
+    ...(identity.dimensionsParam === undefined ? {} : { dimensions: identity.dimensionsParam }),
+    ...(ctx.correlationId === undefined
+      ? {}
+      : { logContext: { correlationId: ctx.correlationId } }),
+    signal,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+}
+
 async function refreshEmbedding(
   ctx: EmbeddingContext,
   input: string,
   signal: AbortSignal | undefined,
   deadlineAtMs: number,
 ): Promise<Float32Array | undefined> {
-  const adapter = ctx.localKnowledgeEmbeddingAdapter;
   const identity = ctx.repositoryPod.capsule.embeddingModelIdentity;
-  const outcome = await raceAbortDeadline(
-    ({ signal: boundedSignal, timeoutMs }) =>
-      adapter.request({
-        endpoint: adapter.endpoint,
-        apiKey: adapter.apiKey,
-        modelId: identity.modelId,
-        input,
-        ...(adapter.apiKeyHeaderName === undefined
-          ? {}
-          : { apiKeyHeaderName: adapter.apiKeyHeaderName }),
-        ...(identity.dimensionsParam === undefined ? {} : { dimensions: identity.dimensionsParam }),
-        ...(ctx.correlationId === undefined
-          ? {}
-          : { logContext: { correlationId: ctx.correlationId } }),
-        signal: boundedSignal,
-        timeoutMs,
-      }),
-    { deadlineAtMs, nowMs: ctx.nowMs ?? Date.now, signal },
-  );
-  return outcome.ok ? compatibleRefreshVector(identity, outcome.value) : undefined;
+  // UTF-8 bytes are a conservative token upper bound when no embedding tokenizer is available.
+  const inputTokens = Buffer.byteLength(input, "utf8");
+  if (
+    refreshStopped(ctx, signal, deadlineAtMs) ||
+    ctx.tryReserveRefreshUsage?.({ modelInputTokens: inputTokens }) !== true
+  )
+    return undefined;
+  if (refreshStopped(ctx, signal, deadlineAtMs)) return undefined;
+  const reservation = ctx.reserveRefreshSpend(input);
+  try {
+    const outcome = await raceAbortDeadline(
+      ({ signal: boundedSignal, timeoutMs }) =>
+        callRefreshEmbedding(ctx, input, boundedSignal, timeoutMs, inputTokens),
+      { deadlineAtMs, nowMs: ctx.nowMs ?? Date.now, signal },
+    );
+    return outcome.ok ? compatibleRefreshVector(identity, outcome.value) : undefined;
+  } finally {
+    // The adapter has no measured token usage; preserve the existing durable upper reservation.
+    reservation?.settle(undefined);
+  }
 }
 
 function refreshMatch(
@@ -937,7 +1031,12 @@ function refreshAllowed(
   limit: number,
   deadlineAtMs: number,
 ): boolean {
-  return limit > 0 && staleCount > 0 && !refreshStopped(ctx, prepared.signal, deadlineAtMs);
+  return (
+    ctx.tryReserveRefreshUsage !== undefined &&
+    limit > 0 &&
+    staleCount > 0 &&
+    !refreshStopped(ctx, prepared.signal, deadlineAtMs)
+  );
 }
 
 async function refreshedDocumentHit(
@@ -974,6 +1073,25 @@ function observedPodIdentity(
   return resolution;
 }
 
+function refreshSpendReserver(
+  deps: UiHandlerDeps,
+  config: ReturnType<typeof currentGatewayConfig>,
+  modelId: string,
+  correlationId: string | undefined,
+): EmbeddingContext["reserveRefreshSpend"] {
+  const capability = config?.capabilities?.find(
+    (candidate) => candidate.kind === "embedding" && candidate.id === modelId,
+  );
+  const correlation = correlationIdOrUnknown(correlationId);
+  return (input) =>
+    reserveGatewaySpendForAttempt(
+      deps.env,
+      capability,
+      { modelId, messages: [{ role: "user", content: input }], maxOutputTokens: 0 },
+      correlation,
+    );
+}
+
 export function configuredRepoSemanticSearchProviderFor(
   deps: UiHandlerDeps,
   signal: AbortSignal | undefined,
@@ -1007,6 +1125,12 @@ export function configuredRepoSemanticSearchProviderFor(
       Math.min(MAX_SEMANTIC_CANDIDATES, options.maxCandidates ?? MAX_SEMANTIC_CANDIDATES),
     ),
     localKnowledgeEmbeddingAdapter: localKnowledgeEmbeddingAdapterForProvider(deps, provider),
+    reserveRefreshSpend: refreshSpendReserver(
+      deps,
+      config,
+      provider.modelId,
+      options.correlationId,
+    ),
     repositoryPod: repositoryPod.pod,
     ...(options.observePodRetrieval === undefined
       ? {}

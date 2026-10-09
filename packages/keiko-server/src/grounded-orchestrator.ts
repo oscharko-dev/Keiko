@@ -1,3 +1,19 @@
+import type { RepositorySemanticFreshnessObservation } from "./grounded-repo-semantic-search.js";
+import {
+  groundedSemanticFreshnessSummary,
+  staleSemanticMarker,
+  type GroundedSemanticFreshnessSummary,
+  type GroundedSemanticProviderFactory,
+  type GroundedSemanticRequest,
+  type SemanticRefreshUsageGrant,
+} from "./grounded-semantic-request.js";
+import type { ServerDiagnosticSink } from "./diagnostics-log.js";
+import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
+import { observeWorktreeRecency, type WorktreeRecencyResult } from "./grounded-worktree-recency.js";
+import {
+  createWorktreeRecencySnapshot,
+  type WorktreeRecencySnapshot,
+} from "./grounded-worktree-request.js";
 import {
   logGroundedAnswerActivity,
   type FollowUpConfiguration,
@@ -614,6 +630,23 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   fields: {
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    worktreeStatusDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-git", "unavailable", "applied", "skipped-budget"],
+    },
+    worktreeStatusDurationMs: { type: "integer", dataClass: "count", required: false },
+    semanticStaleFallbackCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshedFileCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshEmbeddingCallCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshReadFileCount: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshReadBytesUpperBound: { type: "integer", dataClass: "count", required: false },
+    semanticRefreshInputTokenUpperBound: { type: "integer", dataClass: "count", required: false },
+    recentPathHintCount: { type: "integer", dataClass: "count", required: false },
+    recentPathHitCount: { type: "integer", dataClass: "count", required: false },
+    worktreeObservedFileCount: { type: "integer", dataClass: "count", required: false },
+    worktreeDeletedFileCount: { type: "integer", dataClass: "count", required: false },
     basenameCollisionGroupCount: { type: "integer", dataClass: "count", required: false },
     basenameDedupDemotedCount: { type: "integer", dataClass: "count", required: false },
     addressedBasenameDedupDemotedCount: { type: "integer", dataClass: "count", required: false },
@@ -1050,6 +1083,7 @@ export interface GroundedAnswerOptions {
   readonly currentQuestion?: string | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly deadlineAtMs?: number | undefined;
+  readonly requiredEvidencePaths?: readonly string[] | undefined;
 }
 
 export interface GroundedAnswerer {
@@ -1090,6 +1124,11 @@ export interface OrchestratorInput {
 }
 
 export interface OrchestratorDeps {
+  readonly declarationVerificationSignal?: AbortSignal | undefined;
+  readonly repoSemanticSearchProviderFor?: GroundedSemanticProviderFactory | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly worktreeGitRunner?: GitProcessRunner | undefined;
+  readonly worktreeRecencySnapshot?: WorktreeRecencySnapshot | undefined;
   readonly followUpConfigurationDisposition?: FollowUpConfiguration["disposition"] | undefined;
   readonly reliableCitationBehaviour?: GroundedCitationBehaviour | undefined;
   readonly observeCitationBehaviour?: ((behaviour: GroundedCitationBehaviour) => void) | undefined;
@@ -1230,6 +1269,11 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
 }
 
 interface SearchInputs {
+  readonly repoSemanticSearchProviderFor?:
+    ((grant: SemanticRefreshUsageGrant) => SemanticSearchProvider | undefined) | undefined;
+  readonly resolveRepoSemanticSearchProvider?:
+    (() => SemanticSearchProvider | undefined) | undefined;
+  readonly recentPaths?: readonly string[] | undefined;
   readonly observeSourceDecision: (observation: SourceDecisionObservation) => void;
   readonly discoverDefinitions: (
     governor: GovernorState,
@@ -2269,17 +2313,22 @@ function planSearchAnchors(plan: ExplorationPlan): readonly SearchAnchor[] {
   return [...plan.anchors, ...searchReferenceAnchors(plan.references ?? [])];
 }
 
-function lexicalSemanticProvider(inputs: SearchInputs): SemanticSearchProvider | undefined {
-  if (inputs.targetDecision.kind === "contextual") return inputs.repoSemanticSearchProvider;
+function semanticProviderAllowed(inputs: SearchInputs): boolean {
+  if (inputs.targetDecision.kind === "contextual") return true;
   if (
     inputs.targetDecision.kind === "literal-search" ||
     inputs.targetDecision.definitionSymbol !== undefined ||
     isDirectEvidenceLookup(inputs.query, inputs.anchors, inputs.targetDecision)
   )
-    return undefined;
-  return inputs.targetDecision.targets.some((anchor) => anchor.kind === "quoted")
-    ? undefined
-    : inputs.repoSemanticSearchProvider;
+    return false;
+  return !inputs.targetDecision.targets.some((anchor) => anchor.kind === "quoted");
+}
+
+function lexicalSemanticProvider(inputs: SearchInputs): SemanticSearchProvider | undefined {
+  if (!semanticProviderAllowed(inputs)) return undefined;
+  return inputs.resolveRepoSemanticSearchProvider === undefined
+    ? inputs.repoSemanticSearchProvider
+    : inputs.resolveRepoSemanticSearchProvider();
 }
 
 function lexicalSearchOptions(inputs: SearchInputs): {
@@ -2289,6 +2338,7 @@ function lexicalSearchOptions(inputs: SearchInputs): {
   searchHints: {
     retrievalIntent: Exclude<RetrievalIntent, "conversational-follow-up">;
     allowSourceInspection: boolean;
+    recentPaths?: readonly string[] | undefined;
   };
   signal?: AbortSignal;
 } {
@@ -2296,7 +2346,11 @@ function lexicalSearchOptions(inputs: SearchInputs): {
     fs: inputs.fs,
     nowMs: inputs.nowMs,
     deadlineAtMs: inputs.deadlineAtMs,
-    searchHints: { retrievalIntent: inputs.retrievalIntent, allowSourceInspection: true },
+    searchHints: {
+      retrievalIntent: inputs.retrievalIntent,
+      allowSourceInspection: true,
+      recentPaths: inputs.recentPaths,
+    },
     ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
   };
 }
@@ -2327,8 +2381,9 @@ function observedLexicalSemanticProvider(
 ): SemanticSearchProvider | undefined {
   const provider = lexicalSemanticProvider(inputs);
   if (provider === undefined) {
-    observation.semanticProviderDisposition =
-      inputs.repoSemanticSearchProvider === undefined ? "unavailable" : "suppressed";
+    observation.semanticProviderDisposition = semanticProviderUnavailable(inputs)
+      ? "unavailable"
+      : "suppressed";
     return undefined;
   }
   return {
@@ -3072,9 +3127,18 @@ async function runReservedRing(
   if (reservation.marker !== undefined)
     return { governor: reservation.governor, marker: reservation.marker };
   let governor = reservation.governor;
+  const grant: SemanticRefreshUsageGrant = (delta): boolean => {
+    throwIfCancelled(inputs.signal);
+    if (inputs.nowMs() >= inputs.deadlineAtMs) return false;
+    const next = applyUsage(governor, usageDelta(delta));
+    if (next.status === "budget-exhausted") return false;
+    governor = next;
+    return true;
+  };
   decisions.executedRingKinds.push(ring.kind);
   const result = await runRing(ring, {
     ...inputs,
+    resolveRepoSemanticSearchProvider: semanticProviderResolver(inputs, grant),
     tryReserveAdditionalSearchCall: (): boolean => {
       if (governor.usage.searchCalls >= governor.plan.budget.searchCallsMax) return false;
       governor = applyUsage(governor, usageDelta({ searchCalls: 1 }));
@@ -6589,6 +6653,7 @@ function createReadyGovernedPlan(
 }
 
 interface AssembleGroundedPackInputs {
+  readonly worktreeRecency?: WorktreeRecencyResult | undefined;
   readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
   readonly input: OrchestratorInput;
@@ -6873,6 +6938,7 @@ function rankEligibleEvidencePool(
   atoms: readonly EvidenceAtom[],
   nowMs: () => number,
   hasGitMetadata: boolean,
+  recentPaths: readonly string[],
 ): ReturnType<typeof rankCandidates> {
   return rankCandidates(
     {
@@ -6880,7 +6946,7 @@ function rankEligibleEvidencePool(
       anchors: primaryRankingAnchors(input, plan),
       ...(plan.references === undefined ? {} : { references: plan.references }),
       context: { retrievalIntent: effectiveRetrievalIntent(plan) },
-      ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
+      hints: { recentPaths, ...(hasGitMetadata ? {} : { generatedPathPatterns: [] }) },
     },
     { nowMs, filter: { ...primaryCandidateFilter(rings), minScore: 0 } },
   );
@@ -6942,7 +7008,15 @@ async function preparePackAssembly(
 ): Promise<PreparedPackAssembly> {
   const { input, plan, deps, nowMs, deadlineAtMs } = args;
   const { atoms, reusedEvidenceAtomCount } = rankingEvidence(input, rings);
-  const ranking = rankEligibleEvidencePool(input, plan, rings, atoms, nowMs, args.hasGitMetadata);
+  const ranking = rankEligibleEvidencePool(
+    input,
+    plan,
+    rings,
+    atoms,
+    nowMs,
+    args.hasGitMetadata,
+    args.worktreeRecency?.paths.map((path) => path.path) ?? [],
+  );
   const reranker = await rerankGroundedCandidates({
     reranker: deps.contextPackReranker,
     candidates: ranking.kept,
@@ -7454,6 +7528,10 @@ function explicitAssemblyDetails(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly semanticFreshness?: GroundedSemanticFreshnessSummary | undefined;
+  readonly worktreeStatusDurationMs?: number | undefined;
+  readonly worktreeRecency?: WorktreeRecencyResult | undefined;
+  readonly recentPathHitCount?: number | undefined;
   readonly selectionObservation?: ContextSelectionDiagnostics | undefined;
   readonly rerankFailure?: unknown;
   readonly explicitObservation?: ExplicitPathObservation | undefined;
@@ -7503,6 +7581,7 @@ type ConnectedContextPhase =
   | "directory-cleanup";
 
 interface ConnectedContextProgress {
+  semanticFreshness?: RepositorySemanticFreshnessObservation[] | undefined;
   plan?: ExplorationPlan | undefined;
   sourceDecision?: SourceDecisionObservation | undefined;
   scopeContextObservation?: ScopeContextObservation | undefined;
@@ -8407,6 +8486,8 @@ function selectionDetailsActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
     ...status.rankingObservation,
+    ...worktreeActivityExtra(status),
+    ...status.semanticFreshness,
     ...selectionQualityActivityExtra(status),
     ...(status.referenceObservation === undefined
       ? {}
@@ -8636,6 +8717,7 @@ function connectedContextSearchInputs(
       runtime.progress.scopeContextObservation = observation;
     },
     hasGitMetadata: context.hasGitMetadata,
+    recentPaths: context.worktreeRecency?.paths.map((path) => path.path),
     searchScope: context.searchScope,
     query: input.query,
     targetDecision: plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors),
@@ -8647,6 +8729,7 @@ function connectedContextSearchInputs(
     ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
     workspaceIndexActivity: context.workspaceIndexActivity,
     repoSemanticSearchProvider: deps.repoSemanticSearchProvider ?? deps.semanticSearchProvider,
+    repoSemanticSearchProviderFor: groundedSemanticProviderFactory(deps, runtime, context),
     gitFileHistoryEvidence: deps.gitFileHistoryEvidence ?? defaultGitFileHistoryEvidenceProvider,
     correlationId: deps.correlationId,
     structuralContexts: context.structuralContexts,
@@ -9094,6 +9177,8 @@ function liveStructuralContexts(
 }
 
 interface LiveRetrievalContext {
+  readonly worktreeStatusDurationMs?: number | undefined;
+  readonly worktreeRecency?: WorktreeRecencyResult | undefined;
   readonly hasGitMetadata: boolean;
   readonly deadlineAtMs: number;
   readonly searchScope: SearchScope;
@@ -9192,6 +9277,7 @@ function liveGroundedPackInputs(
   rings: RingRunSummary,
 ): AssembleGroundedPackInputs {
   return {
+    worktreeRecency: context.worktreeRecency,
     recordMetadataUnavailable: runtime.activity.metadataUnavailable,
     recordSymbolReadFailure: runtime.activity.symbolReadFailure,
     input,
@@ -9238,11 +9324,16 @@ async function retrieveLiveConnectedContext(
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
   const execution = connectedContextExecution(
-    withRetrievalSourceDiagnostics(assembled.pack, runtime.progress),
+    withRetrievalSourceDiagnostics(assembled.pack, runtime.progress, runtime.nowMs()),
     plan,
     runtime.activity,
     {
       ...liveRetrievalCompletion(workspaceIndex.providerStatus, assembled, rings.decisions),
+      ...liveWorktreeCompletion(context, assembled.pack),
+      semanticFreshness: groundedSemanticFreshnessSummary(
+        runtime.progress.semanticFreshness ?? [],
+        assembled.pack,
+      ),
       scopeContextObservation: runtime.progress.scopeContextObservation,
       sourceDecision: runtime.progress.sourceDecision,
     },
@@ -9250,6 +9341,16 @@ async function retrieveLiveConnectedContext(
     workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
+  return withDeclarationScopeResolver(execution, input, deps, runtime, context);
+}
+
+function withDeclarationScopeResolver(
+  execution: ConnectedContextExecution,
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): ConnectedContextExecution {
   return {
     ...execution,
     output: {
@@ -9269,7 +9370,7 @@ function declarationScopeIndex(
 ): ReadonlyMap<string, "unread-in-scope"> {
   const verified = new Map<string, "unread-in-scope">();
   for (const path of paths.slice(0, 3)) {
-    throwIfCancelled(deps.signal);
+    throwIfCancelled(deps.declarationVerificationSignal ?? deps.signal);
     if (runtime.nowMs() >= context.deadlineAtMs) break;
     if (
       admissibleDeclaredScopePath(path, {
@@ -9286,11 +9387,19 @@ function declarationScopeIndex(
 function withRetrievalSourceDiagnostics(
   pack: ConnectedContextPack,
   progress: ConnectedContextProgress,
+  nowMs: number,
 ): ConnectedContextPack {
   const scopeState = progress.scopeContextObservation?.state;
   const semanticState = progress.sourceDecision?.semanticProviderDisposition;
   return {
     ...pack,
+    uncertainty: [
+      ...pack.uncertainty,
+      ...staleSemanticMarker(
+        groundedSemanticFreshnessSummary(progress.semanticFreshness ?? [], pack),
+        nowMs,
+      ),
+    ],
     diagnostics: {
       rankedCandidates: [],
       ...pack.diagnostics,
@@ -9480,7 +9589,20 @@ async function retrieveLiveOrDeadlineExhausted(
       elapsedBudgetBlocked: true,
     });
   }
-  return retrieveLiveConnectedContext(input, deps, plan, governor, runtime, liveContext);
+  const observedContext = await withLiveWorktreeRecency(input, deps, plan, runtime, liveContext);
+  throwIfCancelled(deps.signal);
+  const observedGovernor = applyUsage(
+    governor,
+    usageDelta({ elapsedMs: observedContext.worktreeStatusDurationMs ?? 0 }),
+  );
+  return retrieveLiveConnectedContext(
+    input,
+    deps,
+    plan,
+    observedGovernor,
+    runtime,
+    observedContext,
+  );
 }
 
 async function executeConnectedContextRetrieval(
@@ -9653,14 +9775,19 @@ async function groundedAnswerForPack(
   pack: ConnectedContextPack,
   declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
   deadlineAtMs?: number,
+  requiredEvidencePaths?: readonly string[],
 ): Promise<GroundedAnswerResult> {
   const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
-    modelInputTokensMax: pack.budget.modelInputTokensMax,
-    modelOutputTokensMax: pack.budget.modelOutputTokensMax,
+    modelInputTokensMax: Math.max(0, pack.budget.modelInputTokensMax - pack.usage.modelInputTokens),
+    modelOutputTokensMax: Math.max(
+      0,
+      pack.budget.modelOutputTokensMax - pack.usage.modelOutputTokens,
+    ),
     answerOnlyContextAvailable: input.answerOnlyContextAvailable,
     currentQuestion: input.currentQuestion ?? input.query.text,
     signal: deps.signal,
     deadlineAtMs,
+    requiredEvidencePaths,
   });
   const answer = normalizeGroundedAnswerPayload(payload);
   return validateSingleAnswerEvidence(
@@ -9800,13 +9927,14 @@ function followUpAnswerForPack(
     deadlineAtMs,
     nowMs,
     retrieve: (next) => retrieveConnectedContextPack(next, deps),
-    answer: (next, retrieved) =>
+    answer: (next, retrieved, requiredEvidencePaths) =>
       groundedAnswerForPack(
         next,
         deps,
         retrieved.pack,
         retrieved.declarationScopeIndexFor,
         deadlineAtMs,
+        requiredEvidencePaths,
       ),
   });
 }
@@ -9888,7 +10016,14 @@ export async function runGroundedExploration(
   // by retrieveConnectedContextPack is deliberately discarded here.
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
-  const { pack, plan, declarationScopeIndexFor } = await retrieveConnectedContextPack(input, deps);
+  const requestDeps = {
+    ...deps,
+    worktreeRecencySnapshot: deps.worktreeRecencySnapshot ?? createWorktreeRecencySnapshot(),
+  };
+  const { pack, plan, declarationScopeIndexFor } = await retrieveConnectedContextPack(
+    input,
+    requestDeps,
+  );
   // GEN-AI-GROUNDING-002/-003 (RB-4): abstain BEFORE the model call when the assembled pack carries
   // no usable evidence. The local-knowledge and hybrid paths already short-circuit here; the folder
   // path must too, so the model is never asked to answer confidently over zero evidence and no
@@ -9907,7 +10042,7 @@ export async function runGroundedExploration(
   }
   return answerWithAvailableContext(
     input,
-    deps,
+    requestDeps,
     pack,
     plan,
     sourceEvidenceAvailable,
@@ -9970,4 +10105,114 @@ function citationObservation(
     declaredUnreadInScopeCount: observation?.unreadInScopeCount ?? 0,
     declaredNotInScopeCount: observation?.notInScopeCount ?? 0,
   };
+}
+
+async function withLiveWorktreeRecency(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): Promise<LiveRetrievalContext> {
+  const startedAtMs = runtime.nowMs();
+  const observe = deps.worktreeRecencySnapshot ?? observeWorktreeRecency;
+  const worktreeRecency = await observe({
+    scope: input.scope,
+    searchScope: context.searchScope,
+    workspaceKind: context.hasGitMetadata ? "git-repository" : "directory",
+    fs: runtime.fs,
+    nowMs: runtime.nowMs,
+    deadlineAtMs: context.deadlineAtMs,
+    observationAllowed: plan.budget.searchCallsMax > 0,
+    signal: deps.signal,
+    gitRunner: deps.worktreeGitRunner,
+    activityLog: deps.activityLog,
+    diagnostics: deps.diagnostics,
+    correlationId: deps.correlationId,
+  });
+  return {
+    ...context,
+    worktreeRecency,
+    worktreeStatusDurationMs: Math.max(0, Math.floor(runtime.nowMs() - startedAtMs)),
+  };
+}
+
+function worktreeActivityExtra(
+  status: ConnectedContextCompletionStatus,
+): Partial<ActivityLogFields<typeof SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION>> {
+  const recency = status.worktreeRecency;
+  if (recency === undefined) return {};
+  return {
+    worktreeStatusDisposition: recency.observation.worktreeStatusDisposition,
+    worktreeStatusDurationMs: status.worktreeStatusDurationMs ?? 0,
+    recentPathHintCount: recency.paths.length,
+    recentPathHitCount: status.recentPathHitCount ?? 0,
+    worktreeObservedFileCount: recency.observation.worktreeObservedFileCount,
+    worktreeDeletedFileCount: recency.observation.worktreeDeletedFileCount,
+  };
+}
+
+function liveWorktreeCompletion(
+  context: LiveRetrievalContext,
+  pack: ConnectedContextPack,
+): Pick<
+  ConnectedContextCompletionStatus,
+  "worktreeRecency" | "recentPathHitCount" | "worktreeStatusDurationMs"
+> {
+  const paths = new Set(context.worktreeRecency?.paths.map((path) => path.path));
+  return {
+    worktreeRecency: context.worktreeRecency,
+    worktreeStatusDurationMs: context.worktreeStatusDurationMs,
+    recentPathHitCount: pack.files.filter((file) => paths.has(file.scopePath)).length,
+  };
+}
+
+function semanticProviderResolver(
+  inputs: SearchInputs,
+  grant: SemanticRefreshUsageGrant,
+): () => SemanticSearchProvider | undefined {
+  let resolved = false;
+  let provider: SemanticSearchProvider | undefined;
+  return (): SemanticSearchProvider | undefined => {
+    if (!resolved) {
+      provider =
+        inputs.repoSemanticSearchProviderFor === undefined
+          ? inputs.repoSemanticSearchProvider
+          : inputs.repoSemanticSearchProviderFor(grant);
+      resolved = true;
+    }
+    return provider;
+  };
+}
+
+function groundedSemanticProviderFactory(
+  deps: OrchestratorDeps,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): SearchInputs["repoSemanticSearchProviderFor"] {
+  const factory = deps.repoSemanticSearchProviderFor;
+  if (factory === undefined) return undefined;
+  return (tryReserveRefreshUsage): SemanticSearchProvider | undefined => {
+    const request: GroundedSemanticRequest = {
+      fs: context.ringFs,
+      nowMs: runtime.nowMs,
+      deadlineAtMs: context.deadlineAtMs,
+      signal: deps.signal,
+      correlationId: deps.correlationId,
+      tryReserveRefreshUsage,
+      observeSemanticFreshness: (observation): void => {
+        runtime.progress.semanticFreshness ??= [];
+        runtime.progress.semanticFreshness.push(observation);
+      },
+    };
+    return factory(request);
+  };
+}
+
+function semanticProviderUnavailable(inputs: SearchInputs): boolean {
+  return (
+    semanticProviderAllowed(inputs) ||
+    (inputs.repoSemanticSearchProvider === undefined &&
+      inputs.repoSemanticSearchProviderFor === undefined)
+  );
 }
