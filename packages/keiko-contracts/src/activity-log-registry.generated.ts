@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "33fa657e46bba5b1124b088c2fa21485bfe4a6150f3dfa4b2c7bdb5beb232c3d" as const;
+  "b0ea17ce82525d8a0e5a917aa55fc097c7bf5749bc1ff5fc4a031f44be3f98af" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13171,6 +13171,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "continuityAdmittedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "continuityReferentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "continuityReferentSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "continuityRejectedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "directoryProximityTieBreakCount",
               type: "integer",
               dataClass: "count",
@@ -13302,6 +13326,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "search.connected-context.selection-details.line",
             "search.connected-context.path-ranking.line",
             "search.connected-context.selection-quality.line",
+            "search.connected-context.continuity.line",
           ],
           replayReferences: [],
           missingObligations: [],

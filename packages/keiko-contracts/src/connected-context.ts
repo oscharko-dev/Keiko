@@ -484,6 +484,14 @@ export type ContextScopeState = "applied" | "overflow" | "gate-refused" | "incom
 export type ContextRerankerDisposition =
   "unconfigured" | "applied" | "failed" | "skipped-budget" | "skipped-literal";
 
+/** Body-free origin of the request-local conversation retrieval hints. */
+export type ContinuityReferentSource =
+  | "none"
+  | "previous-user-question"
+  | "assistant-paths"
+  | "assistant-declaration"
+  | "assistant-paths-and-declaration";
+
 export interface ContextSelectionDiagnostics {
   readonly selectionConfidence: ContextSelectionConfidence;
   readonly keepOneFallbackApplied: boolean;

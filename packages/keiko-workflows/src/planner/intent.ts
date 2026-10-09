@@ -30,7 +30,7 @@ export interface RetrievalIntentContext {
 }
 
 const CONVERSATIONAL_FOLLOW_UP_RE =
-  /\b(?:and\s+(?:now|then)|that\s+(?:file|one)|this\s+file|in\s+the\s+file|und\s+(?:nun|jetzt)|in\s+der\s+datei|diese[rn]?\s+datei|darin|dazu|weiter)\b/iu;
+  /\b(?:can\s+you\s+see\s+(?:it|them|the\s+file)|siehst\s+du\s+(?:sie|es|die\s+datei)|kannst\s+du\s+das|try\s+again|what\s+about\s+now|and\s+(?:now|then)|that\s+(?:file|one)|this\s+file|in\s+the\s+file|und\s+(?:nun|jetzt)|in\s+der\s+datei|diese[rn]?\s+datei|darin|dazu|weiter)\b/iu;
 
 interface IntentPattern {
   readonly term: string;
@@ -270,6 +270,13 @@ export function classifyRetrievalIntent(
     return classifyShortTarget(trimmed);
   }
 
+  return classifyRequestedIntent(trimmed, normalized);
+}
+
+function classifyRequestedIntent(
+  trimmed: string,
+  normalized: string,
+): RetrievalIntentClassification {
   return (
     classifyByPatterns(trimmed, normalized, DIAGNOSTIC_PATTERNS, "diagnostic-search") ??
     (requestedSourceInspectionExtensions(trimmed).length > 0
