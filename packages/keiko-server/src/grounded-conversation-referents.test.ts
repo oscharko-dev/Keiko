@@ -100,6 +100,18 @@ describe("assistant referents are a bounded independent retrieval channel", () =
     expect(result.retrievalContent).toBe("Explain src/Other/handler.ts now");
   });
 
+  it("ignores an unrelated independently named symbol", () => {
+    const result = resolve("Explain DifferentValidator", [
+      { role: "user", content: "Explain the validation routine" },
+      { role: "assistant", content: "Read `src/Feature/validation.ts`." },
+    ]);
+    expect(result.assistantReferents).toEqual([]);
+  });
+
+  it("has no referents in another chat with no history", () => {
+    expect(resolve("What about now?", []).assistantReferents).toEqual([]);
+  });
+
   it("uses only the latest assistant turn", () => {
     const result = resolve("What about now?", [
       { role: "user", content: "Explain the validation routine" },
