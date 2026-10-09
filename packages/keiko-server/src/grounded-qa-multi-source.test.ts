@@ -2606,6 +2606,98 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
   });
 });
 
+describe("multi-source bounded citation repair", () => {
+  async function repairAsk(repaired: string, original = "The implementation works.") {
+    const calls: GatewayCallRequest[] = [];
+    const puts: PutCall[] = [];
+    const packs = ["alpha", "beta"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.8, name);
+      return { ...pack, usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 } };
+    });
+    const scopes = packs.map((pack, index) => ({
+      kind: "files" as const,
+      relativePaths: [pack.files[0]?.scopePath ?? ""],
+      connectedAtMs: NOW,
+      root: tempRoot(`repair-${String(index)}`),
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("Missing repair chat");
+    const deps = recordingDeps(puts);
+    const signal = new AbortController().signal;
+    const model: ModelPort = {
+      call: (request) => {
+        calls.push(request);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content: calls.length === 1 ? original : repaired,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "bounded-repair",
+            promptTokens: 10,
+            completionTokens: 4,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "How does the implementation work?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps,
+      signal,
+      correlationId: "corr-multi-repair",
+      retriever: packPerScope(new Map(packs.map((pack) => [pack.files[0]?.scopePath ?? "", pack]))),
+      answerer: createMultiSourceAnswerer(deps, model, CHAT_MODEL, signal, "corr-multi-repair"),
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return { calls, puts, answer: asConnectedAnswer(result.body as GroundedAnswer) };
+  }
+
+  it("adds only supported source-two markers in one remaining-budget call", async () => {
+    const repaired = "The implementation works [source:2|src/beta.ts:1-5].";
+    const { calls, puts, answer } = await repairAsk(repaired);
+    expect(calls).toHaveLength(2);
+    const repairPrompt = calls[1]?.messages.map((message) => message.content).join("\n");
+    expect(repairPrompt).toContain("body of src/alpha.ts");
+    expect(repairPrompt).toContain("body of src/beta.ts");
+    expect(calls[1]?.maxOutputTokens).toBe(DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax - 4);
+    expect(answer.content).toBe(repaired);
+    expect(answer.citationBehaviour).toBe("cites-after-repair");
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
+    expect(answer.contextPack.usage.modelInputTokens).toBe(20);
+    expect(answer.contextPack.usage.modelOutputTokens).toBe(8);
+  });
+
+  it("retains original prose after a repair changes its claim and never attempts a third call", async () => {
+    const { calls, answer } = await repairAsk(
+      "The implementation fails [source:2|src/beta.ts:1-5].",
+    );
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    expect(answer.citationBehaviour).toBe("never");
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
+    expect(answer.contextPack.usage.modelInputTokens).toBe(20);
+  });
+
+  it.each(["Which file should I inspect?", "No evidence found."])(
+    "does not repair a non-claim answer: %s",
+    async (original) => {
+      const { calls, answer } = await repairAsk("Changed content.", original);
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe(original);
+      expect(answer.citationBehaviour).toBeUndefined();
+    },
+  );
+});
+
 describe("multi-source final fitted citation authority", () => {
   function sourcePacks(): readonly ConnectedContextPack[] {
     return ["alpha", "beta"].map((name) => {

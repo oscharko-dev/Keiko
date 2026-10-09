@@ -15,7 +15,10 @@ import {
 // gateway messages, citations, and evidence from the exact same primitives.
 
 import { mapWithConcurrency } from "./bounded-concurrency.js";
-import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
+import {
+  reconcileAndLogInlineCitations,
+  type CitationReconciliationMetadata,
+} from "./grounded-citation-log.js";
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -50,6 +53,7 @@ import {
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
+  type CitationRepairDisposition,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import type { RouteResult } from "./routes.js";
@@ -64,6 +68,7 @@ import {
   retrieveConnectedContextPack,
   type OrchestratorInput,
   type GroundedAnswerOptions,
+  type GroundedAnswerer,
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
@@ -130,6 +135,15 @@ import {
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { logPromptWindowFit } from "./knowledge-prompt-window.js";
+import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
+import {
+  repairGroundedAnswer,
+  observeGroundedCitationBehaviour,
+} from "./grounded-answer-repair.js";
+import {
+  citationBehaviourFor,
+  citationBehaviourObserverFor,
+} from "./grounded-citation-capability.js";
 
 export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 
@@ -709,10 +723,23 @@ export function defaultRetriever(
 
 // ─── Multi-source answerer seam ───────────────────────────────────────────────
 
-export type MultiSourceAnswerer = (
-  question: string,
-  labeledPacks: readonly LabeledPack[],
-) => Promise<GroundedAnswerPayload>;
+export interface MultiSourceAnswerer {
+  (question: string, labeledPacks: readonly LabeledPack[]): Promise<GroundedAnswerPayload>;
+  readonly repair?: GroundedAnswerer["repair"];
+}
+
+interface MultiSourceGatewayContext {
+  readonly deps: UiHandlerDeps;
+  readonly model: ModelPort;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly answerOptions: Pick<
+    GroundedAnswerOptions,
+    "answerOnlyContextAvailable" | "currentQuestion"
+  >;
+  sent?: ReturnType<typeof fittedMultiSourcePrompt>;
+}
 
 // Like the folder answerer (createGatewayAnswerer): each attempt fits the prompt to the model's
 // current input budget, and a provider overflow that states the real window re-fits and sends once
@@ -725,38 +752,139 @@ export function createMultiSourceAnswerer(
   correlationId: string | undefined,
   answerOptions: Pick<GroundedAnswerOptions, "answerOnlyContextAvailable" | "currentQuestion"> = {},
 ): MultiSourceAnswerer {
-  return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
-    ensureNotCancelled(signal);
-    let sent: ReturnType<typeof fittedMultiSourcePrompt> | undefined;
-    const response = await withAdoptedContextWindowRetry(
-      deps,
-      { modelId, surface: "grounded", correlationId },
-      async () => {
-        const tokenAccounting = currentContextProfileForModel(deps, modelId)?.tokenAccounting;
-        const options = groundedPromptOptions(deps, modelId, tokenAccounting);
-        sent = fittedMultiSourcePrompt(
-          question,
-          labeledPacks,
-          deps.redactor,
-          options,
-          correlationId,
-        );
-        if (sent.sentReferenceCount === 0 && answerOptions.answerOnlyContextAvailable !== true)
-          return undefined;
-        return model.call(
-          { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
-          signal,
-        );
+  const ctx: MultiSourceGatewayContext = {
+    deps,
+    model,
+    modelId,
+    signal,
+    correlationId,
+    answerOptions,
+  };
+  return Object.assign(
+    (question: string, packs: readonly LabeledPack[]) =>
+      multiSourceGatewayAnswer(ctx, question, packs),
+    {
+      repair: (
+        question: string,
+        _pack: ConnectedContextPack,
+        original: string,
+        options: GroundedAnswerOptions,
+      ) => multiSourceGatewayRepair(ctx, question, original, options),
+    },
+  );
+}
+
+async function multiSourceGatewayAnswer(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  labeledPacks: readonly LabeledPack[],
+): Promise<GroundedAnswerResult> {
+  const { deps, model, modelId, signal, correlationId, answerOptions } = ctx;
+  ensureNotCancelled(signal);
+  let sent: ReturnType<typeof fittedMultiSourcePrompt> | undefined;
+  const response = await withAdoptedContextWindowRetry(
+    deps,
+    { modelId, surface: "grounded", correlationId },
+    async () => {
+      const tokenAccounting = currentContextProfileForModel(deps, modelId)?.tokenAccounting;
+      const options = groundedPromptOptions(deps, modelId, tokenAccounting);
+      sent = fittedMultiSourcePrompt(question, labeledPacks, deps.redactor, options, correlationId);
+      if (sent.sentReferenceCount === 0 && answerOptions.answerOnlyContextAvailable !== true)
+        return undefined;
+      return model.call(
+        {
+          modelId,
+          messages: sent.messages,
+          stream: false,
+          maxOutputTokens: labeledPacks.reduce(
+            (sum, entry) => sum + entry.pack.budget.modelOutputTokensMax,
+            0,
+          ),
+          logContext: { correlationId },
+        },
+        signal,
+      );
+    },
+  );
+  if (sent === undefined) throw new TypeError("Multi-source fitted prompt is unavailable");
+  ctx.sent = sent;
+  return multiSourceAnswerResult(
+    response,
+    sent,
+    answerOptions.currentQuestion ?? question,
+    modelId,
+    currentContextProfileForModel(deps, modelId),
+  );
+}
+
+function multiSourceRepairPrompt(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  original: string,
+  options: GroundedAnswerOptions,
+): ReturnType<typeof fittedMultiSourcePrompt> | undefined {
+  const packs = ctx.sent?.packs;
+  if (packs === undefined) return undefined;
+  const accounting = currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting;
+  const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, accounting);
+  try {
+    const fitted = fittedMultiSourcePrompt(
+      `${question}\n\n${buildCitationRepairPrompt(original)}`,
+      packs,
+      ctx.deps.redactor,
+      {
+        ...promptOptions,
+        modelInputTokensMax: Math.min(
+          promptOptions.modelInputTokensMax ?? Number.MAX_SAFE_INTEGER,
+          options.modelInputTokensMax ?? 0,
+        ),
       },
+      ctx.correlationId,
     );
-    if (sent === undefined) throw new TypeError("Multi-source fitted prompt is unavailable");
-    return multiSourceAnswerResult(
-      response,
-      sent,
-      answerOptions.currentQuestion ?? question,
-      modelId,
-      currentContextProfileForModel(deps, modelId),
-    );
+    return fitted.packs === packs ? fitted : undefined;
+  } catch (error) {
+    if (error instanceof ContextOverflowError) return undefined;
+    throw error;
+  }
+}
+
+async function multiSourceGatewayRepair(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  original: string,
+  options: GroundedAnswerOptions,
+): Promise<GroundedAnswerResult> {
+  const sent = multiSourceRepairPrompt(ctx, question, original, options);
+  if (sent === undefined)
+    return {
+      content: original,
+      modelInvoked: false,
+      usage: { promptTokens: 0, completionTokens: 0 },
+    };
+  const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
+  if (options.deadlineAtMs !== undefined)
+    signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
+  const signal = AbortSignal.any(signals);
+  ensureNotCancelled(signal);
+  const response = await ctx.model.call(
+    {
+      modelId: ctx.modelId,
+      messages: sent.messages,
+      stream: false,
+      maxOutputTokens: options.modelOutputTokensMax,
+      logContext: { correlationId: ctx.correlationId },
+    },
+    signal,
+  );
+  assertUsableAssistantContent(response.content.trim(), ctx.modelId);
+  return {
+    content: response.content.trim(),
+    usage: {
+      promptTokens: response.usage.promptTokens,
+      completionTokens: response.usage.completionTokens,
+    },
+    sentEvidencePacks: sent.packs.map((entry) => entry.pack),
+    modelInvoked: true,
   };
 }
 
@@ -1187,7 +1315,7 @@ function assembleMultiSourceAnswer(
   ctx: MultiSourceAskInput,
   sources: readonly RetrievedSource[],
   skipped: readonly SkippedScope[],
-  assistant: GroundedAnswerResult,
+  assistant: RepairedMultiSourceAnswer,
   ids: {
     readonly userMessageId: string;
     readonly assistantMessageId: string;
@@ -1278,7 +1406,7 @@ function finalMultiSourceEvidence(
 // Wire-projected reconciliation markers (unsupported-citation + incomplete-answer) for the
 // multi-source path. Mirrors the single-source reconciliation in runGroundedExploration.
 function buildMultiSourceReconciliationUncertainty(
-  assistant: GroundedAnswerResult,
+  assistant: RepairedMultiSourceAnswer,
   sources: readonly RetrievedSource[],
   redactor: Redactor,
   correlationId: string | undefined,
@@ -1288,6 +1416,12 @@ function buildMultiSourceReconciliationUncertainty(
     assistant.content,
     buildPackCitationIndex(finalMultiSourceEvidence(assistant, sources)),
     correlationId,
+    {
+      answerKind: assistant.answerKind,
+      citationBehaviour: assistant.citationBehaviour,
+      citationRepairDisposition: assistant.citationRepairDisposition,
+      ...multiSourceInsufficiencyObservation(assistant),
+    },
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const missing =
@@ -1413,7 +1547,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   // evidence — the folders path must not answer confidently over zero evidence, and no grounded
   // evidence manifest may be persisted.
   const noRetrievedEvidence = !packsHaveUsableEvidence(retrieved.map((s) => s.pack));
-  const assistant = await answerMultiSource(ctx, retrieved, noRetrievedEvidence);
+  const assistant = await answerMultiSource(ctx, retrieved, noRetrievedEvidence, startedAtMs);
   if (isRouteResult(assistant)) {
     return assistant;
   }
@@ -1449,7 +1583,8 @@ async function answerMultiSource(
   ctx: MultiSourceAskInput,
   retrieved: readonly RetrievedSource[],
   abstained: boolean,
-): Promise<GroundedAnswerResult | RouteResult> {
+  startedAtMs: number,
+): Promise<RepairedMultiSourceAnswer | RouteResult> {
   ensureNotCancelled(ctx.signal);
   if (abstained && ctx.answerOnlyContextAvailable !== true) {
     return {
@@ -1458,6 +1593,11 @@ async function answerMultiSource(
       usage: { promptTokens: 0, completionTokens: 0 },
     };
   }
+  const observeCitationBehaviour = citationBehaviourObserverFor(
+    ctx.deps,
+    ctx.modelId,
+    ctx.correlationId,
+  );
   try {
     const assistant = normalizeGroundedAnswerPayload(
       await ctx.answerer(
@@ -1468,14 +1608,124 @@ async function answerMultiSource(
     ensureNotCancelled(ctx.signal);
     const scopeIndex = new Map(buildInsufficiencyScopeIndex([], ctx.insufficiencyScopeIndex));
     for (const [path, state] of assistant.evidenceScopeIndex ?? []) scopeIndex.set(path, state);
-    return {
+    const validated = {
       ...assistant,
       insufficiencyDeclarations: undefined,
       ...validateGroundedAnswerEvidence(assistant.content, scopeIndex, ctx.content),
     };
+    return await repairMultiSourceAnswer(
+      ctx,
+      retrieved,
+      validated,
+      startedAtMs,
+      observeCitationBehaviour,
+    );
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
   }
+}
+
+interface RepairedMultiSourceAnswer extends GroundedAnswerResult {
+  readonly citationRepairDisposition?: CitationRepairDisposition;
+}
+
+function multiSourceInsufficiencyObservation(
+  assistant: GroundedAnswerResult,
+): CitationReconciliationMetadata {
+  const counts = assistant.insufficiencyObservation;
+  return counts === undefined
+    ? {}
+    : {
+        insufficiencyDeclaredCount: counts.declaredCount,
+        declaredInScopeCount: counts.inScopeCount,
+        declaredUnreadInScopeCount: counts.unreadInScopeCount,
+        declaredNotInScopeCount: counts.notInScopeCount,
+      };
+}
+
+function multiSourceRepairPack(
+  ctx: MultiSourceAskInput,
+  sources: readonly RetrievedSource[],
+): ConnectedContextPack | undefined {
+  const first = sources[0]?.pack;
+  if (first === undefined) return undefined;
+  const budget = modelWindowAwareBudget(ctx.deps, ctx.modelId);
+  const elapsedLimits = [
+    budget.elapsedMsMax,
+    ...sources.map((source) => source.pack.budget.elapsedMsMax),
+  ].filter((limit): limit is number => limit !== null);
+  return {
+    ...first,
+    usage: {
+      ...first.usage,
+      modelInputTokens: sources.reduce(
+        (sum, source) => sum + source.pack.usage.modelInputTokens,
+        0,
+      ),
+      modelOutputTokens: sources.reduce(
+        (sum, source) => sum + source.pack.usage.modelOutputTokens,
+        0,
+      ),
+    },
+    budget: {
+      ...budget,
+      elapsedMsMax: elapsedLimits.length === 0 ? null : Math.min(...elapsedLimits),
+      modelInputTokensMax: Math.min(
+        budget.modelInputTokensMax,
+        sources.reduce((sum, source) => sum + source.pack.budget.modelInputTokensMax, 0),
+      ),
+      modelOutputTokensMax: Math.min(
+        budget.modelOutputTokensMax,
+        sources.reduce((sum, source) => sum + source.pack.budget.modelOutputTokensMax, 0),
+      ),
+    },
+  };
+}
+
+async function repairMultiSourceAnswer(
+  ctx: MultiSourceAskInput,
+  sources: readonly RetrievedSource[],
+  assistant: GroundedAnswerResult,
+  startedAtMs: number,
+  observeCitationBehaviour: ReturnType<typeof citationBehaviourObserverFor>,
+): Promise<RepairedMultiSourceAnswer> {
+  const pack = multiSourceRepairPack(ctx, sources);
+  if (pack === undefined) return assistant;
+  let budgetRefused = false;
+  const repair = ctx.answerer.repair;
+  const repairContext = {
+    question: ctx.answerContent ?? ctx.content,
+    pack,
+    answer: assistant,
+    nowMs: Date.now,
+    ...(pack.budget.elapsedMsMax === null
+      ? {}
+      : { deadlineAtMs: startedAtMs + pack.budget.elapsedMsMax }),
+    ...(repair === undefined
+      ? {}
+      : {
+          invokeRepair: async (
+            original: string,
+            options: GroundedAnswerOptions,
+          ): Promise<GroundedAnswerPayload> => {
+            const result = normalizeGroundedAnswerPayload(
+              await repair(ctx.answerContent ?? ctx.content, pack, original, options),
+            );
+            budgetRefused = result.modelInvoked === false;
+            return result;
+          },
+        }),
+    deps: {
+      signal: ctx.signal,
+      reliableCitationBehaviour: citationBehaviourFor(ctx.deps, ctx.modelId),
+      observeCitationBehaviour,
+    },
+  };
+  const repaired = await repairGroundedAnswer(repairContext);
+  return {
+    ...observeGroundedCitationBehaviour({ ...repairContext, answer: repaired.answer }),
+    citationRepairDisposition: budgetRefused ? "skipped-budget" : repaired.disposition,
+  };
 }
 
 function mapMultiSourceError(

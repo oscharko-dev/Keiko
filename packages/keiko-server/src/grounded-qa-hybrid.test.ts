@@ -2229,6 +2229,100 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
   );
 });
 
+describe("hybrid bounded citation repair", () => {
+  async function repairAsk(repaired: string, folders: boolean) {
+    const { capsuleId: capA } = await seedReadyCapsule("Repair A Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Repair B Docs");
+    const folderScopes: ChatConnectedScope[] = folders
+      ? [
+          {
+            kind: "files",
+            root: tempRoot("repair"),
+            relativePaths: ["src/repair.ts"],
+            connectedAtMs: NOW,
+          },
+        ]
+      : [];
+    const connectorScopes: ChatLocalKnowledgeScope[] = (folders ? [capA] : [capA, capB]).map(
+      (capsuleId) => ({
+        kind: "capsule",
+        capsuleId,
+        connectedAtMs: NOW,
+      }),
+    );
+    const chat = store.findChatById(makeHybridChat(folderScopes, connectorScopes));
+    if (chat === undefined) throw new TypeError("Missing hybrid repair chat");
+    const calls: GatewayCallRequest[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        calls.push(request);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content: calls.length === 1 ? "The implementation works." : repaired,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "hybrid-repair",
+            promptTokens: 10,
+            completionTokens: 4,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+    const signal = new AbortController().signal;
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "How does the implementation work?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: hybridDeps(),
+      signal,
+      correlationId: "corr-hybrid-repair",
+      answer: createHybridAnswerer(model, CHAT_MODEL, signal, "corr-hybrid-repair"),
+      folderRetriever: folderRetrieverFor(
+        new Map([["src/repair.ts", folderPack("src/repair.ts", 0.9, "repair")]]),
+      ),
+      connectorRetrieve: (knowledgeStore, scope, selected, connectorSignal) => {
+        if (scope.kind !== "capsule") throw new TypeError("Missing capsule");
+        return singleConnectorRetrieve(scope.capsuleId)(
+          knowledgeStore,
+          scope,
+          selected,
+          connectorSignal,
+        );
+      },
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return { calls, answer: asHybrid(result.body as GroundedAnswer) };
+  }
+
+  it.each([false, true])(
+    "repairs one supported numeric marker without changing prose (folders=%s)",
+    async (folders) => {
+      const { calls, answer } = await repairAsk("The implementation works [1].", folders);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.messages[1]?.content).toContain("The implementation works.");
+      expect(calls[1]?.messages[1]?.content).toContain("[1]");
+      expect(answer.content).toBe("The implementation works [1].");
+      expect(answer.citationBehaviour).toBe("cites-after-repair");
+      expect(answer.citations.length + answer.knowledgeCitations.length).toBe(1);
+      if (!folders) expect(answer.contextPack.folder.filesInPrompt).toBe(0);
+    },
+  );
+
+  it("rejects an invented numeric source after exactly one repair", async () => {
+    const { calls, answer } = await repairAsk("The implementation works [99].", true);
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    expect(answer.citationBehaviour).toBe("never");
+    expect(answer.citations).toEqual([]);
+    expect(answer.knowledgeCitations).toEqual([]);
+  });
+});
+
 async function hybridReviewContext(): Promise<HybridGroundedAskCtx> {
   const { capsuleId } = await seedReadyCapsule("Hybrid review docs");
   const chatId = makeHybridChat(
