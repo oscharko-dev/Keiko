@@ -66,6 +66,14 @@ function useLatestActionProps(props: MissingEvidenceActionsProps): {
   return latest;
 }
 
+function ownsActionScope(original: Chat, current: Chat | undefined): boolean {
+  return (
+    current?.id === original.id &&
+    current.projectPath === original.projectPath &&
+    current.groundingScopeIdentity === original.groundingScopeIdentity
+  );
+}
+
 function useAddDeclaredFile(
   props: MissingEvidenceActionsProps,
   path: string,
@@ -82,8 +90,7 @@ function useAddDeclaredFile(
     setError(null);
     try {
       const merged = mergeRepositoryFileScope(chat, root, path);
-      const isCurrent = (): boolean =>
-        latest.current.chat?.id === chat.id && latest.current.chat.projectPath === chat.projectPath;
+      const isCurrent = (): boolean => ownsActionScope(chat, latest.current.chat);
       const update = (current: Chat): void => {
         if (isCurrent()) latest.current.onChatChanged(current);
       };
@@ -95,13 +102,13 @@ function useAddDeclaredFile(
             update,
           )
         : { chat };
+      if (!isCurrent()) return;
       reportScopeNotice("missing-evidence-added", {
         kind: "files",
         root,
         relativePaths: [path],
         connectedAtMs: Date.now(),
       });
-      if (!isCurrent()) return;
       update(response.chat);
       const suggestion = t("scope.missing.followUp", { path });
       latest.current.setDraft(
