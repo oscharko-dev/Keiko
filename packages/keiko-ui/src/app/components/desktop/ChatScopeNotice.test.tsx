@@ -76,6 +76,21 @@ describe("acknowledged scope notice", () => {
     expect(keep).toHaveBeenCalledWith(true);
     expect(changed).toHaveBeenCalledWith(chat(folder));
   });
+  it("retains a pending notice when the pin callback changes on an unrelated render", () => {
+    vi.useFakeTimers();
+    const changed = vi.fn();
+    const view = render(
+      <ChatScopeNotice chat={chat(folder)} onChatChanged={changed} onKeepFolderChange={vi.fn()} />,
+    );
+    view.rerender(
+      <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={vi.fn()} />,
+    );
+    view.rerender(
+      <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={vi.fn()} />,
+    );
+    settle();
+    expect(screen.getByRole("status")).toHaveTextContent("File: validation.ts");
+  });
   it("announces widening, dismisses politely and never replays a folder across chats", () => {
     vi.useFakeTimers();
     const changed = vi.fn();

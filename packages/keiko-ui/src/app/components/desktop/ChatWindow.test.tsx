@@ -56,7 +56,13 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { ApiError, fetchChats, fetchFilesSearch, updateChat } from "@/lib/api";
+import {
+  ApiError,
+  fetchChats,
+  fetchFilesSearch,
+  updateChat,
+  updateChatConnectedScopes,
+} from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
@@ -70,6 +76,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     fetchFilesSearch: vi.fn(),
     fetchChats: vi.fn(),
     updateChat: vi.fn(),
+    updateChatConnectedScopes: vi.fn(),
   };
 });
 
@@ -5154,4 +5161,43 @@ it("explains repository grounding whenever a folder scope is connected", () => {
     "Keiko searches the connected scope before each answer; the model has no file tools.",
   );
   expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
+});
+
+it("lets a scripted insufficiency add its file and focus an unsent follow-up", async () => {
+  const chat = makeChat({
+    connectedScopes: [
+      { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+    ],
+  });
+  const latestGrounded: GroundedAnswer = {
+    groundingKind: "connected-context",
+    userMessageId: "u",
+    assistantMessageId: "a",
+    content: "Need this file.",
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 1,
+    contextPack: repositoryTestContextSummary(),
+    answerKind: "insufficiency",
+    insufficiencyDeclarations: [{ scopePath: "src/validation.ts", state: "unread-in-scope" }],
+  };
+  vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat });
+  const session = makeSession({ activeChat: chat, latestGrounded });
+  renderStatefulWindow(session);
+  await userEvent.setup().click(screen.getByRole("button", { name: "Add file to scope" }));
+  await waitFor(() =>
+    expect(session.setDraft).toHaveBeenCalledWith(expect.stringContaining("@src/validation.ts")),
+  );
+  expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
+  expect(session.sendMessage).not.toHaveBeenCalled();
+  expect(vi.mocked(updateChatConnectedScopes).mock.calls[0]?.[1]).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "files",
+        root: "/proj",
+        relativePaths: ["src/validation.ts"],
+      }),
+    ]),
+  );
 });
