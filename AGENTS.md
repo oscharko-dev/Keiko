@@ -486,6 +486,11 @@ system that exists, never beside it:
   closed to zero passes with an invalid configuration observation. Final sent packs and ranges
   authenticate citations; assembled reads remain separate physical-usage and audit evidence.
   The same answer-details line optionally records `synthesisCallCount` and
+  `completedSynthesisCallCount`; the former counts physical attempts and the latter completed
+  responses. Grounded evidence reports use completed responses for `usageTotals.requestCount`,
+  including completed marker repairs and follow-up answers; failed retries do not become completed
+  requests. Legacy evidence callers retain their one-request default.
+  It also records
   `synthesisReservedOutputTokens`. Synthesis input usage charges the greater of the canonical sent
   prompt estimate and reported provider usage. Reported discarded output is retained; an interrupted
   stream without output measurement retains its requested output reservation instead of granting an
