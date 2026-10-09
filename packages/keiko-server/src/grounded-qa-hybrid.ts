@@ -142,6 +142,7 @@ import {
   pluralSynthesisCountFields,
   pluralSynthesisMetadata,
   withPluralSynthesisUsage,
+  capturePluralSynthesisCounts,
 } from "./grounded-plural-synthesis.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { ExplorationBudget } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -246,6 +247,7 @@ export interface HybridAnswerer {
   readonly pendingSynthesisUsage?: GroundedSynthesisCallBudget["pendingUsage"];
   readonly takeFailedSynthesisUsage?: GroundedSynthesisCallBudget["takeUsage"];
   readonly reservedSynthesisOutputTokens?: GroundedSynthesisCallBudget["reservedOutputTokens"];
+  readonly completedSynthesisCalls?: GroundedSynthesisCallBudget["completed"];
   readonly repair?: (
     original: string,
     options: GroundedAnswerOptions,
@@ -1000,6 +1002,7 @@ export function createHybridAnswerer(
       takeFailedSynthesisUsage: (): ReturnType<GroundedSynthesisCallBudget["takeUsage"]> =>
         synthesisBudget.takeUsage(),
       reservedSynthesisOutputTokens: (): number => synthesisBudget.reservedOutputTokens(),
+      completedSynthesisCalls: (): number => synthesisBudget.completed(),
       repair: (original: string, options: GroundedAnswerOptions): Promise<GroundedAnswerPayload> =>
         hybridGatewayRepair(ctx, original, options),
     },
@@ -1012,8 +1015,7 @@ async function hybridGatewayAnswer(
   user: string,
   options: GroundedAnswerOptions,
 ): Promise<GroundedAnswerResult> {
-  const remainingBefore = ctx.synthesisBudget.remaining();
-  const reservedBefore = ctx.synthesisBudget.reservedOutputTokens();
+  const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
   ctx.lastPrompt = [
     { role: "system", content: system },
     { role: "user", content: user },
@@ -1052,8 +1054,7 @@ async function hybridGatewayAnswer(
   return withPluralSynthesisUsage(
     hybridGatewayAnswerResult(response, ctx.modelId),
     ctx.synthesisBudget,
-    remainingBefore,
-    reservedBefore,
+    countsBefore,
   );
 }
 
@@ -1155,8 +1156,7 @@ async function hybridGatewayRepair(
   original: string,
   options: GroundedAnswerOptions,
 ): Promise<GroundedAnswerResult> {
-  const remainingBefore = ctx.synthesisBudget.remaining();
-  const reservedBefore = ctx.synthesisBudget.reservedOutputTokens();
+  const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
   const messages = hybridRepairMessages(ctx, original, options);
   const signal = hybridRepairSignal(ctx.signal, options);
   if (
@@ -1195,8 +1195,7 @@ async function hybridGatewayRepair(
       usage: { promptTokens: 0, completionTokens: 0 },
     },
     ctx.synthesisBudget,
-    remainingBefore,
-    reservedBefore,
+    countsBefore,
   );
 }
 
@@ -1686,6 +1685,7 @@ function persistFolderEvidence(
   ctx: HybridGroundedAskCtx,
   folders: readonly RetrievedFolder[],
   cited: readonly SelectedCandidate<HybridPayload>[],
+  completedSynthesisCallCount: number | undefined,
 ): { readonly firstRunId: string | undefined; readonly runIds: readonly string[] } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
@@ -1709,6 +1709,7 @@ function persistFolderEvidence(
         plan: src.plan,
         pack: src.pack,
         citationCount: folderCitationCount(src.pack, cited),
+        completedSynthesisCallCount,
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
@@ -1860,8 +1861,9 @@ function persistHybridEvidence(
   store: KnowledgeStore,
   selected: readonly SelectedCandidate<HybridPayload>[],
   cited: readonly SelectedCandidate<HybridPayload>[],
+  completedSynthesisCallCount: number | undefined,
 ): Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds"> {
-  const folder = persistFolderEvidence(ctx, sources.folders, cited);
+  const folder = persistFolderEvidence(ctx, sources.folders, cited, completedSynthesisCallCount);
   persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   return { evidenceRunId: folder.firstRunId, evidenceRunIds: folder.runIds };
 }
@@ -1983,8 +1985,10 @@ function hybridEvidenceForAnswer(
   selected: readonly SelectedCandidate<HybridPayload>[],
   cited: readonly SelectedCandidate<HybridPayload>[],
   sourceEvidenceAvailable: boolean,
+  completedSynthesisCallCount: number | undefined,
 ): Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds"> {
-  if (sourceEvidenceAvailable) return persistHybridEvidence(ctx, sources, store, selected, cited);
+  if (sourceEvidenceAvailable)
+    return persistHybridEvidence(ctx, sources, store, selected, cited, completedSynthesisCallCount);
   persistConnectorAudit(store, sources.connectors, [], ctx.modelId);
   return { evidenceRunIds: [] };
 }
@@ -2018,6 +2022,15 @@ function hybridUncertaintyForAnswer(
   ];
 }
 
+interface HybridAnswerProjection {
+  readonly cited: readonly SelectedCandidate<HybridPayload>[];
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly retrievalActivity: HybridGroundedAnswer["retrievalActivity"];
+  readonly evidence: Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds">;
+  readonly uncertainty: readonly GroundedUncertainty[];
+}
+
 function projectHybridAnswer(
   ctx: HybridGroundedAskCtx,
   sources: RetrievedSources,
@@ -2026,14 +2039,7 @@ function projectHybridAnswer(
   assistant: GroundedAnswerResult,
   reranker: GroundedRerankerDiagnostics,
   sourceEvidenceAvailable: boolean,
-): {
-  readonly cited: readonly SelectedCandidate<HybridPayload>[];
-  readonly citations: readonly GroundedEvidenceCitation[];
-  readonly knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[];
-  readonly retrievalActivity: HybridGroundedAnswer["retrievalActivity"];
-  readonly evidence: Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds">;
-  readonly uncertainty: readonly GroundedUncertainty[];
-} {
+): HybridAnswerProjection {
   const cited = citedHybridSelections(selected, assistant.content);
   const citations = selectedFolderCitations(cited, ctx.deps.redactor);
   const knowledgeCitations = selectedConnectorCitations(store, cited, ctx.deps.redactor);
@@ -2057,6 +2063,7 @@ function projectHybridAnswer(
       selected,
       cited,
       sourceEvidenceAvailable,
+      assistant.completedSynthesisCallCount,
     ),
     uncertainty: hybridUncertaintyForAnswer(
       sources,
@@ -2781,6 +2788,7 @@ async function answerHybridWithinWindow(
   const observe = citationBehaviourObserverFor(ctx.deps, ctx.modelId, ctx.correlationId);
   const remainingBefore = answerer.answer.remainingSynthesisCalls?.();
   const reservedBefore = answerer.answer.reservedSynthesisOutputTokens?.();
+  const completedBefore = answerer.answer.completedSynthesisCalls?.();
   const fitted = await withAdoptedContextWindowRetry(
     ctx.deps,
     { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
@@ -2793,6 +2801,8 @@ async function answerHybridWithinWindow(
       answerer.answer.remainingSynthesisCalls?.(),
       reservedBefore,
       answerer.answer.reservedSynthesisOutputTokens?.(),
+      completedBefore,
+      answerer.answer.completedSynthesisCalls?.(),
     ),
   };
   const validated = validatedHybridEvidence(fitted.promptCtx, assistant, fitted.sent);
