@@ -75,7 +75,7 @@ import {
 import { mergeOverviewListing } from "./grounded-overview-fallback.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { dirname as parentDirectory, resolve } from "node:path";
 import {
   connectedContextOmittedCount,
   connectedContextOmittedCounts,
@@ -1087,6 +1087,12 @@ export interface GroundedAnswerOptions {
 }
 
 export interface GroundedAnswerer {
+  /** Actual factory dispatch slots, shared by synthesis, window retry and repair. */
+  readonly remainingSynthesisCalls?: (() => number) | undefined;
+  /** Drain charged failed-attempt usage once when the factory rejects without a result. */
+  readonly pendingSynthesisUsage?: (() => GroundedAnswerResult["usage"]) | undefined;
+  readonly takeFailedSynthesisUsage?: (() => GroundedAnswerResult["usage"]) | undefined;
+  readonly reservedSynthesisOutputTokens?: (() => number) | undefined;
   repair?(
     question: string,
     pack: ConnectedContextPack,
@@ -9234,6 +9240,19 @@ function explorationDeadlineAtMs(startedAtMs: number, budget: ExplorationBudget)
     : startedAtMs + Math.max(0, budget.elapsedMsMax);
 }
 
+// Metadata only: the existing hardened Git membership resolver still validates ownership in the
+// selected cwd. Finding an ancestor marker never changes the selected evidence root or scope.
+function hasConnectedGitMetadata(root: string, fs: WorkspaceFs): boolean {
+  let current = root;
+  for (let depth = 0; depth < 32; depth += 1) {
+    if (fs.exists(resolve(current, ".git"))) return true;
+    const parent = parentDirectory(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+  return false;
+}
+
 function prepareLiveRetrievalContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -9251,8 +9270,9 @@ function prepareLiveRetrievalContext(
     runtime.workspaceRoot,
     detectionGuardedFs(runtime.fs, detectionControl),
   );
-  const hasGitMetadata = detectionGuardedFs(runtime.fs, detectionControl).exists(
-    resolve(workspace.root, ".git"),
+  const hasGitMetadata = hasConnectedGitMetadata(
+    workspace.root,
+    detectionGuardedFs(runtime.fs, detectionControl),
   );
   const searchScope = buildSearchScope(input.scope, workspace);
   const workspaceIndexSource =

@@ -367,7 +367,10 @@ preserve complete anchors when their combined required bytes fit, and zero-byte 
 Selected files retain every distinct, already-admitted evidence range rather than independent
 per-file atom or window quotas. The existing safe excerpt reader batches those ranges from one
 freshly classified, decoded and redacted file snapshot, preserves original line coordinates, and
-charges every returned fragment against the accepted cumulative byte grant. Remaining ranges are
+charges every returned fragment against the accepted cumulative byte grant. A stale location beyond
+physical EOF is an omitted range and cannot discard another valid requested window from that same
+snapshot. The ordinary default-window fallback applies only when every requested location is invalid.
+Remaining ranges are
 reported when that grant is spent; cancellation or a changed source prevents publication. Global
 retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
@@ -430,7 +433,10 @@ explicit `1` enables, explicit `0` disables, and every other explicit value fail
 passes with a body-free invalid configuration observation (ADR-0180).
 Working-tree recency uses one scope-bound request-local snapshot from the existing observed Git
 runner, capped at 64 admitted paths and a shared 1.5-second ceiling further bounded by the remaining
-request deadline. Ordinary folders spawn no process; exhausted grants and elapsed deadlines refuse
+request deadline. A directly connected repository subfolder uses a bounded ancestor metadata check
+only as the Git-discovery hint; hardened Git membership still executes in that selected cwd, and
+the selected evidence root never expands to the repository parent. Ordinary folders spawn no process;
+exhausted grants and elapsed deadlines refuse
 observation. Allowed paths feed the existing recent-path search policy and a small targeted/diagnostic
 ranking signal without changing provenance, admission, or floor exemptions. Selection-details
 records only the closed status disposition, measured duration, observed/deleted counts and hint/hit

@@ -1,4 +1,6 @@
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
+import * as groundedOrchestrator from "./grounded-orchestrator.js";
+import * as chatActivity from "./chat-activity.js";
 import { buildPackCitationIndex, reconcileInlineCitations } from "./grounded-faithfulness.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
@@ -74,7 +76,11 @@ import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/inte
 import { currentConversationReady, type RuntimeGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
-import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import type {
+  OrchestratorDeps,
+  OrchestratorInput,
+  OrchestratorOutput,
+} from "./grounded-orchestrator.js";
 import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
@@ -613,6 +619,43 @@ function requirePackExcerpt(
     );
   }
   return { file, excerpt };
+}
+
+function minimumFittedPromptBudget(question: string, pack: ConnectedContextPack): number {
+  let low = 1;
+  let high = pack.budget.modelInputTokensMax;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    try {
+      fittedGroundedGatewayPrompt(question, pack, buildRedactor({}), {
+        modelInputTokensMax: middle,
+      });
+      high = middle;
+    } catch (error) {
+      if (!(error instanceof ContextOverflowError)) throw error;
+      low = middle + 1;
+    }
+  }
+  return low;
+}
+
+function withMinimumFittedInputGrant(ports: OrchestratorDeps): OrchestratorDeps {
+  return {
+    ...ports,
+    answerer: {
+      ...ports.answerer,
+      answer: (question, pack, options): ReturnType<OrchestratorDeps["answerer"]["answer"]> => {
+        // The actual reader's pack determines the remaining input grant. A prompt-text change
+        // can move this boundary without changing the product's configured token ceilings.
+        const modelInputTokensMax = minimumFittedPromptBudget(question, pack);
+        const sent = fittedGroundedGatewayPrompt(question, pack, buildRedactor({}), {
+          modelInputTokensMax,
+        });
+        expect(sent.sentReferenceCount).toBe(0);
+        return ports.answerer.answer(question, pack, { ...options, modelInputTokensMax });
+      },
+    },
+  };
 }
 
 function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
@@ -5553,7 +5596,43 @@ describe("actual fitted repository evidence authority", () => {
     expect(result.body).toMatchObject({ content: "The threshold is 1000.", citations: [] });
     expect(result.body).not.toMatchObject({ citationBehaviour: "cites-after-repair" });
   });
-  it("abstains when a 970-token input ceiling fits away every source excerpt", async () => {
+  it("refuses gateway dispatch when prompt logging exhausts the original deadline", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const call = vi.fn(fakeModel("Threshold is 1000 [src/validation.ts:1].", []).call);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const execute = groundedOrchestrator.runGroundedExploration;
+    const logPrompt = chatActivity.logGroundedPromptSelection;
+    const runnerSpy = vi
+      .spyOn(groundedOrchestrator, "runGroundedExploration")
+      .mockImplementation((input, ports) =>
+        execute({ ...input, budget: { ...input.budget, elapsedMsMax: 100 } }, ports),
+      );
+    const loggerSpy = vi
+      .spyOn(chatActivity, "logGroundedPromptSelection")
+      .mockImplementation((...args) => {
+        logPrompt(...args);
+        clock.mockReturnValue(NOW + 100);
+      });
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+        deps({ call }),
+      );
+      expect(loggerSpy).toHaveBeenCalledOnce();
+      expect(call).not.toHaveBeenCalled();
+      expect(result.status).toBe(503);
+    } finally {
+      loggerSpy.mockRestore();
+      runnerSpy.mockRestore();
+      clock.mockRestore();
+    }
+  });
+  it("abstains at the actual fitted-input boundary when every source excerpt is omitted", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });
     writeFileSync(
@@ -5573,25 +5652,33 @@ describe("actual fitted repository evidence authority", () => {
         modelId: CHAT_MODEL,
       }),
     );
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "Explain validation" })),
-      deps(
-        { call },
-        {},
-        {
-          config: customModelConfig(CHAT_MODEL, {
-            contextWindow: 4096,
-            maxInputTokens: 970,
-            maxOutputTokens: 1024,
-          }),
-          evidenceStore: createInMemoryEvidenceStore(),
-        },
-      ),
-    );
-    expect(result.status).toBe(200);
-    expect(call).not.toHaveBeenCalled();
-    expect(result.body).toMatchObject({ citations: [], contextPack: { filesInPrompt: 0 } });
-    expect(result.body).not.toHaveProperty("evidenceRunId");
+    const execute = groundedOrchestrator.runGroundedExploration;
+    const runnerSpy = vi
+      .spyOn(groundedOrchestrator, "runGroundedExploration")
+      .mockImplementation((input, ports) => execute(input, withMinimumFittedInputGrant(ports)));
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain validation" })),
+        deps(
+          { call },
+          {},
+          {
+            config: customModelConfig(CHAT_MODEL, {
+              contextWindow: 4096,
+              maxInputTokens: 970,
+              maxOutputTokens: 1024,
+            }),
+            evidenceStore: createInMemoryEvidenceStore(),
+          },
+        ),
+      );
+      expect(result.status).toBe(200);
+      expect(call).not.toHaveBeenCalled();
+      expect(result.body).toMatchObject({ citations: [], contextPack: { filesInPrompt: 0 } });
+      expect(result.body).not.toHaveProperty("evidenceRunId");
+    } finally {
+      runnerSpy.mockRestore();
+    }
   });
 });
 
