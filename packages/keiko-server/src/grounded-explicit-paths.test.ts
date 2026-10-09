@@ -7,6 +7,10 @@ import {
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 
 const ROOT = "/explicit-path-fixture";
@@ -74,6 +78,17 @@ async function retrieve(
 }
 
 describe("query-named explicit path admission", () => {
+  it("formats correlated content-free admission and read evidence", async () => {
+    const { log } = await retrieve(`Why does ${TARGET}:1 fail?`);
+    const source = log.events.find(
+      (event) => event.op === "search.connected-context.source-details",
+    );
+    const completed = log.events.find((event) => event.op === "search.connected-context.completed");
+    expect(source?.correlationId).toBe(completed?.correlationId);
+    const line = formatActivityLogProofLine(source ?? {});
+    expect(line).not.toContain(TARGET);
+    expectActivityLogProof("search.connected-context.explicit-admission.line", line);
+  });
   it.each([TARGET, `${TARGET}:301:5`, `${ROOT}/${TARGET}`, `file://${ROOT}/${TARGET}:301:5`])(
     "reads the case-preserving named path without a content match: %s",
     async (path) => {
@@ -81,7 +96,7 @@ describe("query-named explicit path admission", () => {
       expect(output.pack.files.map((file) => file.scopePath)).toContain(TARGET);
       expect(output.pack.files[0]?.excerpts[0]?.content).toContain("requirement = true");
       expect(
-        log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+        log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
       ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
     },
   );
@@ -97,8 +112,11 @@ describe("query-named explicit path admission", () => {
     expect(excerpt?.atom.lineRange?.startLine).toBeLessThanOrEqual(301);
     expect(excerpt?.atom.lineRange?.endLine).toBeGreaterThanOrEqual(301);
     expect(
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+    ).toMatchObject({ explicitLineHintCount: 1 });
+    expect(
       log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
-    ).toMatchObject({ explicitLineHintCount: 1, excerptAnchoredWindowCount: 1 });
+    ).toMatchObject({ excerptAnchoredWindowCount: 1 });
   });
 
   it.each([
@@ -114,7 +132,7 @@ describe("query-named explicit path admission", () => {
     });
     expect(output.pack.files.map((file) => file.scopePath)).not.toContain(path);
     expect(
-      log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
     ).toMatchObject({ explicitPathRejectedCount: 1, explicitPathRejectionReasons: [reason] });
     expect(JSON.stringify(log.events)).not.toContain(path);
   });
@@ -149,7 +167,7 @@ describe("query-named explicit path admission", () => {
       omittedAtMs: NOW,
     });
     expect(
-      log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
     ).toMatchObject({ explicitPathAdmittedCount: 2, explicitPathRejectedCount: 0 });
   });
 });
