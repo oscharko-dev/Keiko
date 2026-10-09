@@ -186,3 +186,30 @@ describe("filterCandidates", () => {
     expect(result.kept).toHaveLength(1);
   });
 });
+
+describe("path-aware deterministic score ties", () => {
+  it("orders score ties by exact path then segment affinity before depth and spelling", () => {
+    const exact = annotated("z/deep/exact.ts", 0.5);
+    const segment = annotated("y/deep/segment.ts", 0.5);
+    const shallow = annotated("a.ts", 0.5);
+    const entries = [
+      shallow,
+      {
+        ...segment,
+        candidate: {
+          ...segment.candidate,
+          signals: [{ name: "path-segment-affinity", value: 0.8 }],
+        },
+      },
+      {
+        ...exact,
+        candidate: { ...exact.candidate, signals: [{ name: "exact-path-match", value: 0.8 }] },
+      },
+    ];
+    expect(filterCandidates(entries, options()).kept.map((entry) => entry.scopePath)).toEqual([
+      exact.candidate.scopePath,
+      segment.candidate.scopePath,
+      shallow.candidate.scopePath,
+    ]);
+  });
+});
