@@ -36,6 +36,36 @@ describe("bounded marker-only citation repair", () => {
     expect(validateCitationRepair(original, repaired, index)).toBe(false);
   });
 
+  it("accepts only inserted numeric markers authorized by the final fitted hybrid prompt", () => {
+    const available = new Set([2, 4]);
+    expect(
+      validateCitationRepair("Feature is true.", "Feature is true [2, 4].", index, available),
+    ).toBe(true);
+    expect(
+      validateCitationRepair("Feature is true.", "Feature is true [1].", index, available),
+    ).toBe(false);
+    expect(
+      validateCitationRepair("Feature is true.", "Feature is false [2].", index, available),
+    ).toBe(false);
+    expect(
+      validateCitationRepair(
+        "Feature [optional] is true.",
+        "Feature is true [2].",
+        index,
+        available,
+      ),
+    ).toBe(false);
+    expect(validateCitationRepair("Feature is true.", "Feature is true [2].", index)).toBe(false);
+    expect(buildCitationRepairPrompt("Feature is true.", "numeric")).toContain("[n]");
+  });
+  it.each([
+    ["The threshold is 1000.", "The threshold is 10 [src/Feature.ts:3] 00."],
+    ["The threshold is 1000.", "The threshold is 10 [2] 00."],
+    ["FeatureName is true.", "Feature [src/Feature.ts:3] Name is true."],
+    ["The threshold is 10.25.", "The threshold is 10 [src/Feature.ts:3] .25."],
+  ])("rejects a marker that splits a substantive token in %s", (original, repaired) => {
+    expect(validateCitationRepair(original, repaired, index, new Set([2]))).toBe(false);
+  });
   it("requests marker insertion without granting tools or substantive rewriting", () => {
     const prompt = buildCitationRepairPrompt("Feature returns true.");
     expect(prompt).toContain("Feature returns true.");
