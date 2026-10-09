@@ -29,6 +29,8 @@ describe("parseFailureEvidence (AC #4 / AC #9 failure-output handling)", () => {
     { location: "file://localhost/repo/pressure%20check.mjs:7", file: "/repo/pressure check.mjs" },
     { location: "file:///repo/pressure%2520check.mjs:7", file: "/repo/pressure%20check.mjs" },
     { location: "src/pressure%20check.mjs:7", file: "src/pressure%20check.mjs" },
+    { location: "file:///C:/repo/pressure%20check.mjs:7", file: "C:/repo/pressure check.mjs" },
+    { location: "file:///c:/repo/pressure%2520check.mjs:7", file: "c:/repo/pressure%20check.mjs" },
   ])("preserves one-pass runtime location identity $location", ({ location, file }) => {
     expect(parseFailureEvidence({ stackTrace: `    at run (${location})` }).frames).toEqual([
       { file, line: 7 },
@@ -39,9 +41,19 @@ describe("parseFailureEvidence (AC #4 / AC #9 failure-output handling)", () => {
     "file://remote.invalid/repo/guard.mjs:7",
     "file:///repo/bad%ZZ.mjs:7",
     "file:///repo/a%2Fguard.mjs:7",
+    "file:///repo/a%5Cguard.mjs:7",
     "file:///repo/a%00guard.mjs:7",
   ])("does not turn an invalid URL into a different filesystem frame: %s", (location) => {
     expect(parseFailureEvidence({ stackTrace: `    at run (${location})` }).frames).toEqual([]);
+  });
+
+  it("bounds URL decoding without dropping an ordinary bounded source location", () => {
+    expect(
+      parseFailureEvidence({ stackTrace: `at file:///repo/${"a".repeat(8192)}.mjs:7` }).frames,
+    ).toEqual([]);
+    expect(parseFailureEvidence({ stackTrace: "at src/guard.mjs:7" }).frames).toEqual([
+      { file: "src/guard.mjs", line: 7 },
+    ]);
   });
 
   it("extracts a vitest-style bare `path:line:col` from failing output", () => {

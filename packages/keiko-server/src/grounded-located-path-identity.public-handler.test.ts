@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectedContextGroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createDefaultChatCapability,
@@ -154,17 +154,34 @@ async function ask(query: string, path: string, line: number, compact = false): 
     deps,
   );
   expect(response.status).toBe(200);
+  if (compact) assertCompactedHistory(deps);
   const prompt = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
-  expect(prompt.includes(`File: ${path}`)).toBe(true);
-  expect(prompt.includes("guardedFact = 937") || prompt.includes("guardedFact=937")).toBe(true);
-  const decoyPosition = prompt.indexOf("guardedFact = 211");
-  if (decoyPosition !== -1) expect(prompt.indexOf(`File: ${path}`)).toBeLessThan(decoyPosition);
+  assertPrompt(prompt, path);
   const answer = response.body as ConnectedContextGroundedAnswer;
   expect(answer.citations.some((citation) => citation.scopePath === path)).toBe(true);
   const records = readPersistedActivityLog(stateDir)
     .split("\n")
     .filter(Boolean)
     .map((entry) => JSON.parse(entry) as Record<string, unknown>);
+  assertAdmission(query, records);
+}
+
+function assertCompactedHistory(deps: UiHandlerDeps): void {
+  expect(
+    deps.evidenceStore
+      .list()
+      .some((id) => (loadEvidence(deps.evidenceStore, id)?.compaction?.length ?? 0) > 0),
+  ).toBe(true);
+}
+
+function assertPrompt(prompt: string, path: string): void {
+  expect(prompt.includes(`File: ${path}`)).toBe(true);
+  expect(prompt.includes("guardedFact = 937") || prompt.includes("guardedFact=937")).toBe(true);
+  const decoyPosition = prompt.indexOf("guardedFact = 211");
+  if (decoyPosition !== -1) expect(prompt.indexOf(`File: ${path}`)).toBeLessThan(decoyPosition);
+}
+
+function assertAdmission(query: string, records: readonly Record<string, unknown>[]): void {
   const details = records.find((record) => record.op === "search.connected-context.source-details");
   expect(details?.explicitPathAdmittedCount).toBe(1);
   if (!query.includes("\n")) expect(details?.explicitPathRejectedCount).toBe(0);
@@ -244,4 +261,46 @@ describe("located path identity through real files and the public grounded handl
     populate(path, 7, "zz-source/pressure%20check.mjs");
     await ask(`Read ${pathToFileURL(join(root, path)).href}:7 and explain the failure.`, path, 7);
   });
+
+  it.each(["outside", "denied", "host", "malformed", "separator"])(
+    "keeps the real-file diagnostic boundary closed for %s URLs",
+    async (kind) => {
+      const outside = join(stateDir, "outside.mjs");
+      writeFileSync(outside, "export const guardedFact = 211;\n");
+      put(".env", "guardedFact=211\n");
+      const location =
+        kind === "outside"
+          ? pathToFileURL(outside).href
+          : kind === "denied"
+            ? `${pathToFileURL(root).href}/%2eenv`
+            : kind === "host"
+              ? "file://remote.invalid/source.mjs"
+              : kind === "malformed"
+                ? `${pathToFileURL(root).href}/bad%ZZ.mjs`
+                : `${pathToFileURL(root).href}/a%2Fsource.mjs`;
+      const requests: GatewayCallRequest[] = [];
+      const { deps, chatId } = runtime(requests, "source.mjs", 7, false);
+      const response = await handleGroundedAsk(
+        {
+          params: {},
+          correlationId: "located-identity-closed",
+          url: new URL("http://localhost/api/chats/messages/grounded"),
+          req: mockRequest({
+            body: JSON.stringify({
+              chatId,
+              content: `Why does this fail?\n    at run (${location}:7:1)`,
+            }),
+          }),
+          res: mockResponse().res,
+        },
+        deps,
+      );
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([]);
+      const answer = response.body as ConnectedContextGroundedAnswer;
+      expect(answer.citations).toEqual([]);
+      expect(answer.contextPack.usage.filesRead).toBe(0);
+      expect(answer.content).not.toContain("guardedFact");
+    },
+  );
 });
