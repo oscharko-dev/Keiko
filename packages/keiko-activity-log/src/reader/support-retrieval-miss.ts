@@ -292,7 +292,7 @@ function observeTurnLine(
   if (observeLifecycle(state, line, scopeIdentity, key)) return;
   const extra = retrievalExtra(line);
   if (extra === undefined) return;
-  let turn = state.latest.get(key);
+  let turn = currentObservationTurn(state, key, line.op);
   if (turn === undefined) {
     turn = createTurn(correlationId, line, scopeIdentity, state.started.has(key));
     state.latest.set(key, turn);
@@ -300,6 +300,26 @@ function observeTurnLine(
   }
   observeQuery(turn, extra, index);
   if (line.op === "search.connected-context.answer-details") turn.closed = true;
+}
+
+function currentObservationTurn(
+  state: TurnCollection,
+  key: string,
+  op: string,
+): TurnObservation | undefined {
+  const turn = state.latest.get(key);
+  if (turn?.closed !== true || !startsSelectionObservation(op)) return turn;
+  state.started.delete(key);
+  state.latest.delete(key);
+  return undefined;
+}
+
+function startsSelectionObservation(op: string): boolean {
+  return (
+    op === "search.connected-context.source-details" ||
+    op === "search.connected-context.selection-details" ||
+    op === "search.connected-context.completed"
+  );
 }
 
 function observedTurns(
