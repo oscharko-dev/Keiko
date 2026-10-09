@@ -1,11 +1,21 @@
-import type { GroundedPromptContextWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  GroundedAnswerEvidenceDeclaration,
+  GroundedInsufficiencyDeclaration,
+  GroundedPromptContextWire,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { InsufficiencyDeclarationResult } from "./grounded-faithfulness.js";
 
 export interface GroundedAnswerUsage {
   readonly promptTokens: number;
   readonly completionTokens: number;
 }
 
-export interface GroundedAnswerResult {
+export interface GroundedAnswerResult extends GroundedAnswerEvidenceDeclaration {
+  /** Internal verified inventory; never projected as a wire field or included in logs. */
+  readonly evidenceScopeIndex?:
+    ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> | undefined;
+  readonly insufficiencyObservation?:
+    Omit<InsufficiencyDeclarationResult, "declarations"> | undefined;
   readonly content: string;
   readonly usage: GroundedAnswerUsage;
   // GEN-AI-GATEWAY-001 (RB-4): the provider finishReason for the completion. When "length" the
@@ -105,6 +115,34 @@ export function normalizeGroundedAnswerPayload(
     },
     ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
     ...(payload.promptContext === undefined ? {} : { promptContext: payload.promptContext }),
+    ...normalizedEvidenceDeclaration(payload),
+  };
+}
+
+function normalizedEvidenceDeclaration(
+  payload: GroundedAnswerResult,
+): Pick<
+  GroundedAnswerResult,
+  | "answerKind"
+  | "citationBehaviour"
+  | "insufficiencyDeclarations"
+  | "evidenceScopeIndex"
+  | "insufficiencyObservation"
+> {
+  return {
+    ...(payload.answerKind === undefined ? {} : { answerKind: payload.answerKind }),
+    ...(payload.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: payload.citationBehaviour }),
+    ...(payload.insufficiencyDeclarations === undefined
+      ? {}
+      : { insufficiencyDeclarations: payload.insufficiencyDeclarations }),
+    ...(payload.evidenceScopeIndex === undefined
+      ? {}
+      : { evidenceScopeIndex: payload.evidenceScopeIndex }),
+    ...(payload.insufficiencyObservation === undefined
+      ? {}
+      : { insufficiencyObservation: payload.insufficiencyObservation }),
   };
 }
 
