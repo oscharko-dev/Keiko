@@ -972,6 +972,88 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  it.each([
+    ["please paste validation.ts", "clarification", false],
+    ["Missing evidence: [src/unread.ts]", "insufficiency", false],
+    ["No evidence found in the connected scope.", "refusal", false],
+    ["The service uses OAuth2. Which version do you mean?", "answer", true],
+  ] as const)("projects conservative multi-source kind %s", async (content, kind, warns) => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      root: tempRoot(name),
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("expected chat");
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Explain both files",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: new AbortController().signal,
+      insufficiencyScopeIndex: new Map([["src/unread.ts", "unread-in-scope"]]),
+      retriever: packPerScope(
+        new Map([
+          ["src/a.ts", scopePack("src/a.ts", 0.5, "a")],
+          ["src/b.ts", scopePack("src/b.ts", 0.5, "b")],
+        ]),
+      ),
+      answerer: () => Promise.resolve(content),
+    });
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.answerKind).toBe(kind);
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(warns);
+    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(false);
+    if (kind === "insufficiency")
+      expect(answer.insufficiencyDeclarations).toEqual([
+        { scopePath: "src/unread.ts", state: "unread-in-scope" },
+      ]);
+  });
+
+  it("removes unverified multi-source declaration text before wire and stored history", async () => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      root: tempRoot(name),
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("expected chat");
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Explain both files",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: new AbortController().signal,
+      retriever: packPerScope(
+        new Map([
+          ["src/a.ts", scopePack("src/a.ts", 0.5, "a")],
+          ["src/b.ts", scopePack("src/b.ts", 0.5, "b")],
+        ]),
+      ),
+      answerer: () =>
+        Promise.resolve({
+          content:
+            "I need the missing file to answer this question.\nMissing evidence: [private/outside.ts]",
+          usage: { promptTokens: 0, completionTokens: 0 },
+          insufficiencyDeclarations: [
+            { scopePath: "private/outside.ts", state: "unread-in-scope" },
+          ],
+        }),
+    });
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).not.toContain("private/outside.ts");
+    expect(answer.insufficiencyDeclarations).toBeUndefined();
+    expect(
+      store.listMessages(chat.id).find((message) => message.role === "assistant")?.content,
+    ).not.toContain("private/outside.ts");
+  });
   it.each(["workspace-root", "directory", "files"] as const)(
     "attributes %s citations to selected aliases while reads use the canonical root",
     async (kind): Promise<void> => {
@@ -2508,6 +2590,7 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     );
 
     expect(result.content).toBe("multi-source answer");
+    expect(result.evidenceScopeIndex?.size).toBe(0);
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-multi-source-answerer-000001");
     // PR #3678 review: the answer reports the share of the prompt it actually sent.
@@ -2567,9 +2650,11 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       };
     });
     const sentTokens: number[] = [];
+    const sentSourceBodies: string[] = [];
     const model: ModelPort = {
       call: (request) => {
         sentTokens.push(countGatewayPromptTokens({ messages: request.messages }));
+        sentSourceBodies.push(request.messages.map((message) => message.content).join("\n"));
         if (sentTokens.length === 1) {
           adoptReportedContextWindow(
             built,
@@ -2612,6 +2697,12 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       expect(sentTokens[1]).toBeLessThan(sentTokens[0] ?? 0);
       expect(sentTokens[1]).toBeLessThanOrEqual(8_192);
       expect(result.promptContext?.contextWindowTokens).toBe(8_192);
+      expect(result.evidenceScopeIndex).toBeDefined();
+      for (const name of ["a", "b"]) {
+        expect(result.evidenceScopeIndex?.get(`src/${name}.ts`) === "read-in-this-turn").toBe(
+          sentSourceBodies.at(-1)?.includes(`${name} evidence`),
+        );
+      }
     } finally {
       await built.dispose?.();
     }
