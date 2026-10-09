@@ -21,6 +21,17 @@ describe("factory-owned physical synthesis allowance", () => {
     expect(tracker.admission({ promptTokens: 100, maxOutputTokens: 80 })).toBeUndefined();
     expect(budget.remaining()).toBe(1);
   });
+  it("reduces the actual retry output cap after a reported partial completion", () => {
+    const budget = createGroundedSynthesisCallBudget();
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 220,
+      outputTokensMax: 80,
+    });
+    tracker
+      .admission({ promptTokens: 100, maxOutputTokens: 80 })
+      ?.settle({ promptTokens: 41, completionTokens: 7 }, true, "observed");
+    expect(tracker.admission({ promptTokens: 100, maxOutputTokens: 80 })?.maxOutputTokens).toBe(73);
+  });
   it("admits internal retry only inside the same original input and two-attempt grants", () => {
     const budget = createGroundedSynthesisCallBudget();
     const tracker = createGroundedSynthesisAttemptAdmission(budget, {

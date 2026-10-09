@@ -9,6 +9,8 @@ import {
   CancelledError,
   ContextOverflowError,
   TimeoutError,
+  GatewayError,
+  ProviderError,
   type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 
@@ -87,6 +89,7 @@ export interface GroundedSynthesisAttemptOptions {
 export interface GroundedSynthesisAttemptTracker {
   readonly admission: NonNullable<GatewayCallRequest["attemptAdmission"]>;
   /** Injected model ports may not implement the gateway's physical-attempt callback. */
+  settleFallbackFailure(promptTokens: number, failure: unknown): void;
   settleFallback(
     promptTokens: number,
     reported?: Readonly<Partial<GroundedAnswerUsage>>,
@@ -105,22 +108,52 @@ export function createGroundedSynthesisAttemptAdmission(
     const pending = budget.pendingUsage();
     if (
       input.promptTokens > options.inputTokensMax - pending.promptTokens ||
-      input.maxOutputTokens > options.outputTokensMax - pending.completionTokens ||
+      options.outputTokensMax <= pending.completionTokens ||
       !budget.tryReserve()
     )
       return undefined;
-    return synthesisAttemptReservation(budget, input.promptTokens, input.maxOutputTokens);
+    return synthesisAttemptReservation(
+      budget,
+      input.promptTokens,
+      Math.min(input.maxOutputTokens, options.outputTokensMax - pending.completionTokens),
+    );
+  };
+  const settleFallback: GroundedSynthesisAttemptTracker["settleFallback"] = (
+    promptTokens,
+    reported,
+    outputState = "observed",
+  ): void => {
+    if (gatewayOwned) return;
+    const reservation = admission({ promptTokens, maxOutputTokens: options.outputTokensMax });
+    if (reservation === undefined)
+      throw new ContextOverflowError("Synthesis attempt grant exhausted before dispatch");
+    reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
   };
   return {
     admission,
-    settleFallback(promptTokens, reported, outputState = "observed"): void {
-      if (gatewayOwned) return;
-      const reservation = admission({ promptTokens, maxOutputTokens: options.outputTokensMax });
-      if (reservation === undefined)
-        throw new ContextOverflowError("Synthesis attempt grant exhausted before dispatch");
-      reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
+    settleFallback,
+    settleFallbackFailure(promptTokens, failure): void {
+      settleFallback(
+        promptTokens,
+        failure instanceof GatewayError ? failure.partialUsage : undefined,
+        failedSynthesisOutputState(failure),
+      );
     },
   };
+}
+
+/** Injected model ports have no gateway-owned attempt settlement. */
+function failedSynthesisOutputState(failure: unknown): "observed" | "none" | "unknown" {
+  if (failure instanceof GatewayError && (failure.partialUsage?.completionTokens ?? 0) > 0)
+    return "observed";
+  if (failure instanceof ContextOverflowError && failure.partialUsage === undefined) return "none";
+  if (
+    failure instanceof ProviderError &&
+    failure.httpStatus >= 400 &&
+    failure.partialUsage === undefined
+  )
+    return "none";
+  return "unknown";
 }
 
 function assertSynthesisAttemptActive(options: GroundedSynthesisAttemptOptions): void {
@@ -136,6 +169,7 @@ function synthesisAttemptReservation(
 ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
   let settled = false;
   return {
+    maxOutputTokens,
     settle(reported, dispatched, outputState = "observed"): void {
       if (settled) return;
       settled = true;
