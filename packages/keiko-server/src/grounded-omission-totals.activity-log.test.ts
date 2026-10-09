@@ -103,7 +103,10 @@ async function assertOmissionEvidence(pack: ConnectedContextPack, clipped: boole
       ignoreLines: [],
     }),
   });
-  expect(output.pack).toBe(pack);
+  expect(output.pack).toEqual({ ...pack, diagnostics: output.pack.diagnostics });
+  expect(output.pack.files).toBe(pack.files);
+  expect(output.pack.omitted).toBe(pack.omitted);
+  expect(output.pack.diagnostics).toBeDefined();
   const event = log.events.find((entry) => entry.op === "search.connected-context.source-details");
   const counts = connectedContextOmittedCounts(pack);
   expect(event?.extra).toMatchObject({
