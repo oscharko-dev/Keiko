@@ -51,6 +51,7 @@ async function askLocations(
       budget: { ...DEFAULT_EXPLORATION_BUDGET, modelInputTokensMax: 32768 },
     },
     {
+      correlationId: "mixed-line-window-retrieval",
       activityLog: log.sink,
       fs: memFs(ROOT, { [PATH]: body }),
       nowMs: () => 0,

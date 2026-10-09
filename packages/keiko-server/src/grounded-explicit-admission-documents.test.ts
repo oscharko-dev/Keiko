@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
+import type {
+  RetrievalQuery,
+  SelectedScope,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import { admitExplicitPaths, explicitPathReferences } from "./grounded-explicit-paths.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 
@@ -27,7 +30,7 @@ const scope: SelectedScope = {
   connectedAtMs: 1,
   explicitConnection: true,
 };
-function query(text: string) {
+function query(text: string): RetrievalQuery {
   return {
     kind: "natural-language" as const,
     text,
@@ -36,7 +39,7 @@ function query(text: string) {
     emittedAtMs: 1,
   };
 }
-function admit(text: string, fs: WorkspaceFs) {
+function admit(text: string, fs: WorkspaceFs): ReturnType<typeof admitExplicitPaths> {
   return admitExplicitPaths({
     scope,
     query: query(text),
@@ -90,10 +93,11 @@ describe("explicit admission preserves bounded document and filesystem semantics
     const output = await retrieveConnectedContextPack(
       { workspaceRoot: ROOT, scope, query: query("Explain plainMarker") },
       {
+        correlationId: "plain-document-admission",
         fs: memFs(ROOT, { "src/plain.doc": "export const plainMarker = 73;\n" }),
         detectWorkspace: () => workspace,
         nowMs: () => 1,
-        answerer: { answer: async () => "" },
+        answerer: { answer: () => Promise.resolve("") },
       },
     );
     expect(output.pack.files.map((file) => file.scopePath)).toContain("src/plain.doc");

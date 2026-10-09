@@ -123,7 +123,9 @@ function runtime(
       timestamp: timestamp++,
       runId: undefined,
       workflowId: undefined,
-      attachments: [],
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
     });
   return {
     chatId: chat.id,
