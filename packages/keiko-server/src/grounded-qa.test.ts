@@ -278,7 +278,11 @@ async function assertPairedAdmissionReport(stateDir: string, correlationId: stri
 
 function customModelConfig(
   modelId = CHAT_MODEL,
-  capability: { readonly contextWindow?: number; readonly maxOutputTokens?: number } = {},
+  capability: {
+    readonly contextWindow?: number;
+    readonly maxInputTokens?: number;
+    readonly maxOutputTokens?: number;
+  } = {},
 ): GatewayConfig {
   return {
     providers: [
@@ -305,6 +309,9 @@ function customModelConfig(
         id: modelId,
         kind: "chat",
         contextWindow: capability.contextWindow ?? 64_000,
+        ...(capability.maxInputTokens === undefined
+          ? {}
+          : { maxInputTokens: capability.maxInputTokens }),
         maxOutputTokens: capability.maxOutputTokens ?? 4_096,
         toolCalling: true,
         structuredOutput: true,
