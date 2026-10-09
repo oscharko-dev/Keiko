@@ -36,6 +36,28 @@ describe("bounded marker-only citation repair", () => {
     expect(validateCitationRepair(original, repaired, index)).toBe(false);
   });
 
+  it("accepts only inserted numeric markers authorized by the final fitted hybrid prompt", () => {
+    const available = new Set([2, 4]);
+    expect(
+      validateCitationRepair("Feature is true.", "Feature is true [2, 4].", index, available),
+    ).toBe(true);
+    expect(
+      validateCitationRepair("Feature is true.", "Feature is true [1].", index, available),
+    ).toBe(false);
+    expect(
+      validateCitationRepair("Feature is true.", "Feature is false [2].", index, available),
+    ).toBe(false);
+    expect(
+      validateCitationRepair(
+        "Feature [optional] is true.",
+        "Feature is true [2].",
+        index,
+        available,
+      ),
+    ).toBe(false);
+    expect(validateCitationRepair("Feature is true.", "Feature is true [2].", index)).toBe(false);
+    expect(buildCitationRepairPrompt("Feature is true.", "numeric")).toContain("[n]");
+  });
   it("requests marker insertion without granting tools or substantive rewriting", () => {
     const prompt = buildCitationRepairPrompt("Feature returns true.");
     expect(prompt).toContain("Feature returns true.");
