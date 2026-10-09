@@ -9391,15 +9391,16 @@ function explorationDeadlineAtMs(startedAtMs: number, budget: ExplorationBudget)
 
 // Metadata only: the existing hardened Git membership resolver still validates ownership in the
 // selected cwd. Finding an ancestor marker never changes the selected evidence root or scope.
+// The original metadata deadline/abort guard bounds each probe; filesystem-root termination keeps
+// legitimate deeply nested selections discoverable without an arbitrary ancestor-depth cutoff.
 function hasConnectedGitMetadata(root: string, fs: WorkspaceFs): boolean {
   let current = root;
-  for (let depth = 0; depth < 32; depth += 1) {
+  for (;;) {
     if (fs.exists(resolve(current, ".git"))) return true;
     const parent = parentDirectory(current);
     if (parent === current) return false;
     current = parent;
   }
-  return false;
 }
 
 function prepareLiveRetrievalContext(
