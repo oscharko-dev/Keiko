@@ -1,3 +1,8 @@
+import {
+  citationBehaviourFor,
+  citationBehaviourObserverFor,
+} from "./grounded-citation-capability.js";
+import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
 import { evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
 import type { GroundedAnswerOptions } from "./grounded-orchestrator.js";
 import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -1356,7 +1361,25 @@ function createGatewayAnswerer(
   const ctx = { deps, model, modelId, signal, correlationId, tokenAccounting };
   return {
     answer: (question, pack, options) => gatewayGroundedAnswer(ctx, question, pack, options ?? {}),
+    repair: (question, pack, original, options) =>
+      gatewayGroundedAnswer(
+        ctx,
+        `${question}\n\n${buildCitationRepairPrompt(original)}`,
+        pack,
+        options,
+      ),
   };
+}
+
+function groundedAnswerContextSignal(
+  ctx: GroundedGatewayAnswerContext,
+  options: GroundedAnswerOptions,
+): GroundedGatewayAnswerContext {
+  const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
+  if (options.deadlineAtMs !== undefined) {
+    signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
+  }
+  return { ...ctx, signal: AbortSignal.any(signals) };
 }
 
 async function gatewayGroundedAnswer(
@@ -1365,6 +1388,7 @@ async function gatewayGroundedAnswer(
   pack: ConnectedContextPack,
   options: GroundedAnswerOptions,
 ): Promise<GroundedAnswerResult> {
+  ctx = groundedAnswerContextSignal(ctx, options);
   ensureNotCancelled(ctx.signal);
   const attempt = await withAdoptedContextWindowRetry(
     ctx.deps,
@@ -1496,6 +1520,8 @@ function runDefaultGroundedExploration(
     budgetedInput.workspaceRoot,
   );
   return runGroundedExploration(budgetedInput, {
+    reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
+    observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
     answerer: createGatewayAnswerer(
       deps,
       model,
@@ -1957,6 +1983,9 @@ function singleAnswerEvidenceDeclaration(
   output: OrchestratorOutput,
 ): GroundedAnswerEvidenceDeclaration {
   return {
+    ...(output.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: output.citationBehaviour }),
     ...(output.answerKind === undefined ? {} : { answerKind: output.answerKind }),
     ...(output.insufficiencyDeclarations === undefined
       ? {}
