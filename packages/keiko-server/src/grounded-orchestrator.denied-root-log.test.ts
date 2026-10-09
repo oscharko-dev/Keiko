@@ -58,11 +58,27 @@ function expectSearchLifecycle(
           "search.connected-context.started",
           "search.connected-context.completion-details",
           "search.connected-context.source-details",
+          "search.connected-context.selection-details",
           terminalOp,
         ]
       : ["search.connected-context.started", terminalOp],
   );
   expect(activityLog.events.every((event) => event.correlationId === CORRELATION_ID)).toBe(true);
+  if (terminalOp !== "search.connected-context.completed") return;
+  const started = expectActivityLogProof(
+    "search.connected-context.started.line",
+    formatActivityLogProofLine(activityLog.events[0] ?? {}),
+  );
+  const selection = expectActivityLogProof(
+    "search.connected-context.selection-details.line",
+    formatActivityLogProofLine(activityLog.events[3] ?? {}),
+  );
+  expect(selection).toMatchObject({
+    scopeIdentitySha256: started.scopeIdentitySha256,
+    queryIdentitySha256: started.queryIdentitySha256,
+    completeness: "complete",
+    loss: "none",
+  });
 }
 
 function expectDeniedLifecycle(activityLog: BufferedActivityLog): void {

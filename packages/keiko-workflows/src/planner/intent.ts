@@ -96,6 +96,7 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "package-json", pattern: /\bpackage\.json\b/iu },
   { term: "package-manager", pattern: /\bpackage[\s_-]?manager\b/iu },
   { term: "package-manager", pattern: /\bpaket[\s_-]?manager\b/iu },
+  { term: "manifest-inventory", pattern: /\b(?:package|project|workspace)[\s_-]+manifests?\b/iu },
   { term: "tsconfig", pattern: /\btsconfig(?:\.[a-z0-9]+)?\b/iu },
   { term: "dependency", pattern: /\bdevdependencies\b|\bdependencies\b|\bdependency\b/iu },
   { term: "dependency", pattern: /\babhaengigkeit(?:en)?\b|\babhängigkeit(?:en)?\b/iu },
@@ -235,6 +236,12 @@ function classifyShortTarget(text: string): RetrievalIntentClassification {
     : { intent: "clarification-needed", normalizedTerms: [] };
 }
 
+function hasConcreteSourceTarget(text: string): boolean {
+  return extractAnchors({ text, maxAnchors: text.length }).anchors.some(
+    (anchor) => anchor.kind === "path" || anchor.kind === "quoted" || anchor.kind === "identifier",
+  );
+}
+
 function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext): boolean {
   if (
     context.previousIntent !== "diagnostic-search" &&
@@ -247,10 +254,19 @@ function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext
       "orientation",
     );
   if (!CONVERSATIONAL_FOLLOW_UP_RE.test(text) && !orientation) return false;
-  const anchors = extractAnchors({ text, maxAnchors: text.length }).anchors;
-  return !anchors.some(
-    (anchor) => anchor.kind === "path" || anchor.kind === "quoted" || anchor.kind === "identifier",
-  );
+  return !hasConcreteSourceTarget(text);
+}
+
+function classifyProjectMetadata(
+  text: string,
+  normalized: string,
+): RetrievalIntentClassification | undefined {
+  const matched = matchedTerms(text, normalized, PROJECT_METADATA_PATTERNS);
+  const terms =
+    matched.includes("manifest-inventory") && hasConcreteSourceTarget(text)
+      ? matched.filter((term) => term !== "manifest-inventory")
+      : matched;
+  return terms.length === 0 ? undefined : { intent: "project-metadata", normalizedTerms: terms };
 }
 
 export function classifyRetrievalIntent(
@@ -290,7 +306,7 @@ function classifyRequestedIntent(
           normalizedTerms: searchableTokens(normalized).slice(0, 8),
         }
       : undefined) ??
-    classifyByPatterns(trimmed, normalized, PROJECT_METADATA_PATTERNS, "project-metadata") ??
+    classifyProjectMetadata(trimmed, normalized) ??
     classifyByPatterns(trimmed, normalized, TARGETED_CODE_PATTERNS, "targeted-code-search") ??
     classifyByPatterns(
       trimmed,
