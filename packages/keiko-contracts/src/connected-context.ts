@@ -728,7 +728,7 @@ function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {
   }
 }
 
-function isPathWithinSelectedScope(
+export function isPathWithinSelectedScope(
   scope: SelectedScope,
   scopePaths: ReadonlySet<string>,
   candidatePath: unknown,
