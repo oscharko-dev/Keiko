@@ -1944,16 +1944,15 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
     const reservation = this.transportReservation(request, config);
-    request = callerAdmittedRequest(request, reservation);
-    const body = JSON.stringify(
-      stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
+    const { body, deadline } = this.prepareHttpDispatch(
+      request,
+      config,
+      reservation,
+      url,
+      stream,
+      bounds,
+      includeUsage,
     );
-    const readBounds = dispatchedReadBounds(stream, bounds);
-    logChatDispatch(
-      this.log,
-      chatDispatchFields(url, request, config, body, stream, includeUsage, readBounds),
-    );
-    const deadline = requestDeadline(config.timeoutMs, readBounds, request.cancellationSignal);
     try {
       const response = await gatewayFetch(url, {
         method: "POST",
@@ -1970,14 +1969,46 @@ export class OpenAiAdapter implements ProviderAdapter {
         reservation,
         signal: deadline.signal,
         dispose: (): void => {
-          settleCallerAttempt(reservation, undefined, true, response.ok ? "unknown" : "none");
-          deadline.dispose();
+          try {
+            settleCallerAttempt(reservation, undefined, true, response.ok ? "unknown" : "none");
+          } finally {
+            deadline.dispose();
+          }
         },
       };
     } catch (error) {
       deadline.dispose();
       const failure = this.mapDispatchError(error, config, deadline.signal, secrets);
       settleFailedCallerAttempt(reservation, failure, true);
+      throw failure;
+    }
+  }
+
+  private prepareHttpDispatch(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
+    url: string,
+    stream: boolean,
+    bounds: StreamReadBounds | undefined,
+    includeUsage: boolean,
+  ): { readonly body: string; readonly deadline: RequestDeadline } {
+    try {
+      request = callerAdmittedRequest(request, reservation);
+      const body = JSON.stringify(
+        stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
+      );
+      const readBounds = dispatchedReadBounds(stream, bounds);
+      logChatDispatch(
+        this.log,
+        chatDispatchFields(url, request, config, body, stream, includeUsage, readBounds),
+      );
+      return {
+        body,
+        deadline: requestDeadline(config.timeoutMs, readBounds, request.cancellationSignal),
+      };
+    } catch (failure) {
+      settleCallerAttempt(reservation, undefined, false, "none");
       throw failure;
     }
   }

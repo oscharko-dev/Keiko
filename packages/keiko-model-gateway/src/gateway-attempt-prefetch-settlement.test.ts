@@ -2,10 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { Gateway, type GatewayCallRequest } from "./gateway.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import { parseGatewayConfig } from "./config.js";
+import { OpenAiAdapter } from "./openai-adapter.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
-import type { NormalizedResponse, ProviderAdapter } from "./types.js";
+import type { ModelProviderConfig, NormalizedResponse, ProviderAdapter } from "./types.js";
 
 const MODEL = "prefetch-settlement-proof";
+const PROVIDER: ModelProviderConfig = {
+  modelId: MODEL,
+  baseUrl: "https://prefetch.example.invalid/v1",
+  apiKey: "fixture",
+  maxRetries: 0,
+  timeoutMs: 30_000,
+  retryBaseDelayMs: 1,
+};
 const REQUEST: GatewayCallRequest = {
   modelId: MODEL,
   messages: [{ role: "user", content: "Synthetic settlement question" }],
@@ -53,16 +62,7 @@ function fixture(
   });
   const gateway = new Gateway(
     parseGatewayConfig({
-      providers: [
-        {
-          modelId: MODEL,
-          baseUrl: "https://prefetch.example.invalid/v1",
-          apiKey: "fixture",
-          maxRetries: 0,
-          timeoutMs: 30_000,
-          retryBaseDelayMs: 1,
-        },
-      ],
+      providers: [PROVIDER],
       capabilities: [{ ...createDefaultChatCapability(MODEL), maxOutputTokens: 1024 }],
     }),
     {
@@ -107,23 +107,75 @@ function partialStream(): { readonly response: Response; readonly cancelled: () 
 }
 
 describe("physical admission settlement before fetch and despite spend failure", () => {
-  it("settles acquired admissions when buffered dispatch logging throws before fetch", async () => {
+  it("preserves buffered dispatch when the isolated log sink throws", async () => {
     const proof = fixture({ logFailure: true });
-    await expect(
-      proof.gateway.chat({ ...REQUEST, attemptAdmission: proof.admission }),
-    ).rejects.toThrow();
-    assertUndispatched(proof, 1);
+    const answer = await proof.gateway.chat({ ...REQUEST, attemptAdmission: proof.admission });
+    expect(answer.content).toBe("Synthetic answer");
+    expect(proof.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(proof.settle).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ promptTokens: 2, completionTokens: 3 }),
+      true,
+      "observed",
+    );
+    expect(proof.spendSettle).toHaveBeenCalledTimes(1);
   });
 
-  it("settles acquired admissions when streamed dispatch logging throws before fetch", async () => {
+  it("preserves streamed dispatch when the isolated log sink throws", async () => {
     const proof = fixture({ logFailure: true });
     const iterator = proof.gateway.chatStream({
       ...REQUEST,
       stream: true,
       attemptAdmission: proof.admission,
     });
-    await expect(iterator.next()).rejects.toThrow();
-    assertUndispatched(proof, 1);
+    const chunks = [];
+    for await (const chunk of iterator) chunks.push(chunk);
+    expect(chunks.at(-1)).toMatchObject({ type: "done" });
+    expect(proof.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(proof.settle).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ promptTokens: 2, completionTokens: 3 }),
+      true,
+      "observed",
+    );
+    expect(proof.spendSettle).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles a direct transport admission whose cap fails HTTP preparation", async () => {
+    const proof = fixture({ invalidLimit: true });
+    const adapter = new OpenAiAdapter({
+      requestId: "prefetch",
+      costClass: "low",
+      fetchImpl: proof.fetchImpl,
+    });
+    await expect(
+      adapter.call({ ...REQUEST, attemptAdmission: proof.admission }, PROVIDER),
+    ).rejects.toThrow();
+    expect(proof.fetchImpl).not.toHaveBeenCalled();
+    expect(proof.settle).toHaveBeenCalledExactlyOnceWith(undefined, false, "none");
+  });
+
+  it("rejects cyclic schemas during canonical token preflight before acquiring admission", async () => {
+    const proof = fixture();
+    const schema: Record<string, unknown> = {};
+    schema.self = schema;
+    const admission = vi.fn(proof.admission);
+    const adapter = new OpenAiAdapter({
+      requestId: "prefetch",
+      costClass: "low",
+      fetchImpl: proof.fetchImpl,
+    });
+    await expect(
+      adapter.call(
+        {
+          ...REQUEST,
+          responseFormat: { type: "json_schema", schema },
+          attemptAdmission: admission,
+        },
+        PROVIDER,
+      ),
+    ).rejects.toThrow(TypeError);
+    expect(admission).not.toHaveBeenCalled();
+    expect(proof.fetchImpl).not.toHaveBeenCalled();
+    expect(proof.settle).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

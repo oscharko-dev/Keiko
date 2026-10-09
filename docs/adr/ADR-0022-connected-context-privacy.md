@@ -752,3 +752,9 @@ for each physical synthesis HTTP POST, including stream-shape and output-token-f
 fallbacks. This avoids double-reserving the first request at both gateway and adapter boundaries.
 Other adapters retain the gateway-owned attempt boundary. Each reservation settles once; early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
+An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
+before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token
+preflight rejects cyclic schemas before acquisition. Log-sink exceptions remain isolated by the
+existing observability port and do not interrupt healthy dispatch. Durable spend-settlement failure
+remains fatal, while a `finally` settles caller usage and output exposure exactly once and releases
+transport timers. A dispatched attempt never restores its grants merely because accounting failed.
