@@ -88,6 +88,7 @@ describe("scope notice and evidence inspection ingestion", () => {
       const sink = captureServerLog();
       const failed = reason === "manifest-fetch-failed";
       const evidenceInspection = { reason, readFileCount: 2, omittedFileCount: 1 };
+      const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"];
       const result = await handleClientDiagnosticIngest(
         context(
           JSON.stringify({
@@ -98,7 +99,7 @@ describe("scope notice and evidence inspection ingestion", () => {
             ...(failed
               ? {
                   errorKind: "unavailable",
-                  errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+                  errorEvidence: { errorClass: "TypeError", frames, causeChain: ["TypeError"] },
                 }
               : {}),
           }),
@@ -116,7 +117,12 @@ describe("scope notice and evidence inspection ingestion", () => {
         ...evidenceInspection,
         correlationId: "inspection-123",
         ...(failed
-          ? { errorKind: "unavailable", errorClass: "TypeError", frames: [], causeChain: [] }
+          ? {
+              errorKind: "unavailable",
+              errorClass: "TypeError",
+              frames: redactLogFields({ frames })?.frames,
+              causeChain: ["TypeError"],
+            }
           : {}),
       });
       expect(event?.level).toBe(failed ? "warn" : "info");
