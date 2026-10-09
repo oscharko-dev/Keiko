@@ -1,8 +1,7 @@
 // Closed, body-free observations of actual responses; no answer is promoted to a semantic proof.
 import { createHash } from "node:crypto";
-import { join } from "node:path";
 import { importBuilt } from "./lab-common.mjs";
-import { flatten, readActivityLogText } from "./activity-log-events.mjs";
+import { flatten } from "./activity-log-events.mjs";
 import { assertOperationContract, registeredOperations, readOpCatalog } from "./op-contract.mjs";
 
 const OPERATIONS = registeredOperations(readOpCatalog());
@@ -32,6 +31,22 @@ assertOperationContract("connected-chat-record", {
     "queryIdentitySha256",
     "sourceBackedChars",
     "assessmentChars",
+  ],
+  "search.connected-context.completed": [
+    "scopeIdentitySha256",
+    "queryIdentitySha256",
+    "usageFilesRead",
+    "selectedFileCount",
+  ],
+  "search.connected-context.completion-details": [
+    "scopeIdentitySha256",
+    "queryIdentitySha256",
+    "indexProviderStatus",
+    "indexSearchMode",
+    "indexIndexedRecords",
+    "indexReusedRecords",
+    "workspaceIoContentReadCalls",
+    "workspaceIoContentReadBytes",
   ],
 });
 
@@ -66,7 +81,8 @@ function sameActualProcess(rows) {
   return (
     rows.length > 0 &&
     rows.every((row) => row.pid !== undefined && row.instanceId !== undefined) &&
-    new Set(rows.map((row) => row.instanceId)).size === 1
+    new Set(rows.map((row) => row.instanceId)).size === 1 &&
+    new Set(rows.map((row) => row.pid)).size === 1
   );
 }
 
@@ -124,9 +140,47 @@ function usageObservation(usage) {
       };
 }
 
+function retrievalObservation(rows, answer) {
+  const coverage = answer.contextPack?.coverage;
+  return {
+    coverage:
+      coverage === undefined
+        ? undefined
+        : {
+            incomplete: coverage.incomplete,
+            truncated: coverage.truncated,
+            reasons: coverage.reasons,
+            filesDiscovered: coverage.filesDiscovered,
+            filesScanned: coverage.filesScanned,
+            filesSkipped: coverage.filesSkipped,
+            matchesReturned: coverage.matchesReturned,
+          },
+    retrievalEvents: rows
+      .filter((row) => row.op === "search.connected-context.completed")
+      .map((row) => ({
+        scopeIdentitySha256: row.scopeIdentitySha256,
+        queryIdentitySha256: row.queryIdentitySha256,
+        dedicatedExcerptFilesRead: row.usageFilesRead,
+        selectedFileCount: row.selectedFileCount,
+      })),
+    workspaceEvents: rows
+      .filter((row) => row.op === "search.connected-context.completion-details")
+      .map((row) => ({
+        scopeIdentitySha256: row.scopeIdentitySha256,
+        queryIdentitySha256: row.queryIdentitySha256,
+        indexProviderStatus: row.indexProviderStatus,
+        indexSearchMode: row.indexSearchMode,
+        indexIndexedRecords: row.indexIndexedRecords,
+        indexReusedRecords: row.indexReusedRecords,
+        workspaceIoContentReadCalls: row.workspaceIoContentReadCalls,
+        workspaceIoContentReadBytes: row.workspaceIoContentReadBytes,
+      })),
+  };
+}
+
 function evidenceObservation(manifests, target) {
   return {
-    expectedTargetRead:
+    expectedTargetInRetainedEvidence:
       target === undefined
         ? undefined
         : manifests.some((manifest) =>
@@ -140,33 +194,98 @@ function evidenceObservation(manifests, target) {
   };
 }
 
-export async function connectedChatObservation(runtime, result, manifests, target) {
-  const text = await readActivityLogText(join(runtime.stateDir, "logs"));
-  const { splitOwnAssessment } = await importBuilt("keiko-contracts", "grounded-assessment.js");
-  const { analyzeLogText, buildReproductionSeed } = await importBuilt(
-    "keiko-activity-log",
-    "reader/index.js",
-  );
-  const analysis = analyzeLogText(text);
+function targetPromptObservation(answer, target) {
+  if (target === undefined) return {};
+  const cited = expectedTargetCited(answer, target);
+  return {
+    expectedTargetInPrompt:
+      cited === true ? true : answer.contextPack?.filesInPrompt === 0 ? false : undefined,
+    targetPhysicalReadDisposition: "unobserved",
+    targetDeclarationStates: (answer.insufficiencyDeclarations ?? [])
+      .filter((entry) => entry.scopePath === target)
+      .map((entry) => entry.state),
+  };
+}
+
+async function logAnalysis(stateDir, correlationId) {
+  const reader = await importBuilt("keiko-activity-log", "reader/index.js");
+  const { openSafeArtifactFile } = await importBuilt("keiko-security", "fs-hardening.js");
+  const files = reader.listActivityLogStoreFiles(stateDir);
+  const digest = createHash("sha256");
+  let lineCount = 0;
+  let firstLine;
+  function* lines() {
+    for (const file of files) {
+      const open = () =>
+        openSafeArtifactFile(file.path, {
+          artifactClass: "activity-log",
+          mode: "read",
+          trustedRoot: stateDir,
+        });
+      for (const line of reader.readActivityLogFileLines(open, {
+        onChunk: (chunk) => digest.update(chunk),
+      })) {
+        firstLine ??= line.text;
+        lineCount += 1;
+        yield line;
+      }
+    }
+  }
+  const analysis = reader.analyzeLogLines(lines(), { sourceKind: "raw-log" });
   const seed =
-    result.correlationId === null
+    correlationId === null
       ? undefined
-      : buildReproductionSeed(text, result.correlationId, new Date());
+      : reader.buildReproductionSeedFromAnalysis(
+          analysis,
+          { kind: "raw-log", lineCount, sha256: digest.digest("hex"), firstLine },
+          correlationId,
+          new Date(),
+        );
+  return { analysis, seed };
+}
+
+export async function connectedChatObservation(runtime, result, manifests, target) {
+  const { splitOwnAssessment } = await importBuilt("keiko-contracts", "grounded-assessment.js");
+  const { analysis, seed } = await logAnalysis(runtime.stateDir, result.correlationId);
   const rows = (seed?.timeline ?? []).map(flatten);
   return {
     correlationId: result.correlationId,
     stableProcess: sameActualProcess(rows),
     ...answerObservation(result.json, splitOwnAssessment),
     ...evidenceObservation(manifests, target),
+    ...targetPromptObservation(result.json, target),
     ...selectedObservation(rows),
+    ...retrievalObservation(rows, result.json),
     expectedTargetCited: expectedTargetCited(result.json, target),
     findingKinds: (seed?.findings ?? []).map((finding) => finding.reason),
     analysisSufficiency: seed?.sufficiency?.status,
     evidenceClassification: analysis.evidence.classification,
     corruptLogLineCount: analysis.evidence.corruptLineCount,
+    truncatedLogLineCount: analysis.evidence.truncatedLineCount,
     unsupportedLogLineCount: analysis.evidence.unsupportedLineCount,
     incompleteLogLineCount: analysis.evidence.incompleteLineCount,
     sequenceAnomalyCount: analysis.evidence.sequenceAnomalies.length,
     readerTimelineCount: rows.length,
+  };
+}
+
+/** A numeric synthetic-corpus witness, not a semantic verdict over arbitrary prose. */
+export async function expectedSourceFactObservation(content, fact) {
+  if (fact === undefined) return {};
+  const { ownAssessmentSourceText } = await importBuilt(
+    "keiko-contracts",
+    "grounded-assessment.js",
+  );
+  const { stripInlineCitations } = await importBuilt("keiko-server", "grounded-faithfulness.js");
+  const source = stripInlineCitations(ownAssessmentSourceText(content));
+  const number = fact.number.replace(".", "[.,]");
+  const unit =
+    fact.unit === "seconds"
+      ? "(?:seconds?|Sekunden|s)\\b"
+      : "(?:°\\s*C|degrees?(?:\\s+Celsius)?|Celsius|Grad(?:\\s+Celsius)?)\\b";
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${number}\\s*(?:[-–]\\s*)?${unit}`, "iu");
+  return {
+    expectedSourceFactPresent: pattern.test(source),
+    expectedSourceFactSha256: createHash("sha256").update(JSON.stringify(fact)).digest("hex"),
   };
 }

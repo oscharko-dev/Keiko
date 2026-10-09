@@ -26,6 +26,7 @@ binding uses the canonical real path. No scope change occurs within a campaign.
 | `customer`   | 5     | Canonical incident fixture from `check-retrieval-quality.mjs` | Trace → German follow-up → explicit nested file → basename → English orientation; actual fresh reads, supplied citations, honest declarations/repair and support sufficiency.                                                  |
 | `knowledge`  | 8     | Real large Keiko checkout                                     | Production retrieval pipeline and original budgets → general decision advice in EN/DE → mixed source facts and recommendations → return to an explicit implementation file → freshness limits and an operational evidence gap. |
 | `compaction` | 3     | Real large Keiko checkout                                     | Actual cited source answer → marked synthetic user-history padding → actual general answer → actual source return, with persisted compaction evidence and unchanged scope.                                                     |
+| `manual`     | 8     | Existing 100,000-file non-Git HTML folder                     | Original content-only late-target query → repeat → original entity query → depth-72 exact path → same-chat follow-up → general learned knowledge → mixed authority → source return.                                            |
 
 The case catalog contains domain-neutral learned-knowledge questions. It does not select a product
 router, introduce a topic classifier, enable Internet access, or supply model responses. The
@@ -49,6 +50,7 @@ Preparation reads only the public case catalog and starts no server or model req
 node scripts/testing/coding-workbench-lab/connected-chat-run.mjs --campaign customer --prepare
 node scripts/testing/coding-workbench-lab/connected-chat-run.mjs --campaign knowledge --prepare
 node scripts/testing/coding-workbench-lab/connected-chat-run.mjs --campaign compaction --prepare
+node scripts/testing/coding-workbench-lab/connected-chat-run.mjs --campaign manual --prepare
 ```
 
 After the source hold and CPU handoff, run from that checkout using its own built packages.
@@ -66,8 +68,25 @@ node scripts/testing/coding-workbench-lab/connected-chat-run.mjs \
 Use the canonical incident-fixture root for `customer`, and the held Keiko root for `knowledge`
 and `compaction`. The prepared fixture must be materialized from the existing producer, with real
 Git metadata created separately; do not execute its generated or dependency decoys. The existing
-ordinary-folder/HTML lab remains the search-index owner's qualification; this campaign does not
-claim those measurements.
+100,000-file non-Git HTML corpus for `manual`. That corpus has an external witness digest and
+retained original questions, but no retained exact materialization generator; do not invent one or
+call a smaller hermetic template its producer. The driver loads target paths from the private
+witness and verifies its root and non-Git binding. Supply the existing witness through
+`--corpus-witness /private/lab/3894-html-corpus-local.json` for actual execution. Source bodies never
+enter records. Standalone scale/cache metrics remain the search-index owner's separate proof.
+
+The original complete-coverage but authoritative-target-unread/uncited failure remains open until
+the real model and current source qualify the content-only case. A successful exact-path control
+does not establish that fix. The repeated question measures the actual second turn without
+claiming a cold or warm cache from its position. All eight manual turns use one chat and unchanged
+acknowledged scope. Inspect target facts and citations against the existing corpus privately;
+neither nonzero citation counts nor the source return's general history authenticates manual facts.
+For the synthetic targets only, a numeric fact witness is derived transiently from the existing
+witness's primary value (or its explicit depth-72 delay). Record a unit-qualified presence boolean
+and digest from source prose, excluding assessment and citation markers. This check cannot prove
+negation, entailment or answer usefulness; inspect the actual answer and cited lines privately.
+Revalidate the existing LiteLLM-to-local-Ollama selected-model mapping before the campaign and keep
+only a route digest/closed disposition. Do not print aliases, endpoints, keys or configuration.
 
 ## Observations and acceptance
 
@@ -77,14 +96,22 @@ timeout does not prove that no provider request occurred or that the server comp
 inspect the existing Activity Log before deciding whether another campaign can start.
 
 Local records contain response hashes and character counts, citation/declaration counts, expected
-target-read/cited booleans, canonical scope/query digests, actual final-prompt file counts, physical
+target-retained-evidence/cited booleans, canonical scope/query digests, actual final-prompt file counts, physical
 and completed synthesis counts, repair/follow-up dispositions, compaction evidence counts, and the
 existing support analyzer's sufficiency/findings. They contain no prompts, response bodies,
 excerpts, raw source paths, model endpoints, credentials, or pairing attestations. The scenario
 catalog's public questions are the reproduction input, not Activity Log evidence.
 
+Manifest file presence establishes retained assembled evidence, not exhaustive physical workspace
+reads or exact per-file final-prompt membership. An authenticated actual target citation witnesses
+target membership in the final prompt; `filesInPrompt: 0` witnesses its absence. Otherwise that
+membership remains unobserved. Declaration states are separate observations. Target-specific
+physical reads remain unobserved; aggregate dedicated excerpt reads and index/search body reads
+must remain distinct counts.
+
 Read the actual writer/formatter output through the canonical validated support reader. Preserve
-malformed persisted lines in that input and report its integrity classification and counters;
+malformed persisted lines and per-file termination through its hardened line iterator, and report
+its integrity classification and counters;
 never discard them before analysis. For a healthy general-only answer, verify the actual
 `search.answer.assessed` event has `phase: accepted-final`, the canonical scope/query identities,
 and `outcome: assessment-only`, and check that it does not create a retrieval-miss finding. Compare

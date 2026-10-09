@@ -3,11 +3,14 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { REPO_ROOT, UsageError, labBaseUrl, openApiSession, parseCli } from "./lab-common.mjs";
-import { CONNECTED_CHAT_CAMPAIGNS } from "./connected-chat-cases.mjs";
-import { connectedChatObservation } from "./connected-chat-record.mjs";
+import { CONNECTED_CHAT_CAMPAIGNS, materializeManualCases } from "./connected-chat-cases.mjs";
+import {
+  connectedChatObservation,
+  expectedSourceFactObservation,
+} from "./connected-chat-record.mjs";
 
 const USAGE =
-  "connected-chat-run.mjs --campaign customer|knowledge|compaction --repo <explicit-root> --runtime-state <private-json> --output <external-jsonl> [--prepare]";
+  "connected-chat-run.mjs --campaign customer|knowledge|compaction|manual --repo <explicit-root> --runtime-state <private-json> --output <external-jsonl> [--corpus-witness <private-json>] [--prepare]";
 const REQUEST_TIMEOUT_MS = 120_000;
 const HISTORY_COUNT = 120;
 const HISTORY_BYTES = 8192;
@@ -145,6 +148,7 @@ async function runCase(session, runtime, chat, row) {
     ...seed,
     persistedMessageCount: history.json.messages?.length,
     ...(await connectedChatObservation(runtime, result, manifests, row.target)),
+    ...(await expectedSourceFactObservation(result.json.content ?? "", row.expectedFact)),
   };
 }
 
@@ -156,6 +160,7 @@ function campaignOptions() {
       repo: { type: "string" },
       "runtime-state": { type: "string" },
       output: { type: "string" },
+      "corpus-witness": { type: "string" },
       prepare: { type: "boolean" },
     },
   });
@@ -177,11 +182,22 @@ function campaignOptions() {
   return { values: parsed.values, campaign, cases };
 }
 
+async function boundCampaignCases(parsed, root) {
+  if (parsed.campaign !== "manual") return parsed.cases;
+  const path = requiredExternalPath(parsed.values["corpus-witness"]);
+  if ((statSync(path).mode & 0o077) !== 0) throw new UsageError("private-manual-witness-required");
+  const corpus = JSON.parse(readFileSync(path, "utf8"));
+  if (realpathSync(corpus.root) !== root || existsSync(join(root, ".git")))
+    throw new UsageError("manual-root-witness-mismatch");
+  return materializeManualCases(corpus);
+}
+
 async function setupCampaign(parsed) {
   const runtime = privateRuntime(requiredExternalPath(parsed.values["runtime-state"]));
   const output = requiredExternalPath(parsed.values.output);
   if (typeof parsed.values.repo !== "string") throw new UsageError("explicit-root-required");
   const root = realpathSync(parsed.values.repo);
+  const cases = await boundCampaignCases(parsed, root);
   requireHeldHead(runtime);
   const env = {
     ...process.env,
@@ -189,10 +205,10 @@ async function setupCampaign(parsed) {
   };
   const session = await openApiSession(labBaseUrl(`http://127.0.0.1:${runtime.port}`), env);
   const chat = await createChat(session, root, runtime, parsed.campaign);
-  return { session, runtime, chat, output };
+  return { session, runtime, chat, output, cases };
 }
 
-async function runCampaign({ session, runtime, chat, output }, cases) {
+async function runCampaign({ session, runtime, chat, output, cases }) {
   for (const row of cases) {
     console.log(
       JSON.stringify({
@@ -229,7 +245,7 @@ async function runCampaign({ session, runtime, chat, output }, cases) {
 async function main() {
   const parsed = campaignOptions();
   if (parsed === undefined) return;
-  await runCampaign(await setupCampaign(parsed), parsed.cases);
+  await runCampaign(await setupCampaign(parsed));
 }
 
 main().catch(() => {

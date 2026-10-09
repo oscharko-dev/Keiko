@@ -1,5 +1,6 @@
 // Customer prompts for the actual connected-chat lab; these are questions, never model outputs.
 import { INCIDENT_FEATURE_PATH, INCIDENT_RETRIEVAL_CASES } from "../../check-retrieval-quality.mjs";
+import { importBuilt, UsageError } from "./lab-common.mjs";
 
 export const CONNECTED_CHAT_CAMPAIGNS = Object.freeze({
   customer: [
@@ -97,4 +98,82 @@ export const CONNECTED_CHAT_CAMPAIGNS = Object.freeze({
       target: "packages/keiko-server/src/grounded-answer-assessment.ts",
     },
   ],
+  manual: [
+    {
+      id: "manual-original-content-only-first",
+      targetKey: "late",
+      question:
+        "What temperature trips the Vesper dosing interlock? Cite the authoritative manual. Keep the answer under 100 words.",
+    },
+    {
+      id: "manual-original-content-only-repeated",
+      targetKey: "late",
+      question:
+        "What temperature trips the Vesper dosing interlock? Cite the authoritative manual. Keep the answer under 100 words.",
+    },
+    {
+      id: "manual-original-entity-target",
+      targetKey: "generated",
+      question:
+        "What operating limit does Überhitzungsschutz specify? Cite the authoritative manual. Keep the answer under 100 words.",
+    },
+    {
+      id: "manual-depth72-exact",
+      targetKey: "deep72",
+      question:
+        "What restart delay is specified in `{target}`? Cite the manual. Keep the answer under 100 words.",
+    },
+    {
+      id: "manual-same-chat-follow-up",
+      targetKey: "deep72",
+      question:
+        "Siehst du die Datei jetzt? Welche Wartezeit vor dem Neustart steht dort? Antworte kurz mit Quellenangabe.",
+    },
+    {
+      id: "manual-general-knowledge",
+      question:
+        "How should a team communicate uncertainty when choosing between reasonable alternatives? Explain a short general process, under 100 words.",
+    },
+    {
+      id: "manual-mixed-authority",
+      targetKey: "deep72",
+      question:
+        "State the restart delay in `{target}` with a source citation. Then separately explain a general process for deciding safely when operational evidence is incomplete. Keep the answer under 150 words.",
+    },
+    {
+      id: "manual-source-return",
+      targetKey: "deep72",
+      question:
+        "Return to `{target}`. What restart delay does the actual manual specify? Cite it, under 100 words.",
+    },
+  ],
 });
+
+/** Bind reproduction inputs to the existing witness; never retain its file bodies or root path. */
+export async function materializeManualCases(corpus) {
+  if (corpus.fileCount !== 100_000 || corpus.noGit !== true)
+    throw new UsageError("invalid-manual-witness");
+  const { isValidScopePath } = await importBuilt("keiko-contracts", "connected-context.js");
+  return CONNECTED_CHAT_CAMPAIGNS.manual.map((row) => {
+    if (row.targetKey === undefined) return { id: row.id, question: row.question };
+    const target = corpus.targets?.[row.targetKey]?.path;
+    if (!isValidScopePath(target, { mustBeRelative: true }))
+      throw new UsageError("invalid-manual-target");
+    return {
+      id: row.id,
+      question: row.question.replaceAll("{target}", target),
+      target,
+      expectedFact: manualNumericFact(corpus.targets[row.targetKey], row.targetKey),
+    };
+  });
+}
+
+function manualNumericFact(target, key) {
+  const number =
+    key === "deep72"
+      ? String(target.expectedDelaySeconds)
+      : target.body?.match(/\d+(?:[.,]\d+)?/u)?.[0];
+  return typeof number === "string" && /^\d+(?:[.,]\d+)?$/u.test(number)
+    ? { number: number.replace(",", "."), unit: key === "deep72" ? "seconds" : "temperature" }
+    : undefined;
+}

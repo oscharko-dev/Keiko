@@ -21,7 +21,7 @@ function parseLine(line) {
   }
 }
 
-/** The logical log's original lines, including malformed records for the validated support reader. */
+/** Logical text for lab views; normalizes unterminated inter-file delimiters, not a byte-exact artifact. */
 export async function readActivityLogText(logDirectory) {
   const grammar = await importBuilt("keiko-contracts", "activity-log-files.js");
   const files = grammar.readableActivityLogFileNames(
