@@ -1,5 +1,7 @@
 "use client";
 
+import { MissingEvidenceActions } from "./MissingEvidenceActions";
+import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
 import { ChatScopeNotice } from "./ChatScopeNotice";
 import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
@@ -1563,7 +1565,6 @@ export const ConversationQuestionMap = memo(ConversationQuestionMapImpl);
 const ConversationThread = memo(ConversationThreadImpl);
 
 const REPOSITORY_FILE_SEARCH_LIMIT = 24;
-const MAX_REPOSITORY_FOCUS_PATHS = 50;
 
 interface ComposerRepositoryReference {
   readonly id: string;
@@ -1700,57 +1701,6 @@ function replaceRepositoryMention(
     value: `${prefix}${inserted}${suffix}`,
     cursor: prefix.length + inserted.length,
   };
-}
-
-function mergeRepositoryFileScope(
-  chat: Chat,
-  root: string,
-  path: string,
-  now: () => number = Date.now,
-): { readonly scopes: readonly ChatConnectedScope[]; readonly changed: boolean } {
-  const filePath = normalizedRepositoryPath(path);
-  if (filePath.length === 0) {
-    throw new Error("EMPTY_REPOSITORY_FILE_SELECTION");
-  }
-  const currentScopes = effectiveConnectedScopes(chat);
-  const nextScopes: ChatConnectedScope[] = [];
-  let merged = false;
-  let changed = false;
-
-  for (const scope of currentScopes) {
-    const scopeRoot = scope.root ?? chat.projectPath;
-    if (scope.kind === "files" && scopeRoot === root) {
-      merged = true;
-      if (scope.relativePaths.includes(filePath)) {
-        nextScopes.push(scope);
-        continue;
-      }
-      if (scope.relativePaths.length >= MAX_REPOSITORY_FOCUS_PATHS) {
-        throw new Error("REPOSITORY_FILE_SCOPE_LIMIT");
-      }
-      nextScopes.push({
-        ...scope,
-        root,
-        relativePaths: [...scope.relativePaths, filePath],
-        connectedAtMs: now(),
-      });
-      changed = true;
-      continue;
-    }
-    nextScopes.push(scope);
-  }
-
-  if (!merged) {
-    nextScopes.push({
-      kind: "files",
-      root,
-      relativePaths: [filePath],
-      connectedAtMs: now(),
-    });
-    changed = true;
-  }
-
-  return { scopes: nextScopes, changed };
 }
 
 function resultDirectoryLabel(result: FilesSearchResult, t: I18nTranslate): string {
@@ -4479,7 +4429,7 @@ function ChatScopeHeaderImpl({
         connected={connected}
       />
       {effectiveConnectedScopes(chat).length === 0 ? null : (
-        <p className={scopeNoticeStyles.help} data-testid="grounding-help">
+        <p className={scopeNoticeStyles.help} data-testid="grounding-help" tabIndex={-1}>
           {t("chat.grounding.help")}
         </p>
       )}
@@ -5903,6 +5853,19 @@ export function ChatWindow({
           and its live dialogue session — across the empty→populated transition. The condition is the
           exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
           keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
+      <MissingEvidenceActions
+        chat={activeChat}
+        answer={
+          session.latestGrounded ??
+          messages.findLast(
+            (message) => message.role === "assistant" && message.groundedAnswer !== undefined,
+          )?.groundedAnswer
+        }
+        onChatChanged={replaceChat}
+        setDraft={session.setDraft}
+        draft={draft}
+        focusComposer={() => composerInputRef.current?.focus()}
+      />
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}
