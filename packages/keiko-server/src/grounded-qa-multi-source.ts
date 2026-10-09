@@ -23,6 +23,7 @@ import {
   ContextOverflowError,
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
@@ -62,6 +63,7 @@ import {
   clarificationUserMessage,
   retrieveConnectedContextPack,
   type OrchestratorInput,
+  type GroundedAnswerOptions,
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
@@ -86,6 +88,7 @@ import {
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   packsHaveUsableEvidence,
+  noEvidenceMarker,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import {
@@ -720,6 +723,7 @@ export function createMultiSourceAnswerer(
   modelId: string,
   signal: AbortSignal,
   correlationId: string | undefined,
+  answerOptions: Pick<GroundedAnswerOptions, "answerOnlyContextAvailable" | "currentQuestion"> = {},
 ): MultiSourceAnswerer {
   return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
@@ -727,7 +731,7 @@ export function createMultiSourceAnswerer(
     const response = await withAdoptedContextWindowRetry(
       deps,
       { modelId, surface: "grounded", correlationId },
-      () => {
+      async () => {
         const tokenAccounting = currentContextProfileForModel(deps, modelId)?.tokenAccounting;
         const options = groundedPromptOptions(deps, modelId, tokenAccounting);
         sent = fittedMultiSourcePrompt(
@@ -737,28 +741,49 @@ export function createMultiSourceAnswerer(
           options,
           correlationId,
         );
+        if (sent.sentReferenceCount === 0 && answerOptions.answerOnlyContextAvailable !== true)
+          return undefined;
         return model.call(
           { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
           signal,
         );
       },
     );
-    const content = response.content.trim();
-    assertUsableAssistantContent(content, modelId);
-    const { promptTokens, completionTokens } = response.usage;
-    const profile = currentContextProfileForModel(deps, modelId);
-    return {
-      content,
-      usage: { promptTokens, completionTokens },
-      ...(sent === undefined
-        ? {}
-        : {
-            promptContext: sentPromptContext(sent, promptTokens, profile),
-            evidenceScopeIndex: buildInsufficiencyScopeIndex(sent.packs.map((entry) => entry.pack)),
-            sentEvidencePacks: sent.packs.map((entry) => entry.pack),
-            filesInPrompt: sentGroundedFileCount(sent.packs.map((entry) => entry.pack)),
-          }),
-    };
+    if (sent === undefined) throw new TypeError("Multi-source fitted prompt is unavailable");
+    return multiSourceAnswerResult(
+      response,
+      sent,
+      answerOptions.currentQuestion ?? question,
+      modelId,
+      currentContextProfileForModel(deps, modelId),
+    );
+  };
+}
+
+function multiSourceAnswerResult(
+  response: NormalizedResponse | undefined,
+  sent: ReturnType<typeof fittedMultiSourcePrompt>,
+  question: string,
+  modelId: string,
+  profile: ReturnType<typeof currentContextProfileForModel>,
+): GroundedAnswerResult {
+  const content = response?.content.trim() ?? connectedSearchNoEvidenceAnswer(question);
+  if (response !== undefined) assertUsableAssistantContent(content, modelId);
+  const packs = sent.packs.map((entry) => entry.pack);
+  return {
+    content,
+    modelInvoked: response !== undefined,
+    noEvidence: sent.sentReferenceCount === 0,
+    usage: {
+      promptTokens: response?.usage.promptTokens ?? 0,
+      completionTokens: response?.usage.completionTokens ?? 0,
+    },
+    evidenceScopeIndex: buildInsufficiencyScopeIndex(packs),
+    sentEvidencePacks: packs,
+    filesInPrompt: sentGroundedFileCount(packs),
+    ...(response === undefined
+      ? {}
+      : { promptContext: sentPromptContext(sent, response.usage.promptTokens, profile) }),
   };
 }
 
@@ -1149,6 +1174,15 @@ function persistPerSourceEvidence(
   return { firstRunId, runIds };
 }
 
+function noSourceAnswerMarkers(
+  assistant: GroundedAnswerResult,
+  redactor: Redactor,
+): readonly GroundedUncertainty[] {
+  if (assistant.noEvidence !== true) return [];
+  const marker = noEvidenceMarker(Date.now());
+  return [{ kind: marker.kind, claim: redactString(redactor, marker.claim) }];
+}
+
 function assembleMultiSourceAnswer(
   ctx: MultiSourceAskInput,
   sources: readonly RetrievedSource[],
@@ -1163,7 +1197,8 @@ function assembleMultiSourceAnswer(
   },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
-  const modelInvoked = !ids.abstained || ctx.answerOnlyContextAvailable === true;
+  const modelInvoked =
+    assistant.modelInvoked ?? (!ids.abstained || ctx.answerOnlyContextAvailable === true);
   const citationBundles = sourceCitationBundles(
     sources,
     redactor,
@@ -1206,6 +1241,7 @@ function assembleMultiSourceAnswer(
     uncertainty: [
       ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
       ...reconciliationUncertainty,
+      ...noSourceAnswerMarkers(assistant, redactor),
     ],
     omittedCount: sources.reduce((acc, src) => acc + connectedContextOmittedCount(src.pack), 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
@@ -1376,12 +1412,13 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   // GEN-AI-GROUNDING-002/-003 (RB-4): abstain BEFORE the model call when no source carries usable
   // evidence — the folders path must not answer confidently over zero evidence, and no grounded
   // evidence manifest may be persisted.
-  const abstained = !packsHaveUsableEvidence(retrieved.map((s) => s.pack));
-  const assistant = await answerMultiSource(ctx, retrieved, abstained);
+  const noRetrievedEvidence = !packsHaveUsableEvidence(retrieved.map((s) => s.pack));
+  const assistant = await answerMultiSource(ctx, retrieved, noRetrievedEvidence);
   if (isRouteResult(assistant)) {
     return assistant;
   }
   ensureNotCancelled(ctx.signal);
+  const abstained = noRetrievedEvidence || assistant.noEvidence === true;
   const persisted = persistMultiSourceExchange(ctx, assistant);
   const answer = await applyMultiSourceEntailment(
     ctx,
@@ -1391,7 +1428,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     }),
     assistant,
     retrieved,
-    !abstained || ctx.answerOnlyContextAvailable === true,
+    assistant.modelInvoked ?? (!abstained || ctx.answerOnlyContextAvailable === true),
   );
   ensureNotCancelled(ctx.signal);
   const completedAnswer = withAnswerDuration(answer, startedAtMs);

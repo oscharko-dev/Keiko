@@ -672,6 +672,82 @@ function asLocalKnowledge(answer: GroundedAnswer): LocalKnowledgeGroundedAnswer 
 // ─── Window fit: a folder path the prompt left out supports nothing ───────────
 
 describe("hybrid grounded ask — folder evidence the window fit left out", () => {
+  function boundaryAsk(
+    capsuleId: KnowledgeCapsuleId,
+    pack: ConnectedContextPack,
+    deps: UiHandlerDeps,
+    memory: boolean,
+    answer: NonNullable<HybridSeam["answer"]>,
+  ): ReturnType<typeof runHybridGroundedAsk> {
+    const chatId = makeHybridChat(
+      [
+        {
+          kind: "files",
+          relativePaths: ["src/only.ts"],
+          connectedAtMs: NOW,
+          root: tempRoot("zero-window"),
+        },
+      ],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("Missing chat");
+    return runHybridGroundedAsk({
+      chat,
+      content: "What can you establish?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps,
+      signal: new AbortController().signal,
+      answerOnlyContextAvailable: memory,
+      folderRetriever: folderRetrieverFor(new Map([["src/only.ts", pack]])),
+      connectorRetrieve: () => Promise.resolve({ references: [], noEvidence: true }),
+      answer,
+    });
+  }
+
+  it.each([false, true])(
+    "refuses a window that cannot fit any hybrid reference before invocation (memory=%s)",
+    async (memory) => {
+      const { capsuleId } = await seedReadyCapsule("Empty Window Docs");
+      const pack = folderPack("src/only.ts", 0.9, "only-window");
+      let emptyTokens = 0;
+      const probe = await boundaryAsk(
+        capsuleId,
+        { ...pack, files: [] },
+        hybridDeps(),
+        true,
+        (system, user) => {
+          emptyTokens = countGatewayPromptTokens({
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          });
+          return Promise.resolve("Personal preference.");
+        },
+      );
+      expect(probe.status).toBe(200);
+      expect(emptyTokens).toBeGreaterThan(0);
+      const profile = deriveContextProfile({
+        maxInputTokens: emptyTokens + 512 + 64,
+        reservedOutputTokens: 512,
+        safetyMarginTokens: 64,
+      });
+      const call = vi.fn(sentinelAnswerer("Personal preference."));
+      const result = await boundaryAsk(
+        capsuleId,
+        pack,
+        hybridDeps({ contextProfileForModel: () => profile }),
+        memory,
+        call,
+      );
+      expect(result.status).toBe(502);
+      expect(result.body).toMatchObject({ error: { code: "GATEWAY_CONTEXT_OVERFLOW" } });
+      expect(call).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([1, 5])(
     "authenticates only a sent partial folder range (cited line %s)",
     async (line) => {
