@@ -233,15 +233,15 @@ function generationBoundWorkspaceIndex(
     return true;
   };
   return {
-    loadSnapshot: async (scopeKey): Promise<WorkspaceIndexSnapshot | undefined> => {
+    loadSnapshot: async (scopeKey, isActive): Promise<WorkspaceIndexSnapshot | undefined> => {
       if (stale()) return undefined;
-      const snapshot = await index.loadSnapshot(scopeKey);
+      const snapshot = await index.loadSnapshot(scopeKey, isActive);
       return stale() ? undefined : snapshot;
     },
-    saveSnapshot: async (scopeKey, snapshot): Promise<void> => {
+    saveSnapshot: async (scopeKey, snapshot, isActive): Promise<void> => {
       if (stale()) throw new WorkspaceIndexKeyRotatedError();
       try {
-        await index.saveSnapshot(scopeKey, snapshot);
+        await index.saveSnapshot(scopeKey, snapshot, isActive);
       } catch (error) {
         if (stale()) throw new WorkspaceIndexKeyRotatedError();
         throw error;
