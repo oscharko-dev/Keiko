@@ -117,7 +117,7 @@ import {
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { GROUNDED_SYSTEM_PROMPT, sentGroundedFileCount } from "./grounded-prompt.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
@@ -1618,6 +1618,7 @@ function buildHybridContextPack(
     connectorSourceCount: sources.connectorSourceCount,
     folder: {
       ...summary,
+      filesInPrompt: sentGroundedFileCount(sentFolderPacks(sources.folders, selected)),
       usage: {
         ...summary.usage,
         modelInputTokens: summary.usage.modelInputTokens + assistant.usage.promptTokens,
@@ -2509,8 +2510,9 @@ async function answerHybridWithinWindow(
       return normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
     },
   );
+  const sentEvidencePacks = sentFolderPacks(promptCtx.folderOmissionPacks ?? [], sent);
   const evidenceScopeIndex = buildInsufficiencyScopeIndex(
-    sentFolderPacks(promptCtx.folderOmissionPacks ?? [], sent),
+    sentEvidencePacks,
     ctx.insufficiencyScopeIndex,
   );
   return {
@@ -2518,6 +2520,8 @@ async function answerHybridWithinWindow(
       ...assistant,
       insufficiencyDeclarations: undefined,
       evidenceScopeIndex,
+      sentEvidencePacks,
+      filesInPrompt: sentGroundedFileCount(sentEvidencePacks),
       ...validateGroundedAnswerEvidence(assistant.content, evidenceScopeIndex, ctx.content),
     },
     sent,
