@@ -69,13 +69,27 @@ describe("scope notice and evidence inspection diagnostic contracts", () => {
   });
 
   it.each([
+    { reason: "narrowed-to-directory", scopeKind: "directory", pathCount: 1 },
+    { reason: "widened", scopeKind: "workspace-root", pathCount: 0 },
+    { reason: "pinned-folder", scopeKind: "directory", pathCount: 1 },
+    { reason: "pinned-folder", scopeKind: "workspace-root", pathCount: 0 },
+    { reason: "missing-evidence-added", scopeKind: "files", pathCount: 2 },
+  ])("admits each coherent scope action %j", (notice) => {
+    expect(isClientDiagnosticIngestRequest({ ...envelope, scopeNotice: notice })).toBe(true);
+  });
+
+  it.each([
     { reason: "private/path.ts" },
     { scopeKind: "private/path.ts" },
     { pathCount: -1 },
     { pathCount: 1.5 },
     { pathCount: Number.MAX_SAFE_INTEGER },
+    { pathCount: 0 },
     { scopeKind: "workspace-root", pathCount: 1 },
+    { reason: "narrowed-to-directory", scopeKind: "directory", pathCount: 2 },
     { reason: "narrowed-to-file", scopeKind: "directory" },
+    { reason: "pinned-folder" },
+    { reason: "missing-evidence-added", scopeKind: "directory" },
     { path: "private/path.ts" },
   ])("refuses malformed or content-bearing scope facts %j", (patch) => {
     expect(
@@ -86,6 +100,7 @@ describe("scope notice and evidence inspection diagnostic contracts", () => {
   it.each([
     { reason: "private/path.ts" },
     { readFileCount: -1 },
+    { readFileCount: Number.MAX_SAFE_INTEGER },
     { omittedFileCount: 1.5 },
     { path: "private/path.ts" },
     { reason: "manifest-fetch-failed" },

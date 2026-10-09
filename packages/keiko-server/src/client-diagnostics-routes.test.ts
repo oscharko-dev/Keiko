@@ -1,4 +1,5 @@
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import {
   resetServerLogger,
   setSupportIncidentTriggerForTests,
@@ -42,7 +43,9 @@ const CORRELATION_ID = "diagnostics-route-test";
 const CLIENT_TS = "2026-08-21T10:00:00.000Z";
 
 describe("scope notice and evidence inspection ingestion", () => {
-  beforeEach(() => resetClientDiagnosticsIngestStateForTests());
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
   afterEach(() => {
     resetClientDiagnosticsIngestStateForTests();
     resetServerLogger();
@@ -75,6 +78,8 @@ describe("scope notice and evidence inspection ingestion", () => {
     expect(event?.level).toBe("info");
     expect(clientDiagnosticEvents(sink)).toHaveLength(0);
     expect(JSON.stringify(event)).not.toContain("private-message-canary");
+    if (event === undefined) throw new Error("Missing scope notice event");
+    expect(observedFailureQuery([event]).events).toHaveLength(0);
   });
 
   it.each(["summary-expanded", "file-table-opened", "manifest-fetch-failed"])(
@@ -117,6 +122,10 @@ describe("scope notice and evidence inspection ingestion", () => {
       expect(event?.level).toBe(failed ? "warn" : "info");
       expect(clientDiagnosticEvents(sink)).toHaveLength(0);
       expect(JSON.stringify(event)).not.toContain("private-inspection-canary");
+      if (event === undefined) throw new Error("Missing evidence inspection event");
+      expect(
+        observedFailureQuery([event]).events.filter((entry) => entry.parsed.view.op === event.op),
+      ).toHaveLength(failed ? 1 : 0);
     },
   );
 
