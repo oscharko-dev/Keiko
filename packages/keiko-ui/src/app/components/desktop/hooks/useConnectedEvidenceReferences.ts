@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GroundedAnswer } from "@/lib/types";
 import type { RepositoryReferenceEvidence, RepositoryReferenceRoot } from "../repositoryReferences";
 
@@ -10,35 +10,35 @@ export function useConnectedEvidenceReferences(
   readonly onReadPaths: (runId: string, paths: readonly string[]) => void;
 } {
   const connected = answer?.groundingKind === "local-knowledge" ? undefined : answer;
-  const runIds =
-    connected === undefined
-      ? []
-      : Array.from(
-          new Set([
-            ...(connected.evidenceRunId === undefined ? [] : [connected.evidenceRunId]),
-            ...(connected.evidenceRunIds ?? []),
-          ]),
-        );
+  const primaryId = connected?.evidenceRunId;
+  const otherIds = connected?.evidenceRunIds;
+  const runIds = useMemo(
+    () =>
+      Array.from(new Set([...(primaryId === undefined ? [] : [primaryId]), ...(otherIds ?? [])])),
+    [primaryId, otherIds],
+  );
   const key = JSON.stringify([
     connected?.assistantMessageId,
     runIds,
     roots.map((root) => root.root),
   ]);
-  const runKey = JSON.stringify(runIds);
+  const currentKey = useRef(key);
+  useEffect(() => {
+    currentKey.current = key;
+  }, [key]);
   const [snapshot, setSnapshot] = useState<{
     readonly key: string;
     readonly byRun: Readonly<Record<string, readonly string[]>>;
   }>({ key: "", byRun: {} });
   const onReadPaths = useCallback(
     (runId: string, paths: readonly string[]): void => {
-      const allowed: readonly string[] = JSON.parse(runKey) as readonly string[];
-      if (!allowed.includes(runId)) return;
+      if (currentKey.current !== key || !runIds.includes(runId)) return;
       setSnapshot((previous) => ({
         key,
         byRun: { ...(previous.key === key ? previous.byRun : {}), [runId]: paths },
       }));
     },
-    [key, runKey],
+    [key, runIds],
   );
   return {
     evidence:

@@ -1,0 +1,25 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`prose evidence links > distinguishes src/cited.ts with a title, class and accessible name 1`] = `
+{
+  "accessibleName": "Open src/cited.ts in editor · Cited evidence",
+  "state": "cited",
+  "title": "src/cited.ts · Cited evidence",
+}
+`;
+
+exports[`prose evidence links > distinguishes src/read.ts with a title, class and accessible name 1`] = `
+{
+  "accessibleName": "Open src/read.ts in editor · Read, not cited",
+  "state": "read-uncited",
+  "title": "src/read.ts · Read, not cited",
+}
+`;
+
+exports[`prose evidence links > distinguishes src/unread.ts with a title, class and accessible name 1`] = `
+{
+  "accessibleName": "Open src/unread.ts in editor · Not read",
+  "state": "unread",
+  "title": "src/unread.ts · Not read",
+}
+`;

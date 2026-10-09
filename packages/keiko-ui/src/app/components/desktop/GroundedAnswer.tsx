@@ -7,7 +7,7 @@
 // UI's lib/types re-export. Citations are static evidence references until a future change wires
 // them to the Files-window preview at the cited line range.
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   citationFindingTotal,
@@ -231,8 +231,9 @@ const QUERY_KIND_LABELS: Readonly<
 function contextPackHeadline(
   contextPack: GroundedAnswerContextPackSummary,
   t: I18nTranslate,
+  scopeLabel?: string,
 ): string {
-  const scope = formatScopeLabel(contextPack, t);
+  const scope = scopeLabel ?? formatScopeLabel(contextPack, t);
   let key: MessageKey = "grounded.inspection.scope";
   if (contextPack.scopeKind === "files") {
     key =
@@ -400,13 +401,17 @@ function SearchCoverageDetail({ coverage }: { readonly coverage: SearchCoverage 
 
 function ContextPackSummary({
   contextPack,
+  scopeLabel,
 }: {
+  readonly scopeLabel?: string | undefined;
   readonly contextPack: GroundedAnswerContextPackSummary;
 }): ReactNode {
   const t = useTranslate();
   return (
     <section className="grounded-context-pack" aria-label={t("grounded.inspection.aria")}>
-      <div className="grounded-context-pack-headline">{contextPackHeadline(contextPack, t)}</div>
+      <div className="grounded-context-pack-headline">
+        {contextPackHeadline(contextPack, t, scopeLabel)}
+      </div>
       <dl className="grounded-context-pack-dl">
         {inspectionMetrics(contextPack, t).map(([label, value]) => (
           <MetricRow key={label} label={label} value={value} />
@@ -931,7 +936,7 @@ function GroundedEvidenceDisclosure({
     <details
       className="grounded-evidence-disclosure"
       onToggle={(event) => {
-        if (reportInspection && event.currentTarget.open)
+        if (reportInspection && event.target === event.currentTarget && event.currentTarget.open)
           reportEvidenceInspection({ reason: "summary-expanded" });
       }}
     >
@@ -1573,7 +1578,9 @@ function LocalKnowledgeContextPackSummary({
 // Epic #189 Slice 3 M5 — hybrid context pack: folder + Knowledge Pod sources side-by-side.
 function HybridContextPackSummary({
   contextPack,
+  scopeLabel,
 }: {
+  readonly scopeLabel?: string | undefined;
   readonly contextPack: HybridGroundedAnswerContextSummary;
 }): ReactNode {
   const t = useTranslate();
@@ -1591,7 +1598,7 @@ function HybridContextPackSummary({
           }),
         })}
       </div>
-      <ContextPackSummary contextPack={contextPack.folder} />
+      <ContextPackSummary contextPack={contextPack.folder} scopeLabel={scopeLabel} />
       <LocalKnowledgeContextPackSummary contextPack={contextPack.knowledge} />
     </section>
   );
@@ -1817,6 +1824,76 @@ function GroundedAnswerWarnings({ answer }: { readonly answer: GroundedAnswer })
   );
 }
 
+type FolderAuditDetailsProps = Omit<GroundedAnswerProps, "answer" | "busy"> & {
+  readonly answer: ConnectedGroundedAnswer | HybridGroundedAnswer;
+};
+
+function useInspectedFolderScope({
+  answer,
+  repositoryRoots = [],
+  onReadPaths,
+}: FolderAuditDetailsProps): {
+  readonly scopeLabel: string | undefined;
+  readonly onRead: (
+    runId: string,
+    paths: readonly string[],
+    selectedPaths: readonly string[],
+  ) => void;
+} {
+  const pack = answer.groundingKind === "hybrid" ? answer.contextPack.folder : answer.contextPack;
+  const primaryId = answer.evidenceRunId ?? answer.evidenceRunIds?.[0];
+  const key = JSON.stringify([answer.assistantMessageId, pack.scopeId, primaryId]);
+  const [selection, setSelection] = useState<{
+    readonly key: string;
+    readonly paths: readonly string[];
+  }>({ key: "", paths: [] });
+  const onRead = useCallback(
+    (runId: string, paths: readonly string[], selectedPaths: readonly string[]): void => {
+      if (runId === primaryId) setSelection({ key, paths: selectedPaths });
+      onReadPaths?.(runId, paths);
+    },
+    [key, primaryId, onReadPaths],
+  );
+  return {
+    scopeLabel:
+      selection.key === key && selection.paths.length > 0
+        ? selection.paths.join(", ")
+        : repositoryRoots.length === 1
+          ? repositoryRoots[0]?.label
+          : undefined,
+    onRead,
+  };
+}
+
+function FolderAuditDetails(props: FolderAuditDetailsProps): ReactNode {
+  const { answer } = props;
+  const pack = answer.groundingKind === "hybrid" ? answer.contextPack.folder : answer.contextPack;
+  const inspection = useInspectedFolderScope(props);
+  return (
+    <>
+      <ConnectedEvidenceInspection
+        contextPack={pack}
+        runIds={[
+          ...(answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]),
+          ...(answer.evidenceRunIds ?? []),
+        ]}
+        citationBehaviour={answer.citationBehaviour}
+        attachedCitationCount={answer.citations.length}
+        onReadPaths={inspection.onRead}
+      />
+      <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
+      {answer.groundingKind === "hybrid" ? (
+        <HybridContextPackSummary
+          contextPack={answer.contextPack}
+          scopeLabel={inspection.scopeLabel}
+        />
+      ) : (
+        <ContextPackSummary contextPack={pack} scopeLabel={inspection.scopeLabel} />
+      )}
+    </>
+  );
+}
+
 export function GroundedAnswer({
   answer,
   busy,
@@ -1896,18 +1973,11 @@ export function GroundedAnswer({
             omittedCount={answer.omittedCount}
             omittedCounts={answer.contextPack.folder.omittedCounts}
           />
-          <ConnectedEvidenceInspection
-            contextPack={answer.contextPack.folder}
-            runIds={[
-              ...(answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]),
-              ...(answer.evidenceRunIds ?? []),
-            ]}
-            citationBehaviour={answer.citationBehaviour}
-            attachedCitationCount={answer.citations.length}
+          <FolderAuditDetails
+            answer={answer}
+            repositoryRoots={repositoryRoots}
             onReadPaths={onReadPaths}
           />
-          <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
-          <HybridContextPackSummary contextPack={answer.contextPack} />
         </GroundedEvidenceDisclosure>
       </div>
     );
@@ -1939,18 +2009,11 @@ export function GroundedAnswer({
           omittedCount={answer.contextPack.omittedCount}
           omittedCounts={answer.contextPack.omittedCounts}
         />
-        <ConnectedEvidenceInspection
-          contextPack={answer.contextPack}
-          runIds={[
-            ...(answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]),
-            ...(answer.evidenceRunIds ?? []),
-          ]}
-          citationBehaviour={answer.citationBehaviour}
-          attachedCitationCount={answer.citations.length}
+        <FolderAuditDetails
+          answer={answer}
+          repositoryRoots={repositoryRoots}
           onReadPaths={onReadPaths}
         />
-        <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
-        <ContextPackSummary contextPack={answer.contextPack} />
       </GroundedEvidenceDisclosure>
     </div>
   );
