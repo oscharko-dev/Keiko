@@ -18,7 +18,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return handle;
     },
     rename: async (...args: Parameters<typeof original.rename>): Promise<void> => {
-      if (String(args[0]).endsWith(".tmp")) hooks.beforeRename?.();
+      if (String(args[0]).endsWith(".tmp") && String(args[1]).endsWith(".json"))
+        hooks.beforeRename?.();
       await original.rename(...args);
     },
   };

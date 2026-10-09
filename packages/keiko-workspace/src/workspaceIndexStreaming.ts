@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FileMatches, SearchTextRunner } from "./repoSearchScan.js";
 import {
+  raceStructuralExecution,
   structuralExecutionStopped,
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
@@ -114,7 +115,10 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     key: WorkspaceIndexScopeKey,
   ): Promise<Awaited<ReturnType<WorkspaceIndex["loadSnapshot"]>>> {
     try {
-      return await this.index.loadSnapshot(key, () => this.active());
+      return await raceStructuralExecution(
+        this.index.loadSnapshot(key, () => this.active()),
+        this.control,
+      );
     } catch {
       // The observed owning adapter records the failure; source search remains independent of storage.
       this.available = false;
@@ -251,7 +255,10 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
       const snapshot = this.snapshot(shard);
       if (!this.active()) return;
       try {
-        await this.index.saveSnapshot(shard.key, snapshot, () => this.active());
+        await raceStructuralExecution(
+          this.index.saveSnapshot(shard.key, snapshot, () => this.active()),
+          this.control,
+        );
       } catch {
         this.available = false;
         return;

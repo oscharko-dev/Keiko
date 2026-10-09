@@ -1,5 +1,5 @@
 import { createHash, createHmac, hkdfSync, randomUUID } from "node:crypto";
-import { constants as fsConstants, lstatSync, realpathSync } from "node:fs";
+import { constants as fsConstants, lstatSync, realpathSync, type Stats } from "node:fs";
 import {
   chmod,
   type FileHandle,
@@ -1153,15 +1153,18 @@ interface SnapshotReadResult {
 async function safeReadSnapshotFile(
   path: string,
   maxSnapshotBytes: number,
+  isActive?: () => boolean,
 ): Promise<SnapshotReadResult | undefined> {
   let handle: FileHandle | undefined;
   try {
+    if (!snapshotOperationActive(isActive)) return undefined;
     handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    if (!snapshotOperationActive(isActive)) return undefined;
     const fileStat = await handle.stat();
     if (!fileStat.isFile() || fileStat.size > maxSnapshotBytes) {
       return undefined;
     }
-    const raw = await readSnapshotHandleWithinLimit(handle, maxSnapshotBytes);
+    const raw = await readSnapshotHandleWithinLimit(handle, maxSnapshotBytes, isActive);
     return raw === undefined
       ? undefined
       : {
@@ -1177,16 +1180,23 @@ async function safeReadSnapshotFile(
   }
 }
 
+function snapshotOperationActive(isActive: (() => boolean) | undefined): boolean {
+  return isActive?.() !== false;
+}
+
 async function readSnapshotHandleWithinLimit(
   handle: FileHandle,
   maxSnapshotBytes: number,
+  isActive?: () => boolean,
 ): Promise<Buffer | undefined> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
   while (totalBytes <= maxSnapshotBytes) {
+    if (!snapshotOperationActive(isActive)) return undefined;
     const readLimit = Math.min(64 * 1024, maxSnapshotBytes + 1 - totalBytes);
     const buffer = Buffer.allocUnsafe(readLimit);
     const { bytesRead } = await handle.read(buffer, 0, readLimit);
+    if (!snapshotOperationActive(isActive)) return undefined;
     if (bytesRead === 0) {
       return Buffer.concat(chunks, totalBytes);
     }
@@ -1552,8 +1562,14 @@ async function createSnapshotTempFile(tempPath: string): Promise<OpenSnapshotTem
   }
 }
 
-async function writeSnapshotTempFile(temp: OpenSnapshotTempFile, content: string): Promise<void> {
+async function writeSnapshotTempFile(
+  temp: OpenSnapshotTempFile,
+  content: string,
+  config: FileWorkspaceIndexStoreConfig,
+): Promise<void> {
+  assertWorkspaceIndexGenerationActive(config);
   await temp.handle.writeFile(content, { encoding: "utf8" });
+  assertWorkspaceIndexGenerationActive(config);
   await temp.handle.sync();
 }
 
@@ -1603,21 +1619,19 @@ async function removeExactSnapshotFile(snapshot: SnapshotFileIdentity): Promise<
 async function committedSnapshotMatches(
   snapshot: SnapshotFileIdentity,
   expectedRaw: string,
+  isActive?: () => boolean,
 ): Promise<boolean> {
   let handle: FileHandle | undefined;
   try {
+    if (!snapshotOperationActive(isActive)) return false;
     handle = await open(snapshot.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    if (!snapshotOperationActive(isActive)) return false;
     const stat = await handle.stat();
     const expected = Buffer.from(expectedRaw, "utf8");
-    if (
-      !stat.isFile() ||
-      stat.dev !== snapshot.dev ||
-      stat.ino !== snapshot.ino ||
-      stat.size !== expected.byteLength
-    ) {
+    if (!snapshotDescriptorMatches(stat, snapshot, expected.byteLength)) {
       return false;
     }
-    const actual = await readSnapshotHandleWithinLimit(handle, expected.byteLength);
+    const actual = await readSnapshotHandleWithinLimit(handle, expected.byteLength, isActive);
     if (actual?.byteLength !== expected.byteLength) return false;
     const expectedDigest = createHash("sha256").update(expected).digest("hex");
     const actualDigest = createHash("sha256").update(actual).digest("hex");
@@ -1628,6 +1642,19 @@ async function committedSnapshotMatches(
   } finally {
     await handle?.close();
   }
+}
+
+function snapshotDescriptorMatches(
+  stat: Stats,
+  snapshot: SnapshotFileIdentity,
+  expectedBytes: number,
+): boolean {
+  return (
+    stat.isFile() &&
+    stat.dev === snapshot.dev &&
+    stat.ino === snapshot.ino &&
+    stat.size === expectedBytes
+  );
 }
 
 async function abandonSnapshotTempFile(temp: OpenSnapshotTempFile, cause: unknown): Promise<never> {
@@ -1775,7 +1802,9 @@ async function loadFileWorkspaceIndexSnapshot(
     config.storageGenerationId,
     config.locatorKey,
   );
-  const read = await safeReadSnapshotFile(path, config.maxSnapshotBytes);
+  const read = await safeReadSnapshotFile(path, config.maxSnapshotBytes, () =>
+    workspaceIndexGenerationIsActive(config),
+  );
   if (read === undefined || !workspaceIndexGenerationIsActive(config)) {
     return undefined;
   }
@@ -1817,7 +1846,7 @@ async function writeAndCommitGuardedSnapshot(
     );
   }
   try {
-    await writeSnapshotTempFile(temp, raw);
+    await writeSnapshotTempFile(temp, raw, config);
   } catch (error) {
     await abandonSnapshotTempFile(temp, error);
   }
@@ -1830,7 +1859,7 @@ async function writeAndCommitGuardedSnapshot(
       new Error("workspace index runtime directory identity changed after snapshot write"),
     );
   }
-  const committed = await commitWrittenSnapshot(temp, path, tempPath, raw);
+  const committed = await commitWrittenSnapshot(temp, path, tempPath, raw, config);
   const generationActive = workspaceIndexGenerationIsActive(config);
   const runtimeDirGuarded = await runtimeDirStillGuarded(safeRuntimeDir, guarded);
   if (!generationActive || !runtimeDirGuarded) {
@@ -1917,16 +1946,19 @@ async function commitWrittenSnapshot(
   path: string,
   tempPath: string,
   raw: string,
+  config: FileWorkspaceIndexStoreConfig,
 ): Promise<SnapshotFileIdentity> {
   try {
     await temp.handle.close();
   } catch (error) {
     await abandonSnapshotTempFile(temp, error);
   }
+  await rejectCommittedSnapshotFromRetiredGeneration(config, temp);
   if (!(await snapshotPathMatchesIdentity(temp))) {
     throw new Error("workspace index temp snapshot identity changed before commit");
   }
   try {
+    assertWorkspaceIndexGenerationActive(config);
     await commitSnapshotTempFile(path, tempPath);
   } catch (error) {
     if (!(await removeExactSnapshotFile(temp))) {
@@ -1939,7 +1971,11 @@ async function commitWrittenSnapshot(
     throw error;
   }
   const committed = { ...temp, path };
-  if (!(await committedSnapshotMatches(committed, raw))) {
+  const matches = await committedSnapshotMatches(committed, raw, () =>
+    workspaceIndexGenerationIsActive(config),
+  );
+  await rejectCommittedSnapshotFromRetiredGeneration(config, committed);
+  if (!matches) {
     throw new Error("workspace index committed snapshot identity changed");
   }
   return committed;

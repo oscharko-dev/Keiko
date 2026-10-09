@@ -461,4 +461,38 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
       expect(result.coverage.reasons).toContain("aborted");
     },
   );
+
+  it("does not accept or count a cached match when final live metadata validation consumes its deadline", async () => {
+    const { scope, fs, reads } = fixture();
+    for (let index = 0; index < 11; index += 1)
+      unlinkSync(join(scope.workspace.root, `manual-${String(index)}.html`));
+    const index = createWorkspaceIndex();
+    await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex: index, nowMs: () => 0 });
+    reads.mockClear();
+    let loaded = false;
+    let now = 0;
+    const result = await searchText(scope, QUERY, LIMITS, {
+      fs: {
+        ...fs,
+        stat: (path) => {
+          if (loaded && path.endsWith("manual-11.html")) now = 20;
+          return fs.stat(path);
+        },
+      },
+      workspaceIndex: {
+        saveSnapshot: index.saveSnapshot,
+        loadSnapshot: async (key, isActive) => {
+          const snapshot = await index.loadSnapshot(key, isActive);
+          loaded = true;
+          return snapshot;
+        },
+      },
+      nowMs: () => now,
+      deadlineAtMs: 10,
+    });
+    expect(result.atoms).toEqual([]);
+    expect(result.workspaceIndex?.reusedRecords).toBe(0);
+    expect(result.coverage.reasons).toContain("timeout");
+    expect(reads).not.toHaveBeenCalled();
+  });
 });
