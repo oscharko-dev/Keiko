@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 type OpenFileHandle = Awaited<ReturnType<typeof import("node:fs/promises").open>>;
 const hooks = vi.hoisted(() => ({
   afterOpen: undefined as ((path: string, handle: OpenFileHandle) => void) | undefined,
+  beforeRename: undefined as (() => void) | undefined,
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
@@ -16,6 +17,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       hooks.afterOpen?.(String(args[0]), handle);
       return handle;
     },
+    rename: async (...args: Parameters<typeof original.rename>): Promise<void> => {
+      if (String(args[0]).endsWith(".tmp")) hooks.beforeRename?.();
+      await original.rename(...args);
+    },
   };
 });
 
@@ -24,6 +29,7 @@ import { buildWorkspaceIndexSnapshot, createFileWorkspaceIndexStore } from "./wo
 const roots: string[] = [];
 afterEach(() => {
   hooks.afterOpen = undefined;
+  hooks.beforeRename = undefined;
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -159,6 +165,28 @@ describe("request-owned encrypted workspace index operations", () => {
       store.saveSnapshot("scope-query", snapshot, () => !controller.signal.aborted),
     ).rejects.toThrow();
     expect(write).not.toHaveBeenCalled();
+    expect(
+      readdirSync(runtimeDir).some((entry) => entry.endsWith(".json") || entry.endsWith(".tmp")),
+    ).toBe(false);
+  });
+
+  it("cleans the owned temporary file without publishing after abort during descriptor closure", async () => {
+    const { store, snapshot, runtimeDir } = fixture();
+    const controller = new AbortController();
+    const rename = vi.fn();
+    hooks.beforeRename = rename;
+    hooks.afterOpen = (path, handle): void => {
+      if (!path.endsWith(".tmp")) return;
+      const originalClose = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        await originalClose();
+        controller.abort();
+      });
+    };
+    await expect(
+      store.saveSnapshot("scope-query", snapshot, () => !controller.signal.aborted),
+    ).rejects.toThrow();
+    expect(rename).not.toHaveBeenCalled();
     expect(
       readdirSync(runtimeDir).some((entry) => entry.endsWith(".json") || entry.endsWith(".tmp")),
     ).toBe(false);
