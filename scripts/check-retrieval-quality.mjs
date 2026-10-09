@@ -51,6 +51,7 @@ const INCIDENT_TEST_CONTENT = [
 
 export const INCIDENT_RETRIEVAL_FILES = {
   ".git/HEAD": "ref: refs/heads/fixture\n",
+  ".git/config": "[core]\nrepositoryformatversion = 0\nbare = false\n",
   "README.md": "This repository contains form schema validation and required feature conditions.\n",
   "package.json":
     '{"name":"nested-feature-validation","scripts":{"test":"vitest"},"devDependencies":{"vitest":"1.0.0"}}\n',
@@ -569,7 +570,7 @@ export async function evaluateCase(testCase) {
   };
 }
 
-async function evaluateIncidentCase(testCase) {
+async function evaluateIncidentCase(testCase, regression = "baseline") {
   let pack;
   try {
     ({ pack } = await runConnectedRetrievalEval(testCase));
@@ -577,13 +578,21 @@ async function evaluateIncidentCase(testCase) {
     if (error.name !== "ClarificationNeededError") throw error;
     return incidentResult(testCase, [], false);
   }
-  const paths = pack.files.map((file) => file.scopePath);
+  const selected = pack.files.map((file) => file.scopePath);
+  const paths = regressedIncidentPaths(testCase, selected, regression);
   const lineHit =
     pack.files
       .find((file) => file.scopePath === testCase.expectedTop)
       ?.excerpts.some((excerpt) => testCase.expectedLinePattern?.test(excerpt.content) ?? true) ??
     false;
   return incidentResult(testCase, paths, lineHit);
+}
+
+function regressedIncidentPaths(testCase, selected, regression) {
+  if (regression === "omit-referenced-path")
+    return selected.filter((path) => !testCase.relevantPaths.includes(path));
+  if (regression === "generated-leak") return [...selected, ...testCase.forbiddenPaths];
+  return selected;
 }
 
 function incidentResult(testCase, paths, lineHit) {
@@ -656,6 +665,26 @@ async function runWorkspaceQualityCheck(workspaceCases, budgetPath, log) {
     log(`retrieval-quality failure: ${formatCaseFailure(result)}`);
   }
   return { summary, results, budgetResult };
+}
+
+export async function runIncidentRegressionProbes(log, fixtures = INCIDENT_RETRIEVAL_CASES) {
+  return runRegressionProbes({
+    fixtures,
+    probeFixtureIds: fixtures.map((fixture) => fixture.id),
+    fixtureId: (fixture) => fixture.id,
+    regressFixture: (fixture) => fixture,
+    runFixture: async (fixture) => {
+      const regression =
+        fixture.id === "generated-and-node-modules-ignored"
+          ? "generated-leak"
+          : "omit-referenced-path";
+      const result = await evaluateIncidentCase(fixture, regression);
+      log(`incident-retrieval-regression: probe=${fixture.id} defect=${regression}`);
+      return result;
+    },
+    droppedBelowFloors: (result) =>
+      !result.topHit || !result.lineHit || result.generatedLeakCount > 0,
+  });
 }
 
 function localKnowledgeFailuresFor(scorecard) {
@@ -801,7 +830,7 @@ function regressionFailureMessage(regression) {
     : `local knowledge regression probes were tautological: ${regression.tautological.join(", ")}`;
 }
 
-function collectQualityFailures(localKnowledge, regression, budgetResult) {
+function collectQualityFailures(localKnowledge, regression, budgetResult, incidentRegression) {
   const messages = [];
   if (!localKnowledge.ok) {
     messages.push(
@@ -813,6 +842,8 @@ function collectQualityFailures(localKnowledge, regression, budgetResult) {
   if (!budgetResult.ok) {
     messages.push(`quality budget failed: ${budgetResult.failures.join(", ")}`);
   }
+  if (!incidentRegression.ok)
+    messages.push("incident retrieval regression probes were tautological");
   return messages;
 }
 
@@ -823,6 +854,7 @@ export async function runRetrievalQualityCheck({
   localKnowledgeQualityCheck = runLocalKnowledgeQualityCheck,
   regressionProbes = runLocalKnowledgeRegressionProbes,
   workspaceCases = WORKSPACE_QUALITY_CASES,
+  workspaceRegressionProbes = runIncidentRegressionProbes,
 } = {}) {
   const onLog = log ?? ((message) => console.log(message));
   const onFail =
@@ -838,11 +870,17 @@ export async function runRetrievalQualityCheck({
   );
   const localKnowledge = await localKnowledgeQualityCheck(onLog);
   const regression = await regressionProbes(onLog);
-  const failureMessages = collectQualityFailures(localKnowledge, regression, budgetResult);
+  const incidentRegression = await workspaceRegressionProbes(onLog);
+  const failureMessages = collectQualityFailures(
+    localKnowledge,
+    regression,
+    budgetResult,
+    incidentRegression,
+  );
   if (failureMessages.length > 0) {
     onFail(failureMessages.join("; "));
   }
-  return { summary, results, budgetResult, localKnowledge, regression };
+  return { summary, results, budgetResult, localKnowledge, regression, incidentRegression };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
