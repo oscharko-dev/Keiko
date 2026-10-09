@@ -21,6 +21,8 @@ import {
 } from "./repoSearchSourceClassification.js";
 
 export interface LineMatcher {
+  /** Only explicit false skips structural preparation; unknown injected matchers stay conservative. */
+  readonly requiresSourceClassification?: boolean | undefined;
   readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
 }
 
@@ -53,6 +55,18 @@ export function fingerprintFor(
   query: RetrievalQuery,
   interpretation?: LiteralQueryInterpretation,
 ): string {
+  return queryIdentityFor(query, interpretation).slice(0, 16);
+}
+
+/** Full persistent match identity; the diagnostic fingerprint remains compatible. */
+export function queryIdentityFor(
+  query: RetrievalQuery,
+  interpretation?: LiteralQueryInterpretation,
+  matchingSettings?: {
+    readonly effectiveMaxMatchesReturned: number;
+    readonly policyIntent: string;
+  },
+): string {
   const literalTerms =
     interpretation?.kind === "literal"
       ? boundedLiteralTargets(interpretation.terms ?? [query.text])
@@ -64,8 +78,9 @@ export function fingerprintFor(
     maxResults: query.maxResults,
     ...(interpretation === undefined ? {} : { interpretation: interpretation.kind }),
     ...(interpretation?.terms === undefined ? {} : { literalTerms }),
+    ...(matchingSettings === undefined ? {} : { matchingSettings }),
   });
-  return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 // Issue #177 retrieval correctness: a natural-language question carries function words ("the",
@@ -748,6 +763,7 @@ function buildLiteralMatcher(
   const targets = boundedLiteralTargets(terms);
   const needles = targets.map((term) => (query.caseSensitive ? term : term.toLowerCase()));
   return {
+    requiresSourceClassification: false,
     match: (line: string): number => {
       const haystack = query.caseSensitive ? line : line.toLowerCase();
       return needles.some((needle) => haystack.includes(needle)) ? 1 : 0;

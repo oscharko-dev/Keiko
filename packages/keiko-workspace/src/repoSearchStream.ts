@@ -468,6 +468,7 @@ async function collectRescueStream(
       ...runner,
       policy: { ...runner.policy, omitLowValueWorkspaceFiles: false },
       eligibleTextObserver: undefined,
+      streamingWorkspaceIndex: undefined,
     },
     pathPattern,
     filePatternGroups,

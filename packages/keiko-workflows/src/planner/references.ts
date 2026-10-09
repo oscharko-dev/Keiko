@@ -10,7 +10,12 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 import { isGeneratedRankingPath } from "../ranking/signals.js";
-import { extractAnchors, type AnchorExtractionResult, type SearchAnchor } from "./anchors.js";
+import {
+  extractAnchors,
+  normalizeUnquotedFilePathToken,
+  type AnchorExtractionResult,
+  type SearchAnchor,
+} from "./anchors.js";
 
 export interface SearchReference {
   readonly path: string;
@@ -76,9 +81,8 @@ function bracketReferenceAnchorText(text: string): string {
     const term = bracketReferenceTerm(raw);
     if (!bracketPath(term)) return raw;
     const quote = text.charAt(offset - 1);
-    return PATH_QUOTE_CHARACTERS.has(quote) && quote === text.charAt(offset + raw.length)
-      ? raw
-      : `\`${term}\``;
+    if (PATH_QUOTE_CHARACTERS.has(quote) && quote === text.charAt(offset + raw.length)) return raw;
+    return `\`${normalizeUnquotedFilePathToken(term)}\``;
   });
 }
 
