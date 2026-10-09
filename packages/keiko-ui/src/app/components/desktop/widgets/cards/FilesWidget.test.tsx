@@ -1249,6 +1249,28 @@ describe("FilesWidget", () => {
     expect(session.replaceChat).not.toHaveBeenCalled();
   });
 
+  it("loads its persisted folder without announcing a root scope during hydration", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/configured-repo",
+      path: "docs",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "guide.ts", path: "docs/guide.ts", kind: "file" }],
+    });
+    const changed = vi.fn();
+    render(
+      <FilesWidget
+        root="/configured-repo"
+        initialDirectoryPath="docs"
+        onActiveFileChange={changed}
+      />,
+    );
+    expect(await screen.findByRole("treeitem", { name: /guide.ts/i })).toBeInTheDocument();
+    expect(fetchFilesTree).toHaveBeenCalledWith("/configured-repo", "docs", expect.any(String));
+    expect(changed).toHaveBeenCalledWith(null, "/configured-repo", "docs");
+    expect(changed).not.toHaveBeenCalledWith(null, "/configured-repo", null);
+    expect(changed).not.toHaveBeenCalledWith(null, null, null);
+  });
+
   it("joins product tree-read evidence and contextual transport reports to the request", async () => {
     const writer = vi.fn();
     const report = vi

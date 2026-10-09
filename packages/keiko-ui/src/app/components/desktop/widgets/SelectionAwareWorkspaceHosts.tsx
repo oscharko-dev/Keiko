@@ -1827,6 +1827,7 @@ export function FilesWindowSessionHost({
       ) : null}
       <FilesWidget
         {...(root === undefined ? {} : { root })}
+        initialDirectoryPath={str(cfg, "activeDirectoryPath")}
         onActiveFileChange={onActiveFileChange}
         {...(root === undefined || str(cfg, "rootBinding") === "coding-repository"
           ? { onRootChange }
