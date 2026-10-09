@@ -178,7 +178,10 @@ describe("production working-tree retrieval hints", () => {
     });
     const original = connectedRoot(selectedRoot);
     const retrieved = await retrieveConnectedContextPack(
-      { ...original, budget: { ...original.budget, elapsedMsMax: 1 } },
+      {
+        ...original,
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, ...original.budget, elapsedMsMax: 1 },
+      },
       {
         answerer: { answer: () => Promise.resolve("") },
         correlationId: "worktree-ancestor-deadline",
