@@ -42,6 +42,12 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: Validate reviewed runtime license artifacts
+        id: runtime-license-policy
+        shell: bash
+        run: |
+          exclusions="$(node scripts/check-workspace-supply-chain.mjs --check-reviewed-dependency-licenses)"
+          printf 'exclusions=%s\n' "$exclusions" >> "$GITHUB_OUTPUT"
       - name: Dependency Review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
@@ -65,7 +71,12 @@ jobs:
           # transitive dependency: same vendor, same LGPL-3.0-only license, same development-only
           # lint tooling that is never linked into or shipped with Keiko. Owner decision 2026-09-25,
           # #3609; recorded in docs/release/2296-dependency-security-closeout.md.
-          allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs, pkg:npm/@sonarsource/analyzer-commons-configurations
+          # Reviewed original-host component disposition in #3895: this pinned action ignores
+          # versions in PURLs. The full original component notices remain in the host payload.
+          # Its package-wide exclusions apply only after the required preflight validates every
+          # root/native instance against the same exact version, original SRI and declared license.
+          # Local actual-SBOM checks retain the SPDX parser and preserved shipped notices.
+          allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs, pkg:npm/@sonarsource/analyzer-commons-configurations, ${{ steps.runtime-license-policy.outputs.exclusions }}
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 120
           show-openssf-scorecard: true
