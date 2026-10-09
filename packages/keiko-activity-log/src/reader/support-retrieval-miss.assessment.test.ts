@@ -181,4 +181,14 @@ describe("intentional source-free assessment does not fabricate retrieval incide
       "semantic-unavailable-with-miss",
     ]);
   });
+  it("keeps overlapping reused request lifecycles ambiguous rather than guessing assessment authority", () => {
+    expect(
+      reasons([
+        line(STARTED),
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        line(STARTED),
+        assessment(),
+      ]),
+    ).toEqual(["low-confidence-selection"]);
+  });
 });
