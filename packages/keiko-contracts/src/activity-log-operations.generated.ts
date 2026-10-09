@@ -28228,6 +28228,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      addressedBasenameDedupDemotedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       exactPathSignalPresentCount: {
         type: "integer",
         dataClass: "count",
@@ -28242,6 +28247,84 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      floorReferenceKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["ordinary-p75", "no-ordinary", "files-scope"],
+      },
+      relativeFloorPermille: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      strongestOrdinaryScorePermille: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      absoluteFloorPermille: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      keepOneFallbackApplied: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      selectionConfidence: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["high", "low"],
+      },
+      rerankerDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unconfigured", "applied", "failed", "skipped-budget", "skipped-literal"],
+      },
+      reranked: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      rerankFailedCalls: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      rerankerCandidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      rerankerDocumentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 64,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
       },
       stackTraceFrameCount: {
         type: "integer",
@@ -28261,8 +28344,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     proofIds: [
       "search.connected-context.selection-details.line",
       "search.connected-context.path-ranking.line",
+      "search.connected-context.selection-quality.line",
     ],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "rerankerDisposition",
+        values: ["failed"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",

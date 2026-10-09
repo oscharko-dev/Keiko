@@ -158,6 +158,7 @@ function resolveRole(scopePath: string, editablePaths: ReadonlySet<string>): Con
 interface RerankerOutcome {
   readonly ordered: readonly CandidateFile[];
   readonly reranked: boolean;
+  readonly attempted: boolean;
 }
 
 async function applyReranker(
@@ -171,14 +172,16 @@ async function applyReranker(
   // ExplorationBudget.rerankCallsMax authoritative even when a custom reranker is supplied
   // and avoids billing a rerank call against a run whose budget set rerankCallsMax=0.
   if (usage.rerankCalls >= budget.rerankCallsMax) {
-    return { ordered: ranked, reranked: false };
+    return { ordered: ranked, reranked: false, attempted: false };
   }
   const availability = await reranker.isAvailable();
   if (!availability.available) {
-    return { ordered: ranked, reranked: false };
+    return { ordered: ranked, reranked: false, attempted: false };
   }
   const reordered = await reranker.rerank(ranked, atomsByPath, ranked.length);
-  return { ordered: reordered, reranked: true };
+  const diagnostics = reranker.getDiagnostics?.();
+  const applied = diagnostics === undefined || diagnostics.status === "applied";
+  return { ordered: applied ? reordered : ranked, reranked: applied, attempted: true };
 }
 
 interface BuildPlan {
@@ -1061,7 +1064,7 @@ export async function assembleContextPack(
     initialUsage,
     input.initialUncertainty,
   );
-  if (rerankerOutcome.reranked) {
+  if (rerankerOutcome.attempted) {
     plan.usage = { ...plan.usage, rerankCalls: plan.usage.rerankCalls + 1 };
   }
   const pack = buildPack(input, plan, now);

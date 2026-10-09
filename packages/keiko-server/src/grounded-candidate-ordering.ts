@@ -83,6 +83,16 @@ function pathGroupCounts(
   return counts;
 }
 
+function addressedDemotionCount(
+  ordered: readonly CandidateFile[],
+  paths: ReadonlySet<string>,
+): number {
+  const first = ordered.findIndex((candidate) => !paths.has(candidate.scopePath));
+  return first < 0
+    ? 0
+    : ordered.slice(first).filter((candidate) => paths.has(candidate.scopePath)).length;
+}
+
 export function orderDistinctEvidenceCandidates(
   kept: readonly CandidateFile[],
   anchors: readonly SearchAnchor[],
@@ -115,7 +125,7 @@ export function orderDistinctEvidenceCandidates(
     priorityPaths,
   );
   const ordered = [...addressed, ...unaddressed.candidates];
-  const firstUnaddressed = ordered.findIndex((candidate) => !paths.has(candidate.scopePath));
+
   return {
     kept: ordered,
     observation: {
@@ -123,11 +133,7 @@ export function orderDistinctEvidenceCandidates(
         (count) => count > 1,
       ).length,
       basenameDedupDemotedCount: unaddressed.demotedCount,
-      addressedBasenameDedupDemotedCount:
-        firstUnaddressed < 0
-          ? 0
-          : ordered.slice(firstUnaddressed).filter((candidate) => paths.has(candidate.scopePath))
-              .length,
+      addressedBasenameDedupDemotedCount: addressedDemotionCount(ordered, paths),
       exactPathSignalPresentCount: kept.filter(
         (candidate) => signal(candidate, "exact-path-match") > 0,
       ).length,

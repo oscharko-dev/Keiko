@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e236a3b029d0acdd87e017bfb402bc91696516d716db5202efb42b1f81031c36"
+    "catalogDigest": "33fa657e46bba5b1124b088c2fa21485bfe4a6150f3dfa4b2c7bdb5beb232c3d"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -56,8 +56,8 @@
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
     "operationCount": 535,
-    "proofCount": 545,
-    "resolvedProofCount": 545,
+    "proofCount": 546,
+    "resolvedProofCount": 546,
     "failureClassCount": 344,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -2276,6 +2276,9 @@
     ],
     "search.connected-context.path-ranking.line": [
       "packages/keiko-server/src/grounded-path-ranking.activity-log.test.ts"
+    ],
+    "search.connected-context.selection-quality.line": [
+      "packages/keiko-server/src/grounded-selection-quality.activity-log.test.ts"
     ],
     "search.connected-context.source-details.line": [
       "packages/keiko-server/src/grounded-binary-probe.activity-log.test.ts",
