@@ -728,7 +728,7 @@ export const EN_MESSAGES = {
   "scope.notice.ok": "OK",
   "scope.notice.failed": "The folder could not be kept.",
   "chat.grounding.help":
-    "Keiko searches the connected scope before each answer; the model has no file tools. Open a file in Files or mention it with @ to include it reliably.",
+    "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment. The model has no file tools. Open a file in Files or mention it with @ to include it in the scope.",
   "scope.missing.add": "Add file to scope",
   "scope.missing.folder": "Connected folder",
   "scope.missing.chooseFolder": "Choose the connected folder",

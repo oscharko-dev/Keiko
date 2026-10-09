@@ -194,6 +194,20 @@ function recordingDeps(puts: PutCall[], overrides: Partial<UiHandlerDeps> = {}):
     ...overrides,
   };
 }
+// These legacy pins deliberately exercise the existing source-only operator policy.
+function sourceOnlyDeps(deps: UiHandlerDeps): UiHandlerDeps {
+  const config: NonNullable<UiHandlerDeps["config"]> = deps.config ?? {
+    providers: [],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  };
+  return {
+    ...deps,
+    config: {
+      ...config,
+      groundedAnswers: { ...config.groundedAnswers, ownAssessment: "disabled" },
+    },
+  };
+}
 
 function scopePack(scopePath: string, score: number, stableId: string): ConnectedContextPack {
   const content = `body of ${scopePath}`;
@@ -1322,7 +1336,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
         content,
         modelId: CHAT_MODEL,
         contextProfile: undefined,
-        deps: recordingDeps([]),
+        deps: sourceOnlyDeps(recordingDeps([])),
         retriever: packPerScope(packs),
         answerer: () => {
           throw new TypeError("empty search must not invoke the model");
@@ -3192,7 +3206,7 @@ describe("createMultiSourceAnswerer correlation threading", () => {
         }),
       );
       const answerer = createMultiSourceAnswerer(
-        recordingDeps([], { redactor, contextProfileForModel: () => profile }),
+        sourceOnlyDeps(recordingDeps([], { redactor, contextProfileForModel: () => profile })),
         { call },
         CHAT_MODEL,
         new AbortController().signal,

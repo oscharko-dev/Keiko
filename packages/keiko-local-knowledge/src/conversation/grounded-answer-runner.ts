@@ -70,6 +70,7 @@ function shouldRepairMissingCitations(
   const { attached } = generated;
   if (references.length === 0 || attached.citations.length > 0) return false;
   if (generated.ownAssessment !== undefined && attached.text.trim().length === 0) return false;
+  if (generated.neutralized && attached.text.trim().length === 0) return false;
   return !isNoEvidenceAnswerText(attached.text);
 }
 

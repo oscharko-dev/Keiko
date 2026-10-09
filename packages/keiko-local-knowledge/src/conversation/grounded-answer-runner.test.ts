@@ -483,6 +483,25 @@ describe("runGroundedAnswer — own assessment", () => {
     expect(result.ownAssessment).toBe("My own assessment: Java 21.");
   });
 
+  it("does not repair an assessment-only answer that the operator deliberately neutralized", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-assess-disabled-only" });
+    const generator = fakeGenerator("<assessment>General learned recommendation.</assessment>");
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      {
+        conversationId: "conv-assess-disabled-only",
+        capsuleId: seeded.capsuleId,
+        text: "alpha",
+        ownAssessment: "disabled",
+      },
+    );
+    expect(generator.calls).toHaveLength(1);
+    expect(result.answer).toBe("");
+    expect(result.ownAssessment).toBeUndefined();
+    expect(result.ownAssessmentNeutralized).toBe(true);
+  });
+
   // PR #3678 review (P1): a disabled block is dropped, never promoted to source-backed text that
   // its citations and the judge would not cover.
   it("drops an assessment the policy disables and says so", async () => {

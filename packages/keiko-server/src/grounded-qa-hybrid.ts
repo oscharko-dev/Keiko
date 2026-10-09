@@ -83,6 +83,7 @@ import type { Redactor, UiHandlerDeps } from "./deps.js";
 import {
   currentContextProfileForModel,
   currentGroundingLimits,
+  currentOwnAssessmentPolicy,
   currentRedactionSecrets,
 } from "./deps.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
@@ -127,8 +128,9 @@ import {
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
-import { GROUNDED_SYSTEM_PROMPT, sentGroundedFileCount } from "./grounded-prompt.js";
+import { groundedSystemPrompt, sentGroundedFileCount } from "./grounded-prompt.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
+import { normalizeGroundedAnswerAssessment } from "./grounded-answer-assessment.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   createGroundedSynthesisCallBudget,
@@ -153,6 +155,7 @@ import {
   connectedSearchNoEvidenceAnswer,
   incompleteAnswerMarker,
   missingCitationMarkerFor,
+  assessmentAwareUncertainty,
   noEvidenceMarker,
   citationSourceIdForIndex,
   reconcileNumericCitations,
@@ -920,9 +923,12 @@ async function retrieveOneConnector(
 // ─── Merged prompt ────────────────────────────────────────────────────────────
 
 // The hybrid topology shares the folder prompt and deterministic localized abstention producer.
-const HYBRID_SYSTEM_PROMPT =
-  `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
-  "connector claim to its source label and the matching [n] marker in addition to any file reference.";
+function hybridSystemPrompt(deps: UiHandlerDeps): string {
+  return (
+    `${groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "numeric")} Connector excerpts are indexed-document citations: attribute every ` +
+    "connector claim to its source label and the matching [n] marker in addition to any file reference."
+  );
+}
 
 function hybridCandidateExcerpt(candidate: SelectedCandidate<HybridPayload>): string {
   if (candidate.redactedText.length === 0) return "(No excerpt text available.)";
@@ -2007,23 +2013,23 @@ function hybridUncertaintyForAnswer(
 ): readonly GroundedUncertainty[] {
   const { redactor } = ctx.deps;
   const { correlationId } = ctx;
-  if (sourceEvidenceAvailable) {
-    return hybridAnswerUncertainty(sources, selected, assistant, redactor, nowMs, correlationId);
-  }
-  return [
-    ...folderUncertainty(sources.folders, redactor),
-    ...skippedUncertainty(sources.skippedFolders, redactor),
-    ...skippedUncertainty(sources.skipped, redactor),
-    ...noEvidenceUncertainty(selected, redactor, nowMs),
-    ...hybridReconciliationUncertainty(
-      assistant,
-      sources.folders,
-      selected,
-      redactor,
-      sourceEvidenceAvailable,
-      correlationId,
-    ),
-  ];
+  const markers = sourceEvidenceAvailable
+    ? hybridAnswerUncertainty(sources, selected, assistant, redactor, nowMs, correlationId)
+    : [
+        ...folderUncertainty(sources.folders, redactor),
+        ...skippedUncertainty(sources.skippedFolders, redactor),
+        ...skippedUncertainty(sources.skipped, redactor),
+        ...noEvidenceUncertainty(selected, redactor, nowMs),
+        ...hybridReconciliationUncertainty(
+          assistant,
+          sources.folders,
+          selected,
+          redactor,
+          sourceEvidenceAvailable,
+          correlationId,
+        ),
+      ];
+  return assessmentAwareUncertainty(assistant.content, markers);
 }
 
 interface HybridAnswerProjection {
@@ -2105,7 +2111,7 @@ function hybridPromptContext(
 ): GroundedPromptContextWire {
   const question = ctx.answerContent ?? ctx.content;
   const { redactor } = ctx.deps;
-  const system = { role: "system" as const, content: HYBRID_SYSTEM_PROMPT };
+  const system = { role: "system" as const, content: hybridSystemPrompt(ctx.deps) };
   return sentPromptContext(
     {
       messages: [
@@ -2202,7 +2208,10 @@ function hybridPromptContextField(
   input: AssembleHybridAnswerInput,
 ): Pick<GroundedAnswer, "promptContext"> {
   const modelInvoked =
-    input.sourceEvidenceAvailable !== false || input.ctx.answerOnlyContextAvailable === true;
+    input.assistant.modelInvoked ??
+    (input.sourceEvidenceAvailable !== false ||
+      input.ctx.answerOnlyContextAvailable === true ||
+      currentOwnAssessmentPolicy(input.ctx.deps) === "allowed");
   if (!modelInvoked) return {};
   const available = input.availableReferenceCount ?? input.selected.length;
   return {
@@ -2249,7 +2258,10 @@ async function noEvidenceAssistant(
   | RouteResult
 > {
   ensureNotCancelled(ctx.signal);
-  if (ctx.answerOnlyContextAvailable !== true) {
+  if (
+    ctx.answerOnlyContextAvailable !== true &&
+    currentOwnAssessmentPolicy(ctx.deps) !== "allowed"
+  ) {
     // Share the localized deterministic search outcome with folder and multi-source paths.
     return {
       assistant: {
@@ -2697,7 +2709,7 @@ function hybridPromptMessages(
   selected: readonly SelectedCandidate<HybridPayload>[],
 ): readonly GatewayChatMessage[] {
   return [
-    { role: "system", content: HYBRID_SYSTEM_PROMPT },
+    { role: "system", content: hybridSystemPrompt(ctx.deps) },
     {
       role: "user",
       content: buildRerankedHybridUserMessage(
@@ -2756,7 +2768,7 @@ function hybridCandidatesWithinWindow(
   const question = ctx.answerContent ?? ctx.content;
   const render = (count: number): GatewayPromptTokenInput => ({
     messages: [
-      { role: "system", content: HYBRID_SYSTEM_PROMPT },
+      { role: "system", content: hybridSystemPrompt(ctx.deps) },
       {
         role: "user",
         content: buildRerankedHybridUserMessage(
@@ -2809,7 +2821,13 @@ async function answerHybridWithinWindow(
       answerer.answer.completedSynthesisCalls?.(),
     ),
   };
-  const validated = validatedHybridEvidence(fitted.promptCtx, assistant, fitted.sent);
+  const normalized = normalizeGroundedAnswerAssessment(
+    assistant,
+    currentOwnAssessmentPolicy(ctx.deps),
+    ctx.correlationId,
+    ctx.content,
+  );
+  const validated = validatedHybridEvidence(fitted.promptCtx, normalized, fitted.sent);
   return {
     ...fitted,
     assistant: await repairHybridAnswer(
@@ -2851,7 +2869,7 @@ async function hybridAnswerAttempt(
     promptCtx.folderOmissionMetadata,
   );
   const assistant = normalizeGroundedAnswerPayload(
-    await answerer.answer(HYBRID_SYSTEM_PROMPT, user, {
+    await answerer.answer(hybridSystemPrompt(ctx.deps), user, {
       modelInputTokensMax: budget.modelInputTokensMax - usage.promptTokens,
       modelOutputTokensMax: budget.modelOutputTokensMax - usage.completionTokens,
       ...(budget.elapsedMsMax === null
@@ -2990,6 +3008,7 @@ function recordHybridGroundedAnswer(
     finalAnswer.citationRepairDisposition,
     ctx.correlationId,
     failure,
+    currentOwnAssessmentPolicy(ctx.deps),
   );
   if (packs.length === 0 && failure !== undefined)
     recordPluralCitationRepairFailure(ctx.deps, ctx.correlationId, failure);

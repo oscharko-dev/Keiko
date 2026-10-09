@@ -5212,8 +5212,9 @@ it("explains repository grounding whenever a folder scope is connected", () => {
     }),
   );
   expect(screen.getByTestId("grounding-help")).toHaveTextContent(
-    "Keiko searches the connected scope before each answer; the model has no file tools.",
+    "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment.",
   );
+  expect(screen.getByTestId("grounding-help")).toHaveTextContent("The model has no file tools.");
   expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
 });
 
