@@ -166,6 +166,8 @@ import {
   omissionReasonLines,
   sizeExclusionLines,
   redactString,
+  groundedRetrievalContinuityFields,
+  type GroundedRetrievalContinuityInput,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import {
@@ -212,7 +214,7 @@ export type ConnectorRetrieve = (
 ) => Promise<RetrievalResult>;
 export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
-export interface HybridGroundedAskCtx {
+export interface HybridGroundedAskCtx extends GroundedRetrievalContinuityInput {
   /** Verified discovered paths; only actual sent evidence promotes a path to read-state. */
   readonly insufficiencyScopeIndex?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>;
   readonly startedAtMs?: number;
@@ -617,6 +619,7 @@ async function retrieveFolderIntoSlot(
         query,
         workspaceRoot: scope.workspaceRoot,
         budget,
+        ...groundedRetrievalContinuityFields(ctx),
         ...(workspaceFs === undefined ? {} : { workspaceFs }),
       },
       ctx.signal,
@@ -1420,6 +1423,7 @@ function persistFolderEvidence(
         runId,
         modelId: ctx.modelId,
         workspaceRoot: src.scope.workspaceRoot,
+        sourceScopeFingerprint: src.sourceScopeFingerprint,
         chatId: ctx.chat.id,
         plan: src.plan,
         pack: src.pack,
