@@ -1090,7 +1090,9 @@ export interface GroundedAnswerer {
   /** Actual factory dispatch slots, shared by synthesis, window retry and repair. */
   readonly remainingSynthesisCalls?: (() => number) | undefined;
   /** Drain charged failed-attempt usage once when the factory rejects without a result. */
+  readonly pendingSynthesisUsage?: (() => GroundedAnswerResult["usage"]) | undefined;
   readonly takeFailedSynthesisUsage?: (() => GroundedAnswerResult["usage"]) | undefined;
+  readonly reservedSynthesisOutputTokens?: (() => number) | undefined;
   repair?(
     question: string,
     pack: ConnectedContextPack,

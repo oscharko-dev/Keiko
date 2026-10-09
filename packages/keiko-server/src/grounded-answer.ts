@@ -5,6 +5,12 @@ import type {
   GroundedPromptContextWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { InsufficiencyDeclarationResult } from "./grounded-faithfulness.js";
+import {
+  CancelledError,
+  ContextOverflowError,
+  TimeoutError,
+  type GatewayCallRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 
 export interface GroundedAnswerUsage {
   readonly promptTokens: number;
@@ -32,13 +38,24 @@ export interface GroundedSynthesisCallBudget {
   pendingUsage(): GroundedAnswerUsage;
   recordUsage(usage: GroundedAnswerUsage): void;
   takeUsage(): GroundedAnswerUsage;
+  releaseReservation(): void;
+  reservedOutputTokens(): number;
+  recordOutputReservation(tokens: number): void;
 }
 
 export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget {
   let calls = 0;
+  let reservedOutput = 0;
   let usage: GroundedAnswerUsage = { promptTokens: 0, completionTokens: 0 };
   return {
     remaining: (): number => 2 - calls,
+    reservedOutputTokens: (): number => reservedOutput,
+    recordOutputReservation(tokens): void {
+      reservedOutput += tokens;
+    },
+    releaseReservation(): void {
+      calls = Math.max(0, calls - 1);
+    },
     tryReserve: (): boolean => {
       if (calls >= 2) return false;
       calls += 1;
@@ -59,8 +76,87 @@ export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget
   };
 }
 
+export interface GroundedSynthesisAttemptOptions {
+  readonly inputTokensMax: number;
+  readonly outputTokensMax: number;
+  readonly signal?: AbortSignal | undefined;
+  readonly deadlineAtMs?: number | undefined;
+  readonly nowMs?: (() => number) | undefined;
+}
+
+export interface GroundedSynthesisAttemptTracker {
+  readonly admission: NonNullable<GatewayCallRequest["attemptAdmission"]>;
+  /** Injected model ports may not implement the gateway's physical-attempt callback. */
+  settleFallback(
+    promptTokens: number,
+    reported?: Readonly<Partial<GroundedAnswerUsage>>,
+    outputState?: "observed" | "none" | "unknown",
+  ): void;
+}
+
+export function createGroundedSynthesisAttemptAdmission(
+  budget: GroundedSynthesisCallBudget,
+  options: GroundedSynthesisAttemptOptions,
+): GroundedSynthesisAttemptTracker {
+  let gatewayOwned = false;
+  const admission: NonNullable<GatewayCallRequest["attemptAdmission"]> = (input) => {
+    gatewayOwned = true;
+    assertSynthesisAttemptActive(options);
+    const pending = budget.pendingUsage();
+    if (
+      input.promptTokens > options.inputTokensMax - pending.promptTokens ||
+      input.maxOutputTokens > options.outputTokensMax - pending.completionTokens ||
+      !budget.tryReserve()
+    )
+      return undefined;
+    return synthesisAttemptReservation(budget, input.promptTokens, input.maxOutputTokens);
+  };
+  return {
+    admission,
+    settleFallback(promptTokens, reported, outputState = "observed"): void {
+      if (gatewayOwned) return;
+      const reservation = admission({ promptTokens, maxOutputTokens: options.outputTokensMax });
+      if (reservation === undefined)
+        throw new ContextOverflowError("Synthesis attempt grant exhausted before dispatch");
+      reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
+    },
+  };
+}
+
+function assertSynthesisAttemptActive(options: GroundedSynthesisAttemptOptions): void {
+  if (options.signal?.aborted === true) throw new CancelledError("Synthesis request cancelled");
+  if (options.deadlineAtMs !== undefined && (options.nowMs ?? Date.now)() >= options.deadlineAtMs)
+    throw new TimeoutError("Synthesis deadline elapsed before provider dispatch");
+}
+
+function synthesisAttemptReservation(
+  budget: GroundedSynthesisCallBudget,
+  promptTokens: number,
+  maxOutputTokens: number,
+): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
+  let settled = false;
+  return {
+    settle(reported, dispatched, outputState = "observed"): void {
+      if (settled) return;
+      settled = true;
+      if (dispatched && outputState === "unknown") budget.recordOutputReservation(maxOutputTokens);
+      if (dispatched)
+        budget.recordUsage(
+          groundedSynthesisAttemptUsage(
+            promptTokens,
+            outputState === "unknown"
+              ? { ...reported, completionTokens: maxOutputTokens }
+              : reported,
+          ),
+        );
+      else budget.releaseReservation();
+    },
+  };
+}
+
 export interface GroundedAnswerResult extends GroundedAnswerEvidenceDeclaration {
   readonly synthesisCallCount?: number | undefined;
+  readonly synthesisReservedOutputTokens?: number | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
   readonly filesInPrompt?: number | undefined;
   readonly modelInvoked?: boolean | undefined;
@@ -172,6 +268,9 @@ export function normalizeGroundedAnswerPayload(
     ...(payload.synthesisCallCount === undefined
       ? {}
       : { synthesisCallCount: payload.synthesisCallCount }),
+    ...(payload.synthesisReservedOutputTokens === undefined
+      ? {}
+      : { synthesisReservedOutputTokens: payload.synthesisReservedOutputTokens }),
     ...normalizedEvidenceDeclaration(payload),
   };
 }
