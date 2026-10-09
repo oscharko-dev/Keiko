@@ -127,22 +127,40 @@ by supplying the entire tiny fixture. The repository metadata marker preserves t
 generated-file exclusion policy; an ordinary folder's generated-directory text remains covered by
 its separate historical positive control.
 
-| Case family                              | Languages       | Baseline at `3d46ff9ac`                        |
-| ---------------------------------------- | --------------- | ---------------------------------------------- |
-| `explicit-relative-path`                 | English, German | green                                          |
-| `bare-basename-collision`                | English, German | green                                          |
-| `vitest-stack-trace-node-modules`        | English, German | green                                          |
-| `path-only-in-previous-assistant-answer` | English, German | red: no selected evidence                      |
-| `conversational-orientation-follow-up`   | English, German | red: metadata selected instead of the referent |
-| `floor-outlier-explicit-file`            | English, German | green                                          |
-| `generated-and-node-modules-ignored`     | shared control  | green: zero generated leaks                    |
+| Case family                              | Languages       | Archived fixture discovery at `3d46ff9ac`    |
+| ---------------------------------------- | --------------- | -------------------------------------------- |
+| `explicit-relative-path`                 | English, German | green                                        |
+| `bare-basename-collision`                | English, German | green                                        |
+| `vitest-stack-trace-node-modules`        | English, German | green                                        |
+| `path-only-in-previous-assistant-answer` | English, German | orphan-history fixture: no selected evidence |
+| `conversational-orientation-follow-up`   | English, German | orphan-history fixture: metadata selected    |
+| `floor-outlier-explicit-file`            | English, German | green                                        |
+| `generated-and-node-modules-ignored`     | shared control  | green: zero generated leaks                  |
 
-The current target already satisfies several literal incident cases. The recorded baseline does
-not label those cases red or manufacture a failure; each owning implementation child must prove
-its remaining acceptance boundary with focused failing-first tests. Both assistant-referent and
-orientation variants fail the unchanged lexical gate on the current target.
+The original assistant-referent and orientation fixtures began with an orphan assistant message.
+The canonical `store.listGatewayMessages` correctly excluded that message. Their archived failures
+therefore describe that fixture setup, not an eligible-history continuity regression. The historical
+metric output remains traceable below and is not relabeled as current eligible-chat evidence.
+Several literal cases were already green; each owning child proves remaining gaps with focused
+failing-first controls rather than manufacturing red cases.
 
-Body-free output from `npm run check:retrieval-quality` before the product fixes:
+The corrected fixture in `ef2947375` prepends a neutral user question, "Explain the connected feature
+validation routine.", before the same assistant message. The user wording contains no target path
+or copied ranking expectation. Both languages and all four original row queries, files, target
+paths, line predicates and floors remain unchanged. Direct `evaluateCase` calls through the built
+production continuity and orchestrator establish the authoritative valid-exchange proof:
+
+| Valid-exchange family                    | Languages       | Before continuity producer (`a6ead363c` + corrected fixture) | After producer `d334b552a`                |
+| ---------------------------------------- | --------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| `path-only-in-previous-assistant-answer` | English, German | top/line false; recall@5 and MRR 0; generated leaks 0        | top/line true; recall/MRR/nDCG 1; leaks 0 |
+| `conversational-orientation-follow-up`   | English, German | top/line false; recall@5 and MRR 0; generated leaks 0        | top/line true; recall/MRR/nDCG 1; leaks 0 |
+
+Each four-row replay uses the same corrected eligible exchange. Body-free results are preserved in
+`3884-valid-history-before.log` and `3884-valid-history-after.log` in the task evidence artifacts.
+The post-fix run independently rebuilt only the server package and evaluated those unchanged rows;
+it does not claim the final full retrieval or quality matrix is complete.
+
+Archived body-free `npm run check:retrieval-quality` output from the original fixture discovery:
 
 ```text
 retrieval-quality: cases=29 top1=86.2% recall@5=86.2% mrr=0.862 ndcg@5=0.859 line-hit=86.2% generated-leaks=0.
