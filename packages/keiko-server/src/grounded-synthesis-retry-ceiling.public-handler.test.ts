@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -154,7 +154,10 @@ function responseWithReportedUsageThenTransportFailure(): Response {
   return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-function configuredRuntime(maxRetries = 0): {
+function configuredRuntime(
+  maxRetries = 0,
+  baseUrl = "https://synthesis.example.invalid/v1",
+): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
 } {
@@ -174,7 +177,7 @@ function configuredRuntime(maxRetries = 0): {
       providers: [
         {
           modelId: MODEL,
-          baseUrl: "https://synthesis.example.invalid/v1",
+          baseUrl,
           apiKey: "fixture",
           maxRetries,
           retryBaseDelayMs: 1,
@@ -203,6 +206,84 @@ function configuredRuntime(maxRetries = 0): {
     connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
   });
   return { deps, chatId: chat.id };
+}
+
+async function compatibilityLoopback(): Promise<{
+  readonly baseUrl: string;
+  readonly requests: readonly string[];
+  readonly enableHealthy: () => void;
+  readonly enableProviderFailure: () => void;
+  readonly close: () => Promise<void>;
+}> {
+  const requests: string[] = [];
+  let healthy = false;
+  let providerFailure = false;
+  const server = createServer((req, res): void => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer): void => {
+      chunks.push(chunk);
+    });
+    req.on("end", (): void => {
+      const body = Buffer.concat(chunks).toString();
+      requests.push(body);
+      const request = JSON.parse(body) as Record<string, unknown>;
+      if (providerFailure) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "Synthetic provider outage" } }));
+        return;
+      }
+      const param = healthy
+        ? undefined
+        : "stream_options" in request
+          ? "stream_options"
+          : "max_tokens" in request
+            ? "max_tokens"
+            : undefined;
+      res.writeHead(param === undefined ? 200 : 400, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify(
+          param === undefined
+            ? {
+                id: "breaker-proof",
+                model: MODEL,
+                choices: [
+                  {
+                    index: 0,
+                    message: { role: "assistant", content: CITED },
+                    finish_reason: "stop",
+                  },
+                ],
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+              }
+            : { error: { param, code: "unsupported_parameter" } },
+        ),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new TypeError("Expected loopback port");
+  return {
+    baseUrl: `http://127.0.0.1:${String(address.port)}/v1`,
+    requests,
+    enableHealthy: (): void => {
+      healthy = true;
+      providerFailure = false;
+    },
+    enableProviderFailure: (): void => {
+      providerFailure = true;
+    },
+    close: (): Promise<void> =>
+      new Promise((resolve, reject) => {
+        server.close((error) => {
+          if (error === undefined) resolve();
+          else reject(error);
+        });
+      }),
+  };
 }
 
 function route(chatId: string): RouteContext {
@@ -297,6 +378,47 @@ async function configuredProviderTurn(
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
+  it("does not open the provider breaker after repeated local attempt-grant refusals", async () => {
+    const provider = await compatibilityLoopback();
+    try {
+      const { deps, chatId } = configuredRuntime(0, provider.baseUrl);
+      for (let index = 0; index < 5; index += 1) {
+        const result = await handleGroundedAsk(route(chatId), deps);
+        expect(result.status).toBe(502);
+      }
+      expect(provider.requests).toHaveLength(10);
+      const failedRecords = readPersistedActivityLog(stateDir);
+      expect(failedRecords).toContain("GATEWAY_CONTEXT_OVERFLOW");
+      provider.enableHealthy();
+      const chat = deps.store.createChat(root, "Healthy after local refusal", MODEL);
+      deps.store.updateChat(chat.id, {
+        connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
+      });
+      const result = await handleGroundedAsk(route(chat.id), deps);
+      expect(result.status).toBe(200);
+      expect(provider.requests).toHaveLength(11);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("retains the default provider breaker for genuine dispatched provider failures", async () => {
+    const provider = await compatibilityLoopback();
+    try {
+      provider.enableProviderFailure();
+      const { deps, chatId } = configuredRuntime(0, provider.baseUrl);
+      for (let index = 0; index < 5; index += 1)
+        expect((await handleGroundedAsk(route(chatId), deps)).status).toBe(502);
+      expect(provider.requests).toHaveLength(5);
+      provider.enableHealthy();
+      expect((await handleGroundedAsk(route(chatId), deps)).status).toBe(502);
+      expect(provider.requests).toHaveLength(5);
+      expect(readPersistedActivityLog(stateDir)).toContain("GATEWAY_CIRCUIT_OPEN");
+    } finally {
+      await provider.close();
+    }
+  });
+
   it.each([
     ["ordinary cited answer", [CITED], 1],
     ["ordinary follow-up", [MISSING, FOLLOW_UP], 2],
