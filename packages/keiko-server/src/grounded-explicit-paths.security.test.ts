@@ -1,4 +1,12 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -105,6 +113,13 @@ function watchedSyncReads(fs: WorkspaceFs, reads: string[]): void {
       return descriptor(...args);
     });
   }
+  const containedDescriptor = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
+  if (containedDescriptor !== undefined) {
+    vi.spyOn(fs, "readFileUtf8WithinRootSameDescriptor").mockImplementation((...args) => {
+      reads.push(args[1]);
+      return containedDescriptor(...args);
+    });
+  }
   const prefix = nodeWorkspaceFs.readFileUtf8Prefix;
   if (prefix !== undefined) {
     vi.spyOn(fs, "readFileUtf8Prefix").mockImplementation((...args): string => {
@@ -153,8 +168,8 @@ function expectPrivateRejection(
 }
 
 beforeEach((): void => {
-  root = mkdtempSync(join(tmpdir(), "keiko-explicit-security-"));
-  outside = mkdtempSync(join(tmpdir(), "keiko-explicit-outside-"));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-explicit-security-")));
+  outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-explicit-outside-")));
   writeFixture(TARGET, "export const retainedFact = 73;\n");
 });
 
