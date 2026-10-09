@@ -92,7 +92,11 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
-import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import type {
+  OrchestratorInput,
+  OrchestratorOutput,
+  RetrievalOnlyOutput,
+} from "./grounded-orchestrator.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   PathDeniedError,
@@ -2709,7 +2713,7 @@ describe("multi-source bounded citation repair", () => {
     });
     return {
       scopes,
-      retriever: async (input): Promise<OrchestratorOutput> => {
+      retriever: async (input): Promise<RetrievalOnlyOutput> => {
         const retrieved = await packPerScope(
           new Map(allocatedPacks.map((pack) => [pack.files[0]?.scopePath ?? "", pack])),
         )(input);
