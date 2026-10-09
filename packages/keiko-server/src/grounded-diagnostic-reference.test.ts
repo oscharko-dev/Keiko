@@ -75,4 +75,35 @@ describe("diagnostic retrieval uses references without injecting toolchain metad
       log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
     ).toMatchObject({ metadataInjectionReason: "intent" });
   });
+
+  it("keeps history for admitted diagnostic sources and dependencies without unrelated co-commit files", async () => {
+    const dependency = "src/Feature/limits.ts";
+    const unrelated = "guides/navigation.md";
+    const log = createBufferedServerLogSink();
+    const { pack } = await runConnectedRetrievalEval({
+      files: {
+        ".git/HEAD": "ref: refs/heads/fixture\n",
+        [TEST_PATH]: FILES[TEST_PATH],
+        "package.json": FILES["package.json"],
+        [SOURCE_PATH]: 'import { limit } from "./limits";\nexport const computedFact = limit;\n',
+        [dependency]: "export const limit = 73;\n",
+        [unrelated]: "Standalone customer navigation index.\n",
+      },
+      query: `Why does this assertion fail?\n    at Object.get (${TEST_PATH}:26:5)`,
+      activityLog: log,
+      correlationId: "diagnostic-reference-history-candidates",
+    });
+    expect(pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining([TEST_PATH, SOURCE_PATH, dependency]),
+    );
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+    ).toMatchObject({ executedRingKinds: ["lexical", "structural", "git-history"] });
+    expect(pack.files.map((file) => file.scopePath)).not.toContain(unrelated);
+    expect(pack.files.map((file) => file.scopePath)).not.toContain("package.json");
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+    ).toMatchObject({ stackTraceAdmittedPathCount: 1, metadataInjectionReason: "none" });
+    expect(JSON.stringify(log.events)).not.toContain(dependency);
+  });
 });
