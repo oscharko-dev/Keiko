@@ -419,6 +419,14 @@ bounded gateway/context retries and entailment verification retain their existin
 `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` is default-enabled with one follow-up pass: absent means `1`,
 explicit `1` enables, explicit `0` disables, and every other explicit value fails closed to zero
 passes with a body-free invalid configuration observation (ADR-0180).
+Working-tree recency uses one scope-bound request-local snapshot from the existing observed Git
+runner, capped at 64 admitted paths and a shared 1.5-second ceiling further bounded by the remaining
+request deadline. Ordinary folders spawn no process; exhausted grants and elapsed deadlines refuse
+observation. Allowed paths feed the existing recent-path search policy and a small targeted/diagnostic
+ranking signal without changing provenance, admission, or floor exemptions. Selection-details
+records only the closed status disposition, measured duration, observed/deleted counts and hint/hit
+counts. Private scope/status cache identity and path values never enter activity evidence. Status
+dependency failures retain the existing structured diagnostics and degrade to ordinary retrieval.
 Supported document basenames use the existing bounded path-only discovery port, then the same
 admission and document-extraction boundaries; ZIP containers never require text classification.
 Only extraction-owned files are removed from ordinary code evidence. An ordinary text file with
