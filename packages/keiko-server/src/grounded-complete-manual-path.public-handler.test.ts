@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { ConnectedContextGroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -70,13 +71,17 @@ afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true });
 });
 
-function modelFor(requests: GatewayRequest[], path: string): ModelPort {
+function modelFor(
+  requests: GatewayRequest[],
+  path: string,
+  answerFor?: (request: GatewayRequest) => string,
+): ModelPort {
   return {
     call(request): Promise<NormalizedResponse> {
       requests.push(request);
       return Promise.resolve({
         modelId: request.modelId,
-        content: `The named manual fact is 937. [${path}:1]`,
+        content: answerFor?.(request) ?? `The named manual fact is 937. [${path}:1]`,
         finishReason: "stop",
         toolCalls: [],
         structuredOutput: null,
@@ -95,8 +100,13 @@ function modelFor(requests: GatewayRequest[], path: string): ModelPort {
 function runtime(
   requests: GatewayRequest[],
   path: string,
+  options: {
+    readonly policy?: OwnAssessmentPolicy;
+    readonly answerFor?: (request: GatewayRequest) => string;
+  } = {},
 ): { readonly deps: UiHandlerDeps; readonly chatId: string } {
   const config = parseGatewayConfig({
+    groundedAnswers: { ownAssessment: options.policy ?? "disabled" },
     providers: [
       { modelId: MODEL, baseUrl: "https://complete-manual.example.invalid/v1", apiKey: "fixture" },
     ],
@@ -125,7 +135,7 @@ function runtime(
         get: () => undefined,
         delete: () => undefined,
       },
-      modelPortFactory: () => modelFor(requests, path),
+      modelPortFactory: () => modelFor(requests, path, options.answerFor),
       store,
     },
   };
@@ -174,7 +184,95 @@ async function ask(query: string, path: string): Promise<string> {
   return prompt;
 }
 
+function populateIndependentManuals(
+  first: string,
+  second: string,
+  fact: string,
+  count: number,
+  missing: boolean,
+): void {
+  if (!missing) put(first, FACT);
+  put(second, `<main><h1>Authoritative procedure</h1><p>${fact}</p></main>`);
+  for (let i = 0; i < count - 2; i += 1)
+    put(
+      `documents/navigation-${String(i)}.html`,
+      "<nav>Home | Operating instructions | Maintenance | Restart</nav>\n".repeat(110),
+    );
+}
+
+function requestContent(request: GatewayRequest): string {
+  return request.messages
+    .map((message) => (typeof message.content === "string" ? message.content : ""))
+    .join("\n");
+}
+
 describe("complete bounded manual paths through the actual public grounded handler", () => {
+  it.each([
+    {
+      first: "docs/atlas/trip.html",
+      second: "docs/pumps/reset.html",
+      topic: "pump reset delays",
+      fact: "Pump reset delays are 43 seconds.",
+      count: 258,
+      missing: false,
+    },
+    {
+      first: "manuals/instruments/temperature.html",
+      second: "manuals/seals/flush.html",
+      topic: "seal flush duration",
+      fact: "Seal flush duration is 67 minutes.",
+      count: 98,
+      missing: false,
+    },
+    {
+      first: "docs/atlas/absent.html",
+      second: "docs/pumps/reset.html",
+      topic: "pump reset delays",
+      fact: "Pump reset delays are 43 seconds.",
+      count: 258,
+      missing: true,
+    },
+  ])(
+    "retains an independent prose topic after $first (missing=$missing)",
+    async ({ first, second, topic, fact, count, missing }) => {
+      populateIndependentManuals(first, second, fact, count, missing);
+      const requests: GatewayRequest[] = [];
+      const { deps, chatId } = runtime(requests, first, {
+        answerFor: (request) =>
+          requestContent(request).includes(fact)
+            ? `${fact} [${second}:1]`
+            : `The named manual fact is 937. [${first}:1]`,
+      });
+      const response = await dispatch(`Read ${first} and explain ${topic}.`, deps, chatId);
+      expect(response.status).toBe(200);
+      expect(requests.some((request) => requestContent(request).includes(fact))).toBe(true);
+      const answer = response.body as ConnectedContextGroundedAnswer;
+      expect(answer.content).toContain(fact);
+      expect(answer.citations.some((citation) => citation.scopePath === second)).toBe(true);
+    },
+  );
+
+  it("keeps an unavailable explicit target honest while allowing separately labelled knowledge", async () => {
+    const path = populate("html", false);
+    const absent = `src/missing${LONG_SEGMENT}/manual.html`;
+    const requests: GatewayRequest[] = [];
+    const knowledge =
+      "<assessment>\nI can offer general guidance, but this named source is unavailable.\n</assessment>";
+    const { deps, chatId } = runtime(requests, path, {
+      policy: "allowed",
+      answerFor: () => knowledge,
+    });
+    const response = await dispatch(`Explain ${absent}`, deps, chatId);
+    expect(response.status).toBe(200);
+    expect(requests).toHaveLength(1);
+    expect(requestContent(requests[0]!)).not.toContain(FACT);
+    expect(requestContent(requests[0]!)).not.toContain(DECOY_FACT);
+    const answer = response.body as ConnectedContextGroundedAnswer;
+    expect(answer.content).toBe(knowledge);
+    expect(answer.citations).toEqual([]);
+    expect(readPersistedActivityLog(stateDir)).toContain('"explicitPathRejectedCount":1');
+  });
+
   it.each(["bare", "backtick", "doublequoted"])(
     "retains an ordinary short source path as a healthy %s control",
     async (quoting) => {
