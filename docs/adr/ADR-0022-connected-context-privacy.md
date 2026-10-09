@@ -749,7 +749,14 @@ test will catch it.
 
 Synthesis accounting refines the two-call rule at the actual attempt boundary: initial answers,
 marker repair, follow-up, and context/provider retries share the same turn-owned allowance. The
-answer-details sibling records optional `synthesisCallCount` and `synthesisReservedOutputTokens`.
+answer-details sibling records optional `synthesisCallCount`, `completedSynthesisCallCount` and
+`synthesisReservedOutputTokens`. Physical synthesis attempts remain separate from completed
+responses: overflow, transient and compatibility failures consume attempt and token/spend grants
+without incrementing completed-response count. A completed marker repair increments that count
+even when its content is rejected; a completed follow-up does likewise. The common grounded
+evidence producer receives the completed count for `usageTotals.requestCount` and the human report
+(ADR-0010 D7); unchanged callers retain the existing one-request default. The existing factory
+ledger owns the lifetime completed counter, per-result deltas and caught-repair recovery.
 Input charges use the canonical sent-prompt estimate as a floor and retain larger reported counts.
 Reported partial output is charged; an uncertain interrupted stream retains its requested output
 upper reservation. A definitive HTTP rejection before generation leaves the spare output grant

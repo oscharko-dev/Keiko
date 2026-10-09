@@ -64,6 +64,7 @@ const ANSWER_DETAILS_OPERATION = defineActivityLogOperation({
     },
     filesInPrompt: { type: "integer", dataClass: "count", required: true },
     synthesisCallCount: { type: "integer", dataClass: "count", required: false },
+    completedSynthesisCallCount: { type: "integer", dataClass: "count", required: false },
     synthesisReservedOutputTokens: { type: "integer", dataClass: "count", required: false },
     answerKind: {
       type: "string",
@@ -168,6 +169,9 @@ function synthesisActivityFields(
     ...(answer.synthesisCallCount === undefined
       ? {}
       : { synthesisCallCount: answer.synthesisCallCount }),
+    ...(answer.completedSynthesisCallCount === undefined
+      ? {}
+      : { completedSynthesisCallCount: answer.completedSynthesisCallCount }),
     ...(answer.synthesisReservedOutputTokens === undefined
       ? {}
       : { synthesisReservedOutputTokens: answer.synthesisReservedOutputTokens }),

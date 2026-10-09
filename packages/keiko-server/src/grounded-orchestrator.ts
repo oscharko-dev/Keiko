@@ -1090,6 +1090,7 @@ export interface GroundedAnswerOptions {
 }
 
 export interface GroundedAnswerer {
+  readonly completedSynthesisCalls?: (() => number) | undefined;
   /** Actual factory dispatch slots, shared by synthesis, window retry and repair. */
   readonly remainingSynthesisCalls?: (() => number) | undefined;
   /** Drain charged failed-attempt usage once when the factory rejects without a result. */
@@ -1187,6 +1188,7 @@ export interface OrchestratorDeps {
 }
 
 export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
+  readonly completedSynthesisCallCount?: number | undefined;
   readonly followUp?: FollowUpObservation | undefined;
   readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
@@ -10152,6 +10154,7 @@ function answerEvidenceFields(
   | "insufficiencyObservation"
   | "sentEvidencePacks"
   | "filesInPrompt"
+  | "completedSynthesisCallCount"
 > {
   return {
     ...(answer.citationBehaviour === undefined
@@ -10170,6 +10173,9 @@ function answerEvidenceFields(
       ? {}
       : { sentEvidencePacks: answer.sentEvidencePacks }),
     ...(answer.filesInPrompt === undefined ? {} : { filesInPrompt: answer.filesInPrompt }),
+    ...(answer.completedSynthesisCallCount === undefined
+      ? {}
+      : { completedSynthesisCallCount: answer.completedSynthesisCallCount }),
   };
 }
 
