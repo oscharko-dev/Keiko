@@ -486,6 +486,9 @@ system that exists, never beside it:
   unknown output amount as zero. These charges are conservative admission bounds, not claims of exact
   provider consumption. The optional local gateway attempt hook preserves transient recovery within
   the two-attempt allowance and does not change unrelated callers' retry policy.
+  OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
+  caller and durable spend admission for each actual POST; adapters without that transport hook
+  retain the existing gateway boundary. No nested compatibility path grants another attempt.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or

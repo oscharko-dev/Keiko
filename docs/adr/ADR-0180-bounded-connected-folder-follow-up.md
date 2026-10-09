@@ -36,16 +36,19 @@ pass. Candidate declaration text is not a workspace command, and the model recei
 tools. Selected Files exceptions retain their existing human-owned admission semantics; a model
 declaration cannot create an exception.
 
-### D2 — One additional synthesis slot, shared with marker repair
+### D2 — Two physical synthesis attempts, shared across retries, repair and follow-up
 
-Each logical turn has at most two application-level synthesis calls: the initial answer and either
-one citation-marker repair or one follow-up answer. Spending the second slot for either purpose
-leaves no slot for the other. A second insufficiency answer returns with its truthful declarations;
-there is no third synthesis call and no recursive follow-up.
+Each logical turn admits at most two physical synthesis attempts across the initial answer,
+citation-marker repair and follow-up answer. Gateway transport and context-window retries consume
+the same allowance before an actual adapter dispatch. If a retry consumes the second attempt,
+neither repair nor follow-up may dispatch another synthesis. A second insufficiency answer returns
+with its truthful declarations; there is no third synthesis attempt or recursive follow-up.
 
-The ceiling covers answer generation. Existing bounded entailment verification and gateway
-transport or context-window retries retain their own admission and settlement contracts; they do
-not grant another synthesis slot. In particular, the entailment stage in
+Counting physical dispatches refines the accepted #3889 never-third-model-call criterion after the
+configured-producer audit exposed retries outside the earlier application-level count. It does not
+record a separate owner decision about provider retry semantics. Unrelated gateway requests retain
+their existing retry contracts. Separately bounded entailment and embedding calls retain their own
+purpose-specific admission and settlement and cannot grant another synthesis attempt. The entailment stage in
 [ADR-0144](ADR-0144-grounded-entailment-stage.md) remains responsible for claim support, and marker
 membership alone never establishes entailment.
 
@@ -53,6 +56,16 @@ The follow-up uses the same connected scope and original authority. Retrieval, s
 assembly consume the remaining search-call, read, excerpt-byte, model-input-token and elapsed
 budgets. Gateway spend, circuit, concurrency and cancellation admission still apply. High budget
 pressure or insufficient remaining resources refuses the pass rather than resetting a budget.
+
+Every physical synthesis attempt is admitted against the original cumulative input/output grants
+before spend reservation and provider dispatch. Charged input is the greater of the canonical sent
+prompt estimate and reported provider usage. Reported partial output remains charged after a
+discarded attempt. When a dispatched stream fails without measured output, the requested output cap
+remains reserved; exhausted remaining output refuses a retry. A definite provider rejection or
+context overflow without partial usage contributes no generated output, so a transient rejection
+may recover within the spare second attempt. Conservative charges and reservations are distinct
+from provider-measured usage; they do not claim that unmeasured output was generated. Attempt and
+spend settlement each complete once, including failure and cancellation.
 
 ### D3 — The default is on, with a closed off switch
 
