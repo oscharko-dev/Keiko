@@ -17,9 +17,12 @@ slot for one leaves no slot for the other. Models do not receive workspace tools
 
 All children meet on one integration branch through child-branch merges. One non-draft pull
 request targets `dev`, with native auto-merge **off**; the owner integrates it. Agents commit and
-push their assigned branches regularly, at least every ten minutes where work has changed. Before
-each push, run the applicable local gates and `npm run gates:sonar`; report unavailable gates
-truthfully. Review conversations receive a fix reference or evidenced refutation before resolution.
+push their assigned branches regularly, at least every ten minutes where work has changed. The
+owner's 2026-10-09 execution instruction uses pointed tests and necessary compilation during
+implementation; signed work-in-progress pushes identify known red fixtures. Run the broad
+applicable quality gates, coverage, and `npm run gates:sonar` at the end before completion. Gate
+thresholds and merge prerequisites remain unchanged; report unavailable gates truthfully. Review
+conversations receive a fix reference or evidenced refutation before resolution.
 Never push to `dev`, force-push, weaken a gate, widen authority, or publish private support artifacts.
 
 ## Current-code corrections
