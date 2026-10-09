@@ -312,12 +312,15 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     if (port === undefined || budget === undefined)
       throw new TypeError("Expected configured gateway");
     const reserve = vi.spyOn(budget, "reserve");
-    const answer = await port.call({
-      modelId: MODEL,
-      messages: [{ role: "user", content: "File: src/Feature.ts" }],
-      stream: false,
-      maxOutputTokens: 1024,
-    });
+    const answer = await port.call(
+      {
+        modelId: MODEL,
+        messages: [{ role: "user", content: "File: src/Feature.ts" }],
+        stream: false,
+        maxOutputTokens: 1024,
+      },
+      new AbortController().signal,
+    );
     expect(answer.content).toBe(CITED);
     expect(requests).toHaveLength(2);
     expect(reserve).toHaveBeenCalledTimes(2);
@@ -410,12 +413,15 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     const { deps } = configuredRuntime();
     const port = deps.modelPortFactory(MODEL);
     if (port === undefined) throw new TypeError("Expected configured gateway");
-    const answer = await port.call({
-      modelId: MODEL,
-      messages: [{ role: "user", content: "File: src/Feature.ts" }],
-      stream: false,
-      maxOutputTokens: 1024,
-    });
+    const answer = await port.call(
+      {
+        modelId: MODEL,
+        messages: [{ role: "user", content: "File: src/Feature.ts" }],
+        stream: false,
+        maxOutputTokens: 1024,
+      },
+      new AbortController().signal,
+    );
     expect(answer.content).toBe(CITED);
     expect(requests).toHaveLength(3);
   });

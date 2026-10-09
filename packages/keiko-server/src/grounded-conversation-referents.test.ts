@@ -40,7 +40,9 @@ function resolve(
         timestamp: timestamp++,
         runId: undefined,
         workflowId: undefined,
-        attachments: [],
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
       });
     const user = runtime.store.listMessages(chat.id).at(-1);
     if (user === undefined) throw new Error("Fixture user missing");

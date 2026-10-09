@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Gateway, type GatewayCallRequest } from "./gateway.js";
 import { createDefaultChatCapability } from "./capabilities.js";
+import { parseGatewayConfig } from "./config.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 
@@ -63,7 +64,7 @@ function fixture(): {
   const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response));
   const events: ModelGatewayLogEvent[] = [];
   const gateway = new Gateway(
-    {
+    parseGatewayConfig({
       providers: [
         {
           modelId: MODEL,
@@ -75,7 +76,7 @@ function fixture(): {
         },
       ],
       capabilities: [{ ...createDefaultChatCapability(MODEL), maxOutputTokens: 1024 }],
-    },
+    }),
     {
       adapter: new OpenAiAdapter({ fetchImpl, requestId: "lifecycle", costClass: "low" }),
       spendBudget: { reserve },

@@ -1,3 +1,4 @@
+import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
 import * as groundedOrchestrator from "./grounded-orchestrator.js";
 import * as chatActivity from "./chat-activity.js";
@@ -1519,7 +1520,7 @@ describe("modelWindowAwareBudget", () => {
   ] as const)("binds the real server follow-up deployment value %s", (value, expected) => {
     expect(
       modelWindowAwareBudget(
-        deps(undefined, { KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX: value }),
+        deps(undefined, value === undefined ? {} : { KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX: value }),
         CHAT_MODEL,
       ).followUpPassesMax,
     ).toBe(expected);
@@ -5461,7 +5462,13 @@ describe("actual fitted repository evidence authority", () => {
             requests.length === 1
               ? "I need more evidence.\nMissing evidence: [lib/ConfigurationOrchid.ts]"
               : "Configuration is 42 [lib/ConfigurationOrchid.ts:1].",
-          usage: { promptTokens: tokens, completionTokens: 20, totalTokens: tokens + 20 },
+          usage: {
+            requestId: "fitted-follow-up",
+            promptTokens: tokens,
+            completionTokens: 20,
+            latencyMs: 1,
+            costClass: "medium",
+          },
           toolCalls: [],
           finishReason: "stop",
           structuredOutput: null,
@@ -5545,7 +5552,7 @@ describe("actual fitted repository evidence authority", () => {
             ? "I need more evidence.\nMissing evidence: [lib/Companion.ts]\nMissing evidence: [../PRIVATE_CANARY.ts]"
             : "Companion is 42 [lib/Companion.ts:1].",
           requests,
-        ).call(request);
+        ).call(request, new AbortController().signal);
       },
     };
     const result = await handleGroundedAsk(
@@ -5585,7 +5592,7 @@ describe("actual fitted repository evidence authority", () => {
         return fakeModel(
           calls === 1 ? "The threshold is 1000." : "The threshold is 10 [src/validation.ts:1] 00.",
           requests,
-        ).call(request);
+        ).call(request, new AbortController().signal);
       },
     };
     const result = await handleGroundedAsk(
@@ -5610,7 +5617,13 @@ describe("actual fitted repository evidence authority", () => {
     const runnerSpy = vi
       .spyOn(groundedOrchestrator, "runGroundedExploration")
       .mockImplementation((input, ports) =>
-        execute({ ...input, budget: { ...input.budget, elapsedMsMax: 100 } }, ports),
+        execute(
+          {
+            ...input,
+            budget: { ...(input.budget ?? DEFAULT_EXPLORATION_BUDGET), elapsedMsMax: 100 },
+          },
+          ports,
+        ),
       );
     const loggerSpy = vi
       .spyOn(chatActivity, "logGroundedPromptSelection")
@@ -5645,7 +5658,13 @@ describe("actual fitted repository evidence authority", () => {
     const call = vi.fn(() =>
       Promise.resolve({
         content: "Validation returns true [src/validation.ts:1].",
-        usage: { promptTokens: 800, completionTokens: 20, totalTokens: 820 },
+        usage: {
+          requestId: "zero-source-fitted",
+          promptTokens: 800,
+          completionTokens: 20,
+          latencyMs: 1,
+          costClass: "medium" as const,
+        },
         toolCalls: [],
         finishReason: "stop" as const,
         structuredOutput: null,
