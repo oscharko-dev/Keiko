@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { formatServerLogLine } from "../server-log.js";
+import { groupConnectedContextOmissions } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CANDIDATE_OMISSION_REASONS,
+  type CandidateOmissionReason,
+} from "@oscharko-dev/keiko-contracts/connected-context";
+import { projectRetrievalMisses } from "./support-retrieval-miss.js";
 import {
   analyzeLogText,
   buildReproductionSeed,
@@ -182,5 +188,124 @@ describe("retrieval-miss projection (#3893)", () => {
     expect(seed?.warnings.some((warning) => warning.includes("retrieval inputs"))).toBe(true);
     const projected: unknown = seed === undefined ? undefined : Reflect.get(seed, "findings");
     expect(projected).toEqual(findings(text));
+  });
+
+  it("uses the canonical omission grouping producer for complete observed counters", () => {
+    const counts = Object.fromEntries(
+      CANDIDATE_OMISSION_REASONS.map((reason) => [reason, 2]),
+    ) as Record<CandidateOmissionReason, number>;
+    const text = line(SOURCE, {
+      explicitPathRejectedCount: 1,
+      omittedOutsideScopeCount: 2,
+      omittedBinaryCount: 2,
+      omittedGeneratedCount: 2,
+      omittedIgnoredCount: 2,
+      omittedSizeExceededCount: 2,
+      omittedNearDuplicateCount: 2,
+      omittedLowRelevanceCount: 2,
+      omittedRedactedOnlyCount: 2,
+      omittedBudgetExhaustedCount: 2,
+      omittedToolUnavailableCount: 2,
+      omittedUnsupportedFormatCount: 2,
+      omittedNoTextLayerCount: 2,
+      omittedMalformedDocumentCount: 2,
+      omittedEncryptedDocumentCount: 2,
+    });
+    expect(findings(text)).toEqual([
+      expect.objectContaining({
+        omissionGroups: groupConnectedContextOmissions(counts),
+      }),
+    ]);
+  });
+
+  it("does not invent omission groups for a partial historical observation", () => {
+    const result = projectRetrievalMisses(CORRELATION, [
+      { op: SOURCE, extra: { explicitPathRejectedCount: 1, omittedLowRelevanceCount: 2 } },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty("omissionGroups");
+  });
+
+  it("does not dispose an unread declaration in another process lifetime", () => {
+    const result = projectRetrievalMisses(CORRELATION, [
+      {
+        op: ANSWER,
+        pid: 10,
+        instanceId: "a".repeat(32),
+        extra: {
+          scopeIdentitySha256: SCOPE,
+          queryIdentitySha256: QUERY,
+          declaredUnreadInScopeCount: 1,
+        },
+      },
+      {
+        op: SELECTION,
+        pid: 11,
+        instanceId: "b".repeat(32),
+        extra: {
+          scopeIdentitySha256: SCOPE,
+          queryIdentitySha256: QUERY,
+          followUpPassCount: 1,
+          followUpOutcome: "answered",
+        },
+      },
+    ]);
+    expect(result).toEqual([expect.objectContaining({ reason: "declared-unread-in-scope" })]);
+  });
+
+  it("does not join sibling correlations even when a parent timeline contains both", () => {
+    const result = projectRetrievalMisses("parent", [
+      {
+        op: ANSWER,
+        correlationId: "child-one",
+        extra: {
+          scopeIdentitySha256: SCOPE,
+          queryIdentitySha256: QUERY,
+          declaredUnreadInScopeCount: 1,
+        },
+      },
+      {
+        op: SELECTION,
+        correlationId: "child-two",
+        extra: {
+          scopeIdentitySha256: SCOPE,
+          queryIdentitySha256: QUERY,
+          followUpPassCount: 1,
+          followUpOutcome: "answered",
+        },
+      },
+    ]);
+    expect(result).toEqual([
+      expect.objectContaining({ correlationId: "child-one", reason: "declared-unread-in-scope" }),
+    ]);
+  });
+
+  it("does not let an unconfirmed answer clear the initial declaration", () => {
+    const text =
+      line(ANSWER, { declaredUnreadInScopeCount: 1 }) +
+      line(ANSWER, { declaredUnreadInScopeCount: 0 });
+    expect(findings(text)).toEqual([
+      expect.objectContaining({
+        reason: "declared-unread-in-scope",
+        fields: { declaredUnreadInScopeCount: 1 },
+      }),
+    ]);
+  });
+
+  it("keeps arbitrary legacy fields and raw paths out of findings", () => {
+    const result = projectRetrievalMisses(CORRELATION, [
+      {
+        op: SOURCE,
+        extra: {
+          explicitPathRejectedCount: 1,
+          explicitPathRejectionReasons: ["missing", "/private/file.ts"],
+          body: "private source body",
+          path: "/private/file.ts",
+          followUpOutcome: "private outcome",
+        },
+      },
+    ]);
+    expect(result[0]?.fields).toEqual({ explicitPathRejectedCount: 1 });
+    expect(JSON.stringify(result)).not.toContain("private");
   });
 });
