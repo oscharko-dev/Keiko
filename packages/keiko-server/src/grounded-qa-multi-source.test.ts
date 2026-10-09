@@ -116,6 +116,7 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 interface PutCall {
   readonly runId: string;
   readonly workspaceRoot: string;
+  readonly sourceScopeFingerprint: string | undefined;
 }
 
 function asConnectedAnswer(
@@ -152,8 +153,15 @@ function recordingDeps(puts: PutCall[], overrides: Partial<UiHandlerDeps> = {}):
     configPresent: false,
     evidenceStore: {
       put: (runId: string, json: string): string => {
-        const parsed = JSON.parse(json) as { context?: { workspaceRoot?: string } };
-        puts.push({ runId, workspaceRoot: parsed.context?.workspaceRoot ?? "" });
+        const parsed = JSON.parse(json) as {
+          context?: { workspaceRoot?: string };
+          connectedContext?: { scope: { sourceScopeFingerprint?: string } };
+        };
+        puts.push({
+          runId,
+          workspaceRoot: parsed.context?.workspaceRoot ?? "",
+          sourceScopeFingerprint: parsed.connectedContext?.scope.sourceScopeFingerprint,
+        });
         return runId;
       },
       list: () => [],
@@ -972,6 +980,45 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  it("forwards validated assistant continuity hints to every source retriever", async () => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      root: tempRoot(name),
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("expected chat");
+    const continuity = {
+      assistantReferents: [{ path: "src/a.ts", line: 4, origin: "assistant" as const }],
+      previousRetrievalIntent: "targeted-code-search" as const,
+      continuityReferentSource: "assistant-paths" as const,
+    };
+    const retriever = vi.fn(
+      packPerScope(
+        new Map([
+          ["src/a.ts", scopePack("src/a.ts", 0.5, "a")],
+          ["src/b.ts", scopePack("src/b.ts", 0.5, "b")],
+        ]),
+      ),
+    );
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "What about now?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: new AbortController().signal,
+      retriever,
+      answerer: () => Promise.resolve("ok"),
+      ...continuity,
+    });
+    expect(result.status).toBe(200);
+    expect(retriever).toHaveBeenCalledTimes(2);
+    for (const [input] of retriever.mock.calls) expect(input).toMatchObject(continuity);
+  });
+
   it.each([
     ["please paste validation.ts", "clarification", false],
     ["Missing evidence: [src/unread.ts]", "insufficiency", false],
@@ -1947,6 +1994,13 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       expect.stringMatching(/^connected-context-root-[0-9a-f]{16}$/),
     ]);
     expect(new Set(puts.map((p) => p.workspaceRoot)).size).toBe(2);
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("expected chat");
+    expect(puts.map((entry) => entry.sourceScopeFingerprint)).toEqual(
+      [scopeA, scopeB].map((scope) =>
+        groundedSourceScopeFingerprint(buildSelectedScopeFrom(chat, scope, "identity")),
+      ),
+    );
     expect(answer.evidenceRunId).toBe(puts[0]?.runId);
     expect(answer.evidenceRunIds).toEqual(puts.map((p) => p.runId));
   });
