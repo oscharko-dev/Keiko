@@ -1,0 +1,42 @@
+.inspection {
+  display: grid;
+  gap: 8px;
+  color: var(--ink);
+}
+.files {
+  min-width: 0;
+  overflow-x: auto;
+}
+.files summary {
+  cursor: pointer;
+}
+.files table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-block: 8px;
+}
+.files caption {
+  text-align: left;
+  font-weight: 600;
+}
+.files th,
+.files td {
+  padding: 6px;
+  border-bottom: 1px solid var(--stroke);
+  text-align: left;
+  vertical-align: top;
+}
+.files code {
+  overflow-wrap: anywhere;
+}
+.files button {
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.files :is(button, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
