@@ -424,6 +424,61 @@ async function staleFixture(
 
 type StaleFixture = Awaited<ReturnType<typeof staleFixture>>;
 
+function pricedRefreshFixture(fixture: StaleFixture): StaleFixture {
+  return {
+    ...fixture,
+    deps: {
+      ...fixture.deps,
+      config: {
+        ...fixture.deps.config,
+        capabilities: (fixture.deps.config.capabilities ?? []).map((capability) => ({
+          ...capability,
+          pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 0 },
+        })),
+      },
+    },
+  };
+}
+
+function pausedRefreshEmbedding(fixture: StaleFixture): {
+  readonly entered: Promise<void>;
+  readonly finished: Promise<void>;
+  readonly finish: () => void;
+} {
+  let enter: () => void = () => undefined;
+  let finish: () => void = () => undefined;
+  let done: () => void = () => undefined;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const response = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const finished = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  fixture.embedding.mockImplementation(async (request) => {
+    enter();
+    await response;
+    done();
+    return { ok: true, value: { vector: vectorFor(request.input), modelId: request.modelId } };
+  });
+  return { entered, finished, finish };
+}
+
+function expectRefreshSpendRejection(
+  log: ReturnType<typeof createBufferedServerLogSink>,
+  required: boolean,
+): void {
+  if (!required) return;
+  const rejection = log.events.find((event) => event.op === "gateway.spend.rejected");
+  expect(rejection?.extra?.reason).toBe("spend-budget-exceeded");
+  expectActivityLogProof(
+    "gateway.spend.rejected.line",
+    formatActivityLogProofLine(rejection ?? {}),
+  );
+}
+
 function searchStaleFixture(
   fixture: StaleFixture,
   provider = fixture.provider,
@@ -1070,19 +1125,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     const log = createBufferedServerLogSink();
     const writer = vi.spyOn(processServerLogSink(), "write").mockImplementation(log.write);
     const readFileBytes = vi.fn(fixture.fs.readFileBytes);
-    const configured = {
-      ...fixture,
-      deps: {
-        ...fixture.deps,
-        config: {
-          ...fixture.deps.config,
-          capabilities: fixture.deps.config.capabilities.map((capability) => ({
-            ...capability,
-            pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 0 },
-          })),
-        },
-      },
-    };
+    const configured = pricedRefreshFixture(fixture);
     try {
       const provider = refreshProviderFor(
         configured,
@@ -1107,8 +1150,64 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         expect(event.extra?.measured).toBe(false);
         expect(event.extra?.chargedNanoUsd).toBeGreaterThan(0);
         expect(event.extra?.chargedNanoUsd).toBe(reserved[index]?.extra?.reservedNanoUsd);
+        expectActivityLogProof("gateway.spend.settled.line", formatActivityLogProofLine(event));
       }
+      expectRefreshSpendRejection(log, expected.hits === 0);
+      const logged = JSON.stringify(log.events);
+      expect(logged).not.toContain("session renewal");
+      expect(logged).not.toContain("Path: ");
+      expect(logged).not.toContain("https://embedding.example");
+      expect(logged).not.toContain("embedding-key");
     } finally {
+      writer.mockRestore();
+      fixture.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("settles an aborted refresh embedding once without late reads or observation resurrection", async () => {
+    const fixture = await staleFixture();
+    const pending = pausedRefreshEmbedding(fixture);
+    const root = mkdtempSync(join(tmpdir(), "keiko-semantic-refresh-abort-"));
+    const log = createBufferedServerLogSink();
+    const writer = vi.spyOn(processServerLogSink(), "write").mockImplementation(log.write);
+    const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+    const controller = new AbortController();
+    try {
+      const provider = refreshProviderFor(
+        pricedRefreshFixture(fixture),
+        {
+          fs: { ...fixture.fs, readFileBytes },
+          semanticRefreshFilesMax: 1,
+        },
+        {
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "1",
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(root, "spend.db"),
+        },
+      );
+      const work = provider.search({
+        query: QUERY,
+        signal: controller.signal,
+        documents: Object.entries(fixture.files).map(([scopePath, text]) => ({ scopePath, text })),
+      });
+      await pending.entered;
+      controller.abort();
+      expect(await work).toEqual([]);
+      expect(log.events.filter((event) => event.op === "gateway.spend.settled")).toHaveLength(1);
+      expect(readFileBytes).not.toHaveBeenCalled();
+      const observation = structuredClone(fixture.observed.mock.lastCall?.[0]);
+      expect(observation).toMatchObject({
+        refreshUsage: { embeddingCallCount: 1, readFileCount: 0 },
+      });
+      pending.finish();
+      await pending.finished;
+      await Promise.resolve();
+      expect(fixture.observed).toHaveBeenCalledTimes(1);
+      expect(fixture.observed.mock.lastCall?.[0]).toEqual(observation);
+      expect(log.events.filter((event) => event.op === "gateway.spend.settled")).toHaveLength(1);
+      expect(readFileBytes).not.toHaveBeenCalled();
+    } finally {
+      pending.finish();
       writer.mockRestore();
       fixture.close();
       rmSync(root, { recursive: true, force: true });
@@ -1131,6 +1230,15 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         stalePaths: ["src/auth.ts", "src/peer.ts"],
         refreshedPaths: ["src/auth.ts"],
         unavailableFileCount: 0,
+        refreshUsage: {
+          embeddingCallCount: fixture.embedding.mock.calls.length,
+          readFileCount: 1,
+          readBytes: Buffer.byteLength(fixture.files["src/auth.ts"] ?? "", "utf8"),
+          inputTokens: fixture.embedding.mock.calls.reduce(
+            (total, [request]) => total + Buffer.byteLength(request.input, "utf8"),
+            0,
+          ),
+        },
       });
       const fragments = fixture.embedding.mock.calls.filter(([request]) =>
         request.input.startsWith("Path: "),
