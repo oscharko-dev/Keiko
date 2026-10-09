@@ -459,7 +459,9 @@ available. External runtime/generated frames are removed before the reference ca
 casing and numeric source locations survive admission; the primary frame and its existing
 structural test/source pair receive the same eligibility and read-budget checks. Tool names inside
 trace bodies never request project metadata. Metadata injection follows the independent user
-question and the effective retrieval intent. Only an anaphoric follow-up with a previous targeted
+question and the effective retrieval intent. Manifest inventory routing requires a complete
+enumeration request; mentioning manifests while asking about validation, loading, or combined
+inventory and behavior retains source-code search. Only an anaphoric follow-up with a previous targeted
 or diagnostic intent may inherit that intent; independently named targets and new traces classify
 on their own. Supplied reference paths, lines, origins, and inherited effective intent participate
 in plan identity without changing the historical no-reference identity.
