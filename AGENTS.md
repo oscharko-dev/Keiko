@@ -451,6 +451,8 @@ system that exists, never beside it:
   high/low selection vocabulary and actual observed scope/semantic dispositions.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  Leading `./` reference spellings are canonicalized before strict path admission; parent and
+  interior dot segments remain subject to the existing validator and every sensitive-path denial.
   Complete document path references are data when classifying relationship/history requests;
   directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
   factual lookup focuses discovery on canonically admitted named documents with a scope-bound
@@ -724,9 +726,17 @@ prompts. `client.answer.copied` records each chat answer copy (`copied` or `fail
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
 removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
 for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
-`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
-assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
-(`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+`search.answer.assessed` records whether a connected answer carried Keiko's own, labelled
+assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under the existing operator
+policy (`allowed`, `disabled`), with character sizes only. This learned knowledge is available
+without Internet or matching evidence; source-specific claims still require actual sent evidence.
+Disabled assessment text is dropped, never promoted into source-backed claims. Source-linked
+observations carry the canonical scope/query digests and `phase` (`candidate`, `accepted-final`);
+only the final accepted phase can explain delivered source-warning eligibility. Candidate or legacy
+unbound observations cannot suppress retrieval-miss findings. The citation sibling records
+`assessment-only` with zero source-marker counts, and repair never changes the assessment block.
+A no-anchor general request can use the same validated empty pack and cumulative synthesis grants
+when the policy allows assessment; scope validation and disabled-policy clarification still apply.
 A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
 provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
 `reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,

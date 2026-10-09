@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6a1933d4e67a254d01df11ea3dd1150bc9a69d148760df9f2f6324b75d2916f5" as const;
+  "8f39f48274f212a2bf284ba12c7cd6ca60cff8f686891252b5fa8f9114fc4577" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -29106,10 +29106,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "policy",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "queryIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "scopeIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
             {
               name: "sourceBackedChars",
@@ -29118,7 +29136,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

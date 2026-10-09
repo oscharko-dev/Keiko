@@ -12,6 +12,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { normalizedExplicitReferencePath } from "./grounded-explicit-paths.js";
 
 const ROOT = "/explicit-path-fixture";
 const TARGET = "src/Form/feature/validation.ts";
@@ -78,6 +79,25 @@ async function retrieve(
 }
 
 describe("query-named explicit path admission", () => {
+  it("canonicalizes a leading current-directory segment before strict literal-at path admission", async () => {
+    const path = "@src/checker.ts";
+    const { output, log } = await retrieve(`Explain ./@src/checker.ts`, {
+      files: { [path]: "export const checker = 937;\n" },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toContain(path);
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+    ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
+  });
+
+  it.each(["./../outside.ts", "././../outside.ts", "./.env", "src/./checker.ts"])(
+    "preserves strict parent/interior validation and canonical sensitive names: %s",
+    (path) => {
+      const normalized = normalizedExplicitReferencePath({ path, origin: "query" }, ROOT);
+      if (path === "./.env") expect(normalized).toBe(".env");
+      else expect(normalized).toBeUndefined();
+    },
+  );
   it("formats correlated content-free admission and read evidence", async () => {
     const { log } = await retrieve(`Why does ${TARGET}:1 fail?`);
     const source = log.events.find(

@@ -59,6 +59,18 @@ file bytes). Persisting it to disk would create a second redaction surface co-eq
 with the evidence ledger, with no offsetting benefit. The evidence ledger records the
 audited subset as metadata and hashes, not as a full pack.
 
+Connected folder answers reuse ADR-0144's operator-owned assessment policy, including ordinary
+conversation and learned knowledge without Internet or matching excerpts. The policy instruction
+is included before prompt fitting. Assessment text never authenticates source citations, missing
+file declarations or entailment, and operator-disabled blocks are dropped. Source-only marker
+repair preserves the assessment verbatim. General requests with no runnable retrieval anchors may
+use the validated empty assembler under the same original token, spend, time and two-physical-
+attempt envelope; they do not invent repository facts or bypass scope validation. Existing
+`search.answer.assessed` events distinguish early `candidate` from `accepted-final` observations
+and bind final source-warning decisions to canonical scope/query digests. Unknown or candidate
+observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
+observations even when a separate labelled assessment is allowed.
+
 ### D2 — Per-answer summary is wire-only
 
 The wire response carries `contextPack: GroundedAnswerContextPackSummary` on every
@@ -236,6 +248,9 @@ images, binary content, unsafe aliases, and larger files are excluded. Ordinary-
 exclusions merely from names such as `build` or `dist`. Query-named ordinary-folder documents use
 that same eligibility distinction; repository generated code remains excluded before unconditional
 read admission. Hard denials, containment, ignore, binary, size and budget checks still apply.
+Leading `./` in a query reference denotes the same scope-relative target and is removed before
+strict canonical validation. Parent traversal and interior dot segments are not normalized away;
+canonical sensitive names still pass through the existing hard-denial policy.
 Complete extracted document paths are target data, so their `reference`, `history` or `caller`
 directory segments cannot request relationship/history rings. Actual relationship/history words
 outside the path retain their routing. An ordinary factual lookup with admitted named document

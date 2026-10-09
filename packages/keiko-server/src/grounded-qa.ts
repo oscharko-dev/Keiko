@@ -109,6 +109,7 @@ import {
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
+  currentOwnAssessmentPolicy,
   currentRedactionSecrets,
 } from "./deps.js";
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
@@ -1524,7 +1525,12 @@ async function groundedGatewayAttempt(
     ),
   });
   if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
-  if (sent.sentReferenceCount === 0 && options.answerOnlyContextAvailable !== true) return { sent };
+  if (
+    sent.sentReferenceCount === 0 &&
+    options.answerOnlyContextAvailable !== true &&
+    promptOptions.ownAssessmentPolicy !== "allowed"
+  )
+    return { sent };
   if ((remaining.modelOutputTokensMax ?? 0) <= 0) return { sent };
   const response = await dispatchGroundedSynthesis(ctx, sent, pack, options, remaining);
   return { sent, response };
@@ -1602,6 +1608,7 @@ export function groundedPromptOptions(
 ): GroundedGatewayPromptOptions {
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
   };
@@ -1659,6 +1666,7 @@ function runDefaultGroundedExploration(
   );
   const semanticLease = configuredGroundedSemanticRequest(deps, budgetedInput.workspaceRoot);
   return runGroundedExploration(budgetedInput, {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
     followUpConfigurationDisposition: connectedFollowUpConfiguration(
       deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
     ).disposition,

@@ -37,6 +37,31 @@ function evidence(
 }
 
 describe("summarizeCitationReconciliation", () => {
+  it("does not count knowledge-block markers as source groups or dangling citations", () => {
+    expect(
+      summarizeCitationReconciliation(
+        evidence({
+          answer: "Fact [1].\n\n<assessment>Advice [90, 91].</assessment>",
+          attachedIndices: [1],
+        }),
+      ),
+    ).toMatchObject({ outcome: "cited", groupedMarkerCount: 0, danglingMarkerCount: 0 });
+  });
+
+  it("truthfully records assessment-only without inventing a source refusal or uncited claim", () => {
+    expect(
+      summarizeCitationReconciliation(
+        evidence({
+          answer: "<assessment>Advice [90, 91].</assessment>",
+        }),
+      ),
+    ).toMatchObject({
+      outcome: "assessment-only",
+      attachedCount: 0,
+      groupedMarkerCount: 0,
+      danglingMarkerCount: 0,
+    });
+  });
   it("classifies an answer whose markers all attached", () => {
     expect(
       summarizeCitationReconciliation(

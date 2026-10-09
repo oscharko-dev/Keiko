@@ -144,6 +144,9 @@ export function normalizedExplicitReferencePath(
     path = localFileUrlPath(url) ?? "";
   }
   if (isAbsolute(path)) path = relative(root, path);
+  // A leading current-directory spelling does not change the target. Keep all interior and
+  // parent segments for the strict canonical validator; path.normalize would erase that evidence.
+  path = path.replace(/^(?:\.\/)+/u, "");
   return isValidScopePath(path, { mustBeRelative: true }) ? path : undefined;
 }
 

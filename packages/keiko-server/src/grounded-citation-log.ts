@@ -391,6 +391,12 @@ const SEARCH_ANSWER_ASSESSED_OPERATION = defineActivityLogOperation({
     },
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["candidate", "accepted-final"],
+    },
     sourceBackedChars: { type: "integer", dataClass: "count", required: true },
     assessmentChars: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -405,6 +411,7 @@ const SEARCH_ANSWER_ASSESSED_OPERATION = defineActivityLogOperation({
 });
 
 export interface AnswerAssessmentIdentity {
+  readonly phase?: "candidate" | "accepted-final" | undefined;
   readonly scopeIdentitySha256?: string | undefined;
   readonly queryIdentitySha256?: string | undefined;
 }
@@ -439,6 +446,7 @@ export function logAnswerAssessment(
         ...(identity.queryIdentitySha256 === undefined
           ? {}
           : { queryIdentitySha256: identity.queryIdentitySha256 }),
+        ...(identity.phase === undefined ? {} : { phase: identity.phase }),
         policy: evidence.policy,
         outcome: assessmentOutcome(evidence),
         sourceBackedChars: evidence.sourceBacked.trim().length,
