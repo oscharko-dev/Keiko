@@ -7,7 +7,10 @@ import {
   CITATION_FINDING_LIST_MAX,
   citationFindingTotalSuffix,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
-import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  buildGroundedAnswerContextPackSummary,
+  groupConnectedContextOmissions,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { GroundedAnswer } from "./GroundedAnswer";
 import {
   resetClientDiagnosticWriter,
@@ -30,6 +33,91 @@ import type {
 } from "@/lib/types";
 
 afterEach(resetClientDiagnosticWriter);
+
+describe("honest connected evidence", () => {
+  it("does not promise attachment after an unsuccessful citation repair", () => {
+    render(
+      <GroundedAnswer
+        answer={answer({ citationBehaviour: "never", citations: [] })}
+        busy={false}
+      />,
+    );
+    expect(
+      screen.getByText(/No evidence citations were attached to this answer/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This model does not add citations itself; Keiko attaches evidence."),
+    ).toBeNull();
+  });
+  it("shows prompt-reaching files and canonical omission groups rather than assembled reads", () => {
+    const pack = contextPack({
+      filesInPrompt: 1,
+      omittedCounts: {
+        ...OMITTED_COUNTS_ZERO,
+        "low-relevance": 2,
+        "budget-exhausted": 3,
+        ignored: 4,
+      },
+    });
+    const groups = groupConnectedContextOmissions(pack.omittedCounts);
+    render(<GroundedAnswer answer={answer({ contextPack: pack })} busy={false} />);
+    expect(
+      screen.getByText(
+        `1 citation · 1 files in prompt · ${String(groups.ranking)} omitted for relevance or budget · ${String(groups.eligibility)} ineligible`,
+      ),
+    ).toHaveAttribute("title", expect.stringContaining("low relevance: 2"));
+  });
+  it.each([
+    [{ semanticProviderDisposition: "unavailable" as const }, "Retrieval used text matching only."],
+    [
+      {
+        reranker: {
+          status: "unavailable" as const,
+          candidateCount: 9,
+          documentCount: 3,
+          keptCount: 0,
+        },
+      },
+      "Relevance refinement was unavailable; the initial ranking was used.",
+    ],
+    [
+      { scopeContextState: "overflow" as const },
+      "The folder context exceeded the request capacity.",
+    ],
+    [{ selectionConfidence: "low" as const }, "No confident evidence match was found."],
+  ])("shows a plain-language retrieval notice for %j", (diagnostics, message) => {
+    render(
+      <GroundedAnswer answer={answer({ contextPack: contextPack(diagnostics) })} busy={false} />,
+    );
+    expect(screen.getByText(message)).toHaveAttribute("title");
+  });
+  it("shows uncited text once, a reference in uncertainty, and separate memory context text", () => {
+    render(
+      <GroundedAnswer
+        answer={answer({
+          uncertainty: [
+            uncertainty({ kind: "uncited-answer" }),
+            uncertainty({ kind: "uncited-memory-context" }),
+          ],
+        })}
+        busy={false}
+      />,
+    );
+    expect(screen.getByText(/See the citation warning above/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/The answer used memory context without citing it/),
+    ).toBeInTheDocument();
+  });
+  it.each(["never", "cites-after-repair"] as const)(
+    "explains citation attachment for %s",
+    (citationBehaviour) => {
+      render(<GroundedAnswer answer={answer({ citationBehaviour })} busy={false} />);
+      expect(
+        screen.getByText("This model does not add citations itself; Keiko attaches evidence."),
+      ).toBeInTheDocument();
+    },
+  );
+});
 
 function scopeFingerprint(scope: ChatConnectedScope): string {
   const fingerprint = connectedScopeFingerprint(scope);
