@@ -40,9 +40,23 @@ import {
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  DEFAULT_EXPLORATION_BUDGET,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type ExplorationBudget,
+  type ExplorationUsage,
   type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  applyUsage,
+  canContinue,
+  createExplorationPlan,
+  createGovernor,
+} from "@oscharko-dev/keiko-workflows";
+import { processServerLogSink } from "./process-log-sink.js";
+import {
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
+  QUALIFICATION_SPEND_LEDGER_PATH_ENV,
+} from "./gateway-spend-budget.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
@@ -267,6 +281,37 @@ interface SeededRepositoryPod {
   readonly store: KnowledgeStore;
 }
 
+function refreshBudgetGrant(overrides: Partial<ExplorationBudget> = {}): {
+  readonly reserve: (delta: Readonly<Partial<ExplorationUsage>>) => boolean;
+  readonly usage: () => ExplorationUsage;
+} {
+  const plan = createExplorationPlan({
+    scope: {
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      scopeId: "semantic-refresh-budget",
+      workspaceRoot: ROOT,
+      kind: "workspace-root",
+      relativePaths: [],
+      conversationId: undefined,
+      connectedAtMs: 1,
+    },
+    query: { ...QUERY, text: "Explain src/auth.ts" },
+    budget: { ...DEFAULT_EXPLORATION_BUDGET, ...overrides },
+  });
+  const initial = createGovernor(plan);
+  let state = initial;
+  return {
+    reserve(delta): boolean {
+      if (!canContinue(state)) return false;
+      const next = applyUsage(state, { ...initial.usage, ...delta });
+      if (!canContinue(next)) return false;
+      state = next;
+      return true;
+    },
+    usage: (): ExplorationUsage => state.usage,
+  };
+}
+
 async function seedRepositoryPod(
   deps: UiHandlerDeps,
   fs: WorkspaceFs,
@@ -357,6 +402,7 @@ async function staleFixture(
     maxCandidates: 8,
     repositoryPod: { store: pod.store, repositoryRoot: ROOT },
     observeSemanticFreshness: observed,
+    tryReserveRefreshUsage: refreshBudgetGrant().reserve,
     ...extra,
   });
   if (provider === undefined) throw new Error("expected semantic provider");
@@ -399,6 +445,7 @@ function refreshProviderFor(
     deadlineAtMs: 1_001,
     nowMs: (): number => 1,
     observeSemanticFreshness: fixture.observed,
+    tryReserveRefreshUsage: refreshBudgetGrant().reserve,
     ...options,
   });
   if (provider === undefined) throw new Error("expected configured refresh provider");
@@ -964,6 +1011,110 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     }
   });
 
+  it("refuses optional refresh without a request-local usage grant", async () => {
+    const fixture = await staleFixture();
+    const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+    try {
+      const provider = refreshProviderFor(fixture, {
+        fs: { ...fixture.fs, readFileBytes },
+        semanticRefreshFilesMax: 1,
+        tryReserveRefreshUsage: undefined,
+      });
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(fixture.embedding).not.toHaveBeenCalled();
+      expect(readFileBytes).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it.each(["query-tokens", "file-count", "bytes", "document-tokens"])(
+    "refuses optional refresh before %s exceeds the actual governor",
+    async (dimension) => {
+      const fixture = await staleFixture();
+      const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+      const identity = listCapsules(fixture.store)[0]?.embeddingModelIdentity;
+      if (identity === undefined) throw new TypeError("Expected the indexed embedding identity");
+      const queryBytes = Buffer.byteLength(shapeEmbeddingQuery(identity, QUERY.text), "utf8");
+      const budgets: Readonly<Record<string, Partial<ExplorationBudget>>> = {
+        "query-tokens": { modelInputTokensMax: 0 },
+        "file-count": { filesReadMax: 0 },
+        bytes: { excerptBytesMax: 1 },
+        "document-tokens": { modelInputTokensMax: queryBytes },
+      };
+      const grant = refreshBudgetGrant(budgets[dimension]);
+      try {
+        const provider = refreshProviderFor(fixture, {
+          fs: { ...fixture.fs, readFileBytes },
+          semanticRefreshFilesMax: 1,
+          tryReserveRefreshUsage: grant.reserve,
+        });
+        expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+        expect(fixture.embedding).toHaveBeenCalledTimes(dimension === "query-tokens" ? 0 : 1);
+        expect(readFileBytes).toHaveBeenCalledTimes(dimension === "document-tokens" ? 1 : 0);
+        expect(grant.usage().modelInputTokens).toBe(dimension === "query-tokens" ? 0 : queryBytes);
+        expect(grant.usage().filesRead).toBe(dimension === "document-tokens" ? 1 : 0);
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it.each([
+    { ceiling: "0", embeddingCalls: 0, reads: 0, hits: 0 },
+    { ceiling: "0.01", embeddingCalls: 1, reads: 1, hits: 0 },
+    { ceiling: "1", embeddingCalls: 2, reads: 1, hits: 1 },
+  ])("uses the actual embedding spend ledger with ceiling $ceiling", async (expected) => {
+    const fixture = await staleFixture();
+    const root = mkdtempSync(join(tmpdir(), "keiko-semantic-refresh-spend-"));
+    const log = createBufferedServerLogSink();
+    const writer = vi.spyOn(processServerLogSink(), "write").mockImplementation(log.write);
+    const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+    const configured = {
+      ...fixture,
+      deps: {
+        ...fixture.deps,
+        config: {
+          ...fixture.deps.config,
+          capabilities: fixture.deps.config.capabilities.map((capability) => ({
+            ...capability,
+            pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 0 },
+          })),
+        },
+      },
+    };
+    try {
+      const provider = refreshProviderFor(
+        configured,
+        {
+          fs: { ...fixture.fs, readFileBytes },
+          semanticRefreshFilesMax: 1,
+          correlationId: "semantic-refresh-spend-control",
+        },
+        {
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: expected.ceiling,
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(root, "spend.db"),
+        },
+      );
+      expect(await searchStaleFixture(fixture, provider)).toHaveLength(expected.hits);
+      expect(fixture.embedding).toHaveBeenCalledTimes(expected.embeddingCalls);
+      expect(readFileBytes).toHaveBeenCalledTimes(expected.reads);
+      const reserved = log.events.filter((event) => event.op === "gateway.spend.reserved");
+      const settled = log.events.filter((event) => event.op === "gateway.spend.settled");
+      expect(reserved).toHaveLength(expected.embeddingCalls);
+      expect(settled).toHaveLength(expected.embeddingCalls);
+      for (const [index, event] of settled.entries()) {
+        expect(event.extra?.measured).toBe(false);
+        expect(event.extra?.chargedNanoUsd).toBeGreaterThan(0);
+        expect(event.extra?.chargedNanoUsd).toBe(reserved[index]?.extra?.reservedNanoUsd);
+      }
+    } finally {
+      writer.mockRestore();
+      fixture.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes only explicitly enabled bounded live fragments", async () => {
     const fixture = await staleFixture({
       semanticRefreshFilesMax: 1,
@@ -1161,6 +1312,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
       deadlineAtMs: 1_001,
       observePodIdentity,
       observeSemanticFreshness: fixture.observed,
+      tryReserveRefreshUsage: refreshBudgetGrant().reserve,
     });
     try {
       if (lease.provider === undefined) throw new Error("expected configured lease provider");

@@ -6,6 +6,7 @@ import {
   type EmbeddingModelIdentity,
   type KnowledgeSource,
   type RetrievalReference,
+  type ExplorationUsage,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createLocalKnowledgeStoreVectorIndexPort,
@@ -64,6 +65,8 @@ export interface RepositorySemanticFreshnessObservation {
 }
 
 interface SemanticRefreshOptions {
+  readonly tryReserveRefreshUsage?:
+    ((delta: Readonly<Partial<ExplorationUsage>>) => boolean) | undefined;
   readonly semanticRefreshFilesMax?: number | undefined;
   readonly deadlineAtMs?: number | undefined;
   readonly nowMs?: (() => number) | undefined;
