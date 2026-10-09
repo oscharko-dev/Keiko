@@ -25,7 +25,10 @@ import type {
   KnowledgeCapsule,
   KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
-import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  ModelGatewayLogContext,
+  OpenAIEmbeddingAdapter,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import { buildComposedRetrievalScope } from "../composition.js";
@@ -56,6 +59,7 @@ import {
 export interface RetrievalDependencies {
   readonly store: KnowledgeStore;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
+  readonly logContext?: ModelGatewayLogContext;
   readonly queryTransformer?: QueryTransformer;
   readonly vectorIndex?: VectorIndexOptions;
   // Optional cancellation. Honoured by the embedding adapter; the store reads are
@@ -83,6 +87,7 @@ export async function runLocalKnowledgeRetrieval(
     ...(deps.queryTransformer !== undefined ? { queryTransformer: deps.queryTransformer } : {}),
     ...(deps.vectorIndex !== undefined ? { vectorIndex: deps.vectorIndex } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+    ...(deps.logContext !== undefined ? { logContext: deps.logContext } : {}),
   });
 
   return finaliseWithGrounding(search, policy);

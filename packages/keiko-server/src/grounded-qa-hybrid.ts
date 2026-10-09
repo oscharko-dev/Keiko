@@ -795,7 +795,15 @@ function defaultConnectorRetrieve(
       throw new EmbeddingAdapterError(embeddingAdapter);
     }
     return await runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter, signal, vectorIndex },
+      {
+        store,
+        embeddingAdapter,
+        signal,
+        vectorIndex,
+        ...(ctx.correlationId !== undefined
+          ? { logContext: { correlationId: ctx.correlationId } }
+          : {}),
+      },
       connectorQuery(scope, ctx.retrievalContent ?? ctx.content, connectorScopeCount),
     );
   };
