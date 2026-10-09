@@ -32,6 +32,8 @@ interface QueryObservation {
   readonly queryIdentitySha256?: string;
   readonly fields: MutableFields;
   declaredUnreadInScopeCount: number;
+  assessmentOnly: boolean;
+  sourceRequired: boolean;
   omissionGroups?: SupportRetrievalMissFinding["omissionGroups"];
 }
 interface TurnObservation {
@@ -40,6 +42,8 @@ interface TurnObservation {
   readonly scopeIdentitySha256?: string;
   readonly queries: Map<string, QueryObservation>;
   answered: boolean;
+  closed: boolean;
+  readonly started: boolean;
 }
 
 const COUNT_FIELDS = [
@@ -167,6 +171,16 @@ function omissionGroups(
   return groupConnectedContextOmissions(counts);
 }
 
+function sourceRequired(extra: Readonly<Record<string, unknown>>): boolean {
+  return ["explicitPathAnchorCount", "referenceChannelCount", "continuityReferentCount"].some(
+    (name) => (count(extra[name]) ?? 0) > 0,
+  );
+}
+
+function answeredFollowUp(fields: SupportRetrievalMissFields): boolean {
+  return (fields.followUpPassCount ?? 0) > 0 && fields.followUpOutcome === "answered";
+}
+
 function observeQuery(
   turn: TurnObservation,
   extra: Readonly<Record<string, unknown>>,
@@ -180,47 +194,114 @@ function observeQuery(
     ...(queryIdentitySha256 === undefined ? {} : { queryIdentitySha256 }),
     fields: {},
     declaredUnreadInScopeCount: 0,
+    assessmentOnly: false,
+    sourceRequired: false,
   };
   updateFields(query.fields, extra);
+  query.sourceRequired ||= sourceRequired(extra);
   query.omissionGroups = omissionGroups(extra) ?? query.omissionGroups;
   query.declaredUnreadInScopeCount = Math.max(
     query.declaredUnreadInScopeCount,
     count(extra.declaredUnreadInScopeCount) ?? 0,
   );
-  if ((query.fields.followUpPassCount ?? 0) > 0 && query.fields.followUpOutcome === "answered")
-    turn.answered = true;
+  if (answeredFollowUp(query.fields)) turn.answered = true;
   turn.queries.set(key, query);
+}
+
+function turnKey(correlationId: string, line: RetrievalLine, scope: string): string {
+  return JSON.stringify([line.correlationId ?? correlationId, line.pid, line.instanceId, scope]);
+}
+
+function confirmedAssessment(extra: Readonly<Record<string, unknown>>): boolean {
+  return (
+    extra.policy === "allowed" &&
+    extra.outcome === "assessment-only" &&
+    extra.sourceBackedChars === 0 &&
+    (count(extra.assessmentChars) ?? 0) > 0
+  );
+}
+
+function observeAssessment(turn: TurnObservation | undefined, line: RetrievalLine): void {
+  const extra = line.extra;
+  if (turn?.started !== true || extra?.phase !== "accepted-final" || turn.process === undefined)
+    return;
+  if (!isActivityLogIdentityDigest(extra.queryIdentitySha256)) return;
+  const query = turn.queries.get(extra.queryIdentitySha256);
+  if (query === undefined) return;
+  query.assessmentOnly = confirmedAssessment(extra);
+  turn.closed = true;
+}
+
+function createTurn(
+  correlationId: string,
+  line: RetrievalLine,
+  scopeIdentitySha256: string | undefined,
+  started: boolean,
+): TurnObservation {
+  return {
+    correlationId: line.correlationId ?? correlationId,
+    ...observedProcess(line),
+    ...(scopeIdentitySha256 === undefined ? {} : { scopeIdentitySha256 }),
+    queries: new Map(),
+    answered: false,
+    closed: false,
+    started,
+  };
+}
+
+interface TurnCollection {
+  readonly turns: TurnObservation[];
+  readonly latest: Map<string, TurnObservation>;
+  readonly started: Set<string>;
+}
+
+function observeLifecycle(
+  state: TurnCollection,
+  line: RetrievalLine,
+  scope: string | undefined,
+  key: string,
+): boolean {
+  if (line.op === "search.connected-context.started") {
+    if (state.latest.get(key)?.closed === true) state.latest.delete(key);
+    state.started.add(key);
+    return true;
+  }
+  if (line.op !== "search.answer.assessed") return false;
+  if (scope !== undefined) observeAssessment(state.latest.get(key), line);
+  return true;
+}
+
+function observeTurnLine(
+  state: TurnCollection,
+  correlationId: string,
+  line: RetrievalLine,
+  index: number,
+): void {
+  const scope = line.extra?.scopeIdentitySha256;
+  const scopeIdentity = isActivityLogIdentityDigest(scope) ? scope : undefined;
+  const key = turnKey(correlationId, line, scopeIdentity ?? `unknown:${String(index)}`);
+  if (observeLifecycle(state, line, scopeIdentity, key)) return;
+  const extra = retrievalExtra(line);
+  if (extra === undefined) return;
+  let turn = state.latest.get(key);
+  if (turn === undefined) {
+    turn = createTurn(correlationId, line, scopeIdentity, state.started.has(key));
+    state.latest.set(key, turn);
+    state.turns.push(turn);
+  }
+  observeQuery(turn, extra, index);
+  if (line.op === "search.connected-context.answer-details") turn.closed = true;
 }
 
 function observedTurns(
   correlationId: string,
   lines: readonly RetrievalLine[],
 ): readonly TurnObservation[] {
-  const turns = new Map<string, TurnObservation>();
+  const state: TurnCollection = { turns: [], latest: new Map(), started: new Set() };
   lines.forEach((line, index) => {
-    const extra = retrievalExtra(line);
-    if (extra === undefined) return;
-    const scopeIdentitySha256 = isActivityLogIdentityDigest(extra.scopeIdentitySha256)
-      ? extra.scopeIdentitySha256
-      : undefined;
-    const actualCorrelation = line.correlationId ?? correlationId;
-    const key = JSON.stringify([
-      actualCorrelation,
-      line.pid,
-      line.instanceId,
-      scopeIdentitySha256 ?? `unknown:${String(index)}`,
-    ]);
-    const turn = turns.get(key) ?? {
-      correlationId: actualCorrelation,
-      ...observedProcess(line),
-      ...(scopeIdentitySha256 === undefined ? {} : { scopeIdentitySha256 }),
-      queries: new Map(),
-      answered: false,
-    };
-    observeQuery(turn, extra, index);
-    turns.set(key, turn);
+    observeTurnLine(state, correlationId, line, index);
   });
-  return [...turns.values()];
+  return state.turns;
 }
 
 function retrievalExtra(line: RetrievalLine): Readonly<Record<string, unknown>> | undefined {
@@ -236,6 +317,9 @@ function retrievalExtra(line: RetrievalLine): Readonly<Record<string, unknown>> 
     "semanticProviderDisposition",
     "retrievalIntent",
     "continuityReferentSource",
+    "explicitPathAnchorCount",
+    "referenceChannelCount",
+    "continuityReferentCount",
   ];
   return names.some((name) => Object.hasOwn(extra, name)) ? extra : undefined;
 }
@@ -314,18 +398,33 @@ const TRIGGER_FIELDS = {
   Record<SupportRetrievalMissReason, readonly (keyof SupportRetrievalMissFields)[]>
 >;
 
+function incidentalAssessment(
+  query: QueryObservation,
+  reasons: ReadonlySet<SupportRetrievalMissReason>,
+): boolean {
+  return (
+    query.assessmentOnly &&
+    !query.sourceRequired &&
+    query.declaredUnreadInScopeCount === 0 &&
+    ![...reasons].some((reason) => reason !== "low-confidence-selection")
+  );
+}
+
 function queryFindings(
   turn: TurnObservation,
   query: QueryObservation,
 ): readonly SupportRetrievalMissFinding[] {
   const fields = { ...query.fields };
   const reasons = new Set(basicReasons(fields));
+  const assessment = incidentalAssessment(query, reasons);
   const unresolved = !turn.answered && query.declaredUnreadInScopeCount > 0;
   if (unresolved) {
     fields.declaredUnreadInScopeCount = query.declaredUnreadInScopeCount;
     reasons.add("declared-unread-in-scope");
   }
-  if (semanticMiss(fields, reasons.size > 0)) reasons.add("semantic-unavailable-with-miss");
+  if (assessment) reasons.delete("low-confidence-selection");
+  if (semanticMiss(fields, reasons.size > 0) && (!assessment || reasons.size > 0))
+    reasons.add("semantic-unavailable-with-miss");
   return SUPPORT_RETRIEVAL_MISS_REASONS.filter((reason) => reasons.has(reason)).map((reason) => ({
     kind: "retrieval-miss",
     schemaVersion: SUPPORT_RETRIEVAL_MISS_FINDING_SCHEMA_VERSION,

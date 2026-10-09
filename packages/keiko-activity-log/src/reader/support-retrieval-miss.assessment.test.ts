@@ -168,4 +168,17 @@ describe("intentional source-free assessment does not fabricate retrieval incide
       ]).map((finding) => finding.reason),
     ).toEqual(["low-confidence-selection"]);
   });
+  it("retains selection and semantic evidence when an explicit miss establishes source demand", () => {
+    expect(
+      reasons([
+        line(SOURCE, { explicitPathRejectedCount: 1, semanticProviderDisposition: "unavailable" }),
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment(),
+      ]),
+    ).toEqual([
+      "explicit-path-rejected",
+      "low-confidence-selection",
+      "semantic-unavailable-with-miss",
+    ]);
+  });
 });
