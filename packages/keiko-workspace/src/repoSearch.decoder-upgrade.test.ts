@@ -123,6 +123,36 @@ describe("decoder upgrades cannot reuse historical negative matching authority",
     expect(excerpt.content).toBe("<p>Ölwechsel 937 hours</p>");
   });
 
+  it("reuses a completed current-version negative until the live file changes", async () => {
+    const { scope, fs, files, reads } = fixture();
+    files["manual.html"] = '<meta charset="utf-8"><p>Navigation and maintenance.</p>\n';
+    const store = persistence();
+    const cold = await searchText(scope, QUERY, LIMITS, {
+      fs,
+      workspaceIndex: createWorkspaceIndex(store),
+      nowMs: NOW,
+    });
+    expect(cold.atoms).toEqual([]);
+    expect(cold.workspaceIndex).toMatchObject({ indexedRecords: 1, reusedRecords: 0 });
+    reads.mockClear();
+    const warm = await searchText(scope, QUERY, LIMITS, {
+      fs,
+      workspaceIndex: createWorkspaceIndex(store),
+      nowMs: NOW,
+    });
+    expect(warm.atoms).toEqual([]);
+    expect(warm.workspaceIndex).toMatchObject({ indexedRecords: 0, reusedRecords: 1 });
+    expect(reads).not.toHaveBeenCalled();
+    files["manual.html"] = MANUAL;
+    const changed = await searchText(scope, QUERY, LIMITS, {
+      fs,
+      workspaceIndex: createWorkspaceIndex(store),
+      nowMs: NOW,
+    });
+    expect(changed.atoms[0]?.scopePath).toBe("manual.html");
+    expect(reads).toHaveBeenCalledOnce();
+  });
+
   it("does not resurrect a deleted historical negative record", async () => {
     const { scope, fs, files, reads } = fixture();
     delete files["manual.html"];

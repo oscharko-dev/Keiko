@@ -17,3 +17,9 @@ and metadata, against the current decoder. Fresh discovery still owns coverage, 
 decoder's live result is the expected target and physical line. Current-version warm reuse,
 changed/deleted files, cancellation and encrypted persistence/corruption controls remain separate.
 Do not regenerate the historical snapshot with the current decoder.
+
+With the corrected decoder and the former snapshot version, the final seven regression cases
+produced one upgrade failure and six healthy passes. Snapshot version 9 passes all seven unchanged
+cases. The same 37 upgrade, streaming-index and request-lifecycle controls pass on macOS and the
+documented Node 24.18 Bookworm Linux container; all 80 existing workspace-index controls also pass
+on macOS. These are focused producer checks, not final gate or live-model qualification.
