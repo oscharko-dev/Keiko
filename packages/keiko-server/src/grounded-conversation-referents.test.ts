@@ -108,6 +108,23 @@ describe("assistant referents are a bounded independent retrieval channel", () =
     expect(result.assistantReferents).toEqual([]);
   });
 
+  it.each(["Explain invoice reconciliation", "Erkläre invoice reconciliation"])(
+    "keeps an independent natural-language topic separate from retrieval history: %s",
+    (query) => {
+      const result = resolve(query, [
+        { role: "user", content: "Why does src/Legacy/validation.ts throw a TypeError?" },
+        { role: "assistant", content: "Read [src/Legacy/validation.ts:3]." },
+      ]);
+      expect(result).toMatchObject({
+        retrievalContent: query,
+        assistantReferents: [],
+        continuityReferentSource: "none",
+      });
+      expect(result.previousRetrievalIntent).toBeUndefined();
+      expect(result.answerContext).toContain("src/Legacy/validation.ts");
+    },
+  );
+
   it("has no referents in another chat with no history", () => {
     expect(resolve("What about now?", []).assistantReferents).toEqual([]);
   });
