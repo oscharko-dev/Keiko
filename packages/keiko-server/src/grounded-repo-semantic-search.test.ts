@@ -1493,6 +1493,45 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     }
   });
 
+  it("does not reuse an incompatible query response for live refresh", async () => {
+    const { fixture, deps, close } = await leaseFixture();
+    const identity = listCapsules(fixture.store)[0]?.embeddingModelIdentity;
+    if (identity === undefined) throw new TypeError("Expected fixture pod identity");
+    const query = shapeEmbeddingQuery(identity, QUERY.text);
+    let queryCalls = 0;
+    fixture.embedding.mockImplementation((request) => {
+      if (request.input === query) queryCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        value: {
+          modelId: request.modelId,
+          vector:
+            request.input === query && queryCalls === 1
+              ? new Float32Array([1])
+              : vectorFor(request.input),
+        },
+      });
+    });
+    const lease = configuredRepoSemanticSearchProviderLeaseFor(deps, undefined, ROOT, {
+      fs: fixture.fs,
+      semanticRefreshFilesMax: 1,
+      nowMs: (): number => 1,
+      deadlineAtMs: 1_001,
+      observeSemanticFreshness: fixture.observed,
+      tryReserveRefreshUsage: refreshBudgetGrant().reserve,
+    });
+    try {
+      if (lease.provider === undefined) throw new TypeError("Expected configured lease provider");
+      const hits = await searchStaleFixture(fixture, lease.provider);
+      expect(queryCalls).toBe(2);
+      expect(hits.map((hit) => hit.scopePath)).toContain("src/auth.ts");
+      expect(fixture.observed.mock.lastCall?.[0]?.refreshUsage?.embeddingCallCount).toBe(2);
+    } finally {
+      lease.close();
+      close();
+    }
+  });
+
   it("composes the actual request factory, configured lease, governor and durable spend", async () => {
     const { fixture, deps, close } = await leaseFixture();
     const root = mkdtempSync(join(tmpdir(), "keiko-semantic-request-spend-"));
