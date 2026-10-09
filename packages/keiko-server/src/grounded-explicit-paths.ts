@@ -7,21 +7,23 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import {
-  LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS,
-  LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS,
-} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
-import { extractAnchors, isGeneratedRankingPath } from "@oscharko-dev/keiko-workflows";
+  extractPathReferences,
+  isGeneratedRankingPath,
+  type SearchReference,
+} from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
+  PathDeniedError,
+  discoverWorkspacePaths,
   PathEscapeError,
   RepoSearchUnsupportedFileError,
   compileIgnore,
   containedRealPathInfo,
   findFiles,
   isDenied,
-  isEcosystemSourceFile,
   isGeneratedArtifactPath,
   isIgnored,
   readExcerpt,
@@ -31,7 +33,11 @@ import {
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
-import { isConnectedDocumentPath } from "./grounded-document-evidence.js";
+import { safeProperty } from "@oscharko-dev/keiko-activity-log";
+import {
+  isExtractableConnectedDocumentPath,
+  isConnectedDocumentPath,
+} from "./grounded-document-evidence.js";
 
 export const EXPLICIT_PATH_REJECTION_REASONS = [
   "outside-scope",
@@ -45,11 +51,7 @@ export const EXPLICIT_PATH_REJECTION_REASONS = [
 ] as const;
 export type ExplicitPathRejectionReason = (typeof EXPLICIT_PATH_REJECTION_REASONS)[number];
 
-export interface ExplicitPathReference {
-  readonly path: string;
-  readonly line?: number;
-  readonly origin: "query" | "assistant" | "diagnostic";
-}
+export type ExplicitPathReference = SearchReference;
 
 export interface ExplicitPathObservation {
   readonly explicitPathAnchorCount: number;
@@ -72,7 +74,7 @@ interface AdmissionInputs {
   readonly scope: SelectedScope;
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
-  readonly references?: readonly ExplicitPathReference[];
+  readonly references?: readonly ExplicitPathReference[] | undefined;
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly deadlineAtMs: number;
@@ -92,49 +94,17 @@ interface AdmissionState {
   basenameMatches: number;
 }
 
-const KNOWN_TEXT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS);
 const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS);
 const BASENAME_MATCH_CAP = 96;
 
-function knownFilename(path: string): boolean {
-  const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-  return (
-    KNOWN_TEXT_EXTENSIONS.has(extension) ||
-    DOCUMENT_EXTENSIONS.has(extension) ||
-    isEcosystemSourceFile(path) ||
-    isConnectedDocumentPath(path)
-  );
-}
-
-function pathReference(term: string): ExplicitPathReference {
-  const located = /^(.*?):(\d{1,9})(?::\d{1,9})?$/.exec(term);
-  const line = Number(located?.[2]);
-  return {
-    path: located?.[1] ?? term,
-    ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}),
-    origin: "query",
-  };
-}
-
 export function explicitPathReferences(text: string): readonly ExplicitPathReference[] {
-  const { anchors } = extractAnchors({ text, maxAnchors: text.length, caseSensitive: true });
-  const terms = new Set(
-    anchors
-      .filter((anchor) =>
-        anchor.kind === "path"
-          ? pathReference(anchor.term).path.split("/").at(-1)?.includes(".") === true
-          : knownFilename(anchor.term),
-      )
-      .map((anchor) => anchor.sourceTerm ?? anchor.term),
-  );
-  // Denied dotfiles are targets too, even though ordinary word tokenization removes edge dots.
-  for (const token of text.split(/[\s`"'()<>,;!?]+/u)) {
-    if (token.startsWith(".") && isDenied(token)) terms.add(token);
-  }
-  return [...terms].map(pathReference);
+  return extractPathReferences(text);
 }
 
-function normalizedPath(reference: ExplicitPathReference, root: string): string | undefined {
+export function normalizedExplicitReferencePath(
+  reference: ExplicitPathReference,
+  root: string,
+): string | undefined {
   let path = reference.path;
   if (path.startsWith("file://")) {
     if (!URL.canParse(path)) return undefined;
@@ -153,6 +123,13 @@ function localFileUrlPath(url: URL): string | undefined {
     if (error instanceof TypeError || error instanceof URIError) return undefined;
     throw error;
   }
+}
+
+function expectedPathFailure(error: unknown): ExplicitPathRejectionReason | undefined {
+  if (error instanceof PathDeniedError) return "denied";
+  const code = safeProperty(error, "code") ?? safeProperty(safeProperty(error, "cause"), "code");
+  if (code === "ENOENT" || code === "ENOTDIR") return "missing";
+  return code === "EACCES" || code === "EPERM" ? "denied" : undefined;
 }
 
 function pathPolicyRejection(
@@ -174,7 +151,13 @@ function pathPolicyRejection(
     return "ignored";
   const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, path);
   if (!inputs.fs.exists(absolute)) return "missing";
-  return existingPathPolicyRejection(path, absolute, inputs);
+  try {
+    return existingPathPolicyRejection(path, absolute, inputs);
+  } catch (error) {
+    const reason = expectedPathFailure(error);
+    if (reason !== undefined) return reason;
+    throw error;
+  }
 }
 
 function humanSelectedPath(path: string, inputs: AdmissionInputs): boolean {
@@ -277,7 +260,7 @@ async function admitReference(
   state: AdmissionState,
   classified = false,
 ): Promise<void> {
-  const path = normalizedPath(reference, inputs.searchScope.workspace.root);
+  const path = normalizedExplicitReferencePath(reference, inputs.searchScope.workspace.root);
   const identity = `${path ?? reference.path}:${String(reference.line ?? "")}`;
   if (state.seen.has(identity)) return;
   state.seen.add(identity);
@@ -342,6 +325,47 @@ async function classifyHumanSelectedFile(
   }
 }
 
+async function documentBasenamePaths(
+  reference: ExplicitPathReference,
+  inputs: AdmissionInputs,
+): Promise<readonly string[]> {
+  if (inputs.scope.kind === "files")
+    return inputs.scope.relativePaths.filter((path) => path.split("/").at(-1) === reference.path);
+  const directories = inputs.scope.kind === "directory" ? inputs.scope.relativePaths : [""];
+  const paths = new Set<string>();
+  for (const [index, directory] of directories.entries()) {
+    if (index > 0 && !inputs.tryReserveSearchCall()) break;
+    const result = await discoverWorkspacePaths(
+      inputs.searchScope.workspace,
+      {
+        mode: "glob",
+        directory,
+        query: `**/${reference.path}`,
+        maxResults: BASENAME_MATCH_CAP,
+      },
+      { nowMs: inputs.nowMs, deadlineAtMs: inputs.deadlineAtMs, signal: inputs.signal },
+      inputs.fs,
+    );
+    for (const entry of result.entries) if (entry.kind === "file") paths.add(entry.relativePath);
+  }
+  return [...paths].sort().slice(0, BASENAME_MATCH_CAP);
+}
+
+async function basenamePaths(
+  reference: ExplicitPathReference,
+  inputs: AdmissionInputs,
+): Promise<ReadonlySet<string>> {
+  if (isExtractableConnectedDocumentPath(reference.path))
+    return new Set(await documentBasenamePaths(reference, inputs));
+  const result = await findExplicitFiles(
+    inputs,
+    `**/${reference.path}`,
+    inputs.searchScope.relativePaths,
+    BASENAME_MATCH_CAP,
+  );
+  return new Set(result.atoms.map((atom) => atom.scopePath));
+}
+
 async function admitBasename(
   reference: ExplicitPathReference,
   inputs: AdmissionInputs,
@@ -349,13 +373,7 @@ async function admitBasename(
 ): Promise<void> {
   state.basenameTerms += 1;
   if (!inputs.tryReserveSearchCall()) return;
-  const result = await findExplicitFiles(
-    inputs,
-    `**/${reference.path}`,
-    inputs.searchScope.relativePaths,
-    BASENAME_MATCH_CAP,
-  );
-  const paths = new Set(result.atoms.map((atom) => atom.scopePath));
+  const paths = new Set(await basenamePaths(reference, inputs));
   for (const path of inputs.scope.relativePaths) {
     if (humanSelectedPath(path, inputs) && path.split("/").at(-1) === reference.path)
       paths.add(path);

@@ -27226,6 +27226,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "repository-overview",
           "targeted-code-search",
           "diagnostic-search",
+          "conversational-follow-up",
           "clarification-needed",
         ],
       },
@@ -27297,6 +27298,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "repository-overview",
           "targeted-code-search",
           "diagnostic-search",
+          "conversational-follow-up",
           "clarification-needed",
         ],
       },
@@ -28189,6 +28191,82 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "search.connected-context.selection-details",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "grounded-orchestrator.createConnectedContextActivity.selectionDetails",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      scopeIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      queryIdentitySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      basenameCollisionGroupCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      basenameDedupDemotedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      exactPathSignalPresentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      pathSegmentSignalPresentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      directoryProximityTieBreakCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      stackTraceFrameCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      stackTraceExternalFrameCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["connected-context-retrieval"],
+    proofIds: [
+      "search.connected-context.selection-details.line",
+      "search.connected-context.path-ranking.line",
+    ],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "search.connected-context.source-details",
     category: "search",
     owner: "keiko-server",
@@ -28231,6 +28309,37 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      stackTraceDetected: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      stackTraceInScopeFrameCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      stackTraceAdmittedPathCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      testSourcePairCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      referenceChannelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      metadataInjectionReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["intent", "pattern", "none"],
       },
       explicitPathAnchorCount: {
         type: "integer",
@@ -28433,6 +28542,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     proofIds: [
       "search.connected-context.source-details.line",
       "search.connected-context.explicit-admission.line",
+      "search.connected-context.diagnostic-references.line",
     ],
     releaseImpact: "patch",
     diagnosticWhen: [

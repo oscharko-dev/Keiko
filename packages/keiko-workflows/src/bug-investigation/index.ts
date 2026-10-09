@@ -14,7 +14,7 @@ export { BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR } from "./descriptor.js";
 
 export { isSensitivePath, isElevatedReviewPath } from "./guard.js";
 
-export { parseFailureEvidence, MAX_FRAMES } from "./failure-parse.js";
+export { parseFailureEvidence, parseDiagnosticTraceText, MAX_FRAMES } from "./failure-parse.js";
 
 export {
   DEFAULT_BUG_WORKFLOW_LIMITS,

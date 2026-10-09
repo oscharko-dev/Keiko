@@ -2,6 +2,7 @@
 // This module is intentionally pure: no IO, no clock, no model calls.
 
 import { extractAnchors } from "./anchors.js";
+import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import {
@@ -14,12 +15,22 @@ export type RetrievalIntent =
   | "repository-overview"
   | "targeted-code-search"
   | "diagnostic-search"
+  | "conversational-follow-up"
   | "clarification-needed";
 
 export interface RetrievalIntentClassification {
   readonly intent: RetrievalIntent;
+  readonly effectiveIntent?: RetrievalIntent;
   readonly normalizedTerms: readonly string[];
 }
+
+export interface RetrievalIntentContext {
+  readonly previousIntent?: RetrievalIntent | undefined;
+  readonly referencePresent?: boolean | undefined;
+}
+
+const CONVERSATIONAL_FOLLOW_UP_RE =
+  /\b(?:and\s+(?:now|then)|that\s+(?:file|one)|this\s+file|in\s+the\s+file|und\s+(?:nun|jetzt)|in\s+der\s+datei|diese[rn]?\s+datei|darin|dazu|weiter)\b/iu;
 
 interface IntentPattern {
   readonly term: string;
@@ -224,12 +235,36 @@ function classifyShortTarget(text: string): RetrievalIntentClassification {
     : { intent: "clarification-needed", normalizedTerms: [] };
 }
 
+function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext): boolean {
+  if (
+    context.previousIntent !== "diagnostic-search" &&
+    context.previousIntent !== "targeted-code-search"
+  )
+    return false;
+  if (!CONVERSATIONAL_FOLLOW_UP_RE.test(text)) return false;
+  const anchors = extractAnchors({ text, maxAnchors: text.length }).anchors;
+  return !anchors.some(
+    (anchor) => anchor.kind === "path" || anchor.kind === "quoted" || anchor.kind === "identifier",
+  );
+}
+
 export function classifyRetrievalIntent(
   queryText: string,
   _scope?: SelectedScope,
+  context: RetrievalIntentContext = {},
 ): RetrievalIntentClassification {
-  const trimmed = queryText.trim();
+  const trace = parseDiagnosticTraceText(queryText);
+  const trimmed = trace.questionText.trim();
   const normalized = normalizeQueryText(trimmed);
+  if (trace.detected) return { intent: "diagnostic-search", normalizedTerms: ["stacktrace"] };
+  if (canInheritRetrievalIntent(trimmed, context)) {
+    return {
+      intent: "conversational-follow-up",
+      effectiveIntent: context.previousIntent ?? "targeted-code-search",
+      normalizedTerms: searchableTokens(normalized).slice(0, 8),
+    };
+  }
+
   if (trimmed.length === 0) return { intent: "clarification-needed", normalizedTerms: [] };
   if (searchableTokens(normalized).length === 0) {
     return classifyShortTarget(trimmed);

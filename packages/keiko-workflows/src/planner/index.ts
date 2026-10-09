@@ -9,8 +9,18 @@ export type {
   SearchAnchorKind,
 } from "./anchors.js";
 export { extractAnchors } from "./anchors.js";
+export type { SearchReference, RetrievalChannels } from "./references.js";
+export {
+  extractRetrievalChannels,
+  extractPathReferences,
+  searchReferenceAnchors,
+} from "./references.js";
 
-export type { RetrievalIntent, RetrievalIntentClassification } from "./intent.js";
+export type {
+  RetrievalIntent,
+  RetrievalIntentClassification,
+  RetrievalIntentContext,
+} from "./intent.js";
 export { classifyRetrievalIntent } from "./intent.js";
 
 export type {

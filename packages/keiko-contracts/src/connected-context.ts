@@ -296,16 +296,21 @@ export type UncertaintyMarkerKind =
   | "budget-clipped"
   | "tool-unavailable"
   | "low-confidence"
+  // The best ordinary candidate was retained only by the keep-one floor fallback.
+  | "low-confidence-selection"
   // GEN-AI-GROUNDING-001/-008 (RB-4): the grounded answer's inline `[path:line]` reference names a
   // file/line that was NOT in the retrieved evidence pack sent to the model. Post-generation
   // citation reconciliation appends this marker so an ungrounded (fabricated) reference is surfaced
   // rather than displayed as a supported grounded claim.
   | "unsupported-citation"
   // The grounded answer makes source-backed claims but carries no supported inline marker at all
-  // (or received evidence-external context it does not cite). Distinct from `unsupported-citation`:
+  // Distinct from `unsupported-citation`:
   // nothing was fabricated or out of range, the answer simply does not say where it got its
   // claims from. A no-evidence refusal carries no claims and therefore never carries this marker.
   | "uncited-answer"
+  // Governed memory was supplied outside repository evidence; its claims remain uncited even
+  // when the answer has valid repository references.
+  | "uncited-memory-context"
   // GEN-AI-GATEWAY-001 (RB-4): the model completion was truncated (finishReason "length"); the
   // partial answer is surfaced with this marker instead of being consumed as a complete answer.
   | "incomplete-answer"
@@ -331,8 +336,10 @@ export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = Object
   "budget-clipped",
   "tool-unavailable",
   "low-confidence",
+  "low-confidence-selection",
   "unsupported-citation",
   "uncited-answer",
+  "uncited-memory-context",
   "incomplete-answer",
   "unsupported-claim",
   "entailment-unavailable",
@@ -358,6 +365,9 @@ export interface OmittedContextEntry {
   readonly reason: CandidateOmissionReason;
   readonly omittedAtMs: number;
 }
+
+// A robust ordinary reference supplies the relative cut; protected/selected paths never define it.
+export const CONNECTED_CONTEXT_RELATIVE_SELECTION_FLOOR_PERMILLE = 550;
 
 // ─── Connected context pack ───────────────────────────────────────────────────
 export interface ConnectedContextPack {

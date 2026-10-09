@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "bc2396bd44f4d04ffefcd81c1e6cd19a3ccf5679b1f95cb20562dd326ca5e0d4" as const;
+  "e236a3b029d0acdd87e017bfb402bc91696516d716db5202efb42b1f81031c36" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -12082,6 +12082,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         state: [
           "search.connected-context.completion-details",
           "search.connected-context.metadata-unavailable",
+          "search.connected-context.selection-details",
           "search.connected-context.source-details",
           "search.symbol-line.unavailable",
         ],
@@ -12114,6 +12115,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "search.connected-context.selection-details",
+          mode: "correlation",
+        },
+        {
           op: "search.connected-context.source-details",
           mode: "correlation",
         },
@@ -12132,6 +12137,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "search.connected-context.completed",
         "search.connected-context.completion-details",
         "search.connected-context.metadata-unavailable",
+        "search.connected-context.selection-details",
         "search.connected-context.source-details",
         "search.connected-context.started",
         "search.symbol-line.unavailable",
@@ -13127,6 +13133,81 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           missingObligations: [],
         },
         {
+          op: "search.connected-context.selection-details",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "basenameCollisionGroupCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "basenameDedupDemotedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "directoryProximityTieBreakCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "exactPathSignalPresentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "pathSegmentSignalPresentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "queryIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "scopeIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "stackTraceExternalFrameCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "stackTraceFrameCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: [
+            "search.connected-context.selection-details.line",
+            "search.connected-context.path-ranking.line",
+          ],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
           op: "search.connected-context.source-details",
           owner: "keiko-server",
           category: "search",
@@ -13198,6 +13279,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "metadataDiscardedCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "metadataInjectionReason",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -13345,6 +13432,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "referenceChannelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "reusedEvidenceAtomCount",
               type: "integer",
               dataClass: "count",
@@ -13375,6 +13468,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "stackTraceAdmittedPathCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "stackTraceDetected",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "stackTraceInScopeFrameCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "testSourcePairCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "unrepresentablePathCount",
               type: "integer",
               dataClass: "count",
@@ -13389,6 +13506,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           proofIds: [
             "search.connected-context.source-details.line",
             "search.connected-context.explicit-admission.line",
+            "search.connected-context.diagnostic-references.line",
           ],
           replayReferences: [],
           missingObligations: [],
@@ -41173,6 +41291,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "search.connected-context.completion-details": "memory-knowledge",
     "search.connected-context.failed": "memory-knowledge",
     "search.connected-context.metadata-unavailable": "memory-knowledge",
+    "search.connected-context.selection-details": "memory-knowledge",
     "search.connected-context.source-details": "memory-knowledge",
     "search.connected-context.started": "memory-knowledge",
     "search.entailment.judged": "memory-knowledge",

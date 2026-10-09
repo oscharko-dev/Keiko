@@ -1,3 +1,11 @@
+import {
+  orderDistinctEvidenceCandidates,
+  type RankingSelectionObservation,
+} from "./grounded-candidate-ordering.js";
+import {
+  admitDiagnosticReferences,
+  type DiagnosticReferenceObservation,
+} from "./grounded-diagnostic-references.js";
 // Grounded repository Q&A orchestrator (Epic #177, Issue #185). Composes the connected-context
 // layers — #181 exploration planner, #179 lexical search facade, #180 structural adapters,
 // #182 candidate ranker, and #183 context-pack assembler — into a single linear pipeline that
@@ -69,6 +77,8 @@ import {
   isGeneratedRankingPath,
   requiresRelationshipOrHistoryRings,
   resolveQueryTargetDecision,
+  extractRetrievalChannels,
+  searchReferenceAnchors,
   type QueryTargetDecision,
   type ClarificationPrompt,
   type ClarificationReason,
@@ -81,6 +91,7 @@ import {
   type RetrievalIntent,
   type RetrievalRing,
   type SearchAnchor,
+  type SearchReference,
 } from "@oscharko-dev/keiko-workflows";
 import {
   CANONICAL_MANIFEST_BASENAMES,
@@ -181,6 +192,7 @@ import {
 import {
   collectConnectedDocumentEvidence,
   isConnectedDocumentPath,
+  isExtractableConnectedDocumentPath,
   type DocumentEvidenceResult,
 } from "./grounded-document-evidence.js";
 import {
@@ -193,7 +205,6 @@ import {
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
 import {
-  admitExplicitPaths,
   type ExplicitPathAdmission,
   type ExplicitPathObservation,
 } from "./grounded-explicit-paths.js";
@@ -302,6 +313,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
         "repository-overview",
         "targeted-code-search",
         "diagnostic-search",
+        "conversational-follow-up",
         "clarification-needed",
       ],
     },
@@ -554,6 +566,37 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
   releaseImpact: "patch",
 });
 
+const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.selection-details",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.selectionDetails",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    basenameCollisionGroupCount: { type: "integer", dataClass: "count", required: false },
+    basenameDedupDemotedCount: { type: "integer", dataClass: "count", required: false },
+    exactPathSignalPresentCount: { type: "integer", dataClass: "count", required: false },
+    pathSegmentSignalPresentCount: { type: "integer", dataClass: "count", required: false },
+    directoryProximityTieBreakCount: { type: "integer", dataClass: "count", required: false },
+    stackTraceFrameCount: { type: "integer", dataClass: "count", required: false },
+    stackTraceExternalFrameCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: [
+    "search.connected-context.selection-details.line",
+    "search.connected-context.path-ranking.line",
+  ],
+  releaseImpact: "patch",
+});
+
 const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -572,6 +615,17 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
     },
     directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: false },
     explicitSelectionAtomCount: { type: "integer", dataClass: "count", required: false },
+    stackTraceDetected: { type: "boolean", dataClass: "closed-enum", required: false },
+    stackTraceInScopeFrameCount: { type: "integer", dataClass: "count", required: false },
+    stackTraceAdmittedPathCount: { type: "integer", dataClass: "count", required: false },
+    testSourcePairCount: { type: "integer", dataClass: "count", required: false },
+    referenceChannelCount: { type: "integer", dataClass: "count", required: false },
+    metadataInjectionReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["intent", "pattern", "none"],
+    },
     explicitPathAnchorCount: { type: "integer", dataClass: "count", required: false },
     explicitPathAdmittedCount: { type: "integer", dataClass: "count", required: false },
     explicitPathRejectedCount: { type: "integer", dataClass: "count", required: false },
@@ -649,6 +703,7 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
   proofIds: [
     "search.connected-context.source-details.line",
     "search.connected-context.explicit-admission.line",
+    "search.connected-context.diagnostic-references.line",
   ],
   releaseImpact: "patch",
 });
@@ -729,6 +784,7 @@ const SEARCH_CONNECTED_CONTEXT_CLARIFICATION_OPERATION = defineActivityLogOperat
         "repository-overview",
         "targeted-code-search",
         "diagnostic-search",
+        "conversational-follow-up",
         "clarification-needed",
       ],
     },
@@ -896,6 +952,8 @@ export interface GroundedAnswerer {
 }
 
 export interface OrchestratorInput {
+  readonly assistantReferents?: readonly SearchReference[];
+  readonly previousRetrievalIntent?: RetrievalIntent;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   // The original query remains authoritative for every retrieval ring. Callers may supply a
@@ -1057,7 +1115,7 @@ interface SearchInputs {
   readonly query: RetrievalQuery;
   readonly targetDecision: QueryTargetDecision;
   readonly anchors: readonly SearchAnchor[];
-  readonly retrievalIntent: RetrievalIntent;
+  readonly retrievalIntent: Exclude<RetrievalIntent, "conversational-follow-up">;
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
@@ -1741,7 +1799,8 @@ function structuralQueriesForRing(
     if (anchorKind !== "path" && anchorKind !== "identifier" && anchorKind !== "quoted") {
       continue;
     }
-    const query = queryForStructuralAnchor(term, anchorKind, inputs.query);
+    const sourceTerm = inputs.anchors.find((anchor) => anchor.term === term)?.sourceTerm ?? term;
+    const query = queryForStructuralAnchor(sourceTerm, anchorKind, inputs.query);
     const key = `${query.kind}:${query.text}`;
     if (seen.has(key)) {
       continue;
@@ -2052,7 +2111,7 @@ function primaryRankingAnchors(
 ): readonly SearchAnchor[] {
   const anchors = [
     ...new Map(
-      [...plan.anchors, ...(plan.targetDecision?.targets ?? [])].map((anchor) => [
+      [...planSearchAnchors(plan), ...(plan.targetDecision?.targets ?? [])].map((anchor) => [
         `${anchor.kind}:${anchor.term}`,
         anchor,
       ]),
@@ -2069,6 +2128,17 @@ function primaryRankingAnchors(
         (anchor) =>
           targets.has(anchor.term) || anchor.kind !== "literal" || !/^\d+$/u.test(anchor.term),
       );
+}
+
+function effectiveRetrievalIntent(
+  plan: ExplorationPlan,
+): Exclude<RetrievalIntent, "conversational-follow-up"> {
+  const intent = plan.effectiveRetrievalIntent ?? plan.retrievalIntent;
+  return intent === "conversational-follow-up" ? "targeted-code-search" : intent;
+}
+
+function planSearchAnchors(plan: ExplorationPlan): readonly SearchAnchor[] {
+  return [...plan.anchors, ...searchReferenceAnchors(plan.references ?? [])];
 }
 
 function lexicalSemanticProvider(inputs: SearchInputs): SemanticSearchProvider | undefined {
@@ -2088,7 +2158,10 @@ function lexicalSearchOptions(inputs: SearchInputs): {
   fs: WorkspaceFs;
   nowMs: () => number;
   deadlineAtMs: number;
-  searchHints: { retrievalIntent: RetrievalIntent; allowSourceInspection: boolean };
+  searchHints: {
+    retrievalIntent: Exclude<RetrievalIntent, "conversational-follow-up">;
+    allowSourceInspection: boolean;
+  };
   signal?: AbortSignal;
 } {
   return {
@@ -2571,6 +2644,7 @@ interface RingDecisionAudit {
 
 interface RingRunSummary {
   readonly explicitAdmission?: ExplicitPathAdmission;
+  readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
   readonly reusedEvidenceAtomCount?: number | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
@@ -3065,6 +3139,7 @@ export interface ExcerptReadSummary {
 type PackCacheIdentity = readonly string[];
 
 interface CandidateOrdering {
+  readonly rankingObservation?: RankingSelectionObservation | undefined;
   readonly priorityPaths?: ReadonlySet<string>;
   readonly kept: readonly CandidateFile[];
   readonly omitted: readonly OmittedContextEntry[];
@@ -3079,47 +3154,6 @@ const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
 const MAX_EXCERPT_WINDOW_BYTES = 8192;
 const SINGLE_LINE_EXCERPT_CONTEXT_LINES = 3;
 const DISCOVERED_DEFINITION_CONTEXT_AFTER = 24;
-const PROJECT_METADATA_QUERY_TERMS = [
-  "abhängigkeit",
-  "abhängigkeiten",
-  "abhaengigkeit",
-  "abhaengigkeiten",
-  "build",
-  "cypress",
-  "dependenc",
-  "dependencies",
-  "devdependencies",
-  "framework",
-  "java-script",
-  "javascript",
-  "jest",
-  "node",
-  "node.js",
-  "npm",
-  "package",
-  "package.json",
-  "package-manager",
-  "paketmanager",
-  "playwright",
-  "pnpm",
-  "react",
-  "script",
-  "stack",
-  "tech-stack",
-  "techstack",
-  "test",
-  "test-runner",
-  "testing",
-  "testumgebung",
-  "type script",
-  "type-script",
-  "typescript",
-  "version",
-  "versionen",
-  "vite",
-  "vitest",
-  "yarn",
-] as const;
 // Dependency lockfiles surfaced for project-metadata questions (unchanged behaviour). The manifest
 // basenames themselves now come from the shared ecosystem registry (CANONICAL_MANIFEST_BASENAMES),
 // which is a superset of the prior JS/TS-only list and additionally covers Maven/Gradle/Go/Rust/
@@ -3262,19 +3296,12 @@ function selectedFileQueryFingerprint(query: RetrievalQuery): string {
     .slice(0, 16);
 }
 
-function normalizedQueryText(queryText: string): string {
-  return queryText.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
-}
-
 function wantsProjectMetadata(input: OrchestratorInput, intent: RetrievalIntent): boolean {
   if (intent === "project-metadata" || intent === "repository-overview") {
     return true;
   }
-  const lowered = input.query.text.toLowerCase();
-  const normalized = normalizedQueryText(input.query.text);
-  return PROJECT_METADATA_QUERY_TERMS.some(
-    (term) => lowered.includes(term) || normalized.includes(term),
-  );
+  const question = extractRetrievalChannels(input.query.text, 8).questionText;
+  return classifyRetrievalIntent(question).intent === "project-metadata";
 }
 
 function wantsRepositoryOverview(intent: RetrievalIntent): boolean {
@@ -4377,7 +4404,7 @@ async function collectFilenameMatches(
     targets.map((target) => target.request),
     {
       signal: inputs.signal,
-      searchHints: { retrievalIntent: inputs.plan.retrievalIntent },
+      searchHints: { retrievalIntent: effectiveRetrievalIntent(inputs.plan) },
     },
   );
   let symbols: SymbolFilenameMatches = { terms: [], matches: [], uncertainty: [] };
@@ -5321,7 +5348,7 @@ async function collectParallelDeterministicEvidence(
           collectFollowSymbolTraceEvidence({
             scope: input.scope,
             query: input.query,
-            anchors: plan.anchors,
+            anchors: planSearchAnchors(plan),
             retrievalIntent: plan.retrievalIntent,
             searchScope,
             fs,
@@ -5471,35 +5498,6 @@ function explicitlyTargetsLockfile(
   return queryTerms(queryText, anchors).some((term) => path.includes(term) || name === term);
 }
 
-function orderForDistinctEvidencePaths(
-  kept: readonly CandidateFile[],
-  anchors: readonly SearchAnchor[],
-  priorityPaths: Set<string>,
-): readonly CandidateFile[] {
-  const selected = new Set(kept.slice(0, 1));
-  for (const anchor of anchors) {
-    if (anchor.kind === "literal" || anchor.weight < 0.7) continue;
-    const term = anchor.term.toLowerCase();
-    const candidate =
-      [...selected].find((entry) => entry.scopePath.toLowerCase().includes(term)) ??
-      kept.find((entry) => entry.scopePath.toLowerCase().includes(term));
-    if (candidate !== undefined) {
-      selected.add(candidate);
-      priorityPaths.add(candidate.scopePath);
-    }
-  }
-  const names = new Set(
-    [...selected].map((candidate) => basename(candidate.scopePath).toLowerCase()),
-  );
-  for (const candidate of kept) {
-    const name = basename(candidate.scopePath).toLowerCase();
-    if (names.has(name)) continue;
-    names.add(name);
-    selected.add(candidate);
-  }
-  return [...selected, ...kept.filter((candidate) => !selected.has(candidate))];
-}
-
 function refineCandidateOrdering(
   kept: readonly CandidateFile[],
   omitted: readonly OmittedContextEntry[],
@@ -5507,6 +5505,7 @@ function refineCandidateOrdering(
   anchors: readonly SearchAnchor[],
   diagnostics: ContextPackDiagnostics | undefined,
   nowMs: number,
+  addressedPaths: ReadonlySet<string>,
 ): CandidateOrdering {
   const queryText = query.text;
   const preferred: CandidateFile[] = [];
@@ -5539,11 +5538,15 @@ function refineCandidateOrdering(
   const orderedPreferred = useSearchOrder
     ? orderPreferredCandidates(preferred, diagnostics, priorityPaths)
     : preferred;
+  const distinct = orderDistinctEvidenceCandidates(
+    orderedPreferred,
+    anchors,
+    priorityPaths,
+    addressedPaths,
+  );
   return {
-    kept: [
-      ...orderForDistinctEvidencePaths(orderedPreferred, anchors, priorityPaths),
-      ...lockfiles,
-    ],
+    rankingObservation: distinct.observation,
+    kept: [...distinct.kept, ...lockfiles],
     omitted: nextOmitted,
     priorityPaths,
   };
@@ -6427,9 +6430,15 @@ function createReadyGovernedPlan(
   progress: ConnectedContextProgress,
 ): ReadyPlanResult {
   const planned = planAndGovern(
-    input.budget === undefined
-      ? { scope: input.scope, query: input.query }
-      : { scope: input.scope, query: input.query, budget: input.budget },
+    {
+      scope: input.scope,
+      query: input.query,
+      ...(input.budget === undefined ? {} : { budget: input.budget }),
+      ...(input.assistantReferents === undefined ? {} : { references: input.assistantReferents }),
+      ...(input.previousRetrievalIntent === undefined
+        ? {}
+        : { previousRetrievalIntent: input.previousRetrievalIntent }),
+    },
     { nowMs },
   );
   const { plan } = planned;
@@ -6732,10 +6741,22 @@ function explicitSelectionPaths(rings: RingRunSummary): ReadonlySet<string> {
   );
 }
 
-function codeEvidenceAtoms(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[] {
+function codeEvidenceAtoms(
+  atoms: readonly EvidenceAtom[],
+  scope: SelectedScope,
+  admission: ExplicitPathAdmission | undefined,
+): readonly EvidenceAtom[] {
   // Explicit documents belong to extraction, including its unsupported diagnostics. Keep them
   // off the code excerpt path before merging that exclusively document-owned result.
-  return atoms.filter((atom) => !isConnectedDocumentPath(atom.scopePath));
+  const paths = new Set([
+    ...(scope.explicitConnection && scope.kind === "files"
+      ? scope.relativePaths.filter(isConnectedDocumentPath)
+      : []),
+    ...(admission?.selections
+      .map((selection) => selection.path)
+      .filter(isExtractableConnectedDocumentPath) ?? []),
+  ]);
+  return atoms.filter((atom) => !paths.has(atom.scopePath));
 }
 
 function selectionEvidencePaths(
@@ -6757,9 +6778,10 @@ function selectionEvidencePaths(
 }
 
 function rankingEvidence(
+  input: OrchestratorInput,
   rings: RingRunSummary,
 ): Pick<PreparedPackAssembly, "atoms" | "reusedEvidenceAtomCount"> {
-  const sourceAtoms = codeEvidenceAtoms(rings.atoms);
+  const sourceAtoms = codeEvidenceAtoms(rings.atoms, input.scope, rings.explicitAdmission);
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
   for (const atom of sourceAtoms) pushUniqueAtom(atoms, seen, atom);
@@ -6777,7 +6799,7 @@ function preparePackAssembly(
   nowMs: () => number,
   hasGitMetadata: boolean,
 ): PreparedPackAssembly {
-  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(rings);
+  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(input, rings);
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   // M4: pass the classified retrieval intent so ranking can apply intent-conditioned signals
   // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
@@ -6786,7 +6808,8 @@ function preparePackAssembly(
     {
       atoms,
       anchors: primaryRankingAnchors(input, plan),
-      context: { retrievalIntent: plan.retrievalIntent },
+      ...(plan.references === undefined ? {} : { references: plan.references }),
+      context: { retrievalIntent: effectiveRetrievalIntent(plan) },
       ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
     },
     {
@@ -6800,9 +6823,10 @@ function preparePackAssembly(
     ranking.kept,
     ranking.omitted,
     input.query,
-    plan.anchors,
+    planSearchAnchors(plan),
     rings.diagnostics,
     nowMs(),
+    explicitSelectionPaths(rings),
   );
   const ordered = selectGroundedCandidateFiles({
     ...refined,
@@ -6819,7 +6843,7 @@ function preparePackAssembly(
     atoms: selectedAtoms,
     reusedEvidenceAtomCount,
     initialUsage,
-    ordered,
+    ordered: { ...ordered, rankingObservation: refined.rankingObservation },
     atomsByPath: groupEvidenceAtomsByPath(selectedAtoms),
     evidenceUncertainty:
       selectedAtoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [],
@@ -6870,7 +6894,9 @@ async function assemblePackFromReads(
   // also sees them as binary candidates, so strip any document-path omission it produced to avoid a
   // path that is both a selected file and an omitted entry (which the pack validator rejects).
   const codeOmitted = [...rings.omitted, ...ordered.omitted].filter(
-    (entry) => !isConnectedDocumentPath(entry.scopePath),
+    (entry) =>
+      !documentEvidence.candidates.some((candidate) => candidate.scopePath === entry.scopePath) &&
+      !documentEvidence.omitted.some((omitted) => omitted.scopePath === entry.scopePath),
   );
   const assemble = await assembleContextPack(
     {
@@ -6975,7 +7001,7 @@ async function discoveredTraceForAugmentation(
       collectDiscoveredSymbolTraceEvidence({
         scope: input.scope,
         query: input.query,
-        anchors: plan.anchors,
+        anchors: planSearchAnchors(plan),
         retrievalIntent: plan.retrievalIntent,
         searchScope,
         fs,
@@ -7013,7 +7039,7 @@ function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRun
   }
   const reason = lookupAugmentationSkipReason(
     args.input.query,
-    args.plan.anchors,
+    planSearchAnchors(args.plan),
     args.hasGitMetadata,
     rings.diagnostics,
     decision,
@@ -7082,6 +7108,8 @@ interface GroundedAssemblyContext {
 
 interface GroundedPackAssembly {
   readonly explicitObservation?: ExplicitPathObservation | undefined;
+  readonly rankingObservation?: RankingSelectionObservation | undefined;
+  readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
   readonly explicitSelectionAtomCount?: number;
   readonly reusedEvidenceAtomCount?: number | undefined;
   readonly excerptObservation?: ExcerptReadObservation | undefined;
@@ -7155,7 +7183,9 @@ function documentSelectionScope(
   admission: ExplicitPathAdmission | undefined,
 ): SelectedScope {
   const paths =
-    admission?.selections.map((selection) => selection.path).filter(isConnectedDocumentPath) ?? [];
+    admission?.selections
+      .map((selection) => selection.path)
+      .filter(isExtractableConnectedDocumentPath) ?? [];
   if (paths.length === 0) return scope;
   return {
     ...scope,
@@ -7217,6 +7247,7 @@ async function assembleGroundedPack(
     return {
       pack: withGroundedContextDiagnostics(ctx.cached, deps),
       ...explicitDetails,
+      rankingObservation: prepared.ordered.rankingObservation,
       reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
       metadataRetention: augmentedRings.metadataRetention,
       elapsedBudgetBlocked: false,
@@ -7249,6 +7280,7 @@ async function assembleGroundedPack(
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
     ...explicitDetails,
+    rankingObservation: prepared.ordered.rankingObservation,
     reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
     metadataRetention: augmentedRings.metadataRetention,
     excerptObservation: excerptReads.observation,
@@ -7260,9 +7292,13 @@ async function assembleGroundedPack(
 
 function explicitAssemblyDetails(
   rings: RingRunSummary,
-): Pick<GroundedPackAssembly, "explicitObservation" | "explicitSelectionAtomCount"> {
+): Pick<
+  GroundedPackAssembly,
+  "explicitObservation" | "explicitSelectionAtomCount" | "referenceObservation"
+> {
   return {
     explicitObservation: rings.explicitAdmission?.observation,
+    referenceObservation: rings.referenceObservation,
     explicitSelectionAtomCount: rings.atoms.filter(
       (atom) => atom.provenance.tool === "repo.selectedFile",
     ).length,
@@ -7273,6 +7309,8 @@ function explicitAssemblyDetails(
 
 interface ConnectedContextCompletionStatus {
   readonly explicitObservation?: ExplicitPathObservation | undefined;
+  readonly rankingObservation?: RankingSelectionObservation | undefined;
+  readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
   readonly explicitSelectionAtomCount?: number | undefined;
   readonly reusedEvidenceAtomCount?: number | undefined;
   readonly sourceDecision?: SourceDecisionObservation | undefined;
@@ -7366,6 +7404,8 @@ function liveRetrievalCompletion(
 ): ConnectedContextCompletionStatus {
   return {
     explicitObservation: assembled.explicitObservation,
+    rankingObservation: assembled.rankingObservation,
+    referenceObservation: assembled.referenceObservation,
     explicitSelectionAtomCount: assembled.explicitSelectionAtomCount,
     anchoredExcerptWindowCount: assembled.anchoredWindowCount,
     excerptReadWindowCount: assembled.readWindowCount,
@@ -7649,8 +7689,10 @@ function uncertaintyActivityExtra(
     "budget-clipped": 0,
     "tool-unavailable": 0,
     "low-confidence": 0,
+    "low-confidence-selection": 0,
     "unsupported-citation": 0,
     "uncited-answer": 0,
+    "uncited-memory-context": 0,
     "incomplete-answer": 0,
     "unsupported-claim": 0,
     "entailment-unavailable": 0,
@@ -7939,6 +7981,26 @@ function completionDetailsActivityExtra(
   };
 }
 
+function sourceReferenceActivityExtra(
+  observation: DiagnosticReferenceObservation | undefined,
+): Pick<
+  ConnectedContextSourceDetailsActivityFields,
+  | "stackTraceDetected"
+  | "stackTraceInScopeFrameCount"
+  | "stackTraceAdmittedPathCount"
+  | "testSourcePairCount"
+  | "referenceChannelCount"
+  | "metadataInjectionReason"
+> {
+  if (observation === undefined) return {};
+  const {
+    stackTraceFrameCount: _all,
+    stackTraceExternalFrameCount: _external,
+    ...fields
+  } = observation;
+  return fields;
+}
+
 function sourceDetailsActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -7957,6 +8019,7 @@ function sourceDetailsActivityExtra(
       directEvidenceLookup: execution.output.plan.directEvidenceLookup,
       explicitSelectionAtomCount: execution.status.explicitSelectionAtomCount ?? 0,
       ...execution.status.explicitObservation,
+      ...sourceReferenceActivityExtra(execution.status.referenceObservation),
       reusedEvidenceAtomCount: execution.status.reusedEvidenceAtomCount ?? 0,
       unrepresentablePathCount:
         execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
@@ -8158,6 +8221,25 @@ function safeFailureActivityExtra(
   }
 }
 
+function selectionDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  status: ConnectedContextCompletionStatus,
+): ActivityLogFields<typeof SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION> {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    ...status.rankingObservation,
+    ...(status.referenceObservation === undefined
+      ? {}
+      : {
+          stackTraceFrameCount: status.referenceObservation.stackTraceFrameCount,
+          stackTraceExternalFrameCount: status.referenceObservation.stackTraceExternalFrameCount,
+        }),
+    completeness: "complete",
+    loss: "none",
+  };
+}
+
 function logConnectedContextCompletion(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
@@ -8181,6 +8263,13 @@ function logConnectedContextCompletion(
         ...sourceDetailsActivityExtra(identity, execution, correlationId),
         metadataUnavailableInspectionCount,
       },
+    ),
+  );
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION,
+      { correlationId },
+      selectionDetailsActivityExtra(identity, execution.status),
     ),
   );
   logger.info(() =>
@@ -8367,8 +8456,8 @@ function connectedContextSearchInputs(
     searchScope: context.searchScope,
     query: input.query,
     targetDecision: plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors),
-    anchors: plan.anchors,
-    retrievalIntent: plan.retrievalIntent,
+    anchors: planSearchAnchors(plan),
+    retrievalIntent: effectiveRetrievalIntent(plan),
     fs: context.ringFs,
     nowMs: runtime.nowMs,
     signal: deps.signal,
@@ -8952,7 +9041,12 @@ async function retrieveLiveConnectedContext(
     connectedContextSearchInputs(input, deps, plan, runtime, context),
     admitted.governor,
   );
-  const rings = withAdmittedExplicitPaths(discovered, admitted.admission, input, runtime.nowMs);
+  const rings = withAdmittedExplicitPaths(
+    { ...discovered, referenceObservation: admitted.observation },
+    admitted.admission,
+    input,
+    runtime.nowMs,
+  );
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "pack-assembly";
   const assembled = await assembleGroundedPack(
@@ -8975,6 +9069,15 @@ async function retrieveLiveConnectedContext(
   );
 }
 
+function metadataInjectionReason(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+): DiagnosticReferenceObservation["metadataInjectionReason"] {
+  const intent = effectiveRetrievalIntent(plan);
+  if (intent === "project-metadata" || intent === "repository-overview") return "intent";
+  return wantsProjectMetadata(input, intent) ? "pattern" : "none";
+}
+
 async function liveExplicitPathAdmission(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -8982,9 +9085,17 @@ async function liveExplicitPathAdmission(
   governor: GovernorState,
   runtime: ConnectedContextRuntime,
   context: LiveRetrievalContext,
-): Promise<{ readonly admission: ExplicitPathAdmission; readonly governor: GovernorState }> {
+): Promise<{
+  readonly admission: ExplicitPathAdmission;
+  readonly observation: DiagnosticReferenceObservation;
+  readonly governor: GovernorState;
+}> {
   const budget = createAugmentationBudgetMeter(plan, governor, runtime.nowMs, context.deadlineAtMs);
-  const admission = await admitExplicitPaths({
+  const result = await admitDiagnosticReferences({
+    plan,
+    structuralFs: context.ringFs,
+    requestContext: () => context.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS),
+    metadataInjectionReason: metadataInjectionReason(input, plan),
     scope: input.scope,
     query: input.query,
     searchScope: context.searchScope,
@@ -8994,7 +9105,7 @@ async function liveExplicitPathAdmission(
     signal: deps.signal,
     tryReserveSearchCall: budget.tryReserveSearchCall,
   });
-  return { admission, governor: budget.finish(governor).governor };
+  return { ...result, governor: budget.finish(governor).governor };
 }
 
 function withAdmittedExplicitPaths(
@@ -9010,7 +9121,7 @@ function withAdmittedExplicitPaths(
       explicitAdmission: admission,
       atoms: [
         ...admission.selections
-          .filter((selection) => !isConnectedDocumentPath(selection.path))
+          .filter((selection) => !isExtractableConnectedDocumentPath(selection.path))
           .map((selection) =>
             selectedFileAtom(input.scope, selection.path, fingerprint, nowMs, selection.line),
           ),
