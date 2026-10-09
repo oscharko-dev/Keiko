@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5aa9c606145ec3074b7513604b70bf9e1dd6927fa1beaaaeb010cfcd9f66cbc3"
+    "catalogDigest": "30528a70a8f4aa63bb8b3b0fa7f06bce5ce602809c913db59644c0ee220e83fa"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 535,
-    "proofCount": 547,
-    "resolvedProofCount": 547,
+    "operationCount": 536,
+    "proofCount": 548,
+    "resolvedProofCount": 548,
     "failureClassCount": 344,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -473,6 +473,7 @@
         "search.answer.assessed",
         "search.citations.reconciled",
         "search.citations.support-settled",
+        "search.connected-context.answer-details",
         "search.connected-context.clarification-needed",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
@@ -2243,6 +2244,9 @@
     ],
     "search.citations.support-settled.line": [
       "packages/keiko-server/src/grounded-citation-log.test.ts"
+    ],
+    "search.connected-context.answer-details.line": [
+      "packages/keiko-server/src/grounded-answer-activity.test.ts"
     ],
     "search.connected-context.clarification-needed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",

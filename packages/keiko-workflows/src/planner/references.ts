@@ -32,6 +32,8 @@ const KNOWN_EXTENSIONS: ReadonlySet<string> = new Set([
   ...LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS,
 ]);
 const REFERENCE_CAP = 6;
+const REFERENCE_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
+const PATH_QUOTE_CHARACTERS = new Set(["`", '"', "'"]);
 
 function filenameReference(path: string): boolean {
   const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
@@ -56,20 +58,59 @@ function referenceAnchor(anchor: SearchAnchor): boolean {
   );
 }
 
-export function extractPathReferences(text: string): readonly SearchReference[] {
-  const { anchors } = extractAnchors({ text, maxAnchors: text.length, caseSensitive: true });
-  const terms = new Set(
-    anchors.filter(referenceAnchor).map((anchor) => anchor.sourceTerm ?? anchor.term),
-  );
+function bracketReferenceTerm(raw: string): string {
+  const token = raw.endsWith(".") ? raw.slice(0, -1) : raw;
+  return token.startsWith("(") && token.endsWith(")") ? token.slice(1, -1) : token;
+}
+
+function bracketPath(term: string): boolean {
+  const path = parsePathReference(term).path;
+  if (!path.includes("/") || (!path.includes("[") && !path.includes("]"))) return false;
+  return filenameReference(path);
+}
+
+function bracketReferenceAnchorText(text: string): string {
+  return text.replace(REFERENCE_TOKEN_RE, (raw: string, offset: number) => {
+    const term = bracketReferenceTerm(raw);
+    if (!bracketPath(term)) return raw;
+    const quote = text.charAt(offset - 1);
+    return PATH_QUOTE_CHARACTERS.has(quote) && quote === text.charAt(offset + raw.length)
+      ? raw
+      : `\`${term}\``;
+  });
+}
+
+function pathReferenceExtraction(text: string): {
+  readonly references: readonly SearchReference[];
+  readonly anchorText: string;
+} {
+  const anchorText = bracketReferenceAnchorText(text);
+  const { anchors } = extractAnchors({
+    text: anchorText,
+    maxAnchors: text.length,
+    caseSensitive: true,
+  });
+  const terms = new Set([
+    ...anchors.filter(referenceAnchor).map((anchor) => anchor.sourceTerm ?? anchor.term),
+  ]);
   for (const token of text.split(/[\s`"'()<>,;!?]+/u)) {
     if (token.startsWith(".") && isDenied(token)) terms.add(token);
     const located = parsePathReference(token);
-    if (located.line !== undefined && filenameReference(located.path)) {
+    if (located.line !== undefined && filenameReference(located.path) && !bracketPath(token)) {
       terms.delete(located.path);
       terms.add(token);
     }
   }
-  return [...terms].sort((a, b) => text.indexOf(a) - text.indexOf(b)).map(parsePathReference);
+  return {
+    references: [...terms]
+      .sort((a, b) => text.indexOf(a) - text.indexOf(b))
+      .map(parsePathReference),
+    anchorText,
+  };
+}
+
+export function extractPathReferences(text: string): readonly SearchReference[] {
+  return pathReferenceExtraction(text).references;
 }
 
 function externalFrame(path: string): boolean {
@@ -120,13 +161,10 @@ export function extractRetrievalChannels(
     ...(frame.line === undefined ? {} : { line: frame.line }),
     origin: "diagnostic",
   }));
-  const references = uniqueReferences([
-    ...diagnosticFrames,
-    ...extractPathReferences(trace.questionText),
-    ...supplied,
-  ]);
+  const paths = pathReferenceExtraction(trace.questionText);
+  const references = uniqueReferences([...diagnosticFrames, ...paths.references, ...supplied]);
   const extraction = extractAnchors({
-    text: trace.questionText,
+    text: paths.anchorText,
     maxAnchors: trace.questionText.length,
   });
   const userAnchors = extraction.anchors.filter((anchor) => !referenceAnchor(anchor));

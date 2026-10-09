@@ -1,6 +1,18 @@
 import {
+  logGroundedAnswerActivity,
+  type FollowUpConfiguration,
+} from "./grounded-answer-activity.js";
+import {
+  followUpGroundedAnswer,
+  type FollowUpObservation,
+  type FollowUpResult,
+} from "./grounded-follow-up.js";
+import { admissibleDeclaredScopePath } from "./grounded-explicit-paths.js";
+import { declaredInsufficiencyPaths } from "./grounded-faithfulness.js";
+import {
   repairGroundedAnswer,
   observeGroundedCitationBehaviour,
+  type GroundedRepairResult,
 } from "./grounded-answer-repair.js";
 import type {
   CitationRepairDisposition,
@@ -1078,6 +1090,7 @@ export interface OrchestratorInput {
 }
 
 export interface OrchestratorDeps {
+  readonly followUpConfigurationDisposition?: FollowUpConfiguration["disposition"] | undefined;
   readonly reliableCitationBehaviour?: GroundedCitationBehaviour | undefined;
   readonly observeCitationBehaviour?: ((behaviour: GroundedCitationBehaviour) => void) | undefined;
   readonly answerer: GroundedAnswerer;
@@ -1126,6 +1139,7 @@ export interface OrchestratorDeps {
 }
 
 export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
+  readonly followUp?: FollowUpObservation | undefined;
   readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
   readonly filesInPrompt?: number | undefined;
@@ -1151,6 +1165,8 @@ export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
 // answer. `elapsedMs` here is retrieval-only wall time (no model call), distinct from
 // OrchestratorOutput.elapsedMs which also includes the answer.
 export interface RetrievalOnlyOutput {
+  readonly declarationScopeIndexFor?:
+    ((paths: readonly string[]) => ReadonlyMap<string, "unread-in-scope">) | undefined;
   readonly pack: ConnectedContextPack;
   readonly elapsedMs: number;
   readonly plan: ExplorationPlan;
@@ -2398,6 +2414,7 @@ function isKnownFitSourceAnchor(anchor: SearchAnchor): boolean {
 }
 
 function hasKnownFitSourceTarget(inputs: SearchInputs): boolean {
+  if (inputs.anchors.some((anchor) => anchor.kind === "path")) return true;
   if (inputs.targetDecision.definitionRequested && inputs.targetDecision.kind !== "contextual")
     return true;
   // Preserve source spelling: plain technical routing hints are not independently selected
@@ -9220,7 +9237,7 @@ async function retrieveLiveConnectedContext(
   );
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
-  return connectedContextExecution(
+  const execution = connectedContextExecution(
     withRetrievalSourceDiagnostics(assembled.pack, runtime.progress),
     plan,
     runtime.activity,
@@ -9233,6 +9250,37 @@ async function retrieveLiveConnectedContext(
     workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
+  return {
+    ...execution,
+    output: {
+      ...execution.output,
+      declarationScopeIndexFor: (paths) =>
+        declarationScopeIndex(paths, input, deps, runtime, context),
+    },
+  };
+}
+
+function declarationScopeIndex(
+  paths: readonly string[],
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+): ReadonlyMap<string, "unread-in-scope"> {
+  const verified = new Map<string, "unread-in-scope">();
+  for (const path of paths.slice(0, 3)) {
+    throwIfCancelled(deps.signal);
+    if (runtime.nowMs() >= context.deadlineAtMs) break;
+    if (
+      admissibleDeclaredScopePath(path, {
+        scope: input.scope,
+        searchScope: context.searchScope,
+        fs: runtime.fs,
+      })
+    )
+      verified.set(path, "unread-in-scope");
+  }
+  return verified;
 }
 
 function withRetrievalSourceDiagnostics(
@@ -9586,8 +9634,11 @@ function exhaustedAnswerBudgetDimensions(
   elapsedMs: number,
 ): readonly string[] {
   return [
-    ...(answer.usage.promptTokens > pack.budget.modelInputTokensMax ? ["modelInputTokens"] : []),
-    ...(answer.usage.completionTokens > pack.budget.modelOutputTokensMax
+    ...(pack.usage.modelInputTokens + answer.usage.promptTokens > pack.budget.modelInputTokensMax
+      ? ["modelInputTokens"]
+      : []),
+    ...(pack.usage.modelOutputTokens + answer.usage.completionTokens >
+    pack.budget.modelOutputTokensMax
       ? ["modelOutputTokens"]
       : []),
     ...(pack.budget.elapsedMsMax !== null && elapsedMs > pack.budget.elapsedMsMax
@@ -9600,17 +9651,23 @@ async function groundedAnswerForPack(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   pack: ConnectedContextPack,
+  declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
+  deadlineAtMs?: number,
 ): Promise<GroundedAnswerResult> {
   const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
     modelInputTokensMax: pack.budget.modelInputTokensMax,
     modelOutputTokensMax: pack.budget.modelOutputTokensMax,
     answerOnlyContextAvailable: input.answerOnlyContextAvailable,
     currentQuestion: input.currentQuestion ?? input.query.text,
+    signal: deps.signal,
+    deadlineAtMs,
   });
+  const answer = normalizeGroundedAnswerPayload(payload);
   return validateSingleAnswerEvidence(
-    normalizeGroundedAnswerPayload(payload),
+    answer,
     pack,
     input.currentQuestion ?? input.query.text,
+    declarationScopeIndexFor?.(declaredInsufficiencyPaths(answer.content)),
   );
 }
 
@@ -9626,8 +9683,14 @@ function answeredContextPack(
     ...pack,
     usage: {
       ...pack.usage,
-      modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
-      modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
+      modelInputTokens: Math.min(
+        pack.usage.modelInputTokens + answer.usage.promptTokens,
+        pack.budget.modelInputTokensMax,
+      ),
+      modelOutputTokens: Math.min(
+        pack.usage.modelOutputTokens + answer.usage.completionTokens,
+        pack.budget.modelOutputTokensMax,
+      ),
       elapsedMs: Math.min(
         Math.max(pack.usage.elapsedMs, elapsedMs),
         pack.budget.elapsedMsMax ?? Number.POSITIVE_INFINITY,
@@ -9643,27 +9706,82 @@ function answeredContextPack(
   };
 }
 
+interface RefinedGroundedAnswer extends GroundedRepairResult {
+  readonly pack: ConnectedContextPack;
+  readonly followUp: FollowUpObservation;
+}
+
 async function refinedGroundedAnswer(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   pack: ConnectedContextPack,
   start: number,
   nowMs: () => number,
-): Promise<import("./grounded-answer-repair.js").GroundedRepairResult> {
-  const initial = await groundedAnswerForPack(input, deps, pack);
-  const repairContext = {
-    answer: initial,
+  declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
+): Promise<RefinedGroundedAnswer> {
+  const deadlineAtMs = explorationDeadlineAtMs(start, pack.budget);
+  const initial = await groundedAnswerForPack(
+    input,
+    deps,
     pack,
+    declarationScopeIndexFor,
+    deadlineAtMs,
+  );
+  if (initial.answerKind === "insufficiency")
+    citationCoverageMarkerFor(
+      initial.content,
+      initial.sentEvidencePacks?.[0] ?? pack,
+      nowMs(),
+      deps.correlationId,
+      citationObservation(input, initial),
+    );
+  const followUp = await followUpAnswerForPack(input, deps, pack, initial, deadlineAtMs, nowMs);
+  const repairContext = {
+    answer: followUp.answer,
+    pack: followUp.pack,
     deps,
     nowMs,
     question: input.answerQuestion ?? input.query.text,
-    deadlineAtMs: pack.budget.elapsedMsMax === null ? undefined : start + pack.budget.elapsedMsMax,
+    deadlineAtMs,
   };
-  const repair = await repairGroundedAnswer(repairContext);
+  const repair =
+    followUp.observation.passCount === 1
+      ? { answer: followUp.answer, disposition: "not-needed" as const }
+      : await repairGroundedAnswer(repairContext);
   return {
     ...repair,
+    ...(followUp.failure === undefined ? {} : { failure: followUp.failure }),
+    pack: followUp.pack,
+    followUp: followUp.observation,
     answer: observeGroundedCitationBehaviour({ ...repairContext, answer: repair.answer }),
   };
+}
+
+function followUpAnswerForPack(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  pack: ConnectedContextPack,
+  initial: GroundedAnswerResult,
+  deadlineAtMs: number,
+  nowMs: () => number,
+): Promise<FollowUpResult> {
+  return followUpGroundedAnswer({
+    input,
+    deps,
+    pack,
+    initial,
+    deadlineAtMs,
+    nowMs,
+    retrieve: (next) => retrieveConnectedContextPack(next, deps),
+    answer: (next, retrieved) =>
+      groundedAnswerForPack(
+        next,
+        deps,
+        retrieved.pack,
+        retrieved.declarationScopeIndexFor,
+        deadlineAtMs,
+      ),
+  });
 }
 
 async function answerWithAvailableContext(
@@ -9674,36 +9792,64 @@ async function answerWithAvailableContext(
   sourceEvidenceAvailable: boolean,
   start: number,
   nowMs: () => number,
+  declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
 ): Promise<OrchestratorOutput> {
-  const repair = await refinedGroundedAnswer(input, deps, pack, start, nowMs);
-  const answer = repair.answer;
-  const elapsedMs = Math.max(0, nowMs() - start);
-  const sentPack = answer.sentEvidencePacks?.[0] ?? pack;
-  const unsupportedMarker = citationCoverageMarkerFor(
-    answer.content,
-    sentPack,
-    nowMs(),
-    deps.correlationId,
-    { ...citationObservation(input, answer), citationRepairDisposition: repair.disposition },
+  const repair = await refinedGroundedAnswer(
+    input,
+    deps,
+    pack,
+    start,
+    nowMs,
+    declarationScopeIndexFor,
   );
-  const entailmentMarkers =
-    answer.modelInvoked === false
-      ? []
-      : await entailmentMarkersFor(deps, answer.content, sentPack, nowMs());
-  const markers = [
-    ...(unsupportedMarker === undefined ? [] : [unsupportedMarker]),
-    ...entailmentMarkers,
-  ];
+  const answer = repair.answer;
+  logGroundedAnswerActivity(deps.correlationId, {
+    ...connectedContextActivityIdentity(input),
+    answer,
+    followUp: repair.followUp,
+    repairDisposition: repair.disposition,
+    configuration: deps.followUpConfigurationDisposition,
+    failure: repair.failure,
+  });
+  const elapsedMs = Math.max(0, nowMs() - start);
+  const markers = await refinementMarkers(input, deps, repair, nowMs);
   return {
-    pack: answeredContextPack(pack, answer, elapsedMs, markers, nowMs()),
+    pack: answeredContextPack(repair.pack, answer, elapsedMs, markers, nowMs()),
     assistantContent: answer.content,
     elapsedMs,
     modelInvoked: answer.modelInvoked ?? true,
     ...answerEvidenceFields(answer),
     citationRepairDisposition: repair.disposition,
+    followUp: repair.followUp,
     ...(plan === undefined ? {} : { plan }),
     ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
   };
+}
+
+async function refinementMarkers(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  repair: RefinedGroundedAnswer,
+  nowMs: () => number,
+): Promise<readonly UncertaintyMarker[]> {
+  const answer = repair.answer;
+  const sentPack = answer.sentEvidencePacks?.[0] ?? repair.pack;
+  const unsupportedMarker = citationCoverageMarkerFor(
+    answer.content,
+    sentPack,
+    nowMs(),
+    deps.correlationId,
+    {
+      ...citationObservation(input, answer),
+      followUpPass: repair.followUp.passCount,
+      citationRepairDisposition: repair.disposition,
+    },
+  );
+  const entailmentMarkers =
+    answer.modelInvoked === false
+      ? []
+      : await entailmentMarkersFor(deps, answer.content, sentPack, nowMs());
+  return [...(unsupportedMarker === undefined ? [] : [unsupportedMarker]), ...entailmentMarkers];
 }
 
 export async function runGroundedExploration(
@@ -9715,7 +9861,7 @@ export async function runGroundedExploration(
   // by retrieveConnectedContextPack is deliberately discarded here.
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
-  const { pack, plan } = await retrieveConnectedContextPack(input, deps);
+  const { pack, plan, declarationScopeIndexFor } = await retrieveConnectedContextPack(input, deps);
   // GEN-AI-GROUNDING-002/-003 (RB-4): abstain BEFORE the model call when the assembled pack carries
   // no usable evidence. The local-knowledge and hybrid paths already short-circuit here; the folder
   // path must too, so the model is never asked to answer confidently over zero evidence and no
@@ -9732,7 +9878,16 @@ export async function runGroundedExploration(
       noEvidence: true,
     };
   }
-  return answerWithAvailableContext(input, deps, pack, plan, sourceEvidenceAvailable, start, nowMs);
+  return answerWithAvailableContext(
+    input,
+    deps,
+    pack,
+    plan,
+    sourceEvidenceAvailable,
+    start,
+    nowMs,
+    declarationScopeIndexFor,
+  );
 }
 
 // Re-export DEFAULT_SEARCH_LIMITS for parity with #179 callers that import limits via the

@@ -5,6 +5,7 @@
 // from events/RunResult, never Date objects.
 
 import type { ContextAssemblyDiagnostics, ContextCompactionRecord } from "./context-engineering.js";
+import type { GroundedInsufficiencyDeclaration } from "./bff-wire.js";
 import type { ContextOmissionCounts } from "./connected-context.js";
 import { deepFreeze } from "./deep-freeze.js";
 import type { CostClass } from "./gateway.js";
@@ -283,7 +284,22 @@ export interface EvidenceConnectedContextPlan {
   readonly clarificationReasonHash: string | undefined;
 }
 
+export interface EvidenceConnectedContextFollowUp {
+  readonly passCount: 0 | 1;
+  readonly admittedPathCount: number;
+  readonly trigger: "none" | "insufficiency-declared";
+  readonly outcome:
+    | "not-needed"
+    | "answered"
+    | "still-insufficient"
+    | "budget-refused"
+    | "elapsed-refused"
+    | "disabled";
+  readonly firstDeclarations: readonly GroundedInsufficiencyDeclaration[];
+}
+
 export interface EvidenceConnectedContextAudit {
+  readonly followUp?: EvidenceConnectedContextFollowUp | undefined;
   readonly packSchemaVersion: "1";
   readonly packStableIdHash: string;
   readonly chatIdHash: string | undefined;

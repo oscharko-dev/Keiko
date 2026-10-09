@@ -120,16 +120,23 @@ export function validateCitationRepair(
   numericMarkers?: ReadonlySet<number>,
 ): boolean {
   if (original.length > REPAIR_TEXT_MAX || repaired.length > REPAIR_TEXT_MAX) return false;
-  const reconciliation = reconcileInlineCitations(repaired, index);
-  if (reconciliation.unsupported.length > 0) return false;
-  const numeric =
-    numericMarkers === undefined ? undefined : reconcileNumericCitations(repaired, numericMarkers);
-  if ((numeric?.unsupportedMarkers.length ?? 0) > 0) return false;
-  if (reconciliation.citedScopePaths.size === 0 && (numeric?.citedMarkers.size ?? 0) === 0)
-    return false;
+  if (!hasSupportedRepairMarkers(repaired, index, numericMarkers)) return false;
   return unchangedWithInsertions(
     original,
     repaired,
     repairInsertions(repaired, index, numericMarkers),
   );
+}
+
+function hasSupportedRepairMarkers(
+  repaired: string,
+  index: PackCitationIndex,
+  numericMarkers?: ReadonlySet<number>,
+): boolean {
+  const reconciliation = reconcileInlineCitations(repaired, index);
+  if (reconciliation.unsupported.length > 0) return false;
+  const numeric =
+    numericMarkers === undefined ? undefined : reconcileNumericCitations(repaired, numericMarkers);
+  if ((numeric?.unsupportedMarkers.length ?? 0) > 0) return false;
+  return reconciliation.citedScopePaths.size > 0 || (numeric?.citedMarkers.size ?? 0) > 0;
 }
