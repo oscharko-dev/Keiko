@@ -140,6 +140,10 @@ function isWithinSelectedScope(searchScope: SearchScope, realRelativePath: strin
 // document (DOCX/XLSX/PDF) or a known-but-unsupported document format. The orchestrator uses this
 // to keep every such file off the code-first excerpt-read path so document handling (extraction or
 // a stable unsupported diagnostic) is the single source of truth (Issue #1285).
+export function isExtractableConnectedDocumentPath(scopePath: string): boolean {
+  return EXTENSION_BINDINGS.has(extensionOf(scopePath));
+}
+
 export function isConnectedDocumentPath(scopePath: string): boolean {
   const extension = extensionOf(scopePath);
   return EXTENSION_BINDINGS.has(extension) || UNSUPPORTED_DOCUMENT_EXTENSIONS.has(extension);
