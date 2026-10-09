@@ -32,6 +32,12 @@ import {
   type RetrievalIntent,
   type RetrievalIntentClassification,
 } from "./intent.js";
+import {
+  extractRetrievalChannels,
+  searchReferenceAnchors,
+  type SearchReference,
+} from "./references.js";
+import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -65,10 +71,12 @@ export interface ExplorationPlan {
   readonly planId: string;
   readonly state: ExplorationPlanState;
   readonly retrievalIntent: RetrievalIntent;
+  readonly effectiveRetrievalIntent?: RetrievalIntent;
   readonly directEvidenceLookup: boolean;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
+  readonly references?: readonly SearchReference[];
   readonly targetDecision?: QueryTargetDecision;
   readonly rings: readonly RetrievalRing[];
   readonly budget: ExplorationBudget;
@@ -81,6 +89,8 @@ export interface CreatePlanInput {
   readonly query: RetrievalQuery;
   readonly budget?: ExplorationBudget;
   readonly maxAnchors?: number;
+  readonly previousRetrievalIntent?: RetrievalIntent;
+  readonly references?: readonly SearchReference[];
 }
 
 export interface CreatePlanDeps {
@@ -203,8 +213,8 @@ function buildRing(
   };
 }
 
-const DIRECT_ROUTE_METHOD_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
-const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=.%+*{}/-]*[A-Za-z0-9_}/*-]/u;
+const DIRECT_ROUTE_LOOKUP_RE =
+  /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/[A-Za-z0-9:_?&=.%+*{}/-]{0,1024}[A-Za-z0-9_}/*-]/iu;
 const QUERY_TERM_RE = /[\p{L}\p{N}_]+/gu;
 const HISTORY_QUERY_TERMS: ReadonlySet<string> = new Set([
   "git",
@@ -293,8 +303,7 @@ function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
 
 function isDirectRouteLookup(query: RetrievalQuery): boolean {
   return (
-    DIRECT_ROUTE_METHOD_RE.test(query.text) &&
-    DIRECT_ROUTE_PATH_RE.test(query.text) &&
+    DIRECT_ROUTE_LOOKUP_RE.test(parseDiagnosticTraceText(query.text).questionText) &&
     !hasHistoryQuery(query.text) &&
     !hasSymbolRelation(query.text) &&
     !ROUTE_TRAVERSAL_RE.test(query.text)
@@ -696,31 +705,32 @@ export function createExplorationPlan(
   deps?: CreatePlanDeps,
 ): ExplorationPlan {
   const resolved = resolveInputs(input, deps);
-  const classification = classifyRetrievalIntent(input.query.text, input.scope);
+  const classification = classifyRetrievalIntent(input.query.text, input.scope, {
+    previousIntent: input.previousRetrievalIntent,
+    referencePresent: (input.references?.length ?? 0) > 0,
+  });
   const scopeResult = validateSelectedScope(input.scope);
   if (!scopeResult.ok) {
     return buildScopeInvalidPlan(input, resolved, classification);
   }
-  const extraction = extractAnchors({
-    text: input.query.text,
-    maxAnchors: resolved.maxAnchors,
-  });
-  const targetDecision = resolveQueryTargetDecision(
-    input.query,
-    extraction.anchors,
-    input.maxAnchors,
+  const extraction = extractRetrievalChannels(
+    input.query.text,
+    resolved.maxAnchors,
+    input.references,
   );
-  const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
+  const searchAnchors = [...extraction.anchors, ...searchReferenceAnchors(extraction.references)];
+  const targetDecision = resolveQueryTargetDecision(input.query, searchAnchors, input.maxAnchors);
+  const decision = decideClarification(searchAnchors, input.scope, classification.intent);
   const { rings, directEvidenceLookup } =
     decision.state === "ready"
-      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget, targetDecision)
+      ? composeRings(searchAnchors, input.scope, input.query, resolved.budget, targetDecision)
       : { rings: [], directEvidenceLookup: false };
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
     queryText: input.query.text,
     retrievalIntent: classification.intent,
-    anchorTerms: extraction.anchors.map((a) => a.term),
+    anchorTerms: searchAnchors.map((a) => a.term),
     ringKinds: rings.map((r) => r.kind),
   };
   return {
@@ -728,10 +738,14 @@ export function createExplorationPlan(
     planId: derivePlanId(seed),
     state: decision.state,
     retrievalIntent: classification.intent,
+    ...(classification.effectiveIntent === undefined
+      ? {}
+      : { effectiveRetrievalIntent: classification.effectiveIntent }),
     directEvidenceLookup,
     scope: input.scope,
     query: input.query,
     anchors: extraction.anchors,
+    references: extraction.references,
     targetDecision,
     rings,
     budget: resolved.budget,
