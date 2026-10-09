@@ -416,7 +416,7 @@ unknown, or excess declaration lines are removed before client delivery and hist
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
-maximum of two synthesis calls and the original remaining search/read/token/spend/time grants.
+maximum of two physical synthesis attempts and the original remaining search/read/token/spend/time grants.
 Declared unread targets receive priority during final prompt fitting;
 the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
 fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
@@ -426,8 +426,8 @@ admitted-path count records physical target reads, separately from final sent me
 A file already physically read does not acquire another read through an unread-in-prompt declaration.
 The existing allocator's high/exceeded context pressure refuses follow-up; refusal or clarification
 from a second answer remains still-insufficient. A substantive second answer can resolve retrieval
-while retaining an honest uncited warning, and never obtains a third synthesis slot. Separately
-bounded gateway/context retries and entailment verification retain their existing contracts.
+while retaining an honest uncited warning, and never obtains a third synthesis slot. Gateway and context-window retries consume the same physical attempt slots. Separately
+bounded entailment verification cannot grant another synthesis attempt.
 `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` is default-enabled with one follow-up pass: absent means `1`,
 explicit `1` enables, explicit `0` disables, and every other explicit value fails closed to zero
 passes with a body-free invalid configuration observation (ADR-0180).
@@ -731,3 +731,11 @@ test will catch it.
 - `packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx` — `ContextPackSummary`
   presentation
 - `docs/connected-context-privacy.md` — user-facing privacy contract
+
+Synthesis accounting refines the two-call rule at the actual attempt boundary: initial answers,
+marker repair, follow-up, and context/provider retries share the same turn-owned allowance. The
+answer-details sibling records optional `synthesisCallCount` and `synthesisReservedOutputTokens`.
+Input charges use the canonical sent-prompt estimate as a floor and retain larger reported counts.
+Reported partial output is charged; an uncertain interrupted stream retains its requested output
+upper reservation. A definitive HTTP rejection before generation leaves the spare output grant
+available for bounded recovery. These admission charges do not claim exact measured consumption.

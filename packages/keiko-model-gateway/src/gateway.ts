@@ -15,6 +15,7 @@ import {
   GatewayError,
   ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
+  ProviderError,
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -97,6 +98,55 @@ export interface GatewaySpendReservation {
   settle(usage: UsageMetadata | undefined): void;
 }
 
+function settleCallerAttempt(
+  reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
+  usage: Pick<UsageMetadata, "promptTokens" | "completionTokens"> | undefined,
+  dispatched: boolean,
+  outputState: "observed" | "none" | "unknown" = usage === undefined ? "unknown" : "observed",
+): void {
+  reservation?.settle(usage, dispatched, outputState);
+}
+
+function settleFailedCallerAttempt(
+  reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
+  failure: unknown,
+  dispatched: boolean,
+): void {
+  settleCallerAttempt(
+    reservation,
+    failedCallerAttemptUsage(failure),
+    dispatched,
+    failedCallerOutputState(failure),
+  );
+}
+
+function callerAdmittedRequest(
+  request: GatewayCallRequest,
+  reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
+): GatewayCallRequest {
+  const limit = reservation?.maxOutputTokens;
+  return limit === undefined ? request : { ...request, maxOutputTokens: limit };
+}
+
+function failedCallerOutputState(failure: unknown): "observed" | "none" | "unknown" {
+  if (failure instanceof GatewayError && (failure.partialUsage?.completionTokens ?? 0) > 0)
+    return "observed";
+  if (failure instanceof ContextOverflowError && failure.partialUsage === undefined) return "none";
+  if (
+    failure instanceof ProviderError &&
+    failure.httpStatus >= 400 &&
+    failure.partialUsage === undefined
+  )
+    return "none";
+  return "unknown";
+}
+
+function failedCallerAttemptUsage(
+  failure: unknown,
+): Pick<UsageMetadata, "promptTokens" | "completionTokens"> | undefined {
+  return failure instanceof GatewayError ? failure.partialUsage : undefined;
+}
+
 export interface GatewayDeps {
   readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly adapter?: ProviderAdapter | undefined;
@@ -149,6 +199,22 @@ export interface ContextWindowReport {
 // `GatewayRequest`: the extra property is optional, so the contract type is still assignable to
 // this one.
 export interface GatewayCallRequest extends GatewayRequest {
+  /** Optional caller-owned narrowing grant, checked for every provider attempt, including retry.
+   * Local count-only metadata; never serialized into the provider request. Missing keeps the
+   * existing retry policy. A refused grant is a non-provider admission failure.
+   */
+  readonly attemptAdmission?:
+    | ((input: { readonly promptTokens: number; readonly maxOutputTokens: number }) =>
+        | {
+            readonly maxOutputTokens?: number | undefined;
+            settle(
+              usage: Pick<UsageMetadata, "promptTokens" | "completionTokens"> | undefined,
+              dispatched: boolean,
+              outputState?: "observed" | "none" | "unknown",
+            ): void;
+          }
+        | undefined)
+    | undefined;
   readonly logContext?: ModelGatewayLogContext | undefined;
   /**
    * A closed local profile; never serialized into a provider request body. It selects only the
@@ -2089,20 +2155,20 @@ export class Gateway {
     admission: CircuitBreakerAdmission,
   ): AsyncGenerator<GatewayStreamChunk> {
     const { adapter, route, ids, promptAdmission } = state;
-    const schemaRepair = state.attempts.schemaRepair;
     let reservation: GatewaySpendReservation | undefined;
+    let callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     let received = false;
     let terminal: GatewayStreamChunk | undefined;
-    const logRepair = (state: "scheduled" | "denied"): void => {
-      this.logRequestRepair(route.capability, ids.correlationId, schemaRepair, request, state);
-    };
+    const logRepair = this.streamRepairLogger(state, request);
     try {
       const attemptBudget = streamAttemptBudgetMs(adapter, route, bounds);
       const remaining = await promptAdmission.admit(request, attemptBudget);
       logRepair("scheduled");
       bounds = { budgetMs: remaining, silenceMs: Math.min(bounds.silenceMs, remaining) };
+      callerReservation = this.callerAttemptReservation(request, route.capability);
+      request = callerAdmittedRequest(request, callerReservation);
       reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       admitted = true;
       const stream = this.readProviderStream(adapter, request, route.provider, ids, bounds);
@@ -2120,14 +2186,31 @@ export class Gateway {
     } catch (error) {
       if (error instanceof ContextOverflowError) logRepair("denied");
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
+      settleFailedCallerAttempt(callerReservation, error, admitted);
       recordProviderFailure(admission, error, admitted);
       throw error;
     } finally {
       // Closing an iterator early does not enter catch and is not proof of provider recovery.
       admission.settle("non-provider-fault");
       reservation?.settle(usage);
+      settleCallerAttempt(callerReservation, usage, admitted);
     }
     if (terminal !== undefined) yield terminal;
+  }
+
+  private streamRepairLogger(
+    state: PreparedStream,
+    request: GatewayCallRequest,
+  ): (repairState: "scheduled" | "denied") => void {
+    return (repairState): void => {
+      this.logRequestRepair(
+        state.route.capability,
+        state.ids.correlationId,
+        state.attempts.schemaRepair,
+        request,
+        repairState,
+      );
+    };
   }
 
   private async *readProviderStream(
@@ -2222,7 +2305,7 @@ export class Gateway {
   ): Promise<NormalizedResponse> {
     const { adapter, correlationId } = attempt;
     const { capability } = attempt.route;
-    const request = attempt.state.request;
+    let request = attempt.state.request;
     const { admission, remainingMs } = await this.admitAttempt(
       provider,
       request,
@@ -2235,17 +2318,14 @@ export class Gateway {
     provider = { ...provider, timeoutMs: Math.min(provider.timeoutMs, remainingMs) };
     bounds = clippedStreamBounds(bounds, remainingMs);
     let reservation: GatewaySpendReservation | undefined;
+    let callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     try {
-      const remaining = await attempt.promptAdmission.admit(
-        request,
-        bounds?.budgetMs ?? provider.timeoutMs,
-      );
-      provider = { ...provider, timeoutMs: Math.min(provider.timeoutMs, remaining) };
-      if (bounds !== undefined)
-        bounds = { budgetMs: remaining, silenceMs: Math.min(bounds.silenceMs, remaining) };
+      ({ provider, bounds } = await this.admitBufferedPrompt(attempt, provider, bounds));
       this.logAttemptRepair(attempt, "scheduled");
+      callerReservation = this.callerAttemptReservation(request, capability);
+      request = callerAdmittedRequest(request, callerReservation);
       reservation = this.spendBudget?.reserve(capability, request, correlationId);
       admitted = true;
       const response = await readAnswer(adapter, request, provider, bounds);
@@ -2255,13 +2335,54 @@ export class Gateway {
     } catch (error) {
       if (error instanceof ContextOverflowError) this.logAttemptRepair(attempt, "denied");
       usage = measuredCatalogFailureUsage(error, capability, correlationId);
+      settleFailedCallerAttempt(callerReservation, error, admitted);
       // A client-initiated cancel is not a provider fault — skip the breaker.
       recordProviderFailure(admission, error, admitted);
       throw error;
     } finally {
       admission.settle("non-provider-fault");
       reservation?.settle(usage);
+      settleCallerAttempt(callerReservation, usage, admitted);
     }
+  }
+
+  private async admitBufferedPrompt(
+    attempt: BufferedChatAttempt,
+    provider: ModelProviderConfig,
+    bounds: StreamReadBounds | undefined,
+  ): Promise<{
+    readonly provider: ModelProviderConfig;
+    readonly bounds: StreamReadBounds | undefined;
+  }> {
+    const remaining = await attempt.promptAdmission.admit(
+      attempt.state.request,
+      bounds?.budgetMs ?? provider.timeoutMs,
+    );
+    return {
+      provider: { ...provider, timeoutMs: Math.min(provider.timeoutMs, remaining) },
+      bounds:
+        bounds === undefined
+          ? undefined
+          : { budgetMs: remaining, silenceMs: Math.min(bounds.silenceMs, remaining) },
+    };
+  }
+
+  private callerAttemptReservation(
+    request: GatewayCallRequest,
+    capability: ModelCapability,
+  ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
+    const admit = request.attemptAdmission;
+    if (admit === undefined) return undefined;
+    const profile = deriveContextProfileFromCapability(capability);
+    const reservation = admit({
+      promptTokens: countGatewayPromptTokens(request, profile.tokenAccounting, {
+        contextWindow: profile.maxInputTokens,
+      }),
+      maxOutputTokens: request.maxOutputTokens ?? profile.reservedOutputTokens,
+    });
+    if (reservation === undefined)
+      throw new ContextOverflowError("Caller synthesis attempt grant exhausted before dispatch");
+    return reservation;
   }
 
   // The admission of an attempt, the first one's and a retry's, buffered or streamed: the wait is
