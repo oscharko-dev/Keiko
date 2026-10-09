@@ -2,12 +2,48 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GroundedAnswer } from "@/lib/types";
 import type { RepositoryReferenceEvidence, RepositoryReferenceRoot } from "../repositoryReferences";
 
+interface ReadSource {
+  readonly paths: readonly string[];
+  readonly sourceScopeFingerprint: string | undefined;
+}
+
+function inspectedEvidence(
+  citations: RepositoryReferenceEvidence["citations"],
+  sources: readonly ReadSource[],
+  roots: readonly RepositoryReferenceRoot[],
+): RepositoryReferenceEvidence {
+  const readPaths = sources
+    .filter(
+      (source) =>
+        roots.filter(
+          (root) =>
+            source.sourceScopeFingerprint !== undefined &&
+            root.scopeFingerprints?.includes(source.sourceScopeFingerprint) === true,
+        ).length === 1,
+    )
+    .flatMap((source) => source.paths);
+  return {
+    citations,
+    readPaths: Array.from(new Set(readPaths)),
+    inspectedPaths: sources.flatMap((source) =>
+      source.paths.map((scopePath) => ({
+        scopePath,
+        sourceScopeFingerprint: source.sourceScopeFingerprint,
+      })),
+    ),
+  };
+}
+
 export function useConnectedEvidenceReferences(
   answer: GroundedAnswer | undefined,
   roots: readonly RepositoryReferenceRoot[],
 ): {
   readonly evidence: RepositoryReferenceEvidence | undefined;
-  readonly onReadPaths: (runId: string, paths: readonly string[]) => void;
+  readonly onReadPaths: (
+    runId: string,
+    paths: readonly string[],
+    sourceScopeFingerprint?: string,
+  ) => void;
 } {
   const connected = answer?.groundingKind === "local-knowledge" ? undefined : answer;
   const primaryId = connected?.evidenceRunId;
@@ -28,14 +64,17 @@ export function useConnectedEvidenceReferences(
   }, [key]);
   const [snapshot, setSnapshot] = useState<{
     readonly key: string;
-    readonly byRun: Readonly<Record<string, readonly string[]>>;
+    readonly byRun: Readonly<Record<string, ReadSource>>;
   }>({ key: "", byRun: {} });
   const onReadPaths = useCallback(
-    (runId: string, paths: readonly string[]): void => {
+    (runId: string, paths: readonly string[], sourceScopeFingerprint?: string): void => {
       if (currentKey.current !== key || !runIds.includes(runId)) return;
       setSnapshot((previous) => ({
         key,
-        byRun: { ...(previous.key === key ? previous.byRun : {}), [runId]: paths },
+        byRun: {
+          ...(previous.key === key ? previous.byRun : {}),
+          [runId]: { paths, sourceScopeFingerprint },
+        },
       }));
     },
     [key, runIds],
@@ -44,11 +83,11 @@ export function useConnectedEvidenceReferences(
     evidence:
       connected === undefined
         ? undefined
-        : {
-            citations: connected.citations,
-            readPaths:
-              snapshot.key === key ? Array.from(new Set(Object.values(snapshot.byRun).flat())) : [],
-          },
+        : inspectedEvidence(
+            connected.citations,
+            snapshot.key === key ? Object.values(snapshot.byRun) : [],
+            roots,
+          ),
     onReadPaths,
   };
 }
