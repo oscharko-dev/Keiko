@@ -278,7 +278,11 @@ async function assertPairedAdmissionReport(stateDir: string, correlationId: stri
 
 function customModelConfig(
   modelId = CHAT_MODEL,
-  capability: { readonly contextWindow?: number; readonly maxOutputTokens?: number } = {},
+  capability: {
+    readonly contextWindow?: number;
+    readonly maxInputTokens?: number;
+    readonly maxOutputTokens?: number;
+  } = {},
 ): GatewayConfig {
   return {
     providers: [
@@ -305,6 +309,9 @@ function customModelConfig(
         id: modelId,
         kind: "chat",
         contextWindow: capability.contextWindow ?? 64_000,
+        ...(capability.maxInputTokens === undefined
+          ? {}
+          : { maxInputTokens: capability.maxInputTokens }),
         maxOutputTokens: capability.maxOutputTokens ?? 4_096,
         toolCalling: true,
         structuredOutput: true,
@@ -5369,5 +5376,47 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
     expect(
       log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
     ).toMatchObject({ retrievalIntent: "diagnostic-search" });
+  });
+});
+
+describe("actual fitted repository evidence authority", () => {
+  it("abstains when a 970-token input ceiling fits away every source excerpt", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(
+      join(tmp, "src/validation.ts"),
+      "export function validateFeature() { return true; }\n",
+    );
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const call = vi.fn(() =>
+      Promise.resolve({
+        content: "Validation returns true [src/validation.ts:1].",
+        usage: { promptTokens: 800, completionTokens: 20, totalTokens: 820 },
+        toolCalls: [],
+        finishReason: "stop",
+        model: CHAT_MODEL,
+      }),
+    );
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain validation" })),
+      deps(
+        { call },
+        {},
+        {
+          config: customModelConfig(CHAT_MODEL, {
+            contextWindow: 4096,
+            maxInputTokens: 970,
+            maxOutputTokens: 1024,
+          }),
+          evidenceStore: createInMemoryEvidenceStore(),
+        },
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(call).not.toHaveBeenCalled();
+    expect(result.body).toMatchObject({ citations: [], contextPack: { filesInPrompt: 0 } });
+    expect(result.body).not.toHaveProperty("evidenceRunId");
   });
 });

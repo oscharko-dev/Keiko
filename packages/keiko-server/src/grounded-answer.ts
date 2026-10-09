@@ -1,3 +1,4 @@
+import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import type {
   GroundedAnswerEvidenceDeclaration,
   GroundedInsufficiencyDeclaration,
@@ -11,6 +12,10 @@ export interface GroundedAnswerUsage {
 }
 
 export interface GroundedAnswerResult extends GroundedAnswerEvidenceDeclaration {
+  readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
+  readonly filesInPrompt?: number | undefined;
+  readonly modelInvoked?: boolean | undefined;
+  readonly noEvidence?: boolean | undefined;
   /** Internal verified inventory; never projected as a wire field or included in logs. */
   readonly evidenceScopeIndex?:
     ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> | undefined;
@@ -128,8 +133,18 @@ function normalizedEvidenceDeclaration(
   | "insufficiencyDeclarations"
   | "evidenceScopeIndex"
   | "insufficiencyObservation"
+  | "sentEvidencePacks"
+  | "filesInPrompt"
+  | "modelInvoked"
+  | "noEvidence"
 > {
   return {
+    ...(payload.sentEvidencePacks === undefined
+      ? {}
+      : { sentEvidencePacks: payload.sentEvidencePacks }),
+    ...(payload.filesInPrompt === undefined ? {} : { filesInPrompt: payload.filesInPrompt }),
+    ...(payload.modelInvoked === undefined ? {} : { modelInvoked: payload.modelInvoked }),
+    ...(payload.noEvidence === undefined ? {} : { noEvidence: payload.noEvidence }),
     ...(payload.answerKind === undefined ? {} : { answerKind: payload.answerKind }),
     ...(payload.citationBehaviour === undefined
       ? {}
