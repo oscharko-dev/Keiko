@@ -35,6 +35,14 @@ const QUERY: RetrievalQuery = {
 };
 const LIMITS = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: null, elapsedMsMax: null };
 
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function fixture(): {
   readonly scope: SearchScope;
   readonly fs: WorkspaceFs;
@@ -410,4 +418,47 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
       droppedRecords: 1,
     });
   });
+
+  it.each(["load", "save"])(
+    "returns on abort without waiting for a delayed index %s",
+    async (stage) => {
+      const { scope, fs } = fixture();
+      const entered = deferred();
+      const pending = deferred();
+      const controller = new AbortController();
+      const index = createWorkspaceIndex();
+      const pause = async (): Promise<void> => {
+        entered.resolve();
+        await pending.promise;
+      };
+      const running = searchText(scope, QUERY, LIMITS, {
+        fs,
+        signal: controller.signal,
+        workspaceIndex: {
+          loadSnapshot: async (key, isActive) => {
+            if (stage === "load") await pause();
+            return index.loadSnapshot(key, isActive);
+          },
+          saveSnapshot: async (key, snapshot, isActive) => {
+            if (stage === "save") await pause();
+            await index.saveSnapshot(key, snapshot, isActive);
+          },
+        },
+      });
+      await entered.promise;
+      controller.abort();
+      const returnedBeforeRelease = await Promise.race([
+        running.then(() => true),
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            resolve(false);
+          }, 20);
+        }),
+      ]);
+      pending.resolve();
+      const result = await running;
+      expect(returnedBeforeRelease).toBe(true);
+      expect(result.coverage.reasons).toContain("aborted");
+    },
+  );
 });
