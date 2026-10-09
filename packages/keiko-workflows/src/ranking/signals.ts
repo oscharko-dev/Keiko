@@ -117,7 +117,10 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function detectGenerated(scopePath: string, patterns: readonly string[]): boolean {
+export function isGeneratedRankingPath(
+  scopePath: string,
+  patterns: readonly string[] = DEFAULT_GENERATED_PATTERNS,
+): boolean {
   // Scope paths are workspace-relative (no leading "/"), so a pattern like "/dist/" would
   // miss a root-level "dist/foo.js". Match leading "<pattern-without-slash>/" against the
   // path start AND the original "/<pattern>/" anywhere inside the path. .min.js / .bundle.js
@@ -242,7 +245,7 @@ export function extractSignals(
   context?: RankingContext,
 ): ExtractedSignals {
   const scopePath = deriveScopePath(atomsForPath);
-  const generatedHint = detectGenerated(scopePath, hints.generatedPathPatterns);
+  const generatedHint = isGeneratedRankingPath(scopePath, hints.generatedPathPatterns);
   const provBest = computeProvenanceBestScore(atomsForPath);
   const lexicalScore = bestLexicalScore(atomsForPath);
   const semanticScore = bestSemanticScore(atomsForPath);

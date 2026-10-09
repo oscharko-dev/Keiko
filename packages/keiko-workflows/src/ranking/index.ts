@@ -4,7 +4,7 @@
 // remain implementation detail.
 
 export type { ExtractedSignals, RankingHints, RankingInput } from "./signals.js";
-export { DEFAULT_GENERATED_PATTERNS, extractSignals } from "./signals.js";
+export { DEFAULT_GENERATED_PATTERNS, extractSignals, isGeneratedRankingPath } from "./signals.js";
 
 export type { ScoringWeights } from "./scoring.js";
 export { DEFAULT_SCORING_WEIGHTS, computeScore } from "./scoring.js";
