@@ -489,6 +489,11 @@ system that exists, never beside it:
   OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
   caller and durable spend admission for each actual POST; adapters without that transport hook
   retain the existing gateway boundary. No nested compatibility path grants another attempt.
+  Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
+  optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
+  `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
+  and originating request retain the existing causal link. Candidate counts and model-authored
+  marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or

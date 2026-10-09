@@ -415,6 +415,13 @@ body-free frames, and causes. Normalized synthesis output is buffered before pub
 unknown, or excess declaration lines are removed before client delivery and history persistence.
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+After governed memory attachment, final publication records optional memory observations on the
+existing `chat.response.message` operation: the actual structured
+`uncitedMemoryContextMarkerCount` and closed `memoryContextDisposition`
+(included/excluded/not-requested). Its assistant/request causal relationship remains unchanged.
+This distinguishes actual included memory from budget exclusion across single, multiple, and hybrid
+sources; neither retrieval candidate counts nor model-authored marker prose proves inclusion.
+The observation carries no memory content or answer text.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
 maximum of two physical synthesis attempts and the original remaining search/read/token/spend/time grants.
 Declared unread targets receive priority during final prompt fitting;
@@ -745,3 +752,9 @@ for each physical synthesis HTTP POST, including stream-shape and output-token-f
 fallbacks. This avoids double-reserving the first request at both gateway and adapter boundaries.
 Other adapters retain the gateway-owned attempt boundary. Each reservation settles once; early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
+An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
+before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token
+preflight rejects cyclic schemas before acquisition. Log-sink exceptions remain isolated by the
+existing observability port and do not interrupt healthy dispatch. Durable spend-settlement failure
+remains fatal, while a `finally` settles caller usage and output exposure exactly once and releases
+transport timers. A dispatched attempt never restores its grants merely because accounting failed.
