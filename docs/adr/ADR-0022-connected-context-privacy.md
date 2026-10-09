@@ -489,7 +489,8 @@ the actual sent pack must retain each admitted target before a second gateway di
 fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
 against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
 Follow-up pass count observes a completed retrieval pass even if its additional synthesis is refused;
-admitted-path count records physical target reads, separately from final sent membership.
+admitted-path count records targets retained by follow-up retrieval, independently of physical
+read/byte accounting and final sent membership.
 A file already physically read does not acquire another read through an unread-in-prompt declaration.
 The existing allocator's high/exceeded context pressure refuses follow-up; refusal, clarification,
 or assessment-only content from a second answer remains still-insufficient. Permitted learned
