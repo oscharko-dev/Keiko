@@ -5476,6 +5476,7 @@ describe("actual fitted repository evidence authority", () => {
       expect(answer.contextPack.filesInPrompt).toBe(0);
       expect(answer.contextPack.usage.filesRead).toBeGreaterThan(0);
       expect(answer.citations).toHaveLength(0);
+      expect(answer.evidenceRunId).toBeUndefined();
       expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
         true,
       );
@@ -5725,11 +5726,15 @@ describe("actual fitted repository evidence authority", () => {
           { call },
           {},
           {
-            config: customModelConfig(CHAT_MODEL, {
-              contextWindow: 4096,
-              maxInputTokens: 970,
-              maxOutputTokens: 1024,
-            }),
+            config: {
+              ...customModelConfig(CHAT_MODEL, {
+                contextWindow: 4096,
+                maxInputTokens: 970,
+                maxOutputTokens: 1024,
+              }),
+              // This retained pin owns source-only abstention; learned knowledge has its own proofs.
+              groundedAnswers: { ownAssessment: "disabled" },
+            },
             evidenceStore: createInMemoryEvidenceStore(),
           },
         ),

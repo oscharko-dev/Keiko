@@ -46,7 +46,10 @@ import type {
   GroundedCitationBehaviour,
   GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { validateSingleAnswerEvidence } from "./grounded-answer-evidence.js";
+import {
+  singleSentEvidencePack,
+  validateSingleAnswerEvidence,
+} from "./grounded-answer-evidence.js";
 import {
   rerankGroundedCandidates,
   type PreselectionRerankerResult,
@@ -10172,7 +10175,7 @@ async function refinedGroundedAnswer(
   if (initial.answerKind === "insufficiency")
     citationCoverageMarkerFor(
       initial.content,
-      initial.sentEvidencePacks?.[0] ?? pack,
+      singleSentEvidencePack(initial, pack),
       nowMs(),
       deps.correlationId,
       citationObservation(input, initial),
@@ -10282,7 +10285,7 @@ async function refinementMarkers(
   nowMs: () => number,
 ): Promise<readonly UncertaintyMarker[]> {
   const answer = repair.answer;
-  const sentPack = answer.sentEvidencePacks?.[0] ?? repair.pack;
+  const sentPack = singleSentEvidencePack(answer, repair.pack);
   const unsupportedMarker = citationCoverageMarkerFor(
     answer.content,
     sentPack,
