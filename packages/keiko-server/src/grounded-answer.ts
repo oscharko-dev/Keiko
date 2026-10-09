@@ -11,7 +11,56 @@ export interface GroundedAnswerUsage {
   readonly completionTokens: number;
 }
 
+/** Charge the sent-prompt estimate as a floor; unreported failed output remains unknown. */
+export function groundedSynthesisAttemptUsage(
+  promptTokens: number,
+  reported?: Readonly<Partial<GroundedAnswerUsage>>,
+): GroundedAnswerUsage {
+  return {
+    promptTokens: Math.max(
+      promptTokens,
+      isFiniteCount(reported?.promptTokens) ? reported.promptTokens : 0,
+    ),
+    completionTokens: isFiniteCount(reported?.completionTokens) ? reported.completionTokens : 0,
+  };
+}
+
+/** Factory-owned synthesis attempts, including context-window retries; not gateway authority. */
+export interface GroundedSynthesisCallBudget {
+  remaining(): number;
+  tryReserve(): boolean;
+  pendingUsage(): GroundedAnswerUsage;
+  recordUsage(usage: GroundedAnswerUsage): void;
+  takeUsage(): GroundedAnswerUsage;
+}
+
+export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget {
+  let calls = 0;
+  let usage: GroundedAnswerUsage = { promptTokens: 0, completionTokens: 0 };
+  return {
+    remaining: (): number => 2 - calls,
+    tryReserve: (): boolean => {
+      if (calls >= 2) return false;
+      calls += 1;
+      return true;
+    },
+    pendingUsage: (): GroundedAnswerUsage => ({ ...usage }),
+    recordUsage(next): void {
+      usage = {
+        promptTokens: usage.promptTokens + next.promptTokens,
+        completionTokens: usage.completionTokens + next.completionTokens,
+      };
+    },
+    takeUsage(): GroundedAnswerUsage {
+      const pending = usage;
+      usage = { promptTokens: 0, completionTokens: 0 };
+      return pending;
+    },
+  };
+}
+
 export interface GroundedAnswerResult extends GroundedAnswerEvidenceDeclaration {
+  readonly synthesisCallCount?: number | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
   readonly filesInPrompt?: number | undefined;
   readonly modelInvoked?: boolean | undefined;
@@ -120,6 +169,9 @@ export function normalizeGroundedAnswerPayload(
     },
     ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
     ...(payload.promptContext === undefined ? {} : { promptContext: payload.promptContext }),
+    ...(payload.synthesisCallCount === undefined
+      ? {}
+      : { synthesisCallCount: payload.synthesisCallCount }),
     ...normalizedEvidenceDeclaration(payload),
   };
 }
