@@ -167,7 +167,7 @@ afterEach((): void => {
 describe("explicit-path trust boundary", () => {
   it.each([
     { kind: "escaping", reason: "outside-scope" },
-    { kind: "dangling", reason: "missing" },
+    { kind: "dangling", reason: "outside-scope" },
     { kind: "denied-alias", reason: "denied" },
     { kind: "hard-link", reason: "outside-scope" },
   ])(
