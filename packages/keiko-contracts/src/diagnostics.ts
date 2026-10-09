@@ -48,6 +48,8 @@ import {
 } from "./support-report-policy.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
+import { SELECTED_SCOPE_KINDS } from "./connected-context.js";
+import type { ChatConnectedScope } from "./bff-wire.js";
 
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
 // or CLOSED (2). A closed vocabulary, not a raw number, so a future EventSource-shaped value can
@@ -560,6 +562,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
+  readonly scopeNotice?: ClientDiagnosticScopeNotice | undefined;
+  readonly evidenceInspection?: ClientDiagnosticEvidenceInspection | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
@@ -760,6 +764,8 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "answerCopy",
   "answerSpeech",
   "citationActivation",
+  "scopeNotice",
+  "evidenceInspection",
   "supportReportDelivery",
   "supportReportPreparation",
   "filesScopeDecision",
@@ -774,8 +780,9 @@ const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
 ]);
 function allowsClosedReportFailureField(value: Record<string, unknown>, key: string): boolean {
   return (
-    isRecord(value.answerCopy) &&
-    value.answerCopy.outcome === "failed" &&
+    ((isRecord(value.answerCopy) && value.answerCopy.outcome === "failed") ||
+      (isRecord(value.evidenceInspection) &&
+        value.evidenceInspection.reason === "manifest-fetch-failed")) &&
     (key === "errorKind" || key === "errorEvidence")
   );
 }
@@ -805,7 +812,7 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
     hasExclusiveClosedReportContext(value) &&
-    hasValidCitationActivationContext(value) &&
+    hasValidRetrievalEvidenceContext(value) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
     isOptional(value.supportReportPreparation, isClientSupportReportPreparation) &&
     isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
@@ -2351,5 +2358,113 @@ function hasValidCitationActivationContext(value: Record<string, unknown>): bool
   return (
     isActivityLogCorrelationId(value.correlationId) &&
     isClientDiagnosticCitationActivation(value.citationActivation)
+  );
+}
+
+export const CLIENT_SCOPE_NOTICE_REASONS = Object.freeze([
+  "narrowed-to-file",
+  "narrowed-to-directory",
+  "widened",
+  "pinned-folder",
+  "missing-evidence-added",
+] as const);
+
+/** The acknowledged scope change or human repair, without a path or source identity. */
+export interface ClientDiagnosticScopeNotice {
+  readonly reason: (typeof CLIENT_SCOPE_NOTICE_REASONS)[number];
+  readonly scopeKind: ChatConnectedScope["kind"];
+  readonly pathCount: number;
+}
+
+const SCOPE_NOTICE_REASONS: ReadonlySet<unknown> = new Set(CLIENT_SCOPE_NOTICE_REASONS);
+const SCOPE_NOTICE_KINDS: ReadonlySet<unknown> = new Set(SELECTED_SCOPE_KINDS);
+const SCOPE_NOTICE_KEYS = new Set(["reason", "scopeKind", "pathCount"]);
+
+function coherentScopePathCount(value: Record<string, unknown>): boolean {
+  if (value.scopeKind === "workspace-root") return value.pathCount === 0;
+  if (value.scopeKind === "directory") return value.pathCount === 1;
+  return value.pathCount !== 0;
+}
+
+function coherentScopeNotice(value: Record<string, unknown>): boolean {
+  if (!coherentScopePathCount(value)) return false;
+  if (value.reason === "narrowed-to-file" || value.reason === "missing-evidence-added")
+    return value.scopeKind === "files";
+  if (value.reason === "narrowed-to-directory") return value.scopeKind === "directory";
+  return value.reason !== "pinned-folder" || value.scopeKind !== "files";
+}
+
+function isClientDiagnosticScopeNotice(value: unknown): value is ClientDiagnosticScopeNotice {
+  if (!isRecord(value)) return false;
+  return (
+    Object.keys(value).length === SCOPE_NOTICE_KEYS.size &&
+    Object.keys(value).every((key) => SCOPE_NOTICE_KEYS.has(key)) &&
+    SCOPE_NOTICE_REASONS.has(value.reason) &&
+    SCOPE_NOTICE_KINDS.has(value.scopeKind) &&
+    isBoundedNonNegativeInteger(value.pathCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    coherentScopeNotice(value)
+  );
+}
+
+function hasValidScopeNoticeContext(value: Record<string, unknown>): boolean {
+  return (
+    value.scopeNotice === undefined ||
+    (isActivityLogCorrelationId(value.correlationId) &&
+      isClientDiagnosticScopeNotice(value.scopeNotice))
+  );
+}
+
+export const CLIENT_EVIDENCE_INSPECTION_REASONS = Object.freeze([
+  "summary-expanded",
+  "file-table-opened",
+  "manifest-fetch-failed",
+] as const);
+
+/** Inspection counts refer to the authenticated evidence manifest, never file contents. */
+export interface ClientDiagnosticEvidenceInspection {
+  readonly reason: (typeof CLIENT_EVIDENCE_INSPECTION_REASONS)[number];
+  readonly readFileCount?: number | undefined;
+  readonly omittedFileCount?: number | undefined;
+}
+
+const EVIDENCE_INSPECTION_REASONS: ReadonlySet<unknown> = new Set(
+  CLIENT_EVIDENCE_INSPECTION_REASONS,
+);
+const EVIDENCE_INSPECTION_KEYS = new Set(["reason", "readFileCount", "omittedFileCount"]);
+
+function isClientDiagnosticEvidenceInspection(
+  value: unknown,
+): value is ClientDiagnosticEvidenceInspection {
+  if (!isRecord(value)) return false;
+  return (
+    Object.keys(value).every((key) => EVIDENCE_INSPECTION_KEYS.has(key)) &&
+    EVIDENCE_INSPECTION_REASONS.has(value.reason) &&
+    isOptional(value.readFileCount, (count) =>
+      isBoundedNonNegativeInteger(count, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX),
+    ) &&
+    isOptional(value.omittedFileCount, (count) =>
+      isBoundedNonNegativeInteger(count, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX),
+    )
+  );
+}
+
+function hasValidEvidenceInspectionContext(value: Record<string, unknown>): boolean {
+  if (value.evidenceInspection === undefined) return true;
+  if (
+    !isActivityLogCorrelationId(value.correlationId) ||
+    !isClientDiagnosticEvidenceInspection(value.evidenceInspection)
+  )
+    return false;
+  const failed = value.evidenceInspection.reason === "manifest-fetch-failed";
+  return failed
+    ? isActivityLogErrorKind(value.errorKind) && isClientErrorEvidence(value.errorEvidence)
+    : value.errorKind === undefined && value.errorEvidence === undefined;
+}
+
+function hasValidRetrievalEvidenceContext(value: Record<string, unknown>): boolean {
+  return (
+    hasValidCitationActivationContext(value) &&
+    hasValidScopeNoticeContext(value) &&
+    hasValidEvidenceInspectionContext(value)
   );
 }

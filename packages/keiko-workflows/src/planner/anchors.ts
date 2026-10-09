@@ -174,7 +174,8 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // points, which is quadratic on adversarial input (measured empirically before this change).
 // Exported (module-internal, not re-exported from index.ts) solely so the co-located test can
 // exercise the pattern directly for the S8786 regression test.
-export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
+export const PATH_RE =
+  /(?:file:\/\/)?\/?(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}(?::\d{1,9}(?::\d{1,9})?)?/g;
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
 const DEFINITION_TARGET_BEFORE_VERB_RE =
@@ -219,6 +220,8 @@ export type SearchAnchorKind = "literal" | "identifier" | "path" | "quoted";
 
 export interface SearchAnchor {
   readonly term: string;
+  /** Original path spelling for filesystem resolution; `term` remains the lexical key. */
+  readonly sourceTerm?: string;
   readonly weight: number;
   readonly kind: SearchAnchorKind;
 }
@@ -400,6 +403,7 @@ function freeze(
 ): readonly SearchAnchor[] {
   return anchors.map((a) => ({
     term: caseSensitive ? a.sourceTerm : a.term,
+    ...(a.kind === "path" && a.sourceTerm !== a.term ? { sourceTerm: a.sourceTerm } : {}),
     weight: a.weight,
     kind: a.kind,
   }));
