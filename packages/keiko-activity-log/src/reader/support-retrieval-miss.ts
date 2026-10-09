@@ -4,6 +4,7 @@ import {
   isActivityLogIdentityDigest,
   isActivityLogInstanceId,
   isActivityLogProcessId,
+  isActivityLogSequence,
   type SupportRetrievalMissFields,
   type SupportRetrievalMissFinding,
   type SupportRetrievalMissReason,
@@ -19,6 +20,7 @@ interface RetrievalLine {
   readonly correlationId?: string | undefined;
   readonly pid?: number | undefined;
   readonly instanceId?: string | undefined;
+  readonly seq?: number | undefined;
   readonly extra?: Readonly<Record<string, unknown>> | undefined;
 }
 
@@ -44,6 +46,8 @@ interface TurnObservation {
   answered: boolean;
   closed: boolean;
   ambiguousLifecycle: boolean;
+  answerDetailsObserved: boolean;
+  answerDetailsSequence: number | undefined;
   readonly started: boolean;
 }
 
@@ -252,6 +256,8 @@ function createTurn(
     answered: false,
     closed: false,
     ambiguousLifecycle: false,
+    answerDetailsObserved: false,
+    answerDetailsSequence: undefined,
     started,
   };
 }
@@ -292,26 +298,37 @@ function observeTurnLine(
   if (observeLifecycle(state, line, scopeIdentity, key)) return;
   const extra = retrievalExtra(line);
   if (extra === undefined) return;
-  let turn = currentObservationTurn(state, key, line.op);
+  let turn = currentObservationTurn(state, key, line);
   if (turn === undefined) {
     turn = createTurn(correlationId, line, scopeIdentity, state.started.has(key));
     state.latest.set(key, turn);
     state.turns.push(turn);
   }
   observeQuery(turn, extra, index);
-  if (line.op === "search.connected-context.answer-details") turn.closed = true;
+  if (line.op === "search.connected-context.answer-details") {
+    turn.closed = true;
+    turn.answerDetailsObserved = true;
+    turn.answerDetailsSequence = isActivityLogSequence(line.seq) ? line.seq : undefined;
+  }
 }
 
 function currentObservationTurn(
   state: TurnCollection,
   key: string,
-  op: string,
+  line: RetrievalLine,
 ): TurnObservation | undefined {
   const turn = state.latest.get(key);
-  if (turn?.closed !== true || !startsSelectionObservation(op)) return turn;
+  if (turn?.closed !== true || !startsLaterObservation(turn, line)) return turn;
   state.started.delete(key);
   state.latest.delete(key);
   return undefined;
+}
+
+function startsLaterObservation(turn: TurnObservation, line: RetrievalLine): boolean {
+  if (startsSelectionObservation(line.op)) return true;
+  if (line.op !== "search.connected-context.answer-details" || !turn.answerDetailsObserved)
+    return false;
+  return !isActivityLogSequence(line.seq) || line.seq !== turn.answerDetailsSequence;
 }
 
 function startsSelectionObservation(op: string): boolean {
