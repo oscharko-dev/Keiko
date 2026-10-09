@@ -269,6 +269,15 @@ export async function connectedChatObservation(runtime, result, manifests, targe
   };
 }
 
+function canonicalNumericValue(value) {
+  const token = value.replace(/\s/gu, "").replace("−", "-").replace(",", ".");
+  const sign = token.startsWith("-") ? "-" : "";
+  const [whole, fraction = ""] = token.replace(/^[+-]/u, "").split(".");
+  const integer = whole.replace(/^0+(?=\d)/u, "");
+  const decimal = fraction.replace(/0+$/u, "");
+  return `${sign}${integer}${decimal.length > 0 ? `.${decimal}` : ""}`;
+}
+
 /** A numeric synthetic-corpus witness, not a semantic verdict over arbitrary prose. */
 export async function expectedSourceFactObservation(content, fact) {
   if (fact === undefined) return {};
@@ -278,14 +287,19 @@ export async function expectedSourceFactObservation(content, fact) {
   );
   const { stripInlineCitations } = await importBuilt("keiko-server", "grounded-faithfulness.js");
   const source = stripInlineCitations(ownAssessmentSourceText(content));
-  const number = fact.number.replace(".", "[.,]");
   const unit =
     fact.unit === "seconds"
       ? "(?:seconds?|Sekunden|s)\\b"
       : "(?:°\\s*C|degrees?(?:\\s+Celsius)?|Celsius|Grad(?:\\s+Celsius)?)\\b";
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${number}\\s*(?:[-–]\\s*)?${unit}`, "iu");
+  const pattern = new RegExp(
+    `(?<![\\p{L}\\p{N}.,+\\-−])((?:[+\\-−]\\s*)?\\d+(?:[.,]\\d+)?)\\s*(?:[-–]\\s*)?${unit}`,
+    "giu",
+  );
+  const expected = canonicalNumericValue(fact.number);
   return {
-    expectedSourceFactPresent: pattern.test(source),
+    expectedSourceFactPresent: [...source.matchAll(pattern)].some(
+      (match) => canonicalNumericValue(match[1]) === expected,
+    ),
     expectedSourceFactSha256: createHash("sha256").update(JSON.stringify(fact)).digest("hex"),
   };
 }
