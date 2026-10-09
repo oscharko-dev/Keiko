@@ -301,6 +301,60 @@ async function seedRepositoryPod(
   return { store };
 }
 
+async function staleFixture(extra: Readonly<Record<string, unknown>> = {}): Promise<{
+  readonly files: Record<string, string>;
+  readonly fs: WorkspaceFs;
+  readonly provider: SemanticSearchProvider;
+  readonly embedding: ReturnType<
+    typeof vi.fn<(request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>>
+  >;
+  readonly observed: ReturnType<typeof vi.fn<(observation: unknown) => void>>;
+  readonly close: () => void;
+}> {
+  const files = {
+    "src/auth.ts": "export const sessionState = 'indexed';\n",
+    "src/peer.ts": "export const peer = 'indexed';\n",
+  };
+  const embedding = vi.fn((request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+    Promise.resolve({
+      ok: true,
+      value: { vector: vectorFor(request.input), modelId: request.modelId },
+    }),
+  );
+  const deps = depsWith(config(true), embedding);
+  const fs = testFs(files);
+  const pod = await seedRepositoryPod(deps, fs, Object.keys(files));
+  files["src/auth.ts"] = "export const sessionState = 'session renewal changed';\n";
+  files["src/peer.ts"] = "export const peer = 'session renewal changed too';\n";
+  const observed = vi.fn((_observation: unknown): void => undefined);
+  const provider = configuredRepoSemanticSearchProviderFor(
+    deps,
+    undefined,
+    Object.assign(
+      {
+        fs,
+        maxCandidates: 8,
+        repositoryPod: { store: pod.store, repositoryRoot: ROOT },
+        observeSemanticFreshness: observed,
+      },
+      extra,
+    ),
+  );
+  if (provider === undefined) throw new Error("expected semantic provider");
+  embedding.mockClear();
+  return {
+    files,
+    fs,
+    provider,
+    embedding,
+    observed,
+    close: (): void => {
+      pod.store.close();
+      deps.store.close();
+    },
+  };
+}
+
 async function searchMissingCandidate(
   provider: SemanticSearchProvider,
 ): Promise<readonly SemanticSearchMatch[]> {
@@ -703,6 +757,90 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     expect(inputs).toEqual([]);
     pod.store.close();
     deps.store.close();
+  });
+
+  it("retains current lexical atoms and reports safe stale paths without reusing stale vectors", async () => {
+    const fixture = await staleFixture();
+    try {
+      const search = await searchText(
+        { scopeId: "stale-search", relativePaths: [], workspace: testWorkspace() },
+        QUERY,
+        undefined,
+        {
+          fs: fixture.fs,
+          semanticSearchProvider: fixture.provider,
+          nowMs: (): number => 1,
+        },
+      );
+      expect(
+        search.atoms.some(
+          (atom) => atom.scopePath === "src/auth.ts" && atom.provenance.kind === "lexical-search",
+        ),
+      ).toBe(true);
+      expect(search.atoms.some((atom) => atom.provenance.kind === "semantic-search")).toBe(false);
+      expect(fixture.observed).toHaveBeenLastCalledWith({
+        stalePaths: ["src/auth.ts", "src/peer.ts"],
+        refreshedPaths: [],
+        unavailableFileCount: 0,
+      });
+      expect(fixture.embedding).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("refreshes only explicitly enabled bounded live fragments", async () => {
+    const fixture = await staleFixture({
+      semanticRefreshFilesMax: 1,
+      deadlineAtMs: 1_001,
+      nowMs: (): number => 1,
+    });
+    try {
+      const hits = await fixture.provider.search({
+        query: QUERY,
+        documents: Object.entries(fixture.files).map(([scopePath, text]) => ({ scopePath, text })),
+      });
+      expect(hits.map((hit) => hit.scopePath)).toEqual(["src/auth.ts"]);
+      expect(fixture.observed).toHaveBeenLastCalledWith({
+        stalePaths: ["src/auth.ts", "src/peer.ts"],
+        refreshedPaths: ["src/auth.ts"],
+        unavailableFileCount: 0,
+      });
+      const fragments = fixture.embedding.mock.calls.filter(([request]) =>
+        request.input.startsWith("Path: "),
+      );
+      expect(fragments).toHaveLength(1);
+      expect(fragments[0]?.[0].input).toContain("session renewal changed");
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("reports stale fallback but sends no embedding request after the explicit refresh deadline", async () => {
+    const fixture = await staleFixture({
+      semanticRefreshFilesMax: 8,
+      deadlineAtMs: 1,
+      nowMs: (): number => 1,
+    });
+    try {
+      await expect(
+        fixture.provider.search({
+          query: QUERY,
+          documents: Object.entries(fixture.files).map(([scopePath, text]) => ({
+            scopePath,
+            text,
+          })),
+        }),
+      ).resolves.toEqual([]);
+      expect(fixture.embedding).not.toHaveBeenCalled();
+      expect(fixture.observed).toHaveBeenLastCalledWith({
+        stalePaths: ["src/auth.ts", "src/peer.ts"],
+        refreshedPaths: [],
+        unavailableFileCount: 0,
+      });
+    } finally {
+      fixture.close();
+    }
   });
 
   it("hashes bounded live workspace bytes instead of trusting a stale candidate snapshot", async () => {
