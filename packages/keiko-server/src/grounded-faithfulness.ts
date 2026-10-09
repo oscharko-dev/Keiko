@@ -67,6 +67,18 @@ export function isGroundedAssessmentOnly(content: string): boolean {
   );
 }
 
+/** Source selection warnings apply to source answers; retrieval counters remain unchanged. */
+export function assessmentAwareUncertainty<T extends { readonly kind: string }>(
+  content: string,
+  markers: readonly T[],
+): readonly T[] {
+  return isGroundedAssessmentOnly(content)
+    ? markers.filter(
+        (marker) => marker.kind !== "no-evidence" && marker.kind !== "low-confidence-selection",
+      )
+    : markers;
+}
+
 /** Project only authoritative normalized declaration fields into public answer wires. */
 export function groundedAnswerEvidenceFields(
   answer: GroundedAnswerEvidenceDeclaration,

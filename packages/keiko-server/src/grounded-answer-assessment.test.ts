@@ -6,10 +6,27 @@ import {
   isGroundedAssessmentOnly,
   normalizeGroundedAnswerAssessment,
 } from "./grounded-answer-assessment.js";
+import { assessmentAwareUncertainty } from "./grounded-faithfulness.js";
 
 afterEach(resetServerLogger);
 
 describe("shared grounded assessment normalization", () => {
+  it("keeps safety warnings while limiting selection warnings to actual source answers", () => {
+    const markers = [
+      { kind: "no-evidence" },
+      { kind: "low-confidence-selection" },
+      { kind: "unsupported-citation" },
+      { kind: "budget-exhausted" },
+    ];
+    expect(assessmentAwareUncertainty("<assessment>General view.</assessment>", markers)).toEqual([
+      { kind: "unsupported-citation" },
+      { kind: "budget-exhausted" },
+    ]);
+    expect(
+      assessmentAwareUncertainty("Source fact. <assessment>General view.</assessment>", markers),
+    ).toBe(markers);
+    expect(assessmentAwareUncertainty("Missing evidence: [src/a.ts]", markers)).toBe(markers);
+  });
   it.each([
     ["<assessment>General recommendation.</assessment>", true],
     ["Fact. <assessment>General recommendation.</assessment>", false],
@@ -29,6 +46,7 @@ describe("shared grounded assessment normalization", () => {
           content: "Fact [src/a.ts:1]. <assessment>General recommendation.</assessment>",
           modelInvoked: true,
           completedSynthesisCallCount: 1,
+          usage: { promptTokens: 0, completionTokens: 0 },
         },
         policy,
         "assessment-normalization",
@@ -53,7 +71,10 @@ describe("shared grounded assessment normalization", () => {
   it("uses an honest localized refusal after an assessment-only block is disabled", () => {
     expect(
       normalizeGroundedAnswerAssessment(
-        { content: "<assessment>General recommendation.</assessment>" },
+        {
+          content: "<assessment>General recommendation.</assessment>",
+          usage: { promptTokens: 0, completionTokens: 0 },
+        },
         "disabled",
         undefined,
         "Bitte erkläre das.",
