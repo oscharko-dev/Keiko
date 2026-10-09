@@ -12,7 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
-import { handleGroundedAsk } from "./grounded-qa.js";
+import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import type { RouteContext } from "./routes.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
@@ -29,6 +29,7 @@ const FOLLOW_UP = "Companion is 42 [lib/Companion.ts:1].";
 const OVERFLOW = "context-overflow";
 const TRANSIENT = "transient-provider-fault";
 const PARTIAL_USAGE_FAULT = "transport-after-reported-usage";
+const UNMEASURED_PARTIAL_FAULT = "transport-after-unmeasured-output";
 let root = "";
 let stateDir = "";
 const disposals: UiHandlerDeps[] = [];
@@ -59,6 +60,8 @@ afterEach(async () => {
 });
 
 function providerResponse(content: string): Response {
+  if (content === UNMEASURED_PARTIAL_FAULT)
+    return responseWithUnmeasuredOutputThenTransportFailure();
   if (content === PARTIAL_USAGE_FAULT) return responseWithReportedUsageThenTransportFailure();
   if (content === TRANSIENT)
     return new Response(
@@ -88,6 +91,31 @@ function providerResponse(content: string): Response {
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+}
+
+function responseWithUnmeasuredOutputThenTransportFailure(): Response {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller): void {
+      if (reads === 0)
+        controller.enqueue(
+          new TextEncoder().encode(
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "partial" } }] })}\n\n`,
+          ),
+        );
+      else controller.error(new TypeError("Synthetic socket reset after unmeasured output"));
+      reads += 1;
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function requestedOutputTokens(body: string): number {
+  const request = JSON.parse(body) as Record<string, unknown>;
+  const limit = request.max_tokens;
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 0)
+    throw new TypeError("Expected the actual finite provider output reservation");
+  return limit;
 }
 
 function responseWithReportedUsageThenTransportFailure(): Response {
@@ -285,6 +313,19 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(turn.usage.modelInputTokens).toBeGreaterThanOrEqual(42);
     expect(turn.usage.modelInputTokens).toBeGreaterThanOrEqual(canonicalDispatchedTokens);
     expect(turn.usage.modelOutputTokens).toBe(8);
+  });
+
+  it("does not release an unknown failed-output reservation to admit an over-bound retry", async () => {
+    const requests = installProvider([UNMEASURED_PARTIAL_FAULT, CITED]);
+    const { deps, chatId } = configuredRuntime(1);
+    const original = modelWindowAwareBudget(deps, MODEL);
+    await handleGroundedAsk(route(chatId), deps);
+    expect(requestedOutputTokens(requests[0] ?? "")).toBe(original.modelOutputTokensMax);
+    const reservedOutputs = requests.reduce(
+      (total, body) => total + requestedOutputTokens(body),
+      0,
+    );
+    expect(reservedOutputs).toBeLessThanOrEqual(original.modelOutputTokensMax);
   });
 
   it.each([
