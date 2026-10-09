@@ -10,6 +10,30 @@ import { observeFilesDirectoryRead } from "@/lib/files-navigation-evidence";
 import { useFilesNavigation } from "./useFilesNavigation";
 
 describe("folder navigation", () => {
+  it("restores an initial canonical folder while root changes reset its relative binding", () => {
+    const view = renderHook(({ root }) => useFilesNavigation(root, undefined, "docs"), {
+      initialProps: { root: "/repo" },
+    });
+    expect(view.result.current.path).toBe("docs");
+    view.rerender({ root: "/other" });
+    expect(view.result.current.path).toBeNull();
+  });
+  it.each([
+    "../outside",
+    "/absolute",
+    "docs/../outside",
+    "docs\\other",
+    "docs\u202e",
+    "docs\nother",
+    "docs\u2028other",
+    "docs/",
+    "",
+    "https://outside.test",
+  ])("rejects an unsafe persisted initial folder: %s", (path) => {
+    const view = renderHook(() => useFilesNavigation("/repo", undefined, path));
+    expect(view.result.current.path).toBeNull();
+  });
+
   it("keeps folder history across explicit roots and restores the relative folder", () => {
     const changeRoot = vi.fn();
     const { result, rerender } = renderHook(({ root }) => useFilesNavigation(root, changeRoot), {

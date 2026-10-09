@@ -1,3 +1,8 @@
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  hasControlCharacter,
+  stripUnsafeFormatChars,
+} from "@oscharko-dev/keiko-contracts/text-safety";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import {
@@ -102,14 +107,24 @@ function moveInHistory(
   if (target.root !== root) onRootChange?.(target.root);
 }
 
+function restoredDirectory(root: string, path: string | undefined): string | null {
+  if (root.length === 0 || path === undefined) return null;
+  return isValidScopePath(path, { mustBeRelative: true }) &&
+    !hasControlCharacter(path) &&
+    stripUnsafeFormatChars(path) === path
+    ? path
+    : null;
+}
+
 export function useFilesNavigation(
   root: string,
   onRootChange?: (root: string) => void,
+  initialDirectoryPath?: string,
 ): FilesNavigation {
-  const [history, setHistory] = useState<FolderHistory>({
-    entries: [{ root, path: null }],
+  const [history, setHistory] = useState<FolderHistory>(() => ({
+    entries: [{ root, path: restoredDirectory(root, initialDirectoryPath) }],
     index: 0,
-  });
+  }));
   const [lastRoot, setLastRoot] = useState(root);
   const { begin, takeRead } = usePendingNavigation(root);
   if (lastRoot !== root) {
