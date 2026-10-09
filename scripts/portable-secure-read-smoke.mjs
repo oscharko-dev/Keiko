@@ -9,6 +9,11 @@ import { performance } from "node:perf_hooks";
 import { clearTimeout, setTimeout } from "node:timers";
 
 import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  encodeSecureWorkspaceReadRequest,
+} from "../packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadProtocol.ts";
+
+import {
   portableManifestValidationFailuresForDeclaredLane,
   portableTargetByName,
   sha256File,
@@ -20,17 +25,11 @@ function fail(message) {
 }
 
 function request(root, relativePath) {
-  const rootBytes = Buffer.from(root, "utf8");
-  const pathBytes = Buffer.from(relativePath, "utf8");
-  const frame = Buffer.alloc(20 + rootBytes.length + pathBytes.length);
-  frame.write("KSR1", 0, "ascii");
-  frame.writeUInt16LE(1, 4);
-  frame.writeUInt32LE(rootBytes.length, 8);
-  frame.writeUInt32LE(pathBytes.length, 12);
-  frame.writeUInt32LE(65_536, 16);
-  rootBytes.copy(frame, 20);
-  pathBytes.copy(frame, 20 + rootBytes.length);
-  return frame;
+  return encodeSecureWorkspaceReadRequest({
+    root,
+    relativePath,
+    byteCap: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  });
 }
 
 async function runHelper(executable, frame) {
@@ -88,7 +87,7 @@ export async function smokePortableSecureRead(stageRoot, platformTarget, load = 
   const executable = join(resourceRoot, ...helper.executablePath.split("/"));
   if ((await sha256File(executable)) !== helper.shippedSha256)
     fail("helper digest does not match manifest");
-  await smokeReadFixture(executable, target.nodePlatform, load);
+  await smokeSecureReadExecutable(executable, target.nodePlatform, load);
 }
 
 function secureReadHelper(manifest) {
@@ -99,7 +98,7 @@ function secureReadHelper(manifest) {
   return helper;
 }
 
-async function smokeReadFixture(executable, nodePlatform, load) {
+export async function smokeSecureReadExecutable(executable, nodePlatform, load = false) {
   const fixture = await mkdtemp(join(tmpdir(), "keiko-portable-secure-read-"));
   try {
     await mkdir(join(fixture, "src"));

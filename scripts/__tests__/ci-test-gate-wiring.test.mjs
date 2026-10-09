@@ -486,9 +486,10 @@ describe("CI test/gate wiring guard", () => {
     // every other lane, so `verificationCount === nodeSetupCount` below still holds.
     // Issue #3594 adds the required customer-shape qualification job to the release workflow.
     // It uses the same pinned Node 24 setup and toolchain verification before staging the package.
-    expect(node24SetupCount).toBe(31);
+    // The portable secure-read matrix adds one governed Node 24 lane for all four native targets.
+    expect(node24SetupCount).toBe(32);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(32);
+    expect(nodeSetupCount).toBe(33);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

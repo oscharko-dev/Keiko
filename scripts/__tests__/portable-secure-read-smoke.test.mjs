@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { URL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -65,15 +66,16 @@ const SAFE_CONTENT = "portable secure read\n";
 // Reads the KSR1 request frame from stdin and answers with a protocol-faithful KSS1 frame:
 // status 0 plus the exact fixture body for the safe path, a bounded empty failure otherwise.
 const FAITHFUL_HELPER = `
+import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  decodeSecureWorkspaceReadRequest,
+} from ${JSON.stringify(new URL("../../packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadProtocol.ts", import.meta.url).href)};
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const frame = Buffer.concat(chunks);
-const rootLength = frame.readUInt32LE(8);
-const pathLength = frame.readUInt32LE(12);
-const relativePath = frame
-  .subarray(20 + rootLength, 20 + rootLength + pathLength)
-  .toString("utf8");
-const safe = relativePath === "src/safe.txt";
+const request = decodeSecureWorkspaceReadRequest(frame);
+const safe = request.relativePath === "src/safe.txt" &&
+  request.byteCap === SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
 const payload = safe ? Buffer.from(${JSON.stringify(SAFE_CONTENT)}, "utf8") : Buffer.alloc(0);
 const header = Buffer.alloc(12);
 header.write("KSS1", 0, "ascii");

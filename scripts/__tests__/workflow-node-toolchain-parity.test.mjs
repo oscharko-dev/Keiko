@@ -211,7 +211,8 @@ describe("workflow Node toolchain parity", () => {
     // carries out an existing human decision instead of making one. The customer-shape release
     // qualification lane added for #3591 brings the setup-node total to 32; its independent
     // macOS 15 pull-request replay brings the total to 33; the Windows gateway proof adds one.
-    expect(withSetupNode).toHaveLength(34);
+    // The four-target portable secure-read matrix adds one pinned setup-node definition.
+    expect(withSetupNode).toHaveLength(35);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

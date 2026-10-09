@@ -36,6 +36,7 @@ const GATED_JOBS = Object.freeze([
   "build-scan-sbom-smoke",
   "cross-platform-smoke",
   "node-26-compatibility",
+  "portable-secure-read",
   "ui",
 ]);
 
@@ -53,6 +54,7 @@ const AGGREGATOR_DEFAULTS = Object.freeze({
   BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
   CROSS_PLATFORM_RESULT: "success",
   NODE_26_COMPATIBILITY_RESULT: "success",
+  PORTABLE_SECURE_READ_RESULT: "success",
   SBOM_PROVENANCE_RESULT: "skipped",
   DOCUMENTATION_ONLY: "false",
   EDITOR_FAST_PR: "false",
@@ -76,6 +78,7 @@ const REUSING = Object.freeze({
   BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
   CROSS_PLATFORM_RESULT: "skipped",
   NODE_26_COMPATIBILITY_RESULT: "skipped",
+  PORTABLE_SECURE_READ_RESULT: "skipped",
 });
 
 /**
@@ -146,6 +149,7 @@ const EXPECTED_CONDITIONS = Object.freeze({
   "build-scan-sbom-smoke": COND(EDITOR_CLAUSE),
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
   "node-26-compatibility": COND(DOC_ONLY_CLAUSE),
+  "portable-secure-read": COND(DOC_ONLY_CLAUSE),
   ui: COND(),
 });
 
@@ -248,6 +252,15 @@ describe("the resolver refuses every event that may not reuse", () => {
 // A candidate run is only evidence if it EXECUTED every job this run skips, which holds only while
 // the resolver's inventory covers all of them. A job gated in the workflow but missing from the
 // resolver would let an unmeasured gate pass itself off as proven.
+function gatedDisplayNames(job) {
+  const definition = jobs[job];
+  const name = String(definition.name);
+  if (!name.includes("${{ matrix.platform_target }}")) return [name];
+  return definition.strategy.matrix.include.map((target) =>
+    name.replace("${{ matrix.platform_target }}", target.platform_target),
+  );
+}
+
 describe("the resolver inventory covers every gated job", () => {
   const names = resolverInventory("REUSED_JOB_NAMES");
   const prefixes = resolverInventory("REUSED_JOB_PREFIXES");
@@ -258,16 +271,17 @@ describe("the resolver inventory covers every gated job", () => {
   });
 
   it.each(GATED_JOBS)("%s is covered by the resolver inventory", (job) => {
-    const displayName = String(jobs[job].name);
-    const covered =
-      names.includes(displayName) || prefixes.some((prefix) => displayName.startsWith(prefix));
-    expect(covered, `${displayName} is gated but the resolver requires no evidence for it`).toBe(
-      true,
-    );
+    for (const displayName of gatedDisplayNames(job)) {
+      const covered =
+        names.includes(displayName) || prefixes.some((prefix) => displayName.startsWith(prefix));
+      expect(covered, `${displayName} is gated but the resolver requires no evidence for it`).toBe(
+        true,
+      );
+    }
   });
 
   it("carries no inventory entry that matches no gated job", () => {
-    const displayNames = GATED_JOBS.map((job) => String(jobs[job].name));
+    const displayNames = GATED_JOBS.flatMap(gatedDisplayNames);
     for (const entry of [...names, ...prefixes]) {
       expect(
         displayNames.some((name) => name === entry || name.startsWith(entry)),
@@ -278,6 +292,34 @@ describe("the resolver inventory covers every gated job", () => {
 });
 
 describe("the aggregator still fails closed", () => {
+  it.each(["failure", "cancelled", "", "unknown"])(
+    "rejects portable secure-read result %s with and without tree reuse",
+    (result) => {
+      expect(runAggregator({ PORTABLE_SECURE_READ_RESULT: result })).toBe(1);
+      expect(runAggregator({ ...REUSING, PORTABLE_SECURE_READ_RESULT: result })).toBe(1);
+    },
+  );
+
+  it("refuses to skip portable secure-read proof for a code change", () => {
+    expect(runAggregator({ PORTABLE_SECURE_READ_RESULT: "skipped" })).toBe(1);
+  });
+
+  it("requires the four native portable secure-read legs before merging", () => {
+    const job = jobs["portable-secure-read"];
+    expect(job.strategy.matrix.include).toEqual([
+      { platform_target: "linux-x64", runner: "ubuntu-latest" },
+      { platform_target: "windows-x64", runner: "windows-latest" },
+      { platform_target: "macos-arm64", runner: "macos-15" },
+      { platform_target: "macos-x64", runner: "macos-15-intel" },
+    ]);
+    expect(job.steps.at(-1).run).toBe(
+      "node scripts/qualify-portable-secure-read.mjs ${{ matrix.platform_target }}",
+    );
+    expect(jobs.ci.needs).toContain("portable-secure-read");
+    expect(jobs.ci.steps[0].env.PORTABLE_SECURE_READ_RESULT).toBe(
+      "${{ needs.portable-secure-read.result }}",
+    );
+  });
   it("accepts a complete reuse claim whose gates were skipped by the guard", () => {
     expect(runAggregator(REUSING)).toBe(0);
   });
