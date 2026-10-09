@@ -152,6 +152,7 @@ import {
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT, groundedSystemPrompt } from "./grounded-prompt.js";
 import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { singleSentEvidencePack } from "./grounded-answer-evidence.js";
 import {
   isExpectedWorkspaceRootFailure,
   recordWorkspaceRootDenial,
@@ -2171,7 +2172,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   const modelInvoked = output.modelInvoked ?? sourceEvidenceAvailable;
   const citations = modelInvoked
     ? buildAnswerCitations(
-        output.sentEvidencePacks?.[0] ?? output.pack,
+        singleSentEvidencePack(output, output.pack),
         output.assistantContent,
         deps.redactor,
       )

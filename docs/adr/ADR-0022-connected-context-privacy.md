@@ -449,6 +449,9 @@ body-free frames, and causes. Normalized synthesis output is buffered before pub
 unknown, or excess declaration lines are removed before client delivery and history persistence.
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+An explicitly empty sent-pack inventory grants no source support; only absent legacy metadata may
+fall back to assembled evidence. Zero sent files retain physical read usage without producing a
+grounded source manifest.
 After governed memory attachment, final publication records optional memory observations on the
 existing `chat.response.message` operation: the actual structured
 `uncitedMemoryContextMarkerCount` and closed `memoryContextDisposition`
