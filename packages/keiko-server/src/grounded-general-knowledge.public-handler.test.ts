@@ -345,11 +345,34 @@ describe("learned knowledge uses the existing assessment authority across connec
     },
   );
 
-  it.each(TOPOLOGIES)("supports ordinary no-anchor conversation in %s", async (topology) => {
+  it.each(TOPOLOGIES)("supports ordinary short conversation in %s", async (topology) => {
     const setup = await fixture(topology, [GENERAL]);
     assertAssessmentOnly(await ask(setup, "Danke"));
     expect(synthesisCalls(setup)).toHaveLength(1);
   });
+
+  it.each(["plural", "hybrid"] as const)(
+    "supports actual no-anchor conversation without inventing a ready plan in %s",
+    async (topology) => {
+      const setup = await fixture(topology, [GENERAL]);
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      assertAssessmentOnly(await ask(setup, "?"));
+      expect(synthesisCalls(setup)).toHaveLength(1);
+      const retrievals = sink.events.filter(
+        (event) => event.op === "search.connected-context.completed",
+      );
+      expect(retrievals).toHaveLength(topology === "plural" ? 2 : 1);
+      for (const event of retrievals)
+        expect(event.extra).toMatchObject({
+          retrievalIntent: "clarification-needed",
+          retrievalAnchorCount: 0,
+          plannedRingCount: 0,
+          usageSearchCalls: 0,
+          usageFilesRead: 0,
+        });
+    },
+  );
 
   it.each(TOPOLOGIES)(
     "preserves source → general → source authority through actual history compaction in %s",

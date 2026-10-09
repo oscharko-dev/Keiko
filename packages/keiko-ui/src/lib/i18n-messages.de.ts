@@ -749,7 +749,7 @@ export const DE_MESSAGES = {
   "scope.notice.ok": "OK",
   "scope.notice.failed": "Der Ordner konnte nicht beibehalten werden.",
   "chat.grounding.help":
-    "Keiko durchsucht den verbundenen Bereich vor jeder Antwort; das Modell hat keine Datei-Werkzeuge. Öffne eine Datei in Dateien oder erwähne sie mit @, um sie sicher in den Bereich zu nehmen.",
+    "Keiko sucht für quellenbezogene Antworten in den verbundenen Quellen und kennzeichnet allgemeines Wissen als eigene Einschätzung. Das Modell hat keine Datei-Werkzeuge. Öffne eine Datei in Dateien oder erwähne sie mit @, um sie in den Bereich aufzunehmen.",
   "scope.missing.add": "Datei in den Bereich aufnehmen",
   "scope.missing.folder": "Verbundener Ordner",
   "scope.missing.chooseFolder": "Verbundenen Ordner auswählen",
