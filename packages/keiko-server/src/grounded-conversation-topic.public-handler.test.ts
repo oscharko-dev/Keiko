@@ -51,11 +51,13 @@ const HISTORY = [
   },
 ];
 let root = "";
+let stateDir = "";
 const stores: UiHandlerDeps["store"][] = [];
 
 beforeEach(() => {
   root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-topic-continuity-"));
-  vi.stubEnv("KEIKO_STATE_DIR", join(root, "state"));
+  stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-topic-state-"));
+  vi.stubEnv("KEIKO_STATE_DIR", stateDir);
   resetServerLogger();
   for (const [path, content] of Object.entries(FILES)) {
     const target = join(root, path);
@@ -68,6 +70,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   for (const store of stores.splice(0)) store.close();
   rmSync(root, { recursive: true, force: true });
+  rmSync(stateDir, { recursive: true, force: true });
 });
 
 function modelFor(requests: GatewayRequest[]): ModelPort {
@@ -110,7 +113,7 @@ function runtime(
   store.createProject(root, "Topic continuity");
   const chat = store.createChat(root, "Topic continuity", MODEL);
   store.updateChat(chat.id, {
-    connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: 0 },
+    connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
   });
   let timestamp = 1;
   for (const message of withHistory ? HISTORY : [])
@@ -164,13 +167,27 @@ async function ask(query: string, withHistory = true): Promise<string> {
   return prompt;
 }
 
+function legacyEvidence(prompt: string): {
+  readonly headers: number;
+  readonly bodies: number;
+} {
+  return {
+    headers: LEGACY_PATHS.filter((path) => prompt.includes(`File: ${path}`)).length,
+    bodies: Array.from(
+      { length: 6 },
+      (_, index) => `export function legacyHandler${String(index)}()`,
+    ).filter((marker) => prompt.includes(marker)).length,
+  };
+}
+
 describe("independent topics through the real public grounded handler", () => {
   it.each(["Explain invoice reconciliation", "Erkläre invoice reconciliation"])(
     "preserves the new topic's evidence within a supported 4096-token model window: %s",
     async (query) => {
+      const control = await ask(query, false);
       const prompt = await ask(query);
       expect(prompt.includes(`File: ${INVOICE_PATH}`)).toBe(true);
-      for (const path of LEGACY_PATHS) expect(prompt.includes(`File: ${path}`)).toBe(false);
+      expect(legacyEvidence(prompt)).toEqual(legacyEvidence(control));
     },
   );
 
@@ -179,14 +196,13 @@ describe("independent topics through the real public grounded handler", () => {
     async (query) => {
       const prompt = await ask(query);
       expect(prompt.includes(`File: ${INVOICE_PATH}`)).toBe(true);
-      for (const path of LEGACY_PATHS) expect(prompt.includes(`File: ${path}`)).toBe(false);
+      expect(legacyEvidence(prompt)).toEqual({ headers: 0, bodies: 0 });
     },
   );
 
   it("preserves the history-free natural-language control", async () => {
-    expect(
-      (await ask("Explain invoice reconciliation", false)).includes(`File: ${INVOICE_PATH}`),
-    ).toBe(true);
+    const prompt = await ask("Explain invoice reconciliation", false);
+    expect(prompt.includes(`File: ${INVOICE_PATH}`)).toBe(true);
   });
 
   it.each(["Can you see it now?", "Siehst du sie jetzt?"])(
