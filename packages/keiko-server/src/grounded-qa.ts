@@ -1,3 +1,5 @@
+import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { RetrievalIntent, SearchReference } from "@oscharko-dev/keiko-workflows";
 import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
@@ -374,7 +376,29 @@ export function mappedWorkspaceError(
   return undefined;
 }
 
-export interface AskInput {
+export interface GroundedRetrievalContinuityInput {
+  readonly assistantReferents?: readonly SearchReference[] | undefined;
+  readonly previousRetrievalIntent?: RetrievalIntent | undefined;
+  readonly continuityReferentSource?: ContinuityReferentSource | undefined;
+}
+
+export function groundedRetrievalContinuityFields(
+  input: GroundedRetrievalContinuityInput,
+): GroundedRetrievalContinuityInput {
+  return {
+    ...(input.assistantReferents === undefined
+      ? {}
+      : { assistantReferents: input.assistantReferents }),
+    ...(input.previousRetrievalIntent === undefined
+      ? {}
+      : { previousRetrievalIntent: input.previousRetrievalIntent }),
+    ...(input.continuityReferentSource === undefined
+      ? {}
+      : { continuityReferentSource: input.continuityReferentSource }),
+  };
+}
+
+export interface AskInput extends GroundedRetrievalContinuityInput {
   readonly retrievalContent?: string | undefined;
   readonly chatId: string;
   readonly content: string;
@@ -1564,7 +1588,7 @@ function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
 
 // ─── Route worker (extracted to keep handleGroundedAsk under the LOC bound) ───
 
-interface AskWorkerCtx {
+interface AskWorkerCtx extends GroundedRetrievalContinuityInput {
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly scope: SelectedScope;
@@ -1937,6 +1961,7 @@ async function runGroundedRunner(
     const output = await runner({
       scope,
       query,
+      ...groundedRetrievalContinuityFields(workerCtx),
       answerQuestion: answerContent,
       currentQuestion: workerCtx.content,
       answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
@@ -2174,8 +2199,8 @@ async function dispatchFolderAsk(
     prepared.correlationId,
   );
   if ("status" in resolved) return resolved;
-  const workspaceFs = firstScopeWorkspaceFs(scopes);
   return runAsk({
+    ...groundedRetrievalContinuityFields(input),
     chat,
     scope,
     content: input.content,
@@ -2189,7 +2214,7 @@ async function dispatchFolderAsk(
     contextProfile: resolved.contextProfile,
     deps,
     runner: resolved.runner,
-    ...optionalWorkspaceFs(workspaceFs),
+    ...optionalWorkspaceFs(firstScopeWorkspaceFs(scopes)),
     signal,
     correlationId: prepared.correlationId,
   });
@@ -2463,6 +2488,7 @@ async function withGroundedContinuity(
       ...prepared.input,
       content,
       retrievalContent: continuity.retrievalContent,
+      ...groundedRetrievalContinuityFields(continuity),
       answerContent: [continuity.answerContext, content].filter(Boolean).join("\n\n"),
     },
   };

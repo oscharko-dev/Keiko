@@ -447,6 +447,8 @@ system that exists, never beside it:
   remains separate from healthy unaddressed basename diversity; safe reranker failure frames and
   causes use the existing failure-class contract. Pack, prompt, wire, and log share the same
   high/low selection vocabulary and actual observed scope/semantic dispositions.
+  Conversation continuity records only its closed referent source and source/admitted/rejected
+  counts on selection-details; assistant path text never enters activity evidence.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
