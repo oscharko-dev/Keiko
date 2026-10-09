@@ -308,6 +308,9 @@ describe("parseUpdateGitHubIssueReaderAuthorizationWire", () => {
   });
 });
 
+const RESOURCE_BUDGET_FIXTURE = { ...DEFAULT_EXPLORATION_BUDGET };
+delete RESOURCE_BUDGET_FIXTURE.followUpPassesMax;
+
 describe("buildGroundedAnswerContextPackSummary", () => {
   it("produces a complete summary from a 2-file files-scope pack", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
@@ -319,7 +322,7 @@ describe("buildGroundedAnswerContextPackSummary", () => {
       fileCount: 2,
       queryKind: "natural-language",
       usage: USAGE_FIXTURE,
-      budget: DEFAULT_EXPLORATION_BUDGET,
+      budget: RESOURCE_BUDGET_FIXTURE,
       citationCount: 4,
       omittedCount: 0,
       omittedCounts: emptyOmittedCounts(),
@@ -498,11 +501,14 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     }
   });
 
-  it("surfaces usage and budget identity-equal to the source pack fields", () => {
+  it("preserves source usage identity and projects all public resource limits", () => {
     const p = pack();
     const summary = buildGroundedAnswerContextPackSummary(p, 0, 0);
     expect(summary.usage).toBe(p.usage);
-    expect(summary.budget).toBe(p.budget);
+    const { followUpPassesMax, ...resources } = p.budget;
+    expect(summary.budget).toStrictEqual(resources);
+    expect(summary.budget).not.toHaveProperty("followUpPassesMax");
+    expect(p.budget.followUpPassesMax).toBe(followUpPassesMax);
   });
 
   it("carries elapsedMs and citationCount verbatim from the caller's arguments", () => {
@@ -629,7 +635,7 @@ describe("buildGroundedAnswerContextPackSummary contextSummary (ADR-0057 D1)", (
       fileCount: 2,
       queryKind: "natural-language",
       usage: USAGE_FIXTURE,
-      budget: DEFAULT_EXPLORATION_BUDGET,
+      budget: RESOURCE_BUDGET_FIXTURE,
       citationCount: 4,
       omittedCount: 0,
       omittedCounts: emptyOmittedCounts(),
@@ -1429,6 +1435,21 @@ describe("UNKNOWN_REPOSITORY_ERROR_CODE", () => {
   it("is the BFF wire code for a repository the workspace has not opened", () => {
     expect(UNKNOWN_REPOSITORY_ERROR_CODE).toBe("UNKNOWN_REPOSITORY");
   });
+});
+
+describe("grounded wire resource budget", () => {
+  it.each([0, 1] as const)(
+    "omits internal follow-up admission while retaining every resource limit (passes=%s)",
+    (passes) => {
+      const input = { ...pack(), budget: { ...pack().budget, followUpPassesMax: passes } };
+      const { followUpPassesMax, ...resources } = input.budget;
+      expect(followUpPassesMax).toBe(passes);
+      const summary = buildGroundedAnswerContextPackSummary(input, 0, 0);
+      expect(summary.budget).not.toHaveProperty("followUpPassesMax");
+      expect(summary.budget).toStrictEqual(resources);
+      expect(input.budget.followUpPassesMax).toBe(passes);
+    },
+  );
 });
 
 describe("retrieval diagnostics projection", () => {

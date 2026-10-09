@@ -1556,7 +1556,7 @@ export function buildGroundedAnswerContextPackSummary(
     fileCount: pack.scope.kind === "workspace-root" ? -1 : pack.scope.relativePaths.length,
     queryKind: pack.query.kind,
     usage: pack.usage,
-    budget: pack.budget,
+    budget: groundedWireResourceBudget(pack.budget),
     citationCount,
     omittedCount: connectedContextOmittedCount(pack),
     omittedCounts: connectedContextOmittedCounts(pack),
@@ -1566,6 +1566,18 @@ export function buildGroundedAnswerContextPackSummary(
     ...(coverage !== undefined ? { coverage } : {}),
     ...(contextSummary !== undefined ? { contextSummary } : {}),
     ...retrievalDiagnosticSummary(packRetrievalDiagnostics(pack, retrievalDiagnostics)),
+  };
+}
+
+function groundedWireResourceBudget(budget: ExplorationBudget): ExplorationBudget {
+  return {
+    searchCallsMax: budget.searchCallsMax,
+    filesReadMax: budget.filesReadMax,
+    excerptBytesMax: budget.excerptBytesMax,
+    modelInputTokensMax: budget.modelInputTokensMax,
+    modelOutputTokensMax: budget.modelOutputTokensMax,
+    elapsedMsMax: budget.elapsedMsMax,
+    rerankCallsMax: budget.rerankCallsMax,
   };
 }
 
