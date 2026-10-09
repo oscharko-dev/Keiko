@@ -378,6 +378,34 @@ the same reasoning applies: it is development-only lint tooling, executed in CI 
 machines, never linked into Keiko or distributed in the published npm tarball. The Dependabot
 `ignore` entry is removed and `eslint-plugin-sonarjs` moves to 4.2.1.
 
+### Exact-artifact original OpenCode host license correction (#3895)
+
+The OpenCode host integration introduced three component classifications that the earlier
+package-wide filter could not represent accurately. The engineering-reviewed correction in #3895
+binds each disposition to its exact original component identity and artifact. Dependency Review's
+global thirteen approved license IDs, the local twelve-license SPDX allowlist, dependency
+vulnerability thresholds, action pins, signature checks and merge conditions are unchanged.
+[ADR-0002](../adr/ADR-0002-ci-and-supply-chain-security-baseline.md) records the exact scope.
+
+| Original component      | Reviewed disposition                                                                                                                                                                                                             | Preserved distribution obligations                                                                                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spdx-exceptions@2.5.0` | Exact SPDX identifier data under `CC-BY-3.0`; no global CC-BY-3.0 allowance.                                                                                                                                                     | Full original README plus Linux Foundation and Contributors copyright attribution, Kyle E. Mitchell credit, pinned upstream source, CC-BY-3.0 license URL, unchanged-file statement and no implied endorsement. |
+| `bowser@2.14.1`         | npm metadata declares MIT; the original full notice has the `MITNFA` condition. Only this original artifact is recognized.                                                                                                       | Complete original license, including its original-author bug-report contact condition for substantial functional modifications; no shortened or relabeled MIT notice.                                           |
+| `json-schema@0.4.0`     | Use its existing BSD-3-Clause option from `(AFL-2.1 OR BSD-3-Clause)`; the required Dependency Review log separately reports `AFL-2.1 AND AFL-3.0 AND BSD-3-Clause`. The classification disposition is limited to this artifact. | Complete original dual-license notice, including BSD copyright, redistribution conditions and disclaimer; no global AFL-2.1 or AFL-3.0 allowance.                                                               |
+
+The pinned `actions/dependency-review-action` ignores versions in its exclusion PURLs. The workflow
+therefore runs the existing supply-chain owner's mandatory preflight before passing the three
+package-name exclusions. Both canonical npm locks are inspected: every matching instance must retain
+its exact original name, version, registry URL, SRI and declared license. Missing records, malformed
+locks, aliases, later versions and artifact or license drift refuse the workflow before exclusions
+are emitted. Local CycloneDX evaluation retains its SPDX expression parser and recognizes only exact
+component PURL/name/version identities; unrelated licenses and disallowed compound expressions still
+fail. The complete original notices and actual dependency SBOM remain in the host payload.
+
+Owning failure-first controls cover missing preflight, aliases, root-lock gaps and identity, artifact
+or license drift. Release and platform qualification remain separate from this component
+disposition; it does not activate the host or establish complete OpenCode parity.
+
 ## Follow-ups
 
 1. **Credential-shaped literals remain in pre-existing test fixtures.** A repository sweep found

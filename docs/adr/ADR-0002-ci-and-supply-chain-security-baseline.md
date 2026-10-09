@@ -33,6 +33,40 @@ The reasoning behind the decision: LGPL copyleft attaches to the library and to 
 linter executed in CI and on developer machines is neither linked into Keiko nor distributed with it,
 so no obligation reaches our source or our artifacts.
 
+### Exact-artifact original OpenCode host license disposition (#3895, 2026-10-09)
+
+The OpenCode integration in #3895 includes an engineering-reviewed correction for three original npm
+component identities and their preserved notice obligations. Dependency Review's global
+thirteen-license allowlist, the local twelve-license SPDX allowlist, vulnerability thresholds, action
+signature checks and merge gates remain unchanged.
+
+- `spdx-exceptions@2.5.0` contains SPDX license-exception identifier data under `CC-BY-3.0`.
+  The host retains its full original README and supplies attribution to the Linux Foundation and
+  its Contributors, the package contributor Kyle E. Mitchell, the pinned upstream source and the
+  Creative Commons Attribution 3.0 Unported license URL. The unchanged distributed files and
+  absence of implied endorsement are stated in the host notice. This is an exact component
+  disposition, not a global allowance for `CC-BY-3.0`.
+- `bowser@2.14.1` declares `MIT` in its npm metadata, while its full original license contains the
+  condition classified as `MITNFA`. The entire original notice remains shipped, including the
+  requirement to replace or remove original-author bug-report contacts when substantial functional
+  modifications outside documented configuration are distributed. The filter recognizes that exact
+  artifact and classification without globally allowing `MITNFA` or reducing the notice to MIT.
+- `json-schema@0.4.0` offers `AFL-2.1 OR BSD-3-Clause`. Keiko uses the existing approved BSD-3-Clause
+  choice and preserves the complete original dual-license notice. The required Dependency Review
+  log reports `AFL-2.1 AND AFL-3.0 AND BSD-3-Clause`, while the shipped declaration is
+  `(AFL-2.1 OR BSD-3-Clause)`. The exact artifact guard makes that classification difference explicit
+  without globally allowing either AFL identifier.
+
+The pinned Dependency Review action ignores versions in package-license exclusion PURLs. Its
+package-name exclusions therefore depend on a mandatory, non-optional same-job preflight in
+`scripts/check-workspace-supply-chain.mjs`. That preflight reads both canonical root and native-host
+npm lockfiles and verifies every matching instance's exact name, version, registry URL, SRI and
+declared license. Missing or malformed metadata, aliases and any matching-instance drift fail before
+the action receives the exclusions. The local CycloneDX filter separately binds the exact component
+PURL, name, version and license expression; unrelated licenses and mixed disallowed expressions
+remain refused. Full original notices and the artifact's SBOM remain required distribution assets.
+This correction does not enable the service host or claim complete native-tool parity.
+
 ## Context
 
 The `dev` branch has protection rules requiring a fixed set of named status checks before any PR can
@@ -120,9 +154,10 @@ Jobs:
 - `Review dependency diff (dev/main)` (job `name:` field exactly): runs
   `actions/dependency-review-action` with `fail-on-severity: moderate`, `fail-on-scopes: development,
   runtime, unknown`, and an **allow**-list rather than a deny-list — every copyleft licence is
-  therefore refused by default, without needing to be enumerated. One package is exempted by name via
-  `allow-dependencies-licenses` (see the 2026-07-25 amendment above); the licence list itself stays
-  permissive-only. Permissions: `contents: read`.
+  therefore refused by default, without needing to be enumerated. The reviewed development-tool
+  exemptions and the guarded exact-artifact original-host dispositions above use
+  `allow-dependencies-licenses`; the global licence list itself stays unchanged. Permissions:
+  `contents: read`.
 
 ### Workflow file permission policy
 

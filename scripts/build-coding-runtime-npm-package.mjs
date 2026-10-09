@@ -312,7 +312,8 @@ function serviceThirdPartyNotice() {
     "Distributed package files are unchanged. Upstream notices remain in node_modules/spdx-exceptions/README.md.",
     "No endorsement by the original authors is implied.",
     "",
-    "This private candidate remains blocked by the existing license policy; this notice is not an exception.",
+    "The documented component dispositions in PR #3895 apply only to the exact original artifacts.",
+    "This remains a private candidate; platform qualification and production activation are separate.",
     "",
   ].join("\n");
 }
@@ -491,7 +492,7 @@ export async function buildCodingRuntimeNpmServiceHostCandidate(input) {
   writeFileSync(
     join(input.outDir, "LICENSE.md"),
     licenseNotice(input.target) +
-      "\nThe private original service host retains its full dependency notices and SBOM under\n`runtime/opencode-compatible/service-host/payload/evidence`. Its license review is pending.\n",
+      "\nThe private original service host retains its full dependency notices and SBOM under\n`runtime/opencode-compatible/service-host/payload/evidence`. Component dispositions in PR #3895\napply only to the documented exact original artifacts; platform qualification, full native parity\nand production activation remain separate.\n",
   );
   const stagedAttestation = await attestServiceHost(host.root, owners);
   const candidate = servicePackedFileFacts(input.outDir);
