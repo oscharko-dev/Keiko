@@ -117,6 +117,7 @@ function buildRetrievalDependencies(deps: GroundedAnswerDependencies): Retrieval
   return {
     store: deps.retrieval.store,
     embeddingAdapter: deps.retrieval.embeddingAdapter,
+    ...(deps.retrieval.logContext !== undefined ? { logContext: deps.retrieval.logContext } : {}),
     ...(deps.retrieval.queryTransformer !== undefined
       ? { queryTransformer: deps.retrieval.queryTransformer }
       : {}),
