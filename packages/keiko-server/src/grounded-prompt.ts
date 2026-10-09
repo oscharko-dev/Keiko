@@ -1,3 +1,7 @@
+import {
+  ownAssessmentPromptRule,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Shared grounded-answer system prompt. Extracted to a contracts-only LEAF module so the
@@ -6,7 +10,7 @@ import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/run
 // cycle; a leaf both sides import breaks the module-init dependency). The prompt must stay shared
 // across every grounding path (AC5) — all paths apply the identical untrusted-evidence + citation +
 // no-secret guardrails.
-export const GROUNDED_SYSTEM_PROMPT_VERSION = "connected-evidence-v2";
+export const GROUNDED_SYSTEM_PROMPT_VERSION = "connected-evidence-v3";
 
 export const GROUNDED_SYSTEM_PROMPT =
   "You are Keiko answering from supplied evidence in read-only Files scopes: Git repositories or ordinary folders without Git. " +
@@ -40,4 +44,14 @@ export function sentGroundedFileCount(packs: readonly ConnectedContextPack[]): n
         .map((file) => `${pack.scope.workspaceRoot}\0${file.scopePath}`),
     ),
   ).size;
+}
+
+/** Extends the existing source-only prompt under the operator's existing assessment policy. */
+export function groundedSystemPrompt(
+  policy: OwnAssessmentPolicy = "disabled",
+  markerKind: "file" | "numeric" = "file",
+): string {
+  return policy === "allowed"
+    ? `${GROUNDED_SYSTEM_PROMPT} ${ownAssessmentPromptRule(markerKind)}`
+    : GROUNDED_SYSTEM_PROMPT;
 }

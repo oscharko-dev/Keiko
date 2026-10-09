@@ -226,13 +226,17 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
 
 A sources-only answer could not answer a question about Keiko's own view. For "Which Java version
 do you suggest?" after the documents set none, it could only repeat that the documents say nothing.
-A chat with Knowledge Pods attached must still be a conversation partner.
+A chat with connected sources must still be a conversation partner. The owner clarified on
+2026-10-09 that learned model knowledge remains available beside every connected source topology,
+including offline folders, Knowledge Pods, multiple sources, and hybrid answers. This extends the
+existing labelled assessment authority rather than adding question-specific routing or a tool call.
 
-- **Two parts, one boundary.** When the operator allows it, the Knowledge Pod prompt adds one short
+- **Two parts, one boundary.** When the operator allows it, every grounded prompt adds one short
   rule (`OWN_ASSESSMENT_PROMPT_RULE`, keiko-contracts `runtime/grounded-assessment`). Whatever the
   excerpts do not back (a recommendation, an opinion, general knowledge, small talk) goes after the
   source-backed part inside one `<assessment>` block. The block opens by saying it is Keiko's own
-  assessment and carries no `[n]` markers. A plain text tag works with every model family,
+  assessment and carries no source markers or missing-evidence declarations. Source-specific claims
+  remain outside it and use the actual supplied file or numeric marker grammar. A plain text tag works with every model family,
   open-weight models included, and needs no structured-output support.
 - **Only the source-backed part is checked.** The runner splits the block off right after
   generation (`splitOwnAssessment`), so the following steps see only the text outside it:
@@ -263,10 +267,19 @@ A chat with Knowledge Pods attached must still be a conversation partner.
   content and never delimit. The tag grammar reads code through the same `markdownCodeRanges` as
   the citation markers.
 - **Evidence.** `search.answer.assessed` records the policy, the outcome (`none`, `assessment`,
-  `assessment-only`, `neutralized`) and the character sizes of both parts per Knowledge Pod answer,
+  `assessment-only`, `neutralized`) and the character sizes of both parts per grounded answer,
   never the text. The note's own layout evidence posts under the message's correlation.
-- **Scope.** The rule applies to the single-scope Knowledge Pod path. The folder, multi-source and
-  hybrid prompts keep their own evidence rules.
+- **Scope.** The same existing `allowed`/`disabled` policy governs a single folder, multiple folders,
+  Knowledge Pods, and hybrid answers. No topic classifier, alternate conversation route, Internet
+  dependency, or extra synthesis call grants permission to use learned knowledge. The existing
+  synthesis token, deadline, spend, and physical-call limits remain authoritative.
+- **Honest authority.** General explanations and recommendations may stand alone when no selected
+  source answers the question. Only text outside the labelled block authenticates citations,
+  missing-evidence requests, continuity source referents, or entailment claims. A loose heading does
+  not change authority. The block is model knowledge rather than evidence; it cannot establish
+  current/live verification without a supplied timely source. The prompt requires relevant
+  uncertainty about freshness. Structural separation does not prove every model-authored assertion
+  semantically true; unsupported source-specific claims outside the block retain existing warnings.
 
 ## Related
 

@@ -1771,3 +1771,46 @@ describe("unsupportedClaimMarker / entailmentUnavailableMarker", () => {
     expect(marker.claim.toLowerCase()).toContain("could not be verified");
   });
 });
+
+describe("labelled general knowledge authority", () => {
+  const source = "The page returns true [src/page.ts:1].";
+  const general =
+    "<assessment>My recommendation: compare alternatives [missing.ts:9] [99].</assessment>";
+  it("never authenticates a file citation from model knowledge", () => {
+    expect(
+      parseInlineCitations(`${source}\n${general}`).map((citation) => citation.scopePath),
+    ).toEqual(["src/page.ts"]);
+  });
+  it("never authenticates a numeric citation from model knowledge", () => {
+    const result = reconcileNumericCitations(`Fact [1].\n${general}`, new Set([1, 99]));
+    expect([...result.citedMarkers]).toEqual([1]);
+    expect(result.unsupportedMarkers).toEqual([]);
+  });
+  it("does not repair an assessment-only answer as an uncited source claim", () => {
+    expect(missingCitationMarkerFor(general, NOW)).toBeUndefined();
+  });
+  it("judges only source-backed file claims", () => {
+    expect(segmentCitedClaims(`${source}\n${general}`)).toMatchObject([
+      { claimText: "The page returns true .", citations: [{ scopePath: "src/page.ts" }] },
+    ]);
+    expect(segmentCitedClaims(`${source}\n${general}`)).toHaveLength(1);
+  });
+  it("judges only source-backed numeric claims", () => {
+    expect(segmentNumericCitedClaims(`Fact [1].\n${general}`)).toEqual([
+      { claimText: "Fact .", markers: [1] },
+    ]);
+  });
+  it("keeps an unlabelled source assertion subject to missing-citation warning", () => {
+    expect(
+      missingCitationMarkerFor(
+        "The page returns true.\n<assessment>Use robust tests.</assessment>",
+        NOW,
+      ),
+    ).toMatchObject({ kind: "uncited-answer" });
+  });
+  it("does not accept a loose assessment heading as an authority delimiter", () => {
+    expect(missingCitationMarkerFor("Own assessment: the page returns true.", NOW)).toMatchObject({
+      kind: "uncited-answer",
+    });
+  });
+});
