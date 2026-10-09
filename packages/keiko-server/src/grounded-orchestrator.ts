@@ -7291,31 +7291,11 @@ async function assembleGroundedPack(
     input.scope,
     nowMs(),
   );
-  const explicitDetails = explicitAssemblyDetails(augmentedRings);
+
   const prepared = await preparePackAssembly(args, augmentedRings);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
-  if (ctx.cached !== undefined) {
-    return {
-      pack: withGroundedContextDiagnostics(
-        {
-          ...ctx.cached,
-          diagnostics: {
-            rankedCandidates: [],
-            ...ctx.cached.diagnostics,
-            selection: prepared.selection,
-          },
-        },
-        deps,
-      ),
-      ...explicitDetails,
-      selectionObservation: prepared.selection,
-      rerankFailure: prepared.rerankFailure,
-      rankingObservation: prepared.ordered.rankingObservation,
-      reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
-      metadataRetention: augmentedRings.metadataRetention,
-      elapsedBudgetBlocked: false,
-    };
-  }
+  if (ctx.cached !== undefined)
+    return cachedGroundedAssembly(ctx.cached, deps, prepared, augmentedRings);
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
     knownFitFileBytes: augmentedRings.knownFitFileBytes,
     searchScope,
@@ -7342,16 +7322,44 @@ async function assembleGroundedPack(
   });
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
-    ...explicitDetails,
-    selectionObservation: prepared.selection,
-    rerankFailure: prepared.rerankFailure,
-    rankingObservation: prepared.ordered.rankingObservation,
-    reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
-    metadataRetention: augmentedRings.metadataRetention,
+    ...groundedAssemblyDetails(prepared, augmentedRings),
     excerptObservation: excerptReads.observation,
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
     anchoredWindowCount: excerptReads.anchoredWindowCount,
     readWindowCount: excerptReads.readWindowCount,
+  };
+}
+
+function groundedAssemblyDetails(
+  prepared: PreparedPackAssembly,
+  rings: RingRunSummary,
+): Omit<GroundedPackAssembly, "pack" | "elapsedBudgetBlocked"> {
+  return {
+    ...explicitAssemblyDetails(rings),
+    selectionObservation: prepared.selection,
+    rerankFailure: prepared.rerankFailure,
+    rankingObservation: prepared.ordered.rankingObservation,
+    reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
+    metadataRetention: rings.metadataRetention,
+  };
+}
+
+function cachedGroundedAssembly(
+  pack: ConnectedContextPack,
+  deps: OrchestratorDeps,
+  prepared: PreparedPackAssembly,
+  rings: RingRunSummary,
+): GroundedPackAssembly {
+  return {
+    pack: withGroundedContextDiagnostics(
+      {
+        ...pack,
+        diagnostics: { rankedCandidates: [], ...pack.diagnostics, selection: prepared.selection },
+      },
+      deps,
+    ),
+    ...groundedAssemblyDetails(prepared, rings),
+    elapsedBudgetBlocked: false,
   };
 }
 
@@ -9149,7 +9157,7 @@ async function retrieveLiveConnectedContext(
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
   return connectedContextExecution(
-    assembled.pack,
+    withRetrievalSourceDiagnostics(assembled.pack, runtime.progress),
     plan,
     runtime.activity,
     {
@@ -9161,6 +9169,25 @@ async function retrieveLiveConnectedContext(
     workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
+}
+
+function withRetrievalSourceDiagnostics(
+  pack: ConnectedContextPack,
+  progress: ConnectedContextProgress,
+): ConnectedContextPack {
+  const scopeState = progress.scopeContextObservation?.state;
+  const semanticState = progress.sourceDecision?.semanticProviderDisposition;
+  return {
+    ...pack,
+    diagnostics: {
+      rankedCandidates: [],
+      ...pack.diagnostics,
+      ...(semanticState === undefined ? {} : { semanticProviderDisposition: semanticState }),
+      ...(scopeState === undefined || scopeState === "empty"
+        ? {}
+        : { scopeContextState: scopeState }),
+    },
+  };
 }
 
 function metadataInjectionReason(

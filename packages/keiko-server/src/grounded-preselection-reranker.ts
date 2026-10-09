@@ -93,7 +93,7 @@ function finishResult(
   candidates: readonly CandidateFile[],
   failure?: unknown,
 ): PreselectionRerankerResult {
-  const diagnostics = input.reranker?.getDiagnostics?.();
+  const diagnostics = attempted ? input.reranker?.getDiagnostics?.() : undefined;
   return {
     candidates,
     usage: {
@@ -109,6 +109,37 @@ function finishResult(
   };
 }
 
+function applyBatchResult(
+  input: PreselectionRerankerInput,
+  startMs: number,
+  attempted: boolean,
+  batch: readonly CandidateFile[] | undefined,
+): PreselectionRerankerResult {
+  if (batch === undefined)
+    return finishResult(input, startMs, attempted, "unconfigured", input.candidates);
+  const diagnostics = input.reranker?.getDiagnostics?.();
+  if (
+    !validResult(batch, input.candidates.slice(0, RERANK_DOCUMENT_CAP)) ||
+    (diagnostics !== undefined && diagnostics.status !== "applied")
+  )
+    return finishResult(input, startMs, attempted, "failed", input.candidates);
+  const paths = new Set(batch.map((candidate) => candidate.scopePath));
+  const candidates = [...batch, ...input.candidates.filter((entry) => !paths.has(entry.scopePath))];
+  return finishResult(input, startMs, attempted, "applied", candidates);
+}
+
+function failedBatchResult(
+  input: PreselectionRerankerInput,
+  startMs: number,
+  attempted: boolean,
+  error: unknown,
+): PreselectionRerankerResult {
+  if (error instanceof AbortDeadlineRaceError && error.reason === "aborted")
+    throw new CancelledError("grounded request cancelled");
+  const disposition = error instanceof AbortDeadlineRaceError ? "skipped-budget" : "failed";
+  return finishResult(input, startMs, attempted, disposition, input.candidates, error);
+}
+
 export async function rerankGroundedCandidates(
   input: PreselectionRerankerInput,
 ): Promise<PreselectionRerankerResult> {
@@ -121,24 +152,8 @@ export async function rerankGroundedCandidates(
     const batch = await rerankedBatch(input, input.reranker, (): void => {
       attempted = true;
     });
-    if (batch === undefined)
-      return finishResult(input, startMs, attempted, "unconfigured", input.candidates);
-    const diagnostics = input.reranker.getDiagnostics?.();
-    if (
-      !validResult(batch, input.candidates.slice(0, RERANK_DOCUMENT_CAP)) ||
-      (diagnostics !== undefined && diagnostics.status !== "applied")
-    )
-      return finishResult(input, startMs, attempted, "failed", input.candidates);
-    const paths = new Set(batch.map((candidate) => candidate.scopePath));
-    const candidates = [
-      ...batch,
-      ...input.candidates.filter((entry) => !paths.has(entry.scopePath)),
-    ];
-    return finishResult(input, startMs, attempted, "applied", candidates);
+    return applyBatchResult(input, startMs, attempted, batch);
   } catch (error) {
-    if (error instanceof AbortDeadlineRaceError && error.reason === "aborted")
-      throw new CancelledError("grounded request cancelled");
-    const disposition = error instanceof AbortDeadlineRaceError ? "skipped-budget" : "failed";
-    return finishResult(input, startMs, attempted, disposition, input.candidates, error);
+    return failedBatchResult(input, startMs, attempted, error);
   }
 }

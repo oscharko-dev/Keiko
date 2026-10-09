@@ -2847,11 +2847,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredFrameOperations: [
       "search.connected-context.failed",
       "search.connected-context.metadata-unavailable",
+      "search.connected-context.selection-details",
       "search.symbol-line.unavailable",
     ],
     requiredCauseOperations: [
       "search.connected-context.failed",
       "search.connected-context.metadata-unavailable",
+      "search.connected-context.selection-details",
       "search.symbol-line.unavailable",
     ],
   },

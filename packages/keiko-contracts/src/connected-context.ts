@@ -478,6 +478,9 @@ export interface ContextCoverageDiagnostics {
 }
 
 export type ContextSelectionConfidence = "high" | "low";
+export type ContextSemanticProviderDisposition =
+  "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected";
+export type ContextScopeState = "applied" | "overflow" | "gate-refused" | "incomplete-traversal";
 export type ContextRerankerDisposition =
   "unconfigured" | "applied" | "failed" | "skipped-budget" | "skipped-literal";
 
@@ -503,6 +506,8 @@ export interface ContextPackDiagnostics {
   // present it explains whether repository coverage was incomplete and why.
   readonly coverage?: ContextCoverageDiagnostics | undefined;
   readonly selection?: ContextSelectionDiagnostics | undefined;
+  readonly semanticProviderDisposition?: ContextSemanticProviderDisposition | undefined;
+  readonly scopeContextState?: ContextScopeState | undefined;
 }
 
 // ─── Pack summary ─────────────────────────────────────────────────────────────
@@ -1486,6 +1491,29 @@ function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: s
   validateDiagnosticsContextBudget(diagnostics.contextBudget, reasons);
   validateDiagnosticsCoverage(diagnostics.coverage, reasons);
   validateDiagnosticsSelection(diagnostics.selection, reasons);
+  validateDiagnosticSourceStates(diagnostics, reasons);
+}
+
+function validateDiagnosticSourceStates(
+  diagnostics: ContextPackDiagnostics,
+  reasons: string[],
+): void {
+  pushIf(
+    reasons,
+    diagnostics.semanticProviderDisposition !== undefined &&
+      !["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"].some(
+        (state) => state === diagnostics.semanticProviderDisposition,
+      ),
+    "pack.diagnostics.semanticProviderDisposition invalid",
+  );
+  pushIf(
+    reasons,
+    diagnostics.scopeContextState !== undefined &&
+      !["applied", "overflow", "gate-refused", "incomplete-traversal"].some(
+        (state) => state === diagnostics.scopeContextState,
+      ),
+    "pack.diagnostics.scopeContextState invalid",
+  );
 }
 
 function validateDiagnosticsSelection(value: unknown, reasons: string[]): void {
@@ -1503,20 +1531,21 @@ function validateDiagnosticsSelection(value: unknown, reasons: string[]): void {
     ],
   ] as const)
     pushIf(reasons, !allowed.some((entry) => entry === value[field]), `selection.${field} invalid`);
-  for (const field of [
-    "relativeFloorPermille",
-    "strongestOrdinaryScorePermille",
-    "absoluteFloorPermille",
-  ])
+  for (const field of ["relativeFloorPermille", "absoluteFloorPermille"])
     pushIf(
       reasons,
-      !isFiniteNonNegativeInteger(value[field]) || Number(value[field]) > 1000,
+      !isFiniteNonNegativeInteger(value[field]) || value[field] > 1000,
       `selection.${field} invalid`,
     );
   pushIf(
     reasons,
     !isFiniteNonNegativeInteger(value.rerankFailedCalls),
     "selection.rerankFailedCalls invalid",
+  );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(value.strongestOrdinaryScorePermille),
+    "selection.strongestOrdinaryScorePermille invalid",
   );
   pushIf(
     reasons,

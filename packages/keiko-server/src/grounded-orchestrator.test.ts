@@ -5878,6 +5878,7 @@ describe("runGroundedExploration", () => {
     let cacheGets = 0;
     let cacheSets = 0;
     let rerankerCalls = 0;
+    const rerankerCallTimes: number[] = [];
     const microIndex: MicroIndex = {
       get: (): undefined => {
         cacheGets += 1;
@@ -5895,6 +5896,7 @@ describe("runGroundedExploration", () => {
       name: "post-cache-deadline fixture",
       isAvailable: () => {
         rerankerCalls += 1;
+        rerankerCallTimes.push(nowMs);
         return Promise.resolve({ available: true, modelLabel: "fixture" });
       },
       rerank: (candidates) => Promise.resolve(candidates),
@@ -5914,7 +5916,9 @@ describe("runGroundedExploration", () => {
 
     expect(cacheGets).toBe(1);
     expect(cacheSets).toBe(0);
-    expect(rerankerCalls).toBe(0);
+    // Pre-cut reranking now precedes the cache; no later call may start at the deadline.
+    expect(rerankerCalls).toBe(1);
+    expect(rerankerCallTimes.every((time) => time < deadlineAtMs)).toBe(true);
     expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
   });
 
@@ -6033,7 +6037,7 @@ describe("runGroundedExploration", () => {
     }
   });
 
-  it("uses identity ordering when reranking never settles and discards its late result", async () => {
+  it("reads no excerpts after preselection reranking times out and discards its late result", async () => {
     const request = input({
       scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
       query: happyQuery({ text: "Investigate src/foo.ts and src/bar.ts MyClass" }),
@@ -6082,17 +6086,22 @@ describe("runGroundedExploration", () => {
       await vi.advanceTimersByTimeAsync(25);
       const out = await pending;
       expect(executionSignal?.aborted).toBe(true);
-      expect(out.pack.files.map((file) => file.scopePath)).toEqual(candidatePaths);
+      expect(candidatePaths.length).toBeGreaterThan(0);
+      expect(out.pack.files).toEqual([]);
+      expect(out.pack.diagnostics?.selection).toMatchObject({
+        rerankerDisposition: "skipped-budget",
+        reranked: false,
+      });
 
       resolveRerank(lateOrder);
       await Promise.resolve();
-      expect(out.pack.files.map((file) => file.scopePath)).toEqual(candidatePaths);
+      expect(out.pack.files).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("uses identity ordering when reranking rejects at the absolute deadline", async () => {
+  it("starts no excerpt reads after preselection reranking rejects at the absolute deadline", async () => {
     const request = input({
       scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
       query: happyQuery({ text: "Investigate src/foo.ts and src/bar.ts MyClass" }),
@@ -6123,9 +6132,12 @@ describe("runGroundedExploration", () => {
       contextPackReranker: reranker,
     });
 
-    expect(out.pack.files.map((file) => file.scopePath)).toEqual(
-      baseline.pack.files.map((file) => file.scopePath),
-    );
+    expect(baseline.pack.files.length).toBeGreaterThan(0);
+    expect(out.pack.files).toEqual([]);
+    expect(out.pack.diagnostics?.selection).toMatchObject({
+      rerankerDisposition: "skipped-budget",
+      reranked: false,
+    });
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

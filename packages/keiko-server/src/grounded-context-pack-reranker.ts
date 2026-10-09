@@ -125,6 +125,7 @@ export function configuredContextPackRerankerFor(
     getDiagnostics: (): GroundedRerankerDiagnostics | undefined => diagnostics,
     isAvailable: () => Promise.resolve({ available: true, modelLabel: reranker.modelId }),
     rerank: async (candidates, atomsByPath, topK, context): Promise<readonly CandidateFile[]> => {
+      diagnostics = undefined;
       const requestSignal = executionSignal(signal, context);
       const batch = candidateBatch({
         deps,
