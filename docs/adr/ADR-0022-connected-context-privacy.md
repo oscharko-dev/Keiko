@@ -252,6 +252,9 @@ scores and definition status; bodies and previews are absent. The full identity 
 fingerprint producer and includes matching interpretation, effective result/line limits and policy
 intent. Snapshot identity additionally binds scope, ignore/candidate policy, byte grant and algorithm
 version. Partial, cancelled, timed-out, corrupt or incompatible records require live matching.
+Changes to decoding or matching semantics invalidate the existing snapshot version, including
+completed negative records whose source bytes and file metadata have not changed. The markup
+declaration correction uses snapshot version 9; prior snapshots require fresh live matching.
 Sixteen lazily loaded query shards retain the existing encrypted store's snapshot and entry bounds,
 an 8 KiB record bound and a 64 MiB aggregate request-record bound. They are partial acceleration
 metadata, never discovery authority. Capacity refusals remain visible as dropped records; retained
