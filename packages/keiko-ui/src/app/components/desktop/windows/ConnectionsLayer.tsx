@@ -2,10 +2,19 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icons } from "../Icons";
-import { connPath, relLabel } from "./connectionUtils";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { ChatConnectedScope } from "@/lib/types";
+import { connectedScopeFullPath } from "../connectedScopePresentation";
+import { restoredConnectionScope, resolvedFilesRoot } from "../hooks/workspaceActions";
+import { connPath, relLabel, englishConnectionTranslate } from "./connectionUtils";
 import type { AppWindow, Connection, ConnectingState } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
-import { useChatWindowFlows, type ChatWindowFlowIntensity } from "./chatWindowActivity";
+import {
+  useChatWindowFlows,
+  useChatWindowRuntimes,
+  type ChatWindowRuntimeTarget,
+  type ChatWindowFlowIntensity,
+} from "./chatWindowActivity";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const GitIcon = Icons.git;
@@ -24,27 +33,67 @@ export interface ResolvedConn {
   readonly d: string;
   readonly mid: { readonly x: number; readonly y: number };
   readonly label: string;
+  readonly scope?: ChatConnectedScope | null;
   // True when this is a chat↔data-source edge (a grounding/data channel), so it can light up while
   // the connected chat is exchanging data with the source. Pure links (e.g. keiko↔agents) do not.
   readonly dataChannel: boolean;
   readonly chatWindowId: string | undefined;
 }
 
-function connectionMetadataLabel(item: ResolvedConn): string {
-  const parts = [`Connection: ${item.label}`];
-  if (item.c.boundRoot !== undefined) {
-    parts.push(`Root: ${item.c.boundRoot}`);
-  }
-  if (item.c.boundScopeKind !== undefined) {
-    parts.push(`Scope: ${item.c.boundScopeKind}`);
-  }
-  if (item.c.boundRelativePath !== undefined && item.c.boundRelativePath.length > 0) {
-    parts.push(`Path: ${item.c.boundRelativePath}`);
-  }
+function connectionMetadataLabel(item: ResolvedConn, t: I18nTranslate): string {
+  const parts = [t("connection.metadata", { label: item.label })];
+  const path = item.scope == null ? undefined : connectedScopeFullPath(item.scope);
+  if (path !== undefined) parts.push(t("connection.path", { value: path }));
+  else if (item.scope === undefined && item.c.boundRoot !== undefined)
+    parts.push(t("connection.root", { value: item.c.boundRoot }));
   if (item.c.boundConnectorKind !== undefined && item.c.boundConnectorId !== undefined) {
-    parts.push(`Knowledge: ${item.c.boundConnectorKind} ${item.c.boundConnectorId}`);
+    parts.push(
+      t("connection.knowledge", {
+        value: `${item.c.boundConnectorKind} ${item.c.boundConnectorId}`,
+      }),
+    );
   }
   return parts.join("\n");
+}
+
+export interface ConnectionPresentation {
+  readonly t?: I18nTranslate;
+  readonly runtimes?: ReadonlyMap<string, ChatWindowRuntimeTarget>;
+}
+
+function connectionScope(
+  c: Connection,
+  a: AppWindow,
+  b: AppWindow,
+  presentation: ConnectionPresentation,
+): ChatConnectedScope | null | undefined {
+  const id = chatWindowId(a, b);
+  const scopes = id === undefined ? undefined : presentation.runtimes?.get(id)?.connectedScopes;
+  if (scopes === undefined || (a.type !== "files" && b.type !== "files")) return undefined;
+  const restored = restoredConnectionScope(c, scopes);
+  if (restored !== null) return restored;
+  const root = c.boundRoot ?? resolvedFilesRoot(a.type === "files" ? a : b);
+  const matching = scopes.filter((scope) => scope.root === root);
+  return matching.length === 1 ? (matching[0] ?? null) : null;
+}
+
+function resolveConnection(
+  c: Connection,
+  a: AppWindow,
+  b: AppWindow,
+  scope: ChatConnectedScope | null | undefined,
+  t: I18nTranslate,
+): ResolvedConn {
+  const path = connPath(a, b);
+  return {
+    c,
+    d: path.d,
+    mid: path.mid,
+    label: relLabel(a, b, { t, ...(scope === undefined ? {} : { scope }) }),
+    ...(scope === undefined ? {} : { scope }),
+    dataChannel: isDataChannel(a, b),
+    chatWindowId: chatWindowId(a, b),
+  };
 }
 
 // Window kinds a chat reads data FROM. A live exchange on a chat↔source edge is what the data-flow
@@ -75,6 +124,7 @@ function chatWindowId(a: AppWindow, b: AppWindow): string | undefined {
 export function resolveConnections(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
+  presentation: ConnectionPresentation = {},
 ): ResolvedConn[] {
   const byId = new Map<string, AppWindow>(wins.map((w) => [w.id, w]));
   const out: ResolvedConn[] = [];
@@ -82,15 +132,15 @@ export function resolveConnections(
     const a = byId.get(c.a);
     const b = byId.get(c.b);
     if (a === undefined || b === undefined) continue;
-    const p = connPath(a, b);
-    out.push({
-      c,
-      d: p.d,
-      mid: p.mid,
-      label: relLabel(a, b),
-      dataChannel: isDataChannel(a, b),
-      chatWindowId: chatWindowId(a, b),
-    });
+    out.push(
+      resolveConnection(
+        c,
+        a,
+        b,
+        connectionScope(c, a, b, presentation),
+        presentation.t ?? englishConnectionTranslate,
+      ),
+    );
   }
   return out;
 }
@@ -100,6 +150,8 @@ interface ResolvedConnCacheEntry {
   readonly b: AppWindow;
   readonly conn: Connection;
   readonly resolved: ResolvedConn;
+  readonly scope: ChatConnectedScope | null | undefined;
+  readonly t: I18nTranslate;
 }
 
 // GEN-PERF-WORKSPACE-006 — an edge's geometry/label depend ONLY on its two endpoint
@@ -115,6 +167,7 @@ export function resolveConnectionsCached(
   cache: Map<string, ResolvedConnCacheEntry>,
   wins: readonly AppWindow[],
   conns: readonly Connection[],
+  presentation: ConnectionPresentation = {},
 ): ResolvedConn[] {
   const byId = new Map<string, AppWindow>(wins.map((w) => [w.id, w]));
   const out: ResolvedConn[] = [];
@@ -124,21 +177,15 @@ export function resolveConnectionsCached(
     const b = byId.get(c.b);
     if (a === undefined || b === undefined) continue;
     seen.add(c.id);
+    const scope = connectionScope(c, a, b, presentation);
+    const t = presentation.t ?? englishConnectionTranslate;
     const prev = cache.get(c.id);
-    if (prev?.conn === c && prev.a === a && prev.b === b) {
+    if (prev?.conn === c && prev.a === a && prev.b === b && prev.scope === scope && prev.t === t) {
       out.push(prev.resolved);
       continue;
     }
-    const p = connPath(a, b);
-    const resolved: ResolvedConn = {
-      c,
-      d: p.d,
-      mid: p.mid,
-      label: relLabel(a, b),
-      dataChannel: isDataChannel(a, b),
-      chatWindowId: chatWindowId(a, b),
-    };
-    cache.set(c.id, { a, b, conn: c, resolved });
+    const resolved = resolveConnection(c, a, b, scope, t);
+    cache.set(c.id, { a, b, conn: c, resolved, scope, t });
     out.push(resolved);
   }
   // Sweep entries for removed/orphaned connections so the cache cannot grow past
@@ -359,14 +406,18 @@ export function connectionBadgeAriaLabel(
   active: boolean,
   armed: boolean,
   intensity: FlowIntensity,
+  t: I18nTranslate = englishConnectionTranslate,
 ): string {
   let label: string;
   if (armed) {
-    label = `Confirm removal of connection: ${item.label}. Activate again to remove.`;
+    label = t("connection.confirmAria", { label: item.label });
   } else if (active) {
-    label = `${item.label} — ${intensity} data exchange in progress. Activate to remove connection.`;
+    label = t("connection.activeAria", {
+      label: item.label,
+      intensity: t(intensity === "heavy" ? "connection.heavy" : "connection.light"),
+    });
   } else {
-    label = `Remove connection: ${item.label}`;
+    label = t("connection.removeAria", { label: item.label });
   }
   return label;
 }
@@ -382,7 +433,8 @@ const ConnectionBadge = memo(function ConnectionBadge({
   onDisarm,
   onConfirmRemove,
 }: ConnectionBadgeProps): ReactNode {
-  const metadataLabel = connectionMetadataLabel(item);
+  const t = useTranslate();
+  const metadataLabel = connectionMetadataLabel(item, t);
   return (
     <button
       type="button"
@@ -401,12 +453,12 @@ const ConnectionBadge = memo(function ConnectionBadge({
       }}
       title={
         armed
-          ? `Click again to remove: ${item.label}\n\n${metadataLabel}`
-          : `${metadataLabel}\n\nClick once to arm removal.`
+          ? `${t("connection.confirmTitle", { label: item.label })}\n\n${metadataLabel}`
+          : `${metadataLabel}\n\n${t("connection.armTitle")}`
       }
-      aria-label={connectionBadgeAriaLabel(item, active, armed, intensity)}
+      aria-label={connectionBadgeAriaLabel(item, active, armed, intensity, t)}
     >
-      <GitIcon size={11} /> <span>{armed ? "Remove?" : item.label}</span>
+      <GitIcon size={11} /> <span>{armed ? t("connection.removeQuestion") : item.label}</span>
       {active && !armed ? (
         <span className="conn-flow-tag" aria-hidden="true">
           {intensity === "heavy" ? "⇶" : "→"}
@@ -417,6 +469,8 @@ const ConnectionBadge = memo(function ConnectionBadge({
 });
 
 function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayerProps): ReactNode {
+  const t = useTranslate();
+  const runtimes = useChatWindowRuntimes();
   const chatWindowFlows = useChatWindowFlows();
   const reducedMotion = usePrefersReducedMotion();
   const { armedId, arm, disarm, autoCancelledNonce } = useArmedRemove();
@@ -429,8 +483,8 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
   useEffect(() => {
     if (autoCancelledNonce === prevAutoCancelledNonce.current) return;
     prevAutoCancelledNonce.current = autoCancelledNonce;
-    setRemovalAnnouncement("Removal cancelled — the connection was not removed.");
-  }, [autoCancelledNonce]);
+    setRemovalAnnouncement(t("connection.cancelled"));
+  }, [autoCancelledNonce, t]);
   // Issue #1580 — edge geometry depends only on window rects + the connection set,
   // never on the pan/zoom view (the SVG lives inside the CSS-transformed .ws-scene),
   // so recompute only when those actually change. Combined with the memo wrapper
@@ -440,8 +494,8 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
   // and re-renders ONLY the dragged window's edges.
   const resolveCacheRef = useRef<Map<string, ResolvedConnCacheEntry>>(new Map());
   const items = useMemo(
-    () => resolveConnectionsCached(resolveCacheRef.current, wins, conns),
-    [wins, conns],
+    () => resolveConnectionsCached(resolveCacheRef.current, wins, conns, { runtimes, t }),
+    [wins, conns, runtimes, t],
   );
   const onConfirmRemove = useCallback(
     (id: string): void => {

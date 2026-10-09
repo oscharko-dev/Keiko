@@ -8,10 +8,12 @@ local gate, required GitHub check, or customer reproduction is claimed complete 
 ## Accepted decisions and delivery boundaries
 
 The owner accepted one bounded server-owned follow-up pass for #3889 with the normal-installation
-default **on**. The decision must be recorded on that issue before its implementation starts.
+default **on**, recorded in the [owner decision](https://github.com/oscharko-dev/Keiko/issues/3889#issuecomment-6076008027).
 Only admitted, unread, in-scope declarations may trigger the pass; the original authority and
 remaining search, byte, token, elapsed, and spend budgets still apply. Cancellation propagates and
-there is never a third pass. Models do not receive workspace tools.
+there is never a third pass. Citation repair and follow-up answer generation share a maximum of
+two application-level model-call slots per turn, including the initial answer; consuming the second
+slot for one leaves no slot for the other. Models do not receive workspace tools.
 
 All children meet on one integration branch through child-branch merges. One non-draft pull
 request targets `dev`, with native auto-merge **off**; the owner integrates it. Agents commit and
@@ -35,9 +37,10 @@ Never push to `dev`, force-push, weaken a gate, widen authority, or publish priv
 - `usage.filesRead` counts assembled files. Only the prompt fitter can report `filesInPrompt`.
   Existing evidence-manifest file entries describe assembled reads; a table must state that
   precisely unless prompt membership is supplied by the owning producer.
-- The existing authenticated `fetchEvidenceManifest` helper already serves the file inspection
-  panel. Its manifest exposes permitted scope-relative metadata, while the answer summary remains
-  path-free. Prose links default to unread until trusted evidence establishes their read state.
+- The existing `fetchEvidenceManifest` helper already serves the file inspection panel through the
+  loopback host/origin-restricted evidence read endpoint. Its manifest exposes permitted
+  scope-relative metadata, while the answer summary remains path-free. Prose links default to
+  unread until trusted evidence establishes their read state.
 
 ## Sequence and exclusive ownership
 
@@ -74,7 +77,7 @@ pre-fix producer and pass after the change; budgets and existing incident pins s
 | #3888 | Answer/refusal/clarification/insufficiency classification; validated declarations; one bounded marker-only citation repair; separate memory warning; consistent single/multi/hybrid assembly.                                                                                                                | Faithfulness cases and injected regression; prose-changing repair rejection; existing pins; capability observation and Activity Log projection.                   |
 | #3889 | Owner decision and indexed ADR precede code. One remaining-budget pass answers admissible declarations, refuses elapsed/spend/budget/denied inputs, buffers first-pass output and propagates abort.                                                                                                          | Scripted-model call-count pin; never a third pass; distinct follow-up latency scenario; scenario timeline.                                                        |
 | #3890 | Root/directory/files fixtures render agreeing pill, edge and boundary. Canonical acknowledged scope wins over pending Files config; file previews announce changes, and keep-folder preserves the folder. Help is visible; validated missing-file action updates scope and prefills/focuses without sending. | Localized labels; live-region/focus/axe tests; preview/pin smoke journey; UI plus server read proof; editor and updater evidence; registered client scope notice. |
-| #3891 | Prompt-reaching, ranking and eligibility counters derive from one contracts grouping helper. Authenticated read/omission tables, fetch failure, three prose-link states, four degradation states, one citation warning and distinct memory/capability copy.                                                  | Counter/manifest/link/accessibility controls; typed additive wire tests; inspection and prose activation evidence; UI coverage; regenerated updater evidence.     |
+| #3891 | Prompt-reaching, ranking and eligibility counters derive from one contracts grouping helper. Read/omission tables use the existing loopback host/origin-restricted endpoint; fetch failure, three prose-link states, four degradation states, one citation warning and distinct memory/capability copy.      | Counter/manifest/link/accessibility controls; typed additive wire tests; inspection and prose activation evidence; UI coverage; regenerated updater evidence.     |
 | #3892 | Observed bounded Git status gives admitted edited files recency; non-Git scopes spawn no process. Stale semantic files retain lexical candidates; optional refresh respects the remaining budget; runner failure is diagnostic and retrieval survives.                                                       | Git runner/non-Git/ignore/fingerprint/budget tests; measured status-call latency; Activity Log proof.                                                             |
 | #3893 | Validated analyzer projection emits closed retrieval-miss reasons for recorded pre-fix replay and none for post-fix/healthy controls. The full scenario reaches a complete report; operator troubleshooting and contract descriptions converge.                                                              | Analyzer/scenario tests; complete Activity Log gate; targeted Markdown links; AGENTS.md/CONTRIBUTING.md parity.                                                   |
 | #3894 | Full matrix on the integrated head; lab trace → follow-up → explicit path → basename flow with a model emitting no markers; healthy control; ADR/docs/release-impact convergence.                                                                                                                            | Required GitHub checks on current head; final body-free closeout only after the integration branch is green.                                                      |
