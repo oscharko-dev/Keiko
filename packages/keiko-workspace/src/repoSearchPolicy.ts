@@ -24,9 +24,8 @@ import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSea
 import { isDenied } from "./ignore.js";
 import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
 import {
-  REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES,
   repositoryRouteDeclarationMarker,
-  repositoryRouteDeclarationMarkers,
+  repositoryRouteDeclarationWindowContains,
   repositoryRouteQuery,
 } from "./repoSearchRoutes.js";
 import { repositorySourceLines } from "./repoSearchSourceClassification.js";
@@ -649,15 +648,9 @@ function routeDeclarationContentBonus(
   const route = routeQueryTermsForSearch(query);
   if (route === undefined) return 0;
   const expectedMarker = repositoryRouteDeclarationMarker(route.method, route.path);
-  for (let index = 0; index < sourceLines.length; index += 1) {
-    const window = sourceLines.slice(index, index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES);
-    const code = window.map((line) => line.code).join("\n");
-    const structural = window.map((line) => line.structural).join("\n");
-    if (repositoryRouteDeclarationMarkers(code, structural).includes(expectedMarker)) {
-      return ROUTE_DECLARATION_BONUS;
-    }
-  }
-  return 0;
+  return repositoryRouteDeclarationWindowContains(sourceLines, expectedMarker)
+    ? ROUTE_DECLARATION_BONUS
+    : 0;
 }
 
 export function scoreContentHitsForSearch(

@@ -1,6 +1,7 @@
 // Shared extraction for HTTP method + path questions. Query classification, content prescoring,
 // and line matching must recognize the same route syntax so a route cannot be prioritized by one
 // retrieval ring and treated as generic prose by another.
+import type { RepositorySourceLine } from "./repoSearchSourceClassification.js";
 
 const ROUTE_QUERY_PATH_RE = /\/[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-]/u;
 const ROOT_ROUTE_AFTER_METHOD_RE =
@@ -557,11 +558,11 @@ export function repositoryRouteDeclarationMarker(method: string, path: string): 
   return `${ROUTE_DECLARATION_MARKER_PREFIX}:${method.toLowerCase()}:${path.toLowerCase()}`;
 }
 
-export function repositoryRouteDeclarationMarkers(
+function markersForSegments(
   text: string,
-  shapeText = text,
+  shapeText: string,
+  segments: readonly RouteSourceSegment[],
 ): readonly string[] {
-  const segments = routeSourceSegments(text, shapeText);
   const markers = new Set([
     ...configuredRouteMarkers(text, shapeText),
     ...configuredYamlRouteMarkers(text, shapeText),
@@ -572,4 +573,35 @@ export function repositoryRouteDeclarationMarkers(
     for (const marker of declarationMarkers(group.code, group.structural)) markers.add(marker);
   }
   return [...markers];
+}
+
+export function repositoryRouteDeclarationMarkers(
+  text: string,
+  shapeText = text,
+): readonly string[] {
+  return markersForSegments(text, shapeText, routeSourceSegments(text, shapeText));
+}
+
+/** Reuse only the overlapping window's segments; route binding remains four physical lines. */
+export function repositoryRouteDeclarationWindowContains(
+  lines: readonly Pick<RepositorySourceLine, "code" | "structural">[],
+  marker: string,
+): boolean {
+  const prepared = lines
+    .slice(0, REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES)
+    .map((line, index) => segmentsForLine(line.code, line.structural, index));
+  for (let index = 0; index < lines.length; index += 1) {
+    const window = lines.slice(index, index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES);
+    const markers = markersForSegments(
+      window.map((line) => line.code).join("\n"),
+      window.map((line) => line.structural).join("\n"),
+      prepared.flat(),
+    );
+    if (markers.includes(marker)) return true;
+    prepared.shift();
+    const nextIndex = index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES;
+    const next = lines[nextIndex];
+    if (next !== undefined) prepared.push(segmentsForLine(next.code, next.structural, nextIndex));
+  }
+  return false;
 }
