@@ -47,7 +47,12 @@ describe("connected evidence inspection", () => {
     await screen.findByRole("table", { name: "Files assembled for this answer" });
     complete?.({ manifest: manifest() });
     await waitFor(() => expect(onRead).toHaveBeenCalledTimes(1));
-    expect(onRead).toHaveBeenCalledWith("run-2", ["src/feature/read.ts"], ["src/feature"]);
+    expect(onRead).toHaveBeenCalledWith(
+      "run-2",
+      ["src/feature/read.ts"],
+      ["src/feature"],
+      manifest("run-2").connectedContext?.scope.sourceScopeFingerprint,
+    );
   });
   it("fetches only on expand and renders manifest metadata without claiming prompt-fit reads", async () => {
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest() });

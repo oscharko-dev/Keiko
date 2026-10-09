@@ -21,7 +21,12 @@ export interface ConnectedEvidenceInspectionProps {
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   readonly attachedCitationCount?: number | undefined;
   readonly onReadPaths?:
-    | ((runId: string, paths: readonly string[], selectedPaths: readonly string[]) => void)
+    | ((
+        runId: string,
+        paths: readonly string[],
+        selectedPaths: readonly string[],
+        sourceScopeFingerprint?: string,
+      ) => void)
     | undefined;
 }
 
@@ -69,6 +74,7 @@ function useManifestInspection(
           runId,
           audit.files.map((file) => file.scopePath).filter(isRootRelativeFileIdentifier),
           audit.scope.selectedPaths,
+          audit.scope.sourceScopeFingerprint,
         );
         reportEvidenceInspection({
           reason: "file-table-opened",

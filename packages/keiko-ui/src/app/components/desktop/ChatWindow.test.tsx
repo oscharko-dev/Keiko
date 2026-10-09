@@ -1,7 +1,7 @@
 import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // Issue #185 AC3 — tests for the grounded-request cancel button in ChatWindow.
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   connectedInspectionAnswer,
@@ -4751,6 +4751,51 @@ describe("ChatWindow message copy", () => {
     });
   });
 
+  it("normalizes legacy prefixed paths after an explicit nested repository choice", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: [],
+              connectedAtMs: 2,
+            },
+          ],
+        }),
+        messages: [
+          makeMessage({
+            role: "assistant",
+            content: "Use Keiko/packages/keiko-editor/src/range.ts:10.",
+          }),
+        ],
+      }),
+      { linkedRoot: "/Users/dev/Projects", openEditorFile },
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Open Keiko\/packages\/keiko-editor\/src\/range.ts/ }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Select repository source: Keiko · Projects/Keiko" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
+  });
+
   it("normalizes legacy parent-prefixed repository references against nested roots", async () => {
     const user = userEvent.setup();
     const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
@@ -4797,6 +4842,9 @@ describe("ChatWindow message copy", () => {
     expect(referenceButton).toHaveTextContent("range.ts:10");
 
     await user.click(referenceButton);
+    await user.click(
+      screen.getByRole("button", { name: "Select repository source: Keiko · Projects/Keiko" }),
+    );
 
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/Users/dev/Projects/Keiko",
@@ -5206,6 +5254,69 @@ it("updates an actual chat prose reference after its answer manifest is inspecte
   });
   await user.click(read);
   expect(openEditorFile).toHaveBeenCalledWith({ root: "/proj", path: "src/feature/read.ts" });
+});
+
+it("does not attribute an old manifest first expanded after switching repositories", async () => {
+  const originalScope = {
+    kind: "directory" as const,
+    root: "/repo-a",
+    relativePaths: ["src"],
+    connectedAtMs: 1,
+  };
+  const answer = connectedInspectionAnswer();
+  const manifest = connectedInspectionManifest();
+  const audit = manifest.connectedContext;
+  if (audit === undefined) throw new TypeError("Missing connected audit");
+  vi.mocked(fetchEvidenceManifest).mockResolvedValueOnce({
+    manifest: {
+      ...manifest,
+      connectedContext: {
+        ...audit,
+        scope: {
+          ...audit.scope,
+          sourceScopeFingerprint: connectedScopeFingerprint(originalScope),
+        },
+      },
+    },
+  });
+  const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "file" }));
+  let reconnect: (() => void) | undefined;
+  function ConnectedChat(): React.JSX.Element {
+    const [scope, setScope] = useState(originalScope);
+    reconnect = () => setScope({ ...originalScope, root: "/repo-b", connectedAtMs: 2 });
+    const session = makeSession({
+      activeChat: makeChat({ projectPath: scope.root, connectedScopes: [scope] }),
+      messages: [
+        makeMessage({
+          role: "assistant",
+          id: answer.assistantMessageId,
+          content: answer.content,
+          groundedAnswer: answer,
+        }),
+      ],
+    });
+    return (
+      <ChatSessionProvider value={session}>
+        <ChatWindow openEditorFile={openEditorFile} />
+      </ChatSessionProvider>
+    );
+  }
+  render(<ConnectedChat />);
+  act(() => reconnect?.());
+  const user = userEvent.setup();
+  const disclosure = document.querySelector("details.grounded-evidence-disclosure > summary");
+  if (disclosure === null) throw new TypeError("Missing evidence summary");
+  await user.click(disclosure);
+  await user.click(screen.getByText("Inspect files"));
+  await screen.findByRole("table", { name: /Files assembled/ });
+  expect(
+    screen.queryByRole("button", { name: /Open src\/feature\/read.ts.*Read, not cited/ }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Not read/ }));
+  expect(openEditorFile).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole("button", { name: "Select repository source: repo-b" }),
+  ).toBeInTheDocument();
 });
 
 it("lets a scripted insufficiency add its file and focus an unsent follow-up", async () => {
