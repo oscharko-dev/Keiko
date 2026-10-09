@@ -110,6 +110,7 @@ import {
   recordPluralGroundedAnswer,
   finalPluralRepairAnswer,
   uninvokedCitationRepair,
+  verifiedPluralInsufficiencyScopeIndex,
   type GroundedRetriever,
 } from "./grounded-qa-multi-source.js";
 import {
@@ -137,7 +138,6 @@ import {
 import {
   buildPackCitationIndex,
   groundedAnswerEvidenceFields,
-  buildInsufficiencyScopeIndex,
   validateGroundedAnswerEvidence,
   connectedSearchNoEvidenceAnswer,
   incompleteAnswerMarker,
@@ -289,6 +289,7 @@ interface RetrievedFolder {
   readonly elapsedMs: number;
   readonly scope: SelectedScope;
   readonly plan: RetrievalOnlyOutput["plan"];
+  readonly declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"];
 }
 
 interface RetrievedConnector {
@@ -593,6 +594,7 @@ function retrievedFolderSlot(
       elapsedMs: out.elapsedMs,
       scope,
       plan: out.plan,
+      declarationScopeIndexFor: out.declarationScopeIndexFor,
       sourceScopeFingerprint: groundedSourceScopeFingerprint(
         scope,
         cs,
@@ -1033,24 +1035,13 @@ function hybridRepairMessages(
   original: string,
   options: GroundedAnswerOptions,
 ): readonly GatewayChatMessage[] | undefined {
-  const system = ctx.lastPrompt?.[0];
-  const user = ctx.lastPrompt?.[1];
   const profile =
     ctx.deps === undefined ? undefined : currentContextProfileForModel(ctx.deps, ctx.modelId);
   const inputMax = Math.min(
     options.modelInputTokensMax ?? 0,
     profile?.effectiveInputBudget ?? Number.MAX_SAFE_INTEGER,
   );
-  const messages: readonly GatewayChatMessage[] =
-    system === undefined || user === undefined
-      ? []
-      : [
-          system,
-          {
-            ...user,
-            content: `${user.content}\n\n${buildCitationRepairPrompt(original, "numeric")}`,
-          },
-        ];
+  const messages = hybridRepairPrompt(ctx.lastPrompt, original);
   if (
     messages.length === 0 ||
     promptByteLength(messages) > modelInputPromptByteLimit(inputMax) ||
@@ -1058,6 +1049,19 @@ function hybridRepairMessages(
   )
     return undefined;
   return messages;
+}
+
+function hybridRepairPrompt(
+  lastPrompt: readonly GatewayChatMessage[] | undefined,
+  original: string,
+): readonly GatewayChatMessage[] {
+  const system = lastPrompt?.[0];
+  const user = lastPrompt?.[1];
+  if (system === undefined || user === undefined) return [];
+  return [
+    system,
+    { ...user, content: `${user.content}\n\n${buildCitationRepairPrompt(original, "numeric")}` },
+  ];
 }
 
 function hybridRepairSignal(
@@ -1085,19 +1089,7 @@ async function hybridGatewayRepair(
     (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
   )
     return uninvokedCitationRepair(original);
-  logGroundedPromptSelection(
-    ctx.correlationId,
-    { messages },
-    Math.min(
-      options.modelInputTokensMax ?? 0,
-      ctx.deps === undefined
-        ? Number.MAX_SAFE_INTEGER
-        : modelWindowAwareBudget(ctx.deps, ctx.modelId).modelInputTokensMax,
-    ),
-    ctx.deps === undefined
-      ? undefined
-      : currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
-  );
+  logHybridRepairPrompt(ctx, messages, options);
   if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
@@ -1120,6 +1112,26 @@ async function hybridGatewayRepair(
       completionTokens: response.usage.completionTokens,
     },
   };
+}
+
+function logHybridRepairPrompt(
+  ctx: HybridGatewayRepairContext,
+  messages: readonly GatewayChatMessage[],
+  options: GroundedAnswerOptions,
+): void {
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    { messages },
+    Math.min(
+      options.modelInputTokensMax ?? 0,
+      ctx.deps === undefined
+        ? Number.MAX_SAFE_INTEGER
+        : modelWindowAwareBudget(ctx.deps, ctx.modelId).modelInputTokensMax,
+    ),
+    ctx.deps === undefined
+      ? undefined
+      : currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
+  );
 }
 
 // ─── Citations + summaries ────────────────────────────────────────────────────
@@ -2417,7 +2429,7 @@ async function retrieveHybridSources(
           child,
           capped.folderScopes,
           query,
-          ctx.folderRetriever ?? defaultRetriever(signal, ctx.deps, ctx.correlationId),
+          ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps, ctx.correlationId),
         );
       } else {
         connectorResult = await retrieveConnectors(
@@ -2714,7 +2726,9 @@ function validatedHybridEvidence(
   sent: readonly SelectedCandidate<HybridPayload>[],
 ): GroundedAnswerResult {
   const sentEvidencePacks = sentFolderPacks(ctx.folderOmissionPacks ?? [], sent);
-  const evidenceScopeIndex = buildInsufficiencyScopeIndex(
+  const evidenceScopeIndex = verifiedPluralInsufficiencyScopeIndex(
+    ctx.folderOmissionPacks ?? [],
+    assistant.content,
     sentEvidencePacks,
     ctx.insufficiencyScopeIndex,
   );
