@@ -149,7 +149,8 @@ import {
   type FolderRetriever,
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { GROUNDED_SYSTEM_PROMPT, groundedSystemPrompt } from "./grounded-prompt.js";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import {
   isExpectedWorkspaceRootFailure,
   recordWorkspaceRootDenial,
@@ -850,6 +851,7 @@ export function groundedPromptInputTokensForCapability(
 }
 
 export interface GroundedGatewayPromptOptions {
+  readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
   readonly modelInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
   readonly requiredEvidencePaths?: readonly string[] | undefined;
@@ -1137,7 +1139,7 @@ export function fittedGroundedGatewayPrompt(
     question,
     pack,
     redactor,
-    buildRawGroundedGatewayMessages,
+    groundedPromptBuilder(options),
     options,
   );
   return {
@@ -1148,6 +1150,7 @@ export function fittedGroundedGatewayPrompt(
       withPromptExcerptBudget(fitted.pack, 0),
       redactor,
       -1,
+      options?.ownAssessmentPolicy,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -1328,6 +1331,7 @@ function buildRawGroundedGatewayMessages(
   pack: ConnectedContextPack,
   redactor: Redactor,
   omissionPathBytes?: number,
+  ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
@@ -1351,7 +1355,7 @@ function buildRawGroundedGatewayMessages(
     ...uncertaintyLines(pack, redactor),
   ].join("\n");
   return [
-    { role: "system", content: GROUNDED_SYSTEM_PROMPT },
+    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
     { role: "user", content: userContent },
   ];
 }
@@ -1362,7 +1366,18 @@ export function buildGroundedGatewayMessages(
   redactor: Redactor,
   options?: GroundedGatewayPromptOptions,
 ): readonly GatewayChatMessage[] {
-  return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages, options);
+  return promptBudgetedMessages(question, pack, redactor, groundedPromptBuilder(options), options);
+}
+
+function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): GroundedPromptBuilder {
+  return (question, pack, redactor, omissionPathBytes): readonly GatewayChatMessage[] =>
+    buildRawGroundedGatewayMessages(
+      question,
+      pack,
+      redactor,
+      omissionPathBytes,
+      options?.ownAssessmentPolicy,
+    );
 }
 
 interface GroundedGatewayAnswerContext {
