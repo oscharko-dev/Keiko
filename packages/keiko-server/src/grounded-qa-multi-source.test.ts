@@ -117,6 +117,7 @@ interface PutCall {
   readonly runId: string;
   readonly workspaceRoot: string;
   readonly sourceScopeFingerprint: string | undefined;
+  readonly citationCount: number | undefined;
 }
 
 function asConnectedAnswer(
@@ -155,12 +156,16 @@ function recordingDeps(puts: PutCall[], overrides: Partial<UiHandlerDeps> = {}):
       put: (runId: string, json: string): string => {
         const parsed = JSON.parse(json) as {
           context?: { workspaceRoot?: string };
-          connectedContext?: { scope: { sourceScopeFingerprint?: string } };
+          connectedContext?: {
+            scope: { sourceScopeFingerprint?: string };
+            summary: { citationCount?: number };
+          };
         };
         puts.push({
           runId,
           workspaceRoot: parsed.context?.workspaceRoot ?? "",
           sourceScopeFingerprint: parsed.connectedContext?.scope.sourceScopeFingerprint,
+          citationCount: parsed.connectedContext?.summary.citationCount,
         });
         return runId;
       },
@@ -2599,6 +2604,118 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
   });
 });
 
+describe("multi-source final fitted citation authority", () => {
+  function sourcePacks(): readonly ConnectedContextPack[] {
+    return ["alpha", "beta"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.8, name);
+      const content = "first line\nsecond line\nthird line\nfourth line\nfifth line";
+      return {
+        ...pack,
+        usage: { ...pack.usage, excerptBytes: Buffer.byteLength(content) },
+        files: pack.files.map((file) => ({
+          ...file,
+          excerpts: file.excerpts.map((excerpt) => ({
+            ...excerpt,
+            content,
+            contentBytes: Buffer.byteLength(content),
+          })),
+        })),
+      };
+    });
+  }
+
+  async function fittedAsk(
+    packs: readonly ConnectedContextPack[],
+    sent: readonly ConnectedContextPack[],
+    content: string,
+  ): Promise<{
+    readonly answer: Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>;
+    readonly puts: readonly PutCall[];
+    readonly judged: readonly (readonly ConnectedContextPack[])[];
+  }> {
+    const puts: PutCall[] = [];
+    const judged: (readonly ConnectedContextPack[])[] = [];
+    const scopes = packs.map((pack, index) => ({
+      kind: "files" as const,
+      relativePaths: [pack.files[0]?.scopePath ?? ""],
+      connectedAtMs: NOW,
+      root: tempRoot(`fitted-${String(index)}`),
+    }));
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: makeChat(scopes), content: "Explain both files" })),
+      recordingDeps(puts),
+      undefined,
+      {
+        retriever: packPerScope(
+          new Map(packs.map((pack) => [pack.files[0]?.scopePath ?? "", pack])),
+        ),
+        answerer: () =>
+          Promise.resolve({
+            content,
+            usage: { promptTokens: 0, completionTokens: 0 },
+            sentEvidencePacks: sent,
+            filesInPrompt: sent.reduce((count, pack) => count + pack.files.length, 0),
+          }),
+        entailmentStageFactory: () => ({
+          evaluate: (_answer, evidence) => {
+            judged.push(evidence);
+            return Promise.resolve([]);
+          },
+          evaluateNumeric: () => Promise.resolve([]),
+        }),
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return { answer: asConnectedAnswer(result.body as GroundedAnswer), puts, judged };
+  }
+
+  it("does not authenticate an assembled source when the final prompt sent zero excerpts", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack) => withPromptExcerptByteLimit(pack, 0));
+    const { answer, puts, judged } = await fittedAsk(
+      packs,
+      sent,
+      "The implementation works [source:1|src/alpha.ts:1-5].",
+    );
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("unsupported-citation");
+    expect(answer.contextPack.filesInPrompt).toBe(0);
+    expect(answer.contextPack.fileCount).toBe(2);
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 0]);
+    expect(judged).toEqual([sent]);
+  });
+
+  it("rejects a trimmed-away line while retaining the second source ordinal and actual judge evidence", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack, index) =>
+      withPromptExcerptByteLimit(pack, index === 0 ? 11 : 100),
+    );
+    expect(sent[0]?.files[0]?.excerpts[0]?.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    const { answer, puts, judged } = await fittedAsk(
+      packs,
+      sent,
+      "First [source:1|src/alpha.ts:5]. Second [source:2|src/beta.ts:1-5].",
+    );
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("unsupported-citation");
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
+    expect(answer.contextPack.filesInPrompt).toBe(2);
+    expect(judged).toEqual([sent]);
+  });
+
+  it("keeps source two attributable when source one has no sent file", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack, index) =>
+      withPromptExcerptByteLimit(pack, index === 0 ? 0 : 100),
+    );
+    const { answer, puts } = await fittedAsk(packs, sent, "Second [source:2|src/beta.ts:1-5].");
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("unsupported-citation");
+    expect(answer.contextPack.filesInPrompt).toBe(1);
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
+  });
+});
+
 // ─── Correlation threading (ADR-0173 D5) ──────────────────────────────────────
 //
 // createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
@@ -2647,6 +2764,8 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     expect(result.evidenceScopeIndex?.size).toBe(0);
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-multi-source-answerer-000001");
+    expect(result.sentEvidencePacks).toEqual([empty]);
+    expect(result.filesInPrompt).toBe(0);
     // PR #3678 review: the answer reports the share of the prompt it actually sent.
     expect(result.promptContext).toMatchObject({
       promptTokens: 3,
@@ -2752,6 +2871,17 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       expect(sentTokens[1]).toBeLessThanOrEqual(8_192);
       expect(result.promptContext?.contextWindowTokens).toBe(8_192);
       expect(result.evidenceScopeIndex).toBeDefined();
+      expect(result.sentEvidencePacks).toBeDefined();
+      expect(result.filesInPrompt).toBe(
+        result.sentEvidencePacks?.filter((pack) => pack.files.length > 0).length,
+      );
+      for (const pack of result.sentEvidencePacks ?? []) {
+        for (const file of pack.files) {
+          for (const excerpt of file.excerpts) {
+            expect(sentSourceBodies.at(-1)).toContain(excerpt.content);
+          }
+        }
+      }
       for (const name of ["a", "b"]) {
         expect(result.evidenceScopeIndex?.get(`src/${name}.ts`) === "read-in-this-turn").toBe(
           sentSourceBodies.at(-1)?.includes(`${name} evidence`),

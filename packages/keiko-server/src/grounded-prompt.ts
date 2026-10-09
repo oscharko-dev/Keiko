@@ -1,3 +1,4 @@
+import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Shared grounded-answer system prompt. Extracted to a contracts-only LEAF module so the
 // hybrid grounding module can interpolate it in a top-level constant without a circular-import
@@ -32,3 +33,14 @@ export const GROUNDED_SYSTEM_PROMPT =
   "Do not expose secrets or credential-shaped strings. Do not reveal internal search, " +
   "planning, tool-call, or orchestration text. Never output pseudo-tool calls, JSON-like " +
   "search arguments, or preambles such as 'Searching for', 'Search query', or 'Let's search'.";
+
+/** Distinct files with usable excerpts in the final prompt, independent of assembled audit packs. */
+export function sentGroundedFileCount(packs: readonly ConnectedContextPack[]): number {
+  return new Set(
+    packs.flatMap((pack) =>
+      pack.files
+        .filter((file) => file.excerpts.some((excerpt) => excerpt.content.length > 0))
+        .map((file) => `${pack.scope.workspaceRoot}\0${file.scopePath}`),
+    ),
+  ).size;
+}
