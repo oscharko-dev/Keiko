@@ -1,5 +1,9 @@
 "use client";
 
+import { MissingEvidenceActions } from "./MissingEvidenceActions";
+import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
+import { ChatScopeNotice } from "./ChatScopeNotice";
+import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
 
 /**
@@ -209,6 +213,7 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
@@ -1560,7 +1565,6 @@ export const ConversationQuestionMap = memo(ConversationQuestionMapImpl);
 const ConversationThread = memo(ConversationThreadImpl);
 
 const REPOSITORY_FILE_SEARCH_LIMIT = 24;
-const MAX_REPOSITORY_FOCUS_PATHS = 50;
 
 interface ComposerRepositoryReference {
   readonly id: string;
@@ -1697,57 +1701,6 @@ function replaceRepositoryMention(
     value: `${prefix}${inserted}${suffix}`,
     cursor: prefix.length + inserted.length,
   };
-}
-
-function mergeRepositoryFileScope(
-  chat: Chat,
-  root: string,
-  path: string,
-  now: () => number = Date.now,
-): { readonly scopes: readonly ChatConnectedScope[]; readonly changed: boolean } {
-  const filePath = normalizedRepositoryPath(path);
-  if (filePath.length === 0) {
-    throw new Error("EMPTY_REPOSITORY_FILE_SELECTION");
-  }
-  const currentScopes = effectiveConnectedScopes(chat);
-  const nextScopes: ChatConnectedScope[] = [];
-  let merged = false;
-  let changed = false;
-
-  for (const scope of currentScopes) {
-    const scopeRoot = scope.root ?? chat.projectPath;
-    if (scope.kind === "files" && scopeRoot === root) {
-      merged = true;
-      if (scope.relativePaths.includes(filePath)) {
-        nextScopes.push(scope);
-        continue;
-      }
-      if (scope.relativePaths.length >= MAX_REPOSITORY_FOCUS_PATHS) {
-        throw new Error("REPOSITORY_FILE_SCOPE_LIMIT");
-      }
-      nextScopes.push({
-        ...scope,
-        root,
-        relativePaths: [...scope.relativePaths, filePath],
-        connectedAtMs: now(),
-      });
-      changed = true;
-      continue;
-    }
-    nextScopes.push(scope);
-  }
-
-  if (!merged) {
-    nextScopes.push({
-      kind: "files",
-      root,
-      relativePaths: [filePath],
-      connectedAtMs: now(),
-    });
-    changed = true;
-  }
-
-  return { scopes: nextScopes, changed };
 }
 
 function resultDirectoryLabel(result: FilesSearchResult, t: I18nTranslate): string {
@@ -2076,7 +2029,9 @@ function RepositoryReferenceStrip({
             <FileIcon name={reference.name} />
           </span>
           <span className="repo-token-main">
-            <span className="repo-token-name">{reference.name}</span>
+            <span className="repo-token-name">
+              {t("scope.pill.file", { name: reference.name })}
+            </span>
             <span className="repo-token-path">
               {reference.directory.length === 0
                 ? repositoryRootLabel(reference.root)
@@ -4449,8 +4404,10 @@ function ChatScopeHeaderImpl({
   onChatChanged,
   memoryControl,
   pendingGitChangeComparisons,
+  onKeepFolderChange,
 }: {
   readonly chat: Chat;
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly onChatChanged: (chat: Chat) => void;
   readonly memoryControl?: ReactNode;
   readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
@@ -4470,6 +4427,16 @@ function ChatScopeHeaderImpl({
         onChatChanged={onChatChanged}
         catalog={catalog}
         connected={connected}
+      />
+      {effectiveConnectedScopes(chat).length === 0 ? null : (
+        <p className={scopeNoticeStyles.help} data-testid="grounding-help" tabIndex={-1}>
+          {t("chat.grounding.help")}
+        </p>
+      )}
+      <ChatScopeNotice
+        chat={chat}
+        onChatChanged={onChatChanged}
+        onKeepFolderChange={onKeepFolderChange}
       />
       <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
       <ConnectorScopePill
@@ -5256,6 +5223,7 @@ function composerPlaceholder(visibleCount: number, loading: boolean, t: I18nTran
 // Extracted from ChatWindow (SonarCloud S3776) — the chat-scope header, memory panel, and
 // no-model/loading alerts that sit above the scrollable log.
 function ChatWindowStatusHeader({
+  onKeepFolderChange,
   activeChat,
   replaceChat,
   memoryControl,
@@ -5270,6 +5238,7 @@ function ChatWindowStatusHeader({
   noEligibleModels,
   loading,
 }: {
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly activeChat: Chat | undefined;
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
@@ -5290,6 +5259,7 @@ function ChatWindowStatusHeader({
         <ChatScopeHeader
           chat={activeChat}
           onChatChanged={replaceChat}
+          onKeepFolderChange={onKeepFolderChange}
           memoryControl={memoryControl}
           pendingGitChangeComparisons={pendingGitChangeComparisons}
         />
@@ -5635,6 +5605,7 @@ function ChatWindowComposerFooter({
 }
 
 export function ChatWindow({
+  onKeepFolderChange,
   windowId,
   suspended = false,
   mini = false,
@@ -5821,6 +5792,7 @@ export function ChatWindow({
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
       <ChatWindowStatusHeader
+        onKeepFolderChange={onKeepFolderChange}
         activeChat={activeChat}
         replaceChat={replaceChat}
         memoryControl={memoryControl}
@@ -5881,6 +5853,19 @@ export function ChatWindow({
           and its live dialogue session — across the empty→populated transition. The condition is the
           exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
           keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
+      <MissingEvidenceActions
+        chat={activeChat}
+        answer={
+          session.latestGrounded ??
+          messages.findLast(
+            (message) => message.role === "assistant" && message.groundedAnswer !== undefined,
+          )?.groundedAnswer
+        }
+        onChatChanged={replaceChat}
+        setDraft={session.setDraft}
+        draft={draft}
+        focusComposer={() => composerInputRef.current?.focus()}
+      />
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}
