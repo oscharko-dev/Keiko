@@ -18,6 +18,7 @@ import {
 } from "./grounded-answer.js";
 import {
   buildPackCitationIndex,
+  groundedAnswerSourceText,
   parseInlineCitations,
   reconcileInlineCitations,
   reconcileNumericCitations,
@@ -70,13 +71,19 @@ function repairDisposition(ctx: GroundedRepairContext): CitationRepairDispositio
 
 function hasSubstantiveEvidenceAnswer(ctx: GroundedRepairContext): boolean {
   const sourceCount = (ctx.answer.filesInPrompt ?? 0) + (ctx.numericMarkers?.size ?? 0);
-  return ctx.answer.answerKind === "answer" && ctx.answer.modelInvoked !== false && sourceCount > 0;
+  return (
+    ctx.answer.answerKind === "answer" &&
+    ctx.answer.modelInvoked !== false &&
+    sourceCount > 0 &&
+    groundedAnswerSourceText(ctx.answer.content).trim().length > 0
+  );
 }
 
 function hasParsedRepairCitations(ctx: GroundedRepairContext): boolean {
   return (
     parseInlineCitations(ctx.answer.content).length > 0 ||
-    (ctx.numericMarkers !== undefined && findCitationMarkerGroups(ctx.answer.content).length > 0)
+    (ctx.numericMarkers !== undefined &&
+      findCitationMarkerGroups(groundedAnswerSourceText(ctx.answer.content)).length > 0)
   );
 }
 

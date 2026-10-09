@@ -415,6 +415,36 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(readPersistedActivityLog(stateDir)).toContain('"outcome":"assessment-only"');
   });
 
+  it.each(["Danke.", "Thank you."])(
+    "answers ordinary connected conversation %s without invented retrieval anchors",
+    async (question) => {
+      const knowledge = "<assessment>\nYou are welcome.\n</assessment>";
+      const requests = installProvider([knowledge], true);
+      const { deps, chatId } = configuredRuntime();
+      const result = await handleGroundedAsk(route(chatId, question), deps);
+      expect(result.status).toBe(200);
+      expect(requests).toHaveLength(1);
+      expect(result.body).toMatchObject({
+        content: knowledge,
+        citations: [],
+        answerKind: "answer",
+      });
+      expect(requests[0]).toContain("Use learned knowledge");
+    },
+  );
+
+  it("permits a generic no-anchor request under assessment authority", async () => {
+    const knowledge = "<assessment>\nI can explain concepts or discuss a question.\n</assessment>";
+    const requests = installProvider([knowledge], true);
+    const { deps, chatId } = configuredRuntime();
+    const result = await handleGroundedAsk(route(chatId, "?"), deps);
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(1);
+    expect(result.body).toMatchObject({ content: knowledge, citations: [] });
+    expect(requests[0]).not.toContain("File:");
+    expect(deps.evidenceStore.list()).toEqual([]);
+  });
+
   it("keeps operator-disabled empty-source abstention without synthesis", async () => {
     rmSync(join(root, "src"), { recursive: true });
     rmSync(join(root, "lib"), { recursive: true });
@@ -458,6 +488,31 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(answer.content).not.toContain("<assessment>");
     expect(answer.citations).toEqual([]);
     expect(readPersistedActivityLog(stateDir)).toContain('"outcome":"neutralized"');
+  });
+
+  it("keeps source warnings when an assessment-only repair draft is rejected", async () => {
+    const requests = installProvider(
+      [UNCITED, "<assessment>\nGeneral advice.\n</assessment>"],
+      true,
+    );
+    const { deps, chatId } = configuredRuntime();
+    const result = await handleGroundedAsk(route(chatId), deps);
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.content).toBe(UNCITED);
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(true);
+    const assessed = readPersistedActivityLog(stateDir)
+      .split("\n")
+      .filter((line) => line.startsWith("{"))
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter(
+        (record) => record.op === "search.answer.assessed" && record.phase === "accepted-final",
+      );
+    expect(assessed).toHaveLength(1);
+    expect(assessed[0]?.outcome).toBe("none");
+    expect(typeof assessed[0]?.scopeIdentitySha256).toBe("string");
+    expect(typeof assessed[0]?.queryIdentitySha256).toBe("string");
   });
 
   it("repairs only the uncited source claims while preserving the assessment verbatim", async () => {

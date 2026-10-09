@@ -1,3 +1,4 @@
+import { splitOwnAssessment } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import {
   parseInlineCitations,
@@ -120,6 +121,8 @@ export function validateCitationRepair(
   numericMarkers?: ReadonlySet<number>,
 ): boolean {
   if (original.length > REPAIR_TEXT_MAX || repaired.length > REPAIR_TEXT_MAX) return false;
+  if (splitOwnAssessment(original).assessment !== splitOwnAssessment(repaired).assessment)
+    return false;
   if (!hasSupportedRepairMarkers(repaired, index, numericMarkers)) return false;
   return unchangedWithInsertions(
     original,
