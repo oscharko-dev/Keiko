@@ -91,7 +91,7 @@ describe("query-named explicit path admission", () => {
   });
 
   it.each(["./../outside.ts", "././../outside.ts", "./.env", "src/./checker.ts"])(
-    "never collapses unsafe or noncanonical interior segments in %s",
+    "preserves strict parent/interior validation and canonical sensitive names: %s",
     (path) => {
       const normalized = normalizedExplicitReferencePath({ path, origin: "query" }, ROOT);
       if (path === "./.env") expect(normalized).toBe(".env");

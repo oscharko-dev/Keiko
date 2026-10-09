@@ -452,6 +452,8 @@ system that exists, never beside it:
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
   Complete document path references are data when classifying relationship/history requests;
+  Leading `./` reference spellings are canonicalized before strict path admission; parent and
+  interior dot segments remain subject to the existing validator and every sensitive-path denial.
   directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
   factual lookup focuses discovery on canonically admitted named documents with a scope-bound
   request context only when the planner has no independent non-path target. Its source/read/ring
