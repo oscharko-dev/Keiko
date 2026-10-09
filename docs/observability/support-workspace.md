@@ -207,6 +207,12 @@ report availability reason. Unknown facts are omitted rather than inferred from 
    records missing these fields cannot retroactively establish the finding. Use the
    [connected-folder troubleshooting entry](../troubleshooting/chat-connected-folder-file-not-read.md)
    to distinguish ranking, scope eligibility, and exhausted budgets.
+   The same timeline joins the typed `search.connected-context.source-details`,
+   `selection-details`, `completion-details`, and `answer-details` siblings. Inspect
+   `answer-details.filesInPrompt` for final sent evidence; assembled reads alone do not prove
+   delivery to synthesis. The first and second prompts retain the original source/query identities
+   and use `followUpPass` 0 and 1 even when the selection fingerprint changes. An `answered`
+   follow-up can still carry an uncited-answer warning; this warning does not grant another call.
    `--emit-fixture PATH` prepares
    an existing safe gateway replay fixture and never overwrites a target. Follow the
    [red/green reproduction recipe](reproduction-harness.md); no user-authored reproduction text
