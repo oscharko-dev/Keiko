@@ -7,6 +7,7 @@
 // `@oscharko-dev/keiko-*` imports may appear in this module.
 
 import type { ContextBudget } from "./context-engineering.js";
+import type { GroundedRerankerDiagnostics } from "./bff-wire.js";
 import { validateContextBudget } from "./context-engineering-validation.js";
 import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
 
@@ -476,6 +477,23 @@ export interface ContextCoverageDiagnostics {
   readonly limits: ContextCoverageLimits;
 }
 
+export type ContextSelectionConfidence = "high" | "low";
+export type ContextRerankerDisposition =
+  "unconfigured" | "applied" | "failed" | "skipped-budget" | "skipped-literal";
+
+export interface ContextSelectionDiagnostics {
+  readonly selectionConfidence: ContextSelectionConfidence;
+  readonly keepOneFallbackApplied: boolean;
+  readonly floorReferenceKind: "ordinary-p75" | "no-ordinary" | "files-scope";
+  readonly relativeFloorPermille: number;
+  readonly strongestOrdinaryScorePermille: number;
+  readonly absoluteFloorPermille: number;
+  readonly rerankerDisposition: ContextRerankerDisposition;
+  readonly reranked: boolean;
+  readonly rerankFailedCalls: number;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
+}
+
 export interface ContextPackDiagnostics {
   readonly rankedCandidates: readonly RankedCandidateExplanation[];
   // Optional, additive deterministic context-budget plan (ADR-0052). Absent on legacy packs;
@@ -484,6 +502,7 @@ export interface ContextPackDiagnostics {
   // Optional, additive path-free coverage diagnostics. Absent on legacy/non-search packs; when
   // present it explains whether repository coverage was incomplete and why.
   readonly coverage?: ContextCoverageDiagnostics | undefined;
+  readonly selection?: ContextSelectionDiagnostics | undefined;
 }
 
 // ─── Pack summary ─────────────────────────────────────────────────────────────
@@ -1466,6 +1485,76 @@ function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: s
   // Additive, guarded: legacy diagnostics without contextBudget validate exactly as before.
   validateDiagnosticsContextBudget(diagnostics.contextBudget, reasons);
   validateDiagnosticsCoverage(diagnostics.coverage, reasons);
+  validateDiagnosticsSelection(diagnostics.selection, reasons);
+}
+
+function validateDiagnosticsSelection(value: unknown, reasons: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    reasons.push("pack.diagnostics.selection invalid");
+    return;
+  }
+  for (const [field, allowed] of [
+    ["selectionConfidence", ["high", "low"]],
+    ["floorReferenceKind", ["ordinary-p75", "no-ordinary", "files-scope"]],
+    [
+      "rerankerDisposition",
+      ["unconfigured", "applied", "failed", "skipped-budget", "skipped-literal"],
+    ],
+  ] as const)
+    pushIf(reasons, !allowed.some((entry) => entry === value[field]), `selection.${field} invalid`);
+  for (const field of [
+    "relativeFloorPermille",
+    "strongestOrdinaryScorePermille",
+    "absoluteFloorPermille",
+  ])
+    pushIf(
+      reasons,
+      !isFiniteNonNegativeInteger(value[field]) || Number(value[field]) > 1000,
+      `selection.${field} invalid`,
+    );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(value.rerankFailedCalls),
+    "selection.rerankFailedCalls invalid",
+  );
+  pushIf(
+    reasons,
+    typeof value.keepOneFallbackApplied !== "boolean",
+    "selection.keepOneFallbackApplied invalid",
+  );
+  pushIf(
+    reasons,
+    value.reranked !== (value.rerankerDisposition === "applied"),
+    "selection.reranked invalid",
+  );
+  validateSelectionReranker(value.reranker, reasons);
+}
+
+function validateSelectionReranker(value: unknown, reasons: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    reasons.push("selection.reranker invalid");
+    return;
+  }
+  pushIf(
+    reasons,
+    !["disabled", "denied", "unavailable", "invalid-response", "applied"].some(
+      (state) => state === value.status,
+    ),
+    "selection.reranker.status invalid",
+  );
+  for (const field of ["candidateCount", "documentCount", "keptCount"])
+    pushIf(
+      reasons,
+      !isFiniteNonNegativeInteger(value[field]),
+      `selection.reranker.${field} invalid`,
+    );
+  pushIf(
+    reasons,
+    value.latencyMs !== undefined && !isFiniteNonNegativeInteger(value.latencyMs),
+    "selection.reranker.latencyMs invalid",
+  );
 }
 
 function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: string[]): void {

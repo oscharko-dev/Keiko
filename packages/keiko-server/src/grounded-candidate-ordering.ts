@@ -5,6 +5,7 @@ import type { SearchAnchor } from "@oscharko-dev/keiko-workflows";
 export interface RankingSelectionObservation {
   readonly basenameCollisionGroupCount: number;
   readonly basenameDedupDemotedCount: number;
+  readonly addressedBasenameDedupDemotedCount: number;
   readonly exactPathSignalPresentCount: number;
   readonly pathSegmentSignalPresentCount: number;
   readonly directoryProximityTieBreakCount: number;
@@ -113,13 +114,20 @@ export function orderDistinctEvidenceCandidates(
     anchors,
     priorityPaths,
   );
+  const ordered = [...addressed, ...unaddressed.candidates];
+  const firstUnaddressed = ordered.findIndex((candidate) => !paths.has(candidate.scopePath));
   return {
-    kept: [...addressed, ...unaddressed.candidates],
+    kept: ordered,
     observation: {
       basenameCollisionGroupCount: [...pathGroupCounts(kept, basename).values()].filter(
         (count) => count > 1,
       ).length,
       basenameDedupDemotedCount: unaddressed.demotedCount,
+      addressedBasenameDedupDemotedCount:
+        firstUnaddressed < 0
+          ? 0
+          : ordered.slice(firstUnaddressed).filter((candidate) => paths.has(candidate.scopePath))
+              .length,
       exactPathSignalPresentCount: kept.filter(
         (candidate) => signal(candidate, "exact-path-match") > 0,
       ).length,

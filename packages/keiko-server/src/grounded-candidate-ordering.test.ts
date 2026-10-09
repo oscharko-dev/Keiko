@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { CandidateFile } from "@oscharko-dev/keiko-contracts/connected-context";
-import { orderForDistinctEvidencePaths } from "./grounded-candidate-ordering.js";
+import {
+  orderForDistinctEvidencePaths,
+  orderDistinctEvidenceCandidates,
+} from "./grounded-candidate-ordering.js";
 function candidate(scopePath: string, score: number): CandidateFile {
   return { scopePath, score, signals: [], omitted: undefined };
 }
 
 describe("addressed same-basename ordering", () => {
+  it("separates healthy unaddressed diversity from any addressed-file demotion", () => {
+    const addressed = candidate("src/Feature/validation.ts", 0.8);
+    const first = candidate("src/A/helper.ts", 0.7);
+    const duplicate = candidate("src/B/helper.ts", 0.6);
+    const result = orderDistinctEvidenceCandidates(
+      [addressed, first, duplicate, candidate("README.md", 0.5)],
+      [],
+      new Set(),
+      new Set([addressed.scopePath]),
+    );
+    expect(result.kept[0]).toBe(addressed);
+    expect(result.observation.basenameDedupDemotedCount).toBe(1);
+    expect(result.observation.addressedBasenameDedupDemotedCount).toBe(0);
+  });
   it("keeps all explicitly selected collisions before unaddressed alternatives", () => {
     const first = candidate("src/Form/feature/validation.ts", 0.8);
     const second = candidate("src/Form/validation.ts", 0.7);
