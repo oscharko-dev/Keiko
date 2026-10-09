@@ -1652,6 +1652,7 @@ function createStructuralRequestContextPool(
   deadlineAtMs: number,
   workspaceIndexActivity: WorkspaceIndexActivity,
   signal?: AbortSignal,
+  isCandidateAllowed?: (scopePath: string) => boolean,
 ): StructuralRequestContextPool {
   const contexts = new Map<string, StructuralAdapterRequestContext>();
   return {
@@ -1664,6 +1665,7 @@ function createStructuralRequestContextPool(
           nowMs,
           deadlineAtMs,
           ...(signal === undefined ? {} : { signal }),
+          ...(isCandidateAllowed === undefined ? {} : { isCandidateAllowed }),
         }),
         workspaceIndexActivity,
       );
@@ -7655,6 +7657,7 @@ interface ConnectedContextRuntime {
   readonly progress: ConnectedContextProgress;
   readonly workspaceIoActivity: WorkspaceIoActivity;
   readonly requestStartedAtMs: number;
+  readonly rejectedExplicitPaths: Set<string>;
 }
 
 const EMPTY_STRUCTURAL_DIAGNOSTICS: StructuralRequestContextPoolDiagnostics = {
@@ -9351,6 +9354,7 @@ function liveStructuralContexts(
     deadlineAtMs,
     workspaceIndexActivity,
     signal,
+    (scopePath) => !runtime.rejectedExplicitPaths.has(scopePath),
   );
 }
 
@@ -9673,6 +9677,9 @@ async function liveExplicitPathAdmission(
     deadlineAtMs: context.deadlineAtMs,
     signal: deps.signal,
     tryReserveSearchCall: budget.tryReserveSearchCall,
+    onPathRejected: (scopePath): void => {
+      runtime.rejectedExplicitPaths.add(scopePath);
+    },
   });
   return { ...result, governor: budget.finish(governor).governor };
 }
@@ -9978,6 +9985,7 @@ export async function retrieveConnectedContextPack(
       progress,
       workspaceIoActivity,
       requestStartedAtMs,
+      rejectedExplicitPaths: new Set(),
     });
     activity.completed(execution);
     return execution.output;
