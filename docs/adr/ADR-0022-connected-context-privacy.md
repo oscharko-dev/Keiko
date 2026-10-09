@@ -256,6 +256,9 @@ Sixteen lazily loaded query shards retain the existing encrypted store's snapsho
 an 8 KiB record bound and a 64 MiB aggregate request-record bound. They are partial acceleration
 metadata, never discovery authority. Capacity refusals remain visible as dropped records; retained
 and reused counts describe actual guarded index records, independently of source coverage counts.
+An active request may evict unseen advisory records even when capacity refused every new record.
+This releases bounded reuse capacity without claiming source-file deletion or complete enumeration;
+the next uncached lookup still requires live matching under the existing guards.
 Positive evidence excerpts are still freshly read. Active known-fit observers, semantic/document
 inspection and Editor lanes retain their live content behavior; an observer may release this need
 only after it irrevocably stops. Thus a warm workspace search with no body reads does not imply that
