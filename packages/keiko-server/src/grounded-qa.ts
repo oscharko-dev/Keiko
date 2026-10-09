@@ -22,7 +22,7 @@ import {
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
-import { logChatResponseMessage } from "./chat-activity.js";
+import { logChatResponseMessage, type ChatResponseMemoryActivity } from "./chat-activity.js";
 import {
   groundedConversationContinuity,
   type GroundedConversationContinuity,
@@ -3237,6 +3237,24 @@ function groundedAnswerWithMemoryUncertainty(
   };
 }
 
+function finalGroundedMemoryActivity(
+  prepared: PreparedGroundedAsk,
+  body: GroundedAnswer,
+): ChatResponseMemoryActivity {
+  const markerCount = body.uncertainty.filter(
+    (marker) => marker.kind === "uncited-memory-context",
+  ).length;
+  return {
+    uncitedMemoryContextMarkerCount: markerCount,
+    memoryContextDisposition:
+      prepared.input.memory?.enabled !== true
+        ? "not-requested"
+        : markerCount > 0
+          ? "included"
+          : "excluded",
+  };
+}
+
 export async function handleGroundedAsk(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -3251,7 +3269,11 @@ export async function handleGroundedAsk(
     if ("status" in prepared) return prepared;
     const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
     if (result.status === 200 && groundedAnswerBody(result.body)) {
-      logChatResponseMessage(result.body.assistantMessageId, ctx.correlationId);
+      logChatResponseMessage(
+        result.body.assistantMessageId,
+        ctx.correlationId,
+        finalGroundedMemoryActivity(prepared, result.body),
+      );
     }
     return result;
   } finally {

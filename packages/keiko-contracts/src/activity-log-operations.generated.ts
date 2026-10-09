@@ -1612,6 +1612,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      uncitedMemoryContextMarkerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      memoryContextDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["included", "excluded", "not-requested"],
+      },
     },
     causal: "correlation",
     lifecycle: "state",
