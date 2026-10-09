@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import type { SearchReference } from "@oscharko-dev/keiko-workflows";
 import { admitExplicitPaths } from "./grounded-explicit-paths.js";
 
@@ -177,6 +178,43 @@ describe("request-local repeated-location eligibility classification", () => {
     expect(fixture.reserve).not.toHaveBeenCalled();
     expect(fixture.readFileBytes).not.toHaveBeenCalled();
     await admitExplicitPaths(fixture.request);
+    expect(fixture.reserve).toHaveBeenCalledTimes(1);
+    expect(fixture.readFileBytes).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains fresh classification when the filesystem cannot prove stable file identity", async () => {
+    const fixture = inputs(3);
+    const base = memFs(root, { [TARGET]: CONTENT });
+    const readFileBytes = vi.fn(base.readFileBytes);
+    const stat = (path: string): WorkspaceStat => {
+      const observed = base.stat(path);
+      return {
+        size: observed.size,
+        isFile: observed.isFile,
+        isDirectory: observed.isDirectory,
+        isSymbolicLink: observed.isSymbolicLink,
+        hardLinkCount: observed.hardLinkCount,
+      };
+    };
+    const result = await admitExplicitPaths({
+      ...fixture.request,
+      fs: { ...base, readFileBytes, stat },
+    });
+    expect(result.selections).toHaveLength(3);
+    expect(fixture.reserve).toHaveBeenCalledTimes(3);
+    expect(readFileBytes).toHaveBeenCalledTimes(3);
+  });
+
+  it("revalidates selected membership after an in-request scope narrowing", async () => {
+    const fixture = inputs(2);
+    const relativePaths = ["src"];
+    const scope: SelectedScope = { ...fixture.request.scope, kind: "directory", relativePaths };
+    const references = afterFirstReference(() => {
+      relativePaths.splice(0, 1, "other");
+    });
+    const result = await admitExplicitPaths({ ...fixture.request, scope, references });
+    expect(result.selections.map((reference) => reference.line)).toEqual([10]);
+    expect(result.observation.explicitPathRejectionReasons).toEqual(["outside-scope"]);
     expect(fixture.reserve).toHaveBeenCalledTimes(1);
     expect(fixture.readFileBytes).toHaveBeenCalledTimes(1);
   });

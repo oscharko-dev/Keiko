@@ -31,7 +31,9 @@ import {
   type SearchResult,
   type SearchScope,
   type WorkspaceFs,
+  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import { safeProperty } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -84,12 +86,20 @@ interface AdmissionInputs {
 
 type PathPolicyInputs = Pick<AdmissionInputs, "scope" | "searchScope" | "fs">;
 
+interface ValidatedPathSnapshot {
+  readonly absolutePath: string;
+  readonly canonicalPath: string;
+  readonly stat: WorkspaceStat;
+}
+
 interface AdmissionState {
   readonly selections: ExplicitPathReference[];
   readonly rejectedPaths: Set<string>;
   readonly omitted: OmittedContextEntry[];
   readonly reasons: Set<ExplicitPathRejectionReason>;
   readonly seen: Set<string>;
+  /** One scope-bound request only; no content or eligibility is retained across calls. */
+  readonly classifications: Map<string, ValidatedPathSnapshot>;
   anchorCount: number;
   rejectedCount: number;
   basenameTerms: number;
@@ -137,6 +147,24 @@ function expectedPathFailure(error: unknown): ExplicitPathRejectionReason | unde
 function pathPolicyRejection(
   path: string,
   inputs: PathPolicyInputs,
+  observeSnapshot?: (snapshot: ValidatedPathSnapshot) => void,
+): ExplicitPathRejectionReason | undefined {
+  const reason = relativePathPolicyRejection(path, inputs);
+  if (reason !== undefined) return reason;
+  const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, path);
+  if (!inputs.fs.exists(absolute)) return "missing";
+  try {
+    return existingPathPolicyRejection(path, absolute, inputs, observeSnapshot);
+  } catch (error) {
+    const expected = expectedPathFailure(error);
+    if (expected !== undefined) return expected;
+    throw error;
+  }
+}
+
+function relativePathPolicyRejection(
+  path: string,
+  inputs: PathPolicyInputs,
 ): ExplicitPathRejectionReason | undefined {
   if (!isPathWithinSelectedScope(inputs.scope, new Set(inputs.scope.relativePaths), path))
     return "outside-scope";
@@ -151,15 +179,7 @@ function pathPolicyRejection(
     isIgnored(compileIgnore(inputs.searchScope.workspace.ignoreLines), path, false)
   )
     return "ignored";
-  const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, path);
-  if (!inputs.fs.exists(absolute)) return "missing";
-  try {
-    return existingPathPolicyRejection(path, absolute, inputs);
-  } catch (error) {
-    const reason = expectedPathFailure(error);
-    if (reason !== undefined) return reason;
-    throw error;
-  }
+  return undefined;
 }
 
 function humanSelectedPath(path: string, inputs: PathPolicyInputs): boolean {
@@ -182,6 +202,7 @@ function existingPathPolicyRejection(
   path: string,
   absolute: string,
   inputs: PathPolicyInputs,
+  observeSnapshot?: (snapshot: ValidatedPathSnapshot) => void,
 ): ExplicitPathRejectionReason | undefined {
   const contained = explicitContainedPath(inputs, absolute);
   if (contained === undefined) return "outside-scope";
@@ -189,12 +210,17 @@ function existingPathPolicyRejection(
   if (!isCanonicalAllowedContainedPath(contained, inputs.searchScope.workspace.root, path))
     return "outside-scope";
   const stat = inputs.fs.stat(contained.path);
-  if (!stat.isFile || stat.isSymbolicLink || (stat.hardLinkCount ?? 1) > 1) return "outside-scope";
+  if (!regularExclusiveFile(stat)) return "outside-scope";
   if (stat.size > DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned) return "size-exceeded";
   const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
   if (isConnectedDocumentPath(path) && !DOCUMENT_EXTENSIONS.has(extension))
     return "unsupported-format";
+  observeSnapshot?.({ absolutePath: absolute, canonicalPath: contained.path, stat });
   return undefined;
+}
+
+function regularExclusiveFile(stat: WorkspaceStat): boolean {
+  return stat.isFile && !stat.isSymbolicLink && (stat.hardLinkCount ?? 1) <= 1;
 }
 
 function explicitContainedPath(
@@ -279,8 +305,11 @@ async function admitReference(
     rejectPath(state, path, "outside-scope", inputs.nowMs());
     return;
   }
+  let snapshot: ValidatedPathSnapshot | undefined;
   const reason =
-    pathPolicyRejection(path, inputs) ?? (await classifiedPathRejection(path, inputs, classified));
+    pathPolicyRejection(path, inputs, (observed) => {
+      snapshot = observed;
+    }) ?? (await classifiedPathRejection(path, inputs, state, classified, snapshot));
   if (reason === "budget-exhausted") {
     recordUnread(state, path, inputs.nowMs());
     return;
@@ -295,11 +324,64 @@ async function admitReference(
 async function classifiedPathRejection(
   path: string,
   inputs: AdmissionInputs,
+  state: AdmissionState,
   classified: boolean,
+  snapshot: ValidatedPathSnapshot | undefined,
 ): Promise<ExplicitPathRejectionReason | "budget-exhausted" | undefined> {
   if (classified || isConnectedDocumentPath(path)) return undefined;
+  if (admissionStopped(inputs)) return "budget-exhausted";
+  const cached = state.classifications.get(path);
+  if (cached !== undefined && currentClassification(cached, inputs)) return undefined;
+  state.classifications.delete(path);
   if (!inputs.tryReserveSearchCall()) return "budget-exhausted";
-  if (humanSelectedPath(path, inputs)) return classifyHumanSelectedFile(path, inputs);
+  const reason = humanSelectedPath(path, inputs)
+    ? await classifyHumanSelectedFile(path, inputs)
+    : await classifyNamedFile(path, inputs);
+  rememberClassification(path, snapshot, reason, state, inputs);
+  return reason;
+}
+
+function rememberClassification(
+  path: string,
+  snapshot: ValidatedPathSnapshot | undefined,
+  reason: ExplicitPathRejectionReason | undefined,
+  state: AdmissionState,
+  inputs: AdmissionInputs,
+): void {
+  if (reason !== undefined || snapshot === undefined || !trustedClassificationSnapshot(snapshot))
+    return;
+  if (currentClassification(snapshot, inputs)) state.classifications.set(path, snapshot);
+}
+
+function trustedClassificationSnapshot(snapshot: ValidatedPathSnapshot): boolean {
+  // Legacy filesystem ports without identity/change metadata must classify each location anew.
+  return (
+    snapshot.stat.fileIdentity !== undefined &&
+    snapshot.stat.mtimeNs !== undefined &&
+    snapshot.stat.ctimeNs !== undefined
+  );
+}
+
+function admissionStopped(inputs: AdmissionInputs): boolean {
+  return inputs.signal?.aborted === true || inputs.nowMs() >= inputs.deadlineAtMs;
+}
+
+function currentClassification(snapshot: ValidatedPathSnapshot, inputs: AdmissionInputs): boolean {
+  return (
+    !admissionStopped(inputs) &&
+    isWorkspacePathSnapshotCurrent(
+      inputs.fs,
+      snapshot.absolutePath,
+      snapshot.canonicalPath,
+      snapshot.stat,
+    )
+  );
+}
+
+async function classifyNamedFile(
+  path: string,
+  inputs: AdmissionInputs,
+): Promise<ExplicitPathRejectionReason | undefined> {
   const result = await findExplicitFiles(inputs, path, [path], 1);
   return result.atoms.some((atom) => atom.scopePath === path)
     ? undefined
@@ -415,6 +497,7 @@ export async function admitExplicitPaths(inputs: AdmissionInputs): Promise<Expli
     omitted: [],
     reasons: new Set(),
     seen: new Set(),
+    classifications: new Map(),
     anchorCount: 0,
     rejectedCount: 0,
     basenameTerms: 0,
@@ -422,7 +505,7 @@ export async function admitExplicitPaths(inputs: AdmissionInputs): Promise<Expli
   };
   const references = inputs.references ?? explicitPathReferences(inputs.query.text);
   for (const reference of references) {
-    if (inputs.signal?.aborted === true || inputs.nowMs() >= inputs.deadlineAtMs) break;
+    if (admissionStopped(inputs)) break;
     if (!reference.path.includes("/") && !isDenied(reference.path))
       await admitBasename(reference, inputs, state);
     else await admitReference(reference, inputs, state);
