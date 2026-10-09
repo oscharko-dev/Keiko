@@ -263,4 +263,36 @@ describe("manual campaign's existing corpus witness", () => {
     ).toMatchObject({ expectedSourceFactPresent: false });
     expect(Object.keys(present)).toEqual(["expectedSourceFactPresent", "expectedSourceFactSha256"]);
   });
+
+  it.each([
+    ["0.61 seconds", "61", "seconds", false],
+    ["0,61 seconds", "61", "seconds", false],
+    ["0.91°C", "91", "temperature", false],
+    ["0,91°C", "91", "temperature", false],
+    ["-61 seconds", "61", "seconds", false],
+    ["− 61 Sekunden", "61", "seconds", false],
+    ["-91°C", "91", "temperature", false],
+    ["+0.61 seconds", "61", "seconds", false],
+    ["1e+61 seconds", "61", "seconds", false],
+    ["+-61 seconds", "61", "seconds", false],
+    ["61.000000000000001 seconds", "61", "seconds", false],
+    ["91,000000000000001°C", "91", "temperature", false],
+    ["161 seconds", "61", "seconds", false],
+    ["191°C", "91", "temperature", false],
+    ["61 seconds", "61", "seconds", true],
+    ["+61 seconds", "61", "seconds", true],
+    ["+ 91 °C", "91", "temperature", true],
+    ["61,2 Sekunden", "61.2", "seconds", true],
+    ["61.20 seconds", "61.2", "seconds", true],
+    ["91.5 degrees Celsius", "91.5", "temperature", true],
+    ["0.61 seconds", "0.61", "seconds", true],
+    ["0,91°C", "0.91", "temperature", true],
+    ["<assessment>61 seconds</assessment>", "61", "seconds", false],
+    ["[manual/61/recovery.html:1]", "61", "seconds", false],
+  ])("matches a complete numeric source token in %s", async (content, number, unit, expected) => {
+    const record = await expectedSourceFactObservation(content, { number, unit });
+    expect(record.expectedSourceFactPresent).toBe(expected);
+    expect(record.expectedSourceFactSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(Object.keys(record)).toEqual(["expectedSourceFactPresent", "expectedSourceFactSha256"]);
+  });
 });
