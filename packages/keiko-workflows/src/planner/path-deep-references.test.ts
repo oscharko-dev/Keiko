@@ -34,4 +34,9 @@ describe("complete bounded manual path tokens", () => {
       paths.slice(0, 6).map((path) => ({ path, origin: "query" })),
     );
   });
+
+  it("does not reintroduce over-budget path metadata through a line hint", () => {
+    const path = `${"folder/".repeat(700)}manual.ts`;
+    expect(extractPathReferences(`Explain ${path}:27`)).toEqual([]);
+  });
 });
