@@ -32,13 +32,20 @@ describe("shared grounded assessment normalization", () => {
         },
         policy,
         "assessment-normalization",
+        "",
+        { scopeIdentitySha256: "a".repeat(64), queryIdentitySha256: "b".repeat(64) },
       );
       expect(answer.content).toContain("Fact [src/a.ts:1].");
       expect(answer.content.includes("General recommendation.")).toBe(policy === "allowed");
       expect(answer.completedSynthesisCallCount).toBe(1);
       expect(
         sink.events.find((event) => event.op === "search.answer.assessed")?.extra,
-      ).toMatchObject({ policy, outcome: policy === "allowed" ? "assessment" : "neutralized" });
+      ).toMatchObject({
+        policy,
+        outcome: policy === "allowed" ? "assessment" : "neutralized",
+        scopeIdentitySha256: "a".repeat(64),
+        queryIdentitySha256: "b".repeat(64),
+      });
       expect(sink.lines().join("\n")).not.toContain("General recommendation");
       expect(sink.lines().join("\n")).not.toContain("src/a.ts");
     },
