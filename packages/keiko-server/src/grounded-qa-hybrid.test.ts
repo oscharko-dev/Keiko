@@ -738,6 +738,88 @@ describe("hybrid grounded ask — folder evidence the window fit left out", () =
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
+  it.each([
+    ["please paste validation.ts", "clarification", false],
+    ["Missing evidence: [src/unread.ts]", "insufficiency", false],
+    ["No evidence found in the connected scope.", "refusal", false],
+    ["The service uses OAuth2. Which version do you mean?", "answer", true],
+  ] as const)("projects conservative hybrid kind %s", async (content, kind, warns) => {
+    const { capsuleId } = await seedReadyCapsule("Kinds Docs");
+    const folder: ChatConnectedScope = {
+      kind: "directory",
+      root: tempRoot("kinds"),
+      relativePaths: ["src/read.ts"],
+      connectedAtMs: NOW,
+    };
+    const chat = store.findChatById(
+      makeHybridChat([folder], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]),
+    );
+    if (chat === undefined) throw new TypeError("expected chat");
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "Explain the service",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: hybridDeps(),
+      signal: new AbortController().signal,
+      insufficiencyScopeIndex: new Map([["src/unread.ts", "unread-in-scope"]]),
+      folderRetriever: folderRetrieverFor(
+        new Map([["src/read.ts", folderPack("src/read.ts", 0.5, "read")]]),
+      ),
+      connectorRetrieve: singleConnectorRetrieve(capsuleId),
+      answer: () => Promise.resolve(content),
+    });
+    expect(result.status).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.answerKind).toBe(kind);
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(warns);
+    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(false);
+    if (kind === "insufficiency")
+      expect(answer.insufficiencyDeclarations).toEqual([
+        { scopePath: "src/unread.ts", state: "unread-in-scope" },
+      ]);
+  });
+
+  it("removes unverified hybrid declaration text before wire and stored history", async () => {
+    const { capsuleId } = await seedReadyCapsule("Unknown Declarations Docs");
+    const folder: ChatConnectedScope = {
+      kind: "directory",
+      root: tempRoot("unknown"),
+      relativePaths: ["src/read.ts"],
+      connectedAtMs: NOW,
+    };
+    const chat = store.findChatById(
+      makeHybridChat([folder], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]),
+    );
+    if (chat === undefined) throw new TypeError("expected chat");
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "Explain the service",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: hybridDeps(),
+      signal: new AbortController().signal,
+      folderRetriever: folderRetrieverFor(
+        new Map([["src/read.ts", folderPack("src/read.ts", 0.5, "read")]]),
+      ),
+      connectorRetrieve: singleConnectorRetrieve(capsuleId),
+      answer: () =>
+        Promise.resolve({
+          content:
+            "I need the missing file to answer this question.\nMissing evidence: [private/outside.ts]",
+          usage: { promptTokens: 0, completionTokens: 0 },
+          insufficiencyDeclarations: [
+            { scopePath: "private/outside.ts", state: "unread-in-scope" },
+          ],
+        }),
+    });
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.content).not.toContain("private/outside.ts");
+    expect(answer.insufficiencyDeclarations).toBeUndefined();
+    expect(
+      store.listMessages(chat.id).find((message) => message.role === "assistant")?.content,
+    ).not.toContain("private/outside.ts");
+  });
   it.each([false, true])(
     "persists and replays the exact hybrid compaction flag: %s",
     async (compacted) => {

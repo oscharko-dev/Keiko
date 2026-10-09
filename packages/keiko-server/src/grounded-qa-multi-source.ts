@@ -44,6 +44,7 @@ import {
   chatConnectedScopeFingerprintInput,
   type ChatConnectedScope,
   type GroundedAnswer,
+  type GroundedInsufficiencyDeclaration,
   type GroundedAnswerContextSummary,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
@@ -78,6 +79,8 @@ import {
 } from "./grounded-answer.js";
 import {
   connectedSearchNoEvidenceAnswer,
+  buildInsufficiencyScopeIndex,
+  validateGroundedAnswerEvidence,
   buildPackCitationIndex,
   citationSourceIdForIndex,
   incompleteAnswerMarker,
@@ -642,9 +645,10 @@ export function fittedMultiSourcePrompt(
   redactor: Redactor,
   options: GroundedGatewayPromptOptions = {},
   correlationId?: string,
-): SentGroundedPrompt {
+): SentGroundedPrompt & { readonly packs: readonly LabeledPack[] } {
   const fitted = loggedMultiSourceFit(question, labeledPacks, redactor, options, correlationId);
   return {
+    packs: fitted.packs,
     messages: fitted.messages,
     withoutSources: buildRawMultiSourceGatewayMessages(
       question,
@@ -717,7 +721,7 @@ export function createMultiSourceAnswerer(
 ): MultiSourceAnswerer {
   return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
-    let sent: SentGroundedPrompt | undefined;
+    let sent: ReturnType<typeof fittedMultiSourcePrompt> | undefined;
     const response = await withAdoptedContextWindowRetry(
       deps,
       { modelId, surface: "grounded", correlationId },
@@ -746,7 +750,10 @@ export function createMultiSourceAnswerer(
       usage: { promptTokens, completionTokens },
       ...(sent === undefined
         ? {}
-        : { promptContext: sentPromptContext(sent, promptTokens, profile) }),
+        : {
+            promptContext: sentPromptContext(sent, promptTokens, profile),
+            evidenceScopeIndex: buildInsufficiencyScopeIndex(sent.packs.map((entry) => entry.pack)),
+          }),
     };
   };
 }
@@ -776,6 +783,8 @@ interface RetrievalOutcome {
 }
 
 export interface MultiSourceAskInput {
+  /** Verified discovered paths; only actual sent evidence promotes a path to read-state. */
+  readonly insufficiencyScopeIndex?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>;
   readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
@@ -1176,6 +1185,13 @@ function assembleMultiSourceAnswer(
     ...(firstRunId === undefined ? {} : { evidenceRunId: firstRunId }),
     evidenceRunIds: runIds,
     content: redactString(redactor, assistant.content),
+    answerKind: assistant.answerKind,
+    ...(assistant.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: assistant.citationBehaviour }),
+    ...(assistant.insufficiencyDeclarations === undefined
+      ? {}
+      : { insufficiencyDeclarations: assistant.insufficiencyDeclarations }),
     citations,
     uncertainty: [
       ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
@@ -1222,7 +1238,7 @@ function buildMultiSourceReconciliationUncertainty(
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const missing =
     unsupported === undefined && reconciliation.citedScopePaths.size === 0
-      ? missingCitationMarkerFor(assistant.content, nowMs)
+      ? missingCitationMarkerFor(assistant.content, nowMs, assistant.answerKind)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
@@ -1383,6 +1399,7 @@ async function answerMultiSource(
   if (abstained && ctx.answerOnlyContextAvailable !== true) {
     return {
       content: connectedSearchNoEvidenceAnswer(ctx.content),
+      answerKind: "refusal",
       usage: { promptTokens: 0, completionTokens: 0 },
     };
   }
@@ -1394,7 +1411,13 @@ async function answerMultiSource(
       ),
     );
     ensureNotCancelled(ctx.signal);
-    return assistant;
+    const scopeIndex = new Map(buildInsufficiencyScopeIndex([], ctx.insufficiencyScopeIndex));
+    for (const [path, state] of assistant.evidenceScopeIndex ?? []) scopeIndex.set(path, state);
+    return {
+      ...assistant,
+      insufficiencyDeclarations: undefined,
+      ...validateGroundedAnswerEvidence(assistant.content, scopeIndex, ctx.content),
+    };
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
   }
