@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
+import { parsePorcelainV2Branch, parsePorcelainV2Changes } from "./gitPorcelainStatus.js";
 
 // Porcelain v2 records are NUL-separated under `-z`; helper joins them with the trailing NUL git emits.
 function porcelain(records: readonly string[]): string {
@@ -107,5 +107,37 @@ describe("parsePorcelainV2Branch", () => {
     );
 
     expect(result.upstream).toEqual({ ref: "weirdref" });
+  });
+});
+
+describe("parsePorcelainV2Changes", () => {
+  it("preserves names and classifies ordinary, renamed, untracked and deleted files", () => {
+    expect(
+      parsePorcelainV2Changes(
+        porcelain([
+          "1 .M N... 100644 100644 100644 aaa bbb src/dirty file.ts",
+          "1 A. N... 000000 100644 100644 aaa bbb src/new.ts",
+          "2 R. N... 100644 100644 100644 aaa bbb R100 src/renamed.ts",
+          "? src/old-name.ts",
+          "? src/untracked.ts",
+          "1 .D N... 100644 100644 000000 aaa bbb src/deleted.ts",
+        ]),
+        64,
+      ),
+    ).toEqual([
+      { path: "src/dirty file.ts", status: "modified" },
+      { path: "src/new.ts", status: "added" },
+      { path: "src/renamed.ts", status: "renamed" },
+      { path: "src/untracked.ts", status: "untracked" },
+      { path: "src/deleted.ts", status: "deleted" },
+    ]);
+  });
+
+  it("bounds changes and rejects incomplete or malformed records", () => {
+    expect(parsePorcelainV2Changes("? partial.ts", 64)).toEqual([]);
+    expect(
+      parsePorcelainV2Changes(porcelain(["1 .M incomplete", "! ignored/", "? a.ts"]), 1),
+    ).toEqual([{ path: "a.ts", status: "untracked" }]);
+    expect(parsePorcelainV2Changes(porcelain(["? a.ts"]), 0)).toEqual([]);
   });
 });
