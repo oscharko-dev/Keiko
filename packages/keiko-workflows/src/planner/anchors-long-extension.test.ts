@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractAnchors, PATH_RE } from "./anchors.js";
+import { extractAnchors } from "./anchors.js";
 import { extractPathReferences } from "./references.js";
 
 describe("complete bounded filename extensions", () => {
@@ -27,8 +27,11 @@ describe("complete bounded filename extensions", () => {
   it.each(["src/config.abcdefghijklmnopq", "src/config.properties-with-extra"])(
     "never admits a truncated filename prefix: %s",
     (target) => {
-      const regex = new RegExp(PATH_RE.source, PATH_RE.flags);
-      expect([...target.matchAll(regex)]).toEqual([]);
+      expect(
+        extractAnchors({ text: target, maxAnchors: 8 }).anchors.filter(
+          (anchor) => anchor.kind === "path",
+        ),
+      ).toEqual([]);
     },
   );
 });
