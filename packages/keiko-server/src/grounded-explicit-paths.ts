@@ -117,7 +117,11 @@ export function explicitPathReferences(text: string): readonly ExplicitPathRefer
   const { anchors } = extractAnchors({ text, maxAnchors: text.length, caseSensitive: true });
   const terms = new Set(
     anchors
-      .filter((anchor) => anchor.kind === "path" || knownFilename(anchor.term))
+      .filter((anchor) =>
+        anchor.kind === "path"
+          ? pathReference(anchor.term).path.split("/").at(-1)?.includes(".") === true
+          : knownFilename(anchor.term),
+      )
       .map((anchor) => anchor.sourceTerm ?? anchor.term),
   );
   // Denied dotfiles are targets too, even though ordinary word tokenization removes edge dots.
@@ -143,7 +147,7 @@ function localFileUrlPath(url: URL): string | undefined {
   try {
     return fileURLToPath(url);
   } catch (error) {
-    if (error instanceof TypeError) return undefined;
+    if (error instanceof TypeError || error instanceof URIError) return undefined;
     throw error;
   }
 }
@@ -264,7 +268,8 @@ async function admitReference(
     rejectPath(state, path, "outside-scope", inputs.nowMs());
     return;
   }
-  const reason = pathPolicyRejection(path, inputs) ?? await classifiedPathRejection(path, inputs, classified);
+  const reason =
+    pathPolicyRejection(path, inputs) ?? (await classifiedPathRejection(path, inputs, classified));
   if (reason === "budget-exhausted") {
     recordUnread(state, path, inputs.nowMs());
     return;
@@ -285,7 +290,8 @@ async function classifiedPathRejection(
   if (!inputs.tryReserveSearchCall()) return "budget-exhausted";
   const result = await findExplicitFiles(inputs, path, [path], 1);
   return result.atoms.some((atom) => atom.scopePath === path)
-    ? undefined : rejectionReason(result, path);
+    ? undefined
+    : rejectionReason(result, path);
 }
 
 async function admitBasename(
