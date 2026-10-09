@@ -18,6 +18,7 @@ function line(
   readonly correlationId: string;
   readonly pid: number;
   readonly instanceId: string;
+  readonly seq?: number;
   readonly extra: Readonly<Record<string, unknown>>;
 } {
   return {
@@ -210,6 +211,43 @@ describe("intentional source-free assessment does not fabricate retrieval incide
         line(SELECTION, { keepOneFallbackApplied: true }),
         assessment(),
         line("search.connected-context.answer-details", { followUpOutcome: "not-needed" }),
+      ]),
+    ).toEqual([]);
+  });
+  it("does not inherit assessment authority into a later terminal-only partial request", () => {
+    expect(
+      reasons([
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment(),
+        {
+          ...line("search.connected-context.answer-details", { followUpOutcome: "not-needed" }),
+          seq: 100,
+        },
+        {
+          ...line("search.connected-context.answer-details", {
+            keepOneFallbackApplied: true,
+            followUpOutcome: "not-needed",
+          }),
+          seq: 200,
+        },
+      ]),
+    ).toEqual(["low-confidence-selection"]);
+  });
+
+  it("keeps an exact duplicate of the same process sequence idempotent", () => {
+    const terminal = {
+      ...line("search.connected-context.answer-details", {
+        keepOneFallbackApplied: true,
+        followUpOutcome: "not-needed",
+      }),
+      seq: 100,
+    };
+    expect(
+      reasons([
+        line(SELECTION, { keepOneFallbackApplied: true }),
+        assessment(),
+        terminal,
+        { ...terminal },
       ]),
     ).toEqual([]);
   });
