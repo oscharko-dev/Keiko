@@ -2212,7 +2212,11 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       expect(await screen.findByText(notice, { exact: false })).toHaveAttribute("title");
       expect(screen.getByText(/11 (?:files in prompt|Dateien im Prompt)/u)).toBeInTheDocument();
       expect(
-        screen.getByTitle("Evidence citation in src/foo.ts at lines 10-25"),
+        await screen.findByTitle(
+          locale === "de"
+            ? "Quellenangabe in src/foo.ts in Zeilen 10-25"
+            : "Evidence citation in src/foo.ts at lines 10-25",
+        ),
       ).toBeInTheDocument();
       expect(
         screen.queryByText(/refused by its safety gate|Sicherheitsprüfung abgelehnt/u),

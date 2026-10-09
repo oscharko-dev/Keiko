@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runConnectedRetrievalEval } from "./grounded-eval-support.js";
+import type { GroundedAnswerPayload } from "./grounded-answer.js";
 
 const files = { "src/Feature.ts": "export function feature() { return true; }\n" };
 
@@ -41,19 +42,19 @@ describe("single-source bounded citation repair", () => {
   it("repairs a substantive uncited answer once and preserves cumulative usage", async () => {
     let calls = 0;
     const answerer = {
-      answer: async () => {
+      answer: (): Promise<GroundedAnswerPayload> => {
         calls += 1;
-        return {
+        return Promise.resolve({
           content: "Feature returns true.",
           usage: { promptTokens: 100, completionTokens: 10 },
-        };
+        });
       },
-      repair: async () => {
+      repair: (): Promise<GroundedAnswerPayload> => {
         calls += 1;
-        return {
+        return Promise.resolve({
           content: "Feature returns true [src/Feature.ts:1].",
           usage: { promptTokens: 120, completionTokens: 15 },
-        };
+        });
       },
     };
     const result = await runConnectedRetrievalEval({ files, query: "Explain feature", answerer });
@@ -71,8 +72,8 @@ describe("single-source bounded citation repair", () => {
       files,
       query: "Explain feature",
       answerer: {
-        answer: async () => "Feature returns true.",
-        repair: async () => "Feature returns false [src/Feature.ts:1].",
+        answer: (): Promise<string> => Promise.resolve("Feature returns true."),
+        repair: (): Promise<string> => Promise.resolve("Feature returns false [src/Feature.ts:1]."),
       },
     });
     expect(result.answer).toMatchObject({
@@ -87,10 +88,8 @@ describe("single-source bounded citation repair", () => {
       files,
       query: "Explain feature",
       answerer: {
-        answer: async () => "Feature returns true.",
-        repair: async () => {
-          throw new TypeError("synthetic repair fault");
-        },
+        answer: (): Promise<string> => Promise.resolve("Feature returns true."),
+        repair: (): Promise<string> => Promise.reject(new TypeError("synthetic repair fault")),
       },
     });
     expect(result.answer).toMatchObject({
@@ -107,10 +106,10 @@ describe("single-source bounded citation repair", () => {
         files,
         query: "Explain feature",
         answerer: {
-          answer: async () => answer,
-          repair: async () => {
+          answer: (): Promise<string> => Promise.resolve(answer),
+          repair: (): Promise<string> => {
             repairCalls += 1;
-            return answer;
+            return Promise.resolve(answer);
           },
         },
       });
