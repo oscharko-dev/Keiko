@@ -3,6 +3,10 @@ import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import {
+  connectedInspectionAnswer,
+  connectedInspectionManifest,
+} from "./connectedEvidenceInspection.test-fixtures";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -60,6 +64,7 @@ import {
   ApiError,
   fetchChats,
   fetchFilesSearch,
+  fetchEvidenceManifest,
   updateChat,
   updateChatConnectedScopes,
 } from "@/lib/api";
@@ -74,6 +79,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     fetchFilesSearch: vi.fn(),
+    fetchEvidenceManifest: vi.fn(),
     fetchChats: vi.fn(),
     updateChat: vi.fn(),
     updateChatConnectedScopes: vi.fn(),
@@ -5161,6 +5167,45 @@ it("explains repository grounding whenever a folder scope is connected", () => {
     "Keiko searches the connected scope before each answer; the model has no file tools.",
   );
   expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
+});
+
+it("updates an actual chat prose reference after its answer manifest is inspected", async () => {
+  const answer = connectedInspectionAnswer();
+  vi.mocked(fetchEvidenceManifest).mockResolvedValueOnce({
+    manifest: connectedInspectionManifest(),
+  });
+  const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "file" }));
+  renderWindow(
+    makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+        ],
+      }),
+      messages: [
+        makeMessage({
+          role: "assistant",
+          id: answer.assistantMessageId,
+          content: answer.content,
+          groundedAnswer: answer,
+        }),
+      ],
+    }),
+    { openEditorFile },
+  );
+  expect(
+    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Not read/ }),
+  ).toBeInTheDocument();
+  const user = userEvent.setup();
+  const disclosure = document.querySelector("details.grounded-evidence-disclosure > summary");
+  if (disclosure === null) throw new TypeError("Missing evidence summary");
+  await user.click(disclosure);
+  await user.click(screen.getByText("Inspect files"));
+  const read = await screen.findByRole("button", {
+    name: /Open src\/feature\/read.ts.*Read, not cited/,
+  });
+  await user.click(read);
+  expect(openEditorFile).toHaveBeenCalledWith({ root: "/proj", path: "src/feature/read.ts" });
 });
 
 it("lets a scripted insufficiency add its file and focus an unsent follow-up", async () => {

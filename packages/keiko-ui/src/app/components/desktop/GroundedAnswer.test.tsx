@@ -31,10 +31,44 @@ import type {
   KnowledgePodRetrievalActivity,
   LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
+import * as api from "@/lib/api";
+import { connectedInspectionManifest } from "./connectedEvidenceInspection.test-fixtures";
 
 afterEach(resetClientDiagnosticWriter);
 
 describe("honest connected evidence", () => {
+  it("keeps a measured zero prompt-file count distinct from assembled reads", () => {
+    render(
+      <GroundedAnswer
+        answer={answer({ contextPack: contextPack({ filesInPrompt: 0 }) })}
+        busy={false}
+      />,
+    );
+    expect(screen.getByText(/1 citation · 0 files in prompt/)).toBeInTheDocument();
+  });
+  it("names the inspected subfolder from the manifest instead of a scope hash", async () => {
+    const fetch = vi
+      .spyOn(api, "fetchEvidenceManifest")
+      .mockResolvedValue({ manifest: connectedInspectionManifest() });
+    const view = render(
+      <GroundedAnswer
+        answer={answer({
+          evidenceRunId: "run-1",
+          contextPack: contextPack({ scopeKind: "directory", fileCount: 1 }),
+        })}
+        busy={false}
+        repositoryRoots={[{ root: "/repo", label: "repo" }]}
+      />,
+    );
+    openEvidenceDisclosure(view.container);
+    const details = screen.getByText("Inspect files").closest("details");
+    if (details === null) throw new TypeError("Missing inspection disclosure");
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+    await waitFor(() => expect(screen.getAllByText("Scope: src/feature")).toHaveLength(2));
+    expect(view.container).not.toHaveTextContent("cafef00d");
+    fetch.mockRestore();
+  });
   it("does not promise attachment after an unsuccessful citation repair", () => {
     render(
       <GroundedAnswer
@@ -104,6 +138,11 @@ describe("honest connected evidence", () => {
       />,
     );
     expect(screen.getByText(/See the citation warning above/)).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        "This answer contains statements without an inline citation, so they cannot be traced to a source.",
+      ),
+    ).toHaveLength(1);
     expect(
       screen.getByText(/The answer used memory context without citing it/),
     ).toBeInTheDocument();
@@ -477,7 +516,11 @@ describe("GroundedAnswer", () => {
     expect(container.querySelector(".grounded-evidence-summary-title")).toHaveTextContent(
       "Evidence",
     );
-    expect(screen.getByText(/1 citation.*5 \/ 32 files read/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /1 citation.*not recorded files in prompt.*0 omitted for relevance or budget.*0 ineligible/,
+      ),
+    ).toBeInTheDocument();
 
     const opened = openEvidenceDisclosure(container);
     expect(opened.open).toBe(true);
@@ -1316,7 +1359,11 @@ describe("GroundedAnswer", () => {
       />,
     );
 
-    expect(screen.getByText(/1 citation.*5 \/ 32 files read.*3 not used/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /1 citation.*not recorded files in prompt.*2 omitted for relevance or budget.*1 ineligible/,
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("Not used: 3 files (binary: 1, low relevance: 2)")).toBeInTheDocument();
     expect(screen.queryByText(/99 not used|Not used: 99/)).not.toBeInTheDocument();
   });
@@ -1382,7 +1429,7 @@ describe("GroundedAnswer", () => {
     // searched row reads symmetrically; queryKind is humanized (C160).
     expect(region.textContent).toContain("Search operations");
     expect(region.textContent).toContain("3 / 16 searches");
-    expect(region.textContent).toContain("Read");
+    expect(region.textContent).toContain("Assembled for this answer");
     expect(region.textContent).toContain("5 / 32 files");
     expect(region.textContent).toContain("Selected excerpt size");
     expect(region.textContent).toContain("12.1 KB / 128.0 KB");
@@ -1509,7 +1556,11 @@ describe("GroundedAnswer", () => {
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(2);
     expect(screen.getByText("src/foo.ts:1-4")).toBeInTheDocument();
     expect(screen.getByText("src/foo.ts:10-12")).toBeInTheDocument();
-    expect(screen.getByText(/2 citations.*5 \/ 32 files read/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /2 citations.*not recorded files in prompt.*0 omitted for relevance or budget.*0 ineligible/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("renders no disclosure button when the citation list is within the cap", () => {
@@ -2116,7 +2167,9 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       const { container } = renderInLocale(locale, a);
       if (locale === "de")
         await waitFor(() => expect(container).toHaveTextContent("Nicht als Quelle verwendet"));
-      expect(container).toHaveTextContent(locale === "de" ? "1 Datei gelesen" : "1 file read");
+      expect(container).toHaveTextContent(
+        locale === "de" ? "1 Datei zusammengestellt" : "1 file assembled",
+      );
       expect(container).toHaveTextContent(locale === "de" ? "1.000 Dateien" : "1,000 files");
       expect(container).toHaveTextContent(locale === "de" ? "12,1 KB" : "12.1 KB");
       expect(container).toHaveTextContent(locale === "de" ? "1,8 s" : "1.8 s");
@@ -2155,7 +2208,7 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       const text = locale === "de" ? "Nicht als Quelle verwendet: 1 Datei (" : "Not used: 1 file (";
       await waitFor(() => expect(container).toHaveTextContent(text));
       expect(container).not.toHaveTextContent(
-        locale === "de" ? "1 Dateien gelesen" : "1 files read",
+        locale === "de" ? "1 Dateien zusammengestellt" : "1 files assembled",
       );
     },
   );
@@ -2490,7 +2543,7 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     expect(region).toHaveTextContent(
       "Überlappende Suchbereiche können dieselbe Datei mehrfach zählen",
     );
-    expect(within(region).getByText("Für die Antwort gelesen")).toBeInTheDocument();
+    expect(within(region).getByText("Für die Antwort zusammengestellt")).toBeInTheDocument();
     expect(region).toHaveTextContent("5 / 32 Dateien");
     expect(region).toHaveTextContent("32 ist das Lesebudget für diese Antwort");
     expect(within(region).getByText("Suchzeitlimit")).toBeInTheDocument();
@@ -2693,7 +2746,9 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       expect(container).not.toHaveTextContent("5 / 32");
       expect(container).not.toHaveTextContent("5 / —");
       expect(container).not.toHaveTextContent("5 / ∞");
-      expect(container).toHaveTextContent(locale === "de" ? "5 Dateien gelesen" : "5 files read");
+      expect(container).toHaveTextContent(
+        locale === "de" ? "5 Dateien zusammengestellt" : "5 files assembled",
+      );
       expect(container).toHaveTextContent(
         locale === "de" ? "Kein festes Dateianzahllimit" : "No fixed file-count limit",
       );
@@ -3009,9 +3064,7 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     openEvidenceDisclosure(container);
     expect(screen.getByText("Unsicherheit (1) — Antwort ohne Quellenangabe")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Antwort ohne Quellenangabe: Diese Antwort enthält Aussagen ohne Quellenangabe, die sich keiner Quelle zuordnen lassen.",
-      ),
+      screen.getByText("Antwort ohne Quellenangabe: Siehe den Zitierhinweis oben."),
     ).toBeInTheDocument();
     expect(container.textContent).not.toContain("English server claim text.");
   });

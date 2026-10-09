@@ -31,6 +31,11 @@ describe("prose evidence links", () => {
     expect(link).toHaveAttribute("data-evidence-state", state);
     expect(link).toHaveAttribute("title", expect.stringContaining(label));
     expect(link.className).toContain(state === "read-uncited" ? "readUncited" : state);
+    expect({
+      state: link.dataset["evidenceState"],
+      title: link.title,
+      accessibleName: link.getAttribute("aria-label"),
+    }).toMatchSnapshot();
     fireEvent.click(link);
     expect(openReference).toHaveBeenCalledWith({ root: "/repo", path });
     expect(writer).toHaveBeenCalledWith(
