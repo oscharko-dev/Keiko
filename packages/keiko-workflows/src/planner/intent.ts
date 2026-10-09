@@ -235,6 +235,19 @@ function classifyShortTarget(text: string): RetrievalIntentClassification {
     : { intent: "clarification-needed", normalizedTerms: [] };
 }
 
+function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext): boolean {
+  if (
+    context.previousIntent !== "diagnostic-search" &&
+    context.previousIntent !== "targeted-code-search"
+  )
+    return false;
+  if (!CONVERSATIONAL_FOLLOW_UP_RE.test(text)) return false;
+  const anchors = extractAnchors({ text, maxAnchors: text.length }).anchors;
+  return !anchors.some(
+    (anchor) => anchor.kind === "path" || anchor.kind === "quoted" || anchor.kind === "identifier",
+  );
+}
+
 export function classifyRetrievalIntent(
   queryText: string,
   _scope?: SelectedScope,
@@ -243,17 +256,15 @@ export function classifyRetrievalIntent(
   const trace = parseDiagnosticTraceText(queryText);
   const trimmed = trace.questionText.trim();
   const normalized = normalizeQueryText(trimmed);
-  if (
-    context.previousIntent !== undefined &&
-    (context.referencePresent === true || CONVERSATIONAL_FOLLOW_UP_RE.test(trimmed))
-  ) {
+  if (trace.detected) return { intent: "diagnostic-search", normalizedTerms: ["stacktrace"] };
+  if (canInheritRetrievalIntent(trimmed, context)) {
     return {
       intent: "conversational-follow-up",
-      effectiveIntent: context.previousIntent,
+      effectiveIntent: context.previousIntent ?? "targeted-code-search",
       normalizedTerms: searchableTokens(normalized).slice(0, 8),
     };
   }
-  if (trace.detected) return { intent: "diagnostic-search", normalizedTerms: ["stacktrace"] };
+
   if (trimmed.length === 0) return { intent: "clarification-needed", normalizedTerms: [] };
   if (searchableTokens(normalized).length === 0) {
     return classifyShortTarget(trimmed);

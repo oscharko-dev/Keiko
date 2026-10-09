@@ -19,6 +19,7 @@ export interface SearchReference {
 
 export interface RetrievalChannels extends AnchorExtractionResult {
   readonly references: readonly SearchReference[];
+  readonly diagnosticFrames: readonly SearchReference[];
   readonly questionText: string;
   readonly stackTraceDetected: boolean;
   readonly stackTraceFrameCount: number;
@@ -62,6 +63,11 @@ export function extractPathReferences(text: string): readonly SearchReference[] 
   );
   for (const token of text.split(/[\s`"'()<>,;!?]+/u)) {
     if (token.startsWith(".") && isDenied(token)) terms.add(token);
+    const located = parsePathReference(token);
+    if (located.line !== undefined && filenameReference(located.path)) {
+      terms.delete(located.path);
+      terms.add(token);
+    }
   }
   return [...terms].sort((a, b) => text.indexOf(a) - text.indexOf(b)).map(parsePathReference);
 }
@@ -109,12 +115,13 @@ export function extractRetrievalChannels(
 ): RetrievalChannels {
   const trace = parseDiagnosticTraceText(text);
   const candidates = trace.frames.filter((frame) => !externalFrame(frame.file));
+  const diagnosticFrames = candidates.map((frame): SearchReference => ({
+    path: frame.file,
+    ...(frame.line === undefined ? {} : { line: frame.line }),
+    origin: "diagnostic",
+  }));
   const references = uniqueReferences([
-    ...candidates.map((frame): SearchReference => ({
-      path: frame.file,
-      ...(frame.line === undefined ? {} : { line: frame.line }),
-      origin: "diagnostic",
-    })),
+    ...diagnosticFrames,
     ...extractPathReferences(trace.questionText),
     ...supplied,
   ]);
@@ -128,6 +135,7 @@ export function extractRetrievalChannels(
     anchors: userAnchors.slice(0, maxAnchors),
     truncated: userAnchors.length > maxAnchors,
     references,
+    diagnosticFrames,
     questionText: trace.questionText,
     stackTraceDetected: trace.detected,
     stackTraceFrameCount: trace.frames.length,
