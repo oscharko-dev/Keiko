@@ -5,7 +5,9 @@ import type { PackCitationIndex } from "./grounded-faithfulness.js";
 const index: PackCitationIndex = {
   scopePaths: new Set(["src/Feature.ts"]),
   sourceIdsByPath: new Map([["src/Feature.ts", new Set(["1"])]]),
-  lineWindowsBySourceId: new Map([["1", new Map([["src/Feature.ts", [{ startLine: 3, endLine: 5 }]]])]]),
+  lineWindowsBySourceId: new Map([
+    ["1", new Map([["src/Feature.ts", [{ startLine: 3, endLine: 5 }]]])],
+  ]),
 };
 
 describe("bounded marker-only citation repair", () => {
