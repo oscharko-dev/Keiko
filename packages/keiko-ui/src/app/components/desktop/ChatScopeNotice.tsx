@@ -56,6 +56,73 @@ function changedScope(
   );
 }
 
+function replacedScope(
+  previous: readonly ChatConnectedScope[],
+  next: readonly ChatConnectedScope[],
+  scope: ChatConnectedScope,
+): ChatConnectedScope | undefined {
+  const removed = previous.filter(
+    (candidate) =>
+      candidate.root === scope.root &&
+      !next.some(
+        (current) => connectedScopeSignature([candidate]) === connectedScopeSignature([current]),
+      ),
+  );
+  return removed.length === 1 ? removed[0] : undefined;
+}
+
+interface ScopeTransitionHistory {
+  id: string;
+  scopes: readonly ChatConnectedScope[];
+  folder: ChatConnectedScope | undefined;
+  represented: ChatConnectedScope | undefined;
+}
+
+function resetScopeHistory(
+  history: ScopeTransitionHistory,
+  releasePin: ChatScopeNoticeProps["onKeepFolderChange"],
+): null {
+  history.folder = undefined;
+  history.represented = undefined;
+  releasePin?.(false);
+  return null;
+}
+
+function trackedScopeRemoved(history: ScopeTransitionHistory): boolean {
+  if (history.scopes.length === 0) return true;
+  const represented = history.represented;
+  return (
+    represented !== undefined &&
+    !history.scopes.some(
+      (scope) => connectedScopeSignature([scope]) === connectedScopeSignature([represented]),
+    )
+  );
+}
+
+function evaluateScopeTransition(
+  history: ScopeTransitionHistory,
+  chat: Chat,
+  releasePin: ChatScopeNoticeProps["onKeepFolderChange"],
+): ScopeTransition | null | undefined {
+  const oldId = history.id;
+  const oldScopes = history.scopes;
+  history.id = chat.id;
+  history.scopes = effectiveScopes(chat);
+  if (oldId !== chat.id) return resetScopeHistory(history, releasePin);
+  const scope = changedScope(oldScopes, history.scopes);
+  if (scope === undefined)
+    return trackedScopeRemoved(history) ? resetScopeHistory(history, releasePin) : undefined;
+  const prior = replacedScope(oldScopes, history.scopes, scope);
+  if (prior === undefined) resetScopeHistory(history, releasePin);
+  else if (prior.kind !== "files") history.folder = prior;
+  history.represented = scope;
+  return {
+    scope,
+    folder: history.folder?.root === scope.root ? history.folder : undefined,
+    reason: transitionReason(prior ?? scope, scope),
+  };
+}
+
 function useScopeTransition(
   chat: Chat,
   releasePin: ChatScopeNoticeProps["onKeepFolderChange"],
@@ -63,43 +130,34 @@ function useScopeTransition(
   readonly notice: ScopeTransition | null;
   readonly dismiss: () => void;
 } {
-  const scopes = effectiveScopes(chat);
-  const signature = connectedScopeSignature(scopes);
-  const previous = useRef({ id: chat.id, scopes });
-  const releasePinRef = useRef(releasePin);
+  const signature = connectedScopeSignature(effectiveScopes(chat));
+  const latest = useRef({ chat, releasePin });
   useEffect(() => {
-    releasePinRef.current = releasePin;
-  }, [releasePin]);
-  const folder = useRef<ChatConnectedScope | undefined>(undefined);
+    latest.current = { chat, releasePin };
+  }, [chat, releasePin]);
+  const history = useRef<ScopeTransitionHistory>({
+    id: chat.id,
+    scopes: effectiveScopes(chat),
+    folder: undefined,
+    represented: undefined,
+  });
   const [notice, setNotice] = useState<ScopeTransition | null>(null);
   useEffect(() => {
-    const old = previous.current;
-    previous.current = { id: chat.id, scopes };
-    if (old.id !== chat.id) {
-      folder.current = undefined;
+    const transition = evaluateScopeTransition(
+      history.current,
+      latest.current.chat,
+      latest.current.releasePin,
+    );
+    if (transition === undefined) return;
+    if (transition === null) {
       setNotice(null);
-      releasePinRef.current?.(false);
       return;
     }
-    const scope = changedScope(old.scopes, scopes);
-    if (scope === undefined) return;
-    const prior = old.scopes.find((candidate) => candidate.root === scope.root);
-    if (prior === undefined) {
-      folder.current = undefined;
-      releasePinRef.current?.(false);
-    } else if (prior.kind !== "files") folder.current = prior;
-    const transition = {
-      scope,
-      folder: folder.current?.root === scope.root ? folder.current : undefined,
-      reason: transitionReason(prior ?? scope, scope),
-    };
     const timer = setTimeout(() => {
       setNotice(transition);
-      reportScopeNotice(transition.reason, scope);
+      reportScopeNotice(transition.reason, transition.scope);
     }, 100);
     return () => clearTimeout(timer);
-    // Scope identity excludes timestamps and messages; unrelated chat updates keep the pending notice.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.id, signature]);
   return { notice, dismiss: (): void => setNotice(null) };
 }

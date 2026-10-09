@@ -15,6 +15,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import evidenceStyles from "./RepositoryReferenceEvidence.module.css";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { FileIcon } from "./widgets/shared/projectTree";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
@@ -23,8 +24,44 @@ import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
-import type { ChatConnectedScope } from "@/lib/types";
-import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import type { ChatConnectedScope, GroundedEvidenceCitation } from "@/lib/types";
+import {
+  connectedScopeFingerprint,
+  isConnectedScopeFingerprint,
+} from "./hooks/workspaceScopeIdentity";
+
+function citationIdentityReason(
+  fingerprint: string | undefined,
+  matchCount: number,
+): ClientDiagnosticCitationActivation["reason"] {
+  if (fingerprint === undefined) return "absent";
+  if (!isConnectedScopeFingerprint(fingerprint)) return "malformed";
+  if (matchCount === 1) return "matched";
+  return matchCount === 0 ? "unmatched" : "ambiguous";
+}
+
+export function citationRootOptions(
+  citation: Pick<GroundedEvidenceCitation, "sourceScopeFingerprint">,
+  roots: readonly RepositoryReferenceRoot[],
+): {
+  readonly roots: readonly RepositoryReferenceRoot[];
+  readonly requireRootChoice: boolean;
+  readonly citationActivation: Omit<ClientDiagnosticCitationActivation, "outcome">;
+} {
+  const fingerprint = citation.sourceScopeFingerprint;
+  const matching = isConnectedScopeFingerprint(fingerprint)
+    ? roots.filter((root) => root.scopeFingerprints?.includes(fingerprint) === true)
+    : [];
+  const reason = citationIdentityReason(fingerprint, matching.length);
+  const activation = { reason, rootCount: roots.length, matchCount: matching.length };
+  if (reason === "matched")
+    return { roots: matching, requireRootChoice: false, citationActivation: activation };
+  return {
+    roots,
+    requireRootChoice: reason !== "absent" || roots.length > 1,
+    citationActivation: activation,
+  };
+}
 
 export interface RepositoryReference {
   readonly label: string;
@@ -37,6 +74,80 @@ export interface RepositoryReferenceRoot {
   readonly root: string;
   readonly label: string;
   readonly scopeFingerprints?: readonly string[] | undefined;
+}
+
+export type RepositoryReferenceEvidenceState = "cited" | "read-uncited" | "unread";
+export interface RepositoryReferenceEvidence {
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly readPaths: readonly string[];
+}
+
+const EVIDENCE_CLASSES = {
+  cited: "cited",
+  "read-uncited": "readUncited",
+  unread: "unread",
+} as const;
+const EVIDENCE_LABELS = {
+  cited: "grounded.reference.cited",
+  "read-uncited": "grounded.reference.readUncited",
+  unread: "grounded.reference.unread",
+} as const;
+
+function evidenceAccessibleLabel(
+  label: string,
+  state: RepositoryReferenceEvidenceState | undefined,
+  t: I18nTranslate,
+): string {
+  return state === undefined ? label : `${label} · ${t(EVIDENCE_LABELS[state])}`;
+}
+
+function proseCitation(
+  reference: RepositoryReference,
+  evidence: RepositoryReferenceEvidence | undefined,
+): GroundedEvidenceCitation | undefined {
+  const matching =
+    evidence?.citations.filter(
+      (citation) =>
+        normalizeReferencePath(citation.scopePath) === normalizeReferencePath(reference.path),
+    ) ?? [];
+  const fingerprints = new Set(matching.map((citation) => citation.sourceScopeFingerprint));
+  return fingerprints.size === 1 ? matching[0] : undefined;
+}
+
+export function proseReferenceEvidenceState(
+  reference: RepositoryReference,
+  evidence: RepositoryReferenceEvidence,
+  roots: readonly RepositoryReferenceRoot[],
+): RepositoryReferenceEvidenceState {
+  const path = normalizeReferencePath(reference.path);
+  if (evidence.citations.some((citation) => normalizeReferencePath(citation.scopePath) === path))
+    return "cited";
+  return roots.length === 1 &&
+    evidence.readPaths.some((read) => normalizeReferencePath(read) === path)
+    ? "read-uncited"
+    : "unread";
+}
+
+export function ProseRepositoryReference({
+  evidence,
+  ...props
+}: Omit<RepositoryReferenceInlineProps, "citationActivation" | "evidenceState"> & {
+  readonly evidence?: RepositoryReferenceEvidence | undefined;
+}): ReactNode {
+  const citation = proseCitation(props.reference, evidence);
+  const options = citationRootOptions(citation ?? {}, props.roots);
+  return (
+    <RepositoryReferenceInline
+      {...props}
+      {...options}
+      rootRelative={citation !== undefined}
+      evidenceState={
+        evidence === undefined
+          ? undefined
+          : proseReferenceEvidenceState(props.reference, evidence, props.roots)
+      }
+    />
+  );
 }
 
 export type OpenRepositoryReference = (request: OpenEditorFileRequest) => OpenEditorFileResult;
@@ -648,6 +759,7 @@ interface RepositoryReferenceInlineProps {
   readonly requireRootChoice?: boolean | undefined;
   readonly rootRelative?: boolean | undefined;
   readonly citationActivation?: Omit<ClientDiagnosticCitationActivation, "outcome"> | undefined;
+  readonly evidenceState?: RepositoryReferenceEvidenceState | undefined;
 }
 
 function sourceChoicePath(
@@ -735,6 +847,7 @@ export function RepositoryReferenceInline({
   requireRootChoice = false,
   rootRelative,
   citationActivation,
+  evidenceState,
 }: RepositoryReferenceInlineProps): ReactNode {
   const t = useTranslate();
   const pickerId = useId();
@@ -881,7 +994,17 @@ export function RepositoryReferenceInline({
 
   if (openReference === undefined) {
     return (
-      <span title={repositoryReferenceDisplayPath(reference.label)}>
+      <span
+        className={
+          evidenceState === undefined ? undefined : evidenceStyles[EVIDENCE_CLASSES[evidenceState]]
+        }
+        data-evidence-state={evidenceState}
+        title={evidenceAccessibleLabel(
+          repositoryReferenceDisplayPath(reference.label),
+          evidenceState,
+          t,
+        )}
+      >
         {referenceVisibleLabel(reference, displayPath)}
       </span>
     );
@@ -893,17 +1016,26 @@ export function RepositoryReferenceInline({
       <button
         ref={triggerRef}
         type="button"
-        className={className}
-        aria-label={t("chat.repository.openInEditor", {
-          path: referenceAccessiblePath(reference.path, sourceLabel, displayPath),
-          range: referenceRangeLabel(reference, t),
-        })}
+        className={`${className}${evidenceState === undefined ? "" : ` ${evidenceStyles[EVIDENCE_CLASSES[evidenceState]] ?? ""}`}`}
+        data-evidence-state={evidenceState}
+        aria-label={evidenceAccessibleLabel(
+          t("chat.repository.openInEditor", {
+            path: referenceAccessiblePath(reference.path, sourceLabel, displayPath),
+            range: referenceRangeLabel(reference, t),
+          }),
+          evidenceState,
+          t,
+        )}
         aria-expanded={
           bestRootOptions.length > 1 || requireRootChoice ? status === "choosing" : undefined
         }
         aria-controls={status === "choosing" ? pickerId : undefined}
         data-state={status}
-        title={repositoryReferenceDisplayPath(reference.label)}
+        title={evidenceAccessibleLabel(
+          repositoryReferenceDisplayPath(reference.label),
+          evidenceState,
+          t,
+        )}
         onClick={activate}
         onKeyDown={onKeyDown}
       >

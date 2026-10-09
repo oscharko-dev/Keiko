@@ -5,6 +5,48 @@ import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/cl
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type { LocalKnowledgeEvidenceCitation } from "@/lib/types";
 
+describe("prose evidence links", () => {
+  it.each([
+    ["src/cited.ts", "cited", "Cited evidence"],
+    ["src/read.ts", "read-uncited", "Read, not cited"],
+    ["src/unread.ts", "unread", "Not read"],
+  ])("distinguishes %s with a title, class and accessible name", (path, state, label) => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "file" }));
+    render(
+      <SafeMarkdown
+        source={`Inspect ${path}.`}
+        repositoryRoots={[{ root: "/repo", label: "repo" }]}
+        openRepositoryReference={openReference}
+        repositoryEvidence={{
+          citations: [
+            { scopePath: "src/cited.ts", stableId: "atom", score: 1, lineRange: undefined },
+          ],
+          readPaths: ["src/read.ts"],
+        }}
+      />,
+    );
+    const link = screen.getByRole("button", { name: new RegExp(label) });
+    expect(link).toHaveAttribute("data-evidence-state", state);
+    expect(link).toHaveAttribute("title", expect.stringContaining(label));
+    expect(link.className).toContain(state === "read-uncited" ? "readUncited" : state);
+    expect({
+      state: link.dataset["evidenceState"],
+      title: link.title,
+      accessibleName: link.getAttribute("aria-label"),
+    }).toMatchSnapshot();
+    fireEvent.click(link);
+    expect(openReference).toHaveBeenCalledWith({ root: "/repo", path });
+    expect(writer).toHaveBeenCalledWith(
+      "[keiko] citation activation settled",
+      expect.objectContaining({
+        citationActivation: { reason: "absent", outcome: "opened", rootCount: 1, matchCount: 0 },
+      }),
+    );
+  });
+});
+
 const PDF_CITATION: LocalKnowledgeEvidenceCitation = {
   stableId: "lk-1",
   marker: "[1]",
