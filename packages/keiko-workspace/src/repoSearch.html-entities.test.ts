@@ -38,6 +38,41 @@ const encoded = [
 ].join("\n");
 
 describe("HTML character-reference search with raw source evidence", () => {
+  it.each([
+    ["&Uuml;berhitzungsschutz", "Überhitzungsschutz"],
+    ["&uuml;berhitzung", "überhitzung"],
+    ["M&auml;ngel&nbsp;Beseitigung", "Mängel"],
+    ["caf&eacute;&nbsp;maintenance", "café"],
+  ])("finds standard named HTML references %s as human term %s", async (encodedTerm, term) => {
+    const raw = `<html>\n<p>${encodedTerm} specifies 61.2 C.</p>\n</html>`;
+    const selected = fixture("manual.html", raw);
+    const workspaceIndex = createWorkspaceIndex();
+    for (const maxFilesScanned of [null, 16]) {
+      const result = await searchText(
+        selected,
+        query(term),
+        {
+          ...DEFAULT_SEARCH_LIMITS,
+          maxFilesScanned,
+        },
+        { workspaceIndex },
+      );
+      expect(result.atoms).toHaveLength(1);
+      expect(result.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 2 });
+      expect(result.coverage.incomplete).toBe(false);
+    }
+    expect(
+      (
+        await readExcerpt(selected, {
+          scopePath: "manual.html",
+          startLine: 2,
+          endLine: 2,
+          maxBytes: 512,
+        })
+      ).content,
+    ).toBe(raw.split("\n")[1]);
+  });
+
   it.each(["html", "htm", "xhtml"])(
     "finds decimal entities in ordinary %s documents without changing source lines",
     async (extension) => {
@@ -114,6 +149,7 @@ describe("HTML character-reference search with raw source evidence", () => {
 
   it.each([
     ["manual.html", "<p>&amp;#220;berhitzungsschutz</p>"],
+    ["manual.html", "<p>&amp;Uuml;berhitzungsschutz</p>"],
     ["manual.html", "<p>&#xD800;berhitzungsschutz &#999999999;</p>"],
     ["manual.ts", "export const source = '&#220;berhitzungsschutz';"],
     ["manual.txt", "&#220;berhitzungsschutz"],
