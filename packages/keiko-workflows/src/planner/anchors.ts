@@ -171,10 +171,10 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // remains authoritative. No nested repetition or rescanning from every slash is necessary.
 const PATH_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
 const PRESENTATION_PATTERNS: readonly RegExp[] = [
-  /\bcite(?:\s+(?:the|a|an|any|authoritative|relevant|supporting|source|sources|manual|manuals|file|files|and|line|lines|evidence)){1,16}\b/giu,
-  /\bkeep\s+(?:the|your)\s+answer\s+(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b/giu,
-  /\b(?:answer|respond)\s+(?:briefly|concisely)\b/giu,
-  /\bantworte\s+(?:kurz|knapp)(?:\s+mit\s+(?:quellenangabe|quellen|belegen))?\b/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?cite(?:\s+(?:the|a|an|any|authoritative|relevant|supporting|source|sources|manual|manuals|file|files|and|line|lines|evidence)){1,16}\b/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?keep\s+(?:the|your)\s+answer\s+(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?(?:answer|respond)\s+(?:briefly|concisely)\b/giu,
+  /(^|[.!?;\n])\s*(?:bitte\s+)?antworte\s+(?:kurz|knapp)(?:\s+mit\s+(?:quellenangabe|quellen|belegen))?\b/giu,
 ];
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
@@ -392,9 +392,16 @@ function isFilePathToken(term: string): boolean {
   return dot > 0 && /^[A-Za-z0-9]{1,16}$/u.test(name.slice(dot + 1));
 }
 
+// The composer emits @path as a reference marker. Quotes have already been consumed here;
+// quoted literal @ paths and an explicit ./@ path therefore retain their filesystem spelling.
+export function normalizeUnquotedFilePathToken(term: string): string {
+  const withoutMention = term.startsWith("@") ? term.slice(1) : term;
+  return isFilePathToken(withoutMention) ? withoutMention : term;
+}
+
 function collectFilePathTokens(source: string, out: AnchorAccumulator): string {
   return source.replace(PATH_TOKEN_RE, (raw: string) => {
-    const term = completePathToken(raw);
+    const term = normalizeUnquotedFilePathToken(completePathToken(raw));
     if (!isFilePathToken(term)) return raw;
     pushAnchor(out, term, "path", 0.95);
     return " ".repeat(raw.length);
