@@ -339,11 +339,12 @@ export async function mintPairing(env = process.env) {
   return { attestation, fragment: contracts.encodeCodingAppSessionPairingFragment(attestation) };
 }
 
-async function callJson(baseUrl, headers, method, path, body) {
+async function callJson(baseUrl, headers, method, path, body, { signal } = {}) {
   const response = await globalThis.fetch(`${baseUrl}${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    ...(signal === undefined ? {} : { signal }),
   });
   const text = await response.text();
   let json;
@@ -379,7 +380,10 @@ export async function openApiSession(baseUrl, env = process.env) {
     );
   }
   const headers = { ...CSRF_HEADERS, cookie };
-  return { request: (method, path, body) => callJson(baseUrl, headers, method, path, body) };
+  return {
+    request: (method, path, body, options) =>
+      callJson(baseUrl, headers, method, path, body, options),
+  };
 }
 
 /** One progress line for a run snapshot: state, revision and the kind of a pending permission. */

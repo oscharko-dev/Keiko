@@ -789,6 +789,23 @@ describe("importBuilt", () => {
 });
 
 describe("pairing as the local operator", () => {
+  it("forwards ordinary request cancellation through the paired API session", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new globalThis.Response(null, {
+          status: 204,
+          headers: { "set-cookie": `${sessionCookies.APP_SESSION_COOKIE_NAME}=fixture; HttpOnly` },
+        }),
+      )
+      .mockResolvedValueOnce(globalThis.Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetch);
+    const session = await openApiSession("http://127.0.0.1:1983", env);
+    const controller = new globalThis.AbortController();
+    await session.request("GET", "/api/health", undefined, { signal: controller.signal });
+    expect(fetch.mock.calls.at(-1)?.[1].signal).toBe(controller.signal);
+  });
+
   const { CODING_APP_SESSION_LAUNCHER_SECRET_ENV: SECRET_ENV } = sessionContracts;
   const secret = "s".repeat(sessionContracts.CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS);
   const env = { [SECRET_ENV]: secret };
