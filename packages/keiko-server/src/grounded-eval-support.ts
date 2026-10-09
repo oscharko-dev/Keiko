@@ -10,7 +10,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { groundedConversationContinuity } from "./grounded-conversation-continuity.js";
-import { retrieveConnectedContextPack, runGroundedExploration } from "./grounded-orchestrator.js";
+import {
+  retrieveConnectedContextPack,
+  runGroundedExploration,
+  type OrchestratorDeps,
+} from "./grounded-orchestrator.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
 import { createRunRegistry } from "./runs.js";
@@ -143,6 +147,7 @@ export interface ConnectedRetrievalEvalInput {
   readonly correlationId?: string;
   readonly activityLog?: ServerLogSink;
   readonly answer?: string;
+  readonly detectWorkspace?: OrchestratorDeps["detectWorkspace"];
 }
 
 function connectedEvalRuntime(): UiHandlerDeps {
@@ -180,6 +185,10 @@ function evalChatMessage(
 }
 
 function materializeConnectedFixture(root: string, files: Readonly<Record<string, string>>): void {
+  if (files[".git/HEAD"] !== undefined) {
+    mkdirSync(join(root, ".git", "objects"), { recursive: true });
+    mkdirSync(join(root, ".git", "refs"), { recursive: true });
+  }
   for (const [path, content] of Object.entries(files)) {
     const target = join(root, path);
     mkdirSync(dirname(target), { recursive: true });
@@ -216,6 +225,9 @@ export async function runConnectedRetrievalEval(
     const retrievalDeps = {
       correlationId: fixture.correlationId,
       activityLog: fixture.activityLog,
+      ...(fixture.detectWorkspace === undefined
+        ? {}
+        : { detectWorkspace: fixture.detectWorkspace }),
       answerer: { answer: (): Promise<string> => Promise.resolve(fixture.answer ?? "") },
     };
     const result =
