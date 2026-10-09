@@ -20,6 +20,7 @@ import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type {
   ConnectionOutcome,
   ChatBindingTarget,
+  FilesScopeBindReply,
   ChatUnbindTarget,
   UseWorkspaceResult,
   ViewportWorld,
@@ -1838,7 +1839,7 @@ export interface UseWorkspaceOptions {
         chatWindowId: string,
         scope: ChatConnectedScope,
         target?: ChatBindingTarget,
-      ) => boolean | Promise<boolean>)
+      ) => FilesScopeBindReply | Promise<FilesScopeBindReply>)
     | undefined;
   readonly onScopeUnbind?:
     | ((
@@ -2131,7 +2132,8 @@ export function useWorkspace(
       chatWindowId: string,
       scope: ChatConnectedScope,
       target?: ChatBindingTarget,
-    ): boolean | Promise<boolean> => onScopeBindRef.current?.(chatWindowId, scope, target) ?? true,
+    ): FilesScopeBindReply | Promise<FilesScopeBindReply> =>
+      onScopeBindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
   const stableScopeUnbind = useCallback(

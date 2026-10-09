@@ -885,6 +885,7 @@ interface FilesScopeUnbindInput {
 }
 
 interface FilesScopeRequest {
+  acknowledgement?: FilesPatchAcknowledgement;
   chatWindowId: string;
   nextScope: ChatConnectedScope;
   previousScope: ChatConnectedScope | null;
@@ -1844,6 +1845,9 @@ function AppShellInner(): ReactNode {
       reportFilesOwnershipDecision(attempt, connection, canonicalScopes);
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (filesScopeAlreadyCanonical(canonicalScopes, nextScope, ownedScope)) {
+        acknowledgement.chat = chat;
+        const acceptedScope = canonicalScopes.find((scope) => isScopeConnected([scope], nextScope));
+        if (acceptedScope !== undefined) acknowledgement.scope = acceptedScope;
         rememberGroundingChat(chat);
         publishRefreshedGroundingChat(chat);
         return true;
@@ -1922,7 +1926,7 @@ function AppShellInner(): ReactNode {
       const { nextScope, previousScope, attempt, connectionId, edgeKey, chatKey } = input;
       const confirmed =
         edgeKey === undefined ? undefined : acknowledgedFilesScopesRef.current.get(edgeKey);
-      const acknowledgement: FilesPatchAcknowledgement = {};
+      const acknowledgement = input.acknowledgement ?? {};
       const accepted = await retryGroundingScopeIntent(async (): Promise<boolean> => {
         if (filesRequestWasSuperseded(input, automaticFilesRequestsRef.current)) return false;
         return replaceFilesScopeNow(input, confirmed ?? previousScope, acknowledgement);
@@ -1952,6 +1956,7 @@ function AppShellInner(): ReactNode {
       target?: ChatBindingTarget,
       connectionId?: string,
       automatic = false,
+      acknowledgement?: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
       try {
         const chatKey = groundingMutationKey(chatWindowId, target);
@@ -1974,6 +1979,7 @@ function AppShellInner(): ReactNode {
               edgeKey,
               chatKey,
               request,
+              ...(acknowledgement === undefined ? {} : { acknowledgement }),
             }),
           "files",
         );
@@ -1990,7 +1996,19 @@ function AppShellInner(): ReactNode {
       chatWindowId: string,
       scope: ChatConnectedScope,
       target?: ChatBindingTarget,
-    ): Promise<boolean> => replaceFilesScope(chatWindowId, scope, null, target),
+    ): Promise<ChatConnectedScope | false> => {
+      const acknowledgement: FilesPatchAcknowledgement = {};
+      const accepted = await replaceFilesScope(
+        chatWindowId,
+        scope,
+        null,
+        target,
+        undefined,
+        false,
+        acknowledgement,
+      );
+      return accepted ? (acknowledgement.scope ?? scope) : false;
+    },
     [replaceFilesScope],
   );
   const unbindFilesScopeNow = useCallback(
