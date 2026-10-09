@@ -47,7 +47,7 @@ describe("literal manual queries avoid unused source classification", () => {
   it("does not classify source syntax when content scoring cannot award structural bonuses", () => {
     const spy = vi.spyOn(classification, "repositorySourceLines");
     expect(
-      scoreContentForSearch(QUERY, TEXT, resolveSearchPolicy(true), "manual.html"),
+      scoreContentForSearch(QUERY, TEXT, resolveSearchPolicy(true, undefined), "manual.html"),
     ).toBeGreaterThan(0);
     expect(spy).not.toHaveBeenCalled();
   });
@@ -75,7 +75,7 @@ describe("literal manual queries avoid unused source classification", () => {
     const spy = vi.spyOn(classification, "repositorySourceLines");
     const query = { ...QUERY, kind: row.kind, text: row.text };
     expect(
-      scoreContentForSearch(query, row.content, resolveSearchPolicy(true), row.path),
+      scoreContentForSearch(query, row.content, resolveSearchPolicy(true, undefined), row.path),
     ).toBeGreaterThan(0);
     expect(spy).toHaveBeenCalledOnce();
   });
