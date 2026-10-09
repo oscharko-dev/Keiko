@@ -24,6 +24,9 @@ import {
   type CandidateOmissionReason,
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
+  type ContextSelectionConfidence,
+  type ContextSemanticProviderDisposition,
+  type ContextScopeState,
   type ExplorationBudget,
   type ExplorationUsage,
   type RetrievalQueryKind,
@@ -1380,11 +1383,9 @@ export interface GroundedAnswerContextSummary {
 export interface GroundedAnswerRetrievalDiagnostics {
   readonly filesInPrompt?: number | undefined;
   readonly reranker?: GroundedRerankerDiagnostics | undefined;
-  readonly selectionConfidence?: "low" | "normal" | undefined;
-  readonly semanticProviderDisposition?:
-    "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected" | undefined;
-  readonly scopeContextState?:
-    "applied" | "overflow" | "gate-refused" | "incomplete-traversal" | undefined;
+  readonly selectionConfidence?: ContextSelectionConfidence | undefined;
+  readonly semanticProviderDisposition?: ContextSemanticProviderDisposition | undefined;
+  readonly scopeContextState?: ContextScopeState | undefined;
 }
 
 export interface GroundedOmissionGroups {
@@ -1564,25 +1565,45 @@ export function buildGroundedAnswerContextPackSummary(
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
     ...(coverage !== undefined ? { coverage } : {}),
     ...(contextSummary !== undefined ? { contextSummary } : {}),
-    ...retrievalDiagnosticSummary(retrievalDiagnostics),
+    ...retrievalDiagnosticSummary(packRetrievalDiagnostics(pack, retrievalDiagnostics)),
+  };
+}
+
+function packRetrievalDiagnostics(
+  pack: ConnectedContextPack,
+  provided: GroundedAnswerRetrievalDiagnostics | undefined,
+): GroundedAnswerRetrievalDiagnostics {
+  const observed = pack.diagnostics;
+  const selection = observed?.selection;
+  return {
+    semanticProviderDisposition: observed?.semanticProviderDisposition,
+    scopeContextState: observed?.scopeContextState,
+    ...(selection === undefined
+      ? {}
+      : {
+          selectionConfidence: selection.selectionConfidence,
+          reranker: selection.reranker,
+        }),
+    ...provided,
   };
 }
 
 function retrievalDiagnosticSummary(
   diagnostics: GroundedAnswerRetrievalDiagnostics | undefined,
 ): GroundedAnswerRetrievalDiagnostics {
+  if (diagnostics === undefined) return {};
   return {
-    ...(diagnostics?.reranker === undefined ? {} : { reranker: diagnostics.reranker }),
-    ...(diagnostics?.selectionConfidence === undefined
+    ...(diagnostics.reranker === undefined ? {} : { reranker: diagnostics.reranker }),
+    ...(diagnostics.selectionConfidence === undefined
       ? {}
       : { selectionConfidence: diagnostics.selectionConfidence }),
-    ...(diagnostics?.filesInPrompt === undefined
+    ...(diagnostics.filesInPrompt === undefined
       ? {}
       : { filesInPrompt: diagnostics.filesInPrompt }),
-    ...(diagnostics?.semanticProviderDisposition === undefined
+    ...(diagnostics.semanticProviderDisposition === undefined
       ? {}
       : { semanticProviderDisposition: diagnostics.semanticProviderDisposition }),
-    ...(diagnostics?.scopeContextState === undefined
+    ...(diagnostics.scopeContextState === undefined
       ? {}
       : { scopeContextState: diagnostics.scopeContextState }),
   };

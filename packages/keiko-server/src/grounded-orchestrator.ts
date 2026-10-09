@@ -1,4 +1,9 @@
 import {
+  rerankGroundedCandidates,
+  type PreselectionRerankerResult,
+} from "./grounded-preselection-reranker.js";
+import { selectionQuality, lowConfidenceSelectionMarker } from "./grounded-selection-quality.js";
+import {
   orderDistinctEvidenceCandidates,
   type RankingSelectionObservation,
 } from "./grounded-candidate-ordering.js";
@@ -42,6 +47,7 @@ import {
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
   type ContextPackDiagnostics,
+  type ContextSelectionDiagnostics,
   type EvidenceAtom,
   type ExplorationBudget,
   type ExplorationUsage,
@@ -52,7 +58,10 @@ import {
   type UncertaintyMarkerKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
-import type { GroundedPromptContextWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  GroundedRerankerDiagnostics,
+  GroundedPromptContextWire,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogErrorKindOr,
   activityLogEvent,
@@ -71,6 +80,9 @@ import {
   contextPackIndexKey,
   extractAnchors,
   DEFAULT_FILTER_OPTIONS,
+  absoluteRelevanceFloor,
+  weightsForIntent,
+  filterCandidates,
   planAndGovern,
   rankCandidates,
   isDirectEvidenceLookup,
@@ -86,7 +98,6 @@ import {
   type ExplorationPlan,
   type GovernorState,
   type MicroIndex,
-  type RerankerExecutionContext,
   type RerankerSeam,
   type RetrievalIntent,
   type RetrievalRing,
@@ -199,6 +210,7 @@ import {
   certifiedContentPaths,
   type ContentEvidenceIdentity,
   selectGroundedCandidateFiles,
+  ordinaryRelativeFloor,
   pathOnlyEvidencePaths,
   selectGroundedEvidenceAtoms,
   tracePriority,
@@ -578,14 +590,57 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     basenameCollisionGroupCount: { type: "integer", dataClass: "count", required: false },
     basenameDedupDemotedCount: { type: "integer", dataClass: "count", required: false },
+    addressedBasenameDedupDemotedCount: { type: "integer", dataClass: "count", required: false },
     exactPathSignalPresentCount: { type: "integer", dataClass: "count", required: false },
     pathSegmentSignalPresentCount: { type: "integer", dataClass: "count", required: false },
     directoryProximityTieBreakCount: { type: "integer", dataClass: "count", required: false },
+    floorReferenceKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["ordinary-p75", "no-ordinary", "files-scope"],
+    },
+    relativeFloorPermille: { type: "integer", dataClass: "count", required: false },
+    strongestOrdinaryScorePermille: { type: "integer", dataClass: "count", required: false },
+    absoluteFloorPermille: { type: "integer", dataClass: "count", required: false },
+    keepOneFallbackApplied: { type: "boolean", dataClass: "closed-enum", required: false },
+    selectionConfidence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["high", "low"],
+    },
+    rerankerDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unconfigured", "applied", "failed", "skipped-budget", "skipped-literal"],
+    },
+    reranked: { type: "boolean", dataClass: "closed-enum", required: false },
+    rerankFailedCalls: { type: "integer", dataClass: "count", required: false },
+    rerankerCandidateCount: { type: "integer", dataClass: "count", required: false },
+    rerankerDocumentCount: { type: "integer", dataClass: "count", required: false },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
     stackTraceFrameCount: { type: "integer", dataClass: "count", required: false },
     stackTraceExternalFrameCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [{ field: "rerankerDisposition", values: ["failed"] }],
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
@@ -593,6 +648,7 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   proofIds: [
     "search.connected-context.selection-details.line",
     "search.connected-context.path-ranking.line",
+    "search.connected-context.selection-quality.line",
   ],
   releaseImpact: "patch",
 });
@@ -6533,82 +6589,27 @@ function deadlineBoundMicroIndex(
   };
 }
 
-async function raceRerankerToDeadline<T>(
-  operation: (context: RerankerExecutionContext) => Promise<T>,
-  nowMs: () => number,
-  deadlineAtMs: number,
-  callerSignal: AbortSignal | undefined,
-): Promise<T | undefined> {
-  try {
-    return await raceAbortDeadline(operation, {
-      deadlineAtMs,
-      nowMs,
-      ...(callerSignal === undefined ? {} : { signal: callerSignal }),
-    });
-  } catch (error) {
-    if (error instanceof AbortDeadlineRaceError) {
-      if (error.reason === "aborted") {
-        throw new CancelledError("grounded repository request cancelled");
-      }
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-function deadlineBoundReranker(
-  reranker: RerankerSeam,
-  nowMs: () => number,
-  deadlineAtMs: number,
-  callerSignal: AbortSignal | undefined,
-): RerankerSeam {
-  return {
-    name: reranker.name,
-    isAvailable: async (): ReturnType<RerankerSeam["isAvailable"]> => {
-      const availability = await raceRerankerToDeadline(
-        (context) => reranker.isAvailable(context),
-        nowMs,
-        deadlineAtMs,
-        callerSignal,
-      );
-      return availability ?? { available: false, reason: "elapsed-budget-exhausted" };
-    },
-    rerank: async (candidates, atomsByPath, topK): ReturnType<RerankerSeam["rerank"]> => {
-      const reordered = await raceRerankerToDeadline(
-        (context) => reranker.rerank(candidates, atomsByPath, topK, context),
-        nowMs,
-        deadlineAtMs,
-        callerSignal,
-      );
-      return reordered ?? candidates;
-    },
-  };
-}
-
 function assembleOptionsFor(
   deps: OrchestratorDeps,
   nowMs: () => number,
   includeMicroIndex: boolean,
-  includeReranker = true,
   deadlineAtMs?: number,
 ): AssembleOptionsForGroundedPack {
   const microIndex =
     deps.microIndex === undefined || deadlineAtMs === undefined
       ? deps.microIndex
       : deadlineBoundMicroIndex(deps.microIndex, nowMs, deadlineAtMs);
-  const reranker =
-    deps.contextPackReranker === undefined || deadlineAtMs === undefined
-      ? deps.contextPackReranker
-      : deadlineBoundReranker(deps.contextPackReranker, nowMs, deadlineAtMs, deps.signal);
   return {
     nowMs,
     includeSurroundingContext: true,
     ...(includeMicroIndex && microIndex !== undefined ? { microIndex } : {}),
-    ...(includeReranker && reranker !== undefined ? { reranker } : {}),
   };
 }
 
 interface PreparedPackAssembly {
+  readonly selection: ContextSelectionDiagnostics;
+  readonly rerankerDiagnostics?: GroundedRerankerDiagnostics | undefined;
+  readonly rerankFailure?: unknown;
   readonly reusedEvidenceAtomCount: number;
   readonly atoms: readonly EvidenceAtom[];
   readonly initialUsage: ExplorationUsage;
@@ -6657,7 +6658,7 @@ async function assembleEmptyGroundedPack({
 }: EmptyGroundedPackInputs): Promise<ConnectedContextPack> {
   // An empty pack has nothing to rerank or cache. Keeping both seams out also ensures a request
   // stopped before workspace IO cannot start unrelated external work during empty-pack assembly.
-  const assembleOptions = assembleOptionsFor(deps, nowMs, false, false);
+  const assembleOptions = assembleOptionsFor(deps, nowMs, false);
   const assemble = await assembleContextPack(
     {
       scope: input.scope,
@@ -6792,19 +6793,15 @@ function rankingEvidence(
   };
 }
 
-function preparePackAssembly(
+function rankEligibleEvidencePool(
   input: OrchestratorInput,
   plan: ExplorationPlan,
   rings: RingRunSummary,
+  atoms: readonly EvidenceAtom[],
   nowMs: () => number,
   hasGitMetadata: boolean,
-): PreparedPackAssembly {
-  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(input, rings);
-  const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
-  // M4: pass the classified retrieval intent so ranking can apply intent-conditioned signals
-  // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
-  // no-context default are byte-identical — see weightsForIntent / isIntentBoosted.
-  const ranking = rankCandidates(
+): ReturnType<typeof rankCandidates> {
+  return rankCandidates(
     {
       atoms,
       anchors: primaryRankingAnchors(input, plan),
@@ -6812,23 +6809,37 @@ function preparePackAssembly(
       context: { retrievalIntent: effectiveRetrievalIntent(plan) },
       ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
     },
-    {
-      nowMs,
-      // Retain the admitted evidence pool until distinct requested targets are ordered. The
-      // accepted file/read/context budgets below still bound the material sent to the model.
-      filter: primaryCandidateFilter(rings),
-    },
+    { nowMs, filter: { ...primaryCandidateFilter(rings), minScore: 0 } },
+  );
+}
+
+function selectRankedEvidencePool(
+  args: AssembleGroundedPackInputs,
+  rings: RingRunSummary,
+  atoms: readonly EvidenceAtom[],
+  ranking: ReturnType<typeof rankCandidates>,
+  reranker: PreselectionRerankerResult,
+): Pick<PreparedPackAssembly, "ordered" | "selection"> {
+  const { input, plan, nowMs } = args;
+  const absoluteFloor =
+    input.scope.kind === "files"
+      ? 0
+      : absoluteRelevanceFloor(weightsForIntent(effectiveRetrievalIntent(plan)));
+  const options = { ...primaryCandidateFilter(rings), minScore: absoluteFloor, nowMs };
+  const filtered = filterCandidates(
+    reranker.candidates.map((candidate) => ({ candidate, generatedHint: false, duplicate: false })),
+    options,
   );
   const refined = refineCandidateOrdering(
-    ranking.kept,
-    ranking.omitted,
+    filtered.kept,
+    [...ranking.omitted, ...filtered.omitted],
     input.query,
     planSearchAnchors(plan),
     rings.diagnostics,
     nowMs(),
     explicitSelectionPaths(rings),
   );
-  const ordered = selectGroundedCandidateFiles({
+  const selectionInput = {
     ...refined,
     priorityPaths: mergedSelectionPriorities(refined, rings),
     scopeKind: input.scope.kind,
@@ -6836,18 +6847,57 @@ function preparePackAssembly(
     pathOnlyPaths: pathOnlyEvidencePaths(atoms),
     filesReadMax: plan.budget.filesReadMax,
     nowMs: nowMs(),
+  };
+  const ordered = selectGroundedCandidateFiles(selectionInput);
+  return {
+    ordered: { ...ordered, rankingObservation: refined.rankingObservation },
+    selection: selectionQuality({
+      candidates: reranker.candidates,
+      selected: ordered.kept,
+      absoluteFloor,
+      minScoreExemptPaths: options.minScoreExemptPaths ?? new Set(),
+      scopeKind: input.scope.kind,
+      relative: ordinaryRelativeFloor(selectionInput),
+      reranker,
+    }),
+  };
+}
+
+async function preparePackAssembly(
+  args: AssembleGroundedPackInputs,
+  rings: RingRunSummary,
+): Promise<PreparedPackAssembly> {
+  const { input, plan, deps, nowMs, deadlineAtMs } = args;
+  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(input, rings);
+  const ranking = rankEligibleEvidencePool(input, plan, rings, atoms, nowMs, args.hasGitMetadata);
+  const reranker = await rerankGroundedCandidates({
+    reranker: deps.contextPackReranker,
+    candidates: ranking.kept,
+    atomsByPath: groupEvidenceAtomsByPath(atoms),
+    budget: plan.budget,
+    usage: clampUsageToBudget(rings.governor.usage, plan.budget),
+    nowMs,
+    deadlineAtMs,
+    signal: deps.signal,
+    literal: plan.targetDecision?.kind === "literal-search",
   });
+  const { ordered, selection } = selectRankedEvidencePool(args, rings, atoms, ranking, reranker);
   const selectedPaths = new Set(ordered.kept.map((candidate) => candidate.scopePath));
   const selectedAtoms = selectPackAtoms(atoms, selectedPaths, input, plan);
   return {
     atoms: selectedAtoms,
     reusedEvidenceAtomCount,
-    initialUsage,
-    ordered: { ...ordered, rankingObservation: refined.rankingObservation },
+    initialUsage: clampUsageToBudget(reranker.usage, plan.budget),
+    ordered,
+    selection,
+    rerankerDiagnostics: reranker.diagnostics,
+    rerankFailure: reranker.failure,
     atomsByPath: groupEvidenceAtomsByPath(selectedAtoms),
-    evidenceUncertainty:
-      selectedAtoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [],
-    keptPaths: ordered.kept.map((c) => c.scopePath),
+    evidenceUncertainty: [
+      ...(selectedAtoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : []),
+      ...(selection.selectionConfidence === "low" ? [lowConfidenceSelectionMarker(nowMs())] : []),
+    ],
+    keptPaths: ordered.kept.map((candidate) => candidate.scopePath),
   };
 }
 
@@ -6908,7 +6958,7 @@ async function assemblePackFromReads(
       omittedFromRanking: [...codeOmitted, ...documentEvidence.omitted],
       excerpts,
       initialUsage: prepared.initialUsage,
-      diagnostics: rings.diagnostics,
+      diagnostics: { rankedCandidates: [], ...rings.diagnostics, selection: prepared.selection },
       initialUncertainty: [
         ...rings.uncertainty,
         ...excerptReads.uncertainty,
@@ -7107,6 +7157,8 @@ interface GroundedAssemblyContext {
 }
 
 interface GroundedPackAssembly {
+  readonly selectionObservation?: ContextSelectionDiagnostics | undefined;
+  readonly rerankFailure?: unknown;
   readonly explicitObservation?: ExplicitPathObservation | undefined;
   readonly rankingObservation?: RankingSelectionObservation | undefined;
   readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
@@ -7157,7 +7209,6 @@ async function prepareGroundedAssembly(
     deps,
     nowMs,
     !hasDocumentEvidence && canStartAssemblySeams,
-    canStartAssemblySeams,
     deadlineAtMs,
   );
   // The micro-index cache key does not model request-local document evidence, so a scope that
@@ -7240,19 +7291,11 @@ async function assembleGroundedPack(
     input.scope,
     nowMs(),
   );
-  const explicitDetails = explicitAssemblyDetails(augmentedRings);
-  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs, args.hasGitMetadata);
+
+  const prepared = await preparePackAssembly(args, augmentedRings);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
-  if (ctx.cached !== undefined) {
-    return {
-      pack: withGroundedContextDiagnostics(ctx.cached, deps),
-      ...explicitDetails,
-      rankingObservation: prepared.ordered.rankingObservation,
-      reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
-      metadataRetention: augmentedRings.metadataRetention,
-      elapsedBudgetBlocked: false,
-    };
-  }
+  if (ctx.cached !== undefined)
+    return cachedGroundedAssembly(ctx.cached, deps, prepared, augmentedRings);
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
     knownFitFileBytes: augmentedRings.knownFitFileBytes,
     searchScope,
@@ -7279,14 +7322,44 @@ async function assembleGroundedPack(
   });
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
-    ...explicitDetails,
-    rankingObservation: prepared.ordered.rankingObservation,
-    reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
-    metadataRetention: augmentedRings.metadataRetention,
+    ...groundedAssemblyDetails(prepared, augmentedRings),
     excerptObservation: excerptReads.observation,
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
     anchoredWindowCount: excerptReads.anchoredWindowCount,
     readWindowCount: excerptReads.readWindowCount,
+  };
+}
+
+function groundedAssemblyDetails(
+  prepared: PreparedPackAssembly,
+  rings: RingRunSummary,
+): Omit<GroundedPackAssembly, "pack" | "elapsedBudgetBlocked"> {
+  return {
+    ...explicitAssemblyDetails(rings),
+    selectionObservation: prepared.selection,
+    rerankFailure: prepared.rerankFailure,
+    rankingObservation: prepared.ordered.rankingObservation,
+    reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
+    metadataRetention: rings.metadataRetention,
+  };
+}
+
+function cachedGroundedAssembly(
+  pack: ConnectedContextPack,
+  deps: OrchestratorDeps,
+  prepared: PreparedPackAssembly,
+  rings: RingRunSummary,
+): GroundedPackAssembly {
+  return {
+    pack: withGroundedContextDiagnostics(
+      {
+        ...pack,
+        diagnostics: { rankedCandidates: [], ...pack.diagnostics, selection: prepared.selection },
+      },
+      deps,
+    ),
+    ...groundedAssemblyDetails(prepared, rings),
+    elapsedBudgetBlocked: false,
   };
 }
 
@@ -7308,6 +7381,8 @@ function explicitAssemblyDetails(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly selectionObservation?: ContextSelectionDiagnostics | undefined;
+  readonly rerankFailure?: unknown;
   readonly explicitObservation?: ExplicitPathObservation | undefined;
   readonly rankingObservation?: RankingSelectionObservation | undefined;
   readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
@@ -7404,6 +7479,8 @@ function liveRetrievalCompletion(
 ): ConnectedContextCompletionStatus {
   return {
     explicitObservation: assembled.explicitObservation,
+    selectionObservation: assembled.selectionObservation,
+    rerankFailure: assembled.rerankFailure,
     rankingObservation: assembled.rankingObservation,
     referenceObservation: assembled.referenceObservation,
     explicitSelectionAtomCount: assembled.explicitSelectionAtomCount,
@@ -8221,6 +8298,30 @@ function safeFailureActivityExtra(
   }
 }
 
+function selectionQualityActivityExtra(
+  status: ConnectedContextCompletionStatus,
+): Partial<ActivityLogFields<typeof SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION>> {
+  const selection = status.selectionObservation;
+  if (selection === undefined) return {};
+  const { reranker, ...observation } = selection;
+  const frames = status.rerankFailure === undefined ? [] : keikoStackFrames(status.rerankFailure);
+  const chain = status.rerankFailure === undefined ? [] : causeChain(status.rerankFailure);
+  return {
+    ...observation,
+    ...(reranker === undefined
+      ? {}
+      : {
+          rerankerCandidateCount: reranker.candidateCount,
+          rerankerDocumentCount: reranker.documentCount,
+        }),
+    ...(status.rerankFailure === undefined
+      ? {}
+      : { failureKind: connectedContextFailureKind(status.rerankFailure) }),
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(chain.length === 0 ? {} : { causeChain: chain }),
+  };
+}
+
 function selectionDetailsActivityExtra(
   identity: ConnectedContextActivityIdentity,
   status: ConnectedContextCompletionStatus,
@@ -8229,6 +8330,7 @@ function selectionDetailsActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
     ...status.rankingObservation,
+    ...selectionQualityActivityExtra(status),
     ...(status.referenceObservation === undefined
       ? {}
       : {
@@ -9055,7 +9157,7 @@ async function retrieveLiveConnectedContext(
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
   return connectedContextExecution(
-    assembled.pack,
+    withRetrievalSourceDiagnostics(assembled.pack, runtime.progress),
     plan,
     runtime.activity,
     {
@@ -9067,6 +9169,25 @@ async function retrieveLiveConnectedContext(
     workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
+}
+
+function withRetrievalSourceDiagnostics(
+  pack: ConnectedContextPack,
+  progress: ConnectedContextProgress,
+): ConnectedContextPack {
+  const scopeState = progress.scopeContextObservation?.state;
+  const semanticState = progress.sourceDecision?.semanticProviderDisposition;
+  return {
+    ...pack,
+    diagnostics: {
+      rankedCandidates: [],
+      ...pack.diagnostics,
+      ...(semanticState === undefined ? {} : { semanticProviderDisposition: semanticState }),
+      ...(scopeState === undefined || scopeState === "empty"
+        ? {}
+        : { scopeContextState: scopeState }),
+    },
+  };
 }
 
 function metadataInjectionReason(
