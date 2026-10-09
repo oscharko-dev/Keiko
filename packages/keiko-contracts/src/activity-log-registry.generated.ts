@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "fd2cddb5233d08ff138b941055097d87512c542631fedd4b18a35d95289ebf6b" as const;
+  "89c053e8cca744a08f5f1fd23d79b08b3ce0da665e76a8a405281c24ef7da0d6" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -2416,8 +2416,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           lifecycle: "state",
           causal: "correlation",
           analyzerProjection: "timeline",
-          safeContextFields: [],
-          evidenceClasses: ["completeness-state", "loss-state"],
+          safeContextFields: [
+            {
+              name: "memoryContextDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "uncitedMemoryContextMarkerCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

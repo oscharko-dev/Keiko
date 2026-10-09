@@ -415,6 +415,13 @@ body-free frames, and causes. Normalized synthesis output is buffered before pub
 unknown, or excess declaration lines are removed before client delivery and history persistence.
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+After governed memory attachment, final publication records optional memory observations on the
+existing `chat.response.message` operation: the actual structured
+`uncitedMemoryContextMarkerCount` and closed `memoryContextDisposition`
+(included/excluded/not-requested). Its assistant/request causal relationship remains unchanged.
+This distinguishes actual included memory from budget exclusion across single, multiple, and hybrid
+sources; neither retrieval candidate counts nor model-authored marker prose proves inclusion.
+The observation carries no memory content or answer text.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
 maximum of two physical synthesis attempts and the original remaining search/read/token/spend/time grants.
 Declared unread targets receive priority during final prompt fitting;

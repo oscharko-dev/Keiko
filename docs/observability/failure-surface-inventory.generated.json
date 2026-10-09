@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fd2cddb5233d08ff138b941055097d87512c542631fedd4b18a35d95289ebf6b"
+    "catalogDigest": "89c053e8cca744a08f5f1fd23d79b08b3ce0da665e76a8a405281c24ef7da0d6"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1128,7 +1128,10 @@
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts",
       "packages/keiko-model-gateway/src/openai-adapter.logging.test.ts"
     ],
-    "chat.response.message.causality": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.response.message.causality": [
+      "packages/keiko-server/src/chat-activity.test.ts",
+      "packages/keiko-server/src/grounded-memory-activity.public-handler.test.ts"
+    ],
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
