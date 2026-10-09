@@ -251,7 +251,9 @@ const CORPUS: readonly EvalDocument[] = CONCEPT_MODEL.map((concept) => ({
 
 const CASES: readonly EvalCase[] = CONCEPT_MODEL.map((concept) => ({
   id: concept.id,
-  query: `In the ${QUERY_SYSTEM_WORD}, which module handles ${concept.queryWords.join(" ")}${concept.queryPath === true ? ` in ${concept.scopePath}` : ""}?`,
+  query:
+    `In the ${QUERY_SYSTEM_WORD}, which module handles ${concept.queryWords.join(" ")}` +
+    (concept.queryPath === true ? ` in ${concept.scopePath}?` : "?"),
   relevantPath: concept.scopePath,
 }));
 
