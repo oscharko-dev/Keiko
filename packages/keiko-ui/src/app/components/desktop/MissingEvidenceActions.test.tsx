@@ -1,13 +1,23 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
-import type { Chat, GroundedAnswer } from "@/lib/types";
+import { ApiError, fetchChats, type updateChatConnectedScopes } from "@/lib/api";
+import type { Chat, ChatResponse, GroundedAnswer } from "@/lib/types";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
+import { ConnectedScopePill } from "./ConnectedScopePill";
+import { reportScopeNotice } from "./ChatScopeNotice";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchChats: vi.fn(),
+}));
+vi.mock("./ChatScopeNotice", () => ({ reportScopeNotice: vi.fn() }));
 
 const chat: Chat = {
   id: "a",
@@ -75,6 +85,189 @@ function answer(path: string): GroundedAnswer {
     ),
   };
 }
+
+function scopeResponse(): {
+  readonly promise: Promise<ChatResponse>;
+  readonly release: (value: ChatResponse) => void;
+} {
+  let release = (_value: ChatResponse): void => {
+    throw new Error("Scope response has not been initialized.");
+  };
+  const promise = new Promise<ChatResponse>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+function ScopeActionHarness({
+  initial,
+  updateScopes,
+  focus,
+}: {
+  readonly initial: Chat;
+  readonly updateScopes: typeof updateChatConnectedScopes;
+  readonly focus: () => void;
+}): ReactNode {
+  const [current, setCurrent] = useState(initial);
+  const [draft, setDraft] = useState("Unsent draft");
+  return (
+    <div className="chat-scope-header">
+      <ConnectedScopePill chat={current} onDisconnect={setCurrent} updateScopes={updateScopes} />
+      <MissingEvidenceActions
+        answer={answer("src/validation.ts")}
+        chat={current}
+        onChatChanged={setCurrent}
+        setDraft={setDraft}
+        draft={draft}
+        focusComposer={focus}
+        updateScopes={updateScopes}
+      />
+      <output data-testid="scope-identity">{current.groundingScopeIdentity}</output>
+      <output data-testid="scope-list">{JSON.stringify(current.connectedScopes)}</output>
+      <output data-testid="draft">{draft}</output>
+    </div>
+  );
+}
+
+function delayedScopeTransport(): {
+  readonly initial: Chat;
+  readonly persist: typeof updateChatConnectedScopes;
+  readonly acknowledgeAdd: () => void;
+  readonly disconnectedIdentity: string;
+} {
+  const initial: Chat = { ...chat, groundingScopeIdentity: "gsi-v1:" + "a".repeat(64) };
+  const pending = scopeResponse();
+  let current = initial;
+  let added: ChatResponse | undefined;
+  const disconnectedIdentity = "gsi-v1:" + "c".repeat(64);
+  const persist = vi
+    .fn<typeof updateChatConnectedScopes>()
+    .mockImplementation(async (_id, scopes, identity) => {
+      if (identity !== current.groundingScopeIdentity) {
+        throw new ApiError("GROUNDING_SCOPE_CHANGED", "The sources changed.", 409);
+      }
+      current = {
+        ...current,
+        connectedScopes: scopes ?? undefined,
+        groundingScopeIdentity:
+          added === undefined ? "gsi-v1:" + "b".repeat(64) : disconnectedIdentity,
+        updatedAt: current.updatedAt + 1,
+      };
+      if (added !== undefined) return { chat: current };
+      added = { chat: current };
+      return pending.promise;
+    });
+  vi.mocked(fetchChats).mockImplementation(async () => ({ chats: [current] }));
+  return {
+    initial,
+    persist,
+    disconnectedIdentity,
+    acknowledgeAdd: (): void => {
+      if (added === undefined) throw new Error("No Add-file request was sent.");
+      pending.release(added);
+    },
+  };
+}
+
+async function disconnectFolder(): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: /^Disconnect Folder:/ }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /^Disconnect Folder:/ })).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    ),
+  );
+}
+
+describe("missing-evidence scope acknowledgements", () => {
+  it.each(["scope", "draft"] as const)(
+    "preserves the %s after a newer Disconnect precedes the delayed Add-file reply",
+    async (observable) => {
+      const transport = delayedScopeTransport();
+      const focus = vi.fn();
+      render(
+        <ScopeActionHarness
+          initial={transport.initial}
+          updateScopes={transport.persist}
+          focus={focus}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Add file to scope" }));
+      await waitFor(() => expect(transport.persist).toHaveBeenCalledTimes(1));
+      await disconnectFolder();
+      expect(fetchChats).toHaveBeenCalledExactlyOnceWith(
+        chat.projectPath,
+        expect.any(String),
+        chat.id,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Disconnect Folder:/ }));
+      await waitFor(() =>
+        expect(screen.getByTestId("scope-identity")).toHaveTextContent(
+          transport.disconnectedIdentity,
+        ),
+      );
+      const acknowledgedScopes = screen.getByTestId("scope-list").textContent;
+      await act(async () => transport.acknowledgeAdd());
+      if (observable === "draft") {
+        expect(screen.getByTestId("draft")).toHaveTextContent(/^Unsent draft$/);
+      }
+      expect(screen.getByTestId("scope-identity")).toHaveTextContent(
+        transport.disconnectedIdentity,
+      );
+      expect(screen.getByTestId("scope-list").textContent).toBe(acknowledgedScopes);
+      expect(screen.queryByRole("button", { name: /^Disconnect Folder:/ })).toBeNull();
+      expect(screen.getByTestId("draft")).toHaveTextContent(/^Unsent draft$/);
+      expect(focus).not.toHaveBeenCalled();
+      expect(reportScopeNotice).not.toHaveBeenCalled();
+    },
+  );
+
+  it("adopts the initial successful Add-file reply and appends one focused unsent follow-up", async () => {
+    const transport = delayedScopeTransport();
+    const focus = vi.fn();
+    render(
+      <ScopeActionHarness
+        initial={transport.initial}
+        updateScopes={transport.persist}
+        focus={focus}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add file to scope" }));
+    await waitFor(() => expect(transport.persist).toHaveBeenCalledTimes(1));
+    await act(async () => transport.acknowledgeAdd());
+    expect(screen.getByTestId("scope-identity")).toHaveTextContent("gsi-v1:" + "b".repeat(64));
+    expect(screen.getByTestId("draft")).toHaveTextContent("Unsent draft");
+    expect(screen.getByTestId("draft")).toHaveTextContent("@src/validation.ts");
+    expect(focus).toHaveBeenCalledOnce();
+    expect(reportScopeNotice).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the newer Disconnect when Add-file is acknowledged in normal request order", async () => {
+    const transport = delayedScopeTransport();
+    const focus = vi.fn();
+    render(
+      <ScopeActionHarness
+        initial={transport.initial}
+        updateScopes={transport.persist}
+        focus={focus}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add file to scope" }));
+    await waitFor(() => expect(transport.persist).toHaveBeenCalledTimes(1));
+    await act(async () => transport.acknowledgeAdd());
+    const acknowledgedDraft = screen.getByTestId("draft").textContent;
+    fireEvent.click(screen.getByRole("button", { name: /^Disconnect Folder:/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("scope-identity")).toHaveTextContent(
+        transport.disconnectedIdentity,
+      ),
+    );
+    expect(screen.queryByRole("button", { name: /^Disconnect Folder:/ })).toBeNull();
+    expect(screen.getByTestId("draft").textContent).toBe(acknowledgedDraft);
+    expect(focus).toHaveBeenCalledOnce();
+    expect(fetchChats).not.toHaveBeenCalled();
+  });
+});
 
 describe("declared missing evidence", () => {
   it("uses the sole remaining eligible root after an acknowledged two-to-one transition", async () => {
