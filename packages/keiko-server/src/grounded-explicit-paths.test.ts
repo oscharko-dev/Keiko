@@ -147,6 +147,23 @@ describe("query-named explicit path admission", () => {
     expect(output.pack.files.map((file) => file.scopePath)).toEqual([path]);
   });
 
+  it.each(["ignored/selected.ts", "selected.ts"])(
+    "reports a human-selected ignored file as admitted when named: %s",
+    async (name) => {
+      const path = "ignored/selected.ts";
+      const { output, log } = await retrieve(`Explain ${name}`, {
+        files: { [path]: "export const selectedFact = 73;\n" },
+        kind: "files",
+        relativePaths: [path],
+      });
+      expect(output.pack.files.map((file) => file.scopePath)).toEqual([path]);
+      expect(output.pack.omitted).not.toContainEqual(expect.objectContaining({ scopePath: path }));
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+      ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
+    },
+  );
+
   it("reports unread admitted explicit files under a finite read budget", async () => {
     const other = "src/Form/other/validation.ts";
     const { output, log } = await retrieve(`Why do ${TARGET} and ${other} fail?`, {
