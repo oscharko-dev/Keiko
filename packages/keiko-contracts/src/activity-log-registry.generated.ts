@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e236a3b029d0acdd87e017bfb402bc91696516d716db5202efb42b1f81031c36" as const;
+  "33fa657e46bba5b1124b088c2fa21485bfe4a6150f3dfa4b2c7bdb5beb232c3d" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13141,6 +13141,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "absoluteFloorPermille",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "addressedBasenameDedupDemotedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "basenameCollisionGroupCount",
               type: "integer",
               dataClass: "count",
@@ -13150,6 +13162,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "basenameDedupDemotedCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
               required: false,
             },
             {
@@ -13165,6 +13183,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "floorReferenceKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "keepOneFallbackApplied",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "pathSegmentSignalPresentCount",
               type: "integer",
               dataClass: "count",
@@ -13177,10 +13219,52 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "relativeFloorPermille",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "rerankFailedCalls",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reranked",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "rerankerCandidateCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "rerankerDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "rerankerDocumentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "scopeIdentitySha256",
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "selectionConfidence",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "stackTraceExternalFrameCount",
@@ -13194,15 +13278,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "count",
               required: false,
             },
+            {
+              name: "strongestOrdinaryScorePermille",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
           ],
-          evidenceClasses: ["completeness-state", "count", "digest", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: [
             "search.connected-context.selection-details.line",
             "search.connected-context.path-ranking.line",
+            "search.connected-context.selection-quality.line",
           ],
           replayReferences: [],
           missingObligations: [],

@@ -442,6 +442,11 @@ system that exists, never beside it:
   selection uses the final six available source-detail fields. Additional selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
+  Selection-details records calibrated absolute/ordinary relative floors, the low-confidence
+  keep-one state, and pre-cut reranker disposition/failed-call counts. Addressed-file demotion
+  remains separate from healthy unaddressed basename diversity; safe reranker failure frames and
+  causes use the existing failure-class contract. Pack, prompt, wire, and log share the same
+  high/low selection vocabulary and actual observed scope/semantic dispositions.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
