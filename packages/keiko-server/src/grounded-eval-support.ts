@@ -21,6 +21,8 @@ import {
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
 import { createRunRegistry } from "./runs.js";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 
@@ -208,6 +210,7 @@ async function materializeConnectedFixture(
 }
 
 async function initializeConnectedFixtureRepository(root: string): Promise<void> {
+  const runner = observedGitRunner(defaultGitProcessRunner, processServerLogSink(), undefined);
   const commands = [
     ["init", "--quiet", "--initial-branch=fixture", "--template="],
     ["add", "--", "."],
@@ -226,7 +229,7 @@ async function initializeConnectedFixtureRepository(root: string): Promise<void>
     ],
   ];
   for (const args of commands) {
-    const result = await defaultGitProcessRunner(args, {
+    const result = await runner(args, {
       cwd: root,
       maxBytes: 65_536,
       timeoutMs: 3_000,

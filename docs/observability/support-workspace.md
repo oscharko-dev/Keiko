@@ -213,6 +213,13 @@ report availability reason. Unknown facts are omitted rather than inferred from 
    delivery to synthesis. The first and second prompts retain the original source/query identities
    and use `followUpPass` 0 and 1 even when the selection fingerprint changes. An `answered`
    follow-up can still carry an uncited-answer warning; this warning does not grant another call.
+   For a deliberately source-free answer, only `search.answer.assessed` with `policy: allowed`,
+   `outcome: assessment-only`, zero `sourceBackedChars`, a nonempty assessment and
+   `phase: accepted-final` can dispose incidental selection or empty-semantic findings. It must
+   match the actual process, correlation, scope/query digests and witnessed request lifecycle.
+   Candidate repair output, missing starts, overlapping requests and later partial records do not
+   inherit accepted assessment authority. Source-required, explicit rejection, unread declaration
+   and unresolved follow-up findings remain meaningful even if learned knowledge was also returned.
    `--emit-fixture PATH` prepares
    an existing safe gateway replay fixture and never overwrites a target. Follow the
    [red/green reproduction recipe](reproduction-harness.md); no user-authored reproduction text
