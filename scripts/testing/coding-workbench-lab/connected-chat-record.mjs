@@ -244,9 +244,11 @@ function checkpointObservation(binding, result, capture, checkpoint, inspected) 
     scopeUnchanged: true,
     contextStatusBound: true,
     chatIdSha256: createHash("sha256").update(binding.chatId).digest("hex"),
+    modelIdSha256: createHash("sha256").update(binding.modelId).digest("hex"),
     requestQuestionSha256: createHash("sha256").update(binding.question).digest("hex"),
     groundingScopeIdentity: binding.scopeIdentityAfter,
     manifestSha256: createHash("sha256").update(source.json).digest("hex"),
+    checkpointRecordSha256: createHash("sha256").update(JSON.stringify(checkpoint)).digest("hex"),
     requestStartedAt: binding.startedAt,
     requestFinishedAt: binding.finishedAt,
     manifestStartedAt: manifest.run.startedAt,
@@ -259,6 +261,37 @@ function checkpointObservation(binding, result, capture, checkpoint, inspected) 
     foldedItems: capture.foldedItems,
     retainedItems: capture.retainedItems,
     ...checkpointMetrics(checkpoint, result),
+  };
+}
+
+/** Compare verified persisted observations; never treat pending meters or authored notes as proof. */
+export function historyCheckpointContinuity(previous, current) {
+  if (previous?.disposition !== "observed" || current?.disposition !== "observed")
+    return { disposition: "unobserved", cause: "checkpoint-unobserved" };
+  const identity = [
+    "chatIdSha256",
+    "modelIdSha256",
+    "groundingScopeIdentity",
+    "contextWindowTokens",
+    "effectiveInputBudgetTokens",
+  ];
+  if (identity.some((field) => previous[field] === undefined || previous[field] !== current[field]))
+    return { disposition: "unobserved", cause: "checkpoint-binding-changed" };
+  const boundary = [
+    "throughMessageIdSha256",
+    "historyRevision",
+    "itemsBefore",
+    "tokensBefore",
+    "checkpointRecordSha256",
+  ];
+  if (boundary.some((field) => previous[field] === undefined || current[field] === undefined))
+    return { disposition: "unobserved", cause: "checkpoint-boundary-unobserved" };
+  return {
+    disposition: boundary.every(
+      (field) => previous[field] !== undefined && previous[field] === current[field],
+    )
+      ? "same-checkpoint"
+      : "changed-checkpoint",
   };
 }
 

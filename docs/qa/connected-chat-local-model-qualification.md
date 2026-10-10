@@ -25,7 +25,7 @@ binding uses the canonical real path. No scope change occurs within a campaign.
 | ------------ | ----- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `customer`   | 5     | Canonical incident fixture from `check-retrieval-quality.mjs` | Trace → German follow-up → explicit nested file → basename → English orientation; actual fresh reads, supplied citations, honest declarations/repair and support sufficiency.                                                  |
 | `knowledge`  | 8     | Real large Keiko checkout                                     | Production retrieval pipeline and original budgets → general decision advice in EN/DE → mixed source facts and recommendations → return to an explicit implementation file → freshness limits and an operational evidence gap. |
-| `compaction` | 3     | Real large Keiko checkout                                     | Actual cited source answer → marked synthetic user-history padding → actual general answer → actual source return, with persisted compaction evidence and unchanged scope.                                                     |
+| `compaction` | 6     | Real large Keiko checkout                                     | Actual cited source answer → two authored preference notes with real model acknowledgements → verified persisted checkpoint → general answer → mixed answer → source return, with unchanged scope.                             |
 | `manual`     | 8     | Existing 100,000-file non-Git HTML folder                     | Original content-only late-target query → repeat → original entity query → depth-72 exact path → same-chat follow-up → general learned knowledge → mixed authority → source return.                                            |
 
 The case catalog contains domain-neutral learned-knowledge questions. It does not select a product
@@ -35,12 +35,23 @@ supplied evidence. Treat an unsupported repository assertion as a finding, even 
 sounds plausible. Assess mixed answers against the current cited implementation, rather than
 checking wording against an expected sentence.
 
-Compaction padding consists of at most 120 user messages, each 8,192 ASCII bytes (983,040 bytes
-total), appended through the existing authenticated message API. Every message explicitly says
-it is synthetic qualification context and neither repository evidence nor a model response. No
-assistant message is injected or changed. This input bounds the experiment; it does not prove
-compaction by itself. If the actual compaction counters/evidence do not show compaction, record that
-state as unobserved instead of claiming coverage or increasing the input automatically.
+The campaigns schedule 25 qualification questions and two compaction setup turns, 27 turns total.
+The setup notes contain authored working preferences, no repository facts, filenames, code, or
+model responses. The driver sizes each note using the actual configured model's canonical
+`countContextTokens` and `groundedHistoryLaneTokens`, after checking the authenticated context
+status agrees with that profile. Each note targets 55% of the unchanged conversation lane: about
+4,400 charged tokens when that lane is 8,000. It requests a real acknowledgement of at most twenty
+words through the same grounded API, then waits for successful completion and persisted messages.
+No assistant message is injected. These completed units can be compacted while the current user
+message stays protected; user-only padding cannot establish that behavior.
+
+After the second actual setup response, the canonical checkpoint, persisted boundary, model,
+context budget and unchanged scope must be observed before the driver sends General, Mixed and
+Source-return. Each follow-up records whether the verified checkpoint stayed identical or changed;
+a new source manifest alone does not change the checkpoint. A missing or mismatched checkpoint
+stops the sequence as unobserved. No third seed round, config change or budget increase is allowed.
+The 27 scheduled turns are not a measured provider-call total: physical and completed synthesis,
+retry, repair, embedding and entailment work are counted from their actual producers and logs.
 
 ## Prepare and execute
 
@@ -120,9 +131,11 @@ canonical checkpoint reader, using the request's actual `chat.continuity.capture
 and checks its coverage boundary against persisted messages from that same chat. The actual
 request user message and returned assistant identity, unchanged acknowledged grounding identity,
 manifest timing/model, and authenticated context-status compaction counts must agree. Retain only
-hashes, counts, times and closed dispositions, including whether a model-summary field was present;
-do not infer model authorship merely from a deterministic history digest. Missing, mismatched or
-unreadable checkpoints remain `unobserved` with a cause. Padding and a pending-compaction meter
+hashes, counts, times and closed dispositions, including whether a model-summary field was present.
+The validated checkpoint record's SHA-256 is separate from its optional producer `summaryRefHash`
+and the source manifest's digest. Do not invent a missing summary hash or infer model authorship
+merely from deterministic history compaction. Missing, mismatched or unreadable checkpoints remain
+`unobserved` with a cause. Authored notes and a pending-compaction meter
 projection alone do not establish persisted compaction.
 
 Read the actual writer/formatter output through the canonical validated support reader. Preserve
