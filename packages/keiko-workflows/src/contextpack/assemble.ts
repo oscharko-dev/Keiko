@@ -325,9 +325,14 @@ function compactIdentifiedContextWindows(
   };
   const merged = mergeContextWindows(normalizeExcerptWindows(source));
   const windows = merged.windows;
-  // Prompt admission ranks the excerpt carrying the bytes; metadata-only siblings cannot lend
-  // it their score later. Preserve every edge, but assign each shared body to its strongest atom.
-  const rankedAtoms = [...atoms].sort((left, right) => right.score - left.score);
+  // Located evidence owns a shared body before unlocated discovery metadata, so a path-only
+  // score cannot replace the actual window's relevance during prompt fitting. Preserve every
+  // edge and assign shared bodies to the strongest located atom; standalone listings still fall back.
+  const rankedAtoms = [...atoms].sort(
+    (left, right) =>
+      Number(left.lineRange === undefined) - Number(right.lineRange === undefined) ||
+      right.score - left.score,
+  );
   for (const atom of rankedAtoms) {
     for (const window of contextWindowsForAtom(windows, atom)) {
       appendCompactContextWindow(state, atom, window, maxBytes, scopeId);

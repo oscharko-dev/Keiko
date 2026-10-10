@@ -747,9 +747,11 @@ Assembly compares requested ranges against the compacted bytes actually retained
 missing ranges, truncated windows and incompatible overlapping source views with aggregate counts,
 without one prompt marker per file. A clipped trailing newline does not authorize the next unsent
 line. Structural edges retain independent identities while a shared source body is compacted and
-charged once. The highest-scoring contributing atom carries that body, so downstream prompt ranking
-retains its actual relevance even when a weaker edge arrived first; metadata-only siblings keep
-their original scores. Different view identities merge only when their overlapping source lines agree;
+charged once. The highest-scoring contributing located atom carries that body, so downstream prompt
+ranking retains its actual relevance even when a weaker edge arrived first. Unlocated discovery
+metadata cannot lend its path score to a separately located source window; it remains the fallback
+when no located owner exists. Metadata-only siblings keep their original scores.
+Different view identities merge only when their overlapping source lines agree;
 non-overlapping partial views never establish continuity by themselves.
 
 Canonical omission order and cache identity are independent of caller ordering. A successful
