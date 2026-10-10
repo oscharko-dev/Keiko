@@ -4,7 +4,7 @@ import { memFs } from "./_memfs.js";
 import type { WorkspaceFs } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, findFiles, searchText, type SearchScope } from "./repoSearch.js";
 import { createRequestLocalSearchTextSessionPool } from "./repoSearch.js";
-import { createWorkspaceIndex } from "./workspaceIndex.js";
+import { createWorkspaceIndex, workspaceCandidatePathPolicyFingerprint } from "./workspaceIndex.js";
 
 const EXCLUDED = ["src/exclude*.ts", "src/exclude?.ts", "src/exclude[0].ts"];
 const ALLOWED = ["src/exclude0.ts", "src/exclude1.ts", "src/visible.ts"];
@@ -82,6 +82,15 @@ function expectEligible(result: Awaited<ReturnType<typeof searchText>>, reads: s
 }
 
 describe("exact candidate exclusions on the existing search policy", () => {
+  it("preserves existing policy identity when exact exclusions are absent or empty", () => {
+    const policy = { include: ["src/**"], exclude: ["**/*.test.ts"] };
+    expect(workspaceCandidatePathPolicyFingerprint({ ...policy, excludeLiteralPaths: [] })).toBe(
+      workspaceCandidatePathPolicyFingerprint(policy),
+    );
+    expect(
+      workspaceCandidatePathPolicyFingerprint({ ...policy, excludeLiteralPaths: EXCLUDED }),
+    ).not.toBe(workspaceCandidatePathPolicyFingerprint(policy));
+  });
   it.each([null, 20])(
     "excludes literal metacharacters before body reads at cap=%s",
     async (cap) => {

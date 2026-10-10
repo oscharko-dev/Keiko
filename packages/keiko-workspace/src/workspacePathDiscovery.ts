@@ -208,11 +208,14 @@ async function streamDiscovery(
 export async function discoverWorkspacePaths(
   workspace: WorkspaceInfo,
   request: unknown,
-  control: StructuralExecutionControl,
+  control: StructuralExecutionControl & { readonly exactBasename?: string | undefined },
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): Promise<WorkspacePathDiscoveryResult> {
   const selected = validateRequest(request);
-  const matches = pathMatcher(selected);
+  const matches =
+    control.exactBasename === undefined
+      ? pathMatcher(selected)
+      : (path: string): boolean => path.split("/").at(-1) === control.exactBasename;
   const retained = new RetainedAtomHeap<WorkspacePathDiscoveryEntry>(
     selected.maxResults,
     (left, right) => compareStrings(left.relativePath, right.relativePath),

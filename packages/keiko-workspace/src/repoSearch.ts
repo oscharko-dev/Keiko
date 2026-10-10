@@ -128,6 +128,7 @@ import {
   resolveContainedWorkspaceIndexDirectory,
   workspaceIndexCandidateSet,
   type PreparedWorkspaceIndexEntry,
+  type WorkspaceIndexCandidatePathPolicy,
   type PreparedWorkspaceIndexSnapshot,
   type WorkspaceIndexDirectoryDelta,
   type WorkspaceIndexDirectorySnapshot,
@@ -226,12 +227,7 @@ interface FacadeDeps {
   // Internal absolute request ceiling. Public callers normally use elapsedMsMax; the request-local
   // structural context supplies this so cache hits cannot reset the parent request clock.
   readonly deadlineAtMs?: number | undefined;
-  readonly candidatePathGlobs?:
-    | {
-        readonly include: readonly string[];
-        readonly exclude: readonly string[];
-      }
-    | undefined;
+  readonly candidatePathGlobs?: WorkspaceIndexCandidatePathPolicy | undefined;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
@@ -647,22 +643,30 @@ function buildSearchTextRunner(
   };
 }
 
+function hasCandidatePathFilters(globs: FacadeDeps["candidatePathGlobs"]): boolean {
+  return (
+    globs !== undefined &&
+    (globs.include.length > 0 ||
+      globs.exclude.length > 0 ||
+      (globs.excludeLiteralPaths?.length ?? 0) > 0)
+  );
+}
+
 function buildCandidatePathPredicate(
   globs: FacadeDeps["candidatePathGlobs"],
   sourceExtensions: readonly string[] = [],
 ): ((scopePath: string) => boolean) | undefined {
-  if (
-    sourceExtensions.length === 0 &&
-    (globs === undefined || (globs.include.length === 0 && globs.exclude.length === 0))
-  ) {
+  if (sourceExtensions.length === 0 && !hasCandidatePathFilters(globs)) {
     return undefined;
   }
   const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, true));
   const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, true));
+  const literalExcludes = new Set(globs?.excludeLiteralPaths ?? []);
   return (scopePath: string): boolean => {
     const included = includes.length === 0 || includes.some((pattern) => pattern.test(scopePath));
     return (
       included &&
+      !literalExcludes.has(scopePath) &&
       !excludes.some((pattern) => pattern.test(scopePath)) &&
       (sourceExtensions.length === 0 || sourceInspectionPathMatches(scopePath, sourceExtensions))
     );
@@ -3237,6 +3241,7 @@ interface FileListingRescueInputs {
   readonly startMs: number;
   readonly deadlineAtMs?: number | undefined;
   readonly candidateSetFor?: CandidateSetProvider | undefined;
+  readonly candidatePathPredicate?: SearchTextRunner["candidatePathPredicate"];
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -3268,16 +3273,24 @@ function gatherLowValueFileCandidates(
   policy: SearchPolicy,
 ): CandidateSet {
   if (inputs.candidateSetFor !== undefined) {
-    return inputs.candidateSetFor(inputs.query, limits, policy);
+    return inputs.candidateSetFor(inputs.query, limits, policy, inputs.candidatePathPredicate);
   }
-  return gatherCandidates(ctx.scope, inputs.query, limits, inputs.fs, policy, undefined, {
-    nowMs: ctx.nowMs,
-    deadlineAtMs: Math.min(
-      inputs.deadlineAtMs ?? inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
-      inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
-    ),
-    ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
-  });
+  return gatherCandidates(
+    ctx.scope,
+    inputs.query,
+    limits,
+    inputs.fs,
+    policy,
+    inputs.candidatePathPredicate,
+    {
+      nowMs: ctx.nowMs,
+      deadlineAtMs: Math.min(
+        inputs.deadlineAtMs ?? inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
+        inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
+      ),
+      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+    },
+  );
 }
 
 function rescueLowValueFileListings(
@@ -3364,6 +3377,7 @@ interface FindFilesExecutionInputs {
   readonly nowMs: () => number;
   readonly hints: SearchHints | undefined;
   readonly candidateSetFor: CandidateSetProvider | undefined;
+  readonly candidatePathPredicate: SearchTextRunner["candidatePathPredicate"];
   readonly deadlineAtMs: number | undefined;
   readonly signal: AbortSignal | undefined;
   readonly startMs: number;
@@ -3376,7 +3390,7 @@ function findFilesCandidateSet(
   const { scope, query, limits, fs, nowMs, startMs, deadlineAtMs, signal, candidateSetFor } =
     inputs;
   return candidateSetFor === undefined
-    ? gatherCandidates(scope, query, limits, fs, policy, undefined, {
+    ? gatherCandidates(scope, query, limits, fs, policy, inputs.candidatePathPredicate, {
         nowMs,
         deadlineAtMs: Math.min(
           deadlineAtMs ?? startMs + (limits.elapsedMsMax ?? Infinity),
@@ -3384,7 +3398,7 @@ function findFilesCandidateSet(
         ),
         ...(signal === undefined ? {} : { signal }),
       })
-    : candidateSetFor(query, limits, policy);
+    : candidateSetFor(query, limits, policy, inputs.candidatePathPredicate);
 }
 
 function effectiveFindFilesLimits(query: RetrievalQuery, limits: SearchLimits): SearchLimits {
@@ -3420,6 +3434,7 @@ function executeFindFilesSync(inputs: FindFilesExecutionInputs): SearchResult {
     startMs,
     deadlineAtMs,
     candidateSetFor: inputs.candidateSetFor,
+    candidatePathPredicate: inputs.candidatePathPredicate,
     signal,
   });
 }
@@ -3487,6 +3502,7 @@ interface CompleteFindFilesInputs {
   readonly startMs: number;
   readonly deadlineAtMs: number | undefined;
   readonly candidateSetFor: CandidateSetProvider | undefined;
+  readonly candidatePathPredicate: SearchTextRunner["candidatePathPredicate"];
   readonly signal: AbortSignal | undefined;
 }
 
@@ -3514,6 +3530,9 @@ function completeFindFilesSearch(
     startMs: inputs.startMs,
     ...(inputs.deadlineAtMs === undefined ? {} : { deadlineAtMs: inputs.deadlineAtMs }),
     ...(inputs.candidateSetFor === undefined ? {} : { candidateSetFor: inputs.candidateSetFor }),
+    ...(inputs.candidatePathPredicate === undefined
+      ? {}
+      : { candidatePathPredicate: inputs.candidatePathPredicate }),
     ...(inputs.signal !== undefined ? { signal: inputs.signal } : {}),
   });
   return fileListingResult(
@@ -3593,6 +3612,7 @@ export async function findFiles(
       nowMs,
       hints: deps.searchHints,
       candidateSetFor: deps.candidateSetFor,
+      candidatePathPredicate: buildCandidatePathPredicate(deps.candidatePathGlobs),
       deadlineAtMs: deps.deadlineAtMs,
       signal: deps.signal,
     }),
