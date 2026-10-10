@@ -19,6 +19,8 @@ describe("named source clauses beside explicitly general advice", () => {
     `Explain how ${FILE} applies the operator's policy, with current implementation citations. Then separately give a general recommendation for communicating uncertainty. Keep it under 150 words.`,
     `Read ${FILE}; independently suggest general advice about organizing decisions.`,
     `Read ${FILE}. Separately provide general guidance on arranging work.`,
+    `Read ${FILE}. Give a general recommendation for how your team should compare alternatives before writing files.`,
+    `Read ${FILE}. Give a general recommendation about your preferences for writing files.`,
     `Erkläre wie ${FILE} arbeitet. Gib getrennt eine allgemeine Empfehlung zum Vergleichen von Möglichkeiten.`,
   ])("retains only positively requested source targets: %s", (text) => {
     expect(decision(text).namedFileOnly).toBe(true);

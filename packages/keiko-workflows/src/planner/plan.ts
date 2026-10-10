@@ -334,7 +334,7 @@ export interface QueryTargetDecision {
   readonly targets: readonly SearchAnchor[];
   readonly definitionSymbol: string | undefined;
   readonly definitionRequested: boolean;
-  /** A completely parsed query-only file request; unknown continuations cannot narrow discovery. */
+  /** Every parsed source clause binds a query-named file; unknown continuations stay broad. */
   readonly namedFileOnly?: true;
   /** A completely parsed self-contained conversation or general-advice request, without source work. */
   readonly conversationOnly?: true;
@@ -517,8 +517,38 @@ const GENERAL_ADVICE_REQUEST_RE =
   /^(?:(?:please|bitte) )?(?:(?:then|dann) )?(?:(?:separately|independently|getrennt|separat|unabhängig) )?(?:(?:suggest|give|provide|recommend) (?:a )?(?:(?:short|brief|concise) )?general (?:process|method|approach|guidance|advice|principles|recommendation)|(?:gib|empfiehl|beschreibe) (?:(?:getrennt|separat|unabhängig) )?(?:(?:eine|einen) )?(?:kurze[nr]? )?allgemeine[nr]? (?:vorgehensweise|methode|ansatz|hinweise|empfehlung))(?: (?:for|about|on|zu|zum|zur|über) (.+?))?(?:, (?:under|below|within|unter) \d{1,6} (?:words|wörtern|worte))?$/iu;
 const GENERAL_ADVICE_QUESTION_RE =
   /^(?:how (?:should|could|can) (?:a|an|one|we)|wie (?:sollte|könnte|kann) (?:man|wir|ein|eine)) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu;
-const SOURCE_CONSTRAINED_ADVICE_RE =
-  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b|\b(?:this|these|that|those|the|our|my)\s+(?:(?:attached|connected|selected|supplied)\s+)?(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence|code|implementations?)\b|\b(?:dieses?|diese[nr]?|das|die|der|unser[e]?|mein[e]?)\s+(?:(?:verbundenen?|ausgewählten?|angehängten?)\s+)?(?:handbuch|handbücher|quellen?|dateien?|ordner|dokumente?|repository|code|implementierungen?)\b/iu;
+const SOURCE_ADVICE_ATTRIBUTION_RE =
+  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b/iu;
+const SOURCE_ADVICE_DETERMINER_RE =
+  /^(?:the|this|these|that|those|our|my|your|his|her|its|their|die|das|der|diese[nrs]?|unser[e]?|mein[e]?|dein[e]?|euer[e]?|ihr[e]?)$/iu;
+const SOURCE_ADVICE_NOUN_RE =
+  /^(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence|code|implementations?|handbuch|handbücher|quellen?|dateien?|ordner|dokumente?|repository|implementierungen?)$/iu;
+const SOURCE_ADVICE_TOKEN_RE =
+  /[\p{L}\p{M}\p{N}_-]+(?:['’][\p{L}\p{M}\p{N}_-]+)*|[^\p{L}\p{M}\p{N}\s_-]/gu;
+const SOURCE_ADVICE_BOUNDARY_RE =
+  /^(?:am|is|are|was|were|be|been|being|do|does|did|have|has|had|may|might|shall|to|for|from|with|without|before|after|during|on|in|at|into|over|under|by|about|against|between|through|bin|bist|ist|sind|war|waren|sein|habe|hat|haben|können|könnten|müssen|werden|würden|zu|für|von|mit|ohne|vor|nach|während|auf|an|über|unter|bei|gegen|zwischen|durch)$/iu;
+
+/** Source modifiers stay inside their noun phrase, never across a predicate or preposition. */
+function sourceConstrainedAdvice(clause: string): boolean {
+  if (SOURCE_ADVICE_ATTRIBUTION_RE.test(clause)) return true;
+  let determined = false;
+  for (const match of clause.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
+    const token = match[0];
+    if (determined && SOURCE_ADVICE_NOUN_RE.test(token)) return true;
+    if (SOURCE_ADVICE_DETERMINER_RE.test(token) || /['’]s$/u.test(token)) determined = true;
+    else if (sourceAdviceBoundary(token)) determined = false;
+  }
+  return false;
+}
+
+function sourceAdviceBoundary(token: string): boolean {
+  return (
+    SOURCE_ADVICE_BOUNDARY_RE.test(token) ||
+    CONTEXT_REQUEST_HEADS.has(token) ||
+    REQUEST_COMMAND_RE.test(token) ||
+    !/^[\p{L}\p{M}\p{N}_-]/u.test(token)
+  );
+}
 
 function generalAdviceClause(clause: string): boolean {
   const normalized = normalizedConversationClause(clause);
@@ -526,7 +556,7 @@ function generalAdviceClause(clause: string): boolean {
   return (
     match !== null &&
     !normalized.includes("\0") &&
-    !SOURCE_CONSTRAINED_ADVICE_RE.test(normalized) &&
+    !sourceConstrainedAdvice(normalized) &&
     !independentContextRequest(match[1] ?? "")
   );
 }
@@ -537,7 +567,7 @@ function generalAdviceRequest(clauses: readonly string[]): boolean {
   return (
     GENERAL_ADVICE_QUESTION_RE.test(question) &&
     !INDEPENDENT_CONTEXT_COMMAND_RE.test(question) &&
-    !SOURCE_CONSTRAINED_ADVICE_RE.test(question)
+    !sourceConstrainedAdvice(question)
   );
 }
 
