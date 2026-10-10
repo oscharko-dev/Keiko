@@ -719,18 +719,6 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     return this.importGraphPromise;
   }
 
-  private failedEndpointGraph(error: unknown): Promise<EndpointContractGraph> {
-    if (this.endpointGraphState?.key === "unavailable") return this.endpointGraphState.promise;
-    this.endpointGraphBuildCount += 1;
-    const reason =
-      error instanceof Error
-        ? error
-        : new Error("structural inventory unavailable", { cause: error });
-    const promise = Promise.reject<EndpointContractGraph>(reason);
-    this.endpointGraphState = { key: "unavailable", promise };
-    return promise;
-  }
-
   public endpointContractGraph(
     preferredSourcePaths: readonly string[] = [],
   ): Promise<EndpointContractGraph> {
@@ -738,7 +726,16 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     try {
       candidates = this.candidateSet();
     } catch (error) {
-      return this.failedEndpointGraph(error);
+      if (this.endpointGraphState?.key === "unavailable") return this.endpointGraphState.promise;
+      this.endpointGraphBuildCount += 1;
+      const promise = new Promise<EndpointContractGraph>(
+        (_resolve, reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1]) => {
+          if (error instanceof Error) reject(error);
+          else reject(new Error("structural inventory unavailable", { cause: error }));
+        },
+      );
+      this.endpointGraphState = { key: "unavailable", promise };
+      return promise;
     }
     const preferences = endpointSourcePreferences(candidates, this.limits, preferredSourcePaths);
     const key = JSON.stringify(preferences);

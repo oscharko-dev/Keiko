@@ -354,6 +354,7 @@ describe("StructuralAdapterRequestContext", () => {
     expect(thrownBy(() => context.candidatePaths())).toBe(sharedReason);
     expect(thrownBy(() => context.candidatePaths())).toBe(sharedReason);
     expect(statCalls).toBe(1);
+    expect(context.diagnostics().endpointGraphBuildCount).toBe(1);
   });
 
   it("preserves adapter output when the request-local context replaces direct builders", async () => {
