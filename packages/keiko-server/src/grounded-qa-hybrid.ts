@@ -1,3 +1,4 @@
+import { assistantReferenceExcerptIds } from "./grounded-assistant-referents.js";
 import { mapWithConcurrency } from "./bounded-concurrency.js";
 import {
   caughtGroundedPackValidation,
@@ -377,9 +378,18 @@ function isConnectorCandidate(
 function folderRerankInputs(
   folders: readonly RetrievedFolder[],
   redactor: Redactor,
+  references: HybridGroundedAskCtx["assistantReferents"],
 ): RerankInput<HybridPayload>[] {
   return folders.flatMap((src, index) => {
     const sourceScopeFingerprint = src.sourceScopeFingerprint;
+    const required = new Set(
+      assistantReferenceExcerptIds(
+        src.pack,
+        (references ?? []).filter(
+          (reference) => reference.sourceScopeFingerprint === sourceScopeFingerprint,
+        ),
+      ),
+    );
     return src.pack.files.flatMap((file) =>
       file.excerpts.map((excerpt) => ({
         kind: "folder" as const,
@@ -387,6 +397,9 @@ function folderRerankInputs(
         engineScore: excerpt.atom.score,
         sourceLabel: redactString(redactor, src.label),
         tieKey: excerpt.atom.stableId,
+        ...(required.has(excerpt.atom.stableId)
+          ? { continuityReferenceKey: `${sourceScopeFingerprint}:${excerpt.atom.stableId}` }
+          : {}),
         payload: {
           kind: "folder" as const,
           scopePath: excerpt.atom.scopePath,
@@ -498,7 +511,7 @@ function buildUnifiedSelection(
   const limits = currentGroundingLimits(ctx.deps);
   const { redactor } = ctx.deps;
   const inputs: RerankInput<HybridPayload>[] = [
-    ...folderRerankInputs(folders, redactor),
+    ...folderRerankInputs(folders, redactor, ctx.assistantReferents),
     ...connectorRerankInputs(
       connectors,
       store,
@@ -566,6 +579,7 @@ async function rerankHybridSelection(
     },
     applyScore: withModelRerankScore,
     fallbackMode: "slice-topN",
+    requiredCandidateKey: (candidate) => candidate.continuityReferenceKey,
   });
   return { selected: withFinalMarkers(result.selected), diagnostics: result.diagnostics };
 }
@@ -673,7 +687,7 @@ async function retrieveFolderIntoSlot(
         query,
         workspaceRoot: scope.workspaceRoot,
         budget,
-        ...groundedRetrievalContinuityFields(ctx),
+        ...groundedRetrievalContinuityFields(ctx, scope, cs, ctx.sourceScopeFingerprints),
         ...(workspaceFs === undefined ? {} : { workspaceFs }),
       },
       ctx.signal,

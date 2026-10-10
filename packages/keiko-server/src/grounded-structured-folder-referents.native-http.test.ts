@@ -26,6 +26,7 @@ import {
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { assistantRetrievalReferents } from "./grounded-assistant-referents.js";
 
 const MODEL = "structured-folder-referent-native-proof";
 const TARGET = "src/deep/Novel.ts";
@@ -109,7 +110,7 @@ function folderReply(prompt: string, kind: ReplyKind): string {
   if (folder === null) return "<assessment>No current folder evidence was supplied.</assessment>";
   const marker = folder[1] ?? "0";
   const value = fact === AFTER ? "83" : "37";
-  const path = kind === "path" ? ` [source:1|${TARGET}:61]` : "";
+  const path = kind === "path" ? ` [${TARGET}:61]` : "";
   return `The current value is ${value} [${marker}].${path}`;
 }
 
@@ -279,13 +280,16 @@ async function ask(setup: Fixture, content: string): Promise<HybridGroundedAnswe
   return answer;
 }
 
-async function numericHistory(setup: Fixture): Promise<HybridGroundedAnswer> {
+async function numericHistory(
+  setup: Fixture,
+  latest: "path" | "numeric" = "numeric",
+): Promise<HybridGroundedAnswer> {
   const first = await ask(setup, `Explain ${TARGET}:61.`);
   expect(first.citations.some((citation) => citation.scopePath === TARGET)).toBe(true);
-  setup.provider.reply = "numeric";
+  setup.provider.reply = latest;
   const second = await ask(setup, "Explain that.");
   expect(second.citations.some((citation) => citation.scopePath === TARGET)).toBe(true);
-  expect(second.content).not.toContain(TARGET);
+  if (latest === "numeric") expect(second.content).not.toContain(TARGET);
   const reopened = createNodeUiStore(setup.dbPath);
   try {
     expect(reopened.listMessages(setup.chatId).at(-1)?.groundedAnswer).toMatchObject({
@@ -297,7 +301,10 @@ async function numericHistory(setup: Fixture): Promise<HybridGroundedAnswer> {
   return second;
 }
 
-function continuityCounts(setup: Fixture): readonly number[] {
+function continuityCounts(
+  setup: Fixture,
+  field: "continuityReferentCount" | "continuityAdmittedCount" = "continuityReferentCount",
+): readonly number[] {
   const raw = readPersistedActivityLog(join(directory, "state"));
   const analysis = analyzeLogText(raw);
   expect(analysis.evidence.classification).toBe("supported");
@@ -309,7 +316,7 @@ function continuityCounts(setup: Fixture): readonly number[] {
     .filter((record) => record.op === "search.connected-context.selection-details")
     .slice(-sourceCount);
   expect(raw).not.toContain(AFTER);
-  return selections.map((record) => Number(record.continuityReferentCount));
+  return selections.map((record) => Number(record[field]));
 }
 
 function assertFresh(setup: Fixture, answer: HybridGroundedAnswer, referred = true): void {
@@ -319,8 +326,18 @@ function assertFresh(setup: Fixture, answer: HybridGroundedAnswer, referred = tr
   expect(citation?.lineRange?.startLine).toBeLessThanOrEqual(61);
   expect(citation?.lineRange?.endLine).toBeGreaterThanOrEqual(61);
   const referentCount = continuityCounts(setup).reduce((total, count) => total + count, 0);
-  if (referred) expect(referentCount).toBeGreaterThan(0);
-  else expect(referentCount).toBe(0);
+  const admittedCount = continuityCounts(setup, "continuityAdmittedCount").reduce(
+    (total, count) => total + count,
+    0,
+  );
+  if (referred) {
+    expect(referentCount).toBeGreaterThan(0);
+    expect(admittedCount).toBeGreaterThan(0);
+  } else {
+    expect(referentCount).toBe(0);
+    expect(admittedCount).toBe(0);
+  }
+  expect(answer.contextPack.folder.usage.filesRead).toBeGreaterThan(0);
 }
 
 describe("structured folder citations through native follow-up admission", () => {
@@ -333,7 +350,7 @@ describe("structured folder citations through native follow-up admission", () =>
 
   it("preserves the existing prose path citation healthy twin", async () => {
     const setup = await fixture();
-    await ask(setup, `Explain ${TARGET}:61.`);
+    await numericHistory(setup, "path");
     populate("alpha", AFTER);
     setup.provider.reply = "numeric";
     assertFresh(setup, await ask(setup, "Explain that."));
@@ -346,14 +363,21 @@ describe("structured folder citations through native follow-up admission", () =>
     assertFresh(setup, await ask(setup, `Explain ${TARGET}:61 again.`), false);
   });
 
-  it("binds a numeric folder citation to its prior source among same-path roots", async () => {
-    const setup = await fixture(true);
-    await numericHistory(setup);
-    populate("alpha", AFTER);
-    const answer = await ask(setup, "Explain that.");
-    assertFresh(setup, answer);
-    expect(setup.provider.evidence.at(-1)).not.toContain(COLLISION);
-  });
+  it.each(["numeric", "path"] as const)(
+    "binds a %s folder citation to its prior source among same-path roots",
+    async (kind) => {
+      const setup = await fixture(true);
+      const previous = await numericHistory(setup, kind);
+      populate("alpha", AFTER);
+      const answer = await ask(setup, "Explain that.");
+      assertFresh(setup, answer);
+      expect(continuityCounts(setup)).toEqual([1, 0]);
+      expect(continuityCounts(setup, "continuityAdmittedCount")).toEqual([1, 0]);
+      expect(answer.citations.find((citation) => citation.scopePath === TARGET)).toMatchObject({
+        sourceScopeFingerprint: previous.citations[0]?.sourceScopeFingerprint,
+      });
+    },
+  );
 
   it("does not rebind a prior citation to a newly selected same-path root", async () => {
     const setup = await fixture();
@@ -405,7 +429,8 @@ describe("structured folder citations through native follow-up admission", () =>
   it("retains both source-bound same-path hints after repeated first-source citations", async () => {
     const setup = await fixture(true);
     setup.provider.reply = "both";
-    const first = await ask(setup, `Compare ${TARGET}:61 across both connected folders.`);
+    await ask(setup, `Compare ${TARGET}:61 across both connected folders.`);
+    const first = await ask(setup, "Explain that.");
     expect(first.citations).toHaveLength(2);
     const [alpha, beta] = first.citations;
     if (alpha === undefined || beta === undefined)
@@ -421,9 +446,38 @@ describe("structured folder citations through native follow-up admission", () =>
     });
     const second = await ask(setup, "Explain that.");
     expect(continuityCounts(setup)).toEqual([1, 1]);
+    expect(continuityCounts(setup, "continuityAdmittedCount")).toEqual([1, 1]);
     expect(setup.provider.evidence.at(-1)).toContain(BEFORE);
     expect(setup.provider.evidence.at(-1)).toContain(COLLISION);
     expect(second.citations).toHaveLength(2);
     expect(new Set(second.citations.map((item) => item.sourceScopeFingerprint)).size).toBe(2);
+  });
+  it("skips malformed persisted citation containers and entries before retaining valid hints", async () => {
+    const setup = await fixture();
+    setup.provider.reply = "numeric";
+    const answer = await ask(setup, `Explain ${TARGET}:61.`);
+    const message = setup.deps.store.listMessages(setup.chatId).at(-1);
+    if (message === undefined) throw new TypeError("Persisted assistant required");
+    for (const citations of [undefined, null, {}, [null, 1, "invalid", { scopePath: 1 }]]) {
+      setup.deps.store.attachGroundedAnswer(message.id, {
+        ...answer,
+        citations,
+      } as unknown as HybridGroundedAnswer);
+      expect(
+        assistantRetrievalReferents(setup.deps.store.listMessages(setup.chatId)).assistantReferents,
+      ).toEqual([]);
+    }
+    setup.deps.store.attachGroundedAnswer(message.id, {
+      ...answer,
+      citations: [null, { scopePath: TARGET, sourceScopeFingerprint: 1 }, ...answer.citations],
+    } as unknown as HybridGroundedAnswer);
+    expect(
+      assistantRetrievalReferents(setup.deps.store.listMessages(setup.chatId)).assistantReferents,
+    ).toEqual([
+      expect.objectContaining({
+        path: TARGET,
+        sourceScopeFingerprint: answer.citations[0]?.sourceScopeFingerprint,
+      }),
+    ]);
   });
 });

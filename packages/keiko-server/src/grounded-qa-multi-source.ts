@@ -1,3 +1,4 @@
+import { assistantReferenceExcerptIds } from "./grounded-assistant-referents.js";
 import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
@@ -149,6 +150,7 @@ import {
   sizeExclusionLines,
   fitPromptOmissionMetadata,
   withPromptExcerptByteLimit,
+  withPromptExcerptBudget,
   groundedRetrievalContinuityFields,
   type GroundedRetrievalContinuityInput,
 } from "./grounded-qa.js";
@@ -452,6 +454,7 @@ export function mergeContextPackSummaries(
 export interface LabeledPack {
   readonly label: string;
   readonly pack: ConnectedContextPack;
+  readonly requiredEvidenceAtomIds?: readonly string[];
 }
 
 function sourceSection(
@@ -561,7 +564,14 @@ function withMultiSourcePromptExcerptTotalBudget(
         : Math.floor(sourceBudgetBytes(totalExcerptBytes, index, weights) / excerptCount);
     return {
       ...entry,
-      pack: withPromptExcerptByteLimit(entry.pack, perExcerpt),
+      pack: entry.requiredEvidenceAtomIds?.length
+        ? withPromptExcerptBudget(
+            entry.pack,
+            perExcerpt * excerptCount,
+            undefined,
+            entry.requiredEvidenceAtomIds,
+          )
+        : withPromptExcerptByteLimit(entry.pack, perExcerpt),
     };
   });
 }
@@ -1286,7 +1296,7 @@ async function retrieveOneSource(
         query,
         workspaceRoot: scope.workspaceRoot,
         budget,
-        ...groundedRetrievalContinuityFields(ctx),
+        ...groundedRetrievalContinuityFields(ctx, scope, cs, ctx.sourceScopeFingerprints),
         ...(workspaceFs === undefined ? {} : { workspaceFs }),
       },
       ctx.signal,
@@ -1842,6 +1852,20 @@ async function answerMultiSource(
   }
 }
 
+function sourcePromptPack(ctx: MultiSourceAskInput, source: RetrievedSource): LabeledPack {
+  const requiredEvidenceAtomIds = assistantReferenceExcerptIds(
+    source.pack,
+    (ctx.assistantReferents ?? []).filter(
+      (reference) => reference.sourceScopeFingerprint === source.sourceScopeFingerprint,
+    ),
+  );
+  return {
+    label: source.label,
+    pack: source.pack,
+    ...(requiredEvidenceAtomIds.length === 0 ? {} : { requiredEvidenceAtomIds }),
+  };
+}
+
 async function normalizedMultiSourceAnswer(
   ctx: MultiSourceAskInput,
   retrieved: readonly RetrievedSource[],
@@ -1849,7 +1873,7 @@ async function normalizedMultiSourceAnswer(
   const answer = normalizeGroundedAnswerPayload(
     await ctx.answerer(
       ctx.answerContent ?? ctx.content,
-      retrieved.map((source) => ({ label: source.label, pack: source.pack })),
+      retrieved.map((source) => sourcePromptPack(ctx, source)),
     ),
   );
   return normalizeGroundedAnswerAssessment(

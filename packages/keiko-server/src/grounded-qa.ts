@@ -8,7 +8,11 @@ import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
 import { evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
 import type { GroundedAnswerOptions } from "./grounded-orchestrator.js";
 import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { RetrievalIntent, SearchReference } from "@oscharko-dev/keiko-workflows";
+import type { RetrievalIntent } from "@oscharko-dev/keiko-workflows";
+import {
+  assistantReferenceExcerptIds,
+  type AssistantRetrievalReference,
+} from "./grounded-assistant-referents.js";
 import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
@@ -401,24 +405,50 @@ export function mappedWorkspaceError(
 }
 
 export interface GroundedRetrievalContinuityInput {
-  readonly assistantReferents?: readonly SearchReference[] | undefined;
+  readonly assistantReferents?: readonly AssistantRetrievalReference[] | undefined;
   readonly previousRetrievalIntent?: RetrievalIntent | undefined;
   readonly continuityReferentSource?: ContinuityReferentSource | undefined;
 }
 
+function assistantReferencesForSource(
+  references: readonly AssistantRetrievalReference[] | undefined,
+  sourceScopeFingerprint: string | undefined,
+): readonly AssistantRetrievalReference[] | undefined {
+  if (sourceScopeFingerprint === undefined) return references;
+  return references
+    ?.filter(
+      (reference) =>
+        reference.sourceScopeFingerprint === undefined ||
+        reference.sourceScopeFingerprint === sourceScopeFingerprint,
+    )
+    .map(({ path, line, origin }) => ({ path, ...(line === undefined ? {} : { line }), origin }));
+}
+
 export function groundedRetrievalContinuityFields(
   input: GroundedRetrievalContinuityInput,
+  scope?: SelectedScope,
+  connectedScope?: ChatConnectedScope,
+  selectedFingerprints?: ReadonlyMap<ChatConnectedScope, string>,
 ): GroundedRetrievalContinuityInput {
+  const sourceScopeFingerprint =
+    scope === undefined
+      ? undefined
+      : groundedSourceScopeFingerprint(scope, connectedScope, selectedFingerprints);
+  const assistantReferents = assistantReferencesForSource(
+    input.assistantReferents,
+    sourceScopeFingerprint,
+  );
+  const continuityReferentSource =
+    assistantReferents?.length === 0 &&
+    input.continuityReferentSource?.startsWith("assistant-") === true
+      ? "none"
+      : input.continuityReferentSource;
   return {
-    ...(input.assistantReferents === undefined
-      ? {}
-      : { assistantReferents: input.assistantReferents }),
+    ...(assistantReferents === undefined ? {} : { assistantReferents }),
     ...(input.previousRetrievalIntent === undefined
       ? {}
       : { previousRetrievalIntent: input.previousRetrievalIntent }),
-    ...(input.continuityReferentSource === undefined
-      ? {}
-      : { continuityReferentSource: input.continuityReferentSource }),
+    ...(continuityReferentSource === undefined ? {} : { continuityReferentSource }),
   };
 }
 
@@ -861,6 +891,7 @@ export interface GroundedGatewayPromptOptions {
   readonly modelInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
   readonly requiredEvidencePaths?: readonly string[] | undefined;
+  readonly requiredEvidenceAtomIds?: readonly string[] | undefined;
 }
 
 function withPromptModelInputBudget(
@@ -913,6 +944,7 @@ interface RankedPromptExcerpt {
 function rankedPromptExcerpts(
   pack: ConnectedContextPack,
   requiredEvidencePaths: readonly string[] = [],
+  requiredEvidenceAtomIds: readonly string[] = [],
 ): readonly RankedPromptExcerpt[] {
   const ranked: RankedPromptExcerpt[] = [];
   for (let fileIndex = 0; fileIndex < pack.files.length; fileIndex += 1) {
@@ -928,6 +960,8 @@ function rankedPromptExcerpts(
     (a, b) =>
       Number(requiredEvidencePaths.includes(b.excerpt.atom.scopePath)) -
         Number(requiredEvidencePaths.includes(a.excerpt.atom.scopePath)) ||
+      Number(requiredEvidenceAtomIds.includes(b.excerpt.atom.stableId)) -
+        Number(requiredEvidenceAtomIds.includes(a.excerpt.atom.stableId)) ||
       promptExcerptScore(b.excerpt) - promptExcerptScore(a.excerpt) ||
       promptExcerptProvenancePriority(b.excerpt) - promptExcerptProvenancePriority(a.excerpt) ||
       a.fileIndex - b.fileIndex ||
@@ -968,11 +1002,12 @@ function withPromptExcerptTotalByteBudget(
   pack: ConnectedContextPack,
   maxExcerptBytes: number,
   requiredEvidencePaths: readonly string[] = [],
+  requiredEvidenceAtomIds?: readonly string[],
 ): ConnectedContextPack {
   if (maxExcerptBytes <= 0) return { ...pack, files: [] };
   const byFile = new Map<number, ContextExcerpt[]>();
   let remaining = Math.floor(maxExcerptBytes);
-  for (const ranked of rankedPromptExcerpts(pack, requiredEvidencePaths)) {
+  for (const ranked of rankedPromptExcerpts(pack, requiredEvidencePaths, requiredEvidenceAtomIds)) {
     if (remaining <= 0) break;
     const fullBytes = Buffer.byteLength(ranked.excerpt.content, "utf8");
     if (fullBytes === 0) continue;
@@ -1012,8 +1047,14 @@ export function withPromptExcerptBudget(
   pack: ConnectedContextPack,
   totalExcerptBytes: number,
   requiredEvidencePaths?: readonly string[],
+  requiredEvidenceAtomIds?: readonly string[],
 ): ConnectedContextPack {
-  return withPromptExcerptTotalByteBudget(pack, totalExcerptBytes, requiredEvidencePaths);
+  return withPromptExcerptTotalByteBudget(
+    pack,
+    totalExcerptBytes,
+    requiredEvidencePaths,
+    requiredEvidenceAtomIds,
+  );
 }
 
 type GroundedPromptBuilder = (
@@ -1094,6 +1135,7 @@ function fitGroundedPrompt(
       budgetedPack,
       totalExcerptBytes,
       options.requiredEvidencePaths,
+      options.requiredEvidenceAtomIds,
     );
     const candidate = build(question, candidatePack, redactor, 0);
     if (fits(candidate)) {
@@ -1387,6 +1429,7 @@ function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): Grounded
 }
 
 interface GroundedGatewayAnswerContext {
+  readonly assistantReferences: NonNullable<OrchestratorInput["assistantReferents"]>;
   readonly synthesis: GroundedSynthesisCallBudget;
   readonly deps: UiHandlerDeps;
   readonly model: ModelPort;
@@ -1403,9 +1446,19 @@ function createGatewayAnswerer(
   signal: AbortSignal,
   correlationId: string | undefined,
   tokenAccounting: ContextProfile["tokenAccounting"],
+  assistantReferences: OrchestratorInput["assistantReferents"],
 ): GroundedAnswerer {
   const synthesis = createGroundedSynthesisCallBudget();
-  const ctx = { deps, model, modelId, signal, correlationId, tokenAccounting, synthesis };
+  const ctx = {
+    deps,
+    model,
+    modelId,
+    signal,
+    correlationId,
+    tokenAccounting,
+    synthesis,
+    assistantReferences: assistantReferences ?? [],
+  };
   return {
     completedSynthesisCalls: synthesis.completed,
     remainingSynthesisCalls: synthesis.remaining,
@@ -1524,6 +1577,7 @@ async function groundedGatewayAttempt(
   const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
     ...promptOptions,
     requiredEvidencePaths: options.requiredEvidencePaths,
+    requiredEvidenceAtomIds: assistantReferenceExcerptIds(pack, ctx.assistantReferences),
     modelInputTokensMax: Math.min(
       promptOptions.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
       remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
@@ -1659,7 +1713,6 @@ function runDefaultGroundedExploration(
   input: OrchestratorInput,
 ): Promise<OrchestratorOutput> {
   const { deps, modelId, signal, contextProfile, model, entailmentStage } = runnerCtx;
-  const nowMs = Date.now;
   const budgetedInput = {
     ...input,
     budget: input.budget ?? modelWindowAwareBudget(deps, modelId),
@@ -1689,13 +1742,14 @@ function runDefaultGroundedExploration(
       signal,
       runnerCtx.correlationId,
       contextProfile?.tokenAccounting,
+      input.assistantReferents,
     ),
-    nowMs,
+    nowMs: Date.now,
     signal,
     // ADR-0173 D5: the same id the Gateway answerer above already carries, so a git-history read
     // that failed during THIS ask is joinable to it in `server.log`.
     correlationId: runnerCtx.correlationId,
-    microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
+    microIndex: microIndexForGroundedScope(budgetedInput.scope, Date.now),
     workspaceIndexForRoot: deps.workspaceIndexForRoot,
     ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
     repoSemanticSearchProviderFor: semanticLease.providerFor,
@@ -2252,7 +2306,7 @@ async function runGroundedRunner(
     const output = await runner({
       scope,
       query,
-      ...groundedRetrievalContinuityFields(workerCtx),
+      ...groundedRetrievalContinuityFields(workerCtx, scope),
       answerQuestion: answerContent,
       currentQuestion: workerCtx.content,
       answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
