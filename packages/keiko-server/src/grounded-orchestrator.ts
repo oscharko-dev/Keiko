@@ -6232,21 +6232,45 @@ function connectedCoverageChain(
 
 function fairCoverageEntries(
   entries: readonly RouteTraceCoverageEntry[],
+  totalBytes: number,
 ): readonly RouteTraceCoverageEntry[] {
   const byIdentity = new Map(entries.map((entry) => [entry.definitionIdentity, entry]));
-  const paths = new Set<string>();
-  const parents = new Set(entries.map((entry) => entry.parentIdentity));
   const retained = new Map<string, RouteTraceCoverageEntry>();
-  for (const entry of connectedCoverageOrder(entries)) {
-    if (parents.has(entry.definitionIdentity) || paths.has(entry.atom.scopePath)) continue;
+  const targets = relevantCoverageTargets(entries, byIdentity);
+  let remaining = totalBytes;
+  for (const entry of targets) {
     const chain = connectedCoverageChain(entry, byIdentity);
-    if (chain.length === 0) continue;
-    for (const parent of chain) {
-      retained.set(parent.definitionIdentity, parent);
-      paths.add(parent.atom.scopePath);
-    }
+    const additional = chain.filter((parent) => !retained.has(parent.definitionIdentity));
+    const bytes = additional.reduce((sum, parent) => sum + parent.observedBytes, 0);
+    if (chain.length === 0 || bytes > remaining) continue;
+    remaining -= bytes;
+    for (const parent of [...additional].reverse()) retained.set(parent.definitionIdentity, parent);
   }
   return [...retained.values()];
+}
+
+function relevantCoverageTargets(
+  entries: readonly RouteTraceCoverageEntry[],
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+): readonly RouteTraceCoverageEntry[] {
+  const roots = new Map<string, RouteTraceCoverageEntry[]>();
+  for (const entry of connectedCoverageOrder(entries)) {
+    const root = connectedCoverageChain(entry, byIdentity)[0];
+    if (root === undefined) continue;
+    const branch = roots.get(root.definitionIdentity) ?? [];
+    branch.push(entry);
+    roots.set(root.definitionIdentity, branch);
+  }
+  const queues = [...roots.values()].map((branch) =>
+    branch.sort((a, b) => b.atom.score - a.atom.score),
+  );
+  const targets: RouteTraceCoverageEntry[] = [];
+  for (let index = 0; queues.some((queue) => index < queue.length); index += 1)
+    for (const queue of queues) {
+      const entry = queue[index];
+      if (entry !== undefined) targets.push(entry);
+    }
+  return targets;
 }
 
 function connectedCoverageOrder(
@@ -6317,22 +6341,14 @@ function routeCoverageReadPlan(
   const selected = selectedCoverageEntries(inputs).filter((entry) =>
     allowed.has(entry.atom.scopePath),
   );
-  const entries = fairCoverageEntries(selected);
+  const share = distributeByteBudget(remainingExcerptCapacity(inputs).bytes, 2)[1] ?? 0;
+  const entries = fairCoverageEntries(selected, share);
   if (entries.length === 0) return undefined;
   const grouped = new Map<string, RouteTraceCoverageEntry[]>();
-  const connected = new Set(entries.map((entry) => entry.definitionIdentity));
-  const byIdentity = new Map(selected.map((entry) => [entry.definitionIdentity, entry]));
-  for (const entry of [...entries, ...connectedCoverageOrder(selected)]) {
-    if (
-      !connected.has(entry.definitionIdentity) &&
-      connectedCoverageChain(entry, byIdentity).length === 0
-    )
-      continue;
+  for (const entry of entries) {
     const existing = grouped.get(entry.atom.scopePath) ?? [];
-    if (!existing.some((previous) => previous.definitionIdentity === entry.definitionIdentity))
-      grouped.set(entry.atom.scopePath, [...existing, entry]);
+    grouped.set(entry.atom.scopePath, [...existing, entry]);
   }
-  const share = distributeByteBudget(remainingExcerptCapacity(inputs).bytes, 2)[1] ?? 0;
   const priorities = paths.filter((path) => inputs.priorityPaths?.has(path) === true);
   return {
     paths: [
@@ -6357,18 +6373,14 @@ function currentCoverageEntries(
   return entries;
 }
 
-function interleavedExcerptWindows(
-  ordinary: readonly LineWindow[],
-  connected: readonly LineWindow[],
+function prioritizedExcerptWindows(
+  ordered: readonly LineWindow[],
   explicit: readonly LineWindow[],
 ): readonly LineWindow[] {
   let windows = [...explicit];
-  for (let index = 0; index < Math.max(ordinary.length, connected.length); index += 1) {
-    for (const window of [connected[index], ordinary[index]]) {
-      if (window === undefined) continue;
-      const covered = [...windows].sort((a, b) => a.startLine - b.startLine);
-      windows = [...windows, ...uncoveredExcerptSegments(window, covered, 0)];
-    }
+  for (const window of ordered) {
+    const covered = [...windows].sort((a, b) => a.startLine - b.startLine);
+    windows = [...windows, ...uncoveredExcerptSegments(window, covered, 0)];
   }
   return windows;
 }
@@ -6408,9 +6420,11 @@ function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): Excerp
   return {
     ...selection,
     coverageApplied: true,
-    windows: interleavedExcerptWindows(
-      atomicCoverageWindows(selection.windows, ranges, inputs.atomsByPath.get(path) ?? []),
-      ranges,
+    windows: prioritizedExcerptWindows(
+      [
+        ...ranges,
+        ...atomicCoverageWindows(selection.windows, ranges, inputs.atomsByPath.get(path) ?? []),
+      ],
       explicit.length === 0 ? [] : excerptLineWindows(explicit).windows,
     ),
   };
@@ -6473,6 +6487,7 @@ interface ReadPathExcerptTaskResult {
 function appendReadExcerptWindows(
   result: ReadExcerptResult,
   windows: ExcerptWindow[],
+  preserveWindowIdentity = false,
 ): { readonly bytes: number; readonly truncated: number; readonly anchored: number } {
   let bytes = 0;
   let truncated = 0;
@@ -6481,13 +6496,14 @@ function appendReadExcerptWindows(
   for (const read of result.windows ?? [result]) {
     const range = read.atom.lineRange;
     if (range === undefined) continue;
-    const identity = read.truncated
-      ? connectedContextActivityDigest("keiko.excerpt-window.v1", [
-          String(range.startLine),
-          String(range.endLine),
-          read.content,
-        ])
-      : undefined;
+    const identity =
+      read.truncated || preserveWindowIdentity
+        ? connectedContextActivityDigest("keiko.excerpt-window.v1", [
+            String(range.startLine),
+            String(range.endLine),
+            read.content,
+          ])
+        : undefined;
     const key = excerptWindowKey({ ...range, content: "", identity });
     if (seen.has(key)) continue;
     seen.add(key);
@@ -6577,7 +6593,7 @@ async function readPathExcerptWindows(
   if (inputs.nowMs() >= inputs.deadlineAtMs) return unreadExcerptWindows(selection, true);
   const stale = staleCoverageRead(scopePath, inputs, selection, result);
   if (stale !== undefined) return stale;
-  const appended = appendReadExcerptWindows(result, windows);
+  const appended = appendReadExcerptWindows(result, windows, selection.coverageApplied === true);
   return {
     windows,
     bytesConsumed: appended.bytes,
