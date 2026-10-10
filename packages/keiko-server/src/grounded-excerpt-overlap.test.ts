@@ -111,11 +111,10 @@ async function overlapFixture(
     scope,
     GROUNDED_TRACE_SEARCH_LIMITS,
     fs,
+    { nowMs: () => NOW },
   );
   const query = overlapQuery("Trace POST /api/items through overlap coverage");
-  const routes = await requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS, {
-    nowMs: () => NOW,
-  });
+  const routes = await requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS);
   const trace = await collectDiscoveredSymbolTraceEvidence({
     scope: selectedScope(scope),
     query,
