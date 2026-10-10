@@ -137,7 +137,6 @@ import {
   complete,
   contextPackIndexKey,
   extractAnchors,
-  extractPathReferences,
   DEFAULT_FILTER_OPTIONS,
   absoluteRelevanceFloor,
   weightsForIntent,
@@ -8896,29 +8895,6 @@ function connectedContextSearchInputs(
   };
 }
 
-/** Each meaningful request clause must still bind a named file; weak topics are real targets. */
-function onlyNamedFileRequestClauses(
-  question: string,
-  references: readonly SearchReference[],
-): boolean {
-  const shape = references.reduce(
-    (remaining, reference) => remaining.replaceAll(reference.path.toLowerCase(), "\0"),
-    question.toLowerCase(),
-  );
-  const clauses = shape
-    .split(/[.!?;\n&]|\b(?:and|und|sowie|then|dann)\b/iu)
-    .flatMap((clause) => (clause.includes("\0") ? clause.split(",") : [clause]));
-  return (
-    extractPathReferences(shape).length === 0 &&
-    clauses.some((clause) => clause.includes("\0")) &&
-    clauses.every(
-      (clause) =>
-        clause.includes("\0") ||
-        extractAnchors({ text: clause, maxAnchors: 1 }).anchors.length === 0,
-    )
-  );
-}
-
 function eligibleFocusedFileReferences(references: readonly SearchReference[]): boolean {
   return references.length > 0 && references.every((reference) => reference.path.includes("/"));
 }
@@ -8931,7 +8907,7 @@ function isFocusedFileQuery(input: OrchestratorInput, plan: ExplorationPlan): bo
     !requiresRelationshipOrHistoryRings(input.query) &&
     plan.targetDecision?.definitionRequested === false &&
     eligibleFocusedFileReferences(references) &&
-    onlyNamedFileRequestClauses(input.query.text, references) &&
+    plan.targetDecision.namedFileOnly === true &&
     plan.targetDecision.targets.every((target) =>
       references.some((reference) => reference.path.toLowerCase() === target.term),
     )

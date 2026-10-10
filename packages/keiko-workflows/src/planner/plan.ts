@@ -334,6 +334,8 @@ export interface QueryTargetDecision {
   readonly targets: readonly SearchAnchor[];
   readonly definitionSymbol: string | undefined;
   readonly definitionRequested: boolean;
+  /** A completely parsed query-only file request; unknown continuations cannot narrow discovery. */
+  readonly namedFileOnly?: true;
 }
 
 const SEARCH_COMMANDS = new Set(["find", "search", "locate", "suche", "finde", "lokalisiere"]);
@@ -379,6 +381,75 @@ const ENGLISH_VALUE_REQUEST_RE =
 const GERMAN_VALUE_REQUEST_RE = /^welche\s+werte\s+stehen\s+zu\s+\0$/iu;
 const GERMAN_INFORMATION_REQUEST_RE =
   /^welche\s+information\s+ist\s+(?:für\s+\0|dazu)\s+in\s+diesem\s+ordner\s+belegt$/iu;
+const NAMED_FILE_COMMAND_RE =
+  /^(?:please |bitte )?(?:read|show|open|explain|describe|summarize|inspect|lies|zeige|öffne|erkläre|beschreibe) (?:the |die |das |den )?\0(?: (?:and |und )?\0)*$/iu;
+const NAMED_FILE_CONTAINED_REQUEST_RE =
+  /^(?:please |bitte )?(?:explain|describe|summarize|erkläre|beschreibe) (.+) (?:in|within|from|aus) \0$/iu;
+const NAMED_FILE_SUBJECT_REQUEST_RE =
+  /^(?:please |bitte )?(?:explain|describe|erkläre|beschreibe) (?:how|wie) \0 (.+)$/iu;
+const INDEPENDENT_REQUEST_GRAMMAR_RE =
+  /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus|then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während|außerdem|zudem|zusätzlich|auch|dann|sowie|was|welche|wo|wie|warum)\b/iu;
+const REQUEST_COMMAND_RE =
+  /\b(?:read|show|open|explain|describe|summarize|inspect|find|search|locate)(?:s|ed|ing)?\b|\b(?:lies|zeige|öffne|erkläre|erklären|erklärst|beschreibe|beschreiben|suche|finde)\b/iu;
+
+function boundNamedFilePredicate(text: string): boolean {
+  return (
+    text.length > 0 &&
+    !text.includes("\0") &&
+    !INDEPENDENT_REQUEST_GRAMMAR_RE.test(text) &&
+    !REQUEST_COMMAND_RE.test(text)
+  );
+}
+
+function isNamedFileClause(words: readonly string[]): boolean {
+  if (!words.includes("\0")) return false;
+  if (words.length === 1) return true;
+  const clause = words.join(" ");
+  if (NAMED_FILE_COMMAND_RE.test(clause) || isSearchClause(words) || isFactClause(words))
+    return true;
+  const contained = NAMED_FILE_CONTAINED_REQUEST_RE.exec(clause)?.[1];
+  const subject = NAMED_FILE_SUBJECT_REQUEST_RE.exec(clause)?.[1];
+  const predicate = contained ?? subject;
+  return predicate !== undefined && boundNamedFilePredicate(predicate);
+}
+
+function namedFileRequestShape(query: RetrievalQuery): string | undefined {
+  const references = extractRetrievalChannels(query.text, query.text.length).references.filter(
+    (reference) => reference.origin === "query",
+  );
+  if (references.length === 0 || !references.every((reference) => reference.path.includes("/")))
+    return undefined;
+  const shape = references
+    .reduce(
+      (text, reference) => text.replaceAll(reference.path.toLowerCase(), "\0"),
+      query.text.toLowerCase(),
+    )
+    .replace(/\0(?::\d{1,9}){1,2}/gu, "\0");
+  if (extractPathReferences(shape).length > 0) return undefined;
+  return shape;
+}
+
+function namedFileClauseDecision(clause: string): boolean | undefined {
+  const projected = queryShapeOutsideTargets(clause, [{ term: "\0", kind: "path", weight: 1 }]);
+  if (/[`"']/u.test(projected)) return false;
+  const fragments = projected.includes("\0") ? projected.split(",") : [projected];
+  const decisions = fragments.map(namedFileWordsDecision);
+  if (decisions.includes(false)) return false;
+  return decisions.includes(true) ? true : undefined;
+}
+
+function namedFileWordsDecision(clause: string): boolean | undefined {
+  const words = shapeWords(queryContextOutsideQuotes(clause));
+  return words.length === 0 ? undefined : isNamedFileClause(words);
+}
+
+function namedFileOnlyRequest(query: RetrievalQuery): boolean {
+  if (query.kind !== "natural-language") return false;
+  const shape = namedFileRequestShape(query);
+  if (shape === undefined) return false;
+  const clauses = shape.split(/[.!?;\n&]/u).map(namedFileClauseDecision);
+  return clauses.includes(true) && !clauses.includes(false);
+}
 
 function requestContentTargets(
   query: RetrievalQuery,
@@ -507,6 +578,7 @@ export function resolveQueryTargetDecision(
     targets,
     definitionSymbol: definitionTarget(query, kind, targets, definitionRequested),
     definitionRequested,
+    ...(namedFileOnlyRequest(query) ? { namedFileOnly: true } : {}),
   };
 }
 
