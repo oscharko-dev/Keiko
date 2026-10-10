@@ -45,6 +45,8 @@ describe("named source clauses beside explicitly general advice", () => {
     `Read ${FILE}. Explain pump reset delays.`,
     `Read ${FILE}. Give advice about pump reset delays.`,
     `Read ${FILE}. Gib eine allgemeine Empfehlung laut diesem Handbuch.`,
+    `Read ${FILE}. Gib eine allgemeine Empfehlung zum Interpretieren von dem verbundenen Handbuch.`,
+    `Read ${FILE}. Gib eine allgemeine Empfehlung zum Interpretieren von deinem aktuellen Code.`,
     `Read ${FILE}. Find "operator's policy".`,
     `Explain how ${FILE} doesn't fail. Find 'limits'.`,
   ])("keeps independently bound or unclassified source clauses broad: %s", (text) => {
