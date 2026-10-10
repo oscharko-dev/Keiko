@@ -63,6 +63,9 @@ interface ProviderRequest {
   readonly messages: readonly { readonly role: string; readonly content: string }[];
 }
 interface CaseMaterializer {
+  readonly CONNECTED_CHAT_CAMPAIGNS: {
+    readonly knowledge: readonly { readonly id: string; readonly question: string }[];
+  };
   materializeCompactionCases(profile: ContextProfile): Promise<
     readonly {
       readonly id: string;
@@ -88,7 +91,11 @@ async function originalNote(): Promise<string> {
   );
   return note.question;
 }
-async function provider(requests: ProviderRequest[], responseText = ACK): Promise<string> {
+async function provider(
+  requests: ProviderRequest[],
+  responseText = ACK,
+  firstResponseText?: string,
+): Promise<string> {
   const server = createServer((request, response): void => {
     let body = "";
     request.setEncoding("utf8");
@@ -101,18 +108,19 @@ async function provider(requests: ProviderRequest[], responseText = ACK): Promis
       const prompt = parsed.messages.map((message) => message.content).join("\n");
       const content =
         requests.length === 1
-          ? prompt.includes("applies the operator's policy") &&
+          ? (firstResponseText ??
+            (prompt.includes("applies the operator's policy") &&
             prompt.includes(POLICY_SOURCE.trim())
-            ? prompt.includes("Return to ")
-              ? RETURN_ANSWER
-              : MIXED_ANSWER
-            : body.includes("Which Next.js version")
-              ? "Next.js is 15.0.0. [package.json:1]"
-              : body.includes("maximum operating limit")
-                ? body.includes("The maximum operating limit is 37 units.")
-                  ? MANUAL_ANSWER
-                  : "<assessment>Acknowledged.</assessment>"
-                : SOURCE_ANSWER
+              ? prompt.includes("Return to ")
+                ? RETURN_ANSWER
+                : MIXED_ANSWER
+              : body.includes("Which Next.js version")
+                ? "Next.js is 15.0.0. [package.json:1]"
+                : body.includes("maximum operating limit")
+                  ? body.includes("The maximum operating limit is 37 units.")
+                    ? MANUAL_ANSWER
+                    : "<assessment>Acknowledged.</assessment>"
+                  : SOURCE_ANSWER))
           : responseText;
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
@@ -604,5 +612,75 @@ describe("native original return to a named source", () => {
       classification: "supported",
       corruptLineCount: 0,
     });
+  });
+});
+
+async function pipelineQuestion(): Promise<string> {
+  const catalog = (await import(
+    new URL(
+      "../../../scripts/testing/coding-workbench-lab/connected-chat-cases.mjs",
+      import.meta.url,
+    ).href
+  )) as CaseMaterializer;
+  const question = catalog.CONNECTED_CHAT_CAMPAIGNS.knowledge.find(
+    (row) => row.id === "keiko-source-pipeline",
+  )?.question;
+  if (question === undefined) throw new TypeError("Missing original pipeline question");
+  return question;
+}
+
+function writePipelineSource(root: string): void {
+  const prefix = [
+    'export const unrelatedHeader = "UNRELATED_SOURCE_HEADER";',
+    ...Array.from({ length: 299 }, (_, index) => `// incidental filler ${String(index)}`),
+  ].join("\n");
+  writeFileSync(
+    join(root, "src/grounded.ts"),
+    `${prefix}\n` +
+      [
+        'router.post("/api/chats/messages/grounded", (request) => {',
+        "  const admitted = scopeAdmission(request);",
+        "  const candidates = recursiveCandidateDiscovery(admitted);",
+        "  return promptFitting(candidates);",
+        "});",
+        "export function scopeAdmission(request) { return request.connectedFolder; }",
+        "export function recursiveCandidateDiscovery(scope) { return scope.currentSources; }",
+        "export function promptFitting(candidates) { return candidates.withinInputBudget; }",
+      ].join("\n") +
+      "\n",
+  );
+}
+
+describe("native original pipeline source payload", () => {
+  it("does not send an unrelated discovery prefix beside actual route facts", async () => {
+    const question = await pipelineQuestion();
+    const requests: ProviderRequest[] = [];
+    const content =
+      "The route admits scope, discovers candidates and fits the prompt. [src/grounded.ts:301-305]";
+    const { deps, chatId } = runtime(await provider(requests, content, content), false);
+    writePipelineSource(join(directory, "workspace"));
+    const started = await startUiTestServer({
+      staticRoot: directory,
+      csp: buildCspHeader([]),
+      handlerDeps: deps,
+    });
+    servers.push(started.server);
+    const response = await ask(started.port, chatId, question, "original-pipeline-payload");
+    expect(response.status).toBe(200);
+    const answer = (await response.json()) as GroundedAnswer;
+    expect(answer.citations).toContainEqual(
+      expect.objectContaining({
+        scopePath: "src/grounded.ts",
+        lineRange: { startLine: 301, endLine: 305 },
+      }),
+    );
+    expect(requests).toHaveLength(1);
+    const prompt = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt).toContain(question);
+    expect(prompt).toContain("const candidates = recursiveCandidateDiscovery(admitted);");
+    expect(prompt).not.toContain("UNRELATED_SOURCE_HEADER");
+    expect(
+      analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence,
+    ).toMatchObject({ classification: "supported", corruptLineCount: 0 });
   });
 });

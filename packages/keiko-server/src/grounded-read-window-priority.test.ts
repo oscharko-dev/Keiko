@@ -5,6 +5,7 @@ import {
   type ConnectedContextPack,
   type EvidenceAtom,
   type ExplorationUsage,
+  type ExplorationBudget,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { assembleContextPack } from "@oscharko-dev/keiko-workflows";
@@ -111,8 +112,10 @@ interface ReadAndFitResult {
 async function readAndFit(
   atoms: readonly EvidenceAtom[],
   excerptBytesMax: number,
+  question = QUESTION,
+  suppliedBudget?: ExplorationBudget,
 ): Promise<ReadAndFitResult> {
-  const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax };
+  const budget = { ...(suppliedBudget ?? DEFAULT_EXPLORATION_BUDGET), excerptBytesMax };
   const read = await _readKeptExcerptsForTests([PATH], {
     searchScope: { workspace: workspace(), scopeId: scope().scopeId, relativePaths: [] },
     fs: memFs(ROOT, { [PATH]: source() }),
@@ -127,7 +130,7 @@ async function readAndFit(
       scope: scope(),
       query: {
         kind: "natural-language",
-        text: QUESTION,
+        text: question,
         caseSensitive: false,
         maxResults: 50,
         emittedAtMs: 0,
@@ -142,7 +145,7 @@ async function readAndFit(
     { includeSurroundingContext: true, nowMs: () => 0 },
   );
   expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
-  const sent = fittedGroundedGatewayPrompt(QUESTION, pack, buildRedactor({}));
+  const sent = fittedGroundedGatewayPrompt(question, pack, buildRedactor({}));
   return { read, pack, sent };
 }
 
@@ -204,5 +207,57 @@ describe("located window ownership before actual source reads", () => {
     expect(result.read.excerpts.get(PATH)?.[0]?.startLine).toBe(301);
     expect(sentText(result)).toContain(STRONG);
     expect(result.pack.usage.excerptBytes).toBeLessThanOrEqual(512);
+  });
+});
+
+async function originalPipelineQuestion(): Promise<string> {
+  const catalog = (await import(
+    new URL(
+      "../../../scripts/testing/coding-workbench-lab/connected-chat-cases.mjs",
+      import.meta.url,
+    ).href
+  )) as {
+    readonly CONNECTED_CHAT_CAMPAIGNS: {
+      readonly knowledge: readonly { readonly id: string; readonly question: string }[];
+    };
+  };
+  const question = catalog.CONNECTED_CHAT_CAMPAIGNS.knowledge.find(
+    (row) => row.id === "keiko-source-pipeline",
+  )?.question;
+  if (question === undefined) throw new TypeError("Missing original source-pipeline question");
+  return question;
+}
+
+describe("ordinary discovery metadata beside located current facts", () => {
+  it("does not request an unrelated default header for the unchanged original pipeline question", async () => {
+    const question = await originalPipelineQuestion();
+    const result = await readAndFit(
+      [listing(), located(301, 0.9), located(321, 0.8)],
+      131072,
+      question,
+      {
+        ...DEFAULT_EXPLORATION_BUDGET,
+        filesReadMax: null,
+        elapsedMsMax: null,
+        modelInputTokensMax: 118784,
+        modelOutputTokensMax: 8192,
+      },
+    );
+    expect(sentText(result)).toContain(question);
+    expect(sentText(result)).toContain(STRONG);
+    expect(sentText(result)).toContain(SECOND);
+    expect(sentText(result)).not.toContain(WEAK);
+    expect(result.read.readWindowCount).toBe(2);
+    expect(
+      result.sent.sentEvidencePacks?.[0]?.files[0]?.excerpts.every(
+        (excerpt) => (excerpt.atom.lineRange?.startLine ?? 0) > 200,
+      ),
+    ).toBe(true);
+    expect(result.read.observation?.omittedRangeCount).toBe(0);
+    expect(result.pack.budget).toMatchObject({
+      excerptBytesMax: 131072,
+      modelInputTokensMax: 118784,
+      modelOutputTokensMax: 8192,
+    });
   });
 });
