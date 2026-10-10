@@ -866,7 +866,7 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
       high = mid - 1;
     }
   }
-  return value.slice(0, low);
+  return value.slice(0, (value.codePointAt(low - 1) ?? 0) > 0xffff ? low - 1 : low);
 }
 
 function positiveInteger(value: number): number | undefined {
