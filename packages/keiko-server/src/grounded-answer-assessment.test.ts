@@ -84,6 +84,18 @@ describe("shared grounded assessment normalization", () => {
 });
 
 describe("untagged conversation authority preserves source and policy boundaries", () => {
+  it("keeps general future-work advice outside selected-source attribution", () => {
+    const content = "Your team should compare alternatives before writing files.";
+    const answer = normalizeGroundedAnswerAssessment(
+      { content, usage: { promptTokens: 0, completionTokens: 0 } },
+      "allowed",
+      undefined,
+      "",
+      undefined,
+      true,
+    );
+    expect(isGroundedAssessmentOnly(answer.content)).toBe(true);
+  });
   it.each([
     ["The selected source has value 37.", "allowed", false],
     ["The selected source has value 37.", "allowed", true],
