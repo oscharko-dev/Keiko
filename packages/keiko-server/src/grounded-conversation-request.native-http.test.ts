@@ -487,3 +487,36 @@ describe("native mixed requests within supplied user context", () => {
     },
   );
 });
+
+describe("native source claims within empty-evidence conversation responses", () => {
+  it("keeps general future-work advice outside selected-source attribution", async () => {
+    const text = "Your team should compare alternatives before writing files.";
+    assertPlainAssessment(
+      await replyAfterSource("These are my working notes. Confirm receipt of this message.", text),
+      text,
+    );
+  });
+  it.each([
+    "Your selected files contain the value 37.",
+    "These two connected files contain the value 37.",
+    "These connected files contain the value 37.",
+  ])("retains source validation for %s", async (text) => {
+    const answer = await replyAfterSource(
+      "These are my working notes. Confirm receipt of this message.",
+      text,
+    );
+    expect(splitOwnAssessment(answer.content).assessment).toBeUndefined();
+    expect(answer.content).toBe(text);
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("no-evidence");
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
+    expect(
+      records().find(
+        (record) =>
+          record.op === "search.answer.assessed" &&
+          record.correlationId === "plain-conversation" &&
+          record.phase === "accepted-final",
+      ),
+    ).toMatchObject({ outcome: "none", sourceBackedChars: text.length, assessmentChars: 0 });
+  });
+});
