@@ -518,6 +518,7 @@ describe("native source claims within empty-evidence conversation responses", ()
   it.each([
     "Your team should compare alternatives before writing files.",
     "Unser Team sollte Alternativen vergleichen, bevor es Dateien erstellt.",
+    "Wähle gemäßigte Alternativen vor weiteren Schritten.",
   ])("keeps general future-work advice outside selected-source attribution: %s", async (text) => {
     assertPlainAssessment(
       await replyAfterSource("These are my working notes. Confirm receipt of this message.", text),
@@ -529,6 +530,8 @@ describe("native source claims within empty-evidence conversation responses", ()
     "These two connected files contain the value 37.",
     "These connected files contain the value 37.",
     "In unseren Dateien steht der Grenzwert 37.",
+    "Gemäß Handbuch beträgt die Grenze 37.",
+    "Laut Handbuch beträgt die Grenze 37.",
     "In den verbundenen Dokumenten steht der Grenzwert 37.",
     "Der Wert dieser Dateien beträgt 37.",
   ])("retains source validation for %s", async (text) => {

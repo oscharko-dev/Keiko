@@ -18,7 +18,7 @@ export { isGroundedAssessmentOnly } from "./grounded-faithfulness.js";
 
 // A claim about selected evidence remains source-authoritative even without a marker or path.
 const SOURCE_ATTRIBUTION_RE =
-  /\b(?:according\s+to|as\s+(?:stated|specified|documented)\s+in|laut|gemäß)\b/iu;
+  /(?<![\p{L}\p{M}\p{N}_])(?:according\s+to|as\s+(?:stated|specified|documented)\s+in|laut|gemäß)(?![\p{L}\p{M}\p{N}_])/iu;
 const SOURCE_DETERMINER_RE =
   /^(?:the|this|these|that|those|our|my|your|his|her|its|their|die|das|der|den|dem|des|dies(?:e|en|em|er|es)|(?:unser|mein|dein|euer|ihr)(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu;
 const SOURCE_NOUN_RE =

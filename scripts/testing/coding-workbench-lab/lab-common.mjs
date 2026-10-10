@@ -339,13 +339,27 @@ export async function mintPairing(env = process.env) {
   return { attestation, fragment: contracts.encodeCodingAppSessionPairingFragment(attestation) };
 }
 
-async function callJson(baseUrl, headers, method, path, body, { signal } = {}) {
-  const response = await globalThis.fetch(`${baseUrl}${path}`, {
+async function timedJsonResponse(baseUrl, path, init, timeoutMs) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    throw new UsageError("invalid-request-timeout");
+  }
+  const { gatewayFetch } = await importBuilt("keiko-model-gateway", "http.js");
+  // Native fetch has a separate response-header deadline that an AbortSignal cannot extend.
+  // Reuse the vetted, DNS-pinned transport and its response byte bound for explicit deadlines;
+  // the same signal remains attached while callJson consumes the complete response body.
+  return gatewayFetch(`${labBaseUrl(baseUrl, {})}${path}`, { ...init, timeoutMs });
+}
+
+async function callJson(baseUrl, headers, method, path, body, { signal, timeoutMs } = {}) {
+  const init = {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     ...(signal === undefined ? {} : { signal }),
-  });
+  };
+  const response = await (timeoutMs === undefined
+    ? globalThis.fetch(`${baseUrl}${path}`, init)
+    : timedJsonResponse(baseUrl, path, init, timeoutMs));
   const text = await response.text();
   let json;
   try {
@@ -360,7 +374,7 @@ async function callJson(baseUrl, headers, method, path, body, { signal } = {}) {
   };
 }
 
-/** Pairs an app session over HTTP and returns request(method, path, body) bound to its cookie. */
+/** Pairs an app session; request options accept cancellation and an explicit whole-request deadline. */
 export async function openApiSession(baseUrl, env = process.env) {
   const { attestation } = await mintPairing(env);
   const cookies = await importBuilt("keiko-server", "coding-app-session/sessionCookie.js");

@@ -84,8 +84,10 @@ function appendRecord(path, record) {
 }
 
 async function request(session, method, path, body) {
+  const timeoutMs = session.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   return session.request(method, path, body, {
-    signal: globalThis.AbortSignal.timeout(session.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    signal: globalThis.AbortSignal.timeout(timeoutMs),
+    timeoutMs,
   });
 }
 

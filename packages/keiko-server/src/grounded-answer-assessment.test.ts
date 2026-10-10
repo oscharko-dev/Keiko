@@ -87,6 +87,7 @@ describe("untagged conversation authority preserves source and policy boundaries
   it.each([
     "Your team should compare alternatives before writing files.",
     "Unser Team sollte Alternativen vergleichen, bevor es Dateien erstellt.",
+    "Wähle gemäßigte Alternativen vor weiteren Schritten.",
   ])("keeps general future-work advice outside selected-source attribution: %s", (content) => {
     const answer = normalizeGroundedAnswerAssessment(
       { content, usage: { promptTokens: 0, completionTokens: 0 } },
@@ -98,6 +99,23 @@ describe("untagged conversation authority preserves source and policy boundaries
     );
     expect(isGroundedAssessmentOnly(answer.content)).toBe(true);
   });
+  it.each(["αlaut", "lautα", "laut\u0301", "_laut", "laut_", "1laut", "laut1", "gemäßigt"])(
+    "does not attribute a source cue embedded in the lexical token %s",
+    (token) => {
+      const answer = normalizeGroundedAnswerAssessment(
+        {
+          content: `${token} ist ein freier Arbeitsname.`,
+          usage: { promptTokens: 0, completionTokens: 0 },
+        },
+        "allowed",
+        undefined,
+        "",
+        undefined,
+        true,
+      );
+      expect(isGroundedAssessmentOnly(answer.content)).toBe(true);
+    },
+  );
   it.each([
     ["The selected source has value 37.", "allowed", false],
     ["The selected source has value 37.", "allowed", true],
@@ -106,6 +124,8 @@ describe("untagged conversation authority preserves source and policy boundaries
     ["These connected files contain the value 37.", "allowed", true],
     ["I cannot access the selected files.", "allowed", true],
     ["In unseren Dateien steht der Grenzwert 37.", "allowed", true],
+    ["Gemäß Handbuch beträgt die Grenze 37.", "allowed", true],
+    ["Laut Handbuch beträgt die Grenze 37.", "allowed", true],
     ["In den verbundenen Dokumenten steht der Grenzwert 37.", "allowed", true],
     ["Der Wert dieser Dateien beträgt 37.", "allowed", true],
     ["In euren ausgewählten Handbüchern steht der Grenzwert 37.", "allowed", true],
