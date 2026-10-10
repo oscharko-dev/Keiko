@@ -33,6 +33,8 @@ describe("named source clauses beside explicitly general advice", () => {
   it.each([
     `Read ${FILE}. Give a general recommendation based on this manual.`,
     `Read ${FILE}. Give a general recommendation for interpreting this code.`,
+    `Read ${FILE}. Give a general recommendation for interpreting your code.`,
+    `Read ${FILE}. Give a general recommendation for interpreting these two connected files.`,
     `Read ${FILE}. Give a general recommendation about changing this implementation.`,
     `Explain ${FILE}. Keep the implementation compatible.`,
     `Explain ${FILE}, with current implementation citations for FooProbe.`,
