@@ -161,4 +161,29 @@ describe("native rejected-path eligibility after explicit admission", () => {
       expect(result.reads.some((read) => read.path === join(root, VISIBLE))).toBe(true);
     },
   );
+  it("never reads the rejected source through relationship helpers", async () => {
+    const path = CASES[0].path;
+    const result = await retrieve(`How does ${path} relate to ${VISIBLE}?`, "directory", ["src"]);
+    rejected(result, path);
+    expect(result.result.pack.files.map((file) => file.scopePath)).toContain(VISIBLE);
+  });
+  it("never reads the rejected source through basename admission", async () => {
+    const path = CASES[0].path;
+    rejected(await retrieve("Explain ignored.ts", "directory", ["src"]), path);
+  });
+  it("never reads a rejected manifest through metadata helpers", async () => {
+    const path = "src/package.json";
+    writeFileSync(join(root, path), '{"name":"fixture","version":"1.0.0"}\n');
+    writeFileSync(join(root, ".gitignore"), `${path}\n`);
+    rejected(await retrieve(`Explain ${path}`, "directory", ["src"]), path);
+  });
+  it("preserves ordinary Directory reads without a query-path rejection", async () => {
+    const result = await retrieve("Explain hiddenFlow", "directory", ["src"]);
+    expect(result.result.pack.files.some((file) => file.scopePath === CASES[0].path)).toBe(true);
+    expect(result.reads.some((read) => read.path === join(root, CASES[0].path))).toBe(true);
+    expect(
+      result.log.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra,
+    ).toMatchObject({ explicitPathRejectedCount: 0 });
+  });
 });

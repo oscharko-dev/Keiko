@@ -16,8 +16,12 @@ const QUERY: RetrievalQuery = {
   emittedAtMs: 0,
 };
 
-function fixture(): { readonly scope: SearchScope; readonly fs: WorkspaceFs; reads: string[] } {
-  const files = Object.fromEntries([...EXCLUDED, ...ALLOWED].map((path) => [path, "needle\n"]));
+function fixture(
+  files: Readonly<Record<string, string>> = Object.fromEntries(
+    [...EXCLUDED, ...ALLOWED].map((path) => [path, "needle\n"]),
+  ),
+  relativePaths: readonly string[] = ["src"],
+): { readonly scope: SearchScope; readonly fs: WorkspaceFs; reads: string[] } {
   const base = memFs("/ws", files);
   const reads: string[] = [];
   const fs = { ...base };
@@ -37,7 +41,7 @@ function fixture(): { readonly scope: SearchScope; readonly fs: WorkspaceFs; rea
     reads,
     scope: {
       scopeId: "literal-exclusions",
-      relativePaths: ["src"],
+      relativePaths,
       workspace: {
         root: "/ws",
         selectedRoot: "/ws",
@@ -127,5 +131,26 @@ describe("exact candidate exclusions on the existing search policy", () => {
     await session.searchText(scope, QUERY, limits, options(fs, []));
     reads.length = 0;
     expectEligible(await session.searchText(scope, QUERY, limits, options(fs, EXCLUDED)), reads);
+  });
+
+  it.each([null, 20])("retains literal exclusions in filename rescue at cap=%s", async (cap) => {
+    const excluded = "dist/exclude*.ts";
+    const allowed = "dist/exclude0.ts";
+    const { scope, fs, reads } = fixture(
+      { [excluded]: "needle\n", [allowed]: "needle\n", "src/miss.ts": "other\n" },
+      [],
+    );
+    const result = await findFiles(
+      scope,
+      { ...QUERY, kind: "file-pattern", text: "**/exclude*.ts" },
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: cap },
+      {
+        ...options(fs, [excluded]),
+        candidatePathGlobs: { include: [], exclude: [], excludeLiteralPaths: [excluded] },
+        searchHints: { hasGitMetadata: true },
+      },
+    );
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual([allowed]);
+    expect(reads).not.toContain(`/ws/${excluded}`);
   });
 });
