@@ -96,7 +96,11 @@ bounded English/German anaphoric patterns also preserve previous effective diagn
 All hints pass the same live explicit-path admission, containment, denial, ignore, format, size,
 and budget checks as query references before they become floor-protected evidence candidates.
 Cross-source selection prefers at most one actually read window containing each bound hint's
-line, when present. The original provisional candidate/byte ceilings remain binding; the reranker
+line, when present. If that old location no longer exists, an explicitly selected path that was
+successfully freshly read survives as an unlocated navigation hint, and at most one actual current
+window is retained. Other nonoverlapping located atoms do not gain evidence authority. Citations
+still authenticate only the fresh returned range; no old line or content is restored.
+The original provisional candidate/byte ceilings remain binding; the reranker
 still receives every provisionally admitted document. Final top-N selection and model-window fitting
 retain those windows first without changing native relevance scores or authorizing omitted ranges.
 Plural folder byte fitting uses the same actual-window priority within each existing source share;

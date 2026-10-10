@@ -7202,7 +7202,10 @@ async function assemblePackFromReads(
       scope: input.scope,
       query: input.query,
       budget: plan.budget,
-      atoms: [...prepared.atoms, ...documentEvidence.atoms],
+      atoms: [
+        ...atomsForCurrentReadWindows(prepared.atoms, excerptReads, input.scope.scopeId),
+        ...documentEvidence.atoms,
+      ],
       ranked: [...ordered.kept, ...documentEvidence.candidates],
       omittedFromRanking: [...codeOmitted, ...documentEvidence.omitted],
       excerpts,
@@ -7220,6 +7223,37 @@ async function assemblePackFromReads(
   );
   cacheAssembledGroundedPack(inputs, assemble.pack);
   return assemble.pack;
+}
+
+function atomsForCurrentReadWindows(
+  atoms: readonly EvidenceAtom[],
+  reads: ExcerptReadSummary,
+  scopeId: string,
+): readonly EvidenceAtom[] {
+  return atoms.map((atom) => {
+    const windows = reads.excerpts.get(atom.scopePath);
+    if (
+      atom.provenance.tool !== "repo.selectedFile" ||
+      atom.lineRange === undefined ||
+      !windows?.length ||
+      windows.some((window) => windowContainsAtom(window, atom))
+    )
+      return atom;
+    // The selected path was freshly read, but its old location no longer exists. Preserve only
+    // its unlocated navigation hint; the assembler authenticates the actual returned windows.
+    return {
+      ...atom,
+      lineRange: undefined,
+      stableId: evidenceAtomStableId({
+        scopeId,
+        scopePath: atom.scopePath,
+        lineRange: undefined,
+        provenanceKind: atom.provenance.kind,
+        provenanceTool: atom.provenance.tool,
+        queryFingerprint: atom.provenance.queryFingerprint,
+      }),
+    };
+  });
 }
 
 function missingExcerptEvidence(
