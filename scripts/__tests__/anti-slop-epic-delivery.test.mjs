@@ -65,6 +65,12 @@ describe("#3915 exact epic delivery path", () => {
     expect(step(name).if).toBe(`\${{ github.event_name == 'pull_request' && ${prScope} }}`);
   });
 
+  it("binds Sonar verification to GitHub's actual target instead of a substituted branch", () => {
+    expect(step("Verify SonarCloud Banking Grade PR evidence").env.SONAR_BASE_REF).toBe(
+      "${{ github.base_ref }}",
+    );
+  });
+
   it("runs zizmor for the exact epic while retaining existing events and failure reporting", () => {
     const hygiene = parse(read(".github/workflows/workflow-hygiene.yml"));
     const zizmor = hygiene.jobs["workflow-hygiene"].steps.find(

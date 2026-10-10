@@ -1064,6 +1064,7 @@ jobs:
       - name: Verify SonarCloud Banking Grade PR evidence
         if: ${{ github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality') }}
         env:
+          SONAR_BASE_REF: ${{ github.base_ref }}
           SONAR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}

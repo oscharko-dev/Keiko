@@ -80,6 +80,15 @@ queries SonarCloud for the exact PR and rejects stale analysis revisions, a nati
 duplication above 3 percent, or less than 100 percent hotspot review. Missing analysis or metrics
 fail closed. The verifier is independently covered by deterministic API-shaped fixtures.
 
+For the accepted anti-slop epic (#3915), the verifier also checks the reported PR target against
+GitHub's actual base ref and retains Sonar's comparison-branch identity. It accepts only that
+target or the observed `dev` comparison for this exact epic. Every epic child requires the full
+count-aware new-code metrics, including documentation-only children: its own GitHub diff cannot
+justify omitting rate checks when Sonar compares against `dev`. Explicit zero applicability
+counts remain valid; missing metrics and below-floor rates fail closed. This does not retarget
+the scanner, change Sonar settings, or claim that Free-plan epic analysis is a documented service
+guarantee. Each child must still produce the complete exact-head required matrix.
+
 This compensating check is required because the current SonarCloud plan cannot activate the
 custom `Keiko Banking Grade` gate even though its conditions can be created. The required `ci`
 check therefore enforces those conditions without weakening the native Sonar result.
@@ -106,9 +115,11 @@ branches. Coverage-ignore directives are not used to satisfy these thresholds.
 
 The New Code Definition is **not** changed to Reference Branch, even though Sonar's own guidance
 recommends Reference Branch for trunk-based development without a PR workflow. Keiko's workflow is
-PR-gated (branch protection on `dev`, no direct pushes), and SonarCloud's PR analysis always
-computes "new code" as the diff between the PR branch and its target branch regardless of the
-project's New Code Definition setting — so Reference Branch would add no precision here. Instead,
+PR-gated (branch protection on `dev`, no direct pushes), and ordinary `dev` PR analysis computes
+"new code" against the analyzed target independently of the project's New Code Definition setting.
+For the exact anti-slop epic, the observed comparison can instead remain `dev` as recorded in D2;
+the verifier retains that distinction and never uses an epic child's own diff to omit rate checks.
+Changing the project's New Code Definition is not a repair for that comparison. Instead,
 the underlying defect (Autoscan never sets `sonar.projectVersion`, so the `previous_version` period
 degrades to an unnamed `"not provided"` marker) is fixed by resolving the project version from
 `package.json` at scan time and passing it via `-Dsonar.projectVersion`.
@@ -236,8 +247,10 @@ same merge-blocking effect with zero branch-protection changes, mirroring the ex
 
 **Pros**: Sonar's documented default recommendation for trunk-based development. **Cons**: Keiko
 does not do trunk-based development without PRs — it requires PRs via branch protection, and
-SonarCloud's PR analysis already diffs against the target branch regardless of the project-level
-New Code Definition. Reference Branch would add configuration without adding precision.
+ordinary `dev` PR analysis already compares against the analyzed target independently of the
+project-level New Code Definition. The observed anti-slop epic exception is governed by D2;
+changing this setting does not establish an epic analysis baseline. Reference Branch would add
+configuration without resolving either issue.
 **Why rejected**: no material benefit for this workflow; the actual defect (missing project
 version) is a data problem, not a mode problem.
 

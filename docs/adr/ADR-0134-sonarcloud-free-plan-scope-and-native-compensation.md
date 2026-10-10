@@ -144,6 +144,11 @@ are not replaced by these PR gates.
 
 ### D6 — Count-aware Free-plan gate semantics
 
+The exact anti-slop epic target (#3915) never uses a child's documentation-only diff to omit
+new-code rate checks. Sonar's observed comparison can remain `dev`, so every epic child requires
+the complete count-aware metrics after validation of the actual target and comparison identities
+(ADR-0131 D2). Missing metrics fail closed; no plan change or scanner-target override is implied.
+
 The repository verifier enforces all of the following on the exact PR head: native gate `OK`, no
 unresolved PR issues, `new_violations = 0`, new-code coverage at least 85 percent, new-code
 duplication at most 3 percent, and 100 percent review of both new and overall security hotspots.
