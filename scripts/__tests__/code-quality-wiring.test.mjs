@@ -1,13 +1,17 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { URL } from "node:url";
+import { pathToFileURL, URL } from "node:url";
 import { parse } from "yaml";
 import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
 import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
-import { createPolicyFixtureRepository } from "./support/code-quality-fixture.mjs";
+import {
+  createPolicyFixtureRepository,
+  createRuntimePolicyFixture,
+} from "./support/code-quality-fixture.mjs";
 
 const roots = [];
 afterEach(() => {
@@ -103,6 +107,75 @@ describe("production code-quality invocation wiring (#3915)", () => {
       output.mockRestore();
     }
   }, 60_000);
+  it.each([
+    ["logic.ts", "runtime", true],
+    ["testing/logic.ts", "runtime", true],
+    ["_support.ts", "runtime", true],
+    ["testing/logic.ts", "transitive", true],
+    ["testing/logic.ts", "late-alias", true],
+    ["testing/logic.ts", "wrapped-alias", true],
+    ["testing/logic.ts", "public", true],
+    ["testing/logic.ts", "test-only", false],
+    ["testing/logic.ts", "type", false],
+    ["testing/logic.ts", "named-type", true],
+    ["testing/logic.ts", "named-type-export", true],
+  ])(
+    "reconciles compiled/packed %s via %s with real analyzer evidence",
+    async (helper, linkage, production) => {
+      const root = createRuntimePolicyFixture(helper, linkage);
+      roots.push(root);
+      const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        expect(await codeQualityPolicyMain(["--json"], root)).toBe(production ? 1 : 0);
+        const report = JSON.parse(output.mock.calls[0][0]);
+        const path = `packages/alpha/src/${helper}`;
+        expect(report.inventory.files.find((file) => file.path === path).production).toBe(
+          production,
+        );
+        expect(
+          report.census.filter(
+            (finding) => finding.path === path && finding.rule === "anti-slop/no-reflect-apply",
+          ),
+        ).toHaveLength(1);
+        expect(report.counts.violations).toBe(production ? 1 : 0);
+        expect(report.counts.visited).toBe(report.counts.expected);
+        expect(report.pack[0].files).toContain(`dist/${helper.replace(/\.ts$/u, ".js")}`);
+        if (linkage.startsWith("named-type")) {
+          const emitted = readFileSync(join(root, "packages/alpha/dist/index.js"), "utf8");
+          expect(emitted).toContain('{} from "./testing/logic.js"');
+          expect(
+            execFileSync(
+              process.execPath,
+              [
+                "--input-type=module",
+                "-e",
+                `const runtime = await import(${JSON.stringify(pathToFileURL(join(root, "packages/alpha/dist/index.js")).href)}); console.log(JSON.stringify(runtime.value));`,
+              ],
+              { encoding: "utf8", timeout: 10_000 },
+            ).trim(),
+          ).toBe(linkage === "named-type" ? '{"value":1}' : "1");
+        }
+        if (production && !linkage.startsWith("named-type")) {
+          const entry = linkage === "public" ? "dist/testing/logic.js" : "dist/index.js";
+          const target = pathToFileURL(join(root, "packages/alpha", entry)).href;
+          const executed = execFileSync(
+            process.execPath,
+            [
+              "--input-type=module",
+              "-e",
+              `const runtime = await import(${JSON.stringify(target)}); console.log(await runtime.maximum());`,
+            ],
+            { encoding: "utf8", timeout: 10_000 },
+          );
+          expect(executed.trim()).toBe("2");
+        }
+      } finally {
+        output.mockRestore();
+      }
+    },
+    60_000,
+  );
+
   it("executes the whole enforcing policy before typed root/UI lint in required Core quality", () => {
     const manifest = JSON.parse(read("package.json"));
     expect(manifest.scripts["check:code-quality-policy"]).toBe(

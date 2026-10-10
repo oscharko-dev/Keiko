@@ -6,6 +6,7 @@ import ts from "typescript";
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 import { collectWorkspacePackages } from "../workspace-graph.mjs";
 import { isTestPath } from "../sonar-analysis-scope.mjs";
+import { reconcileProductionSources } from "./code-quality-production.mjs";
 import { resolveGitExecutable } from "../check-dependency-hygiene.mjs";
 
 const POLICY_SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
@@ -39,8 +40,8 @@ function classified(scope, production, reason) {
   return { scope, production, reason };
 }
 
-export function classifyPolicyPath(path, packages) {
-  const special = classifyNonProduction(path);
+export function classifyPolicyPath(path, packages, runtime = false) {
+  const special = runtime ? undefined : classifyNonProduction(path);
   if (special !== undefined) return special;
   const owner = packages.find((entry) => path.startsWith(`${entry.directory}/`));
   if (owner !== undefined)
@@ -85,7 +86,7 @@ export function selectPolicyScope(files, id, ci) {
   return { id, partial: id !== "repository", files: selected };
 }
 
-function parsedBuildSources(root, directory, name = "tsconfig.json") {
+function parsedBuildSources(root, directory, contexts, name = "tsconfig.json") {
   const config = join(root, directory, name);
   const configs = new Map();
   const parsed = ts.getParsedCommandLineOfConfigFile(
@@ -108,6 +109,7 @@ function parsedBuildSources(root, directory, name = "tsconfig.json") {
     },
   );
   if (parsed === undefined || parsed.errors.length > 0) throw new TypeError("invalid-build-config");
+  contexts.set(directory, parsed);
   return {
     path: withinRelative(root, config),
     sha256: policyDigest(readFileSync(config)),
@@ -124,14 +126,14 @@ function exportTargets(value) {
   return Object.values(value).flatMap(exportTargets);
 }
 
-function packageInventory(root, entry) {
+function packageInventory(root, entry, contexts) {
   const directory = withinRelative(root, entry.dir);
   const targets = entry.manifest.exports === undefined ? [] : exportTargets(entry.manifest.exports);
   return {
     name: entry.name,
     directory,
     manifestSha256: policyDigest(readFileSync(entry.manifestPath)),
-    build: parsedBuildSources(root, directory),
+    build: parsedBuildSources(root, directory, contexts),
     exports: [...new Set(targets)]
       .sort((left, right) => left.localeCompare(right))
       .map((target) => ({ target, exists: existsSync(join(entry.dir, target)) })),
@@ -180,15 +182,26 @@ export async function collectPolicyInventory(root) {
     (left, right) => left.localeCompare(right),
   );
   const workspaces = await collectWorkspacePackages(root);
-  const packages = workspaces.map((entry) => packageInventory(root, entry));
+  const contexts = new Map();
+  const packages = workspaces.map((entry) => packageInventory(root, entry, contexts));
+  const rootBuild = parsedBuildSources(root, "", contexts, "tsconfig.build.json");
   verifyWorkspaceInventory(paths, packages);
   const files = sourceInventory(root, paths, tracked, packages);
   if (files.length === 0) throw new TypeError("empty-source-inventory");
+  const productionReachability = reconcileProductionSources({
+    root,
+    files,
+    contexts,
+    workspaces,
+    safeFile: safePolicyFile,
+    classify: (path) => classifyPolicyPath(path, packages, true),
+  });
   return {
     subject: policyGit(root, ["rev-parse", "HEAD"]).trim(),
     packages,
     files,
-    rootBuild: parsedBuildSources(root, "", "tsconfig.build.json"),
+    rootBuild,
+    productionReachability,
     rootManifestSha256: policyDigest(readFileSync(join(root, "package.json"))),
     lockSha256: policyDigest(readFileSync(join(root, "package-lock.json"))),
     html: paths

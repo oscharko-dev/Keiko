@@ -38,6 +38,110 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     ]);
   });
 
+  it.each([
+    ['export { value } from "./testing/logic.js";', true],
+    ['import { value } from "./testing/logic.js"; export { value };', true],
+    ['export * from "./testing/logic.js";', true],
+    ['export const value = import("./testing/logic.js");', true],
+    ['export const value = require("./testing/logic.js");', true],
+    ['const path = "./testing/logic.js"; export const value = import(path);', true],
+    ['const a = "./testing/logic.js"; const b = a; export const value = import(b);', true],
+    ["const load = require; export const value = load(`./testing/logic.js`);", true],
+    ['import value = require("./testing/logic.js"); export { value };', true],
+    ['import type { Marker } from "./testing/logic.js"; export type { Marker };', false],
+    ['export { type Marker } from "./testing/logic.js";', false],
+    ['export type * from "./testing/logic.js";', false],
+    ['import { type Marker } from "./testing/logic.js"; export type { Marker };', false],
+  ])("distinguishes actual value edges from type-only syntax: %s", async (entry, production) => {
+    const root = trackedRepository();
+    mkdirSync(join(root, "packages/alpha/src/testing"));
+    writeFileSync(
+      join(root, "packages/alpha/src/testing/logic.ts"),
+      "export const value = 1; export interface Marker { value: number }",
+    );
+    writeFileSync(join(root, "packages/alpha/src/index.ts"), entry);
+    const inventory = await collectPolicyInventory(root);
+    expect(inventory.files.find((file) => file.path.endsWith("testing/logic.ts"))).toMatchObject({
+      production,
+      scope: production ? "package:alpha" : "tests",
+    });
+  });
+
+  it.each([
+    ['import { type Marker } from "./testing/logic.js"; export const value = 1;', true],
+    ['export { type Marker } from "./testing/logic.js";', true],
+    ['import type { Marker } from "./testing/logic.js"; export type { Marker };', false],
+    ['export type { Marker } from "./testing/logic.js";', false],
+  ])(
+    "honors verbatim emission for the actual import/export form: %s",
+    async (entry, production) => {
+      const root = trackedRepository();
+      mkdirSync(join(root, "packages/alpha/src/testing"));
+      writeFileSync(
+        join(root, "packages/alpha/tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: { rootDir: "src", outDir: "dist", verbatimModuleSyntax: true },
+          include: ["src"],
+        }),
+      );
+      writeFileSync(
+        join(root, "packages/alpha/src/testing/logic.ts"),
+        "export interface Marker { value: number }",
+      );
+      writeFileSync(join(root, "packages/alpha/src/index.ts"), entry);
+      expect(
+        (await collectPolicyInventory(root)).files.find((file) =>
+          file.path.endsWith("testing/logic.ts"),
+        ),
+      ).toMatchObject({ production });
+    },
+  );
+
+  it("resolves config-owned paths and transitive source cycles", async () => {
+    const root = trackedRepository();
+    mkdirSync(join(root, "packages/alpha/src/testing"));
+    writeFileSync(
+      join(root, "packages/alpha/tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          rootDir: "src",
+          outDir: "dist",
+          paths: { "@helper": ["./src/testing/logic.ts"] },
+        },
+        include: ["src"],
+      }),
+    );
+    writeFileSync(join(root, "packages/alpha/src/index.ts"), 'export { value } from "@helper";');
+    writeFileSync(
+      join(root, "packages/alpha/src/testing/logic.ts"),
+      'export { value } from "../relay.js";',
+    );
+    writeFileSync(
+      join(root, "packages/alpha/src/relay.ts"),
+      'import "./testing/logic.js"; export const value = 1;',
+    );
+    expect((await collectPolicyInventory(root)).productionReachability.promoted).toEqual([
+      "packages/alpha/src/testing/logic.ts",
+    ]);
+  });
+
+  it("promotes a fixture loaded by repository tooling, not unrelated test helpers", async () => {
+    const root = trackedRepository();
+    mkdirSync(join(root, "scripts/__tests__"), { recursive: true });
+    writeFileSync(join(root, "scripts/runner.mjs"), 'import "./__tests__/helper.mjs";');
+    writeFileSync(join(root, "scripts/__tests__/helper.mjs"), "export const value = 1;");
+    writeFileSync(join(root, "scripts/__tests__/unrelated.mjs"), "export const value = 1;");
+    const inventory = await collectPolicyInventory(root);
+    expect(inventory.files.find((file) => file.path.endsWith("/helper.mjs"))).toMatchObject({
+      production: true,
+      scope: "tooling",
+    });
+    expect(inventory.files.find((file) => file.path.endsWith("/unrelated.mjs"))).toMatchObject({
+      production: false,
+      scope: "tests",
+    });
+  });
+
   it("fails instead of silently dropping an omitted workspace", async () => {
     const root = trackedRepository();
     unlinkSync(join(root, "packages/alpha/package.json"));

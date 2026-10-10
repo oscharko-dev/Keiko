@@ -47,8 +47,18 @@ The inventory accounts for git-tracked JS/TS plus nonignored local additions. It
 membership from the existing workspace graph, build membership from TypeScript's parsed configs,
 and package/export membership from real `npm pack --dry-run --json --ignore-scripts --workspaces`
 output. Missing workspace metadata or unpacked public export targets fail. Test and hostile
-fixture paths remain in the census; `vitest.setup` is test infrastructure. Generated runtime
-source remains production, while declaration files are type-only. Unknown source owners fail.
+fixture paths remain in the census; `vitest.setup` is test infrastructure. Filename classifications
+are provisional: literal runtime imports, re-exports, import-equals, require and dynamic imports
+from production sources reconcile test-looking helpers back into their owning production scope.
+Declaration-level type-only edges do not grant runtime reachability. Named type-only specifiers
+retain a runtime module edge when the owning compiler config preserves their empty import/export
+under `verbatimModuleSyntax`; classification follows that actual emission. Public exports, main and bin targets are mapped
+back to source using TypeScript's actual output metadata, including transitive runtime helpers;
+build-root inclusion alone does not make a genuine test-only fixture production. Config-owned
+module resolution and bounded, cached traversal retain the same complete source/analyzer census.
+Generated runtime source remains production, while declaration files are type-only. Unknown source
+owners fail. This reconciliation does not claim arbitrary computed-loader or virtual generated
+staging-module resolution; owning build, package-surface and runtime proofs continue to govern them.
 
 The design-system HTML files are non-shipped reference documentation. Their source digests and
 distinct inline-script hashes come from the existing CSP producer; this records documentary
