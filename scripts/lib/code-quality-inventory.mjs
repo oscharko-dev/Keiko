@@ -6,7 +6,7 @@ import ts from "typescript";
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 import { collectWorkspacePackages } from "../workspace-graph.mjs";
 import { isTestPath } from "../sonar-analysis-scope.mjs";
-import { reconcileProductionSources } from "./code-quality-production.mjs";
+import { emittedSources, reconcileProductionSources } from "./code-quality-production.mjs";
 import { resolveGitExecutable } from "../check-dependency-hygiene.mjs";
 
 const POLICY_SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
@@ -175,12 +175,19 @@ function safePolicyFile(root, path) {
   }
 }
 
-export async function collectPolicyInventory(root) {
+export function collectPolicyMembership(root) {
   const tracked = new Set(policyGit(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
   const additions = policyGit(root, ["ls-files", "-z", "--others", "--exclude-standard"]);
   const paths = [...new Set([...tracked, ...additions.split("\0").filter(Boolean)])].sort(
     (left, right) => left.localeCompare(right),
   );
+  return { tracked, paths };
+}
+
+export async function collectPolicySubject(root) {
+  root = realpathSync(root);
+  const membership = collectPolicyMembership(root);
+  const { tracked, paths } = membership;
   const workspaces = await collectWorkspacePackages(root);
   const contexts = new Map();
   const packages = workspaces.map((entry) => packageInventory(root, entry, contexts));
@@ -188,15 +195,17 @@ export async function collectPolicyInventory(root) {
   verifyWorkspaceInventory(paths, packages);
   const files = sourceInventory(root, paths, tracked, packages);
   if (files.length === 0) throw new TypeError("empty-source-inventory");
+  const outputs = emittedSources(root, contexts, new Map(files.map((file) => [file.path, file])));
   const productionReachability = reconcileProductionSources({
     root,
     files,
     contexts,
     workspaces,
+    outputs,
     safeFile: safePolicyFile,
     classify: (path) => classifyPolicyPath(path, packages, true),
   });
-  return {
+  const inventory = {
     subject: policyGit(root, ["rev-parse", "HEAD"]).trim(),
     packages,
     files,
@@ -219,6 +228,11 @@ export async function collectPolicyInventory(root) {
         };
       }),
   };
+  return { root: realpathSync(root), inventory, contexts, workspaces, outputs, membership };
+}
+
+export async function collectPolicyInventory(root) {
+  return (await collectPolicySubject(root)).inventory;
 }
 
 export function readPreviousPolicies(root) {
