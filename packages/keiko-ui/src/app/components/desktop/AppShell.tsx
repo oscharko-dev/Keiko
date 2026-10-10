@@ -24,7 +24,6 @@ import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Header, type HeaderStatusTone } from "./Header";
-import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
@@ -241,6 +240,18 @@ function FooterLoading(): ReactNode {
 const Footer = dynamic(() => import("./Footer").then((mod) => mod.Footer), {
   ssr: false,
   loading: FooterLoading,
+});
+
+export function LeftRailLoading({ error }: Readonly<DynamicOptionsLoadingProps>): ReactNode {
+  if (error !== null && error !== undefined) throw error;
+  return <div className="rail rail-left" aria-hidden="true" />;
+}
+
+// Preserve the navigation's layout slot while the client shell loads its existing controls.
+// A failed chunk reaches the shell's diagnostic/recovery boundary, like other shell failures.
+const LeftRail = dynamic(() => import("./LeftRail").then((mod) => mod.LeftRail), {
+  ssr: false,
+  loading: LeftRailLoading,
 });
 
 // Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture

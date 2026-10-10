@@ -1,11 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { axe } from "jest-axe";
 import {
   applyBackgroundModalLock,
   focusedModalOpener,
   persistedChatProjectPath,
   prepareNewWindowCfg,
+  LeftRailLoading,
 } from "./AppShell";
 import type { AppWindow } from "./windows/types";
+
+describe("LeftRailLoading", () => {
+  it("keeps the stable layout slot out of navigation and the keyboard order", async () => {
+    const { container } = render(LeftRailLoading({}));
+    expect(container.firstElementChild).toHaveClass("rail", "rail-left");
+    expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("preserves the failure for the shell's existing recovery boundary", () => {
+    const failure = new Error("Navigation chunk unavailable");
+    expect(() => LeftRailLoading({ error: failure })).toThrow(failure);
+  });
+});
 
 function chatWindow(projectPath: string): AppWindow {
   return {
