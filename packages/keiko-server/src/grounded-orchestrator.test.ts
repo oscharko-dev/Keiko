@@ -47,7 +47,10 @@ import {
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import {
+  buildMatcher,
   importGraphAdapter,
+  repositorySourceLines,
+  repositorySourceMaxLineScore,
   testSourcePairingAdapter,
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import type { MicroIndex, RerankerSeam } from "@oscharko-dev/keiko-workflows";
@@ -81,6 +84,7 @@ import {
   type WorkspaceHardLinkPolicy,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
+import { fittedGroundedGatewayPrompt } from "./grounded-qa.js";
 
 const NOW = 1_700_000_000_000;
 const listingGuardPhase = new AsyncLocalStorage<boolean>();
@@ -295,6 +299,36 @@ function seedCrowdedHandlerTraceRepo(): void {
       "export async function referenceOnly(): Promise<void> { await dispatchWorkUnit(); }\n",
     );
   }
+}
+
+function seedLateRelevantDelegationRepo(): string {
+  const names = Array.from({ length: 32 }, (_value, index) => `refusal${String(index)}`);
+  const noise = "unrelated bookkeeping ".repeat(30);
+  const fact =
+    "const next = candidates.flatMap((candidate) => candidate.recursiveDiscovery ? candidate.children : []);";
+  const body = [
+    "function opaqueStage(candidates: readonly { children: readonly string[]; recursiveDiscovery: boolean }[]) {",
+    `  ${fact}`,
+    "  return next;",
+    "}",
+  ].join("\n");
+  writeFileSync(
+    join(ROOT, "src/routes.ts"),
+    'import { dispatchWorkUnit } from "./service.js";\n' +
+      'const routes = [{ method: "POST", pattern: "/api/opaque/x7", handler: dispatchWorkUnit }];\n',
+  );
+  writeFileSync(
+    join(ROOT, "src/service.ts"),
+    [
+      `export async function dispatchWorkUnit() { ${names.map((name) => `await ${name}();`).join(" ")} return opaqueStage([]); }`,
+      ...names.map(
+        (name) =>
+          `async function ${name}() {\n  const recursive = "${noise}";\n  return recursive;\n}\n\n\n\n\n`,
+      ),
+      body,
+    ].join("\n"),
+  );
+  return fact;
 }
 
 function seedIssue876Repo(): void {
@@ -2248,6 +2282,45 @@ describe("runGroundedExploration", () => {
         "textSearchCount",
       ),
     ).toBe(1);
+  });
+
+  it("sends a deep query-matching definition instead of shallow unrelated same-file helpers", async () => {
+    const fact = seedLateRelevantDelegationRepo();
+    const query = happyQuery({
+      text: "Trace POST /api/opaque/x7 through recursive candidate discovery.",
+      maxResults: 100,
+    });
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query,
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    const selected = out.pack.files.find((file) => file.scopePath === "src/service.ts");
+    expect(selected?.excerpts.some((excerpt) => excerpt.content.includes(fact))).toBe(true);
+    const sent = fittedGroundedGatewayPrompt(
+      query.text,
+      out.pack,
+      (value: unknown): unknown => value,
+    );
+    expect(sent.messages.some((message) => message.content.includes(fact))).toBe(true);
+    const matcher = buildMatcher(query);
+    const evidence = selected?.excerpts.find((excerpt) => excerpt.content.includes(fact));
+    const source = repositorySourceLines(evidence?.content ?? "", "src/service.ts");
+    const expected = repositorySourceMaxLineScore(
+      source.map((line) => ({ score: matcher.match(line.raw, line) })),
+    );
+    expect(expected).toBeGreaterThan(0);
+    expect(evidence?.atom.lineRange).toBeDefined();
+    expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("runs one bounded structural adapter pass for an exact route trace", async () => {

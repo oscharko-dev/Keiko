@@ -5975,6 +5975,34 @@ function groupEvidenceAtomsByPath(
   return grouped;
 }
 
+function referenceTargetMatchesRange(
+  atom: EvidenceAtom,
+  edge: NonNullable<EvidenceAtom["edge"]>,
+): boolean {
+  const range = atom.lineRange;
+  return (
+    range !== undefined &&
+    edge.target.scopePath === atom.scopePath &&
+    edge.target.lineRange?.startLine === range.startLine &&
+    edge.target.lineRange.endLine === range.endLine &&
+    edge.target.symbol !== undefined &&
+    edge.source.lineRange !== undefined
+  );
+}
+
+function exactReferenceDefinitionRange(atom: EvidenceAtom): boolean {
+  return (
+    atom.provenance.tool === "discovered-symbol-definition" &&
+    atom.edge?.kind === "reference" &&
+    atom.edge.confidence === "resolved" &&
+    referenceTargetMatchesRange(atom, atom.edge)
+  );
+}
+
+function discoveredDefinitionContextAfter(atom: EvidenceAtom): number {
+  return exactReferenceDefinitionRange(atom) ? 0 : DISCOVERED_DEFINITION_CONTEXT_AFTER;
+}
+
 function lineWindowForAtom(atom: EvidenceAtom): LineWindow {
   const range = atom.lineRange;
   if (range === undefined) {
@@ -5989,7 +6017,7 @@ function lineWindowForAtom(atom: EvidenceAtom): LineWindow {
   let contextAfter: number;
   if (isDiscoveredDefinition) {
     contextBefore = 0;
-    contextAfter = DISCOVERED_DEFINITION_CONTEXT_AFTER;
+    contextAfter = discoveredDefinitionContextAfter(atom);
   } else {
     const surroundingContext = addSingleLineContext ? SINGLE_LINE_EXCERPT_CONTEXT_LINES : 0;
     contextBefore = surroundingContext;
@@ -6053,8 +6081,26 @@ function nonOverlappingExcerptWindows(
   let index = 0;
   for (const window of windows) {
     while ((selected[index]?.endLine ?? Infinity) < window.startLine) index += 1;
-    if ((selected[index]?.startLine ?? Infinity) > window.endLine) retained.push(window);
+    retained.push(...uncoveredExcerptSegments(window, selected, index));
   }
+  return retained;
+}
+
+function uncoveredExcerptSegments(
+  window: LineWindow,
+  selected: readonly LineWindow[],
+  firstOverlap: number,
+): readonly LineWindow[] {
+  const retained: LineWindow[] = [];
+  let startLine = window.startLine;
+  for (let index = firstOverlap; index < selected.length; index += 1) {
+    const covered = selected[index];
+    if (covered === undefined || covered.startLine > window.endLine) break;
+    if (covered.startLine > startLine) retained.push({ startLine, endLine: covered.startLine - 1 });
+    startLine = Math.max(startLine, covered.endLine + 1);
+    if (startLine > window.endLine) return retained;
+  }
+  if (startLine <= window.endLine) retained.push({ startLine, endLine: window.endLine });
   return retained;
 }
 
@@ -6080,6 +6126,21 @@ function windowIndexContainingLine(windows: readonly LineWindow[], line: number)
   return low - 1;
 }
 
+function retainOverlappingWindowStrength(
+  windows: readonly LineWindow[],
+  strengths: (ExcerptWindowStrength | undefined)[],
+  range: LineWindow,
+  strength: ExcerptWindowStrength,
+): void {
+  const first = Math.max(0, windowIndexContainingLine(windows, range.startLine));
+  for (let index = first; index < windows.length; index += 1) {
+    const window = windows[index];
+    if (window === undefined || window.startLine > range.endLine) break;
+    if (window.endLine >= range.startLine)
+      strengths[index] = strongerExcerptWindow(strength, strengths[index]);
+  }
+}
+
 function rankedExcerptWindows(
   windows: readonly LineWindow[],
   atoms: readonly EvidenceAtom[],
@@ -6094,11 +6155,7 @@ function rankedExcerptWindows(
       unlocated = strongerExcerptWindow(strength, unlocated);
       continue;
     }
-    const index = windowIndexContainingLine(sorted, range.startLine);
-    const window = sorted[index];
-    const current = strengths[index];
-    if (window !== undefined && windowContainsAtom(window, atom))
-      strengths[index] = strongerExcerptWindow(strength, current);
+    retainOverlappingWindowStrength(sorted, strengths, range, strength);
   }
   return sorted
     .map((window, index) => ({

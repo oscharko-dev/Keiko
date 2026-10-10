@@ -112,6 +112,7 @@ export interface CodeSymbol {
   readonly scopePath: string;
   readonly language: CodeLanguage;
   readonly lineRange: LineRange;
+  readonly declarationSpan?: CodeCallEdge["callerSpan"];
   readonly fields: readonly string[];
   readonly parser: CodeParserKind;
 }
@@ -127,6 +128,9 @@ export interface CodeCallEdge {
   readonly resultUsage?: "returned" | undefined;
   readonly awaited?: true | undefined;
   readonly binding?: "lexical" | undefined;
+  readonly targetDeclarationSpan?: CodeSymbol["declarationSpan"];
+  readonly callerDefinition?:
+    Pick<CodeSymbol, "name" | "lineRange" | "declarationSpan"> | undefined;
   readonly callerSpan?:
     | {
         readonly startColumn: number;
@@ -145,6 +149,9 @@ export interface CodeReferenceEdge {
   readonly targetPath: string;
   readonly targetLineRange: LineRange;
   readonly confidence: "resolved" | "heuristic";
+  readonly binding?: "lexical" | undefined;
+  readonly referenceSpan?: CodeCallEdge["callerSpan"];
+  readonly targetDeclarationSpan?: CodeSymbol["declarationSpan"];
   readonly parser: CodeParserKind;
 }
 
@@ -203,6 +210,7 @@ interface SourceFile {
   readonly scopePath: string;
   readonly text: string;
   readonly language: CodeLanguage;
+  readonly partial: boolean;
   readonly parser: CodeParserKind;
   readonly syntaxTree?: ts.SourceFile | undefined;
 }
@@ -219,13 +227,16 @@ interface CodeImportBinding {
   readonly localName: string;
   readonly importedName: string;
   readonly targetPath: string;
+  readonly lexicalTarget?: CodeSymbol | undefined;
 }
 
 interface TypescriptReExportBinding {
   readonly exporterPath: string;
   readonly exportedName?: string | undefined;
   readonly importedName?: string | undefined;
-  readonly targetPath: string;
+  readonly targetPath?: string | undefined;
+  readonly specifier: string;
+  readonly typeOnly?: true | undefined;
 }
 
 interface TypescriptDefaultExport {
@@ -237,11 +248,15 @@ interface TypescriptReExportResolverContext {
   readonly reExportsByFile: ReadonlyMap<string, readonly TypescriptReExportBinding[]>;
   readonly defaultExportsByFile: ReadonlyMap<string, readonly string[]>;
   readonly symbolsByFile: ReadonlyMap<string, readonly CodeSymbol[]>;
+  readonly moduleExportsByFile: ReadonlyMap<string, ReadonlyMap<string, readonly CodeSymbol[]>>;
+  readonly moduleImportsByFile: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
 interface ResolvedTypescriptImportTarget {
   readonly targetPath: string;
   readonly importedName: string;
+  readonly symbol?: CodeSymbol | undefined;
+  readonly blocked?: true | undefined;
 }
 
 interface BuildDeps {
@@ -266,10 +281,17 @@ interface TsPathAlias {
 interface TsImportResolverConfig {
   readonly aliases: readonly TsPathAlias[];
   readonly baseUrls: readonly string[];
+  readonly sourceMappings: readonly TsOutputSourceMapping[];
   readonly packages: readonly WorkspacePackageAlias[];
   readonly goModules: readonly GoModuleAlias[];
   readonly filesSkipped: number;
   readonly truncated: boolean;
+}
+
+interface TsOutputSourceMapping {
+  readonly configDir: string;
+  readonly rootDir: string;
+  readonly outDir: string;
 }
 
 interface MetadataCollection<T> {
@@ -288,6 +310,7 @@ interface WorkspacePackageAlias {
   readonly root: string;
   readonly manifestPath: string;
   readonly entryTargets: readonly string[];
+  readonly explicitEntryTargets?: readonly string[] | undefined;
   readonly exports: readonly WorkspacePackageExport[];
   readonly dependencies: readonly {
     readonly name: string;
@@ -645,14 +668,19 @@ function exportTargets(value: unknown): readonly string[] {
   return out;
 }
 
-function packageEntryTargets(parsed: Record<string, unknown>): readonly string[] {
-  const exportsTargets = isRecord(parsed.exports)
+function explicitPackageEntryTargets(parsed: Record<string, unknown>): readonly string[] {
+  return isRecord(parsed.exports)
     ? exportTargets(parsed.exports["."])
     : exportTargets(parsed.exports);
+}
+
+function packageEntryTargets(parsed: Record<string, unknown>): readonly string[] {
+  const exportsTargets = explicitPackageEntryTargets(parsed);
   const fallback = [parsed.module, parsed.main, parsed.types].filter(
     (value): value is string => typeof value === "string",
   );
-  return [...new Set([...exportsTargets, ...fallback, "."])];
+  const targets = [...new Set([...exportsTargets, ...fallback])];
+  return targets.length > 0 || parsed.exports !== undefined ? targets : ["."];
 }
 
 function packageExports(parsed: Record<string, unknown>): readonly WorkspacePackageExport[] {
@@ -742,6 +770,9 @@ function collectWorkspacePackages(
       root: tsconfigDir(candidate.relativePath),
       manifestPath: candidate.relativePath,
       entryTargets: packageEntryTargets(parsed),
+      ...(parsed.exports === undefined
+        ? {}
+        : { explicitEntryTargets: explicitPackageEntryTargets(parsed) }),
       exports: packageExports(parsed),
       dependencies: packageDependencies(parsed),
     });
@@ -832,6 +863,15 @@ function collectTsConfigAliases(
   }
 }
 
+function collectExplicitSourceMapping(
+  mappings: TsOutputSourceMapping[],
+  options: Readonly<Record<string, unknown>>,
+  configDir: string,
+): void {
+  if (typeof options.rootDir !== "string" || typeof options.outDir !== "string") return;
+  mappings.push({ configDir, rootDir: options.rootDir, outDir: options.outDir });
+}
+
 function collectTsImportResolverConfig(
   scope: SearchScope,
   fs: WorkspaceFs,
@@ -840,6 +880,7 @@ function collectTsImportResolverConfig(
 ): TsImportResolverConfig {
   const aliases: TsPathAlias[] = [];
   const baseUrls: string[] = [];
+  const sourceMappings: TsOutputSourceMapping[] = [];
   let filesSkipped = 0;
   let truncated = false;
   for (const candidate of candidates) {
@@ -858,6 +899,7 @@ function collectTsImportResolverConfig(
     if (compilerOptions === undefined) continue;
     const baseUrl = typeof compilerOptions.baseUrl === "string" ? compilerOptions.baseUrl : ".";
     const configDir = tsconfigDir(candidate.relativePath);
+    collectExplicitSourceMapping(sourceMappings, compilerOptions, configDir);
     if (typeof compilerOptions.baseUrl === "string") {
       baseUrls.push(normalizeScopePath(posix.join(configDir, compilerOptions.baseUrl)));
     }
@@ -868,6 +910,7 @@ function collectTsImportResolverConfig(
   return {
     aliases,
     baseUrls: [...new Set(baseUrls)],
+    sourceMappings,
     packages: packages.items,
     goModules: goModules.items,
     filesSkipped: filesSkipped + packages.filesSkipped + goModules.filesSkipped,
@@ -955,12 +998,59 @@ function resolveTsAliasTarget(
   return undefined;
 }
 
+function containedMappingDirectory(value: string): string | undefined {
+  if (
+    value.length === 0 ||
+    posix.isAbsolute(value) ||
+    value.includes("\\") ||
+    /^[A-Za-z]:/u.test(value)
+  )
+    return undefined;
+  const directory = posix.normalize(value);
+  return directory === ".." || directory.startsWith("../") ? undefined : directory;
+}
+
+function owningPackageSourceMapping(
+  pkg: WorkspacePackageAlias,
+  mappings: readonly TsOutputSourceMapping[],
+): TsOutputSourceMapping | undefined {
+  const owning = mappings.filter((mapping) => mapping.configDir === pkg.root);
+  const first = owning[0];
+  return first !== undefined &&
+    owning.every((mapping) => mapping.rootDir === first.rootDir && mapping.outDir === first.outDir)
+    ? first
+    : undefined;
+}
+
+function resolveMappedPackageSource(
+  pathSet: ReadonlySet<string>,
+  pkg: WorkspacePackageAlias,
+  target: string,
+  mappings: readonly TsOutputSourceMapping[],
+): string | undefined {
+  const mapping = owningPackageSourceMapping(pkg, mappings);
+  if (mapping === undefined) return undefined;
+  const root = containedMappingDirectory(mapping.rootDir);
+  const output = containedMappingDirectory(mapping.outDir);
+  const relativeTarget = containedMappingDirectory(target);
+  if (root === undefined || output === undefined || relativeTarget === undefined || root === output)
+    return undefined;
+  const prefix = `${output}/`;
+  if (!relativeTarget.startsWith(prefix)) return undefined;
+  const source = posix.join(pkg.root, root, relativeTarget.slice(prefix.length));
+  return resolveSourceSiblingCandidate(pathSet, source);
+}
+
 function resolvePackageTargetPath(
   pathSet: ReadonlySet<string>,
   pkg: WorkspacePackageAlias,
   target: string,
+  mappings: readonly TsOutputSourceMapping[],
 ): string | undefined {
-  return resolveSourceSiblingCandidate(pathSet, posix.join(pkg.root, target));
+  return (
+    resolveSourceSiblingCandidate(pathSet, posix.join(pkg.root, target)) ??
+    resolveMappedPackageSource(pathSet, pkg, target, mappings)
+  );
 }
 
 function resolveSourceSiblingCandidate(
@@ -980,9 +1070,12 @@ function resolveSourceSiblingCandidate(
 function resolveWorkspacePackageEntry(
   pathSet: ReadonlySet<string>,
   pkg: WorkspacePackageAlias,
+  mappings: readonly TsOutputSourceMapping[],
+  lexical: boolean,
 ): string | undefined {
-  for (const target of pkg.entryTargets) {
-    const resolved = resolvePackageTargetPath(pathSet, pkg, target);
+  const targets = lexical ? (pkg.explicitEntryTargets ?? pkg.entryTargets) : pkg.entryTargets;
+  for (const target of targets) {
+    const resolved = resolvePackageTargetPath(pathSet, pkg, target, mappings);
     if (resolved !== undefined) return resolved;
   }
   return undefined;
@@ -992,15 +1085,24 @@ function resolveWorkspacePackageSubpath(
   subpath: string,
   pathSet: ReadonlySet<string>,
   pkg: WorkspacePackageAlias,
+  mappings: readonly TsOutputSourceMapping[],
+  lexical: boolean,
 ): string | undefined {
   const exact = pkg.exports.find((item) => item.subpath === subpath);
   const wildcard = pkg.exports
     .map((item) => ({ item, substitution: wildcardSubstitution(item.subpath, subpath) }))
     .find((entry) => entry.substitution !== undefined);
+  if (
+    lexical &&
+    pkg.explicitEntryTargets !== undefined &&
+    exact === undefined &&
+    wildcard === undefined
+  )
+    return undefined;
   const targets = exact?.targets ?? wildcard?.item.targets ?? [subpath];
   const substitution = wildcard?.substitution ?? "";
   for (const target of targets.map((candidate) => applyWildcard(candidate, substitution))) {
-    const resolved = resolvePackageTargetPath(pathSet, pkg, target);
+    const resolved = resolvePackageTargetPath(pathSet, pkg, target, mappings);
     if (resolved !== undefined) return resolved;
   }
   return undefined;
@@ -1010,12 +1112,14 @@ function resolveWorkspacePackageTarget(
   specifier: string,
   pathSet: ReadonlySet<string>,
   resolver: TsImportResolverConfig,
+  lexical: boolean,
 ): string | undefined {
   for (const pkg of resolver.packages) {
-    if (specifier === pkg.name) return resolveWorkspacePackageEntry(pathSet, pkg);
+    if (specifier === pkg.name)
+      return resolveWorkspacePackageEntry(pathSet, pkg, resolver.sourceMappings, lexical);
     if (!specifier.startsWith(`${pkg.name}/`)) continue;
     const subpath = specifier.slice(pkg.name.length + 1);
-    return resolveWorkspacePackageSubpath(subpath, pathSet, pkg);
+    return resolveWorkspacePackageSubpath(subpath, pathSet, pkg, resolver.sourceMappings, lexical);
   }
   return undefined;
 }
@@ -1100,10 +1204,11 @@ function resolveTypescriptImportTarget(
   specifier: string,
   pathSet: ReadonlySet<string>,
   resolver: TsImportResolverConfig,
+  lexical = false,
 ): string | undefined {
   return (
     resolveTsAliasTarget(specifier, pathSet, resolver) ??
-    resolveWorkspacePackageTarget(specifier, pathSet, resolver)
+    resolveWorkspacePackageTarget(specifier, pathSet, resolver, lexical)
   );
 }
 
@@ -1380,6 +1485,37 @@ function resolvedTargetsBySpecifier(
   return targets;
 }
 
+function certifiedModuleImportPath(
+  edge: CodeImportEdge,
+  pathSet: ReadonlySet<string>,
+  resolver: TsImportResolverConfig,
+): string | undefined {
+  if (edge.language !== "typescript" && edge.language !== "javascript") return undefined;
+  if (edge.specifier.startsWith(".") || edge.specifier.startsWith("/"))
+    return resolveLocalImport(edge, pathSet).targetPath;
+  if (edge.specifier.startsWith("@/"))
+    return resolveCandidate(pathSet, `src/${edge.specifier.slice(2)}`, JS_EXTENSIONS);
+  return resolveTypescriptImportTarget(edge.specifier, pathSet, resolver, true);
+}
+
+function certifiedModuleImportsByFile(
+  imports: readonly CodeImportEdge[],
+  pathSet: ReadonlySet<string>,
+  resolver: TsImportResolverConfig,
+  control: StructuralExecutionControl,
+): TypescriptReExportResolverContext["moduleImportsByFile"] {
+  const files = new Map<string, Map<string, string>>();
+  for (const edge of imports) {
+    if (structuralExecutionStopped(control)) return new Map();
+    const target = certifiedModuleImportPath(edge, pathSet, resolver);
+    if (target === undefined || target !== edge.targetPath) continue;
+    const targets = files.get(edge.importerPath) ?? new Map<string, string>();
+    targets.set(edge.specifier, target);
+    files.set(edge.importerPath, targets);
+  }
+  return files;
+}
+
 function appendTypescriptImportBinding(
   bindings: CodeImportBinding[],
   file: SourceFile,
@@ -1388,15 +1524,22 @@ function appendTypescriptImportBinding(
   specifier: string,
   localName: string,
   importedName: string,
+  runtimeBinding = true,
 ): void {
   const targetPath = targetBySpecifier.get(specifier);
   if (targetPath === undefined) return;
   const resolved = resolveTypescriptReExportedSymbol(targetPath, importedName, resolver);
+  const lexical =
+    runtimeBinding &&
+    resolver.moduleImportsByFile.get(file.scopePath)?.get(specifier) === targetPath
+      ? resolveTypescriptReExportedSymbol(targetPath, importedName, resolver, new Set(), 0, true)
+      : undefined;
   bindings.push({
     importerPath: file.scopePath,
     localName,
     importedName: resolved?.importedName ?? importedName,
     targetPath: resolved?.targetPath ?? targetPath,
+    ...(lexical?.symbol === undefined ? {} : { lexicalTarget: lexical.symbol }),
   });
 }
 
@@ -1419,6 +1562,7 @@ function appendTypescriptImportDeclarationBindings(
       specifier,
       clause.name.text,
       "default",
+      clause.phaseModifier !== typeScriptCompiler().SyntaxKind.TypeKeyword,
     );
   }
   if (
@@ -1435,6 +1579,7 @@ function appendTypescriptImportDeclarationBindings(
       specifier,
       element.name.text,
       element.propertyName?.text ?? element.name.text,
+      clause.phaseModifier !== typeScriptCompiler().SyntaxKind.TypeKeyword && !element.isTypeOnly,
     );
   }
 }
@@ -1582,11 +1727,16 @@ function appendTypescriptReExportBindings(
   statement: ts.ExportDeclaration,
 ): void {
   const specifier = stringLiteralText(statement.moduleSpecifier);
-  const targetPath = specifier === undefined ? undefined : targetBySpecifier.get(specifier);
-  if (targetPath === undefined) return;
+  if (specifier === undefined) return;
+  const targetPath = targetBySpecifier.get(specifier);
   const clause = statement.exportClause;
   if (clause === undefined) {
-    bindings.push({ exporterPath, targetPath });
+    bindings.push({
+      exporterPath,
+      targetPath,
+      specifier,
+      ...(statement.isTypeOnly ? { typeOnly: true } : {}),
+    });
     return;
   }
   if (!typeScriptCompiler().isNamedExports(clause)) return;
@@ -1596,6 +1746,8 @@ function appendTypescriptReExportBindings(
       exportedName: element.name.text,
       importedName: element.propertyName?.text ?? element.name.text,
       targetPath,
+      specifier,
+      ...(statement.isTypeOnly || element.isTypeOnly ? { typeOnly: true } : {}),
     });
   }
 }
@@ -1669,10 +1821,126 @@ function collectTypescriptDefaultExports(file: SourceFile): readonly TypescriptD
   return defaults;
 }
 
+function topLevelSymbolDeclarations(statement: ts.Statement): readonly ts.Node[] {
+  const compiler = typeScriptCompiler();
+  if (compiler.isVariableStatement(statement)) return [...statement.declarationList.declarations];
+  return [statement];
+}
+
+function topLevelDeclaredSymbols(
+  file: SourceFile,
+  symbols: readonly CodeSymbol[],
+): ReadonlyMap<string, readonly CodeSymbol[]> {
+  const source = file.syntaxTree;
+  const byName = new Map<string, CodeSymbol[]>();
+  if (source === undefined) return byName;
+  for (const statement of source.statements) {
+    for (const declaration of topLevelSymbolDeclarations(statement)) {
+      const span = nodeSourceSpan(source, declaration);
+      const range = nodeLineRange(source, declaration);
+      for (const symbol of symbols) {
+        if (
+          !sameLineRange(symbol.lineRange, range) ||
+          !sameSourceSpan(symbol.declarationSpan, span)
+        )
+          continue;
+        byName.set(symbol.name, [...(byName.get(symbol.name) ?? []), symbol]);
+      }
+    }
+  }
+  return byName;
+}
+
+function hasExportModifier(node: ts.Node): boolean {
+  const compiler = typeScriptCompiler();
+  return (
+    compiler.canHaveModifiers(node) &&
+    compiler
+      .getModifiers(node)
+      ?.some((modifier) => modifier.kind === compiler.SyntaxKind.ExportKeyword) === true
+  );
+}
+
+function localModuleExportNames(
+  statement: ts.Statement,
+): readonly { readonly name: string; readonly local: string }[] {
+  const compiler = typeScriptCompiler();
+  if (compiler.isExportDeclaration(statement)) {
+    if (
+      statement.moduleSpecifier !== undefined ||
+      statement.isTypeOnly ||
+      statement.exportClause === undefined ||
+      !compiler.isNamedExports(statement.exportClause)
+    )
+      return [];
+    return statement.exportClause.elements
+      .filter((element) => !element.isTypeOnly)
+      .map((element) => ({
+        name: element.name.text,
+        local: element.propertyName?.text ?? element.name.text,
+      }));
+  }
+  if (compiler.isExportAssignment(statement) && !statement.isExportEquals) {
+    return [
+      {
+        name: "default",
+        local: compiler.isIdentifier(statement.expression) ? statement.expression.text : "default",
+      },
+    ];
+  }
+  if (!hasExportModifier(statement)) return [];
+  return topLevelSymbolDeclarations(statement).flatMap((node) => {
+    const name =
+      callableDeclarationName(node) ??
+      (compiler.isClassDeclaration(node) ? declarationNameText(node.name) : undefined);
+    return name === undefined
+      ? []
+      : [{ name: hasDefaultModifier(statement) ? "default" : name, local: name }];
+  });
+}
+
+function collectTypescriptModuleExports(
+  file: SourceFile,
+  symbols: readonly CodeSymbol[],
+): ReadonlyMap<string, readonly CodeSymbol[]> {
+  const exports = new Map<string, CodeSymbol[]>();
+  if (file.syntaxTree === undefined) return exports;
+  const local = topLevelDeclaredSymbols(file, symbols);
+  for (const statement of file.syntaxTree.statements) {
+    for (const binding of localModuleExportNames(statement)) {
+      exports.set(binding.name, [
+        ...(exports.get(binding.name) ?? []),
+        ...(local.get(binding.local) ?? []),
+      ]);
+    }
+  }
+  return exports;
+}
+
+function moduleExportsByFile(
+  files: readonly SourceFile[],
+  symbolsByFile: ReadonlyMap<string, readonly CodeSymbol[]>,
+  control: StructuralExecutionControl,
+): TypescriptReExportResolverContext["moduleExportsByFile"] {
+  const exports = new Map<string, ReadonlyMap<string, readonly CodeSymbol[]>>();
+  for (const file of files) {
+    if (structuralExecutionStopped(control)) return new Map();
+    if (file.syntaxTree === undefined || file.partial) continue;
+    exports.set(
+      file.scopePath,
+      collectTypescriptModuleExports(file, symbolsByFile.get(file.scopePath) ?? []),
+    );
+  }
+  return structuralExecutionStopped(control) ? new Map() : exports;
+}
+
 function buildTypescriptReExportResolverContext(
   reExports: readonly TypescriptReExportBinding[],
   defaultExports: readonly TypescriptDefaultExport[],
   symbols: readonly CodeSymbol[],
+  files: readonly SourceFile[],
+  control: StructuralExecutionControl,
+  moduleImports: TypescriptReExportResolverContext["moduleImportsByFile"],
 ): TypescriptReExportResolverContext {
   const reExportsByFile = new Map<string, TypescriptReExportBinding[]>();
   for (const binding of reExports) {
@@ -1692,7 +1960,13 @@ function buildTypescriptReExportResolverContext(
   for (const symbol of symbols) {
     symbolsByFile.set(symbol.scopePath, [...(symbolsByFile.get(symbol.scopePath) ?? []), symbol]);
   }
-  return { reExportsByFile, defaultExportsByFile, symbolsByFile };
+  return {
+    reExportsByFile,
+    defaultExportsByFile,
+    symbolsByFile,
+    moduleExportsByFile: moduleExportsByFile(files, symbolsByFile, control),
+    moduleImportsByFile: moduleImports,
+  };
 }
 
 function fileDefinesTypescriptSymbol(
@@ -1708,6 +1982,7 @@ interface TypescriptReExportResolutionRequest {
   readonly resolver: TypescriptReExportResolverContext;
   readonly seen: ReadonlySet<string>;
   readonly depth: number;
+  readonly lexical: boolean;
 }
 
 function resolveDefaultTypescriptExport(
@@ -1727,14 +2002,25 @@ function resolveTypescriptReExportBinding(
   importedName: string,
   request: TypescriptReExportResolutionRequest,
 ): ResolvedTypescriptImportTarget | undefined {
+  if (binding.targetPath === undefined)
+    return request.lexical
+      ? blockedTypescriptExport(binding.exporterPath, importedName)
+      : undefined;
+  if (
+    request.lexical &&
+    request.resolver.moduleImportsByFile.get(binding.exporterPath)?.get(binding.specifier) !==
+      binding.targetPath
+  )
+    return blockedTypescriptExport(binding.targetPath, importedName);
   const resolved = resolveTypescriptReExportedSymbol(
     binding.targetPath,
     importedName,
     request.resolver,
     request.seen,
     request.depth + 1,
+    request.lexical,
   );
-  if (resolved !== undefined) return resolved;
+  if (resolved !== undefined || request.lexical) return resolved;
   return fileDefinesTypescriptSymbol(request.resolver, binding.targetPath, importedName)
     ? { targetPath: binding.targetPath, importedName }
     : undefined;
@@ -1744,6 +2030,14 @@ function resolveNamedTypescriptReExport(
   bindings: readonly TypescriptReExportBinding[],
   request: TypescriptReExportResolutionRequest,
 ): ResolvedTypescriptImportTarget | undefined {
+  if (request.lexical) {
+    const matching = bindings.filter((binding) => binding.exportedName === request.exportedName);
+    if (matching.length !== 1 || matching[0]?.importedName === undefined)
+      return matching.length === 0
+        ? undefined
+        : blockedTypescriptExport(matching[0]?.exporterPath ?? "", request.exportedName);
+    return resolveTypescriptReExportBinding(matching[0], matching[0].importedName, request);
+  }
   for (const binding of bindings) {
     if (binding.exportedName !== request.exportedName || binding.importedName === undefined) {
       continue;
@@ -1758,6 +2052,19 @@ function resolveWildcardTypescriptReExport(
   bindings: readonly TypescriptReExportBinding[],
   request: TypescriptReExportResolutionRequest,
 ): ResolvedTypescriptImportTarget | undefined {
+  if (request.lexical) {
+    const resolutions = bindings
+      .filter((binding) => binding.exportedName === undefined)
+      .map((binding) => resolveTypescriptReExportBinding(binding, request.exportedName, request));
+    const blocked = resolutions.find((target) => target?.blocked === true);
+    if (blocked !== undefined) return blocked;
+    const targets = resolutions.filter((target) => target?.symbol !== undefined);
+    const first = targets[0];
+    if (first === undefined) return undefined;
+    return targets.every((target) => target?.symbol === first.symbol)
+      ? first
+      : blockedTypescriptExport(first.targetPath, request.exportedName);
+  }
   for (const binding of bindings) {
     if (binding.exportedName !== undefined) continue;
     const resolved = resolveTypescriptReExportBinding(binding, request.exportedName, request);
@@ -1766,33 +2073,74 @@ function resolveWildcardTypescriptReExport(
   return undefined;
 }
 
+function blockedTypescriptExport(
+  targetPath: string,
+  importedName: string,
+): ResolvedTypescriptImportTarget {
+  return { targetPath, importedName, blocked: true };
+}
+
+function directLexicalModuleExport(
+  exporterPath: string,
+  exportedName: string,
+  resolver: TypescriptReExportResolverContext,
+): ResolvedTypescriptImportTarget | undefined {
+  const exports = resolver.moduleExportsByFile.get(exporterPath);
+  if (exports === undefined) return blockedTypescriptExport(exporterPath, exportedName);
+  const local = exports.get(exportedName);
+  if (local === undefined) return undefined;
+  if (
+    (resolver.reExportsByFile.get(exporterPath) ?? []).some(
+      (binding) => binding.typeOnly !== true && binding.exportedName === exportedName,
+    )
+  )
+    return blockedTypescriptExport(exporterPath, exportedName);
+  const symbol = local.length === 1 ? local[0] : undefined;
+  return symbol === undefined
+    ? blockedTypescriptExport(exporterPath, exportedName)
+    : { targetPath: exporterPath, importedName: symbol.name, symbol };
+}
+
 function resolveTypescriptReExportedSymbol(
   exporterPath: string,
   exportedName: string,
   resolver: TypescriptReExportResolverContext,
   seen: ReadonlySet<string> = new Set(),
   depth = 0,
+  lexical = false,
 ): ResolvedTypescriptImportTarget | undefined {
   if (depth > RE_EXPORT_RESOLUTION_DEPTH_LIMIT) {
-    return undefined;
+    return lexical ? blockedTypescriptExport(exporterPath, exportedName) : undefined;
   }
   const key = `${exporterPath}\0${exportedName}`;
   if (seen.has(key)) {
-    return undefined;
+    return lexical ? blockedTypescriptExport(exporterPath, exportedName) : undefined;
   }
   const nextSeen = new Set(seen);
   nextSeen.add(key);
-  if (exportedName === "default") {
+  if (lexical) {
+    const direct = directLexicalModuleExport(exporterPath, exportedName, resolver);
+    if (direct !== undefined) return direct;
+  }
+  if (!lexical && exportedName === "default") {
     const resolvedDefault = resolveDefaultTypescriptExport(exporterPath, resolver);
     if (resolvedDefault !== undefined) return resolvedDefault;
   }
-  if (fileDefinesTypescriptSymbol(resolver, exporterPath, exportedName)) {
+  if (!lexical && fileDefinesTypescriptSymbol(resolver, exporterPath, exportedName)) {
     return { targetPath: exporterPath, importedName: exportedName };
   }
-  const reExports = resolver.reExportsByFile.get(exporterPath) ?? [];
-  const request = { exportedName, resolver, seen: nextSeen, depth };
+  const allReExports = resolver.reExportsByFile.get(exporterPath) ?? [];
+  const reExports = lexical
+    ? allReExports.filter((binding) => binding.typeOnly !== true)
+    : allReExports;
+  const request = { exportedName, resolver, seen: nextSeen, depth, lexical };
   const named = resolveNamedTypescriptReExport(reExports, request);
-  if (named !== undefined || exportedName === "default") return named;
+  if (
+    named !== undefined ||
+    exportedName === "default" ||
+    (lexical && reExports.some((binding) => binding.exportedName === exportedName))
+  )
+    return named;
   return resolveWildcardTypescriptReExport(reExports, request);
 }
 
@@ -2460,6 +2808,7 @@ function collectTypescriptSymbols(file: SourceFile): readonly CodeSymbol[] {
       scopePath: file.scopePath,
       language: file.language,
       lineRange: nodeLineRange(sourceFile, node),
+      declarationSpan: nodeSourceSpan(sourceFile, node),
       fields,
       parser: "typescript-compiler-ast",
     });
@@ -2998,12 +3347,12 @@ function callIsDirectlyAwaited(node: ts.CallExpression): boolean {
   return false;
 }
 
-function callSourceSpan(
+function nodeSourceSpan(
   source: ts.SourceFile,
-  call: ts.CallExpression,
+  node: ts.Node,
 ): NonNullable<CodeCallEdge["callerSpan"]> {
-  const start = source.getLineAndCharacterOfPosition(call.getStart(source));
-  const end = source.getLineAndCharacterOfPosition(call.getEnd());
+  const start = source.getLineAndCharacterOfPosition(node.getStart(source));
+  const end = source.getLineAndCharacterOfPosition(node.getEnd());
   return { startColumn: start.character, endLine: end.line + 1, endColumn: end.character };
 }
 
@@ -3072,11 +3421,11 @@ function collectCallBindingScopes(source: ts.SourceFile): CallBindingScopes {
 }
 
 function visibleCallBinding(
-  call: ts.CallExpression,
+  reference: ts.Node,
   name: string,
   scopes: CallBindingScopes,
 ): readonly ts.Node[] | undefined {
-  let node = call.parent;
+  let node = reference.parent;
   for (;;) {
     const binding = scopes.get(node)?.get(name);
     if (binding !== undefined) return binding;
@@ -3085,19 +3434,21 @@ function visibleCallBinding(
   }
 }
 
-function certifiedIdentifierCallTarget(
+function certifiedIdentifierTarget(
   file: SourceFile,
-  call: ts.CallExpression,
-  name: string,
+  identifier: ts.Identifier,
   scopes: CallBindingScopes,
   byName: ReadonlyMap<string, readonly CodeSymbol[]>,
   importBindings: readonly CodeImportBinding[],
 ): CodeSymbol | undefined {
-  if (!typeScriptCompiler().isIdentifier(call.expression)) return undefined;
-  const binding = visibleCallBinding(call, name, scopes);
+  const name = identifier.text;
+  const binding = visibleCallBinding(identifier, name, scopes);
   if (binding === undefined) {
-    const imported = resolveImportedSymbolTarget(name, byName, importBindings);
-    return imported?.parser === "typescript-compiler-ast" ? imported : undefined;
+    const imports = importBindings.filter((candidate) => candidate.localName === name);
+    const imported = imports.length === 1 ? imports[0]?.lexicalTarget : undefined;
+    return imported?.parser === "typescript-compiler-ast" && imported.declarationSpan !== undefined
+      ? imported
+      : undefined;
   }
   const declaration = binding.length === 1 ? binding[0] : undefined;
   if (
@@ -3107,13 +3458,95 @@ function certifiedIdentifierCallTarget(
   )
     return undefined;
   const range = nodeLineRange(file.syntaxTree, declaration);
+  const span = nodeSourceSpan(file.syntaxTree, declaration);
   return (byName.get(name.toLowerCase()) ?? []).find(
     (symbol) =>
       symbol.parser === "typescript-compiler-ast" &&
       symbol.name === name &&
       symbol.scopePath === file.scopePath &&
-      sameLineRange(symbol.lineRange, range),
+      sameLineRange(symbol.lineRange, range) &&
+      sameSourceSpan(symbol.declarationSpan, span),
   );
+}
+
+function certifiedIdentifierCallTarget(
+  file: SourceFile,
+  call: ts.CallExpression,
+  scopes: CallBindingScopes,
+  byName: ReadonlyMap<string, readonly CodeSymbol[]>,
+  importBindings: readonly CodeImportBinding[],
+): CodeSymbol | undefined {
+  return typeScriptCompiler().isIdentifier(call.expression)
+    ? certifiedIdentifierTarget(file, call.expression, scopes, byName, importBindings)
+    : undefined;
+}
+
+function sameSourceSpan(
+  left: CodeSymbol["declarationSpan"],
+  right: CodeSymbol["declarationSpan"],
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  return (
+    left.startColumn === right.startColumn &&
+    left.endLine === right.endLine &&
+    left.endColumn === right.endColumn
+  );
+}
+
+function callableDeclaration(node: ts.Node): ts.Node | undefined {
+  const compiler = typeScriptCompiler();
+  if (compiler.isFunctionDeclaration(node) || compiler.isMethodDeclaration(node)) return node;
+  if (!compiler.isFunctionExpression(node) && !compiler.isArrowFunction(node)) return undefined;
+  let expression: ts.Node = node;
+  while (transparentReturnedExpression(expression.parent)) expression = expression.parent;
+  const parent = expression.parent;
+  return (compiler.isVariableDeclaration(parent) && parent.initializer === expression) ||
+    (compiler.isExportAssignment(parent) &&
+      !parent.isExportEquals &&
+      parent.expression === expression)
+    ? parent
+    : undefined;
+}
+
+function callableDeclarationName(node: ts.Node): string | undefined {
+  const compiler = typeScriptCompiler();
+  if (compiler.isExportAssignment(node)) return "default";
+  if (compiler.isFunctionDeclaration(node))
+    return declarationNameText(node.name) ?? (hasDefaultModifier(node) ? "default" : undefined);
+  if (compiler.isMethodDeclaration(node) || compiler.isVariableDeclaration(node))
+    return declarationNameText(node.name);
+  return undefined;
+}
+
+function containingCallableDefinition(
+  file: SourceFile,
+  call: ts.CallExpression,
+  byName: ReadonlyMap<string, readonly CodeSymbol[]>,
+): CodeCallEdge["callerDefinition"] {
+  if (file.syntaxTree === undefined) return undefined;
+  let owner: ts.Node = call.parent;
+  while (!typeScriptCompiler().isSourceFile(owner)) {
+    if (typeScriptCompiler().isFunctionLike(owner)) {
+      const declaration = callableDeclaration(owner);
+      const name = declaration === undefined ? undefined : callableDeclarationName(declaration);
+      if (declaration === undefined || name === undefined) return undefined;
+      const range = nodeLineRange(file.syntaxTree, declaration);
+      const span = nodeSourceSpan(file.syntaxTree, declaration);
+      const symbol = (byName.get(name.toLowerCase()) ?? []).find(
+        (candidate) =>
+          candidate.parser === "typescript-compiler-ast" &&
+          candidate.scopePath === file.scopePath &&
+          candidate.name === name &&
+          sameLineRange(candidate.lineRange, range) &&
+          sameSourceSpan(candidate.declarationSpan, span),
+      );
+      return symbol === undefined
+        ? undefined
+        : { name: symbol.name, lineRange: symbol.lineRange, declarationSpan: span };
+    }
+    owner = owner.parent;
+  }
+  return undefined;
 }
 
 function collectTypescriptCalls(
@@ -3135,7 +3568,6 @@ function collectTypescriptCalls(
         const certified = certifiedIdentifierCallTarget(
           file,
           node,
-          name,
           bindingScopes,
           byName,
           importBindings,
@@ -3148,17 +3580,21 @@ function collectTypescriptCalls(
               : { ...heuristic, confidence: "heuristic" as const }
             : { symbol: certified, confidence: "resolved" as const };
         if (resolved !== undefined) {
+          const callerDefinition = containingCallableDefinition(file, node, byName);
           calls.push({
             callerPath: file.scopePath,
             callerLine: nodeStartLine(sourceFile, node),
-            callerSpan: callSourceSpan(sourceFile, node),
+            callerSpan: nodeSourceSpan(sourceFile, node),
+            ...(callerDefinition === undefined ? {} : { callerDefinition }),
             calleeName: name,
             targetName: resolved.symbol.name,
             targetPath: resolved.symbol.scopePath,
             targetLineRange: resolved.symbol.lineRange,
             confidence: resolved.confidence,
             parser: "typescript-compiler-ast",
-            ...(certified === undefined ? {} : { binding: "lexical" as const }),
+            ...(certified === undefined
+              ? {}
+              : { binding: "lexical" as const, targetDeclarationSpan: certified.declarationSpan }),
             ...(callReturnsOwnValue(node) ? { resultUsage: "returned" as const } : {}),
             ...(callIsDirectlyAwaited(node) ? { awaited: true as const } : {}),
           });
@@ -3331,21 +3767,36 @@ function collectTypescriptReferences(
   }
   const references: CodeReferenceEdge[] = [];
   const seen = new Set<string>();
+  const bindingScopes = collectCallBindingScopes(sourceFile);
   const visit = (node: ts.Node): void => {
     if (typeScriptCompiler().isIdentifier(node) && !isNonReferenceIdentifier(node)) {
-      const resolved = resolveReferenceTarget(file, node.text, byName, importBindings);
+      const certified = certifiedIdentifierTarget(
+        file,
+        node,
+        bindingScopes,
+        byName,
+        importBindings,
+      );
+      const resolved =
+        certified === undefined
+          ? resolveReferenceTarget(file, node.text, byName, importBindings)
+          : { symbol: certified, confidence: "resolved" as const };
       const range = nodeLineRange(sourceFile, node);
+      const span = nodeSourceSpan(sourceFile, node);
       if (
         resolved !== undefined &&
         !(
           resolved.symbol.scopePath === file.scopePath &&
-          sameLineRange(resolved.symbol.lineRange, range)
+          sameLineRange(resolved.symbol.lineRange, range) &&
+          (certified === undefined || sameSourceSpan(resolved.symbol.declarationSpan, span))
         )
       ) {
         const key = [
           file.scopePath,
           String(range.startLine),
           String(range.endLine),
+          String(span.startColumn),
+          String(span.endColumn),
           node.text,
           resolved.symbol.scopePath,
           resolved.symbol.name,
@@ -3355,12 +3806,16 @@ function collectTypescriptReferences(
           references.push({
             referencerPath: file.scopePath,
             referenceLineRange: range,
+            referenceSpan: span,
             referenceName: node.text,
             targetName: resolved.symbol.name,
             targetPath: resolved.symbol.scopePath,
             targetLineRange: resolved.symbol.lineRange,
             confidence: resolved.confidence,
             parser: "typescript-compiler-ast",
+            ...(certified === undefined
+              ? {}
+              : { binding: "lexical" as const, targetDeclarationSpan: certified.declarationSpan }),
           });
         }
       }
@@ -4890,6 +5345,7 @@ function parseSourceFile(source: SourceText): SourceFile {
     scopePath: source.scopePath,
     text: source.text,
     language: source.language,
+    partial: source.partial,
     parser,
     syntaxTree: parser === "typescript-compiler-ast" ? parseTypescriptSource(source) : undefined,
   };
@@ -5159,6 +5615,9 @@ export function buildCodeIntelligenceIndexFromCandidates(
     reExports,
     defaultExports,
     symbols,
+    files,
+    executionControl,
+    certifiedModuleImportsByFile(imports, pathSet, importResolver, executionControl),
   );
   const importBindings = controlledBuild(
     executionControl,

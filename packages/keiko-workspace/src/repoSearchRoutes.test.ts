@@ -336,20 +336,58 @@ describe("repositoryConfiguredRouteDeclarations", () => {
   }
 
   it("keeps method, exact path, executable handler and physical lines in the same record", () => {
-    const found = declarations(
-      [
-        'const table = [{ method: "GET", path: "/a", handler: getA },',
-        ' { "path": "/b", "handler": postB, "method": "POST" },',
-        ' { method: "PUT",',
-        '   pattern: "/c",',
-        "   handler: putC,",
-        " }];",
-      ].join("\n"),
-    );
+    const content = [
+      'const table = [{ method: "GET", path: "/a", handler: getA },',
+      ' { "path": "/b", "handler": postB, "method": "POST" },',
+      ' { method: "PUT",',
+      '   pattern: "/c",',
+      "   handler: putC,",
+      " }];",
+    ].join("\n");
+    const found = declarations(content);
     expect(found).toEqual([
-      { method: "get", path: "/a", handler: "getA", line: 1, endLine: 1 },
-      { method: "post", path: "/b", handler: "postB", line: 2, endLine: 2 },
-      { method: "put", path: "/c", handler: "putC", line: 3, endLine: 6 },
+      {
+        method: "get",
+        path: "/a",
+        handler: "getA",
+        handlerStart: content.indexOf("getA"),
+        handlerEnd: content.indexOf("getA") + "getA".length,
+        line: 1,
+        endLine: 1,
+      },
+      {
+        method: "post",
+        path: "/b",
+        handler: "postB",
+        handlerStart: content.indexOf("postB"),
+        handlerEnd: content.indexOf("postB") + "postB".length,
+        line: 2,
+        endLine: 2,
+      },
+      {
+        method: "put",
+        path: "/c",
+        handler: "putC",
+        handlerStart: content.indexOf("putC"),
+        handlerEnd: content.indexOf("putC") + "putC".length,
+        line: 3,
+        endLine: 6,
+      },
+    ]);
+  });
+
+  it("retains exact handler offsets across same-line sibling and nested records", () => {
+    const content =
+      'const table = [{ method: "POST", path: "/a", metadata: { label: "handler: wrong" }, handler: first }, { method: "POST", path: "/b", handler: second }];';
+    const found = declarations(content);
+    expect(found).toHaveLength(2);
+    expect(found.map((route) => content.slice(route.handlerStart, route.handlerEnd))).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(found.map((route) => route.handlerStart)).toEqual([
+      content.indexOf("first"),
+      content.indexOf("second"),
     ]);
   });
 

@@ -325,12 +325,15 @@ function configuredRouteMarker(candidate: string): string | undefined {
 interface ConfiguredRouteFrame {
   readonly code: string[];
   readonly structural: string[];
+  readonly positions: number[];
   readonly line: number;
   readonly spreadBody: boolean;
 }
 
 export interface RepositoryConfiguredRouteDeclaration extends RepositoryRouteQuery {
   readonly handler: string;
+  readonly handlerStart: number;
+  readonly handlerEnd: number;
   readonly line: number;
   readonly endLine: number;
 }
@@ -338,6 +341,7 @@ export interface RepositoryConfiguredRouteDeclaration extends RepositoryRouteQue
 interface CompletedConfiguredRoute {
   readonly code: string;
   readonly structural: string;
+  readonly positions: readonly number[];
   readonly line: number;
   readonly endLine: number;
   readonly spreadBody: boolean;
@@ -347,6 +351,18 @@ function configuredSpreadBody(structural: string, index: number): boolean {
   let cursor = index - 1;
   while (cursor >= 0 && /\s/u.test(structural.charAt(cursor))) cursor -= 1;
   return structural.slice(Math.max(0, cursor - 2), cursor + 1) === "...";
+}
+
+function appendConfiguredCharacter(
+  frame: ConfiguredRouteFrame | undefined,
+  code: string,
+  structural: string,
+  position: number,
+): void {
+  if (frame === undefined) return;
+  frame.code.push(code);
+  frame.structural.push(structural);
+  frame.positions.push(position);
 }
 
 function configuredRouteFrames(
@@ -363,26 +379,26 @@ function configuredRouteFrames(
       frames.push({
         code: ["{"],
         structural: ["{"],
+        positions: [index],
         line,
         spreadBody: configuredSpreadBody(structural, index),
       });
       continue;
     }
     const frame = frames.at(-1);
-    frame?.code.push(code.charAt(index));
-    frame?.structural.push(char);
+    appendConfiguredCharacter(frame, code.charAt(index), char, index);
     if (char !== "}") continue;
     const ended = frames.pop();
     if (ended !== undefined)
       completed.push({
         code: ended.code.join(""),
         structural: ended.structural.join(""),
+        positions: ended.positions,
         line: ended.line,
         endLine: line,
         spreadBody: ended.spreadBody,
       });
-    frames.at(-1)?.code.push(" ");
-    frames.at(-1)?.structural.push(" ");
+    appendConfiguredCharacter(frames.at(-1), " ", " ", index);
   }
   return completed;
 }
@@ -395,6 +411,7 @@ function configuredRouteMarkers(code: string, structural: string): readonly stri
 }
 
 interface ConfiguredRouteField {
+  readonly start: number;
   readonly name: string;
   readonly code: string;
   readonly structural: string;
@@ -409,12 +426,14 @@ function configuredRouteFields(
     if (frame.structural.charAt(end) !== "," && end !== frame.structural.length - 1) continue;
     const code = frame.code.slice(start, end).trim();
     const structural = frame.structural.slice(start, end);
+    const fieldStart = start;
     start = end + 1;
     if (code.length === 0) continue;
     if (!/^(?:[A-Za-z_$][\w$]*|"[^"\\]*"|'[^'\\]*')\s*:/u.test(code)) return undefined;
     const match = CONFIGURED_ROUTE_FIELD_RE.exec(code);
     const name = match?.[0].replaceAll('"', "").replaceAll("'", "").replaceAll(":", "").trim();
-    if (name !== undefined && structural.includes(":")) fields.push({ name, code, structural });
+    if (name !== undefined && structural.includes(":"))
+      fields.push({ start: fieldStart, name, code, structural });
     start = end + 1;
   }
   return fields;
@@ -437,10 +456,19 @@ function configuredFieldLiteralMatches(
   return ['"', "'", "`"].some((quote) => literal === `${quote}${value}${quote}`);
 }
 
-function configuredHandler(field: ConfiguredRouteField | undefined): string | undefined {
+interface ConfiguredHandler {
+  readonly name: string;
+  readonly offset: number;
+}
+
+function configuredHandler(field: ConfiguredRouteField | undefined): ConfiguredHandler | undefined {
   if (field === undefined) return undefined;
   const colon = field.structural.indexOf(":");
-  return /^\s*([A-Za-z_$][\w$]{0,127})\s*$/u.exec(field.structural.slice(colon + 1))?.[1];
+  const value = field.structural.slice(colon + 1);
+  const name = /^\s*([A-Za-z_$][\w$]{0,127})\s*$/u.exec(value)?.[1];
+  return name === undefined
+    ? undefined
+    : { name, offset: field.start + colon + 1 + value.indexOf(name) };
 }
 
 function configuredRouteMethod(fields: readonly ConfiguredRouteField[]): string | undefined {
@@ -468,7 +496,18 @@ function configuredRouteDeclaration(
   const path = configuredRoutePathField(fields);
   const handler = configuredHandler(uniqueConfiguredField(fields, ["handler"]));
   if (method === undefined || path === undefined || handler === undefined) return undefined;
-  return { method, path, handler, line: frame.line, endLine: frame.endLine };
+  const handlerStart = frame.positions[handler.offset];
+  const handlerLast = frame.positions[handler.offset + handler.name.length - 1];
+  if (handlerStart === undefined || handlerLast === undefined) return undefined;
+  return {
+    method,
+    path,
+    handler: handler.name,
+    handlerStart,
+    handlerEnd: handlerLast + 1,
+    line: frame.line,
+    endLine: frame.endLine,
+  };
 }
 
 export function repositoryConfiguredRouteDeclarations(
