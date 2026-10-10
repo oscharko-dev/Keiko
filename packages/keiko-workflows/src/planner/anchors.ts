@@ -171,8 +171,9 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // remains authoritative. No nested repetition or rescanning from every slash is necessary.
 const PATH_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
 const PRESENTATION_PATTERNS: readonly RegExp[] = [
+  /,\s*with\s+(?:(?:current|relevant|supporting)\s+)?(?:implementation|definition|code|source)\s+citations\s*(?=$|[.!?;\n])/giu,
   /(^|[.!?;\n])\s*(?:please\s+)?cite(?:\s+(?:the|a|an|any|authoritative|relevant|supporting|source|sources|manual|manuals|file|files|and|line|lines|evidence|(?:implementation|definition|code)\s+lines?)){1,16}\b(?:,\s*(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b)?/giu,
-  /(^|[.!?;\n])\s*(?:please\s+)?keep\s+(?:the|your)\s+answer\s+(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?keep\s+(?:(?:the|your)\s+answer|it)\s+(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b/giu,
   /(^|[.!?;\n])\s*(?:please\s+)?(?:answer|respond)\s+(?:briefly|concisely)\b/giu,
   /(^|[.!?;\n])\s*(?:bitte\s+)?antworte\s+(?:kurz|knapp)(?:\s+mit\s+(?:quellenangabe|quellen|belegen))?\b/giu,
   /(^|[.!?;\n])\s*(?:bitte\s+)?zitiere(?:\s+(?:die|relevanten|quellen|quellzeilen|implementierungszeilen|definitionszeilen|zeilen|und)){1,16}\b(?:,\s*(?:unter|innerhalb\s+von)\s+\d{1,6}\s+(?:wörtern|sätzen|zeilen)\b)?/giu,

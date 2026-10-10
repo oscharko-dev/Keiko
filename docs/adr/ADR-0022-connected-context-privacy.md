@@ -291,8 +291,10 @@ Complete extracted file paths are target data, so their `reference`, `history` o
 directory segments cannot request relationship/history rings. Actual relationship/history words
 outside the path retain their routing; requested tests and integrations use the same canonical
 relationship guard. A factual lookup with freshly admitted query-named file paths, in Git or
-ordinary folders, focuses discovery on those paths only when every substantive request clause
+ordinary folders, focuses discovery on those paths only when every source request clause
 binds a named file and its canonical planner decision contains no independent non-path target.
+A separately requested, positively parsed general recommendation without a source constraint
+does not add source work; unknown or source-constrained independent clauses remain broad.
 The existing target decision supplies a positive, completely parsed `namedFileOnly` result;
 finding a path somewhere in an otherwise unknown clause is insufficient. Closed file-list,
 file-contained fact and file-subject explanation forms retain canonical quote and presentation
@@ -603,8 +605,10 @@ reinterpretation inside shared lexical search. Coding tool and context-provider 
 retain content-match semantics and cannot receive synthetic nonmatching inspection windows.
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
 filename batches; they do not schedule unrelated graph or history traversal. Named-file focus in
-Git and ordinary folders additionally requires every meaningful request clause to stay bound to a
-named file. The canonical anchor producer retains quoted/path targets before removing presentation-only
+Git and ordinary folders additionally requires every source request clause to stay bound to a
+named file. Canonical quotation parsing preserves possessives and contractions while retaining
+actual quoted search targets. Closed attached citation and word-limit instructions do not create
+source targets; separately parsed general advice does not authorize additional source discovery. The canonical anchor producer retains quoted/path targets before removing presentation-only
 prose, and removes that prose before definition patterns or ordinary symbols can treat citation
 instructions as requested source content. Target-shape, definition and relationship classification
 use the same presentation projection; the original question and model prompt remain unchanged.

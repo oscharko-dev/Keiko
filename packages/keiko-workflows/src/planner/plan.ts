@@ -433,7 +433,7 @@ function namedFileRequestShape(query: RetrievalQuery): string | undefined {
 
 function namedFileClauseDecision(clause: string): boolean | undefined {
   const projected = queryShapeOutsideTargets(clause, [{ term: "\0", kind: "path", weight: 1 }]);
-  if (/[`"']/u.test(projected)) return false;
+  if (queryContextOutsideQuotes(projected) !== projected) return false;
   const fragments = projected.includes("\0") ? projected.split(",") : [projected];
   const decisions = fragments.map(namedFileWordsDecision);
   if (decisions.includes(false)) return false;
@@ -441,7 +441,9 @@ function namedFileClauseDecision(clause: string): boolean | undefined {
 }
 
 function namedFileWordsDecision(clause: string): boolean | undefined {
-  const words = shapeWords(queryContextOutsideQuotes(clause));
+  const context = queryContextOutsideQuotes(clause);
+  if (generalAdviceClause(context)) return undefined;
+  const words = shapeWords(context);
   return words.length === 0 ? undefined : isNamedFileClause(words);
 }
 
@@ -512,14 +514,25 @@ function suppliedContextClause(clause: string, index: number): boolean {
 }
 
 const GENERAL_ADVICE_REQUEST_RE =
-  /^(?:(?:please|bitte)\s+)?(?:(?:suggest|give|provide|recommend)\s+(?:a\s+)?(?:(?:short|brief|concise)\s+)?general\s+(?:process|method|approach|guidance|advice|principles)|(?:gib|empfiehl|beschreibe)\s+(?:(?:eine|einen)\s+)?(?:kurze[nr]?\s+)?allgemeine[nr]?\s+(?:vorgehensweise|methode|ansatz|hinweise))(?:,\s*(?:under|below|within|unter)\s+\d{1,6}\s+(?:words|wörtern|worte))?$/iu;
+  /^(?:(?:please|bitte) )?(?:(?:then|dann) )?(?:(?:separately|independently|getrennt|separat|unabhängig) )?(?:(?:suggest|give|provide|recommend) (?:a )?(?:(?:short|brief|concise) )?general (?:process|method|approach|guidance|advice|principles|recommendation)|(?:gib|empfiehl|beschreibe) (?:(?:getrennt|separat|unabhängig) )?(?:(?:eine|einen) )?(?:kurze[nr]? )?allgemeine[nr]? (?:vorgehensweise|methode|ansatz|hinweise|empfehlung))(?: (?:for|about|on|zu|zum|zur|über) (.+?))?(?:, (?:under|below|within|unter) \d{1,6} (?:words|wörtern|worte))?$/iu;
 const GENERAL_ADVICE_QUESTION_RE =
   /^(?:how (?:should|could|can) (?:a|an|one|we)|wie (?:sollte|könnte|kann) (?:man|wir|ein|eine)) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu;
 const SOURCE_CONSTRAINED_ADVICE_RE =
-  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b|\b(?:this|these|that|those|the|our|my)\s+(?:(?:attached|connected|selected|supplied)\s+)?(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence)\b|\b(?:dieses?|diese[nr]?|das|die|der|unser[e]?|mein[e]?)\s+(?:(?:verbundenen?|ausgewählten?|angehängten?)\s+)?(?:handbuch|handbücher|quellen?|dateien?|ordner|dokumente?|repository)\b/iu;
+  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b|\b(?:this|these|that|those|the|our|my)\s+(?:(?:attached|connected|selected|supplied)\s+)?(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence|code|implementations?)\b|\b(?:dieses?|diese[nr]?|das|die|der|unser[e]?|mein[e]?)\s+(?:(?:verbundenen?|ausgewählten?|angehängten?)\s+)?(?:handbuch|handbücher|quellen?|dateien?|ordner|dokumente?|repository|code|implementierungen?)\b/iu;
+
+function generalAdviceClause(clause: string): boolean {
+  const normalized = normalizedConversationClause(clause);
+  const match = GENERAL_ADVICE_REQUEST_RE.exec(normalized);
+  return (
+    match !== null &&
+    !normalized.includes("\0") &&
+    !SOURCE_CONSTRAINED_ADVICE_RE.test(normalized) &&
+    !independentContextRequest(match[1] ?? "")
+  );
+}
 
 function generalAdviceRequest(clauses: readonly string[]): boolean {
-  if (clauses.length !== 2 || !GENERAL_ADVICE_REQUEST_RE.test(clauses[1] ?? "")) return false;
+  if (clauses.length !== 2 || !generalAdviceClause(clauses[1] ?? "")) return false;
   const question = clauses[0] ?? "";
   return (
     GENERAL_ADVICE_QUESTION_RE.test(question) &&
