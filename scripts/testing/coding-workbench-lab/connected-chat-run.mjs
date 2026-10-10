@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, readFileSync, realpathSync, statSync } from
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { URLSearchParams } from "node:url";
 import { buildDevBffEnv } from "../../lib/dev-bff-env.mjs";
+import { isMainModule } from "../../lib/is-main-module.mjs";
 import {
   REPO_ROOT,
   UsageError,
@@ -252,12 +253,15 @@ async function setupCampaign(parsed) {
   return { session, runtime, chat, output, cases: readyCases, evidenceStore };
 }
 
-async function compactionCases(session, runtime, chat, env) {
+export async function compactionCases(session, runtime, chat, env) {
   const path = env.KEIKO_CONFIG_FILE ?? join(env.KEIKO_UI_DATA_DIR, "keiko.config.json");
   if ((statSync(path).mode & 0o077) !== 0) throw new UsageError("private-config-required");
-  const { parseGatewayConfig } = await importBuilt("keiko-model-gateway", "index.js");
+  const { loadConfigFromFile } = await importBuilt("keiko-model-gateway", "index.js");
+  const { createProviderSecretResolver } = await importBuilt("keiko-server", "credentialVault.js");
   const { currentContextProfileForModel } = await importBuilt("keiko-server", "deps.js");
-  const config = parseGatewayConfig(JSON.parse(readFileSync(path, "utf8")));
+  const config = loadConfigFromFile(path, env, {
+    secretResolver: createProviderSecretResolver({ configPath: path, env }),
+  });
   const profile = currentContextProfileForModel({ config }, runtime.selectedModel);
   const query = new URLSearchParams({ ...chatAddress(chat), modelId: runtime.selectedModel });
   const status = requireSuccess(await request(session, "GET", `/api/chats/context?${query}`));
@@ -341,9 +345,10 @@ async function main() {
   await runCampaign(await setupCampaign(parsed));
 }
 
-main().catch(() => {
-  console.error(
-    "connected-chat-lab: incomplete; inspect the body-free local record and Activity Log",
-  );
-  process.exitCode = 1;
-});
+if (isMainModule(import.meta.url))
+  main().catch(() => {
+    console.error(
+      "connected-chat-lab: incomplete; inspect the body-free local record and Activity Log",
+    );
+    process.exitCode = 1;
+  });
