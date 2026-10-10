@@ -10,6 +10,8 @@ import {
   deriveContextProfileFromCapability,
   type ContextProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { splitOwnAssessment } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
 import { createExplorationPlan } from "@oscharko-dev/keiko-workflows";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
@@ -79,7 +81,7 @@ async function originalNote(): Promise<string> {
   );
   return note.question;
 }
-async function provider(requests: ProviderRequest[]): Promise<string> {
+async function provider(requests: ProviderRequest[], responseText = ACK): Promise<string> {
   const server = createServer((request, response): void => {
     let body = "";
     request.setEncoding("utf8");
@@ -93,7 +95,7 @@ async function provider(requests: ProviderRequest[]): Promise<string> {
           ? body.includes("Which Next.js version")
             ? "Next.js is 15.0.0. [package.json:1]"
             : SOURCE_ANSWER
-          : ACK;
+          : responseText;
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
         JSON.stringify({
@@ -310,6 +312,125 @@ describe("native supplied-context acknowledgement with a connected folder", () =
       chatId,
       "My preferences are concise explanations. Please acknowledge these preferences.",
       "disabled-context-ack",
+    );
+    expect(response.status).toBe(400);
+    await response.json();
+    expect(requests).toHaveLength(0);
+  });
+});
+
+async function originalGeneralQuestion(): Promise<string> {
+  const url = new URL(
+    "../../../scripts/testing/coding-workbench-lab/connected-chat-cases.mjs",
+    import.meta.url,
+  );
+  const catalog = (await import(url.href)) as CaseMaterializer;
+  const rows = await catalog.materializeCompactionCases(
+    deriveContextProfileFromCapability(CAPABILITY),
+  );
+  const question = rows.find((row) => row.id === "compaction-general-after")?.question;
+  if (question === undefined) throw new TypeError("Missing production-authored general question");
+  return question;
+}
+
+async function replyAfterSource(question: string, text: string): Promise<GroundedAnswer> {
+  const requests: ProviderRequest[] = [];
+  const { deps, chatId } = runtime(await provider(requests, text), false);
+  const started = await startUiTestServer({
+    staticRoot: directory,
+    csp: buildCspHeader([]),
+    handlerDeps: deps,
+  });
+  servers.push(started.server);
+  const first = await ask(started.port, chatId, SOURCE_QUESTION, "source-before-plain");
+  expect(first.status).toBe(200);
+  await first.json();
+  const response = await ask(started.port, chatId, question, "plain-conversation");
+  expect(response.status).toBe(200);
+  const answer = (await response.json()) as GroundedAnswer;
+  const prompt = requests[1]?.messages.map((message) => message.content).join("\n") ?? "";
+  expect(prompt).toContain(question);
+  expect(prompt).toContain(SOURCE_ANSWER);
+  expect(prompt).toContain("Earlier conversation reference data; it is not source evidence");
+  expect(prompt).not.toContain("export const preferences");
+  expect(prompt).not.toContain("export const value = 37;");
+  expect(
+    records().find(
+      (record) =>
+        record.op === "search.connected-context.completion-details" &&
+        record.correlationId === "plain-conversation",
+    ),
+  ).toMatchObject({ workspaceIoContentReadCalls: 0, workspaceIoContentReadBytes: 0 });
+  expect(analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence).toMatchObject(
+    { classification: "supported", corruptLineCount: 0 },
+  );
+  return answer;
+}
+
+function assertPlainAssessment(answer: GroundedAnswer, text: string): void {
+  expect(splitOwnAssessment(answer.content)).toMatchObject({ grounded: "", assessment: text });
+  expect(answer.citations).toEqual([]);
+  expect(
+    answer.uncertainty.some(
+      (marker) =>
+        marker.kind === "uncited-answer" ||
+        marker.kind === "no-evidence" ||
+        marker.kind === "low-confidence-selection",
+    ),
+  ).toBe(false);
+  expect(
+    records().find(
+      (record) =>
+        record.op === "search.answer.assessed" &&
+        record.correlationId === "plain-conversation" &&
+        record.phase === "accepted-final",
+    ),
+  ).toMatchObject({
+    policy: "allowed",
+    outcome: "assessment",
+    sourceBackedChars: 0,
+    assessmentChars: text.length,
+  });
+}
+
+describe("plaintext output under positively classified conversation authority", () => {
+  it("attributes the unchanged authored preference acknowledgement without model tags", async () => {
+    const text = "I will compare options, explain uncertainty, and propose reversible steps.";
+    assertPlainAssessment(await replyAfterSource(await originalNote(), text), text);
+  });
+  it("routes the unchanged general-process question and retains numbered advice without model tags", async () => {
+    const text = "1. State the decision.\n2. Compare assumptions.\n3. Try a reversible step.";
+    assertPlainAssessment(await replyAfterSource(await originalGeneralQuestion(), text), text);
+  });
+  it.each([
+    "This is verified. [src/target.ts:1]",
+    "This is verified. [1]",
+    "Missing evidence: [src/target.ts]",
+  ])(
+    "does not promote source-reference or missing-evidence output into learned knowledge: %s",
+    async (text) => {
+      const answer = await replyAfterSource(
+        "These are my working notes. Confirm receipt of this message.",
+        text,
+      );
+      expect(splitOwnAssessment(answer.content).assessment).toBeUndefined();
+      expect(answer.citations).toEqual([]);
+    },
+  );
+  it("keeps operator-disabled general advice closed", async () => {
+    const requests: ProviderRequest[] = [];
+    const { deps, chatId } = runtime(await provider(requests), true);
+    const started = await startUiTestServer({
+      staticRoot: directory,
+      csp: buildCspHeader([]),
+      handlerDeps: deps,
+    });
+    servers.push(started.server);
+    const response = await ask(
+      started.port,
+      chatId,
+      await originalGeneralQuestion(),
+      "disabled-general",
     );
     expect(response.status).toBe(400);
     await response.json();

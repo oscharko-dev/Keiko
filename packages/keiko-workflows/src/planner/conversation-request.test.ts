@@ -77,3 +77,31 @@ describe("Next framework spelling and grammatical context", () => {
     expect(classifyRetrievalIntent(text, SCOPE).intent).toBe("project-metadata");
   });
 });
+
+describe("positively requested general advice without source authority", () => {
+  it.each([
+    "How should a team compare alternatives with uncertain evidence? Suggest a short general process, under 100 words.",
+    "How could one organize decisions? Give a concise general method.",
+    "Wie sollte man Entscheidungen vorbereiten? Empfiehl eine kurze allgemeine Vorgehensweise.",
+  ])("uses the existing empty-evidence conversation lane: %s", (text) => {
+    const result = plan(text);
+    expect(result.targetDecision?.conversationOnly).toBe(true);
+    expect(result.rings).toEqual([]);
+    expect(result.state).toBe("clarification-needed");
+    expect(result.query.text).toBe(text);
+  });
+
+  it.each([
+    "What temperature trips the Vesper dosing interlock?",
+    "How does the customer manual describe operating limits?",
+    "How should a team compare alternatives? Suggest a short general process. What maximum does the manual specify?",
+    "How should one organize decisions? Give a general method and explain src/target.ts.",
+    'How should one organize decisions? Give a general method. Find "reset delay" in the manuals.',
+    "How should one organize decisions? Give a general method. Which Next.js version does this project use?",
+  ])("keeps independent source and mixed requests retrievable: %s", (text) => {
+    const result = plan(text);
+    expect(result.targetDecision?.conversationOnly).toBeUndefined();
+    expect(result.state).toBe("ready");
+    expect(result.rings.some((ring) => ring.kind === "lexical")).toBe(true);
+  });
+});
