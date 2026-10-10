@@ -385,6 +385,17 @@ const GERMAN_INFORMATION_REQUEST_RE =
   /^welche\s+information\s+ist\s+(?:für\s+\0|dazu)\s+in\s+diesem\s+ordner\s+belegt$/iu;
 const NAMED_FILE_COMMAND_RE =
   /^(?:please |bitte )?(?:read|show|open|explain|describe|summarize|inspect|lies|zeige|öffne|erkläre|beschreibe) (?:the |die |das |den )?\0(?: (?:and |und )?\0)*$/iu;
+const NAMED_FILE_RETURN_RE =
+  /^(?:please |bitte )?(?:return to \0|go back to \0|zurück zu \0|kehre zu \0 zurück)$/iu;
+const NAMED_FILE_FACT_CONTINUATION_RE =
+  /^(?:(?:which|what) (?:function|method|section|value)|welch(?:e|er|es|en) (?:funktion|methode|abschnitt|wert)) (.+)$/iu;
+const SOURCE_SCOPE_POSITION_RE =
+  /^(?:in|within|from|across|throughout|all|any|other|every|im|innerhalb|aus|über|alle[nmrs]?|andere[nmrs]?|jede[nmrs]?)$/iu;
+const SOURCE_SCOPE_NONLOCAL_RE =
+  /^(?:another|other|all|any|every|entire|whole|ander(?:e|en|em|er|es)|alle[nmrs]?|jede[nmrs]?|gesamt(?:e|en|em|er|es))$/iu;
+const SOURCE_SCOPE_ELSEWHERE_RE = /^(?:elsewhere|everywhere|anderswo|woanders|überall)$/iu;
+const SOURCE_SCOPE_NOUN_RE =
+  /^(?:repos?|workspaces?|projects?|scopes?|projekte?|arbeitsbereiche?)$/iu;
 const NAMED_FILE_CONTAINED_REQUEST_RE =
   /^(?:please |bitte )?(?:explain|describe|summarize|erkläre|beschreibe) (.+) (?:in|within|from|aus) \0$/iu;
 const NAMED_FILE_SUBJECT_REQUEST_RE =
@@ -403,19 +414,24 @@ function boundNamedFilePredicate(text: string): boolean {
   );
 }
 
+function isNamedFileNavigation(clause: string): boolean {
+  return NAMED_FILE_COMMAND_RE.test(clause) || NAMED_FILE_RETURN_RE.test(clause);
+}
+
 function isNamedFileClause(words: readonly string[]): boolean {
   if (!words.includes("\0")) return false;
   if (words.length === 1) return true;
   const clause = words.join(" ");
-  if (NAMED_FILE_COMMAND_RE.test(clause) || isSearchClause(words) || isFactClause(words))
-    return true;
+  if (isNamedFileNavigation(clause) || isSearchClause(words) || isFactClause(words)) return true;
   const contained = NAMED_FILE_CONTAINED_REQUEST_RE.exec(clause)?.[1];
   const subject = NAMED_FILE_SUBJECT_REQUEST_RE.exec(clause)?.[1];
   const predicate = contained ?? subject;
   return predicate !== undefined && boundNamedFilePredicate(predicate);
 }
 
-function namedFileRequestShape(query: RetrievalQuery): string | undefined {
+function namedFileRequestShape(
+  query: RetrievalQuery,
+): { readonly text: string; readonly singleFile: boolean } | undefined {
   const references = extractRetrievalChannels(query.text, query.text.length).references.filter(
     (reference) => reference.origin === "query",
   );
@@ -428,7 +444,10 @@ function namedFileRequestShape(query: RetrievalQuery): string | undefined {
     )
     .replace(/\0(?::\d{1,9}){1,2}/gu, "\0");
   if (extractPathReferences(shape).length > 0) return undefined;
-  return shape;
+  return {
+    text: shape,
+    singleFile: new Set(references.map((reference) => reference.path)).size === 1,
+  };
 }
 
 function namedFileClauseDecision(clause: string): boolean | undefined {
@@ -447,12 +466,52 @@ function namedFileWordsDecision(clause: string): boolean | undefined {
   return words.length === 0 ? undefined : isNamedFileClause(words);
 }
 
+function independentSourceScope(predicate: string): boolean {
+  let locating = false;
+  for (const match of predicate.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
+    const token = match[0];
+    if (SOURCE_SCOPE_ELSEWHERE_RE.test(token)) return true;
+    if (
+      locating &&
+      (SOURCE_SCOPE_NOUN_RE.test(token) ||
+        SOURCE_ADVICE_NOUN_RE.test(token) ||
+        SOURCE_SCOPE_NONLOCAL_RE.test(token))
+    )
+      return true;
+    if (SOURCE_SCOPE_POSITION_RE.test(token)) locating = true;
+    else if (sourceAdviceBoundary(token)) locating = false;
+  }
+  return false;
+}
+
+function namedFileFactContinuation(clause: string): boolean {
+  const projected = queryContextOutsideQuotes(clause);
+  if (projected !== clause) return false;
+  const predicate = NAMED_FILE_FACT_CONTINUATION_RE.exec(
+    normalizedConversationClause(projected),
+  )?.[1];
+  return (
+    predicate !== undefined &&
+    boundNamedFilePredicate(predicate) &&
+    !hasSymbolRelation(predicate) &&
+    !hasHistoryQuery(predicate) &&
+    !sourceConstrainedAdvice(predicate) &&
+    !independentSourceScope(predicate)
+  );
+}
+
 function namedFileOnlyRequest(query: RetrievalQuery): boolean {
   if (query.kind !== "natural-language") return false;
   const shape = namedFileRequestShape(query);
   if (shape === undefined) return false;
-  const clauses = shape.split(/[.!?;\n&]/u).map(namedFileClauseDecision);
-  return clauses.includes(true) && !clauses.includes(false);
+  let bound = false;
+  for (const clause of shape.text.split(/[.!?;\n&]/u)) {
+    const decision = namedFileClauseDecision(clause);
+    if (decision === false && !(shape.singleFile && bound && namedFileFactContinuation(clause)))
+      return false;
+    bound = bound || decision === true;
+  }
+  return bound;
 }
 
 const ACKNOWLEDGEMENT_REQUEST_RE =
