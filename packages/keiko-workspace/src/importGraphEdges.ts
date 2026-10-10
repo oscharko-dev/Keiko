@@ -727,7 +727,7 @@ function boundedImportGraphInputs(candidateSet: CandidateSet, limits: SearchLimi
   const metadataInputs = candidateSet.files.filter(
     (file) => !isImportSource(file.relativePath) && isImportResolverMetadata(file.relativePath),
   );
-  const fileBudget = Math.max(0, limits.maxFilesScanned ?? 2048);
+  const fileBudget = Math.max(0, limits.maxFilesScanned ?? candidateSet.files.length);
   const metadataCapacity = sourceInputs.length === 0 ? fileBudget : Math.floor(fileBudget / 2);
   const rankedMetadata = rankResolverMetadata(metadataInputs, sourceInputs);
   const reservedMetadata = rankedMetadata.slice(0, metadataCapacity);
