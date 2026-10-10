@@ -2818,6 +2818,15 @@ interface FittedHybridAnswer {
   readonly promptCtx: HybridGroundedAskCtx;
 }
 
+function conversationOnlyHybridAnswer(fitted: FittedHybridAnswer): boolean {
+  const folders = fitted.promptCtx.folderOmissionPacks ?? [];
+  return (
+    folders.length > 0 &&
+    folders.every((source) => source.plan.targetDecision?.conversationOnly === true) &&
+    fitted.sent.length === 0
+  );
+}
+
 async function answerHybridWithinWindow(
   ctx: HybridGroundedAskCtx,
   answerer: ResolvedAnswerer,
@@ -2848,6 +2857,8 @@ async function answerHybridWithinWindow(
     currentOwnAssessmentPolicy(ctx.deps),
     ctx.correlationId,
     ctx.content,
+    undefined,
+    conversationOnlyHybridAnswer(fitted),
   );
   const validated = validatedHybridEvidence(fitted.promptCtx, normalized, fitted.sent);
   return {

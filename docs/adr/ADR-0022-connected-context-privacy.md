@@ -172,10 +172,17 @@ orientation or natural-language search request. A filename or symbol is useful f
 but is not a prerequisite to inspect the user's accepted root. Empty and punctuation-only
 requests still require clarification, and implicit roots retain their narrowing guards.
 The canonical planner also recognizes fully parsed acknowledgement or receipt requests for
-supplied user context. These use the existing empty evidence pack when own assessment is allowed,
+supplied user context and normative questions that explicitly request a general method or advice.
+These use the existing empty evidence pack when own assessment is allowed,
 without recursive discovery or source reads; disabled own assessment retains clarification. An
 independent source instruction, diagnostic, quoted target or path keeps source retrieval eligible.
-The original user input and conversation history remain model context. Ordinary "next steps"
+The original user input and conversation history remain model context. On this positively parsed
+conversation lane only, an untagged answer with no actually sent evidence is labelled by software
+as own assessment before source validation. Existing citation, path, declaration and answer-kind
+parsers and a conservative source-attribution guard exclude source references, selected-source
+claims, missing-evidence statements and refusals from this fallback.
+Unclassified, source and mixed requests retain their source projection; explicit assessment tags
+keep their existing policy semantics. Ordinary "next steps"
 are literal prose; a Next.js spelling or a bound framework/version/use request retains its technical
 alias and metadata routing.
 Repository orientation retains the user's lexical terms and repository semantic provider. Recursive

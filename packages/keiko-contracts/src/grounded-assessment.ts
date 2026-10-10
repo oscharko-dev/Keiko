@@ -4,11 +4,13 @@
 // marker. A question that asks for Keiko's own view ("Which Java version do you suggest?") has no
 // source-backed answer, and a sources-only prompt can then only repeat that the documents say
 // nothing. When the operator allows it, the model adds its own assessment after the source-backed
-// part, inside one `<assessment>` block. A plain text tag is something every model family
-// reproduces reliably, open-weight models included, and it needs no structured-output support.
+// part, inside one `<assessment>` block. Tags need no structured-output support, but models may
+// omit them. For a positively parsed self-contained conversation/general request with no sent
+// evidence, software may label an untagged answer after excluding source references/declarations.
 //
-// Everything outside the block is held to the citation, entailment and refusal rules. The block is
-// never cited, never judged, and always shown as Keiko's assessment rather than the sources'.
+// Unclassified, source and mixed output outside the block is held to the citation, entailment
+// and refusal rules. The block is never cited, never judged, and always shown as Keiko's
+// assessment rather than the sources'.
 
 import { markdownCodeRanges } from "./citation-markers.js";
 

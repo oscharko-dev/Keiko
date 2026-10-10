@@ -10104,6 +10104,7 @@ async function groundedAnswerForPack(
   declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
   deadlineAtMs?: number,
   requiredEvidencePaths?: readonly string[],
+  conversationOnly = false,
 ): Promise<GroundedAnswerResult> {
   const payload = await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack, {
     modelInputTokensMax: Math.max(0, pack.budget.modelInputTokensMax - pack.usage.modelInputTokens),
@@ -10117,12 +10118,14 @@ async function groundedAnswerForPack(
     deadlineAtMs,
     requiredEvidencePaths,
   });
+  const normalized = normalizeGroundedAnswerPayload(payload);
   const answer = normalizeGroundedAnswerAssessment(
-    normalizeGroundedAnswerPayload(payload),
+    normalized,
     deps.ownAssessmentPolicy ?? "disabled",
     deps.correlationId,
     input.currentQuestion ?? input.query.text,
     { ...connectedContextActivityIdentity(input), phase: "candidate" },
+    conversationOnly && !packHasUsableEvidence(singleSentEvidencePack(normalized, pack)),
   );
   return validateSingleAnswerEvidence(
     answer,
@@ -10235,6 +10238,7 @@ async function refinedGroundedAnswer(
   start: number,
   nowMs: () => number,
   declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
+  conversationOnly = false,
 ): Promise<RefinedGroundedAnswer> {
   const deadlineAtMs = explorationDeadlineAtMs(start, pack.budget);
   const initial = await groundedAnswerForPack(
@@ -10243,6 +10247,8 @@ async function refinedGroundedAnswer(
     pack,
     declarationScopeIndexFor,
     deadlineAtMs,
+    undefined,
+    conversationOnly,
   );
   if (initial.answerKind === "insufficiency")
     citationCoverageMarkerFor(
@@ -10319,6 +10325,7 @@ async function answerWithAvailableContext(
     start,
     nowMs,
     declarationScopeIndexFor,
+    plan?.targetDecision?.conversationOnly === true,
   );
   const answer = repair.answer;
   logAcceptedGroundedAssessment(
