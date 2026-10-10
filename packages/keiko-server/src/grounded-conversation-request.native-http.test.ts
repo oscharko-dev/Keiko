@@ -245,7 +245,17 @@ describe("native supplied-context acknowledgement with a connected folder", () =
         plannedRingCount: 0,
         usageSearchCalls: 0,
         usageFilesRead: 0,
+      });
+      const details = records().filter(
+        (record) =>
+          record.op === "search.connected-context.completion-details" &&
+          record.correlationId === "supplied-context-ack",
+      );
+      expect(details).toHaveLength(1);
+      expect(details[0]).toMatchObject({
+        structuralCandidateInventoryBuildCount: 0,
         workspaceIoContentReadCalls: 0,
+        workspaceIoContentReadBytes: 0,
       });
       const text = readPersistedActivityLog(join(directory, "state"));
       expect(analyzeLogText(text).evidence).toMatchObject({
