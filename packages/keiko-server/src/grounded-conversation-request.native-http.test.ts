@@ -400,6 +400,7 @@ async function replyAfterSource(question: string, text: string): Promise<Grounde
   expect(analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence).toMatchObject(
     { classification: "supported", corruptLineCount: 0 },
   );
+  expect(deps.store.listMessages(chatId).at(-1)?.groundedAnswer).toEqual(answer);
   return answer;
 }
 
@@ -581,6 +582,7 @@ describe("native marker-only repair for route paths", () => {
       );
       expect(requests).toHaveLength(2);
       expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
+      expect(deps.store.listMessages(chatId).at(-1)?.groundedAnswer).toEqual(answer);
       expect(
         records().find(
           (record) =>
