@@ -2637,21 +2637,29 @@ describe("private OpenCode tool bridge", () => {
   });
 
   it("closes an adapter whose handshake succeeds after manager timeout disposal", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let releaseHistory: (() => void) | undefined;
     const historyResponse = new Promise<Response>((resolve) => {
       releaseHistory = (): void => {
         resolve(v2Envelope([]));
       };
     });
+    let notifyHistoryEntered: (() => void) | undefined;
+    const historyEntered = new Promise<void>((resolve) => {
+      notifyHistoryEntered = resolve;
+    });
     let sseCancellations = 0;
     const clearSafeActivity = vi.fn();
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
-    const fixture = await startBridgeFixture(
+    const fixturePromise = startBridgeFixture(
       facade,
       { requestDeadlineMs: 1_000, maxInFlight: 1 },
       {
         startTimeoutMs: 20,
-        historyResponse,
+        historyResponseFactory: (): Promise<Response> => {
+          notifyHistoryEntered?.();
+          return historyResponse;
+        },
         expectedStart: { ok: false, failureCode: "start-timeout", retryable: true },
         safeActivity: {
           arm: vi.fn(),
@@ -2684,7 +2692,21 @@ describe("private OpenCode tool bridge", () => {
         },
       },
     );
-    await fixture.stop();
+    try {
+      // Freeze preparation time; expire startup only once the blocked handshake is admitted.
+      await Promise.race([
+        historyEntered,
+        fixturePromise.then(() => {
+          throw new Error("startup settled before the blocked handshake");
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(20);
+      const fixture = await fixturePromise;
+      await fixture.stop();
+    } finally {
+      releaseHistory?.();
+      vi.useRealTimers();
+    }
   });
 
   it("reports a malformed history page as one bulk drop update", async () => {

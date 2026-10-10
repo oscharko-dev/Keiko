@@ -255,6 +255,11 @@ describe("the resolver refuses every event that may not reuse", () => {
 function gatedDisplayNames(job) {
   const definition = jobs[job];
   const name = String(definition.name);
+  if (name.includes("${{ matrix.shard }}")) {
+    return definition.strategy.matrix.shard.map((shard) =>
+      name.replace("${{ matrix.shard }}", String(shard)),
+    );
+  }
   if (!name.includes("${{ matrix.platform_target }}")) return [name];
   return definition.strategy.matrix.include.map((target) =>
     name.replace("${{ matrix.platform_target }}", target.platform_target),
@@ -291,7 +296,90 @@ describe("the resolver inventory covers every gated job", () => {
   });
 });
 
+describe("complete Node 26 qualification shards", () => {
+  it("retains both mandatory shards, limits and every qualification step", () => {
+    const job = jobs["node-26-compatibility"];
+    expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2] } });
+    expect(job["timeout-minutes"]).toBe(45);
+    expect(job["continue-on-error"]).toBeUndefined();
+    const runs = job.steps.filter((step) => typeof step.run === "string").map((step) => step.run);
+    expect(runs).toEqual([
+      "node scripts/check-ci-merge-candidate.mjs",
+      "node scripts/check-runtime-toolchain.mjs --exact",
+      "npm ci --ignore-scripts",
+      "npm run provision:usearch",
+      "npm run typecheck",
+      "npm test -- --shard=${{ matrix.shard }}/2",
+      "npm run prepare:bin",
+      "npm run build:ui",
+      expect.stringContaining("npm run provision:smoke"),
+      "npm run smoke:install:optional",
+    ]);
+    expect(
+      job.steps.find((step) => step.run?.includes("npm run provision:smoke"))["timeout-minutes"],
+    ).toBe(10);
+    expect(
+      job.steps.find((step) => step.uses === "./.github/actions/setup-sandbox-isolation"),
+    ).toBeDefined();
+    for (const step of job.steps) {
+      expect(step["continue-on-error"]).toBeUndefined();
+      if (step.name !== "Verify pull-request merge candidate consistency") {
+        expect(step.if).toBeUndefined();
+      }
+    }
+    const testScript = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).scripts
+      .test;
+    expect(testScript).toMatch(/&& vitest run$/u);
+    expect(gatedDisplayNames("node-26-compatibility")).toEqual([
+      "Node 26 compatibility (shard 1/2)",
+      "Node 26 compatibility (shard 2/2)",
+    ]);
+  });
+
+  it("partitions the actual configured root inventory exactly once", () => {
+    const code = `
+      import { createVitest, parseCLI } from "vitest/node";
+      const ctx = await createVitest("test", { watch: false, run: true });
+      try {
+        const specs = await ctx.globTestSpecifications();
+        const Sequencer = ctx.config.sequence.sequencer;
+        const shards = [];
+        for (const index of ${JSON.stringify(jobs["node-26-compatibility"].strategy.matrix.shard)}) {
+          const cli = parseCLI("vitest run --shard=" + index + "/2");
+          if (cli.options.shard !== index + "/2") throw new Error("Shard forwarding failed");
+          ctx.config.shard = { index, count: 2 };
+          shards.push((await new Sequencer(ctx).shard(Array.from(specs))).map(s => s.moduleId));
+        }
+        process.stdout.write(JSON.stringify({ full: specs.map(s => s.moduleId), shards }));
+      } finally { await ctx.close(); }
+    `;
+    const proof = JSON.parse(
+      execFileSync(process.execPath, ["--input-type=module", "-e", code], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+    const selected = proof.shards.flat();
+    expect(proof.full.length).toBeGreaterThan(0);
+    expect(proof.shards.every((shard) => shard.length > 0)).toBe(true);
+    expect(new Set(selected).size).toBe(selected.length);
+    expect(selected.toSorted()).toEqual(proof.full.toSorted());
+  });
+});
+
 describe("the aggregator still fails closed", () => {
+  it.each(["failure", "cancelled", "skipped", "", "unknown"])(
+    "rejects unsuccessful Node 26 qualification result %s for a code change",
+    (result) => {
+      expect(runAggregator({ NODE_26_COMPATIBILITY_RESULT: result })).toBe(1);
+      if (result !== "skipped") {
+        expect(runAggregator({ ...REUSING, NODE_26_COMPATIBILITY_RESULT: result })).toBe(1);
+      }
+    },
+  );
   it.each(["failure", "cancelled", "", "unknown"])(
     "rejects portable secure-read result %s with and without tree reuse",
     (result) => {

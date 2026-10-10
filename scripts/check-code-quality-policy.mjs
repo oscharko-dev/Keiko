@@ -1,0 +1,174 @@
+#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import {
+  collectPolicyInventory,
+  policyDigest,
+  readPreviousPolicies,
+  selectPolicyScope,
+} from "./lib/code-quality-inventory.mjs";
+import { collectPolicyPackages } from "./lib/code-quality-packages.mjs";
+import { assessPolicyDiagnostics, validatePolicy } from "./lib/code-quality-policy.mjs";
+import { runnerIdentity, runNativePolicy } from "./lib/code-quality-runner.mjs";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const FAILURE_REASONS = new Set([
+  "invalid-arguments",
+  "invalid-mode",
+  "partial-ci-verdict",
+  "invalid-policy",
+  "invalid-policy-identity",
+  "invalid-rule-inventory",
+  "initial-guard-disabled",
+  "invalid-baseline-policy",
+  "activation-shrank",
+  "tool-identity-mismatch",
+  "runtime-tool-dependency",
+  "upstream-identity-mismatch",
+  "upstream-source-mismatch",
+  "upstream-source-inventory-mismatch",
+  "unsafe-upstream-source",
+  "upstream-transpile-failed",
+  "inventory-workspace-escape",
+  "invalid-build-config",
+  "production-source-escape",
+  "invalid-production-source",
+  "invalid-production-target",
+  "ambiguous-production-output",
+  "unmapped-production-export",
+  "unaccounted-production-import",
+  "production-source-changed",
+  "unclassified-source",
+  "partial-ci-scope",
+  "unknown-or-empty-scope",
+  "invalid-export-target",
+  "unsafe-source-file",
+  "workspace-inventory-mismatch",
+  "empty-source-inventory",
+  "unclassified-html-source",
+  "npm-invocation-required",
+  "pack-inventory-mismatch",
+  "unpacked-export-target",
+  "unknown-diagnostic",
+  "runner-execution-failed",
+  "invalid-runner-report",
+  "incomplete-parser-visitation",
+  "runner-exit-mismatch",
+  "inline-policy-suppression",
+  "source-argument-too-long",
+  "subject-changed-during-scan",
+  "incomplete-policy-history",
+]);
+
+export function parsePolicyArguments(args, ci = process.env.CI === "true") {
+  const options = { mode: "enforce", scope: "repository", json: false };
+  const supplied = new Set();
+  for (let index = 0; index < args.length; index++) {
+    const key = args[index];
+    if (supplied.has(key)) throw new TypeError("invalid-arguments");
+    supplied.add(key);
+    if (key === "--json") options.json = true;
+    else {
+      applyPolicyOption(options, key, args[++index]);
+    }
+  }
+  if (!["enforce", "census"].includes(options.mode)) throw new TypeError("invalid-mode");
+  if (ci && (options.scope !== "repository" || options.mode !== "enforce"))
+    throw new TypeError("partial-ci-verdict");
+  return options;
+}
+
+function applyPolicyOption(options, key, value) {
+  if (!["--mode", "--scope"].includes(key) || value === undefined || value.startsWith("--")) {
+    throw new TypeError("invalid-arguments");
+  }
+  options[key.slice(2)] = value;
+}
+
+export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
+  const source = readFileSync(resolve(repositoryRoot, "scripts/code-quality-policy.json"));
+  const policy = JSON.parse(source);
+  const errors = validatePolicy(policy, readPreviousPolicies(repositoryRoot));
+  if (errors.length > 0) throw new TypeError(errors[0]);
+  const tools = runnerIdentity();
+  const inventory = await collectPolicyInventory(repositoryRoot);
+  const scope = selectPolicyScope(inventory.files, options.scope, process.env.CI === "true");
+  validateActiveScopes(policy, inventory.files);
+  const pack = collectPolicyPackages(repositoryRoot, inventory.packages);
+  const scan = runNativePolicy(repositoryRoot, scope.files);
+  const inventorySha256 = policyDigest(JSON.stringify(inventory));
+  if (
+    policyDigest(JSON.stringify(await collectPolicyInventory(repositoryRoot))) !==
+      inventorySha256 ||
+    policyDigest(readFileSync(resolve(repositoryRoot, "scripts/code-quality-policy.json"))) !==
+      policyDigest(source)
+  ) {
+    throw new TypeError("subject-changed-during-scan");
+  }
+  const assessed = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
+  const outcome =
+    options.mode === "enforce" && assessed.violations.length > 0 ? "failed" : "passed";
+  return {
+    schemaVersion: 1,
+    subject: inventory.subject,
+    mode: options.mode,
+    scope: { id: scope.id, partial: scope.partial },
+    outcome,
+    policySha256: policyDigest(source),
+    tools,
+    configSha256: scan.configSha256,
+    inventorySha256,
+    counts: {
+      expected: scope.files.length,
+      visited: scan.visited,
+      findings: scan.diagnostics.length,
+      violations: assessed.violations.length,
+      packages: inventory.packages.length,
+      html: inventory.html.length,
+    },
+    rules: policy.rules.map((rule) => ({
+      ...rule,
+      findings: scan.diagnostics.filter((entry) => entry.rule === rule.id).length,
+    })),
+    ...assessed,
+    inventory,
+    pack,
+  };
+}
+
+function validateActiveScopes(policy, files) {
+  for (const rule of policy.rules) {
+    for (const id of rule.activeScopes) selectPolicyScope(files, id, false);
+  }
+}
+
+export async function codeQualityPolicyMain(args = process.argv.slice(2), repositoryRoot = root) {
+  try {
+    const options = parsePolicyArguments(args);
+    const report = await executeCodeQualityPolicy(options, repositoryRoot);
+    if (options.json) console.log(JSON.stringify(report, null, 2));
+    else {
+      console.log(
+        `code-quality-policy: ${report.outcome.toUpperCase()} - ${report.counts.visited} files; ${report.counts.violations} active findings; ${report.scope.partial ? "partial" : "repository"}`,
+      );
+      for (const finding of report.violations) console.log(JSON.stringify(finding));
+    }
+    return report.outcome === "passed" ? 0 : 1;
+  } catch (error) {
+    const reason = FAILURE_REASONS.has(error.message)
+      ? error.message
+      : "analyzer-qualification-failed";
+    console.error(
+      `code-quality-policy: FAIL - ${reason}; repair the named policy, inventory or analyzer obligation`,
+    );
+    return 1;
+  }
+}
+
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
+  process.exitCode = await codeQualityPolicyMain();
+}

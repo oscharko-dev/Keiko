@@ -149,7 +149,8 @@ describe("candidateProvedEveryReusedJob", () => {
     "Coverage suite (scripts)",
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
-    "Node 26 compatibility",
+    "Node 26 compatibility (shard 1/2)",
+    "Node 26 compatibility (shard 2/2)",
     "Portable secure-read smoke (linux-x64)",
     "Portable secure-read smoke (windows-x64)",
     "Portable secure-read smoke (macos-arm64)",
@@ -175,6 +176,23 @@ describe("candidateProvedEveryReusedJob", () => {
   it("refuses a candidate missing a matrix-suffixed job entirely", async () => {
     const withoutMatrix = everyJob.filter((job) => !job.name.startsWith("Cross-platform smoke"));
     stubFetch({ "/jobs": { body: { jobs: withoutMatrix } } });
+    await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+  });
+
+  it.each([1, 2])("requires successful exact evidence for Node 26 shard %s", async (shard) => {
+    const name = `Node 26 compatibility (shard ${shard}/2)`;
+    const missing = everyJob.filter((job) => job.name !== name);
+    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+      stubFetch({ "/jobs": { body: { jobs } } });
+      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+    }
+  });
+
+  it("refuses legacy single-job Node 26 evidence", async () => {
+    const jobs = everyJob.filter((job) => !job.name.startsWith("Node 26 compatibility"));
+    jobs.push({ name: "Node 26 compatibility", conclusion: "success" });
+    stubFetch({ "/jobs": { body: { jobs } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });
 

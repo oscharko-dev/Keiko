@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "upstream": "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
+  "runner": "1.78.0",
+  "rules": [
+    {
+      "id": "anti-slop/no-array-filter-map",
+      "disposition": "targeted-review",
+      "migrationIssue": 3989,
+      "reason": "Require measured cost and ownership/omission equivalence; accept fixed-state immutable copies when proven.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-reduce-accumulator-copy",
+      "disposition": "production-required",
+      "migrationIssue": 3915,
+      "reason": "Reject needless type-evidence erasure and accumulator copies; preserve boundary input and fresh owned mutation.",
+      "activeScopes": ["production"]
+    },
+    {
+      "id": "anti-slop/no-chained-type-assertions",
+      "disposition": "production-required",
+      "migrationIssue": 3991,
+      "reason": "Activate all production owners after their ordered assertion migration; a comment never replaces validation.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-conditional-empty-object-spread",
+      "disposition": "targeted-review",
+      "migrationIssue": 3989,
+      "reason": "Require measured cost and ownership/omission equivalence; accept fixed-state immutable copies when proven.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-known-value-widening",
+      "disposition": "boundary-scoped",
+      "migrationIssue": 3918,
+      "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-module-mocking",
+      "disposition": "test-scoped",
+      "migrationIssue": 3920,
+      "reason": "Migrate internal interceptions to owned seams; qualify legitimate framework and hostile fixtures with real composition.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-object-parameters",
+      "disposition": "boundary-scoped",
+      "migrationIssue": 3918,
+      "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-reflect-apply",
+      "disposition": "production-required",
+      "migrationIssue": 3915,
+      "reason": "Reject needless type-evidence erasure and accumulator copies; preserve boundary input and fresh owned mutation.",
+      "activeScopes": ["production"]
+    },
+    {
+      "id": "anti-slop/no-reflect-get",
+      "disposition": "boundary-scoped",
+      "migrationIssue": 3918,
+      "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-runtime-typeof",
+      "disposition": "boundary-scoped",
+      "migrationIssue": 3918,
+      "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-unsafe-dictionary-type",
+      "disposition": "boundary-scoped",
+      "migrationIssue": 3918,
+      "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-unknown-parameters",
+      "disposition": "boundary-scoped",
+      "migrationIssue": 3918,
+      "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-unknown-returns",
+      "disposition": "boundary-scoped",
+      "migrationIssue": 3918,
+      "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-unknown-type-aliases",
+      "disposition": "existing-equivalent",
+      "migrationIssue": 3918,
+      "reason": "Reuse Sonar simple-alias coverage and repair the scheduler; local aliases are not claimed equivalent.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop/no-widen-then-assert",
+      "disposition": "production-required",
+      "migrationIssue": 3915,
+      "reason": "Reject needless type-evidence erasure and accumulator copies; preserve boundary input and fresh owned mutation.",
+      "activeScopes": ["production"]
+    },
+    {
+      "id": "anti-slop/require-safety-comment-for-type-assertion",
+      "disposition": "production-required",
+      "migrationIssue": 3991,
+      "reason": "Activate all production owners after their ordered assertion migration; a comment never replaces validation.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop-effect/no-manual-effect-error-tag",
+      "disposition": "Effect-host-only",
+      "migrationIssue": 3988,
+      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop-effect/no-manual-tag-comparison",
+      "disposition": "Effect-host-only",
+      "migrationIssue": 3988,
+      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop-effect/no-manual-tagged-construction",
+      "disposition": "Effect-host-only",
+      "migrationIssue": 3988,
+      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop-effect/no-service-constructor-imports",
+      "disposition": "Effect-host-only",
+      "migrationIssue": 3988,
+      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
+      "activeScopes": []
+    },
+    {
+      "id": "anti-slop-effect/prefer-effect-match",
+      "disposition": "Effect-host-only",
+      "migrationIssue": 3988,
+      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
+      "activeScopes": []
+    },
+    {
+      "id": "oxc/no-accumulating-spread",
+      "disposition": "targeted-review",
+      "migrationIssue": 3989,
+      "reason": "Require measured cost and ownership/omission equivalence; accept fixed-state immutable copies when proven.",
+      "activeScopes": []
+    }
+  ]
+}
