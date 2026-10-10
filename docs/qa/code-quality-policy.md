@@ -93,3 +93,41 @@ working-tree census binds its observed bytes with source digests and an inventor
 subject SHA alone is not a claim that uncommitted additions are committed or that hosted checks
 passed. Publish committed-head evidence in the existing issue/PR record. No permanent violation
 baseline, bulk suppression register or separate evidence store is introduced.
+
+The internal #3918 compiler interface is descriptive and inactive in the policy entrypoint.
+`collectPolicySubject` shares the inventory's already parsed effective compiler contexts and its
+single output-to-source map. `collectPolicyInventory` retains its public result. A resolver lazily
+builds context-owned TypeScript programs, keeping NodeNext, Bundler and source-path overrides
+separate. Alias identities derive from actual declaration owners and producer spans; symbols from
+different programs are never compared by object identity or name alone. Incoming-use results retain
+untyped, unresolved and partial coverage explicitly. These facts grant no exemption or activation.
+
+Every compiler-loaded owned declaration, including public entrypoints and intermediate reexports,
+qualifies only when the same configured producer program emits byte-identical
+current declaration and declaration-map output. The builtin Node `SourceMap.findEntry` API maps
+zero-based generated positions back to the owning source; owning fixtures exercise real compiler
+emission, workspace symlink resolution, public main/subpath reexports and UTF-16 positions.
+Missing, stale, changed or escaping provenance fails. Matching names or spans alone is insufficient,
+including a same-length producer type change with an unchanged declaration name.
+
+The interface bounds retained programs (2), verified source bytes (64 MiB), visited nodes
+(5 million), alias traversal (64) and aggregate in-memory declaration emission (16 MiB).
+These are finite resource ceilings, not acceptance thresholds. It rechecks source, configuration,
+manifest, declaration and dependency snapshots plus package/file ownership and effective
+context/output ownership before returning facts. The existing bounded Git membership producer is shared by collection and
+rechecking: changes to the enumerated tracked or nonignored path set invalidate the captured
+membership. This includes
+new root/package consumers and requires no second config, program, packaging or analyzer census.
+Callers release retained graphs with `close`; released resolvers cannot be reused.
+Unsupported or unresolved semantic situations remain incomplete or fail closed. Responsibility
+assessment, boundary exemptions, migration and scope activation are subsequent #3918 checkpoints.
+
+Incoming member references use actual checker-owned properties and canonical declaration provenance,
+including dot access, literal/template element access and bounded immutable const key/callee aliases.
+Inert TypeScript syntax preserves call classification. Keys derive from actual literal/const
+initializers, so an asserted unknown key cannot borrow a known export identity from its type alone.
+Matching members require an actual namespace import binding or its immutable const aliases; an
+asserted opaque receiver cannot qualify through its type alone. Mutable, destructured or parameter
+callable indirection and unresolved computed members remain
+explicitly incomplete. These are compiler/source reference facts, not runtime function-object
+identity or higher-order responsibility proofs; they authorize no semantic exemption.
