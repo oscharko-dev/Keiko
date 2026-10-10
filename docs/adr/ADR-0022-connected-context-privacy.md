@@ -753,8 +753,11 @@ without one prompt marker per file. A clipped trailing newline does not authoriz
 line. Structural edges retain independent identities while a shared source body is compacted and
 charged once. The highest-scoring contributing located atom carries that body, so downstream prompt
 ranking retains its actual relevance even when a weaker edge arrived first. Unlocated discovery
-metadata cannot lend its path score to a separately located source window; it remains the fallback
-when no located owner exists. Metadata-only siblings keep their original scores.
+metadata cannot lend its path score to a separately located source window. The excerpt reader also
+orders windows by their actual located owners before spending the accepted byte grant; an unlocated
+path score remains the fallback only for a window without a located owner. Definition trace
+priority, independently admitted ranges and sole-listing header fallback remain intact.
+Metadata-only siblings keep their original scores.
 Different view identities merge only when their overlapping source lines agree;
 non-overlapping partial views never establish continuity by themselves.
 

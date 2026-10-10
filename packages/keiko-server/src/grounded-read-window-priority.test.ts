@@ -161,7 +161,7 @@ describe("located window ownership before actual source reads", () => {
       expect(sentText(result)).toContain(STRONG);
       expect(result.sent.sentEvidencePacks?.[0]?.files[0]?.excerpts[0]?.atom.score).toBe(0.9);
       expect(result.pack.usage.excerptBytes).toBeLessThanOrEqual(512);
-      expect(result.read.observation?.omittedRangeCount).toBeGreaterThan(0);
+      expect(result.read.observation?.truncatedWindowCount).toBeGreaterThan(0);
     },
   );
 
