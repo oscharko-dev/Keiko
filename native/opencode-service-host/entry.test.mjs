@@ -168,6 +168,52 @@ function authenticated(input) {
   return { authorization: `Basic ${Buffer.from(`opencode:${input.password}`).toString("base64")}` };
 }
 
+test("readiness uses the pinned predicate and refuses unsupported addresses without publishing", async () => {
+  const own = fixture();
+  try {
+    const { publishFixedHostReadiness } = await import(join(own.root, "entry.mjs"));
+    const { Cause, Effect, Exit } = await import(join(moduleRoot, "effect/dist/index.js"));
+    const endpoints = [];
+    const ready = (endpoint) => endpoints.push(endpoint);
+    const supported = await Effect.runPromiseExit(
+      publishFixedHostReadiness({ _tag: "TcpAddress", port: 1983 }, ready),
+    );
+    assert.equal(Exit.isSuccess(supported), true);
+    assert.deepEqual(endpoints, ["http://127.0.0.1:1983"]);
+    for (const address of [{ _tag: "UnixAddress", path: "PRIVATE_SOCKET" }, {}, null]) {
+      const refused = await Effect.runPromiseExit(publishFixedHostReadiness(address, ready));
+      assert.equal(Exit.isFailure(refused), true);
+      assert.deepEqual(Cause.squash(refused.cause), "host-address-invalid");
+      assert.deepEqual(endpoints, ["http://127.0.0.1:1983"]);
+    }
+  } finally {
+    own.cleanup();
+  }
+});
+
+test("native route acquisition failure remains a constant refusal and never publishes readiness", async () => {
+  const own = fixture();
+  writeFileSync(
+    join(own.root, "host.mjs"),
+    `
+    import { Effect } from "effect";
+    import { runFixedHostEntry } from "./entry.mjs";
+    process.exitCode = await runFixedHostEntry(() => Effect.fail(new Error("PRIVATE_NATIVE_CAUSE")));
+  `,
+  );
+  const owned = start(own);
+  try {
+    owned.child.stdin.write(JSON.stringify(own.input) + "\n");
+    const result = await owned.exited;
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "host-entry-refused\n");
+  } finally {
+    await finish(owned);
+    own.cleanup();
+  }
+});
+
 test("the fixed host entry serves original auth/routes/SSE and closes its socket on stdin EOF", async () => {
   const own = fixture();
   const owned = start(own);

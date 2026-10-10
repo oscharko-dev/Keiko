@@ -13,6 +13,27 @@ const files = [
 const diagnostic = (path, rule) => ({ path, rule, line: 1, column: 1 });
 
 describe("code-quality policy fail-closed contract (#3915)", () => {
+  it("activates the qualified Effect rules only for the exact native host owner (#3988)", () => {
+    const effects = policy.rules.filter(({ id }) => id.startsWith("anti-slop-effect/"));
+    expect(effects).toHaveLength(5);
+    const owners = [
+      ...files,
+      { path: "native/opencode-service-host/entry.mjs", scope: "native-host", production: true },
+    ];
+    for (const rule of effects) {
+      expect(rule.activeScopes).toEqual(["native-host"]);
+      const result = assessPolicyDiagnostics(
+        owners.map(({ path }) => diagnostic(path, rule.id)),
+        owners,
+        policy,
+      );
+      expect(result.violations.map(({ path }) => path)).toEqual([
+        "native/opencode-service-host/entry.mjs",
+      ]);
+      expect(result.census).toHaveLength(owners.length);
+    }
+  });
+
   it("keeps all 22 dispositions and the three initial production guards", () => {
     expect(validatePolicy(policy)).toEqual([]);
     expect(policy.rules).toHaveLength(22);
