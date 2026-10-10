@@ -12,17 +12,20 @@ import {
   openApiSession,
   parseCli,
 } from "./lab-common.mjs";
-import { CONNECTED_CHAT_CAMPAIGNS, materializeManualCases } from "./connected-chat-cases.mjs";
+import {
+  CONNECTED_CHAT_CAMPAIGNS,
+  materializeCompactionCases,
+  materializeManualCases,
+} from "./connected-chat-cases.mjs";
 import {
   connectedChatObservation,
   expectedSourceFactObservation,
+  historyCheckpointContinuity,
 } from "./connected-chat-record.mjs";
 
 const USAGE =
   "connected-chat-run.mjs --campaign customer|knowledge|compaction|manual --repo <explicit-root> --runtime-state <private-json> --output <external-jsonl> [--corpus-witness <private-json>] [--prepare]";
 const REQUEST_TIMEOUT_MS = 120_000;
-const HISTORY_COUNT = 120;
-const HISTORY_BYTES = 8192;
 
 function sourceHead() {
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
@@ -117,25 +120,6 @@ function chatAddress(chat) {
   return { chatId: chat.chatId, projectPath: chat.projectPath };
 }
 
-async function seedUserHistory(session, chat) {
-  const label =
-    "Synthetic qualification user note: context padding, never repository evidence or a model response. ";
-  const content = label.repeat(Math.ceil(HISTORY_BYTES / label.length)).slice(0, HISTORY_BYTES);
-  for (let index = 0; index < HISTORY_COUNT; index += 1)
-    requireSuccess(
-      await request(session, "POST", "/api/chats/messages", {
-        ...chatAddress(chat),
-        role: "user",
-        content,
-        timestamp: Date.now(),
-      }),
-    );
-  return {
-    syntheticUserMessageCount: HISTORY_COUNT,
-    syntheticHistoryBytes: content.length * HISTORY_COUNT,
-  };
-}
-
 async function evidenceManifests(session, answer) {
   const runIds =
     answer.evidenceRunIds ?? (answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]);
@@ -149,7 +133,6 @@ async function evidenceManifests(session, answer) {
 
 async function runCase(session, runtime, chat, row, evidenceStore) {
   requireHeldHead(runtime);
-  const seed = row.seedHistoryBefore === true ? await seedUserHistory(session, chat) : {};
   const before = await currentAcknowledgedChat(session, chat);
   requireHeldHead(runtime);
   const startedAt = Date.now();
@@ -191,7 +174,7 @@ async function runCase(session, runtime, chat, row, evidenceStore) {
     timestamp: new Date().toISOString(),
     status: result.status,
     elapsedMs: Date.now() - startedAt,
-    ...seed,
+    ...(row.setup === undefined ? {} : { setup: row.setup }),
     persistedMessageCount: history.json.messages?.length,
     ...(await connectedChatObservation(runtime, result, manifests, row.target, binding)),
     ...(await expectedSourceFactObservation(result.json.content ?? "", row.expectedFact)),
@@ -220,6 +203,7 @@ function campaignOptions() {
         disposition: "preparation-only",
         campaign,
         caseIds: cases.map((row) => row.id),
+        setupSynthesisTurns: cases.filter((row) => row.setupNote !== undefined).length,
         requestTimeoutMs: REQUEST_TIMEOUT_MS,
       }),
     );
@@ -261,10 +245,33 @@ async function setupCampaign(parsed) {
     stateDir: runtime.stateDir,
   });
   const evidenceStore = createNodeEvidenceStore(resolveEvidenceDir(undefined, effectiveEnv));
-  return { session, runtime, chat, output, cases, evidenceStore };
+  const readyCases =
+    parsed.campaign === "compaction"
+      ? await compactionCases(session, runtime, chat, effectiveEnv)
+      : cases;
+  return { session, runtime, chat, output, cases: readyCases, evidenceStore };
+}
+
+async function compactionCases(session, runtime, chat, env) {
+  const path = env.KEIKO_CONFIG_FILE ?? join(env.KEIKO_UI_DATA_DIR, "keiko.config.json");
+  if ((statSync(path).mode & 0o077) !== 0) throw new UsageError("private-config-required");
+  const { parseGatewayConfig } = await importBuilt("keiko-model-gateway", "index.js");
+  const { currentContextProfileForModel } = await importBuilt("keiko-server", "deps.js");
+  const config = parseGatewayConfig(JSON.parse(readFileSync(path, "utf8")));
+  const profile = currentContextProfileForModel({ config }, runtime.selectedModel);
+  const query = new URLSearchParams({ ...chatAddress(chat), modelId: runtime.selectedModel });
+  const status = requireSuccess(await request(session, "GET", `/api/chats/context?${query}`));
+  if (
+    profile === undefined ||
+    profile.maxInputTokens !== status.contextWindowTokens ||
+    profile.effectiveInputBudget !== status.inputBudgetTokens
+  )
+    throw new UsageError("compaction-profile-unbound");
+  return materializeCompactionCases(profile);
 }
 
 async function runCampaign({ session, runtime, chat, output, cases, evidenceStore }) {
+  let checkpoint;
   for (const row of cases) {
     console.log(
       JSON.stringify({
@@ -274,7 +281,14 @@ async function runCampaign({ session, runtime, chat, output, cases, evidenceStor
       }),
     );
     try {
+      if (row.requireHistoryCheckpoint && checkpoint?.disposition !== "observed")
+        throw new UsageError("compaction-checkpoint-unobserved");
       const record = await runCase(session, runtime, chat, row, evidenceStore);
+      if (row.requireHistoryCheckpoint)
+        record.checkpointContinuity = historyCheckpointContinuity(
+          checkpoint,
+          record.historyCompaction,
+        );
       appendRecord(output, record);
       console.log(
         JSON.stringify({
@@ -287,15 +301,38 @@ async function runCampaign({ session, runtime, chat, output, cases, evidenceStor
         }),
       );
       if (record.status !== 200) throw new UsageError("lab-request-refused");
-    } catch {
+      checkpoint = nextHistoryCheckpoint(row, record, checkpoint);
+    } catch (error) {
       appendRecord(output, {
         caseId: row.id,
         testedSha: runtime.testedSha,
         disposition: "unobserved-or-interrupted",
+        cause: qualificationFailureCause(error),
       });
       throw new UsageError("qualification-incomplete");
     }
   }
+}
+
+function nextHistoryCheckpoint(row, record, previous) {
+  if (record.checkpointContinuity?.disposition === "unobserved")
+    throw new UsageError("compaction-checkpoint-unobserved");
+  if (!row.establishHistoryCheckpoint) return previous;
+  if (record.historyCompaction?.disposition !== "observed")
+    throw new UsageError("compaction-checkpoint-unobserved");
+  return record.historyCompaction;
+}
+
+function qualificationFailureCause(error) {
+  const causes = new Set([
+    "source-hold-mismatch",
+    "acknowledged-scope-drift",
+    "compaction-checkpoint-unobserved",
+    "lab-request-refused",
+  ]);
+  return error instanceof UsageError && causes.has(error.message)
+    ? error.message
+    : "request-or-observation-failed";
 }
 
 async function main() {

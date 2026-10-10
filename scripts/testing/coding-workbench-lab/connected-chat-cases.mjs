@@ -1,4 +1,5 @@
 // Customer prompts for the actual connected-chat lab; these are questions, never model outputs.
+import { Buffer } from "node:buffer";
 import { INCIDENT_FEATURE_PATH, INCIDENT_RETRIEVAL_CASES } from "../../check-retrieval-quality.mjs";
 import { importBuilt, UsageError } from "./lab-common.mjs";
 
@@ -86,13 +87,30 @@ export const CONNECTED_CHAT_CAMPAIGNS = Object.freeze({
       target: "packages/keiko-server/src/grounded-answer-assessment.ts",
     },
     {
+      id: "compaction-setup-note-1",
+      setupNote: 1,
+    },
+    {
+      id: "compaction-setup-note-2",
+      setupNote: 2,
+      establishHistoryCheckpoint: true,
+    },
+    {
       id: "compaction-general-after",
-      seedHistoryBefore: true,
+      requireHistoryCheckpoint: true,
       question:
         "How should a team compare alternatives with uncertain evidence? Suggest a short general process, under 100 words.",
     },
     {
+      id: "compaction-mixed-after",
+      requireHistoryCheckpoint: true,
+      question:
+        "Explain how packages/keiko-server/src/grounded-answer-assessment.ts applies the operator's policy, with current implementation citations. Then separately give a general recommendation for communicating uncertainty. Keep it under 150 words.",
+      target: "packages/keiko-server/src/grounded-answer-assessment.ts",
+    },
+    {
       id: "compaction-source-return",
+      requireHistoryCheckpoint: true,
       question:
         "Return to packages/keiko-server/src/grounded-answer-assessment.ts. Which function applies the operator's policy before source validation? Cite the current implementation lines, under 100 words.",
       target: "packages/keiko-server/src/grounded-answer-assessment.ts",
@@ -148,6 +166,57 @@ export const CONNECTED_CHAT_CAMPAIGNS = Object.freeze({
     },
   ],
 });
+
+/** Real user setup inputs, sized in the same token currency as the actual conversation lane. */
+export async function materializeCompactionCases(modelProfile) {
+  const { countContextTokens } = await importBuilt("keiko-contracts", "context-engineering.js");
+  const { groundedHistoryLaneTokens } = await importBuilt(
+    "keiko-server",
+    "grounded-conversation-continuity.js",
+  );
+  const lane = groundedHistoryLaneTokens(modelProfile);
+  const budget = Math.floor(lane * 0.55);
+  return CONNECTED_CHAT_CAMPAIGNS.compaction.map((row) => {
+    if (row.setupNote === undefined) return row;
+    const question = boundedUserNote(
+      row.setupNote,
+      budget,
+      modelProfile.tokenAccounting,
+      countContextTokens,
+    );
+    return {
+      ...row,
+      question,
+      setup: {
+        authoredUserNote: true,
+        conversationLaneTokens: lane,
+        chargedUserNoteTokens: countContextTokens(question, modelProfile.tokenAccounting),
+        userNoteBytes: Buffer.byteLength(question),
+        requestedMaximumResponseWords: 20,
+      },
+    };
+  });
+}
+
+function boundedUserNote(index, budget, accounting, count) {
+  const header = `Laboratory user preference note ${index}. This is authored test context, not repository evidence or a model response.\n`;
+  const paragraph =
+    "My working preferences are to compare reasonable options, explain uncertainty plainly, distinguish observations from assumptions, and propose small reversible next steps. These are conversation preferences, not facts about any connected source.\n";
+  const footer =
+    "\nBriefly acknowledge these preferences in no more than twenty words. Do not repeat the note.";
+  const source = paragraph.repeat(budget);
+  let lower = 0;
+  let upper = source.length;
+  while (lower < upper) {
+    const middle = Math.ceil((lower + upper) / 2);
+    if (count(header + source.slice(0, middle) + footer, accounting) <= budget) lower = middle;
+    else upper = middle - 1;
+  }
+  const note = header + source.slice(0, lower) + footer;
+  if (count(note, accounting) > budget || lower === 0)
+    throw new UsageError("compaction-note-does-not-fit");
+  return note;
+}
 
 /** Bind reproduction inputs to the existing witness; never retain its file bodies or root path. */
 export async function materializeManualCases(corpus) {

@@ -1,4 +1,5 @@
 // Tool qualification only: real registered writer/reader and privacy projection, no model call.
+import { Buffer } from "node:buffer";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,10 +16,15 @@ import {
   connectedChatObservation,
   expectedSourceFactObservation,
 } from "../testing/coding-workbench-lab/connected-chat-record.mjs";
+import * as records from "../testing/coding-workbench-lab/connected-chat-record.mjs";
+import * as catalog from "../testing/coding-workbench-lab/connected-chat-cases.mjs";
 import { materializeManualCases } from "../testing/coding-workbench-lab/connected-chat-cases.mjs";
 import { createNodeEvidenceStore } from "../../packages/keiko-evidence/dist/index.js";
 import { createInMemoryUiStore } from "../../packages/keiko-server/dist/store/index.js";
-import { groundedConversationContinuity } from "../../packages/keiko-server/dist/grounded-conversation-continuity.js";
+import {
+  groundedConversationContinuity,
+  groundedHistoryLaneTokens,
+} from "../../packages/keiko-server/dist/grounded-conversation-continuity.js";
 import { persistChatCompactionEvidence } from "../../packages/keiko-server/dist/chat-compaction-evidence.js";
 import { readChatContextStatus } from "../../packages/keiko-server/dist/chat-context-status.js";
 import {
@@ -26,7 +32,10 @@ import {
   logGroundedPromptSelection,
 } from "../../packages/keiko-server/dist/chat-activity.js";
 import { selectGatewayPromptAssembly } from "../../packages/keiko-server/dist/chat-prompt-budget.js";
-import { deriveContextProfile } from "../../packages/keiko-contracts/dist/context-engineering.js";
+import {
+  countContextTokens,
+  deriveContextProfile,
+} from "../../packages/keiko-contracts/dist/context-engineering.js";
 
 const DIRECTORIES = [];
 const CORRELATION = "corr-connected-chat-lab-observation";
@@ -371,6 +380,142 @@ describe("connected-chat lab's body-free observation", () => {
       disposition: "unobserved",
       cause: "checkpoint-unobserved",
     });
+  });
+});
+
+function admittedNote(store, chatId, row, timestamp) {
+  const input = { chatId, role: "user", content: row.question, timestamp };
+  const turn = store.admitChatTurn(row.id, input);
+  if (turn.kind !== "admitted") throw new TypeError("Expected fixture note admission");
+  return turn.userMessage;
+}
+
+function completeFixtureNote(store, chatId, row, user, timestamp) {
+  const answer = store.createTurnAssistant(user.id, {
+    chatId,
+    role: "assistant",
+    content: "Fixture acknowledgement, not an actual model qualification result.",
+    timestamp,
+  });
+  store.completeChatTurn(chatId, row.id, user.content, answer.id);
+}
+
+describe("bounded real-turn compaction preparation", () => {
+  it("keeps all original questions and requires a checkpoint before general, mixed and source return", () => {
+    const rows = catalog.CONNECTED_CHAT_CAMPAIGNS.compaction;
+    expect(rows.map((row) => row.id)).toEqual([
+      "compaction-source-before",
+      "compaction-setup-note-1",
+      "compaction-setup-note-2",
+      "compaction-general-after",
+      "compaction-mixed-after",
+      "compaction-source-return",
+    ]);
+    expect(rows[2].establishHistoryCheckpoint).toBe(true);
+    expect(rows.slice(3).every((row) => row.requireHistoryCheckpoint)).toBe(true);
+    expect(rows.some((row) => row.seedHistoryBefore)).toBe(false);
+  });
+
+  it.each([
+    undefined,
+    {
+      source: "calibrated",
+      counterId: "qualification-calibrated",
+      scaleMilli: 1500,
+      offsetTokens: 7,
+    },
+  ])(
+    "sizes each setup note in actual accounting and folds completed units with %j",
+    async (accounting) => {
+      const profile = deriveContextProfile({
+        maxInputTokens: 131072,
+        reservedOutputTokens: 8192,
+        safetyMarginTokens: 4096,
+        tokenAccounting: accounting,
+      });
+      const rows = await catalog.materializeCompactionCases(profile);
+      const notes = rows.filter((row) => row.setupNote !== undefined);
+      expect(notes).toHaveLength(2);
+      for (const row of notes) {
+        expect(row.setup.chargedUserNoteTokens).toBe(
+          countContextTokens(row.question, profile.tokenAccounting),
+        );
+        expect(row.setup.conversationLaneTokens).toBe(groundedHistoryLaneTokens(profile));
+        expect(row.setup.chargedUserNoteTokens).toBeLessThan(row.setup.conversationLaneTokens);
+        expect(row.setup.userNoteBytes).toBe(Buffer.byteLength(row.question));
+        expect(row.question).toContain("no more than twenty words");
+        expect(row.question).not.toMatch(/<assessment>|src\/|packages\//u);
+      }
+      const store = createInMemoryUiStore();
+      const root = mkdtempSync(join(tmpdir(), "keiko-compaction-notes-"));
+      DIRECTORIES.push(root);
+      store.createProject(root);
+      const chat = store.createChat(root, "Fixture compaction", "qualification-model");
+      const first = admittedNote(store, chat.id, notes[0], 1);
+      completeFixtureNote(store, chat.id, notes[0], first, 2);
+      const second = admittedNote(store, chat.id, notes[1], 3);
+      const continuity = groundedConversationContinuity(
+        {
+          store,
+          evidenceStore: createNodeEvidenceStore(join(root, "evidence")),
+          env: {},
+          contextProfile: profile,
+        },
+        second,
+        "qualification-model",
+        CORRELATION,
+      );
+      expect(continuity.compaction?.itemsBefore).toBeGreaterThan(0);
+      expect(continuity.compaction?.tokensBefore).toBeGreaterThan(
+        continuity.compaction?.tokensAfter,
+      );
+    },
+  );
+
+  it("does not emit an oversized note when the actual conversation lane cannot fit its instructions", async () => {
+    const profile = deriveContextProfile({
+      maxInputTokens: 1,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    await expect(catalog.materializeCompactionCases(profile)).rejects.toThrow(
+      "compaction-note-does-not-fit",
+    );
+  });
+
+  it("compares the actual verified boundary independently from a new source manifest", async () => {
+    const { runtime, binding, result } = compactionFixture();
+    const record = await connectedChatObservation(runtime, result, [], undefined, binding);
+    const observed = record.historyCompaction;
+    expect(
+      records.historyCheckpointContinuity(observed, {
+        ...observed,
+        manifestSha256: "new-manifest",
+      }),
+    ).toEqual({ disposition: "same-checkpoint" });
+    expect(
+      records.historyCheckpointContinuity(observed, {
+        ...observed,
+        historyRevision: observed.historyRevision + 1,
+      }),
+    ).toEqual({ disposition: "changed-checkpoint" });
+    expect(
+      records.historyCheckpointContinuity(observed, {
+        ...observed,
+        groundingScopeIdentity: "different-scope",
+      }),
+    ).toEqual({ disposition: "unobserved", cause: "checkpoint-binding-changed" });
+    expect(records.historyCheckpointContinuity(observed, { disposition: "unobserved" })).toEqual({
+      disposition: "unobserved",
+      cause: "checkpoint-unobserved",
+    });
+    expect(observed.checkpointRecordSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(
+      records.historyCheckpointContinuity(observed, {
+        ...observed,
+        checkpointRecordSha256: undefined,
+      }),
+    ).toEqual({ disposition: "unobserved", cause: "checkpoint-boundary-unobserved" });
   });
 });
 
