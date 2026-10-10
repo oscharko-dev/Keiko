@@ -387,7 +387,7 @@ function assertPlainAssessment(answer: GroundedAnswer, text: string): void {
     ),
   ).toMatchObject({
     policy: "allowed",
-    outcome: "assessment",
+    outcome: "assessment-only",
     sourceBackedChars: 0,
     assessmentChars: text.length,
   });

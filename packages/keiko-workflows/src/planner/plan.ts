@@ -336,7 +336,7 @@ export interface QueryTargetDecision {
   readonly definitionRequested: boolean;
   /** A completely parsed query-only file request; unknown continuations cannot narrow discovery. */
   readonly namedFileOnly?: true;
-  /** A completely parsed acknowledgement of supplied user context, without a source request. */
+  /** A completely parsed self-contained conversation or general-advice request, without source work. */
   readonly conversationOnly?: true;
 }
 
@@ -477,20 +477,43 @@ function suppliedContextClause(clause: string, index: number): boolean {
   );
 }
 
-function conversationOnlyRequest(query: RetrievalQuery, anchors: readonly SearchAnchor[]): boolean {
-  if (query.kind !== "natural-language" || anchors.some((anchor) => anchor.kind !== "literal"))
-    return false;
-  if (parseDiagnosticTraceText(query.text).detected || /[?`"']/u.test(query.text)) return false;
-  const clauses = queryContextOutsideQuotes(query.text)
-    .split(/[.!;\n]+/u)
-    .map((clause) => clause.trim())
-    .filter(Boolean);
+const GENERAL_ADVICE_REQUEST_RE =
+  /^(?:(?:please|bitte)\s+)?(?:(?:suggest|give|provide|recommend)\s+(?:a\s+)?(?:(?:short|brief|concise)\s+)?general\s+(?:process|method|approach|guidance|advice|principles)|(?:gib|empfiehl|beschreibe)\s+(?:(?:eine|einen)\s+)?(?:kurze[nr]?\s+)?allgemeine[nr]?\s+(?:vorgehensweise|methode|ansatz|hinweise))(?:,\s*(?:under|below|within|unter)\s+\d{1,6}\s+(?:words|wörtern|worte))?$/iu;
+const GENERAL_ADVICE_QUESTION_RE =
+  /^(?:how\s+(?:should|could|can)\s+(?:a|an|one|we)|wie\s+(?:sollte|könnte|kann)\s+(?:man|wir|ein|eine))\s+[\p{L}\p{N} ,()-]+$/iu;
+const SOURCE_CONSTRAINED_ADVICE_RE =
+  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b|\b(?:this|these|that|those|the|our|my)\s+(?:(?:attached|connected|selected|supplied)\s+)?(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence)\b|\b(?:dieses?|diese[nr]?|das|die|der|unser[e]?|mein[e]?)\s+(?:(?:verbundenen?|ausgewählten?|angehängten?)\s+)?(?:handbuch|handbücher|quellen?|dateien?|ordner|dokumente?|repository)\b/iu;
+
+function generalAdviceRequest(clauses: readonly string[]): boolean {
+  if (clauses.length !== 2 || !GENERAL_ADVICE_REQUEST_RE.test(clauses[1] ?? "")) return false;
+  const question = clauses[0] ?? "";
+  return (
+    GENERAL_ADVICE_QUESTION_RE.test(question) &&
+    !INDEPENDENT_CONTEXT_COMMAND_RE.test(question) &&
+    !SOURCE_CONSTRAINED_ADVICE_RE.test(question)
+  );
+}
+
+function suppliedContextRequest(clauses: readonly string[]): boolean {
   const acknowledgement = clauses.findIndex((clause) => ACKNOWLEDGEMENT_REQUEST_RE.test(clause));
   if (acknowledgement < 0) return false;
   return clauses.every((clause, index) =>
     index < acknowledgement
       ? suppliedContextClause(clause, index)
       : index === acknowledgement || ACKNOWLEDGEMENT_OUTPUT_RE.test(clause),
+  );
+}
+
+function conversationOnlyRequest(query: RetrievalQuery, anchors: readonly SearchAnchor[]): boolean {
+  if (query.kind !== "natural-language" || anchors.some((anchor) => anchor.kind !== "literal"))
+    return false;
+  if (parseDiagnosticTraceText(query.text).detected || /[`"']/u.test(query.text)) return false;
+  const clauses = queryContextOutsideQuotes(query.text)
+    .split(/[.!?;\n]+/u)
+    .map((clause) => clause.trim().replace(/[,\s]+$/u, ""))
+    .filter(Boolean);
+  return (
+    generalAdviceRequest(clauses) || (!query.text.includes("?") && suppliedContextRequest(clauses))
   );
 }
 

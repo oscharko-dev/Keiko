@@ -92,6 +92,8 @@ describe("positively requested general advice without source authority", () => {
   });
 
   it.each([
+    "How should a team interpret this manual? Give a general process.",
+    "How should a team use measurements recorded in the attached source? Give a general approach.",
     "What temperature trips the Vesper dosing interlock?",
     "How does the customer manual describe operating limits?",
     "How should a team compare alternatives? Suggest a short general process. What maximum does the manual specify?",

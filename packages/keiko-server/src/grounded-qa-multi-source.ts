@@ -1881,6 +1881,10 @@ async function normalizedMultiSourceAnswer(
     currentOwnAssessmentPolicy(ctx.deps),
     ctx.correlationId,
     ctx.content,
+    undefined,
+    retrieved.length > 0 &&
+      retrieved.every((source) => source.plan.targetDecision?.conversationOnly === true) &&
+      !packsHaveUsableEvidence(finalMultiSourceEvidence(answer, retrieved)),
   );
 }
 

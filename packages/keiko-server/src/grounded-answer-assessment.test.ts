@@ -82,3 +82,26 @@ describe("shared grounded assessment normalization", () => {
     ).toBe("Keine passenden Belege für diese Suche gefunden.");
   });
 });
+
+describe("untagged conversation authority preserves source and policy boundaries", () => {
+  it.each([
+    ["The selected source has value 37.", "allowed", false],
+    ["The selected source has value 37.", "allowed", true],
+    ["I cannot access the selected files.", "allowed", true],
+    ["I will compare the options.", "disabled", true],
+  ] as const)(
+    "does not label %s under %s / conversation=%s",
+    (content, policy, conversationOnly) => {
+      const answer = normalizeGroundedAnswerAssessment(
+        { content, usage: { promptTokens: 0, completionTokens: 0 } },
+        policy,
+        undefined,
+        "",
+        undefined,
+        conversationOnly,
+      );
+      expect(isGroundedAssessmentOnly(answer.content)).toBe(false);
+      expect(answer.content).toBe(content);
+    },
+  );
+});
