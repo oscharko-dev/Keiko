@@ -18,13 +18,31 @@ export { isGroundedAssessmentOnly } from "./grounded-faithfulness.js";
 
 // A claim about selected evidence remains source-authoritative even without a marker or path.
 const SOURCE_ATTRIBUTION_RE =
-  /\b(?:according\s+to|as\s+(?:stated|specified|documented)\s+in|laut|gemäß)\b|\b(?:the|this|these|that|those|our|my)\s+(?:(?:selected|attached|connected|supplied|retrieved)\s+)?(?:sources?|files?|manuals?|documents?|folders?|repositor(?:y|ies))\b|\b(?:die|das|der|diese[nrs]?|unser[e]?|mein[e]?)\s+(?:(?:ausgewählten?|verbundenen?|bereitgestellten?)\s+)?(?:quellen?|dateien?|handbuch|handbücher|dokumente?|ordner|repository)\b/iu;
+  /\b(?:according\s+to|as\s+(?:stated|specified|documented)\s+in|laut|gemäß)\b/iu;
+const SOURCE_DETERMINER_RE =
+  /^(?:the|this|these|that|those|our|my|your|his|her|its|their|die|das|der|diese[nrs]?|unser[e]?|mein[e]?|dein[e]?|euer[e]?|ihr[e]?)$/iu;
+const SOURCE_NOUN_RE =
+  /^(?:sources?|files?|manuals?|documents?|folders?|repositor(?:y|ies)|quellen?|dateien?|handbuch|handbücher|dokumente?|ordner|repository)$/iu;
+const SOURCE_PHRASE_TOKEN_RE = /[\p{L}\p{N}-]+|[^\p{L}\p{N}\s-]/gu;
+
+/** Modifiers cannot erase attribution; punctuation keeps separate phrases independent. */
+function attributedSourcePhrase(content: string): boolean {
+  let determined = false;
+  for (const match of content.matchAll(SOURCE_PHRASE_TOKEN_RE)) {
+    const token = match[0];
+    if (determined && SOURCE_NOUN_RE.test(token)) return true;
+    if (SOURCE_DETERMINER_RE.test(token)) determined = true;
+    else if (!/^[\p{L}\p{N}-]+$/u.test(token)) determined = false;
+  }
+  return false;
+}
 
 /** Empty sent evidence and a positively parsed conversation grant cannot authenticate sources. */
 function untaggedConversationAnswer(content: string): boolean {
   return (
     !hasOwnAssessmentTag(content) &&
     !SOURCE_ATTRIBUTION_RE.test(content) &&
+    !attributedSourcePhrase(content) &&
     classifyGroundedAnswerKind(content) === "answer" &&
     parseInlineCitations(content).length === 0 &&
     citationMarkerIndices(content).length === 0 &&

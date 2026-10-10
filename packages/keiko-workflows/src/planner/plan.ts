@@ -514,7 +514,7 @@ function suppliedContextClause(clause: string, index: number): boolean {
 const GENERAL_ADVICE_REQUEST_RE =
   /^(?:(?:please|bitte)\s+)?(?:(?:suggest|give|provide|recommend)\s+(?:a\s+)?(?:(?:short|brief|concise)\s+)?general\s+(?:process|method|approach|guidance|advice|principles)|(?:gib|empfiehl|beschreibe)\s+(?:(?:eine|einen)\s+)?(?:kurze[nr]?\s+)?allgemeine[nr]?\s+(?:vorgehensweise|methode|ansatz|hinweise))(?:,\s*(?:under|below|within|unter)\s+\d{1,6}\s+(?:words|wörtern|worte))?$/iu;
 const GENERAL_ADVICE_QUESTION_RE =
-  /^(?:how\s+(?:should|could|can)\s+(?:a|an|one|we)|wie\s+(?:sollte|könnte|kann)\s+(?:man|wir|ein|eine))\s+[\p{L}\p{N} ,()-]+$/iu;
+  /^(?:how (?:should|could|can) (?:a|an|one|we)|wie (?:sollte|könnte|kann) (?:man|wir|ein|eine)) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu;
 const SOURCE_CONSTRAINED_ADVICE_RE =
   /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b|\b(?:this|these|that|those|the|our|my)\s+(?:(?:attached|connected|selected|supplied)\s+)?(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence)\b|\b(?:dieses?|diese[nr]?|das|die|der|unser[e]?|mein[e]?)\s+(?:(?:verbundenen?|ausgewählten?|angehängten?)\s+)?(?:handbuch|handbücher|quellen?|dateien?|ordner|dokumente?|repository)\b/iu;
 
