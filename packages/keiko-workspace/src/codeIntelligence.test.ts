@@ -3112,16 +3112,22 @@ describe("compiler-owned wildcard module read authority", () => {
     const files = wildcardAuthorityFixture("export function delegated() { return false; }");
     const { scope, fs } = makeScope(files);
     let deniedReads = 0;
-    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
-      disableCache: true,
-      readSource: (path: string): string => {
-        if (path === "src/other.ts") {
-          deniedReads += 1;
-          throw new Error("Source denied by the owning read port");
-        }
-        return files[path] ?? "";
+    const index = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs),
+      {
+        disableCache: true,
+        readSource: (path: string): string => {
+          if (path === "src/other.ts") {
+            deniedReads += 1;
+            throw new Error("Source denied by the owning read port");
+          }
+          return files[path] ?? "";
+        },
       },
-    });
+    );
     expect(deniedReads).toBe(1);
     expect(index.filesSkipped).toBe(1);
     expect(index.filesPartiallyIndexed).toBe(0);
