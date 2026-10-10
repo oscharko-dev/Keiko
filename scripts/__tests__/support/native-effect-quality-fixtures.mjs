@@ -1,4 +1,5 @@
 const imports = 'import { Context, Data, Effect, Exit, Layer, Match, Predicate } from "effect";';
+const serviceModule = JSON.stringify("./services.mjs");
 
 export const nativeEffectQualityFixtures = [
   {
@@ -43,13 +44,13 @@ export const qualify = () => ({ _tag: "Ready", value: 1 }).value;`,
     rule: "no-service-constructor-imports",
     expected: 42,
     safe: `${imports}
-import { Database, DatabaseLive } from "./services.mjs";
+import { Database, DatabaseLive } from ${serviceModule};
 export const qualify = () => Effect.runPromise(Effect.gen(function* () {
   const database = yield* Database;
   return database.read();
 }).pipe(Effect.provide(DatabaseLive)));`,
     bad: `${imports}
-import { Database, makeDatabase } from "./services.mjs";
+import { Database, makeDatabase } from ${serviceModule};
 export const qualify = () => Effect.runPromise(Effect.gen(function* () {
   const database = yield* Database;
   return database.read();
