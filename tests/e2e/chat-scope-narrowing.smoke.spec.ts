@@ -145,7 +145,7 @@ function scopeViews(page: Page): {
 } {
   const chatWindow = page.getByRole("region", { name: "Chat — Scope narrowing" });
   return {
-    files: page.getByRole("region", { name: /^Files/u }),
+    files: page.getByRole("region", { name: /^(?:Files|Dateien) — /u }),
     chatWindow,
     pill: chatWindow.locator(".scope-pill"),
   };
@@ -157,12 +157,13 @@ async function openNarrowedPreview(
   page: Page,
   request: APIRequestContext,
   fixture: ScopeFixture,
+  locale = "en",
 ): Promise<void> {
   const { root, chat } = fixture;
   const { files, chatWindow, pill } = scopeViews(page);
-  await expect(pill).toHaveText(/Folder:/u);
+  await expect(pill).toHaveText(/Folder:|Ordner:/u);
   await expect(chatWindow.getByTestId("grounding-help")).toContainText(
-    "The model has no file tools",
+    locale === "de" ? "Das Modell hat keine Datei-Werkzeuge" : "The model has no file tools",
   );
   await expectScope(request, root, chat.id, "workspace-root", []);
   await files.locator('.tr-dir-enter[data-path="docs"]').click();
@@ -172,15 +173,16 @@ async function openNarrowedPreview(
   await expect(page.locator(".conn-badge")).toContainText("docs");
   await files.locator('.tr-file[data-path="docs/guide.ts"]').click();
   await expectScope(request, root, chat.id, "files", ["docs/guide.ts"]);
-  await expect(pill).toContainText("File: guide.ts");
+  const fileLabel = locale === "de" ? "Datei: guide.ts" : "File: guide.ts";
+  await expect(pill).toContainText(fileLabel);
+  await expect(chatWindow.getByRole("status").filter({ hasText: fileLabel })).toHaveText(
+    locale === "de"
+      ? `Der verbundene Bereich wurde zu ${fileLabel} geändert.`
+      : `The connected scope changed to ${fileLabel}.`,
+  );
   await expect(
-    chatWindow.getByText("The connected scope changed to File: guide.ts."),
+    chatWindow.locator('[role="status"][aria-live="polite"]').filter({ hasText: fileLabel }),
   ).toBeVisible();
-  await expect(
-    chatWindow
-      .locator('[role="status"][aria-live="polite"]')
-      .filter({ hasText: "The connected scope changed" }),
-  ).toContainText("File: guide.ts");
   await expect(page.locator(".conn-badge")).toContainText("guide.ts");
   const violations = await runAxe(page, ".chat-scope-header");
   expect(seriousOrCritical(violations), formatViolations(violations)).toEqual([]);
@@ -253,6 +255,102 @@ test("Files navigation announces narrowing and keeps the folder on later preview
   await page.screenshot({ path: testInfo.outputPath("scope-folder-kept.png") });
 });
 
+async function chatGeometry(chat: ReturnType<Page["getByRole"]>): Promise<{
+  readonly headerHeight: number;
+  readonly hintWidth: number;
+  readonly availableWidth: number;
+  readonly logHeight: number;
+  readonly footerBottom: number;
+  readonly windowBottom: number;
+}> {
+  return chat.evaluate((node) => {
+    const measure = (selector: string): DOMRect => {
+      const element = node.querySelector(selector);
+      if (element === null) throw new TypeError(`Missing chat surface ${selector}`);
+      return element.getBoundingClientRect();
+    };
+    const header = measure(".chat-scope-header");
+    return {
+      headerHeight: header.height,
+      hintWidth: measure('[data-testid="grounding-help"]').width,
+      availableWidth: header.width - 32,
+      logHeight: measure(".chatw-scroll").height,
+      footerBottom: measure(".chatw-foot").bottom,
+      windowBottom: node.getBoundingClientRect().bottom,
+    };
+  });
+}
+
+function expectUsableConversation(geometry: Awaited<ReturnType<typeof chatGeometry>>): void {
+  expect(geometry.hintWidth).toBeGreaterThanOrEqual(geometry.availableWidth - 1);
+  expect(geometry.headerHeight, JSON.stringify(geometry)).toBeLessThan(220);
+  expect(geometry.logHeight, JSON.stringify(geometry)).toBeGreaterThan(80);
+  expect(geometry.footerBottom).toBeLessThanOrEqual(geometry.windowBottom + 1);
+}
+
+for (const locale of ["en", "de"]) {
+  test(`@smoke visible file-scope notice preserves usable conversation at 480px ${locale}`, async ({
+    page,
+    request,
+  }, testInfo) => {
+    const fixture = await createScopeChat(request);
+    await seedConnectedWindows(page, fixture.root, fixture.chat, { width: 480, height: 480 });
+    await page.addInitScript((value) => {
+      localStorage.setItem("keiko.locale", value);
+    }, locale);
+    await page.goto("/");
+    await openNarrowedPreview(page, request, fixture, locale);
+    const { chatWindow } = scopeViews(page);
+    const visible = await chatGeometry(chatWindow);
+    await chatWindow.screenshot({ path: testInfo.outputPath("scope-notice-visible.png") });
+    await chatWindow.getByRole("button", { name: "OK", exact: true }).click();
+    await expectScope(request, fixture.root, fixture.chat.id, "files", ["docs/guide.ts"]);
+    await expect(chatWindow.getByRole("status").filter({ hasText: "guide.ts" })).toHaveCount(0);
+    await expect(chatWindow.locator(".scope-pill-disconnect")).toBeFocused();
+    const dismissed = await chatGeometry(chatWindow);
+    await testInfo.attach("scope-notice-layout", {
+      body: JSON.stringify({ locale, visible, dismissed }),
+      contentType: "application/json",
+    });
+    expectUsableConversation(dismissed);
+    expect(dismissed.logHeight).toBeGreaterThan(visible.logHeight);
+    expectUsableConversation(visible);
+  });
+}
+
+test("@smoke file-scope notice keeps an unbroken filename readable without horizontal overflow", async ({
+  page,
+  request,
+}) => {
+  const fixture = await createScopeChat(request);
+  const filename = "customeronboardingauthorizationvalidationevidenceguide.ts";
+  const relativePath = `docs/${filename}`;
+  writeFileSync(join(fixture.root, relativePath), "export const authorized = true;\n");
+  await seedConnectedWindows(page, fixture.root, fixture.chat, { width: 480, height: 480 });
+  await page.goto("/");
+  const { files, chatWindow, pill } = scopeViews(page);
+  await expectScope(request, fixture.root, fixture.chat.id, "workspace-root", []);
+  await files.locator('.tr-dir-enter[data-path="docs"]').click();
+  await expectScope(request, fixture.root, fixture.chat.id, "directory", ["docs"]);
+  await files.locator(`.tr-file[data-path="${relativePath}"]`).click();
+  await expectScope(request, fixture.root, fixture.chat.id, "files", [relativePath]);
+  const status = chatWindow.locator('[data-scope-notice] [role="status"]');
+  await expect(status).toHaveText(`The connected scope changed to File: ${filename}.`);
+  await expect(pill).toContainText(filename);
+  await expect(pill.locator("[title]").first()).toHaveAttribute(
+    "title",
+    `${fixture.root}/${relativePath}`,
+  );
+  for (const element of [status, chatWindow.locator(".chat-scope-header")]) {
+    expect(
+      await element.evaluate((node) => node.scrollWidth - node.clientWidth),
+    ).toBeLessThanOrEqual(1);
+  }
+  await expect(chatWindow.getByRole("button", { name: "Keep folder", exact: true })).toBeVisible();
+  await expect(chatWindow.getByRole("button", { name: "OK", exact: true })).toBeVisible();
+  expectUsableConversation(await chatGeometry(chatWindow));
+});
+
 for (const size of [
   { width: 480, height: 480, locale: "en" },
   { width: 480, height: 480, locale: "de" },
@@ -278,29 +376,7 @@ for (const size of [
     );
     await expect(chat.locator(".scope-grounding-select")).toBeVisible();
     await expect(chat.locator(".scope-pill")).toBeVisible();
-    const geometry = await chat.evaluate((node) => {
-      const measure = (selector: string): DOMRect => {
-        const element = node.querySelector(selector);
-        if (element === null) throw new TypeError(`Missing chat surface ${selector}`);
-        return element.getBoundingClientRect();
-      };
-      const header = measure(".chat-scope-header");
-      const hint = measure('[data-testid="grounding-help"]');
-      const log = measure(".chatw-scroll");
-      const footer = measure(".chatw-foot");
-      return {
-        headerHeight: header.height,
-        hintWidth: hint.width,
-        availableWidth: header.width - 32,
-        logHeight: log.height,
-        footerBottom: footer.bottom,
-        windowBottom: node.getBoundingClientRect().bottom,
-      };
-    });
-    expect(geometry.hintWidth).toBeGreaterThanOrEqual(geometry.availableWidth - 1);
-    expect(geometry.headerHeight, JSON.stringify(geometry)).toBeLessThan(220);
-    expect(geometry.logHeight, JSON.stringify(geometry)).toBeGreaterThan(80);
-    expect(geometry.footerBottom).toBeLessThanOrEqual(geometry.windowBottom + 1);
+    expectUsableConversation(await chatGeometry(chat));
     expect(await storedScopes(request, fixture.root, fixture.chat.id)).toEqual([
       { kind: "workspace-root", relativePaths: [] },
     ]);
