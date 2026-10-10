@@ -34,6 +34,11 @@ const CAPABILITY = {
 const SOURCE_QUESTION = "Explain the value in src/target.ts.";
 const SOURCE_ANSWER = "The value is 37. [src/target.ts:1]";
 const MANUAL_ANSWER = "The maximum operating limit is 37 units. [manual/customer.txt:2]";
+const POLICY_FILE = "packages/keiko-server/src/grounded-answer-assessment.ts";
+const POLICY_SOURCE = 'export const operatorPolicy = "allowed or disabled";\n';
+const MIXED_ANSWER =
+  `The operator policy is allowed or disabled. [${POLICY_FILE}:1]\n` +
+  "<assessment>State observations and assumptions separately.</assessment>";
 const ACK =
   "<assessment>I will compare options, explain uncertainty, and propose reversible steps.</assessment>";
 let directory = "";
@@ -90,16 +95,21 @@ async function provider(requests: ProviderRequest[], responseText = ACK): Promis
       body += chunk;
     });
     request.once("end", (): void => {
-      requests.push(JSON.parse(body) as ProviderRequest);
+      const parsed = JSON.parse(body) as ProviderRequest;
+      requests.push(parsed);
+      const prompt = parsed.messages.map((message) => message.content).join("\n");
       const content =
         requests.length === 1
-          ? body.includes("Which Next.js version")
-            ? "Next.js is 15.0.0. [package.json:1]"
-            : body.includes("maximum operating limit")
-              ? body.includes("The maximum operating limit is 37 units.")
-                ? MANUAL_ANSWER
-                : "<assessment>Acknowledged.</assessment>"
-              : SOURCE_ANSWER
+          ? prompt.includes("applies the operator's policy") &&
+            prompt.includes(POLICY_SOURCE.trim())
+            ? MIXED_ANSWER
+            : body.includes("Which Next.js version")
+              ? "Next.js is 15.0.0. [package.json:1]"
+              : body.includes("maximum operating limit")
+                ? body.includes("The maximum operating limit is 37 units.")
+                  ? MANUAL_ANSWER
+                  : "<assessment>Acknowledged.</assessment>"
+                : SOURCE_ANSWER
           : responseText;
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
@@ -121,6 +131,7 @@ function runtime(baseUrl: string, disabled: boolean): { deps: UiHandlerDeps; cha
   const root = join(directory, "workspace");
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, "src/target.ts"), "export const value = 37;\n");
+  writePolicySource(root);
   writeFileSync(
     join(root, "package.json"),
     '{"name":"fixture","dependencies":{"next":"15.0.0"}}\n',
@@ -169,6 +180,10 @@ function runtime(baseUrl: string, disabled: boolean): { deps: UiHandlerDeps; cha
     connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
   });
   return { deps, chatId: chat.id };
+}
+function writePolicySource(root: string): void {
+  mkdirSync(join(root, "packages/keiko-server/src"), { recursive: true });
+  writeFileSync(join(root, POLICY_FILE), POLICY_SOURCE);
 }
 async function ask(
   port: number,
@@ -329,7 +344,7 @@ describe("native supplied-context acknowledgement with a connected folder", () =
   });
 });
 
-async function originalGeneralQuestion(): Promise<string> {
+async function originalGeneralQuestion(caseId = "compaction-general-after"): Promise<string> {
   const url = new URL(
     "../../../scripts/testing/coding-workbench-lab/connected-chat-cases.mjs",
     import.meta.url,
@@ -338,7 +353,7 @@ async function originalGeneralQuestion(): Promise<string> {
   const rows = await catalog.materializeCompactionCases(
     deriveContextProfileFromCapability(CAPABILITY),
   );
-  const question = rows.find((row) => row.id === "compaction-general-after")?.question;
+  const question = rows.find((row) => row.id === caseId)?.question;
   if (question === undefined) throw new TypeError("Missing production-authored general question");
   return question;
 }
@@ -518,5 +533,37 @@ describe("native source claims within empty-evidence conversation responses", ()
           record.phase === "accepted-final",
       ),
     ).toMatchObject({ outcome: "none", sourceBackedChars: text.length, assessmentChars: 0 });
+  });
+});
+
+describe("native original source plus general-advice request", () => {
+  it("sends only the admitted named source and preserves the whole original question", async () => {
+    const question = await originalGeneralQuestion("compaction-mixed-after");
+    const requests: ProviderRequest[] = [];
+    const { deps, chatId } = runtime(await provider(requests), false);
+    const started = await startUiTestServer({
+      staticRoot: directory,
+      csp: buildCspHeader([]),
+      handlerDeps: deps,
+    });
+    servers.push(started.server);
+    const response = await ask(started.port, chatId, question, "original-mixed-advice");
+    expect(response.status).toBe(200);
+    const answer = (await response.json()) as GroundedAnswer;
+    expect(answer.contextPack).toMatchObject({ filesInPrompt: 1 });
+    expect(answer.citations).toContainEqual(
+      expect.objectContaining({ scopePath: POLICY_FILE, lineRange: { startLine: 1, endLine: 1 } }),
+    );
+    expect(splitOwnAssessment(answer.content).assessment).toBe(
+      "State observations and assumptions separately.",
+    );
+    expect(requests).toHaveLength(1);
+    const prompt = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt).toContain(question);
+    expect(prompt).toContain(POLICY_SOURCE.trim());
+    expect(prompt).not.toContain("export const preferences");
+    expect(
+      analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence,
+    ).toMatchObject({ classification: "supported", corruptLineCount: 0 });
   });
 });
