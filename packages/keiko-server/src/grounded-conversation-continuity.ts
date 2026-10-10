@@ -2,10 +2,12 @@ import {
   extractAnchors,
   extractRetrievalChannels,
   classifyRetrievalIntent,
-  type SearchReference,
   type RetrievalIntent,
 } from "@oscharko-dev/keiko-workflows";
-import { assistantRetrievalReferents } from "./grounded-assistant-referents.js";
+import {
+  assistantRetrievalReferents,
+  type AssistantRetrievalReference,
+} from "./grounded-assistant-referents.js";
 import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
@@ -29,7 +31,7 @@ import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import type { ChatMessage } from "./store/index.js";
 
 export interface GroundedConversationContinuity {
-  readonly assistantReferents: readonly SearchReference[];
+  readonly assistantReferents: readonly AssistantRetrievalReference[];
   readonly continuityReferentSource: ContinuityReferentSource;
   readonly previousRetrievalIntent?: RetrievalIntent;
   readonly answerContext: string;
