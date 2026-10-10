@@ -133,15 +133,7 @@ async function retrieve(
   readonly log: ReturnType<typeof createBufferedServerLogSink>;
 }> {
   const bodies: string[] = [];
-  const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
-  if (read === undefined) throw new Error("Native descriptor reader missing");
-  const fs: WorkspaceFs = {
-    ...nodeWorkspaceFs,
-    readFileUtf8SameDescriptor: (...args) => {
-      bodies.push(args[0]);
-      return read(...args);
-    },
-  };
+  const fs = observedNativeReaders(bodies);
   const log = createBufferedServerLogSink();
   const historyScopes: (readonly string[])[] = [];
   const result = await retrieveConnectedContextPack(input(root, text, scope), {
@@ -165,6 +157,31 @@ async function retrieve(
   expect(prompt).toContain(text);
   expect(result.pack.usage.excerptBytes).toBeLessThanOrEqual(result.pack.budget.excerptBytesMax);
   return { result, bodies, historyScopes, prompt, log };
+}
+
+function observedNativeReaders(bodies: string[]): WorkspaceFs {
+  const {
+    readFileUtf8SameDescriptor: read,
+    readFileUtf8WithinRootSameDescriptor: within,
+    readFileBytes: bytes,
+  } = nodeWorkspaceFs;
+  if (read === undefined || within === undefined || bytes === undefined)
+    throw new Error("Native descriptor readers missing");
+  return {
+    ...nodeWorkspaceFs,
+    readFileUtf8SameDescriptor: (...args): ReturnType<typeof read> => {
+      bodies.push(args[0]);
+      return read(...args);
+    },
+    readFileUtf8WithinRootSameDescriptor: (...args): ReturnType<typeof within> => {
+      bodies.push(args[1]);
+      return within(...args);
+    },
+    readFileBytes: (...args): ReturnType<typeof bytes> => {
+      bodies.push(args[0]);
+      return bytes(...args);
+    },
+  };
 }
 
 describe("live-admitted query-named source focus under the original grants", () => {
@@ -223,6 +240,38 @@ describe("live-admitted query-named source focus under the original grants", () 
     expect(out.result.pack.files.map((file) => file.scopePath)).toContain(SECOND);
   });
 
+  it("keeps an independent request after a comma beside a named file", async () => {
+    const root = await fixture();
+    const out = await retrieve(
+      root,
+      `Read ${TARGET}, explain pump reset delays. Cite implementation lines.`,
+    );
+    expect(out.result.pack.files.map((file) => file.scopePath)).toContain(SECOND);
+    expect(out.prompt).toContain("pumpResetDelay = 43");
+  });
+
+  it("preserves breadth when the bounded reference projection cannot retain every named path", async () => {
+    const root = await fixture(true);
+    const paths = Array.from({ length: 7 }, (_, i) => `src/named-${String(i)}.ts`);
+    for (const path of paths) put(root, path, "export const actualValue = 37;\n");
+    const out = await retrieve(root, `Explain ${paths.join(" ")}. Cite implementation lines.`);
+    expect(out.result.plan.references?.length).toBeLessThan(paths.length);
+    expect(out.result.pack.diagnostics?.coverage?.filesScanned).toBeGreaterThan(
+      out.result.plan.references?.length ?? 0,
+    );
+  });
+
+  it("preserves real definition discovery beside the complete file target", async () => {
+    const root = await fixture(true);
+    const out = await retrieve(
+      root,
+      `Where is separateEvidence defined relative to ${TARGET}? Cite implementation lines.`,
+    );
+    expect(out.result.plan.targetDecision?.definitionRequested).toBe(true);
+    expect(out.historyScopes).toContainEqual([]);
+    expect(out.prompt).toContain("source evidence requires actual citations");
+  });
+
   it.each(["callers", "tests", "history"])(
     "preserves requested %s outside the path",
     async (kind) => {
@@ -247,6 +296,13 @@ describe("live-admitted query-named source focus under the original grants", () 
     expect(out.bodies.some((path) => path.includes("navigation-"))).toBe(true);
   });
 
+  it("preserves canonical diagnostic breadth for a named-file failure without pasted frames", async () => {
+    const root = await fixture();
+    const out = await retrieve(root, `Why does ${TARGET} fail?`);
+    expect(out.result.plan.retrievalIntent).toBe("diagnostic-search");
+    expect(out.bodies.some((path) => path.includes("navigation-"))).toBe(true);
+  });
+
   it.each(["directory", "files"] as const)(
     "preserves the original %s scope when the target is outside it",
     async (kind) => {
@@ -258,18 +314,26 @@ describe("live-admitted query-named source focus under the original grants", () 
     },
   );
 
-  it.each(["src/absent.ts", ".env/private.ts"])(
-    "keeps a closed admission for %s without substituting neighbours",
-    async (path) => {
+  it.each([
+    { path: "src/absent.ts", rejected: 1 },
+    { path: ".env/private.ts", rejected: 2 },
+  ])(
+    "keeps a closed admission for $path without substituting neighbours",
+    async ({ path, rejected }) => {
       const root = await fixture();
       put(root, ".env/private.ts", "SECRET_FIXTURE_MARKER");
       const out = await retrieve(root, `Explain ${path}. Cite implementation lines.`);
-      expect(out.result.pack.files).toEqual([]);
-      expect(out.bodies).not.toContain(join(root, ".env/private.ts"));
+      if (path === ".env/private.ts")
+        expect(out.result.plan.references?.map((reference) => reference.path)).toEqual([
+          ".env/private.ts",
+          ".env/private.ts.",
+        ]);
       expect(
         out.log.events.find((event) => event.op === "search.connected-context.source-details")
           ?.extra,
-      ).toMatchObject({ explicitPathAdmittedCount: 0, explicitPathRejectedCount: 1 });
+      ).toMatchObject({ explicitPathAdmittedCount: 0, explicitPathRejectedCount: rejected });
+      expect(out.result.pack.files).toEqual([]);
+      expect(out.bodies).not.toContain(join(root, ".env/private.ts"));
     },
   );
 

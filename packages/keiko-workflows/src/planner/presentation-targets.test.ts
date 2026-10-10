@@ -44,7 +44,9 @@ describe("presentation clauses do not create source targets or definition reques
       expect(result.targetDecision?.definitionRequested).toBe(false);
       expect(result.targetDecision?.targets).toEqual([]);
       expect(
-        extractAnchors({ text: result.query.text }).anchors.map((anchor) => anchor.term),
+        extractAnchors({ text: result.query.text, maxAnchors: 8 }).anchors.map(
+          (anchor) => anchor.term,
+        ),
       ).not.toContain("lines");
     },
   );

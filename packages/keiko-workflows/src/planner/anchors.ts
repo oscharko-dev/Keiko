@@ -405,7 +405,7 @@ function collectFilePathTokens(source: string, out: AnchorAccumulator): string {
     const term = normalizeUnquotedFilePathToken(completePathToken(raw));
     if (!isFilePathToken(term)) return raw;
     pushAnchor(out, term, "path", 0.95);
-    return " ".repeat(raw.length);
+    return raw.endsWith(".") ? `${" ".repeat(raw.length - 1)}.` : " ".repeat(raw.length);
   });
 }
 

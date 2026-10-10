@@ -273,17 +273,22 @@ read admission. Hard denials, containment, ignore, binary, size and budget check
 Leading `./` in a query reference denotes the same scope-relative target and is removed before
 strict canonical validation. Parent traversal and interior dot segments are not normalized away;
 canonical sensitive names still pass through the existing hard-denial policy.
-Complete extracted document paths are target data, so their `reference`, `history` or `caller`
+Complete extracted file paths are target data, so their `reference`, `history` or `caller`
 directory segments cannot request relationship/history rings. Actual relationship/history words
-outside the path retain their routing. An ordinary factual lookup with admitted named document
-paths focuses discovery on those paths only when its canonical planner decision contains no
-independent non-path target, and binds its existing structural request context to that narrower
-search scope. Mixed document/implementation lookups retain discovery of the independent target.
+outside the path retain their routing; requested tests and integrations use the same canonical
+relationship guard. A factual lookup with freshly admitted query-named file paths, in Git or
+ordinary folders, focuses discovery on those paths only when every substantive request clause
+binds a named file and its canonical planner decision contains no independent non-path target.
+The existing structural request context binds to that narrower search scope; the human's source
+scope and budgets remain unchanged. Independent clauses after commas, additional paths omitted
+by the bounded reference projection, definitions, diagnostics, relationships and history retain
+their existing discovery flow. Mixed document/implementation lookups retain discovery of the
+independent target.
 Ordinary document eligibility reuses the shared web/text-document extension groups, including
 XHTML and Markdown, alongside XML and existing bounded document extraction. It does not enumerate
 navigation neighbours or widen the human's scope.
-Quoted document targets match their extracted reference identity rather than their anchor kind.
-If all complete document targets have closed admission rejections, the existing ring and
+Quoted file targets match their extracted reference identity rather than their anchor kind.
+If all complete file targets have closed admission rejections, the existing ring and
 augmentation decision events record `explicit-target-unavailable` and retain those rejection
 facts. They do not substitute another same-basename file or enumerate its contents. An independent
 source target or a requested relationship retains its existing retrieval flow.
@@ -579,16 +584,16 @@ Language source inspection is an explicit trusted grounded-caller hint, rather t
 reinterpretation inside shared lexical search. Coding tool and context-provider lexical requests
 retain content-match semantics and cannot receive synthetic nonmatching inspection windows.
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
-filename batches; they do not schedule unrelated graph or history traversal. Ordinary-folder
-named-document focus additionally requires every meaningful request clause to stay bound to a named
-document. The canonical anchor producer retains quoted/path targets before removing presentation-only
+filename batches; they do not schedule unrelated graph or history traversal. Named-file focus in
+Git and ordinary folders additionally requires every meaningful request clause to stay bound to a
+named file. The canonical anchor producer retains quoted/path targets before removing presentation-only
 prose, and removes that prose before definition patterns or ordinary symbols can treat citation
 instructions as requested source content. Target-shape, definition and relationship classification
 use the same presentation projection; the original question and model prompt remain unchanged.
-Canonical reference wrapping preserves sentence boundaries so a following output clause remains
-separate. An independent prose
+Canonical reference wrapping and raw file-token masking preserve sentence boundaries so a following
+output clause remains separate. An independent prose
 topic, even without a quoted or typed identifier, retains recursive discovery. A rejected named
-document cannot stop discovery for that independent topic. Sole named-document requests retain
+file cannot stop discovery for that independent topic. Sole named-file requests retain
 focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
 Advisory project metadata also streams every admitted directory entry and supported workspace

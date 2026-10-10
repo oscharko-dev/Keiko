@@ -321,6 +321,7 @@ export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boole
   return (
     hasHistoryQuery(prose) ||
     hasSymbolRelation(prose) ||
+    REQUESTED_TEST_RELATION_RE.test(queryContextOutsideQuotes(prose)) ||
     ROUTE_TRAVERSAL_RE.test(queryContextOutsideQuotes(prose))
   );
 }
@@ -517,12 +518,7 @@ export function isDirectEvidenceLookup(
   anchors: readonly SearchAnchor[],
   decision = resolveQueryTargetDecision(query, anchors),
 ): boolean {
-  if (
-    requiresRelationshipOrHistoryRings(query) ||
-    REQUESTED_TEST_RELATION_RE.test(query.text) ||
-    decision.kind === "contextual"
-  )
-    return false;
+  if (requiresRelationshipOrHistoryRings(query) || decision.kind === "contextual") return false;
   const targets = anchors.filter(
     (anchor) =>
       (anchor.kind === "identifier" || anchor.kind === "quoted") &&
