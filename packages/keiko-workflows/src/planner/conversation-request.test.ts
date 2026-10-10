@@ -127,3 +127,20 @@ describe("whole supplied-context clauses preserve independent requests", () => {
     expect(result.query.text).toBe(text);
   });
 });
+
+describe("normalized conversation whitespace retains bounded request semantics", () => {
+  it("keeps general advice with a bounded repeated-space run", () => {
+    const text = `How can a ${" ".repeat(8192)}person organize decisions? Give a general method.`;
+    const result = plan(text);
+    expect(result.targetDecision?.conversationOnly).toBe(true);
+    expect(result.rings).toEqual([]);
+    expect(result.query.text).toBe(text);
+  });
+  it("keeps a receipt request with bounded repeated tabs", () => {
+    const text = `My preferences are concise explanations.${"\t".repeat(8192)}Please acknowledge these preferences.`;
+    const result = plan(text);
+    expect(result.targetDecision?.conversationOnly).toBe(true);
+    expect(result.rings).toEqual([]);
+    expect(result.query.text).toBe(text);
+  });
+});

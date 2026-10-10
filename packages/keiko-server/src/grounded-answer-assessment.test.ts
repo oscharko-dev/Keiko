@@ -87,6 +87,9 @@ describe("untagged conversation authority preserves source and policy boundaries
   it.each([
     ["The selected source has value 37.", "allowed", false],
     ["The selected source has value 37.", "allowed", true],
+    ["Your selected files contain the value 37.", "allowed", true],
+    ["These two connected files contain the value 37.", "allowed", true],
+    ["These connected files contain the value 37.", "allowed", true],
     ["I cannot access the selected files.", "allowed", true],
     ["I will compare the options.", "disabled", true],
   ] as const)(
