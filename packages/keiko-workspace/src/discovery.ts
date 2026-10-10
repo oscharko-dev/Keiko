@@ -1038,6 +1038,13 @@ export interface InternalWorkspaceByteRead {
 }
 
 export interface InternalWorkspaceTextRead {
+  readonly snapshot?:
+    | {
+        readonly canonicalRoot: string;
+        readonly before: WorkspaceStat;
+        readonly descriptor: WorkspaceStat;
+      }
+    | undefined;
   readonly content: string;
   readonly sizeBytes: number;
   readonly stat: WorkspaceStat;
@@ -1045,6 +1052,7 @@ export interface InternalWorkspaceTextRead {
 
 interface StableRawFileContent extends RawFileContent {
   readonly stat: WorkspaceStat;
+  readonly descriptorStat: WorkspaceStat;
 }
 
 interface ReadableWorkspaceFile {
@@ -1184,6 +1192,7 @@ function readRawContent(
     rawText: read.rawText,
     truncated: false,
     stat: after,
+    descriptorStat: read.stat,
   };
 }
 
@@ -1313,10 +1322,27 @@ export function readWorkspaceFileTextForInternalUse(
   fs: WorkspaceFs,
   lane: WorkspaceContentLane,
   preserveSourceLineBreaks = false,
+  assertBeforeRead?: () => void,
 ): InternalWorkspaceTextRead {
-  const target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
+  let target: ReadableWorkspaceFile;
+  try {
+    target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
+  } catch (error) {
+    assertBeforeRead?.();
+    throw error;
+  }
+  assertBeforeRead?.();
   const raw = readRawContent(workspace, fs, target, opts);
   return {
+    ...(preserveSourceLineBreaks
+      ? {
+          snapshot: {
+            canonicalRoot: target.realBase,
+            before: target.stat,
+            descriptor: raw.descriptorStat,
+          },
+        }
+      : {}),
     content:
       lane === "editor" ? raw.rawText : redact(raw.rawText, [], { preserveSourceLineBreaks }),
     sizeBytes: raw.sizeBytes,

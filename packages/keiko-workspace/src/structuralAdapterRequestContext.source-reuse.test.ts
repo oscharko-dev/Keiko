@@ -212,7 +212,7 @@ describe("complete request-local code-to-endpoint source reuse", () => {
     const fixture = measured();
     const context = createStructuralAdapterRequestContext(scope(), LIMITS, fixture.fs);
     await context.codeIntelligenceIndex();
-    delete fixture.files[PATH];
+    delete fixture.files["src/Controller.java"];
     const graph = await context.endpointContractGraph();
     expect(graph.routes).toEqual([]);
     expect(graph.diagnostics.filesSkipped).toBe(1);
@@ -358,16 +358,18 @@ describe("complete request-local code-to-endpoint source reuse", () => {
     const context = createStructuralAdapterRequestContext(selected, LIMITS, fixture.fs);
     await context.codeIntelligenceIndex();
     const otherRoot = scope("/other-root");
-    expect(() => context.assertGraphBinding(otherRoot, LIMITS, fixture.fs)).toThrow(TypeError);
-    expect(() =>
-      context.assertGraphBinding({ ...selected, relativePaths: ["src"] }, LIMITS, fixture.fs),
-    ).toThrow(TypeError);
-    expect(() =>
-      context.assertGraphBinding(selected, { ...LIMITS, maxBytesPerFileScanned: 64 }, fixture.fs),
-    ).toThrow(TypeError);
-    expect(() =>
-      context.assertGraphBinding(selected, LIMITS, memFs(ROOT, { [PATH]: SOURCE })),
-    ).toThrow(TypeError);
+    expect(() => {
+      context.assertGraphBinding(otherRoot, LIMITS, fixture.fs);
+    }).toThrow(TypeError);
+    expect(() => {
+      context.assertGraphBinding({ ...selected, relativePaths: ["src"] }, LIMITS, fixture.fs);
+    }).toThrow(TypeError);
+    expect(() => {
+      context.assertGraphBinding(selected, { ...LIMITS, maxBytesPerFileScanned: 64 }, fixture.fs);
+    }).toThrow(TypeError);
+    expect(() => {
+      context.assertGraphBinding(selected, LIMITS, memFs(ROOT, { [PATH]: SOURCE }));
+    }).toThrow(TypeError);
     expect(fixture.bodies).toHaveLength(1);
   });
 
@@ -465,5 +467,83 @@ describe("complete request-local code-to-endpoint source reuse", () => {
     expect((await context.searchText(query, narrow)).atoms).toEqual([]);
     expect((await context.searchText(query, narrow)).atoms).toEqual([]);
     expect(fixture.bodies).toHaveLength(2);
+  });
+
+  it("does not retain endpoint-only reads for a later code-index consumer", async () => {
+    const fixture = measured();
+    const context = createStructuralAdapterRequestContext(scope(), LIMITS, fixture.fs);
+    await context.endpointContractGraph();
+    await context.codeIntelligenceIndex();
+    expect(fixture.bodies).toHaveLength(2);
+    expect(fixture.probes).toHaveLength(1);
+  });
+
+  it("does not retain a read whose descriptor lacks strong identity metadata", async () => {
+    const fixture = measured();
+    const fs: WorkspaceFs = {
+      ...fixture.fs,
+      readFileUtf8SameDescriptor: (
+        absolute,
+        cap,
+        hardLinks,
+        expected,
+      ): WorkspaceDescriptorUtf8Read => {
+        const read = fixture.fs.readFileUtf8SameDescriptor;
+        if (read === undefined) throw new TypeError("descriptor fixture unavailable");
+        const result = read(absolute, cap, hardLinks, expected);
+        return { ...result, stat: withoutStrongIdentity(result.stat) };
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), LIMITS, fs);
+    await context.codeIntelligenceIndex();
+    await context.endpointContractGraph();
+    expect(fixture.bodies).toHaveLength(2);
+  });
+  it("does not retain a short descriptor result as complete source evidence", async () => {
+    const fixture = measured();
+    let reads = 0;
+    const fs: WorkspaceFs = {
+      ...fixture.fs,
+      readFileUtf8SameDescriptor: (
+        absolute,
+        cap,
+        hardLinks,
+        expected,
+      ): WorkspaceDescriptorUtf8Read => {
+        const read = fixture.fs.readFileUtf8SameDescriptor;
+        if (read === undefined) throw new TypeError("descriptor fixture unavailable");
+        const result = read(absolute, cap, hardLinks, expected);
+        return ++reads === 1 ? { ...result, rawText: "// short read", sizeBytes: 13 } : result;
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), LIMITS, fs);
+    await context.codeIntelligenceIndex();
+    expect((await context.endpointContractGraph()).routes.map((route) => route.path)).toEqual([
+      "/before",
+    ]);
+    expect(fixture.bodies).toHaveLength(2);
+  });
+
+  it("checks dynamic eligibility again at the actual complete descriptor boundary", async () => {
+    const fixture = measured();
+    let denyOnNextStat = false;
+    let allowed = true;
+    const fs: WorkspaceFs = {
+      ...fixture.fs,
+      stat: (absolute): WorkspaceStat => {
+        const stat = fixture.fs.stat(absolute);
+        if (denyOnNextStat && absolute.endsWith(PATH)) allowed = false;
+        return stat;
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), LIMITS, fs, {
+      isCandidateAllowed: () => allowed,
+    });
+    expect(context.candidatePaths()).toEqual([PATH]);
+    fixture.bodies.length = 0;
+    denyOnNextStat = true;
+    const code = await context.codeIntelligenceIndex();
+    expect(code.filesIndexed).toBe(0);
+    expect(fixture.bodies).toHaveLength(0);
   });
 });

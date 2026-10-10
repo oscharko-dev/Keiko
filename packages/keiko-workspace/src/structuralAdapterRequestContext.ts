@@ -476,32 +476,51 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     )
       return false;
     let retainedBytes = 0;
-    for (const [path, record] of this.contentPreviews) {
-      if (path !== scopePath) retainedBytes += record.completeEvidence?.encodedBytes ?? 0;
+    for (const path of this.retainedSourcePaths) {
+      if (path !== scopePath)
+        retainedBytes += this.contentPreviews.get(path)?.completeEvidence?.encodedBytes ?? 0;
     }
     return retainedBytes + encodedBytes <= COMPLETE_STRUCTURAL_SOURCE_BYTES_MAX;
   }
 
-  private retainCompleteSource(
-    scopePath: string,
-    read: InternalWorkspaceTextRead,
-    snapshot: CandidateContentSnapshot | undefined,
-  ): void {
-    if (snapshot === undefined || read.sizeBytes > CONTENT_PRESCORE_MAX_BYTES) return;
+  private retainCompleteSource(scopePath: string, read: InternalWorkspaceTextRead): void {
+    const snapshot = read.snapshot;
+    if (
+      snapshot === undefined ||
+      read.sizeBytes !== read.stat.size ||
+      read.sizeBytes > CONTENT_PRESCORE_MAX_BYTES
+    )
+      return;
     const metadata = workspaceIndexFileMetadata(scopePath, read.stat);
-    if (!isWorkspaceIndexFileMetadataCurrent(metadata, snapshot.metadata)) return;
+    if (
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.before),
+        metadata,
+      )
+    )
+      return;
+    if (
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.descriptor),
+        metadata,
+      )
+    )
+      return;
     const encodedBytes = Buffer.byteLength(read.content, "utf8");
     if (!this.canRetainCompleteSource(scopePath, encodedBytes)) return;
     this.retainedSourcePaths.add(scopePath);
     const previous = this.contentPreviews.get(scopePath);
     this.contentPreviews.set(scopePath, {
       ...previous,
-      content: previous?.content,
+      content: isWorkspaceIndexFileMetadataCurrent(previous?.metadata, metadata)
+        ? previous?.content
+        : undefined,
       file: { relativePath: scopePath, sizeBytes: read.sizeBytes },
       metadata,
       validatedFor: this.executionControl,
       completeEvidence: {
-        ...snapshot,
+        canonicalRoot: snapshot.canonicalRoot,
+        metadata,
         content: read.content,
         sizeBytes: read.sizeBytes,
         encodedBytes,
@@ -509,10 +528,11 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     });
   }
 
-  private completeStructuralSource(scopePath: string, maxBytes: number): string {
+  private readCompleteStructuralSource(
+    scopePath: string,
+    maxBytes: number,
+  ): InternalWorkspaceTextRead {
     this.assertSourceAllowed(scopePath);
-    const cached = this.cachedCompleteSource(scopePath, maxBytes);
-    if (cached !== undefined) return cached;
     const read = readWorkspaceFileTextForInternalUse(
       this.scope.workspace,
       scopePath,
@@ -520,10 +540,26 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       this.executionFs,
       "evidence",
       true,
+      () => {
+        this.assertSourceAllowed(scopePath);
+      },
     );
-    const snapshot = this.sourceSnapshot(scopePath);
-    this.retainCompleteSource(scopePath, read, snapshot);
+    this.assertSourceAllowed(scopePath);
+    return read;
+  }
+
+  private codeIntelligenceSource(scopePath: string, maxBytes: number): string {
+    const read = this.readCompleteStructuralSource(scopePath, maxBytes);
+    this.retainCompleteSource(scopePath, read);
     return read.content;
+  }
+
+  private endpointSource(scopePath: string, maxBytes: number): string {
+    this.assertSourceAllowed(scopePath);
+    return (
+      this.cachedCompleteSource(scopePath, maxBytes) ??
+      this.readCompleteStructuralSource(scopePath, maxBytes).content
+    );
   }
 
   private contentPreviewMetadata(
@@ -545,6 +581,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     // would let a re-read entry shorten the budget the rest of the cache is validated under.
     const pending = [...this.contentPreviews.values()];
     for (const cached of pending) {
+      if (cached.content === undefined) continue;
       if (structuralExecutionStopped(control)) return;
       this.contentPreview(cached.file, control);
     }
@@ -600,7 +637,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         {
           executionControl: this.executionControl,
           disableCache: true,
-          readSource: (path, maxBytes) => this.completeStructuralSource(path, maxBytes),
+          readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),
         },
       );
     });
@@ -646,7 +683,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         this.candidateSet(),
         this.executionControl,
         {
-          readSource: (path, maxBytes) => this.completeStructuralSource(path, maxBytes),
+          readSource: (path, maxBytes) => this.endpointSource(path, maxBytes),
           isCandidateAllowed: (path) => this.isCandidateAllowed?.(path) !== false,
         },
       );

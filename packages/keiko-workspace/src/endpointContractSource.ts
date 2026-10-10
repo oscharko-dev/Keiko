@@ -47,6 +47,14 @@ function endpointReadStopped(
   return structuralExecutionStopped(control) || deps.isCandidateAllowed?.(scopePath) === false;
 }
 
+function requestBoundEndpointReadStopped(
+  scopePath: string,
+  control: StructuralExecutionControl,
+  deps: EndpointSourceReadDeps,
+): boolean {
+  return deps.isCandidateAllowed !== undefined && endpointReadStopped(scopePath, control, deps);
+}
+
 function endpointText(
   scope: SearchScope,
   limits: SearchLimits,
@@ -77,7 +85,7 @@ async function readEndpointSource(
     }
     const stat = fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return undefined;
-    if (endpointReadStopped(scopePath, control, deps)) return undefined;
+    if (requestBoundEndpointReadStopped(scopePath, control, deps)) return undefined;
     if (await probeBinary(fs, contained.path, stat.size)) return undefined;
     if (endpointReadStopped(scopePath, control, deps)) return undefined;
     const text = endpointText(scope, limits, fs, scopePath, deps);
