@@ -47,6 +47,24 @@ describe("Coding History on the existing conversation store", () => {
     },
   );
 
+  // #4009 live qualification: a Coding Workbench run with a region-qualified gateway model failed
+  // at `history-initialization` before any model call, because the task's chat rejected the id.
+  it.each(["azure/gpt-6.1-sol@germanywestcentral", "vertex/claude-sonnet-4-6@europe-west1"])(
+    "stores a coding task for the region-qualified gateway model %s",
+    (modelId) => {
+      const task = codingHistory().create({
+        projectPath: root,
+        title: "Rewrite the README",
+        modelId,
+        workspaceId: "ws_region",
+        taskId: "task_region",
+        branch: "keiko/task/region",
+        operatorDigest: "a".repeat(64),
+      });
+      expect(codingHistory().get(task.id)?.modelId).toBe(modelId);
+    },
+  );
+
   it("registers an accepted workspace repository before storing its first coding task", () => {
     store.deleteProject(root);
     const task = codingHistory().create({
