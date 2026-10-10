@@ -461,17 +461,51 @@ const ACKNOWLEDGEMENT_OUTPUT_RE =
   /^(?:(?:please|bitte)\s+)?(?:do\s+not\s+repeat\s+(?:the|this|these)\s+(?:note|notes|message|context)|wiederhole\s+(?:die|diese)\s+(?:notiz|notizen|nachricht)\s+nicht)$/iu;
 const INDEPENDENT_CONTEXT_COMMAND_RE =
   /\b(?:then|also|please|while|dann|außerdem|bitte|während)\s+(?:explain|read|show|find|search|describe|erkläre|lies|zeige|suche|beschreibe)\b/iu;
+const CONTEXT_REQUEST_SUBJECTS = new Set(["i", "we", "you", "ich", "wir", "du", "sie"]);
+const CONTEXT_REQUEST_HEADS = new Set([
+  "want",
+  "need",
+  "ask",
+  "request",
+  "would",
+  "should",
+  "can",
+  "could",
+  "must",
+  "will",
+  "möchte",
+  "möchten",
+  "wollen",
+  "soll",
+  "sollte",
+  "sollten",
+  "kann",
+  "könnte",
+  "muss",
+]);
+
+function independentContextRequest(clause: string): boolean {
+  if (INDEPENDENT_CONTEXT_COMMAND_RE.test(clause)) return true;
+  const words = shapeWords(clause);
+  return words.some((word, index) => {
+    const next = words[index + 1] ?? "";
+    return (
+      (CONTEXT_REQUEST_SUBJECTS.has(word) && CONTEXT_REQUEST_HEADS.has(next)) ||
+      (INDEPENDENT_REQUEST_GRAMMAR_RE.test(word) && REQUEST_COMMAND_RE.test(next))
+    );
+  });
+}
 
 function suppliedContextClause(clause: string, index: number): boolean {
-  if (INDEPENDENT_CONTEXT_COMMAND_RE.test(clause)) return false;
+  if (independentContextRequest(clause)) return false;
   if (SUPPLIED_CONTEXT_RE.test(clause)) return true;
   // A supplied personal heading may be a fragment rather than an asserted source fact.
-  if (/^(?:my|our|meine|unsere)\s+[\p{L}\d -]+$/iu.test(clause))
+  if (/^(?:my|our|meine|unsere) [\p{L}\d-]+(?: [\p{L}\d-]+)*$/iu.test(clause))
     return !REQUEST_COMMAND_RE.test(clause) && !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause);
   // A neutral initial heading supplies context; it cannot authorize an instruction or question.
   return (
     index === 0 &&
-    /^[\p{L}\d][\p{L}\d -]*$/u.test(clause) &&
+    /^[\p{L}\d][\p{L}\d-]*(?: [\p{L}\d-]+)*$/u.test(clause) &&
     !REQUEST_COMMAND_RE.test(clause) &&
     !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause)
   );
@@ -504,13 +538,20 @@ function suppliedContextRequest(clauses: readonly string[]): boolean {
   );
 }
 
+function normalizedConversationClause(clause: string): string {
+  const normalized = clause.replace(/\s+/gu, " ").trim();
+  let end = normalized.length;
+  while (end > 0 && (normalized[end - 1] === "," || normalized[end - 1] === " ")) end -= 1;
+  return normalized.slice(0, end);
+}
+
 function conversationOnlyRequest(query: RetrievalQuery, anchors: readonly SearchAnchor[]): boolean {
   if (query.kind !== "natural-language" || anchors.some((anchor) => anchor.kind !== "literal"))
     return false;
   if (parseDiagnosticTraceText(query.text).detected || /[`"']/u.test(query.text)) return false;
   const clauses = queryContextOutsideQuotes(query.text)
     .split(/[.!?;\n]+/u)
-    .map((clause) => clause.trim().replace(/[,\s]+$/u, ""))
+    .map(normalizedConversationClause)
     .filter(Boolean);
   return (
     generalAdviceRequest(clauses) || (!query.text.includes("?") && suppliedContextRequest(clauses))
