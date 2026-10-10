@@ -64,7 +64,10 @@ import {
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import { collectSemanticSearchDocument, type SemanticSearchSession } from "./repoSearchSemantic.js";
-import { repositorySourceLines } from "./repoSearchSourceClassification.js";
+import {
+  repositorySourceLines,
+  type RepositorySourceLine,
+} from "./repoSearchSourceClassification.js";
 import type { StreamingWorkspaceIndexSession } from "./workspaceIndexStreaming.js";
 import {
   extraIgnoreLinesForSearch,
@@ -1239,8 +1242,9 @@ function scanLines(
   text: string,
   state: RunState,
   scopePath: string,
+  sourceLinesFor: () => readonly RepositorySourceLine[],
 ): readonly ScoredLine[] {
-  return collectBestLines(runner, text, state, scopePath);
+  return collectBestLines(runner, text, state, scopePath, sourceLinesFor);
 }
 
 function abortScanFile(runner: SearchTextRunner, state: RunState): boolean {
@@ -1587,6 +1591,7 @@ function collectRankedSemanticDocument(
   runner: SearchTextRunner,
   file: DiscoveredFile,
   text: string,
+  sourceLinesFor: () => readonly RepositorySourceLine[],
 ): void {
   if (runner.semantic === undefined) return;
   const document = { scopePath: file.relativePath, text };
@@ -1594,7 +1599,13 @@ function collectRankedSemanticDocument(
     collectSemanticSearchDocument(runner.semantic, document);
     return;
   }
-  const contentScore = scoreContentForSearch(runner.query, text, runner.policy, file.relativePath);
+  const contentScore = scoreContentForSearch(
+    runner.query,
+    text,
+    runner.policy,
+    file.relativePath,
+    sourceLinesFor,
+  );
   const ranked = orderCandidatesForSearch({
     files: [file],
     query: runner.query,
@@ -1629,12 +1640,30 @@ function projectedContentScore(
   scopePath: string,
   text: string,
   projected: string,
+  sourceLinesFor: () => readonly RepositorySourceLine[],
 ): number {
   if (runner.policy.intent === "project-metadata") return 0;
-  const rawScore = scoreContentForSearch(runner.query, text, runner.policy, scopePath);
+  const rawScore = scoreContentForSearch(
+    runner.query,
+    text,
+    runner.policy,
+    scopePath,
+    sourceLinesFor,
+  );
   return projected === text
     ? rawScore
     : Math.max(rawScore, scoreContentForSearch(runner.query, projected, runner.policy, scopePath));
+}
+
+function prepareSourceLines(
+  text: string,
+  scopePath: string,
+): () => readonly RepositorySourceLine[] {
+  let prepared: readonly RepositorySourceLine[] | undefined;
+  return (): readonly RepositorySourceLine[] => {
+    prepared ??= repositorySourceLines(text, scopePath);
+    return prepared;
+  };
 }
 
 function textFileMatches(
@@ -1645,12 +1674,13 @@ function textFileMatches(
   text: string,
 ): FileMatches | undefined {
   observeEligibleTextFile(runner, file, text);
-  collectRankedSemanticDocument(runner, file, text);
+  const sourceLinesFor = prepareSourceLines(text, file.relativePath);
+  collectRankedSemanticDocument(runner, file, text, sourceLinesFor);
   const projected = htmlEntitySearchText(file.relativePath, text);
   if (!projectedFileCanContainMatches(runner, text, projected)) return undefined;
   const matchingRunner =
     projected === text ? runner : { ...runner, matcher: htmlEntityLineMatcher(runner.matcher) };
-  const matched = scanLines(matchingRunner, text, state, file.relativePath);
+  const matched = scanLines(matchingRunner, text, state, file.relativePath, sourceLinesFor);
   const best = sourceInspectionOrMatchedLines(runner, text, state, matched);
   if (best.length === 0) {
     return undefined;
@@ -1660,10 +1690,10 @@ function textFileMatches(
     order,
     best,
     maxScore: maxLineScore(best),
-    contentScore: projectedContentScore(runner, file.relativePath, text, projected),
+    contentScore: projectedContentScore(runner, file.relativePath, text, projected, sourceLinesFor),
     definitionMatch:
       runner.query.kind === "exact-symbol" &&
-      repositorySourceLines(text, file.relativePath).some((line) =>
+      sourceLinesFor().some((line) =>
         structuralLineLooksLikeSymbolDefinition(
           line.structural,
           runner.query.text,

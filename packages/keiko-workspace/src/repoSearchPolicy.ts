@@ -28,7 +28,10 @@ import {
   repositoryRouteDeclarationWindowContains,
   repositoryRouteQuery,
 } from "./repoSearchRoutes.js";
-import { repositorySourceLines } from "./repoSearchSourceClassification.js";
+import {
+  repositorySourceLines,
+  type RepositorySourceLine,
+} from "./repoSearchSourceClassification.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -680,6 +683,7 @@ export function scoreContentForSearch(
   text: string,
   policy: SearchPolicy,
   scopePath?: string,
+  sourceLinesFor?: () => readonly RepositorySourceLine[],
 ): number {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
     return 0;
@@ -696,7 +700,7 @@ export function scoreContentForSearch(
   const sourceLines =
     routeQueryTermsForSearch(query) === undefined && symbolDefinitionQueryTerms(query).length === 0
       ? []
-      : repositorySourceLines(text, scopePath);
+      : (sourceLinesFor?.() ?? repositorySourceLines(text, scopePath));
   return scoreContentHitsForSearch(
     policy,
     groups.length,
