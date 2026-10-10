@@ -53,12 +53,17 @@ async function createScopeChat(request: APIRequestContext): Promise<{
   return { root, chat: ((await bound.json()) as { readonly chat: ScopeChat }).chat };
 }
 
-async function seedConnectedWindows(page: Page, root: string, chat: ScopeChat): Promise<void> {
+async function seedConnectedWindows(
+  page: Page,
+  root: string,
+  chat: ScopeChat,
+  chatSize = { width: 780, height: 820 },
+): Promise<void> {
   const scope = chat.connectedScopes[0];
   if (scope === undefined) throw new TypeError("Missing acknowledged fixture scope");
   const fingerprint = connectedScopeFingerprint(scope);
   await page.addInitScript(
-    ({ root, chat, fingerprint }) => {
+    ({ root, chat, fingerprint, chatSize }) => {
       if (localStorage.getItem("keiko.workspace.v4") !== null) return;
       localStorage.setItem(
         "keiko.workspace.v4",
@@ -79,8 +84,8 @@ async function seedConnectedWindows(page: Page, root: string, chat: ScopeChat): 
             type: "chat",
             x: 980,
             y: 32,
-            w: 780,
-            h: 820,
+            w: chatSize.width,
+            h: chatSize.height,
             z: 11,
             cfg: { chatId: chat.id, title: chat.title },
             max: false,
@@ -101,7 +106,7 @@ async function seedConnectedWindows(page: Page, root: string, chat: ScopeChat): 
         ]),
       );
     },
-    { root, chat, fingerprint },
+    { root, chat, fingerprint, chatSize },
   );
 }
 
@@ -157,7 +162,7 @@ async function openNarrowedPreview(
   const { files, chatWindow, pill } = scopeViews(page);
   await expect(pill).toHaveText(/Folder:/u);
   await expect(chatWindow.getByTestId("grounding-help")).toContainText(
-    "the model has no file tools",
+    "The model has no file tools",
   );
   await expectScope(request, root, chat.id, "workspace-root", []);
   await files.locator('.tr-dir-enter[data-path="docs"]').click();
@@ -247,3 +252,57 @@ test("Files navigation announces narrowing and keeps the folder on later preview
   await verifyReloadedPin(page, request, fixture);
   await page.screenshot({ path: testInfo.outputPath("scope-folder-kept.png") });
 });
+
+for (const size of [
+  { width: 480, height: 480, locale: "en" },
+  { width: 480, height: 480, locale: "de" },
+  { width: 620, height: 640, locale: "en" },
+  { width: 780, height: 820, locale: "en" },
+]) {
+  test(`@smoke connected grounding header preserves usable conversation at ${String(size.width)}px ${size.locale}`, async ({
+    page,
+    request,
+  }) => {
+    const fixture = await createScopeChat(request);
+    await seedConnectedWindows(page, fixture.root, fixture.chat, size);
+    await page.addInitScript((locale) => {
+      localStorage.setItem("keiko.locale", locale);
+    }, size.locale);
+    await page.goto("/");
+    const chat = page.getByRole("region", { name: "Chat — Scope narrowing" });
+    const help = chat.getByTestId("grounding-help");
+    await expect(help).toContainText(
+      size.locale === "de"
+        ? "kennzeichnet allgemeines Wissen als eigene Einschätzung"
+        : "labels general knowledge as its own assessment",
+    );
+    await expect(chat.locator(".scope-grounding-select")).toBeVisible();
+    await expect(chat.locator(".scope-pill")).toBeVisible();
+    const geometry = await chat.evaluate((node) => {
+      const measure = (selector: string): DOMRect => {
+        const element = node.querySelector(selector);
+        if (element === null) throw new TypeError(`Missing chat surface ${selector}`);
+        return element.getBoundingClientRect();
+      };
+      const header = measure(".chat-scope-header");
+      const hint = measure('[data-testid="grounding-help"]');
+      const log = measure(".chatw-scroll");
+      const footer = measure(".chatw-foot");
+      return {
+        headerHeight: header.height,
+        hintWidth: hint.width,
+        availableWidth: header.width - 32,
+        logHeight: log.height,
+        footerBottom: footer.bottom,
+        windowBottom: node.getBoundingClientRect().bottom,
+      };
+    });
+    expect(geometry.hintWidth).toBeGreaterThanOrEqual(geometry.availableWidth - 1);
+    expect(geometry.headerHeight, JSON.stringify(geometry)).toBeLessThan(220);
+    expect(geometry.logHeight, JSON.stringify(geometry)).toBeGreaterThan(80);
+    expect(geometry.footerBottom).toBeLessThanOrEqual(geometry.windowBottom + 1);
+    expect(await storedScopes(request, fixture.root, fixture.chat.id)).toEqual([
+      { kind: "workspace-root", relativePaths: [] },
+    ]);
+  });
+}

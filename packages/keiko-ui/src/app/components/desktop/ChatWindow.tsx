@@ -4414,7 +4414,7 @@ function ChatGroundingHelp({ chat }: { readonly chat: Chat }): ReactNode {
   const t = useTranslate();
   if (effectiveConnectedScopes(chat).length === 0) return null;
   return (
-    <p className={scopeNoticeStyles.help} data-testid="grounding-help" tabIndex={-1}>
+    <p className={scopeNoticeStyles.cmpHelp} data-testid="grounding-help" tabIndex={-1}>
       {t("chat.grounding.help")}
     </p>
   );
@@ -4451,6 +4451,9 @@ function ChatScopeHeaderImpl({
         catalog={catalog}
         connected={connected}
       />
+      {memoryControl !== undefined ? (
+        <div className="chat-scope-header-actions">{memoryControl}</div>
+      ) : null}
       <ChatGroundingHelp chat={chat} />
       <ChatScopeNotice
         chat={chat}
@@ -4474,9 +4477,6 @@ function ChatScopeHeaderImpl({
         onDisconnect={onChatChanged}
         onRefreshed={onChatChanged}
       />
-      {memoryControl !== undefined ? (
-        <div className="chat-scope-header-actions">{memoryControl}</div>
-      ) : null}
     </div>
   );
 }

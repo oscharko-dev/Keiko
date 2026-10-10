@@ -21729,8 +21729,8 @@ button.figma-view-preview {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: nowrap;
+  gap: 4px 12px;
+  flex-wrap: wrap;
   padding: 6px 16px 4px;
 }
 .chat-scope-header-actions {
@@ -21743,9 +21743,12 @@ button.figma-view-preview {
 /* C178 — grounding control label (was fully inline-styled). */
 .scope-grounding {
   display: inline-flex;
+  flex: 1 1 260px;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   font-size: 12px;
 }
 .scope-grounding-label {
