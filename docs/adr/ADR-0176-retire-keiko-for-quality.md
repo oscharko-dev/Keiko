@@ -82,7 +82,8 @@ invisible to duplicate suppression and the finding simply returns on the next pu
   it is now what the documentation says.
 - Review depth on a pull request rests on CodeRabbit plus the deterministic gates. Losing a second
   model-backed opinion is the accepted cost of not carrying a reviewer that does not run.
-- The arming interlock disappears from the delivery rules, so auto-merge arming depends only on the
+- The retired reviewer interlock disappears from the delivery rules. The 2026-10-10 owner amendment
+  to ADR-0135 additionally reserves `dev` auto-merge arming to `oscharko`; technical readiness uses the
   required checks being green on the exact head and every review conversation being resolved.
 - Reintroduction requires a new ADR, a new credential grant, and a fresh trust analysis.
 

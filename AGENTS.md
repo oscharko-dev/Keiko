@@ -28,9 +28,11 @@ product.
 > A local human selects or accepts the task, autonomy mode, and Authority Envelope within the
 > server-owned deployment ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
 > when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
-> their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
-> after the app-bound required checks succeed on the exact current head and every review
-> conversation is resolved. Direct pushes to
+> their feature branch, and maintain the pull request. Only the repository owner account
+> `oscharko` may authorize and execute integration into `dev`, including enabling native auto-merge.
+> Agents acting under that account operate within the owner's explicit authorization. Integration
+> additionally requires the app-bound required checks to succeed on the exact current head and every
+> review conversation to be resolved. Direct pushes to
 > `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
@@ -56,7 +58,7 @@ monotonic semantics fixed by
   or delivery.
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
-  integrated automatically only once the auto-merge preconditions in the invariant above hold.
+  integrated only by `oscharko` once the preconditions in the invariant above hold.
   (A mode's `allowed` disposition is a policy ceiling — see ADR-0138 D4 for the same-day
   capability-availability clarification: a surface still needs an implemented execution path
   before a given mode's `allowed` verdict can act.)
@@ -76,8 +78,10 @@ restrictions fail closed.
 This shapes the product _and_ how you work on it:
 
 - For an accepted Keiko task or epic, agents may commit, push the assigned non-`dev` branch, open or
-  update its PR, repair deterministic findings, arm native auto-merge, and close the issue after
-  verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
+  update its PR, and repair deterministic findings. Only `oscharko` may merge into `dev` or arm native
+  auto-merge for that target; an agent acting under that account needs the owner's explicit
+  authorization. Acceptance of a contributor's task does not grant `dev` integration authority.
+  Close the issue only after verified merge. Never push directly to `dev`, force-push, bypass a
   required check, dismiss a finding to obtain green status, or merge outside the ADR-0135
   direct-check path.
 - Explicit Files/Editor folder selections use the existing `coding-repository` presentation
@@ -900,11 +904,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
   commit signing is configured before you commit.
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
-  history and signed squash merges. Nobody — agent or human — clicks merge: the agent arms GitHub
-  native auto-merge on the PR, and the platform integrates automatically once the required checks
-  are green on the exact current head and every review conversation is resolved (ADR-0135). Green
-  gates plus settled review threads ARE the merge decision; there is no human review step and no
-  waiting for a person.
+  history and signed squash merges. Only the repository owner account `oscharko` may merge into
+  `dev` or enable native auto-merge for it. Agents acting under that account require the owner's
+  explicit authorization; contributors cannot authorize integration. Required checks must be green
+  on the exact current head and every review conversation must be resolved (ADR-0135). Green gates
+  and settled review threads are necessary; they do not grant a contributor merge authority.
 - **The integration run reuses the pull request's evidence, it does not repeat it.** `dev` takes
   signed squash merges of up-to-date heads, so the commit that lands carries the identical tree sha
   as the head the required matrix already proved. The `dev` run resolves that first and skips the
@@ -939,7 +943,10 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   which runs ahead of zizmor so a drifted line anchor names its own cause instead of surfacing as
   the finding it was accepted for (#3130).
 
-  No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
+  No additional approving review is required for `dev`, so owner-authored PRs remain possible.
+  The owner's merge or authorized auto-merge is the integration approval. Only `oscharko` may
+  dismiss blocking reviews; approvals become stale when the reviewed changes change. CodeRabbit
+  reviews every `dev` pull request and
   every subsequent push without auto-pause. Its status is not required because quota can omit a
   current-head review, but every emitted inline finding requests changes and blocks until repaired
   and its conversation is resolved. Qodo remains retired under ADR-0167, and Keiko for

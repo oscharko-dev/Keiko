@@ -298,16 +298,22 @@ and the SonarCloud analysis are never reused on `dev`: they run on every push to
 SonarCloud's branch history stays current (ADR-0178 D1, amended 2026-09-25). Editing a workflow
 changes the tree, so CI changes always measure themselves.
 
-No human approving review or manual merge is required. GitHub native auto-merge integrates only
-after the required checks succeed on the exact current head and every review conversation is
-resolved. CodeRabbit reviews every pull request targeting `dev` and every subsequent push with no
+Only the repository owner account `oscharko` may authorize and execute a merge into `dev`, including
+enabling GitHub native auto-merge. Agents acting under that account operate within the owner's
+explicit authorization. Contributors may prepare PRs and repair findings, but accepting their task
+does not grant integration authority. No additional approving review is required, so owner-authored
+PRs remain possible. Required checks must succeed on the exact current head and every review
+conversation must be resolved before integration. Only `oscharko` may dismiss blocking reviews;
+approvals become stale when the reviewed changes change. These restrictions are scoped to `dev`.
+CodeRabbit reviews every pull request targeting `dev` and every subsequent push with no
 auto-pause. Its status is not required because quota can omit a current-head review. When CodeRabbit
 does emit an inline finding, GitHub's required conversation-resolution rule blocks merge until its
 conversation is resolved. Policy additionally requires the underlying defect to be repaired; the
 quota-tolerant interim topology cannot infer code repair merely from GitHub's resolved bit.
 
 `.github/CODEOWNERS` intentionally stays a single flat `* @oscharko` rule while Keiko has one
-maintainer; it has no merge-gating effect under this no-human-review auto-merge model. Revisit
+maintainer. Required code-owner reviews remain disabled to avoid blocking owner-authored PRs;
+the owner-only branch restriction controls who may integrate into `dev`. Revisit
 path-scoped rows if/when a second maintainer joins.
 
 The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are retired.
