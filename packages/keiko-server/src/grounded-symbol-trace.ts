@@ -57,11 +57,27 @@ interface DiscoveredSymbolTraceEvidenceInput extends FollowSymbolTraceEvidenceIn
   readonly atoms: readonly EvidenceAtom[];
   readonly workspaceIndex?: WorkspaceIndex | undefined;
   readonly definitionCertificates?: WeakMap<EvidenceAtom, CodeSymbol> | undefined;
+  readonly observedDefinitionBytes?: Map<string, number> | undefined;
+  readonly observedDefinitionParents?: Map<string, string> | undefined;
+}
+
+export interface RouteTraceCoverageEntry {
+  readonly atom: EvidenceAtom;
+  readonly definitionIdentity: string;
+  readonly parentIdentity: string | undefined;
+  readonly observedBytes: number;
+}
+
+export interface RouteTraceCoverage {
+  readonly entries: readonly RouteTraceCoverageEntry[];
+  readonly isCurrent: (atom: EvidenceAtom) => boolean;
+  readonly matches: (scope: SearchScope, fs: WorkspaceFs) => boolean;
 }
 
 export interface FollowSymbolTraceEvidence {
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
+  readonly routeCoverage?: RouteTraceCoverage | undefined;
 }
 
 const TRACE_MAX_DEPTH = 3;
@@ -255,6 +271,7 @@ async function discoveryExcerptObservation(
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     },
   );
+  recordObservedDefinitionBytes(input, atom, result.content);
   return discoveredDefinitionCurrent(input, atom)
     ? {
         content: result.content,
@@ -265,6 +282,16 @@ async function discoveryExcerptObservation(
         sourceReference: atom.edge?.kind === "reference",
       }
     : unavailable;
+}
+
+function recordObservedDefinitionBytes(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  atom: EvidenceAtom,
+  content: string,
+): void {
+  const definition = input.definitionCertificates?.get(atom);
+  if (definition !== undefined && discoveredDefinitionCurrent(input, atom))
+    input.observedDefinitionBytes?.set(definitionIdentity(definition), Buffer.byteLength(content));
 }
 
 async function discoveryExcerpt(
@@ -667,6 +694,7 @@ function observedCallReference(call: CodeCallEdge, reference: CodeReferenceEdge)
 interface ObservedBodyTarget {
   readonly call: CodeCallEdge;
   readonly sourceReference: boolean;
+  readonly parentIdentity: string | undefined;
 }
 
 function certifiedBodyCalls(
@@ -687,11 +715,13 @@ function certifiedBodyCalls(
     clipping.frontierOmitted += unsupported;
   }
   return current.flatMap((call) => {
+    const parentIdentity =
+      observation.definition === undefined ? undefined : definitionIdentity(observation.definition);
     if (callOwnedByObservation(call, observation))
-      return [{ call, sourceReference: observation.sourceReference === true }];
+      return [{ call, sourceReference: observation.sourceReference === true, parentIdentity }];
     return call.callerDefinition === undefined &&
       index.references.some((reference) => observedCallReference(call, reference))
-      ? [{ call, sourceReference: true }]
+      ? [{ call, sourceReference: true, parentIdentity }]
       : [];
   });
 }
@@ -925,9 +955,22 @@ async function nextDefinitionFrontier(
       continue;
     }
     const atom = await certifiedTargetAtom(input, call, index, target.sourceReference);
-    if (atom !== undefined) frontier.push(atom);
+    retainDefinitionFrontierAtom(input, target, atom, frontier);
   }
   return frontier;
+}
+
+function retainDefinitionFrontierAtom(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  target: ObservedBodyTarget,
+  atom: EvidenceAtom | undefined,
+  frontier: EvidenceAtom[],
+): void {
+  if (atom === undefined) return;
+  const definition = input.definitionCertificates?.get(atom);
+  if (definition !== undefined && target.parentIdentity !== undefined)
+    input.observedDefinitionParents?.set(definitionIdentity(definition), target.parentIdentity);
+  frontier.push(atom);
 }
 
 function certifiedTargetCapacity(
@@ -1106,6 +1149,8 @@ export async function collectDiscoveredSymbolTraceEvidence(
   const requestInput = {
     ...input,
     definitionCertificates: new WeakMap<EvidenceAtom, CodeSymbol>(),
+    observedDefinitionBytes: new Map<string, number>(),
+    observedDefinitionParents: new Map<string, string>(),
   };
   const symbols = await discoveredHandlerSymbols(requestInput);
   if (symbols.length === 0) return { atoms: [], uncertainty: [] };
@@ -1113,9 +1158,40 @@ export async function collectDiscoveredSymbolTraceEvidence(
   const marker = discoveredTraceCoverageMarker(trace.coverage, input.nowMs);
   return {
     atoms: trace.atoms,
+    routeCoverage: discoveredRouteCoverage(requestInput, trace.atoms),
     uncertainty: [marker, discoveredTraversalMarker(trace.clipping, input.nowMs)].filter(
       (entry): entry is UncertaintyMarker => entry !== undefined,
     ),
+  };
+}
+
+function discoveredRouteCoverage(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  atoms: readonly EvidenceAtom[],
+): RouteTraceCoverage {
+  const entries = atoms.flatMap((atom): readonly RouteTraceCoverageEntry[] => {
+    const definition = input.definitionCertificates?.get(atom);
+    if (definition === undefined) return [];
+    const identity = definitionIdentity(definition);
+    const bytes = input.observedDefinitionBytes?.get(identity);
+    return bytes === undefined || bytes <= 0
+      ? []
+      : [
+          {
+            atom,
+            definitionIdentity: identity,
+            parentIdentity: input.observedDefinitionParents?.get(identity),
+            observedBytes: Math.min(MAX_DISCOVERY_EXCERPT_BYTES, bytes),
+          },
+        ];
+  });
+  return {
+    entries,
+    isCurrent: (atom) =>
+      input.definitionCertificates?.has(atom) === true &&
+      !traceWorkStopped(input) &&
+      discoveredDefinitionCurrent(input, atom),
+    matches: (scope, fs) => scope === input.searchScope && fs === input.fs,
   };
 }
 
