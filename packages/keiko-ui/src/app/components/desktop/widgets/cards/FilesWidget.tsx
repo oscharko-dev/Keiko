@@ -804,6 +804,8 @@ export function FilesWidget({
   const currentDirectoryRef = useRef(currentDirectoryPath);
   currentDirectoryRef.current = currentDirectoryPath;
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
+  const directoriesRef = useRef(directories);
+  directoriesRef.current = directories;
   const [directoryRenderLimits, setDirectoryRenderLimits] = useState<Record<string, number>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
   const [treeTooltip, setTreeTooltip] = useState<TreeTooltipState | null>(null);
@@ -1054,6 +1056,9 @@ export function FilesWidget({
       observedRootRef.current = { requested: apiRoot, resolved: apiRoot };
       setDirectoryRoot(apiRoot);
       setResolvedRootValue(apiRoot);
+      for (const [path, state] of Object.entries(directoriesRef.current)) {
+        if (state.loading) void loadDirectory(path);
+      }
       return;
     }
     observedRootRef.current = null;
