@@ -426,13 +426,18 @@ priority remains intact.
 Physical excerpt allocation preserves connected parent chains across already selected route files.
 Explicit human file selections remain first. The request-local traversal supplies only current,
 certified definition identities, observed parent relationships and actual body-byte requirements.
-Independent route roots share the allocation in observed branch order. Reservations stay inside
-the remaining excerpt-byte and file grants; they do not add selected paths or change relevance
-scores or invocation uncertainty. Ordinary ranked evidence and connected definitions share the
-remaining byte grant; connected reservations cannot consume the whole pool. Existing human and
-endpoint selection priorities survive path ordering. Current certified definition boundaries split
-adjacent ranges before the existing trace-priority and score ordering, preserving useful ordinary
-windows alongside complete observed parent chains and same-file continuations.
+Independent route roots take turns, with existing query relevance ordering targets within each root.
+Admission requires the additional observed body bytes of a complete selected, current parent chain
+to fit the connected share. Shared ancestors reserve bytes once; later same-file targets remain
+eligible, and oversized branches receive no partial reservation. Reservations stay inside the
+remaining excerpt-byte and file grants; they do not add selected paths or change relevance scores
+or invocation uncertainty. Ordinary ranked evidence and connected definitions share the remaining
+byte grant; connected reservations cannot consume the whole pool. Existing human and endpoint
+selection priorities survive path ordering. Reserved definition windows precede ordinary extras,
+with explicit human windows first. Actual returned coverage windows retain the existing physical-view
+digest so adjacent windows cannot introduce uncharged bytes during assembly. Bounded observations
+do not establish that an arbitrarily large function was fully read; actual truncation and omissions
+remain authoritative.
 The existing guarded reader batches each file's ranges, charges
 actual returned bytes and reports omitted windows. A definition that loses currentness cannot
 retain its reserved priority; bytes already read from a subsequently stale definition are charged

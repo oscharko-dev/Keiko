@@ -108,13 +108,15 @@ definition evidence and a resolved reference edge. Declaration priority does not
 invocation; continuation retains that reference relationship and `source-graph-incomplete`.
 Partially overlapping excerpt windows retain uncovered lines and their originating strength;
 deduplication removes only lines already covered by a higher-priority window.
-Physical excerpt allocation preserves connected parent chains across selected route files after
-explicit human file selections. Reservations use request-local current definition witnesses and
-observed body-byte requirements within the existing grants. Independent route roots share the
-allocation; relevance scores, invocation uncertainty and actual omission reporting remain intact.
-Ordinary ranked evidence and connected definitions share the remaining byte grant; neither view
-reserves the whole pool. Existing selection priorities survive path ordering, and current
-definition boundaries split adjacent windows before the existing trace-priority and score ordering.
+Physical excerpt allocation admits complete selected, current definition branches whose additional
+observed body bytes fit the connected share. Independent roots take turns; existing query relevance
+orders targets within each root. Shared ancestors reserve bytes once, later same-file targets remain
+eligible, and an oversized branch spends no partial reservation. Explicit human selections remain
+first, and ordinary ranked evidence retains its share of the existing grant. Reserved definition
+windows precede ordinary extras; their actual returned physical-view identities prevent adjacent
+windows from introducing uncharged bytes during assembly. Bounded observations do not establish
+that an arbitrarily large function was fully read. File and deadline grants, current-source checks,
+invocation uncertainty and actual truncation/omission reporting remain authoritative.
 Existing query evidence orders endpoint intake; bounded delegation traversal keeps the original
 workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
 Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
