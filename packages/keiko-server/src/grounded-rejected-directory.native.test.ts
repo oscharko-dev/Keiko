@@ -9,6 +9,7 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 
@@ -41,8 +42,8 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function watchedFs(reads: NativeRead[]): WorkspaceFs {
-  const fs = { ...nodeWorkspaceFs };
+function watchedFs(reads: NativeRead[], base: WorkspaceFs): WorkspaceFs {
+  const fs = { ...base };
   for (const key of [
     "readFileUtf8",
     "readFileUtf8SameDescriptor",
@@ -60,7 +61,7 @@ function watchedFs(reads: NativeRead[]): WorkspaceFs {
           kind: key,
           byteLimit: typeof args[1] === "number" ? args[1] : undefined,
         });
-        return Reflect.apply(port, nodeWorkspaceFs, args);
+        return Reflect.apply(port, base, args);
       },
       enumerable: true,
     });
@@ -72,6 +73,7 @@ async function retrieve(
   text: string,
   kind: SelectedScope["kind"],
   paths: readonly string[],
+  base: WorkspaceFs = nodeWorkspaceFs,
 ): Promise<{
   readonly result: Awaited<ReturnType<typeof retrieveConnectedContextPack>>;
   readonly reads: readonly NativeRead[];
@@ -80,14 +82,15 @@ async function retrieve(
 }> {
   const reads: NativeRead[] = [];
   const log = createBufferedServerLogSink();
+  const workspaceRoot = base.realPath(root);
   let workspace: WorkspaceInfo | undefined;
   const result = await retrieveConnectedContextPack(
     {
-      workspaceRoot: root,
+      workspaceRoot,
       scope: {
         schemaVersion: "1",
         scopeId: "native-rejected-directory",
-        workspaceRoot: root,
+        workspaceRoot,
         kind,
         relativePaths: paths,
         conversationId: "native-rejected-directory-chat",
@@ -103,7 +106,7 @@ async function retrieve(
       },
     },
     {
-      fs: watchedFs(reads),
+      fs: watchedFs(reads, base),
       activityLog: log,
       correlationId: "native-rejected-directory-request",
       nowMs: (): number => NOW,
@@ -215,13 +218,19 @@ describe("native rejected-path eligibility after explicit admission", () => {
     "keeps literal basename %s distinct from wildcard siblings before retention",
     async (basename) => {
       const path = `src/${basename}`;
-      writeFileSync(join(root, path), "export const literalFact = 937;\n");
+      // Windows cannot materialize '*'/'?' filenames. The existing filesystem test port keeps
+      // this exact production retrieval control portable without skipping its literal identity.
+      const files: Record<string, string> = { [path]: "export const literalFact = 937;\n" };
       for (let index = 0; index < 100; index += 1) {
         const directory = `src/decoy-${String(index).padStart(3, "0")}`;
-        mkdirSync(join(root, directory));
-        writeFileSync(join(root, directory, "probe0.ts"), "export const siblingFact = 211;\n");
+        files[`${directory}/probe0.ts`] = "export const siblingFact = 211;\n";
       }
-      const result = await retrieve(`Explain \`${basename}\``, "directory", ["src"]);
+      const result = await retrieve(
+        `Explain \`${basename}\``,
+        "directory",
+        ["src"],
+        memFs(root, files),
+      );
       expect(result.result.pack.files.map((file) => file.scopePath)).toContain(path);
       expect(
         result.log.events.find((event) => event.op === "search.connected-context.source-details")

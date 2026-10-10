@@ -486,17 +486,21 @@ async function basenamePaths(
 async function classifyBasenamePaths(
   paths: readonly string[],
   inputs: AdmissionInputs,
-): Promise<SearchResult | undefined> {
-  const codePaths = paths.filter(
-    (path) =>
-      pathPolicyRejection(path, inputs) === undefined &&
-      !isConnectedDocumentPath(path) &&
-      !humanSelectedPath(path, inputs),
+): Promise<{ readonly classified: SearchResult | undefined; readonly matchCount: number }> {
+  const eligible = paths.filter((path) => pathPolicyRejection(path, inputs) === undefined);
+  const codePaths = eligible.filter(
+    (path) => !isConnectedDocumentPath(path) && !humanSelectedPath(path, inputs),
   );
-  if (codePaths.length === 0 || admissionStopped(inputs)) return undefined;
+  const metadataMatches = eligible.length - codePaths.length;
+  if (codePaths.length === 0 || admissionStopped(inputs))
+    return { classified: undefined, matchCount: metadataMatches };
   // Metadata enumeration and this bounded batch share the original basename-search grant.
   // Only canonically admissible exact paths reach the existing live file classifier.
-  return findExplicitFiles(inputs, "**/*", codePaths, BASENAME_MATCH_CAP);
+  const classified = await findExplicitFiles(inputs, "**/*", codePaths, BASENAME_MATCH_CAP);
+  return {
+    classified,
+    matchCount: metadataMatches + new Set(classified.atoms.map((atom) => atom.scopePath)).size,
+  };
 }
 
 async function admitBasename(
@@ -511,8 +515,8 @@ async function admitBasename(
     if (humanSelectedPath(path, inputs) && path.split("/").at(-1) === reference.path)
       paths.add(path);
   }
-  const classified = await classifyBasenamePaths([...paths], inputs);
-  const admittedBefore = state.selections.length;
+  const { classified, matchCount } = await classifyBasenamePaths([...paths], inputs);
+  state.basenameMatches += matchCount;
   for (const path of paths) {
     if (admissionStopped(inputs)) break;
     await admitReference(
@@ -522,7 +526,6 @@ async function admitBasename(
       humanSelectedPath(path, inputs) ? undefined : classified,
     );
   }
-  state.basenameMatches += state.selections.length - admittedBefore;
 }
 
 function observation(state: AdmissionState): ExplicitPathObservation {
