@@ -1312,11 +1312,13 @@ export function readWorkspaceFileTextForInternalUse(
   opts: ReadOptions,
   fs: WorkspaceFs,
   lane: WorkspaceContentLane,
+  preserveSourceLineBreaks = false,
 ): InternalWorkspaceTextRead {
   const target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
   const raw = readRawContent(workspace, fs, target, opts);
   return {
-    content: lane === "editor" ? raw.rawText : redact(raw.rawText),
+    content:
+      lane === "editor" ? raw.rawText : redact(raw.rawText, [], { preserveSourceLineBreaks }),
     sizeBytes: raw.sizeBytes,
     stat: raw.stat,
   };

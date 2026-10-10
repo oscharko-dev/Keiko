@@ -27,11 +27,37 @@ export interface EndpointSourceFileSet {
   readonly candidateLimitReached: boolean;
 }
 
+export interface EndpointSourceReadDeps {
+  readonly readSource?: ((scopePath: string, maxBytes: number) => string) | undefined;
+  readonly isCandidateAllowed?: ((scopePath: string) => boolean) | undefined;
+}
+
 const CLIENT_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
 
 function isEndpointSource(scopePath: string): boolean {
   const ext = path.extname(scopePath).toLowerCase();
   return ext === ".java" || CLIENT_EXTENSIONS.has(ext);
+}
+
+function endpointReadStopped(
+  scopePath: string,
+  control: StructuralExecutionControl,
+  deps: EndpointSourceReadDeps,
+): boolean {
+  return structuralExecutionStopped(control) || deps.isCandidateAllowed?.(scopePath) === false;
+}
+
+function endpointText(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  scopePath: string,
+  deps: EndpointSourceReadDeps,
+): string {
+  return deps.readSource === undefined
+    ? readWorkspaceFile(scope.workspace, scopePath, { maxBytes: limits.maxBytesPerFileScanned }, fs)
+        .text
+    : deps.readSource(scopePath, limits.maxBytesPerFileScanned);
 }
 
 async function readEndpointSource(
@@ -40,9 +66,10 @@ async function readEndpointSource(
   fs: WorkspaceFs,
   scopePath: string,
   control: StructuralExecutionControl,
+  deps: EndpointSourceReadDeps,
 ): Promise<SourceFile | undefined> {
   try {
-    if (structuralExecutionStopped(control)) return undefined;
+    if (endpointReadStopped(scopePath, control, deps)) return undefined;
     const absolute = resolveWithinWorkspace(scope.workspace.root, scopePath);
     const contained = containedRealPathInfo(fs, scope.workspace.root, absolute);
     if (!isCanonicalAllowedContainedPath(contained, scope.workspace.root, scopePath)) {
@@ -50,14 +77,10 @@ async function readEndpointSource(
     }
     const stat = fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return undefined;
+    if (endpointReadStopped(scopePath, control, deps)) return undefined;
     if (await probeBinary(fs, contained.path, stat.size)) return undefined;
-    if (structuralExecutionStopped(control)) return undefined;
-    const text = readWorkspaceFile(
-      scope.workspace,
-      scopePath,
-      { maxBytes: limits.maxBytesPerFileScanned },
-      fs,
-    ).text;
+    if (endpointReadStopped(scopePath, control, deps)) return undefined;
+    const text = endpointText(scope, limits, fs, scopePath, deps);
     if (structuralExecutionStopped(control)) return undefined;
     return { scopePath, text };
   } catch {
@@ -88,6 +111,7 @@ export async function endpointSourceFileSetFromCandidates(
   fs: WorkspaceFs,
   candidateSet: CandidateSet,
   executionControl?: StructuralExecutionControl,
+  deps: EndpointSourceReadDeps = {},
 ): Promise<EndpointSourceFileSet> {
   const out: SourceFile[] = [];
   const boundedCandidates = limitCandidateSetForStructuralBuild(candidateSet, limits, (file) =>
@@ -103,7 +127,7 @@ export async function endpointSourceFileSetFromCandidates(
       executionTruncated = true;
       break;
     }
-    const file = await readEndpointSource(scope, limits, fs, scopePath, control);
+    const file = await readEndpointSource(scope, limits, fs, scopePath, control, deps);
     if (structuralExecutionStopped(control)) {
       executionTruncated = true;
       break;
