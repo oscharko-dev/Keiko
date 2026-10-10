@@ -241,6 +241,11 @@ interface BuildDeps {
   readonly executionControl?: StructuralExecutionControl | undefined;
 }
 
+interface InternalBuildDeps extends BuildDeps {
+  readonly readSource?: ((scopePath: string, maxBytes: number) => string) | undefined;
+  readonly assertSourceAllowed?: ((scopePath: string) => void) | undefined;
+}
+
 interface TsPathAlias {
   readonly configDir: string;
   readonly baseUrl?: string | undefined;
@@ -4610,6 +4615,7 @@ function readOversizedSourcePrefix(
   fs: WorkspaceFs,
   relativePath: string,
   language: CodeLanguage,
+  assertSourceAllowed: InternalBuildDeps["assertSourceAllowed"],
 ): SourceText | undefined {
   try {
     const text = readWorkspaceFilePrefixForEvidence(
@@ -4617,6 +4623,11 @@ function readOversizedSourcePrefix(
       relativePath,
       sourceReadCap(limits),
       fs,
+      assertSourceAllowed === undefined
+        ? undefined
+        : (): void => {
+            assertSourceAllowed(relativePath);
+          },
     );
     return text === undefined || text.length === 0
       ? undefined
@@ -4632,18 +4643,26 @@ function readSource(
   fs: WorkspaceFs,
   relativePath: string,
   language: CodeLanguage,
+  readCompleteSource: InternalBuildDeps["readSource"],
+  assertSourceAllowed: InternalBuildDeps["assertSourceAllowed"],
 ): SourceText {
   try {
-    const content = readWorkspaceFile(
-      scope.workspace,
-      relativePath,
-      { maxBytes: sourceReadCap(limits) },
-      fs,
-    );
-    return sourceText(relativePath, content.text, language, false);
+    const text =
+      readCompleteSource === undefined
+        ? readWorkspaceFile(scope.workspace, relativePath, { maxBytes: sourceReadCap(limits) }, fs)
+            .text
+        : readCompleteSource(relativePath, sourceReadCap(limits));
+    return sourceText(relativePath, text, language, false);
   } catch (error) {
     if (error instanceof FileTooLargeError) {
-      const partial = readOversizedSourcePrefix(scope, limits, fs, relativePath, language);
+      const partial = readOversizedSourcePrefix(
+        scope,
+        limits,
+        fs,
+        relativePath,
+        language,
+        assertSourceAllowed,
+      );
       if (partial !== undefined) {
         return partial;
       }
@@ -4665,6 +4684,8 @@ interface SourceReadArgs {
   readonly fs: WorkspaceFs;
   readonly control: StructuralExecutionControl;
   readonly tally: SourceReadTally;
+  readonly readCompleteSource: InternalBuildDeps["readSource"];
+  readonly assertSourceAllowed: InternalBuildDeps["assertSourceAllowed"];
 }
 
 // "stop" ends the candidate walk because the execution deadline fired part-way through it; the
@@ -4696,7 +4717,15 @@ function recordCandidateSource(
   relativePath: string,
   language: CodeLanguage,
 ): CandidateReadOutcome {
-  const source = readSource(args.scope, args.limits, args.fs, relativePath, language);
+  const source = readSource(
+    args.scope,
+    args.limits,
+    args.fs,
+    relativePath,
+    language,
+    args.readCompleteSource,
+    args.assertSourceAllowed,
+  );
   if (structuralExecutionStopped(args.control)) {
     args.tally.truncated = true;
     return "stop";
@@ -4734,6 +4763,8 @@ function readSources(
   fs: WorkspaceFs,
   candidates: readonly { readonly relativePath: string }[],
   control: StructuralExecutionControl,
+  readCompleteSource: InternalBuildDeps["readSource"],
+  assertSourceAllowed: InternalBuildDeps["assertSourceAllowed"],
 ): {
   files: readonly SourceFile[];
   skipped: number;
@@ -4741,7 +4772,15 @@ function readSources(
   truncated: boolean;
 } {
   const tally: SourceReadTally = { files: [], skipped: 0, partiallyIndexed: 0, truncated: false };
-  const args: SourceReadArgs = { scope, limits, fs, control, tally };
+  const args: SourceReadArgs = {
+    scope,
+    limits,
+    fs,
+    control,
+    tally,
+    readCompleteSource,
+    assertSourceAllowed,
+  };
   for (const candidate of candidates) {
     if (structuralExecutionStopped(control)) {
       tally.truncated = true;
@@ -4813,7 +4852,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
   limits: SearchLimits,
   fs: WorkspaceFs,
   candidateSet: CandidateSet,
-  deps?: BuildDeps,
+  deps?: InternalBuildDeps,
 ): CodeIntelligenceIndex {
   const executionControl =
     deps?.executionControl ??
@@ -4890,6 +4929,8 @@ export function buildCodeIntelligenceIndexFromCandidates(
     fs,
     candidates,
     executionControl,
+    deps?.readSource,
+    deps?.assertSourceAllowed,
   );
   const pathSet = new Set(files.map((file) => file.scopePath));
   const importResolver = collectTsImportResolverConfig(

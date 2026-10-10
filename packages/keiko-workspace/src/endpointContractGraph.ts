@@ -23,7 +23,11 @@ import {
   normalizeEndpointPath,
   unquote,
 } from "./endpointContractPaths.js";
-import { endpointSourceFileSetFromCandidates, type SourceFile } from "./endpointContractSource.js";
+import {
+  endpointSourceFileSetFromCandidates,
+  type EndpointSourceReadDeps,
+  type SourceFile,
+} from "./endpointContractSource.js";
 import { gatherCandidatesWithControl, type CandidateSet } from "./repoSearchScan.js";
 
 interface EndpointBuildState {
@@ -515,6 +519,7 @@ export async function buildEndpointContractGraphFromCandidates(
   fs: WorkspaceFs,
   candidateSet: CandidateSet,
   executionControl?: StructuralExecutionControl,
+  sourceReadDeps?: EndpointSourceReadDeps,
 ): Promise<EndpointContractGraph> {
   const control =
     executionControl ?? createStructuralExecutionControl(limits.elapsedMsMax, Date.now);
@@ -524,6 +529,7 @@ export async function buildEndpointContractGraphFromCandidates(
     fs,
     candidateSet,
     control,
+    sourceReadDeps,
   );
   return buildEndpointContractGraphFromSources(
     sourceSet.files,

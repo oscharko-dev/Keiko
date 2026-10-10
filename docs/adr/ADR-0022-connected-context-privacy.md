@@ -322,6 +322,22 @@ matches; they do not cap the recursive lexical scan. An explicitly finite elapse
 across rings, while the default `null` deadline remains uncapped. Retained lexical matches are
 bounded by accepted context capacity independently of corpus traversal.
 
+The existing structural request context can retain complete, physical-line-preserving evidence
+from its code-index reader for the endpoint graph only. This new retention is explicitly bounded
+by the first 512 eligible files, 64 KiB per complete source and 32 MiB of encoded text in aggregate;
+its existing ranking-preview Map is not claimed to have those aggregate bounds. Endpoint binary
+probes remain live. Every reuse rechecks current eligibility, canonical root/path, strong file
+identity, nanosecond modification/change times and single-link membership before and after lookup,
+plus the reader's byte grant and request abort/deadline. Changed, weak, unavailable, partial or
+unretained sources take the established live reader. Request-bound complete and oversized-prefix
+reads recheck active eligibility after their own fresh metadata resolution and before descriptor
+I/O; standalone builders without that optional guard retain their existing behavior. Scope,
+policy, filesystem and limits remain bound to the same request context; no text crosses requests
+or supplies final evidence reads.
+Physical Activity Log I/O counters continue to count the actual underlying calls rather than
+charging a second body read for reused text. This bounded work reduction does not establish an
+actual model-response latency improvement.
+
 The inclusive file-byte ceiling is owned once by `MAX_RECURSIVE_TEXT_FILE_BYTES` in the pure
 workspace contract primitives. Recursive matching, planner limits, document input admission and
 the grounded prompt use that same value. The prompt distinguishes supported document text
