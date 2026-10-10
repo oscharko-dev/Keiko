@@ -277,11 +277,13 @@ function seedIssue672Repo(): void {
 function seedCrowdedHandlerTraceRepo(): void {
   writeFileSync(
     join(ROOT, "src/routes.ts"),
-    'const routes = [{ method: "POST", pattern: "/api/opaque/x7", handler: dispatchWorkUnit }];\n',
+    'import { dispatchWorkUnit } from "./service.js";\n' +
+      'const routes = [{ method: "POST", pattern: "/api/opaque/x7", handler: dispatchWorkUnit }];\n',
   );
   writeFileSync(
     join(ROOT, "src/service.ts"),
-    "export async function dispatchWorkUnit(): Promise<void> {\n  await runPipeline();\n}\n",
+    'import { runPipeline } from "./pipeline.js";\n' +
+      "export async function dispatchWorkUnit(): Promise<void> {\n  await runPipeline();\n}\n",
   );
   writeFileSync(
     join(ROOT, "src/pipeline.ts"),
@@ -2245,7 +2247,7 @@ describe("runGroundedExploration", () => {
         recordEventExtra(completedDetails[1]?.extra, "structural"),
         "textSearchCount",
       ),
-    ).toBeGreaterThan(1);
+    ).toBe(1);
   });
 
   it("runs one bounded structural adapter pass for an exact route trace", async () => {

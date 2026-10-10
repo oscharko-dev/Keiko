@@ -48,3 +48,5 @@ export {
   createEcosystemStructureAdapters,
   runStructuralAdapters,
 } from "./structuralAdapters.js";
+
+export { repositoryConfiguredRouteDeclarations, repositoryRouteQuery } from "./repoSearchRoutes.js";

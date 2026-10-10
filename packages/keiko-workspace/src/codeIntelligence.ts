@@ -124,6 +124,16 @@ export interface CodeCallEdge {
   readonly targetPath: string;
   readonly targetLineRange: LineRange;
   readonly confidence: "resolved" | "heuristic";
+  readonly resultUsage?: "returned" | undefined;
+  readonly awaited?: true | undefined;
+  readonly binding?: "lexical" | undefined;
+  readonly callerSpan?:
+    | {
+        readonly startColumn: number;
+        readonly endLine: number;
+        readonly endColumn: number;
+      }
+    | undefined;
   readonly parser: CodeParserKind;
 }
 
@@ -950,7 +960,13 @@ function resolvePackageTargetPath(
   pkg: WorkspacePackageAlias,
   target: string,
 ): string | undefined {
-  const base = normalizeScopePath(posix.join(pkg.root, target));
+  return resolveSourceSiblingCandidate(pathSet, posix.join(pkg.root, target));
+}
+
+function resolveSourceSiblingCandidate(
+  pathSet: ReadonlySet<string>,
+  base: string,
+): string | undefined {
   const direct = resolveCandidate(pathSet, base, JS_EXTENSIONS);
   if (direct !== undefined) {
     return direct;
@@ -1074,7 +1090,9 @@ function resolveLocalImport(
     ? edge.specifier.slice(1)
     : posix.join(relativeBase, edge.specifier);
   return importResolution(
-    resolveCandidate(pathSet, joined, edge.language === "python" ? PY_EXTENSIONS : JS_EXTENSIONS),
+    edge.language === "python"
+      ? resolveCandidate(pathSet, joined, PY_EXTENSIONS)
+      : resolveSourceSiblingCandidate(pathSet, joined),
   );
 }
 
@@ -2910,7 +2928,7 @@ function resolveImportedSymbolTarget(
     return undefined;
   }
   return (byName.get(binding.importedName.toLowerCase()) ?? []).find(
-    (symbol) => symbol.scopePath === binding.targetPath,
+    (symbol) => symbol.scopePath === binding.targetPath && symbol.name === binding.importedName,
   );
 }
 
@@ -2949,6 +2967,155 @@ function calleeNameFromExpression(expression: ts.Expression): string | undefined
   return undefined;
 }
 
+function transparentReturnedExpression(node: ts.Node): boolean {
+  const compiler = typeScriptCompiler();
+  return (
+    compiler.isAwaitExpression(node) ||
+    compiler.isParenthesizedExpression(node) ||
+    compiler.isAsExpression(node) ||
+    compiler.isTypeAssertionExpression(node) ||
+    compiler.isNonNullExpression(node) ||
+    compiler.isSatisfiesExpression(node)
+  );
+}
+
+function callReturnsOwnValue(node: ts.CallExpression): boolean {
+  let expression: ts.Node = node;
+  while (transparentReturnedExpression(expression.parent)) expression = expression.parent;
+  const parent = expression.parent;
+  return (
+    (typeScriptCompiler().isReturnStatement(parent) && parent.expression === expression) ||
+    (typeScriptCompiler().isArrowFunction(parent) && parent.body === expression)
+  );
+}
+
+function callIsDirectlyAwaited(node: ts.CallExpression): boolean {
+  let expression: ts.Node = node;
+  while (transparentReturnedExpression(expression.parent)) {
+    if (typeScriptCompiler().isAwaitExpression(expression.parent)) return true;
+    expression = expression.parent;
+  }
+  return false;
+}
+
+function callSourceSpan(
+  source: ts.SourceFile,
+  call: ts.CallExpression,
+): NonNullable<CodeCallEdge["callerSpan"]> {
+  const start = source.getLineAndCharacterOfPosition(call.getStart(source));
+  const end = source.getLineAndCharacterOfPosition(call.getEnd());
+  return { startColumn: start.character, endLine: end.line + 1, endColumn: end.character };
+}
+
+type CallBindingScopes = ReadonlyMap<ts.Node, ReadonlyMap<string, readonly ts.Node[]>>;
+
+function callBindingScope(node: ts.Node, functionScoped = false): ts.Node | undefined {
+  let current = node;
+  while (!typeScriptCompiler().isSourceFile(current)) {
+    if (typeScriptCompiler().isFunctionLike(current)) return current;
+    if (
+      !functionScoped &&
+      (typeScriptCompiler().isBlock(current) ||
+        typeScriptCompiler().isCatchClause(current) ||
+        typeScriptCompiler().isForStatement(current) ||
+        typeScriptCompiler().isForInStatement(current) ||
+        typeScriptCompiler().isForOfStatement(current))
+    )
+      return current;
+    current = current.parent;
+  }
+  return current;
+}
+
+function callBindingNames(name: ts.BindingName): readonly string[] {
+  if (typeScriptCompiler().isIdentifier(name)) return [name.text];
+  return name.elements.flatMap((element) =>
+    typeScriptCompiler().isBindingElement(element) ? callBindingNames(element.name) : [],
+  );
+}
+
+function declarationCallBinding(
+  node: ts.Node,
+): { readonly scope: ts.Node; readonly names: readonly string[] } | undefined {
+  const compiler = typeScriptCompiler();
+  if (compiler.isFunctionExpression(node) || compiler.isClassExpression(node)) {
+    return node.name === undefined ? undefined : { scope: node, names: [node.name.text] };
+  }
+  if (compiler.isFunctionDeclaration(node) || compiler.isClassDeclaration(node)) {
+    const scope = callBindingScope(node.parent);
+    return scope === undefined || node.name === undefined
+      ? undefined
+      : { scope, names: [node.name.text] };
+  }
+  if (compiler.isParameter(node)) return { scope: node.parent, names: callBindingNames(node.name) };
+  if (!compiler.isVariableDeclaration(node)) return undefined;
+  const isVar =
+    compiler.isVariableDeclarationList(node.parent) &&
+    (node.parent.flags & compiler.NodeFlags.BlockScoped) === 0;
+  const scope = callBindingScope(node.parent, isVar);
+  return scope === undefined ? undefined : { scope, names: callBindingNames(node.name) };
+}
+
+function collectCallBindingScopes(source: ts.SourceFile): CallBindingScopes {
+  const scopes = new Map<ts.Node, Map<string, ts.Node[]>>();
+  const visit = (node: ts.Node): void => {
+    const binding = declarationCallBinding(node);
+    if (binding !== undefined) {
+      const names = scopes.get(binding.scope) ?? new Map<string, ts.Node[]>();
+      for (const name of binding.names) names.set(name, [...(names.get(name) ?? []), node]);
+      scopes.set(binding.scope, names);
+    }
+    typeScriptCompiler().forEachChild(node, visit);
+  };
+  visit(source);
+  return scopes;
+}
+
+function visibleCallBinding(
+  call: ts.CallExpression,
+  name: string,
+  scopes: CallBindingScopes,
+): readonly ts.Node[] | undefined {
+  let node = call.parent;
+  for (;;) {
+    const binding = scopes.get(node)?.get(name);
+    if (binding !== undefined) return binding;
+    if (typeScriptCompiler().isSourceFile(node)) return undefined;
+    node = node.parent;
+  }
+}
+
+function certifiedIdentifierCallTarget(
+  file: SourceFile,
+  call: ts.CallExpression,
+  name: string,
+  scopes: CallBindingScopes,
+  byName: ReadonlyMap<string, readonly CodeSymbol[]>,
+  importBindings: readonly CodeImportBinding[],
+): CodeSymbol | undefined {
+  if (!typeScriptCompiler().isIdentifier(call.expression)) return undefined;
+  const binding = visibleCallBinding(call, name, scopes);
+  if (binding === undefined) {
+    const imported = resolveImportedSymbolTarget(name, byName, importBindings);
+    return imported?.parser === "typescript-compiler-ast" ? imported : undefined;
+  }
+  const declaration = binding.length === 1 ? binding[0] : undefined;
+  if (
+    declaration === undefined ||
+    !typeScriptCompiler().isFunctionDeclaration(declaration) ||
+    file.syntaxTree === undefined
+  )
+    return undefined;
+  const range = nodeLineRange(file.syntaxTree, declaration);
+  return (byName.get(name.toLowerCase()) ?? []).find(
+    (symbol) =>
+      symbol.parser === "typescript-compiler-ast" &&
+      symbol.name === name &&
+      symbol.scopePath === file.scopePath &&
+      sameLineRange(symbol.lineRange, range),
+  );
+}
+
 function collectTypescriptCalls(
   file: SourceFile,
   byName: ReadonlyMap<string, readonly CodeSymbol[]>,
@@ -2960,21 +3127,40 @@ function collectTypescriptCalls(
     return [];
   }
   const calls: CodeCallEdge[] = [];
+  const bindingScopes = collectCallBindingScopes(sourceFile);
   const visit = (node: ts.Node): void => {
     if (typeScriptCompiler().isCallExpression(node)) {
       const name = calleeNameFromExpression(node.expression);
       if (name !== undefined && !IGNORED_CALL_NAMES.has(name.toLowerCase())) {
-        const resolved = resolveCallTarget(file.scopePath, name, byName, imports, importBindings);
+        const certified = certifiedIdentifierCallTarget(
+          file,
+          node,
+          name,
+          bindingScopes,
+          byName,
+          importBindings,
+        );
+        const heuristic = resolveCallTarget(file.scopePath, name, byName, imports, importBindings);
+        const resolved =
+          certified === undefined
+            ? heuristic === undefined
+              ? undefined
+              : { ...heuristic, confidence: "heuristic" as const }
+            : { symbol: certified, confidence: "resolved" as const };
         if (resolved !== undefined) {
           calls.push({
             callerPath: file.scopePath,
             callerLine: nodeStartLine(sourceFile, node),
+            callerSpan: callSourceSpan(sourceFile, node),
             calleeName: name,
             targetName: resolved.symbol.name,
             targetPath: resolved.symbol.scopePath,
             targetLineRange: resolved.symbol.lineRange,
             confidence: resolved.confidence,
             parser: "typescript-compiler-ast",
+            ...(certified === undefined ? {} : { binding: "lexical" as const }),
+            ...(callReturnsOwnValue(node) ? { resultUsage: "returned" as const } : {}),
+            ...(callIsDirectlyAwaited(node) ? { awaited: true as const } : {}),
           });
         }
       }

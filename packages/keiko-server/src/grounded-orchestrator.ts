@@ -1296,6 +1296,7 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
 }
 
 interface SearchInputs {
+  readonly endpointPreferredSourcePaths?: readonly string[] | undefined;
   readonly admittedPaths?: readonly string[] | undefined;
   readonly rejectedPaths?: readonly string[] | undefined;
   readonly repoSemanticSearchProviderFor?:
@@ -1629,6 +1630,7 @@ function observedStructuralContext(
     skippedSymbolicLinks: context.skippedSymbolicLinks.bind(context),
     candidateLimitReached: context.candidateLimitReached.bind(context),
     codeIntelligenceIndex: context.codeIntelligenceIndex.bind(context),
+    isCodeIntelligenceSourceCurrent: context.isCodeIntelligenceSourceCurrent.bind(context),
     symbolGraph: context.symbolGraph.bind(context),
     importGraph: context.importGraph.bind(context),
     endpointContractGraph: context.endpointContractGraph.bind(context),
@@ -1681,6 +1683,7 @@ function createStructuralRequestContextPool(
 
 interface RingResult {
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly endpointContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
@@ -2316,6 +2319,34 @@ function certifiedLexicalContent(
     }));
 }
 
+function endpointLexicalContent(
+  result: SearchResult,
+  inputs: SearchInputs,
+): readonly ContentEvidenceIdentity[] {
+  if (!queryTargetsRouteImplementation(inputs.query.text)) return [];
+  const ranked = new Set(
+    (result.diagnostics?.rankedCandidates ?? [])
+      .filter((candidate) => candidate.bucket === "source")
+      .map((candidate) => candidate.scopePath),
+  );
+  const identities: ContentEvidenceIdentity[] = [];
+  for (const atom of result.atoms) {
+    if (
+      atom.provenance.kind !== "lexical-search" ||
+      atom.provenance.tool !== "repo.searchText" ||
+      atom.lineRange === undefined ||
+      !ranked.delete(atom.scopePath)
+    )
+      continue;
+    identities.push({
+      stableId: atom.stableId,
+      queryFingerprint: atom.provenance.queryFingerprint,
+    });
+    if (ranked.size === 0) break;
+  }
+  return identities;
+}
+
 function primaryRankingAnchors(
   input: OrchestratorInput,
   plan: ExplorationPlan,
@@ -2638,6 +2669,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   }
   const result = withoutNamedSemanticSubstitution(await lexicalRingSearch(ring, inputs), inputs);
   const primaryContentIdentities = certifiedLexicalContent(result, inputs);
+  const endpointContentIdentities = endpointLexicalContent(result, inputs);
   const sourceDecision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
   sourceDecision.primaryContentPathCount = certifiedContentPaths(
     result.atoms,
@@ -2650,6 +2682,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   return {
     knownFitFileBytes: result.knownFitFileBytes,
     atoms: result.atoms,
+    endpointContentIdentities,
     primaryContentIdentities,
     omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
     uncertainty: [
@@ -2721,6 +2754,7 @@ async function runAdapterQueries(
       nowMs: inputs.nowMs,
       deadlineAtMs: inputs.deadlineAtMs,
       signal,
+      endpointPreferredSourcePaths: inputs.endpointPreferredSourcePaths,
       ...(requestContext === undefined ? {} : { requestContext }),
     }),
   );
@@ -2901,6 +2935,7 @@ interface RingRunSummary {
   readonly verifiedDefinitionContext?: boolean | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly decisions?: RingDecisionAudit | undefined;
+  readonly endpointContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
@@ -3229,6 +3264,7 @@ interface RingEvidenceAccumulator {
   omitted: OmittedContextEntry[];
   uncertainty: UncertaintyMarker[];
   diagnostics: ContextPackDiagnostics | undefined;
+  endpointContentIdentities: readonly ContentEvidenceIdentity[];
   primaryContentIdentities: readonly ContentEvidenceIdentity[];
 }
 function newRingEvidence(): RingEvidenceAccumulator {
@@ -3237,11 +3273,14 @@ function newRingEvidence(): RingEvidenceAccumulator {
     omitted: [],
     uncertainty: [],
     diagnostics: undefined,
+    endpointContentIdentities: [],
     primaryContentIdentities: [],
   };
 }
 function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResult): void {
   evidence.knownFitFileBytes ??= result.knownFitFileBytes;
+  evidence.endpointContentIdentities =
+    result.endpointContentIdentities ?? evidence.endpointContentIdentities;
   evidence.diagnostics ??= result.diagnostics;
   evidence.primaryContentIdentities = lexicalContentIdentities(
     result,
@@ -3320,7 +3359,7 @@ async function runAllRings(
     }
     const execution = await runReservedRing(
       ring,
-      diagnosticHistoryInputs(ring, inputs, evidence),
+      endpointPriorityInputs(ring, diagnosticHistoryInputs(ring, inputs, evidence), evidence),
       governor,
       decisions,
     );
@@ -3347,6 +3386,20 @@ async function runAllRings(
   }
   recordStoppedRings(rings, decisions);
   return { ...evidence, governor, decisions };
+}
+
+function endpointPriorityInputs(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+): SearchInputs {
+  if (ring.kind !== "structural" || !queryTargetsRouteImplementation(inputs.query.text))
+    return inputs;
+  const admitted = certifiedContentPaths(evidence.atoms, evidence.endpointContentIdentities);
+  const paths = (evidence.diagnostics?.rankedCandidates ?? [])
+    .filter((candidate) => candidate.bucket === "source" && admitted.has(candidate.scopePath))
+    .map((candidate) => candidate.scopePath);
+  return { ...inputs, endpointPreferredSourcePaths: paths };
 }
 
 function diagnosticHistoryInputs(

@@ -2403,3 +2403,157 @@ describe("second-pass correctness regressions (verifier-confirmed)", () => {
     expect(paths.some((path) => path.includes(longParam))).toBe(false);
   });
 });
+
+describe("compiler-owned returned call role", () => {
+  it.each([
+    { body: "return target();", callee: "target", returned: true },
+    { body: "return await ((target() as unknown)!);", callee: "target", returned: true },
+    { body: "return outer(target());", callee: "target", returned: false },
+    { body: "return outer(target());", callee: "outer", returned: true },
+    { body: "return outer(() => { target(); });", callee: "target", returned: false },
+    { body: "return outer(() => { return target(); });", callee: "target", returned: true },
+    { body: "const callback = () => target(); return callback;", callee: "target", returned: true },
+    { body: 'return "target()";', callee: "target", returned: false },
+    { body: "return `target()`;", callee: "target", returned: false },
+    { body: "// return target();\nreturn 1;", callee: "target", returned: false },
+  ])(
+    "classifies only the call's own returned expression: $body / $callee",
+    ({ body, callee, returned }) => {
+      const { scope, fs } = makeScope({
+        "src/entry.ts": `function target() { return 1; }\nfunction outer(value: unknown) { return value; }\nasync function handler() { ${body} }`,
+      });
+      const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        disableCache: true,
+      });
+      expect(
+        index.calls.find((call) => call.calleeName === callee)?.resultUsage === "returned",
+      ).toBe(returned);
+    },
+  );
+});
+
+describe("compiler-owned call binding certification", () => {
+  it.each([
+    {
+      entry:
+        "export function handler() { return delegated(); }\nexport function delegated() { return 1; }",
+      imported: false,
+      expectedPath: "src/entry.ts",
+      certified: true,
+    },
+    {
+      entry:
+        'import { delegated } from "./target.js";\nexport function handler(delegated: () => unknown) { return delegated(); }',
+      imported: true,
+      certified: false,
+    },
+    {
+      entry:
+        'import { delegated } from "./target.js";\nexport function handler() { const delegated = () => 0; return delegated(); }',
+      imported: true,
+      certified: false,
+    },
+    {
+      entry:
+        'import { target as delegated } from "./target.js";\nexport function handler() { return delegated(); }',
+      imported: true,
+      expectedPath: "src/target.ts",
+      certified: true,
+    },
+    {
+      entry: "export function handler(obj: {delegated: () => unknown}) { return obj.delegated(); }",
+      imported: false,
+      certified: false,
+    },
+    {
+      entry: "export function handler() { return delegated(); }",
+      imported: false,
+      certified: false,
+    },
+  ])(
+    "certifies only a bare call's actual lexical binding: $entry",
+    ({ entry, expectedPath, certified }) => {
+      const { scope, fs } = makeScope({
+        "src/entry.ts": entry,
+        "src/target.ts":
+          "export function target() { return true; }\nexport function delegated() { return true; }",
+        "src/unrelated.ts": "export function delegated() { return false; }",
+      });
+      const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        disableCache: true,
+      });
+      const call = index.calls.find(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.calleeName === "delegated",
+      );
+      expect(call?.binding === "lexical").toBe(certified);
+      if (expectedPath !== undefined) expect(call?.targetPath).toBe(expectedPath);
+    },
+  );
+});
+
+describe("compiler-owned expression and exact import binding", () => {
+  it.each([
+    { expression: "function delegated() { return delegated(); }", constructor: false },
+    {
+      expression: "class delegated { static construct() { return delegated(); } }",
+      constructor: false,
+    },
+    {
+      expression: "class delegated { static construct() { return new delegated(); } }",
+      constructor: true,
+    },
+  ])("declines an imported target shadowed by $expression", ({ expression, constructor }) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `import { delegated } from "./target.js";\nexport const wrapper = ${expression};`,
+      "src/target.ts": "export function delegated() { return true; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const calls = index.calls.filter((call) => call.callerPath === "src/entry.ts");
+    expect(calls.filter((call) => call.binding === "lexical")).toEqual([]);
+    if (constructor) expect(calls).toEqual([]);
+  });
+
+  it.each(["Foo", "foo"])("binds the exact imported case %s", (name) => {
+    const other = name === "Foo" ? "foo" : "Foo";
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `import { ${name} } from "./target.js";\nexport function handler() { return ${name}(); }`,
+      "src/target.ts": `export function ${other}() { return false; }\nexport function ${name}() { return true; }`,
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const call = index.calls.find((edge) => edge.callerPath === "src/entry.ts");
+    expect(call?.binding).toBe("lexical");
+    expect(call?.targetName).toBe(name);
+    expect(call?.targetLineRange.startLine).toBe(2);
+  });
+});
+
+describe("compiler-owned direct awaited call role", () => {
+  it.each([
+    { body: "await target();", callee: "target", awaited: true },
+    {
+      body: "const result = await ((target() as unknown)!); return result;",
+      callee: "target",
+      awaited: true,
+    },
+    { body: "return await target();", callee: "target", awaited: true },
+    { body: "await outer(target());", callee: "target", awaited: false },
+    { body: "await outer(target());", callee: "outer", awaited: true },
+    { body: "await outer(() => target());", callee: "target", awaited: false },
+    { body: "await outer(async () => await target());", callee: "target", awaited: true },
+    { body: 'return "await target()";', callee: "target", awaited: false },
+    { body: "return `await target()`;", callee: "target", awaited: false },
+    { body: "// await target();\nreturn 1;", callee: "target", awaited: false },
+  ])("marks only the directly awaited expression: $body / $callee", ({ body, callee, awaited }) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `function target() { return 1; }\nfunction outer(value: unknown) { return value; }\nasync function handler() { ${body} }`,
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(index.calls.find((call) => call.calleeName === callee)?.awaited === true).toBe(awaited);
+  });
+});

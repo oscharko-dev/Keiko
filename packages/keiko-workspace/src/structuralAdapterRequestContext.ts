@@ -7,6 +7,7 @@ import {
 import type { CodeIntelligenceIndex } from "./codeIntelligence.js";
 import { buildCodeIntelligenceIndexFromCandidates } from "./codeIntelligence.js";
 import { buildEndpointContractGraphFromCandidates } from "./endpointContractGraph.js";
+import { endpointSourcePreferences } from "./endpointContractSource.js";
 import type { EndpointContractGraph } from "./endpointContractTypes.js";
 import { PathDeniedError, PathEscapeError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
@@ -67,9 +68,12 @@ export interface StructuralAdapterRequestContext {
   readonly skippedSymbolicLinks: () => readonly string[];
   readonly candidateLimitReached: () => boolean;
   readonly codeIntelligenceIndex: () => Promise<CodeIntelligenceIndex>;
+  readonly isCodeIntelligenceSourceCurrent: (scopePath: string) => boolean;
   readonly symbolGraph: () => Promise<SymbolGraph>;
   readonly importGraph: () => Promise<ImportGraph>;
-  readonly endpointContractGraph: () => Promise<EndpointContractGraph>;
+  readonly endpointContractGraph: (
+    preferredSourcePaths?: readonly string[],
+  ) => Promise<EndpointContractGraph>;
   readonly findFiles: (
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -249,9 +253,11 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private paths: readonly string[] | undefined;
   private symbolicLinks: readonly string[] | undefined;
   private codeIndexPromise: Promise<CodeIntelligenceIndex> | undefined;
+  private readonly codeIndexSourceSnapshots = new Map<string, CandidateContentSnapshot>();
   private symbolGraphPromise: Promise<SymbolGraph> | undefined;
   private importGraphPromise: Promise<ImportGraph> | undefined;
-  private endpointGraphPromise: Promise<EndpointContractGraph> | undefined;
+  private endpointGraphState:
+    { readonly key: string; readonly promise: Promise<EndpointContractGraph> } | undefined;
   private candidateInventoryBuildCount = 0;
   private candidateFileCount = 0;
   private candidateDirectoryCount = 0;
@@ -548,10 +554,47 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     return read;
   }
 
+  private captureCodeIndexSource(scopePath: string, read: InternalWorkspaceTextRead): void {
+    const snapshot = read.snapshot;
+    const metadata = workspaceIndexFileMetadata(scopePath, read.stat);
+    if (
+      snapshot === undefined ||
+      read.sizeBytes !== read.stat.size ||
+      this.codeIndexSourceSnapshots.size >= Math.max(0, this.limits.maxFilesScanned ?? 2048)
+    )
+      return;
+    if (
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.before),
+        metadata,
+      ) ||
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.descriptor),
+        metadata,
+      )
+    )
+      return;
+    this.codeIndexSourceSnapshots.set(scopePath, {
+      canonicalRoot: snapshot.canonicalRoot,
+      metadata,
+    });
+  }
+
   private codeIntelligenceSource(scopePath: string, maxBytes: number): string {
     const read = this.readCompleteStructuralSource(scopePath, maxBytes);
+    this.captureCodeIndexSource(scopePath, read);
     this.retainCompleteSource(scopePath, read);
     return read.content;
+  }
+
+  public isCodeIntelligenceSourceCurrent(scopePath: string): boolean {
+    const indexed = this.codeIndexSourceSnapshots.get(scopePath);
+    if (indexed === undefined || this.isCandidateAllowed?.(scopePath) === false) return false;
+    const current = this.sourceSnapshot(scopePath);
+    return (
+      indexed.canonicalRoot === current?.canonicalRoot &&
+      isWorkspaceIndexFileMetadataCurrent(indexed.metadata, current.metadata)
+    );
   }
 
   private endpointSource(scopePath: string, maxBytes: number): string {
@@ -676,22 +719,47 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     return this.importGraphPromise;
   }
 
-  public endpointContractGraph(): Promise<EndpointContractGraph> {
-    this.endpointGraphPromise ??= Promise.resolve().then(() => {
+  private failedEndpointGraph(error: unknown): Promise<EndpointContractGraph> {
+    if (this.endpointGraphState?.key === "unavailable") return this.endpointGraphState.promise;
+    this.endpointGraphBuildCount += 1;
+    const reason =
+      error instanceof Error
+        ? error
+        : new Error("structural inventory unavailable", { cause: error });
+    const promise = Promise.reject<EndpointContractGraph>(reason);
+    this.endpointGraphState = { key: "unavailable", promise };
+    return promise;
+  }
+
+  public endpointContractGraph(
+    preferredSourcePaths: readonly string[] = [],
+  ): Promise<EndpointContractGraph> {
+    let candidates: CandidateSet;
+    try {
+      candidates = this.candidateSet();
+    } catch (error) {
+      return this.failedEndpointGraph(error);
+    }
+    const preferences = endpointSourcePreferences(candidates, this.limits, preferredSourcePaths);
+    const key = JSON.stringify(preferences);
+    if (this.endpointGraphState?.key === key) return this.endpointGraphState.promise;
+    const promise = Promise.resolve().then(() => {
       this.endpointGraphBuildCount += 1;
       return buildEndpointContractGraphFromCandidates(
         this.scope,
         this.limits,
         this.executionFs,
-        this.candidateSet(),
+        candidates,
         this.executionControl,
         {
+          preferredSourcePaths: preferences,
           readSource: (path, maxBytes) => this.endpointSource(path, maxBytes),
           isCandidateAllowed: (path) => this.isCandidateAllowed?.(path) !== false,
         },
       );
     });
-    return this.endpointGraphPromise;
+    this.endpointGraphState = { key, promise };
+    return promise;
   }
 
   private assertInventoryCovers(limits: SearchLimits): void {

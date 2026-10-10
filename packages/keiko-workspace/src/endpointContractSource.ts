@@ -28,8 +28,44 @@ export interface EndpointSourceFileSet {
 }
 
 export interface EndpointSourceReadDeps {
+  readonly preferredSourcePaths?: readonly string[] | undefined;
   readonly readSource?: ((scopePath: string, maxBytes: number) => string) | undefined;
   readonly isCandidateAllowed?: ((scopePath: string) => boolean) | undefined;
+}
+
+export function endpointSourcePreferences(
+  candidateSet: CandidateSet,
+  limits: SearchLimits,
+  preferences: readonly string[] | undefined,
+): readonly string[] {
+  const available = new Set(
+    candidateSet.files
+      .filter((file) => isEndpointSource(file.relativePath))
+      .map((file) => file.relativePath),
+  );
+  return [...new Set(preferences)]
+    .filter((path) => available.has(path))
+    .slice(0, Math.max(0, limits.maxFilesScanned ?? 2048));
+}
+
+function prioritizedEndpointCandidates(
+  candidateSet: CandidateSet,
+  limits: SearchLimits,
+  preferences: readonly string[] | undefined,
+): CandidateSet {
+  const priority = new Map(
+    endpointSourcePreferences(candidateSet, limits, preferences).map((path, index) => [
+      path,
+      index,
+    ]),
+  );
+  if (priority.size === 0) return candidateSet;
+  const files = [...candidateSet.files].sort(
+    (a, b) =>
+      (priority.get(a.relativePath) ?? priority.size) -
+      (priority.get(b.relativePath) ?? priority.size),
+  );
+  return { ...candidateSet, files };
 }
 
 const CLIENT_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
@@ -122,8 +158,10 @@ export async function endpointSourceFileSetFromCandidates(
   deps: EndpointSourceReadDeps = {},
 ): Promise<EndpointSourceFileSet> {
   const out: SourceFile[] = [];
-  const boundedCandidates = limitCandidateSetForStructuralBuild(candidateSet, limits, (file) =>
-    isEndpointSource(file.relativePath),
+  const boundedCandidates = limitCandidateSetForStructuralBuild(
+    prioritizedEndpointCandidates(candidateSet, limits, deps.preferredSourcePaths),
+    limits,
+    (file) => isEndpointSource(file.relativePath),
   );
   const candidates = boundedCandidates.files.map((file) => file.relativePath);
   const control =

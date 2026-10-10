@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  repositoryConfiguredRouteDeclarations,
   repositoryRouteDeclarationMarker,
   repositoryRouteDeclarationMarkers,
   repositoryRouteQuery,
@@ -322,5 +323,65 @@ describe("repositoryRouteDeclarationMarkers", () => {
     ['to: "orders#show"', "config/routes.rb"],
   ])("fails closed for an incomplete framework route: %s", (content, scopePath) => {
     expect(markers(content, scopePath)).toEqual([]);
+  });
+});
+
+describe("repositoryConfiguredRouteDeclarations", () => {
+  function declarations(content: string): ReturnType<typeof repositoryConfiguredRouteDeclarations> {
+    const lines = repositorySourceLines(content, "src/entry.ts");
+    return repositoryConfiguredRouteDeclarations(
+      lines.map((line) => line.code).join("\n"),
+      lines.map((line) => line.structural).join("\n"),
+    );
+  }
+
+  it("keeps method, exact path, executable handler and physical lines in the same record", () => {
+    const found = declarations(
+      [
+        'const table = [{ method: "GET", path: "/a", handler: getA },',
+        ' { "path": "/b", "handler": postB, "method": "POST" },',
+        ' { method: "PUT",',
+        '   pattern: "/c",',
+        "   handler: putC,",
+        " }];",
+      ].join("\n"),
+    );
+    expect(found).toEqual([
+      { method: "get", path: "/a", handler: "getA", line: 1, endLine: 1 },
+      { method: "post", path: "/b", handler: "postB", line: 2, endLine: 2 },
+      { method: "put", path: "/c", handler: "putC", line: 3, endLine: 6 },
+    ]);
+  });
+
+  it.each([
+    '// { method: "POST", path: "/a", handler: comment }',
+    'const label = `{ method: "POST", path: "/a", handler: string }`;',
+    'const object = { label: "method: POST, path: /a, handler: misleading" };',
+    'const object = { a: { method: "POST", handler: split }, b: { path: "/a" } };',
+    'const object = { method: "POST", path: "/a", handler: first, method };',
+    'const object = { method: "POST", path: "/a", handler: first, get method() { return "GET"; } };',
+    'const object = { method: "POST", path: "/a", handler: first, handler() {} };',
+    'const object = { METHOD: "POST", path: "/a", handler: first };',
+    'const object = { method: "POST", PATH: "/a", handler: first };',
+    'const object = { method: "POST", path: "/a", HANDLER: first };',
+    'const object = { ...{ method: "POST", path: "/a", handler: first }, method: "GET" };',
+    'const object = { method: "POST", path: "/a", handler: first, ...overrides };',
+    'const object = { method: "POST", path: "/a", handler: first, ...{ handler: second } };',
+    'const object = { method: "POST", path: "/a", handler: first, [key]: second };',
+    'const object = { method: "POST" + suffix, path: "/a", handler: first };',
+    'const object = { method: "POST", path: "/a" + suffix, handler: first };',
+    'const object = { badmethod: "POST", path: "/a", handler: wrong };',
+    'const object = { method: "POST", notpattern: "/a", handler: wrong };',
+    'const object = { method: "POST", method: "GET", path: "/a", handler: wrong };',
+    'const object = { method: "POST", path: "/a", path: "/b", handler: wrong };',
+    'const object = { method: "POST", path: "/a", handler: first, handler: second };',
+    'const object = { method: "POST", path: "/a", handler: "label" };',
+    'const object = { method: "POST", path: "/a", handler: createHandler() };',
+    'const object = { method: "POST", path: "/a", handler: object.handler };',
+    'const object = { method: "POST", path: "/a", handler: () => execute() };',
+    'const object = { method: "POST", path: `/a/${suffix}`, handler: dynamic };',
+    'const object = {\nmethod: "POST",\npath: "/a",\n\nhandler: tooLate\n};',
+  ])("does not promote non-executable or unbound route facts: %s", (content) => {
+    expect(declarations(content)).toEqual([]);
   });
 });
