@@ -18,6 +18,7 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
+      - codex/epic-anti-slop-quality
       - "release/**"
   pull_request:
     # Metadata is merge-relevant evidence: the review-suppression gate reads the PR title/body, and
@@ -40,6 +41,7 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
+      - codex/epic-anti-slop-quality
       - "release/**"
   # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
   # enable GitHub's merge queue without agents re-racing a moving dev branch.
@@ -93,6 +95,7 @@ jobs:
             | refs/heads/feat/epic-memoria-viva-2538: \
             | refs/heads/epic/coding-workbench-opencode-codex: \
             | refs/heads/epic/updater-reliability: \
+            | refs/heads/codex/epic-anti-slop-quality: \
             | refs/heads/release/*: \
             | *:dev \
             | *:feat/dev \
@@ -109,6 +112,7 @@ jobs:
             | *:feat/epic-memoria-viva-2538 \
             | *:epic/coding-workbench-opencode-codex \
             | *:epic/updater-reliability \
+            | *:codex/epic-anti-slop-quality \
             | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
@@ -966,13 +970,13 @@ jobs:
       - name: Verify governed Sonar analysis scope
         run: npm run check:sonar-scope
       - name: Verify changed production sources are mapped into LCOV
-        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
+        if: ${{ github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality') }}
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/check-lcov-source-mapping.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
       - name: Resolve project version for SonarCloud
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality')) || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-version
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Verify manual analysis is bound to remote dev
@@ -987,7 +991,7 @@ jobs:
           fi
           echo "sha=$actual" >> "$GITHUB_OUTPUT"
       - name: Restore the pinned Sonar Scanner CLI archive
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality')) || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Keyed on the archive's own pinned digest, so a new scanner version or a corrected
@@ -999,7 +1003,7 @@ jobs:
       - name: Download Sonar Scanner CLI
         # Downloaded and checksum-verified directly rather than through a marketplace action whose
         # license is denied by the repository dependency-review policy.
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality')) || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         run: |
           set -euo pipefail
           scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"
@@ -1013,7 +1017,7 @@ jobs:
           unzip -q "$scanner_zip" -d "$RUNNER_TEMP"
           echo "SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64" >> "$GITHUB_ENV"
       - name: SonarCloud CI-based analysis (ADR-0131 / ADR-0134)
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality')) || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -1058,7 +1062,7 @@ jobs:
           --log "$RUNNER_TEMP/sonar-scanner.log"
           --require-full-analysis
       - name: Verify SonarCloud Banking Grade PR evidence
-        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
+        if: ${{ github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality') }}
         env:
           SONAR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
