@@ -33,6 +33,7 @@ const CAPABILITY = {
 };
 const SOURCE_QUESTION = "Explain the value in src/target.ts.";
 const SOURCE_ANSWER = "The value is 37. [src/target.ts:1]";
+const MANUAL_ANSWER = "The maximum operating limit is 37 units. [manual/customer.txt:2]";
 const ACK =
   "<assessment>I will compare options, explain uncertainty, and propose reversible steps.</assessment>";
 let directory = "";
@@ -94,7 +95,11 @@ async function provider(requests: ProviderRequest[], responseText = ACK): Promis
         requests.length === 1
           ? body.includes("Which Next.js version")
             ? "Next.js is 15.0.0. [package.json:1]"
-            : SOURCE_ANSWER
+            : body.includes("maximum operating limit")
+              ? body.includes("The maximum operating limit is 37 units.")
+                ? MANUAL_ANSWER
+                : "<assessment>Acknowledged.</assessment>"
+              : SOURCE_ANSWER
           : responseText;
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
@@ -125,6 +130,11 @@ function runtime(baseUrl: string, disabled: boolean): { deps: UiHandlerDeps; cha
       join(root, `src/part-${String(index)}.ts`),
       "export const preferences = 'compare options and explain reversible next steps';\n",
     );
+  mkdirSync(join(root, "manual"));
+  writeFileSync(
+    join(root, "manual/customer.txt"),
+    "Customer manual\nThe maximum operating limit is 37 units.\n",
+  );
   const stateDir = join(directory, "state");
   setServerLogger(
     createServerLogger({
@@ -436,4 +446,44 @@ describe("plaintext output under positively classified conversation authority", 
     await response.json();
     expect(requests).toHaveLength(0);
   });
+});
+
+describe("native mixed requests within supplied user context", () => {
+  it.each([", and I want you to", ". I want you to", "; I want you to"])(
+    "freshly reads and authenticates the manual with boundary %s",
+    async (boundary) => {
+      const question = `My preferences are concise explanations${boundary} explain the maximum operating limit in the customer manual. Please acknowledge these preferences.`;
+      const requests: ProviderRequest[] = [];
+      const { deps, chatId } = runtime(await provider(requests), false);
+      const started = await startUiTestServer({
+        staticRoot: directory,
+        csp: buildCspHeader([]),
+        handlerDeps: deps,
+      });
+      servers.push(started.server);
+      const response = await ask(started.port, chatId, question, "mixed-context-manual");
+      expect(response.status).toBe(200);
+      const answer = (await response.json()) as GroundedAnswer;
+      expect(answer.content).toContain("maximum operating limit is 37 units");
+      expect(answer.citations).toContainEqual(
+        expect.objectContaining({
+          scopePath: "manual/customer.txt",
+          lineRange: { startLine: 2, endLine: 2 },
+        }),
+      );
+      expect(requests).toHaveLength(1);
+      const prompt = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+      expect(prompt).toContain(question);
+      expect(prompt).toContain("The maximum operating limit is 37 units.");
+      const completion = records().find(
+        (record) =>
+          record.op === "search.connected-context.completion-details" &&
+          record.correlationId === "mixed-context-manual",
+      );
+      expect(completion?.workspaceIoContentReadCalls).toBeGreaterThan(0);
+      expect(
+        analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence,
+      ).toMatchObject({ classification: "supported", corruptLineCount: 0 });
+    },
+  );
 });
