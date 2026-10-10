@@ -279,6 +279,10 @@ outside the path retain their routing; requested tests and integrations use the 
 relationship guard. A factual lookup with freshly admitted query-named file paths, in Git or
 ordinary folders, focuses discovery on those paths only when every substantive request clause
 binds a named file and its canonical planner decision contains no independent non-path target.
+The existing target decision supplies a positive, completely parsed `namedFileOnly` result;
+finding a path somewhere in an otherwise unknown clause is insufficient. Closed file-list,
+file-contained fact and file-subject explanation forms retain canonical quote and presentation
+projection. Independent subordinate requests and unknown meaningful continuations remain broad.
 The existing structural request context binds to that narrower search scope; the human's source
 scope and budgets remain unchanged. Independent clauses after commas, additional paths omitted
 by the bounded reference projection, definitions, diagnostics, relationships and history retain
