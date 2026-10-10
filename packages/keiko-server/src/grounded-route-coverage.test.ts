@@ -328,7 +328,7 @@ async function sentPrompt(
       omittedFromRanking: [],
       excerpts: reads.excerpts,
     },
-    { nowMs: () => NOW },
+    { nowMs: () => NOW, includeSurroundingContext: true },
   );
   expect(pack.usage.excerptBytes).toBeLessThanOrEqual(pack.budget.excerptBytesMax);
   return buildGroundedGatewayMessages(fixture.query.text, pack, (value) => value)
