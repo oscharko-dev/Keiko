@@ -24,15 +24,18 @@ const SOURCE_DETERMINER_RE =
 const SOURCE_NOUN_RE =
   /^(?:sources?|files?|manuals?|documents?|folders?|repositor(?:y|ies)|quellen?|dateien?|handbuch|handbücher|dokumente?|ordner|repository)$/iu;
 const SOURCE_PHRASE_TOKEN_RE = /[\p{L}\p{N}-]+|[^\p{L}\p{N}\s-]/gu;
+const SOURCE_PHRASE_BOUNDARY_RE =
+  /^(?:am|is|are|was|were|be|been|being|do|does|did|have|has|had|can|could|may|might|must|shall|should|will|would|to|for|from|with|without|before|after|during|on|in|at|into|over|under|by|about|against|between|through|bin|bist|ist|sind|war|waren|sein|habe|hat|haben|kann|können|könnte|könnten|muss|müssen|soll|sollen|sollte|sollten|wird|werden|würde|würden|zu|für|von|mit|ohne|vor|nach|während|auf|an|über|unter|bei|gegen|zwischen|durch)$/iu;
 
-/** Modifiers cannot erase attribution; punctuation keeps separate phrases independent. */
+/** Modifiers retain attribution within a noun phrase, not across a separate predicate or clause. */
 function attributedSourcePhrase(content: string): boolean {
   let determined = false;
   for (const match of content.matchAll(SOURCE_PHRASE_TOKEN_RE)) {
     const token = match[0];
     if (determined && SOURCE_NOUN_RE.test(token)) return true;
     if (SOURCE_DETERMINER_RE.test(token)) determined = true;
-    else if (!/^[\p{L}\p{N}-]+$/u.test(token)) determined = false;
+    else if (SOURCE_PHRASE_BOUNDARY_RE.test(token) || !/^[\p{L}\p{N}-]+$/u.test(token))
+      determined = false;
   }
   return false;
 }
