@@ -2423,12 +2423,11 @@ function lexicalQuestionText(inputs: SearchInputs): string {
   const query = inputs.query;
   if (query.kind !== "natural-language") return query.text;
   const channels = extractRetrievalChannels(query.text, 8);
-  if (!channels.stackTraceDetected) return query.text;
+  const contentText = inputs.targetDecision.contentQueryText ?? channels.questionText;
+  if (!channels.stackTraceDetected) return contentText;
   // A source-only diagnostic paste has no independent prose. Only freshly admitted references
   // may supply its lexical query; a raw-frame fallback would restore external runtime noise.
-  return channels.questionText.trim().length > 0
-    ? channels.questionText
-    : (inputs.admittedPaths ?? []).join(" ");
+  return contentText.trim().length > 0 ? contentText : (inputs.admittedPaths ?? []).join(" ");
 }
 
 function observedLexicalSemanticProvider(
@@ -6054,14 +6053,27 @@ interface ExcerptWindowSelection {
   readonly omittedWindowCount: number;
 }
 
+function atomsRequestingExcerptWindows(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[] {
+  if (!atoms.some((atom) => atom.lineRange !== undefined)) return atoms;
+  // An ordinary path listing adds discovery metadata, not a second body request beside located
+  // current evidence. Explicit selections and structural edges keep their independent windows.
+  return atoms.filter(
+    (atom) =>
+      atom.lineRange !== undefined ||
+      atom.provenance.kind !== "file-listing" ||
+      atom.provenance.tool !== "repo.findFiles",
+  );
+}
+
 function excerptLineWindows(
   atomsForPath: readonly EvidenceAtom[] | undefined,
 ): ExcerptWindowSelection {
   if (atomsForPath === undefined || atomsForPath.length === 0) {
     return { windows: [DEFAULT_EXCERPT_WINDOW], omittedWindowCount: 0 };
   }
-  const merged = mergeWindowsByTracePriority(atomsForPath);
-  const selected = rankedExcerptWindows(merged, atomsForPath);
+  const requesting = atomsRequestingExcerptWindows(atomsForPath);
+  const merged = mergeWindowsByTracePriority(requesting);
+  const selected = rankedExcerptWindows(merged, requesting);
   return {
     windows: selected,
     omittedWindowCount: Math.max(0, merged.length - selected.length),

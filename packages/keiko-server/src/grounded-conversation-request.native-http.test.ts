@@ -652,7 +652,7 @@ function writePipelineSource(root: string): void {
 }
 
 describe("native original pipeline source payload", () => {
-  it("does not send an unrelated discovery prefix beside actual route facts", async () => {
+  it("does not use answer formatting as source content for the unchanged pipeline question", async () => {
     const question = await pipelineQuestion();
     const requests: ProviderRequest[] = [];
     const content =

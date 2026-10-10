@@ -23,6 +23,7 @@ import { hasSymbolRelationshipQuery, type SearchLimits } from "@oscharko-dev/kei
 import {
   extractAnchors,
   queryContextOutsideQuotes,
+  queryContentText,
   queryShapeOutsideTargets,
   type SearchAnchor,
   type SearchAnchorKind,
@@ -338,6 +339,8 @@ export interface QueryTargetDecision {
   readonly namedFileOnly?: true;
   /** A completely parsed self-contained conversation or general-advice request, without source work. */
   readonly conversationOnly?: true;
+  /** Execution-only content text; original query identity and model wording remain unchanged. */
+  readonly contentQueryText?: string;
 }
 
 const SEARCH_COMMANDS = new Set(["find", "search", "locate", "suche", "finde", "lokalisiere"]);
@@ -782,11 +785,16 @@ export function resolveQueryTargetDecision(
     kind = positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
   const targets = kind === "literal-search" ? possibleTargets : strongTargets;
   const definitionRequested = hasDefinitionLookup(query.text);
+  const contentQueryText =
+    query.kind === "natural-language"
+      ? queryContentText(extractRetrievalChannels(query.text, 8).questionText)
+      : query.text;
   return {
     kind,
     targets,
     definitionSymbol: definitionTarget(query, kind, targets, definitionRequested),
     definitionRequested,
+    ...(contentQueryText === query.text ? {} : { contentQueryText }),
     ...(namedFileOnlyRequest(query) ? { namedFileOnly: true } : {}),
     ...(conversationOnlyRequest(query, requested.anchors) ? { conversationOnly: true } : {}),
   };
