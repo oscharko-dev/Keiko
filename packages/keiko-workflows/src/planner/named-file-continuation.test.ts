@@ -47,3 +47,13 @@ describe("request-local facts following an explicit named-file orientation", () 
     expect(decision(text).namedFileOnly).toBeUndefined();
   });
 });
+
+describe("arbitrary nonlocal objects after a named-file orientation", () => {
+  it.each([
+    `Return to ${FILE}. Which function handles transactions in another component?`,
+    `Zurück zu ${FILE}. Welche Funktion verarbeitet Anfragen in einem anderen Modul?`,
+    `Read ${FILE}. What value is returned elsewhere?`,
+  ])("preserves nonlocal source work without an object dictionary: %s", (text) => {
+    expect(decision(text).namedFileOnly).toBeUndefined();
+  });
+});
