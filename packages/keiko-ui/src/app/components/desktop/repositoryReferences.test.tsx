@@ -52,6 +52,29 @@ describe("current repository scope navigation identities", () => {
       ]),
     ).toBe("unread");
   });
+  it("leaves a verified read with ambiguous source attribution unknown instead of unread", () => {
+    const scopes = ["/repo", "/other"].map((root) => ({
+      kind: "workspace-root" as const,
+      root,
+      relativePaths: [],
+      connectedAtMs: 1,
+    }));
+    expect(
+      proseReferenceEvidenceState(
+        { path: "src/read.ts", label: "src/read.ts" },
+        {
+          citations: [],
+          readPaths: ["src/read.ts"],
+          readStatusVerified: true,
+          inspectedPaths: scopes.map((scope) => ({
+            scopePath: "src/read.ts",
+            sourceScopeFingerprint: connectedScopeFingerprint(scope),
+          })),
+        },
+        repositoryReferenceRootsForScopes(scopes, "/repo"),
+      ),
+    ).toBe("unknown");
+  });
   it("opens attributed prose in its canonical source root through the existing citation rule", () => {
     const scopes = ["/repo", "/other"].map((root) => ({
       kind: "workspace-root" as const,

@@ -46,6 +46,7 @@ export const DE_MESSAGES = {
     "Diese Antwort bezieht sich auf die verbundene Datei. Sie konnte nicht vollständig durchsucht werden (erfasste Ausschlüsse: {detail}).",
   "grounded.reference.cited": "Zitierter Beleg",
   "grounded.reference.readUncited": "Gelesen, nicht zitiert",
+  "grounded.reference.unknown": "Lesestatus unbekannt",
   "grounded.reference.unread": "Nicht gelesen",
   "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
   "editor.taskWorkspaceAccess.checkingDescription":

@@ -65,7 +65,7 @@ export function AssessedAnswerBody(props: AssessedAnswerBodyProps): ReactNode {
             repositoryEvidence={
               props.repositoryEvidence === undefined
                 ? undefined
-                : { citations: [], readPaths: props.repositoryEvidence.readPaths }
+                : { ...props.repositoryEvidence, citations: [] }
             }
             // The message's own correlation keeps its layout evidence joinable (a derived id with
             // a colon is no valid correlation); the part is named in the message identity instead.

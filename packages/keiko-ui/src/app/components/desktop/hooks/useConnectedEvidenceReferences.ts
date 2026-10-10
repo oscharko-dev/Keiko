@@ -11,6 +11,7 @@ function inspectedEvidence(
   citations: RepositoryReferenceEvidence["citations"],
   sources: readonly ReadSource[],
   roots: readonly RepositoryReferenceRoot[],
+  complete: boolean,
 ): RepositoryReferenceEvidence {
   const readPaths = sources
     .filter(
@@ -24,6 +25,16 @@ function inspectedEvidence(
     .flatMap((source) => source.paths);
   return {
     citations,
+    readStatusVerified:
+      complete &&
+      sources.every(
+        (source) =>
+          roots.filter(
+            (root) =>
+              source.sourceScopeFingerprint !== undefined &&
+              root.scopeFingerprints?.includes(source.sourceScopeFingerprint) === true,
+          ).length === 1,
+      ),
     readPaths: Array.from(new Set(readPaths)),
     inspectedPaths: sources.flatMap((source) =>
       source.paths.map((scopePath) => ({
@@ -91,6 +102,8 @@ export function useConnectedEvidenceReferences(
             connected.citations,
             snapshot.key === key ? Object.values(snapshot.byRun) : [],
             roots,
+            runIds.length > 0 &&
+              runIds.every((runId) => snapshot.key === key && snapshot.byRun[runId] !== undefined),
           ),
     onReadPaths,
   };
