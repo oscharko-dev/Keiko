@@ -253,6 +253,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private paths: readonly string[] | undefined;
   private symbolicLinks: readonly string[] | undefined;
   private codeIndexPromise: Promise<CodeIntelligenceIndex> | undefined;
+  private codeIndexSourceCapacity = 0;
   private readonly codeIndexSourceSnapshots = new Map<string, CandidateContentSnapshot>();
   private symbolGraphPromise: Promise<SymbolGraph> | undefined;
   private importGraphPromise: Promise<ImportGraph> | undefined;
@@ -560,7 +561,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     if (
       snapshot === undefined ||
       read.sizeBytes !== read.stat.size ||
-      this.codeIndexSourceSnapshots.size >= Math.max(0, this.limits.maxFilesScanned ?? 2048)
+      this.codeIndexSourceSnapshots.size >= this.codeIndexSourceCapacity
     )
       return;
     if (
@@ -672,11 +673,16 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   public codeIntelligenceIndex(): Promise<CodeIntelligenceIndex> {
     this.codeIndexPromise ??= Promise.resolve().then(() => {
       this.codeIndexBuildCount += 1;
+      const candidates = this.candidateSet();
+      this.codeIndexSourceCapacity = Math.max(
+        0,
+        this.limits.maxFilesScanned ?? candidates.files.length,
+      );
       return buildCodeIntelligenceIndexFromCandidates(
         this.scope,
         this.limits,
         this.executionFs,
-        this.candidateSet(),
+        candidates,
         {
           executionControl: this.executionControl,
           disableCache: true,

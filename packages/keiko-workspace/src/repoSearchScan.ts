@@ -270,8 +270,8 @@ export function limitCandidateSetForStructuralBuild(
   limits: LimitsShape,
   isEligible: (file: DiscoveredFile) => boolean,
 ): CandidateSet {
-  const fileLimit = Math.max(0, limits.maxFilesScanned ?? 2048);
   const eligibleFiles = candidateSet.files.filter(isEligible);
+  const fileLimit = Math.max(0, limits.maxFilesScanned ?? eligibleFiles.length);
   if (eligibleFiles.length <= fileLimit) {
     return { ...candidateSet, files: eligibleFiles };
   }

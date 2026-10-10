@@ -480,7 +480,7 @@ function boundedPairCandidatePaths(
   limits: SearchLimits,
 ): BoundedPairCandidatePaths {
   const eligible = candidatePaths.filter((scopePath) => extractExtension(scopePath) !== undefined);
-  const fileLimit = Math.max(0, limits.maxFilesScanned ?? 2048);
+  const fileLimit = Math.max(0, limits.maxFilesScanned ?? eligible.length);
   return { paths: eligible.slice(0, fileLimit), truncated: eligible.length > fileLimit };
 }
 

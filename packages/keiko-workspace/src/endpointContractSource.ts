@@ -45,7 +45,7 @@ export function endpointSourcePreferences(
   );
   return [...new Set(preferences)]
     .filter((path) => available.has(path))
-    .slice(0, Math.max(0, limits.maxFilesScanned ?? 2048));
+    .slice(0, Math.max(0, limits.maxFilesScanned ?? available.size));
 }
 
 function prioritizedEndpointCandidates(
