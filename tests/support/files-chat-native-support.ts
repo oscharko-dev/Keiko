@@ -149,13 +149,17 @@ function fixtureModel(observe: (betaSent: boolean) => void): ModelPort {
   };
 }
 
-function seedFiles(): { directory: string; root: string; alias: string } {
+function seedFiles(nested: boolean): { directory: string; root: string; alias: string } {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "keiko-files-canonical-root-")));
   const root = join(directory, "real");
   const alias = join(directory, "alias");
   for (const folder of ["Alpha", "Beta"]) mkdirSync(join(root, folder), { recursive: true });
   writeFileSync(join(root, "Alpha/one.ts"), "export const validationAlpha = 11;\n");
   writeFileSync(join(root, "Beta/two.ts"), "export const validationBeta = 73;\n");
+  if (nested) {
+    mkdirSync(join(root, "Alpha/nested"));
+    writeFileSync(join(root, "Alpha/nested/nested.ts"), "export const nestedValidation = true;\n");
+  }
   symlinkSync(root, alias, "dir");
   return { directory, root, alias };
 }
@@ -208,8 +212,8 @@ async function closeNativeFixture(
   resetServerLogger();
 }
 
-export async function nativeFilesChatFixture(): Promise<NativeFilesChatFixture> {
-  const { directory, root, alias } = seedFiles();
+export async function nativeFilesChatFixture(nested = false): Promise<NativeFilesChatFixture> {
+  const { directory, root, alias } = seedFiles(nested);
   const store = createInMemoryUiStore();
   store.createProject(root, "Files scope proof");
   const chat = store.createChat(root, "Files scope proof", "files-scope-model");
