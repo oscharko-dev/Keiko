@@ -403,7 +403,170 @@ async function allocationAtoms(fixture: CoverageFixture): Promise<readonly Evide
   return [...fixture.ordinaryAtoms, ...endpoints, ...fixture.trace.atoms];
 }
 
+const TERMINAL_FACT = "return recursiveCandidateDiscovery(selectedRoot);";
+const SECOND_TERMINAL_FACT = "return promptFitting(selectedRoot);";
+
+function branchCoverageFiles(): Readonly<Record<string, string>> {
+  const source = { ...configuredCoverageFiles() };
+  for (let index = 0; index < 9; index += 1) {
+    const original = bookkeepingBody(index);
+    const crowded = original.replace(
+      "  return false;",
+      Array.from(
+        { length: 30 },
+        () => "  // Scope admission recursive candidate discovery prompt fitting bookkeeping.",
+      ).join("\n") + "\n  return false;",
+    );
+    for (const [path, content] of Object.entries(source))
+      source[path] = content.replace(original, crowded);
+  }
+  source["src/implementation.ts"] =
+    (source["src/implementation.ts"] ?? "").replace(
+      "  return connector();",
+      "  return beginTraversal();",
+    ) +
+    [
+      "",
+      "function beginTraversal() { return stageOne(); }",
+      "function stageOne() { return stageTwo(); }",
+      "function stageTwo() { return selectedTraversal(); }",
+      `function selectedTraversal() { ${TERMINAL_FACT} }`,
+      "function recursiveCandidateDiscovery(selectedRoot) {",
+      `  ${DESCENT_FACT}`,
+      "  return selectedRoot;",
+      "}",
+      `function latePromptFitting() { ${SECOND_TERMINAL_FACT} }`,
+      "function promptFitting(selectedRoot) { return selectedRoot; }",
+    ].join("\n");
+  return source;
+}
+
+function ordinaryCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...branchCoverageFiles() };
+  const ordinaryFact = "return scopeAdmissionBudget + promptFittingBudget;";
+  files["src/ordinary.ts"] = [
+    "export class ScopeAdmission {",
+    "  // Trace POST /api/items through scope admission recursive candidate discovery and prompt fitting",
+    "  candidateSet() {",
+    "    const scopeAdmissionBudget = 1024;",
+    "    const promptFittingBudget = 2048;",
+    `    ${ordinaryFact}`,
+    "  }",
+    "}",
+  ].join("\n");
+  for (const index of [7, 8]) {
+    delete files[`src/helper-${String(index)}.ts`];
+    files["src/implementation.ts"] = (files["src/implementation.ts"] ?? "")
+      .replace(
+        `import { bookkeeping${String(index)} as externalBookkeeping${String(index)} } from "./helper-${String(index)}.js";`,
+        "",
+      )
+      .replace(`  externalBookkeeping${String(index)}();`, "");
+  }
+  return files;
+}
+
 describe("current route trace excerpt coverage", () => {
+  it("shares the connected grant between two actual registered handler roots", async () => {
+    const files = { ...branchCoverageFiles() };
+    const secondFact = "return scopeAdmissionCompleted(selectedRoot);";
+    files["src/second.ts"] = [
+      "export function handleSecond() { return secondTraversal(); }",
+      `function secondTraversal() { ${secondFact} }`,
+      "function scopeAdmissionCompleted(selectedRoot) { return selectedRoot; }",
+    ].join("\n");
+    files["src/routes.ts"] += [
+      "",
+      'import { handleSecond } from "./second.js";',
+      'const additionalRoutes = [{ method: "POST", path: "/api/items", handler: handleSecond }];',
+    ].join("\n");
+    const fixture = await coverageFixture(undefined, files);
+    expect(
+      fixture.trace.routeCoverage?.entries.filter((entry) => entry.parentIdentity === undefined)
+        .length,
+    ).toBe(2);
+    const reads = await coverageRead(fixture);
+    expect(readContent(reads, "src/second.ts")).toContain(secondFact);
+    expect(await sentPrompt(fixture, reads)).toContain(secondFact);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+  });
+
+  it("gives selected ordinary source without a route certificate a physical read opportunity", async () => {
+    const ordinaryFact = "return scopeAdmissionBudget + promptFittingBudget;";
+    const fixture = await coverageFixture(undefined, ordinaryCoverageFiles());
+    const atoms = [...fixture.ordinaryAtoms, ...fixture.trace.atoms];
+    expect(coverageRanking(atoms).kept.some((entry) => entry.scopePath === "src/ordinary.ts")).toBe(
+      true,
+    );
+    expect(
+      fixture.trace.routeCoverage?.entries.some(
+        (entry) => entry.atom.scopePath === "src/ordinary.ts",
+      ),
+    ).toBe(false);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 65536 };
+    const normal = await coverageRead(fixture, {
+      atoms,
+      inputs: { routeCoverage: undefined, budget },
+    });
+    expect(await sentPrompt(fixture, normal, atoms, budget)).toContain(ordinaryFact);
+    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    expect(readContent(reads, "src/ordinary.ts")).toContain(ordinaryFact);
+    expect(await sentPrompt(fixture, reads, atoms, budget)).toContain(ordinaryFact);
+    expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+  });
+
+  it("sends a later relevant complete branch before called bookkeeping exhausts its share", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items through scope admission recursive candidate discovery and prompt fitting",
+      branchCoverageFiles(),
+    );
+    const target = fixture.trace.routeCoverage?.entries.find((entry) =>
+      fixture.files[entry.atom.scopePath]
+        ?.split("\n")
+        .slice((entry.atom.lineRange?.startLine ?? 1) - 1, entry.atom.lineRange?.endLine)
+        .join("\n")
+        .includes(DESCENT_FACT),
+    );
+    expect(target).toBeDefined();
+    expect(target?.atom.edge?.kind).toBe("reference");
+    if (target === undefined) throw new TypeError("fixture requires an observed target");
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    const body =
+      fixture.files[target.atom.scopePath]
+        ?.split("\n")
+        .slice((target.atom.lineRange?.startLine ?? 1) - 1, target.atom.lineRange?.endLine)
+        .join("\n")
+        .trim() ?? "";
+    expect(target.observedBytes).toBeGreaterThanOrEqual(Buffer.byteLength(body));
+    const reads = await coverageRead(fixture);
+    expect(readContent(reads, "src/implementation.ts")).toContain(TERMINAL_FACT);
+    expect(await sentPrompt(fixture, reads)).toContain(DESCENT_FACT);
+    expect(readBytes(reads)).toBe(8192);
+    const windows = reads.excerpts.get("src/implementation.ts") ?? [];
+    expect(
+      windows.some((window) => windows.some((other) => other.startLine === window.endLine + 1)),
+    ).toBe(true);
+    expect(windows.every((window) => window.identity !== undefined)).toBe(true);
+  });
+
+  it("retains two separate same-file targets sharing the actually observed parent chain", async () => {
+    const files = { ...branchCoverageFiles() };
+    files["src/implementation.ts"] = (files["src/implementation.ts"] ?? "").replace(
+      "function stageTwo() { return selectedTraversal(); }",
+      "function stageTwo() { latePromptFitting(); return selectedTraversal(); }",
+    );
+    const fixture = await coverageFixture(
+      "Trace POST /api/items through scope admission recursive candidate discovery and prompt fitting",
+      files,
+    );
+    const reads = await coverageRead(fixture);
+    const prompt = await sentPrompt(fixture, reads);
+    expect(prompt).toContain(TERMINAL_FACT);
+    expect(prompt).toContain(SECOND_TERMINAL_FACT);
+    expect(prompt).toContain(DESCENT_FACT);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+  });
+
   it("sends the actual route registration through public retrieval under the existing byte grant", async () => {
     const fixture = await coverageFixture(undefined, sameFileCoverageFiles());
     const result = await actualPublicRetrieval(fixture);
