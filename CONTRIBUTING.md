@@ -97,6 +97,10 @@ lexical AST target. Further calls retain their exact callable owner and complete
 same-named declarations and uninvoked nested functions do not certify that relationship.
 Imported targets retain exact runtime module-export identities. Explicit compiler output mappings
 reuse already guarded metadata and can address only admitted sources in the owning package.
+Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
+ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
+reservation and request-local current-source metadata capacity. Finite enrichment grants and
+bounded complete-text reuse retain their separate limits.
 Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
 cannot certify a unique runtime target when a competing branch is unobserved.
 A guarded current definition reached through an observed inline-callable reference retains its

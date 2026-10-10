@@ -263,7 +263,16 @@ still honor an explicit caller deadline or cancellation. Directory entries strea
 source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
 summaries survive the scan. These shared defaults also apply to manual Editor find-in-files, replace
 preview and symbol lookup, coding context lookups, and grounded symbol trace; explicit finite callers retain their
-bounds. An unlimited default lookup uses fresh live traversal rather than treating a finite workspace
+bounds.
+
+Structural AST, import, symbol, endpoint and source/test intake likewise honor the actual caller
+file-scan ceiling. A null ceiling uses all eligible entries in the finite admitted candidate
+inventory. Resolver metadata reservation follows that same ceiling. The request-local AST reader
+fixes its current-source metadata capacity once from the admitted inventory and caller ceiling;
+guarded reading, currentness, cancellation and partial-source uncertainty still apply. Complete-text
+reuse retains the independent bounds stated below, and optional enrichment retains its finite grants.
+
+An unlimited default lookup uses fresh live traversal rather than treating a finite workspace
 index as complete coverage. It may reuse completed matching metadata from that same bounded index
 after fresh canonical-path, hard-link, file-identity and high-resolution modification/change-time
 validation. Each file retains at most one full-query-identity record containing physical line ranges,
