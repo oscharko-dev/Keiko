@@ -24,7 +24,8 @@ export {
   repositorySourceLines,
   type RepositorySourceLine,
 } from "./repoSearchSourceClassification.js";
-export { structuralLineLooksLikeSymbolDefinition } from "./repoSearchMatchers.js";
+export { buildMatcher, structuralLineLooksLikeSymbolDefinition } from "./repoSearchMatchers.js";
+export { maxLineScore as repositorySourceMaxLineScore } from "./repoSearchScan.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export type {
   StructuralAdapterRequestContext,
@@ -48,3 +49,5 @@ export {
   createEcosystemStructureAdapters,
   runStructuralAdapters,
 } from "./structuralAdapters.js";
+
+export { repositoryConfiguredRouteDeclarations, repositoryRouteQuery } from "./repoSearchRoutes.js";

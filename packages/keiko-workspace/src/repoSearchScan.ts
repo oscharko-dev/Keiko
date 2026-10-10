@@ -1229,7 +1229,7 @@ export interface FileMatches {
   readonly contentScore?: number | undefined;
 }
 
-function maxLineScore(best: readonly ScoredLine[]): number {
+export function maxLineScore(best: readonly Pick<ScoredLine, "score">[]): number {
   return best.reduce((max, line) => Math.max(max, line.score), 0);
 }
 

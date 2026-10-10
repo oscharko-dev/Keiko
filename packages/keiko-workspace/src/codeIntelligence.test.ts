@@ -2403,3 +2403,784 @@ describe("second-pass correctness regressions (verifier-confirmed)", () => {
     expect(paths.some((path) => path.includes(longParam))).toBe(false);
   });
 });
+
+describe("compiler-owned returned call role", () => {
+  it.each([
+    { body: "return target();", callee: "target", returned: true },
+    { body: "return await ((target() as unknown)!);", callee: "target", returned: true },
+    { body: "return outer(target());", callee: "target", returned: false },
+    { body: "return outer(target());", callee: "outer", returned: true },
+    { body: "return outer(() => { target(); });", callee: "target", returned: false },
+    { body: "return outer(() => { return target(); });", callee: "target", returned: true },
+    { body: "const callback = () => target(); return callback;", callee: "target", returned: true },
+    { body: 'return "target()";', callee: "target", returned: false },
+    { body: "return `target()`;", callee: "target", returned: false },
+    { body: "// return target();\nreturn 1;", callee: "target", returned: false },
+  ])(
+    "classifies only the call's own returned expression: $body / $callee",
+    ({ body, callee, returned }) => {
+      const { scope, fs } = makeScope({
+        "src/entry.ts": `function target() { return 1; }\nfunction outer(value: unknown) { return value; }\nasync function handler() { ${body} }`,
+      });
+      const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        disableCache: true,
+      });
+      expect(
+        index.calls.find((call) => call.calleeName === callee)?.resultUsage === "returned",
+      ).toBe(returned);
+    },
+  );
+});
+
+describe("compiler-owned call binding certification", () => {
+  it.each([
+    {
+      entry:
+        "export function handler() { return delegated(); }\nexport function delegated() { return 1; }",
+      imported: false,
+      expectedPath: "src/entry.ts",
+      certified: true,
+    },
+    {
+      entry:
+        'import { delegated } from "./target.js";\nexport function handler(delegated: () => unknown) { return delegated(); }',
+      imported: true,
+      certified: false,
+    },
+    {
+      entry:
+        'import { delegated } from "./target.js";\nexport function handler() { const delegated = () => 0; return delegated(); }',
+      imported: true,
+      certified: false,
+    },
+    {
+      entry:
+        'import { target as delegated } from "./target.js";\nexport function handler() { return delegated(); }',
+      imported: true,
+      expectedPath: "src/target.ts",
+      certified: true,
+    },
+    {
+      entry: "export function handler(obj: {delegated: () => unknown}) { return obj.delegated(); }",
+      imported: false,
+      certified: false,
+    },
+    {
+      entry: "export function handler() { return delegated(); }",
+      imported: false,
+      certified: false,
+    },
+  ])(
+    "certifies only a bare call's actual lexical binding: $entry",
+    ({ entry, expectedPath, certified }) => {
+      const { scope, fs } = makeScope({
+        "src/entry.ts": entry,
+        "src/target.ts":
+          "export function target() { return true; }\nexport function delegated() { return true; }",
+        "src/unrelated.ts": "export function delegated() { return false; }",
+      });
+      const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        disableCache: true,
+      });
+      const call = index.calls.find(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.calleeName === "delegated",
+      );
+      expect(call?.binding === "lexical").toBe(certified);
+      if (expectedPath !== undefined) expect(call?.targetPath).toBe(expectedPath);
+    },
+  );
+});
+
+describe("compiler-owned expression and exact import binding", () => {
+  it.each([
+    { expression: "function delegated() { return delegated(); }", constructor: false },
+    {
+      expression: "class delegated { static construct() { return delegated(); } }",
+      constructor: false,
+    },
+    {
+      expression: "class delegated { static construct() { return new delegated(); } }",
+      constructor: true,
+    },
+  ])("declines an imported target shadowed by $expression", ({ expression, constructor }) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `import { delegated } from "./target.js";\nexport const wrapper = ${expression};`,
+      "src/target.ts": "export function delegated() { return true; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const calls = index.calls.filter((call) => call.callerPath === "src/entry.ts");
+    expect(calls.filter((call) => call.binding === "lexical")).toEqual([]);
+    if (constructor) expect(calls).toEqual([]);
+  });
+
+  it.each(["Foo", "foo"])("binds the exact imported case %s", (name) => {
+    const other = name === "Foo" ? "foo" : "Foo";
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `import { ${name} } from "./target.js";\nexport function handler() { return ${name}(); }`,
+      "src/target.ts": `export function ${other}() { return false; }\nexport function ${name}() { return true; }`,
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const call = index.calls.find((edge) => edge.callerPath === "src/entry.ts");
+    expect(call?.binding).toBe("lexical");
+    expect(call?.targetName).toBe(name);
+    expect(call?.targetLineRange.startLine).toBe(2);
+  });
+});
+
+describe("compiler-owned direct awaited call role", () => {
+  it.each([
+    { body: "await target();", callee: "target", awaited: true },
+    {
+      body: "const result = await ((target() as unknown)!); return result;",
+      callee: "target",
+      awaited: true,
+    },
+    { body: "return await target();", callee: "target", awaited: true },
+    { body: "await outer(target());", callee: "target", awaited: false },
+    { body: "await outer(target());", callee: "outer", awaited: true },
+    { body: "await outer(() => target());", callee: "target", awaited: false },
+    { body: "await outer(async () => await target());", callee: "target", awaited: true },
+    { body: 'return "await target()";', callee: "target", awaited: false },
+    { body: "return `await target()`;", callee: "target", awaited: false },
+    { body: "// await target();\nreturn 1;", callee: "target", awaited: false },
+  ])("marks only the directly awaited expression: $body / $callee", ({ body, callee, awaited }) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `function target() { return 1; }\nfunction outer(value: unknown) { return value; }\nasync function handler() { ${body} }`,
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(index.calls.find((call) => call.calleeName === callee)?.awaited === true).toBe(awaited);
+  });
+});
+
+describe("compiler-owned identifier reference binding", () => {
+  it.each([
+    'router.post("/items", handlePostItem);',
+    'const routes = [{ method: "POST", path: "/items", handler: handlePostItem }];',
+  ])("preserves a local route reference after a same-line declaration: %s", (registration) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `function actualDelegate() { return true; } function handlePostItem() { return actualDelegate(); } ${registration}`,
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const references = index.references.filter(
+      (edge) => edge.referenceName === "handlePostItem" && edge.binding === "lexical",
+    );
+    const definition = index.symbols.find((symbol) => symbol.name === "handlePostItem");
+    expect(references).toHaveLength(1);
+    expect(references[0]).toMatchObject({
+      targetPath: "src/entry.ts",
+      targetName: "handlePostItem",
+      targetLineRange: { startLine: 1, endLine: 1 },
+      targetDeclarationSpan: definition?.declarationSpan,
+      referenceLineRange: { startLine: 1, endLine: 1 },
+    });
+    expect(references[0]?.referenceSpan?.startColumn).toBeGreaterThan(
+      definition?.declarationSpan?.endColumn ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("binds an exported declaration independently of a nested same-name declaration", () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": 'import { handler } from "./target.js";\nrouter.post("/items", handler);',
+      "src/target.ts":
+        "function container() { function handler() { return false; } }\nexport function handler() { return true; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const certified = index.references.filter((edge) => edge.binding === "lexical");
+    expect(certified).toHaveLength(1);
+    expect(certified[0]?.targetLineRange.startLine).toBe(2);
+  });
+
+  it.each([
+    {
+      entry: 'import { handler } from "./target.js";\nrouter.post("/items", handler);',
+      expectedPath: "src/target.ts",
+      expectedName: "handler",
+    },
+    {
+      entry: 'import { actual as handler } from "./target.js";\nconst route = { handler };',
+      expectedPath: "src/target.ts",
+      expectedName: "actual",
+    },
+    {
+      entry: 'function handler() { return true; }\nrouter.post("/items", handler);',
+      expectedPath: "src/entry.ts",
+      expectedName: "handler",
+    },
+    {
+      entry:
+        'import { handler } from "./target.js";\nfunction register(handler: unknown) { router.post("/items", handler); }',
+    },
+    {
+      entry:
+        'import { handler } from "./target.js";\nfunction register() { const handler = () => false; router.post("/items", handler); }',
+    },
+    { entry: 'router.post("/items", handler);' },
+    {
+      entry:
+        'import { handler } from "./target.js";\nconst wrapper = function handler() { return {handler}; };',
+    },
+  ])(
+    "certifies the bare identifier's actual scope: $entry",
+    ({ entry, expectedPath, expectedName }) => {
+      const { scope, fs } = makeScope({
+        "src/entry.ts": entry,
+        "src/target.ts":
+          "export function handler() { return true; }\nexport function actual() { return true; }",
+        "src/unrelated.ts": "export function handler() { return false; }",
+      });
+      const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        disableCache: true,
+      });
+      const certified = index.references.filter(
+        (edge) =>
+          edge.referenceName === "handler" && "binding" in edge && edge.binding === "lexical",
+      );
+      if (expectedPath === undefined) expect(certified).toEqual([]);
+      else {
+        expect(certified).toHaveLength(1);
+        expect(certified[0]).toMatchObject({
+          targetPath: expectedPath,
+          targetName: expectedName,
+          referenceSpan: { endLine: 2 },
+        });
+      }
+    },
+  );
+
+  it("preserves distinct same-line references across a shadowed scope", () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts":
+        'import { handler } from "./target.js";\nfunction register(handler: unknown) { router.post("/wrong", handler); } router.post("/items", handler);',
+      "src/target.ts": "export function handler() { return true; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const references = index.references.filter((edge) => edge.referenceName === "handler");
+    expect(references).toHaveLength(2);
+    expect(
+      references.filter((edge) => "binding" in edge && edge.binding === "lexical"),
+    ).toHaveLength(1);
+  });
+});
+
+describe("compiler-owned containing callable identity", () => {
+  it.each([false, true])("retains distinct same-line nested owners (invoked=%s)", (invoked) => {
+    const entry = `function actualDelegate() { return true; }\nfunction unrelatedDelegate() { return false; }\nexport function handler() { function nested() { return unrelatedDelegate(); } return ${invoked ? "nested" : "actualDelegate"}(); }`;
+    const { scope, fs } = makeScope({ "src/entry.ts": entry });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const outer = index.calls.find(
+      (call) => call.calleeName === (invoked ? "nested" : "actualDelegate"),
+    );
+    const nested = index.calls.find((call) => call.calleeName === "unrelatedDelegate");
+    expect(outer).toMatchObject({
+      callerDefinition: {
+        name: "handler",
+        lineRange: { startLine: 3, endLine: 3 },
+        declarationSpan: { startColumn: 0, endLine: 3 },
+      },
+    });
+    expect(nested).toMatchObject({
+      callerDefinition: { name: "nested", lineRange: { startLine: 3, endLine: 3 } },
+    });
+    const definitions = index.symbols.filter(
+      (symbol) => symbol.name === "handler" || symbol.name === "nested",
+    );
+    expect(definitions).toHaveLength(2);
+    expect(definitions[0]).toHaveProperty("declarationSpan");
+    expect(definitions[1]).toHaveProperty("declarationSpan");
+    expect(definitions[0]?.declarationSpan).not.toEqual(definitions[1]?.declarationSpan);
+  });
+
+  it("does not give an anonymous callback its enclosing handler owner", () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts":
+        "function delegated() { return true; }\nfunction outer(value: unknown) { return value; }\nexport function handler() { return outer(() => delegated()); }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const call = index.calls.find((edge) => edge.calleeName === "delegated");
+    expect(call).toBeDefined();
+    expect(call).not.toHaveProperty("callerDefinition");
+  });
+
+  it("binds a variable's arrow body to the indexed variable declaration", () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts":
+        "function delegated() { return true; }\nexport const handler = () => delegated();",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(index.calls.find((edge) => edge.calleeName === "delegated")).toMatchObject({
+      callerDefinition: {
+        name: "handler",
+        lineRange: { startLine: 2, endLine: 2 },
+        declarationSpan: { endLine: 2 },
+      },
+    });
+  });
+});
+
+describe("compiler-owned imported module declaration identity", () => {
+  it.each([
+    {
+      label: "same-named class method",
+      target:
+        "export class Worker { delegated() { return false; } }\nexport function delegated() { return true; }",
+      certified: true,
+      declarationLine: 2,
+    },
+    {
+      label: "same-named nested declaration",
+      target:
+        "function container() { function delegated() { return false; } }\nexport function delegated() { return true; }",
+      certified: true,
+      declarationLine: 2,
+    },
+    {
+      label: "non-exported declaration",
+      target: "function delegated() { return true; }",
+      certified: false,
+    },
+    {
+      label: "ambiguous exported declarations",
+      target:
+        "export function delegated() { return false; }\nexport function delegated() { return true; }",
+      certified: false,
+    },
+    {
+      label: "local named export alias",
+      target: "function actual() { return true; }\nexport { actual as delegated };",
+      certified: true,
+      declarationLine: 1,
+      targetName: "actual",
+    },
+  ])(
+    "certifies the actual module export: $label",
+    ({ target, certified, declarationLine, targetName }) => {
+      const { scope, fs } = makeScope({
+        "src/entry.ts":
+          'import { delegated } from "./target.js";\nexport function handler() { return delegated(); }\nrouter.post("/items", delegated);',
+        "src/target.ts": target,
+      });
+      const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        disableCache: true,
+      });
+      const call = index.calls.find((edge) => edge.callerPath === "src/entry.ts");
+      const reference = index.references.find(
+        (edge) => edge.referencerPath === "src/entry.ts" && edge.referenceLineRange.startLine === 3,
+      );
+      expect(call?.binding === "lexical").toBe(certified);
+      expect(reference?.binding === "lexical").toBe(certified);
+      if (certified) {
+        expect(call?.targetName).toBe(targetName ?? "delegated");
+        expect(call?.targetLineRange.startLine).toBe(declarationLine);
+        expect(reference?.targetDeclarationSpan).toEqual(call?.targetDeclarationSpan);
+      }
+    },
+  );
+
+  it.each([
+    {
+      label: "named alias",
+      barrel: 'export { delegated as invoke } from "./target.js";',
+      name: "invoke",
+      certified: true,
+    },
+    {
+      label: "wildcard",
+      barrel: 'export * from "./target.js";',
+      name: "delegated",
+      certified: true,
+    },
+    {
+      label: "ambiguous wildcard",
+      barrel: 'export * from "./target.js";\nexport * from "./other.js";',
+      name: "delegated",
+      certified: false,
+    },
+    {
+      label: "missing export",
+      barrel: 'export * from "./private.js";',
+      name: "delegated",
+      certified: false,
+    },
+  ])("retains exact identity through $label", ({ barrel, name, certified }) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `import { ${name} as asked } from "./barrel.js";\nexport function handler() { return asked(); }`,
+      "src/barrel.ts": barrel,
+      "src/target.ts":
+        "export class Worker { delegated() { return false; } }\nexport function delegated() { return true; }",
+      "src/other.ts": "export function delegated() { return false; }",
+      "src/private.ts": "function delegated() { return false; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const call = index.calls.find((edge) => edge.callerPath === "src/entry.ts");
+    expect(call?.binding === "lexical").toBe(certified);
+    if (certified) {
+      expect(call?.targetPath).toBe("src/target.ts");
+      expect(call?.targetLineRange.startLine).toBe(2);
+    }
+  });
+});
+
+function mappedPackageFixture(
+  options: Readonly<Record<string, unknown>>,
+  extra: Readonly<Record<string, string>> = {},
+): Readonly<Record<string, string>> {
+  return {
+    "src/entry.ts":
+      'import { delegated as ask } from "@bound/lib";\nexport function handler() { return ask(); }',
+    "packages/lib/package.json": JSON.stringify({
+      name: "@bound/lib",
+      exports: { ".": "./dist/index.js", "./feature": "./dist/feature.js" },
+      main: "./dist/index.js",
+    }),
+    "packages/lib/tsconfig.json": JSON.stringify({ compilerOptions: options }),
+    "packages/lib/src/index.ts": 'export { delegated } from "./worker.js";',
+    "packages/lib/src/worker.ts":
+      "export class Worker { delegated() { return false; } }\nexport function delegated() { return true; }",
+    "packages/lib/src/feature.ts": "export function delegated() { return true; }",
+    ...extra,
+  };
+}
+
+describe("compiler-owned explicit package output mapping", () => {
+  it.each([
+    { label: "declared entry", specifier: "@bound/lib", target: "packages/lib/src/worker.ts" },
+    {
+      label: "declared subpath",
+      specifier: "@bound/lib/feature",
+      target: "packages/lib/src/feature.ts",
+    },
+  ])("binds only the admitted source for $label", ({ specifier, target }) => {
+    const files = mappedPackageFixture({ rootDir: "src", outDir: "dist" });
+    const { scope, fs } = makeScope({
+      ...files,
+      "src/entry.ts": `import { delegated as ask } from "${specifier}";\nexport function handler() { return ask(); }`,
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const call = index.calls.find((edge) => edge.callerPath === "src/entry.ts");
+    expect(call?.binding).toBe("lexical");
+    expect(call?.targetPath).toBe(target);
+    expect(call?.targetDeclarationSpan).toEqual(
+      index.symbols.find((symbol) => symbol.scopePath === target && symbol.kind === "function")
+        ?.declarationSpan,
+    );
+  });
+
+  it.each([
+    { label: "missing mapping", options: {} },
+    { label: "implicit root", options: { outDir: "dist" } },
+    { label: "different output", options: { rootDir: "src", outDir: "build" } },
+    { label: "escaped source", options: { rootDir: "../other/src", outDir: "dist" } },
+    { label: "absolute source", options: { rootDir: "/src", outDir: "dist" } },
+    { label: "escaped output", options: { rootDir: "src", outDir: "../dist" } },
+  ])("declines $label", ({ options }) => {
+    const { scope, fs } = makeScope(mappedPackageFixture(options));
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(
+      index.calls.filter(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.binding === "lexical",
+      ),
+    ).toEqual([]);
+    expect(
+      index.imports.find((edge) => edge.importerPath === "src/entry.ts")?.targetPath,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "conflicting owning configs",
+      extra: {
+        "packages/lib/tsconfig.build.json": JSON.stringify({
+          compilerOptions: { rootDir: "other", outDir: "dist" },
+        }),
+      },
+    },
+    {
+      label: "only unrelated config",
+      extra: {
+        "packages/lib/tsconfig.json": "{}",
+        "packages/other/tsconfig.json": JSON.stringify({
+          compilerOptions: { rootDir: "src", outDir: "dist" },
+        }),
+      },
+    },
+    {
+      label: "missing admitted source",
+      extra: { "packages/lib/src/index.ts": "export const unrelated = true;" },
+    },
+    {
+      label: "unsupported explicit entry with root fallback",
+      extra: {
+        "packages/lib/package.json": JSON.stringify({
+          name: "@bound/lib",
+          exports: "./missing/entry.js",
+        }),
+        "packages/lib/index.ts": "export function delegated() { return false; }",
+      },
+    },
+  ])("does not invent an entry for $label", ({ extra }) => {
+    const { scope, fs } = makeScope(
+      mappedPackageFixture({ rootDir: "src", outDir: "dist" }, extra),
+    );
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(
+      index.calls.filter(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.binding === "lexical",
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("compiler-owned runtime export availability", () => {
+  it.each([
+    {
+      entry: 'import type { delegated } from "./target.js";',
+      target: "export function delegated() { return true; }",
+    },
+    {
+      entry: 'import { type delegated } from "./target.js";',
+      target: "export function delegated() { return true; }",
+    },
+    {
+      entry: 'import { delegated } from "./barrel.js";',
+      target: 'export type { delegated } from "./target.js";',
+    },
+    {
+      entry: 'import { delegated } from "./barrel.js";',
+      target: 'export { type delegated } from "./target.js";',
+    },
+  ])("does not certify an erased import or export: $entry / $target", ({ entry, target }) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `${entry}\nexport function handler() { return delegated(); }`,
+      "src/barrel.ts": target,
+      "src/target.ts": target.startsWith("export function")
+        ? target
+        : "export function delegated() { return true; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(
+      index.calls.filter(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.binding === "lexical",
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not hide an ambiguous wildcard target behind another export", () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts":
+        'import { delegated } from "./barrel.js";\nexport function handler() { return delegated(); }',
+      "src/barrel.ts": 'export * from "./ambiguous.js";\nexport * from "./actual.js";',
+      "src/ambiguous.ts":
+        "export function delegated() { return false; }\nexport function delegated() { return false; }",
+      "src/actual.ts": "export function delegated() { return true; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(
+      index.calls.filter(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.binding === "lexical",
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("compiler-owned authoritative export uniqueness", () => {
+  it("does not certify main when the declared package export is unsupported", () => {
+    const { scope, fs } = makeScope(
+      mappedPackageFixture(
+        { rootDir: "src", outDir: "dist" },
+        {
+          "packages/lib/package.json": JSON.stringify({
+            name: "@bound/lib",
+            exports: "./missing/entry.js",
+            main: "./src/index.js",
+          }),
+        },
+      ),
+    );
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(
+      index.calls.filter(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.binding === "lexical",
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not certify conflicting direct and explicit re-export bindings", () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts":
+        'import { delegated } from "./barrel.js";\nexport function handler() { return delegated(); }',
+      "src/barrel.ts":
+        'export function delegated() { return true; }\nexport { delegated } from "./other.js";',
+      "src/other.ts": "export function delegated() { return false; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(
+      index.calls.filter(
+        (edge) => edge.callerPath === "src/entry.ts" && edge.binding === "lexical",
+      ),
+    ).toEqual([]);
+  });
+
+  it("preserves the direct export precedence over wildcard exports", () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts":
+        'import { delegated } from "./barrel.js";\nexport function handler() { return delegated(); }',
+      "src/barrel.ts": 'export function delegated() { return true; }\nexport * from "./other.js";',
+      "src/other.ts": "export function delegated() { return false; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const call = index.calls.find((edge) => edge.callerPath === "src/entry.ts");
+    expect(call?.binding).toBe("lexical");
+    expect(call?.targetPath).toBe("src/barrel.ts");
+  });
+});
+
+function wildcardAuthorityFixture(competitor: string): Readonly<Record<string, string>> {
+  return {
+    "src/entry.ts":
+      'import { delegated } from "./barrel.js";\nexport function handler() { return delegated(); }\nrouter.post("/items", delegated);',
+    "src/barrel.ts": 'export * from "./target.js";\nexport * from "./other.js";',
+    "src/target.ts": "export function delegated() { return true; }",
+    "src/other.ts": competitor,
+  };
+}
+
+function expectWildcardSourceCertification(index: CodeIntelligenceIndex, certified: boolean): void {
+  const call = index.calls.find((edge) => edge.callerPath === "src/entry.ts");
+  const reference = index.references.find(
+    (edge) => edge.referencerPath === "src/entry.ts" && edge.referenceLineRange.startLine === 3,
+  );
+  expect(call?.binding === "lexical").toBe(certified);
+  expect(reference?.binding === "lexical").toBe(certified);
+  if (certified) {
+    expect(call?.targetPath).toBe("src/target.ts");
+    expect(reference?.targetDeclarationSpan).toEqual(call?.targetDeclarationSpan);
+  }
+}
+
+describe("compiler-owned wildcard module read authority", () => {
+  it("does not treat a clipped competing module as proving export absence", () => {
+    const { scope, fs } = makeScope(
+      wildcardAuthorityFixture(
+        `// ${"x".repeat(2_200_000)}\nexport function delegated() { return false; }`,
+      ),
+    );
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(index.filesPartiallyIndexed).toBe(1);
+    expect(index.filesSkipped).toBe(0);
+    expectWildcardSourceCertification(index, false);
+  });
+
+  it("does not drop a runtime re-export when its complete source read is denied", () => {
+    const files = wildcardAuthorityFixture("export function delegated() { return false; }");
+    const { scope, fs } = makeScope(files);
+    let deniedReads = 0;
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      readSource: (path: string): string => {
+        if (path === "src/other.ts") {
+          deniedReads += 1;
+          throw new Error("Source denied by the owning read port");
+        }
+        return files[path] ?? "";
+      },
+    });
+    expect(deniedReads).toBe(1);
+    expect(index.filesSkipped).toBe(1);
+    expect(index.filesPartiallyIndexed).toBe(0);
+    expectWildcardSourceCertification(index, false);
+  });
+
+  it.each([
+    { label: "complete export absence", source: "export const unrelated = true;" },
+    { label: "duplicate paths to the same declaration", source: 'export * from "./target.js";' },
+    { label: "erased competing export", source: 'export type * from "./missing.js";' },
+  ])("preserves $label", ({ source }) => {
+    const { scope, fs } = makeScope(wildcardAuthorityFixture(source));
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(index.filesSkipped).toBe(0);
+    expect(index.filesPartiallyIndexed).toBe(0);
+    expectWildcardSourceCertification(index, true);
+  });
+
+  it("propagates unresolved nested runtime re-export uncertainty", () => {
+    const { scope, fs } = makeScope(wildcardAuthorityFixture('export * from "./missing.js";'));
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(index.filesSkipped).toBe(0);
+    expectWildcardSourceCertification(index, false);
+  });
+
+  it("does not treat a partial barrel's visible same-owner export as complete", () => {
+    const { scope, fs } = makeScope({
+      ...wildcardAuthorityFixture(
+        `export * from "./target.js";\n// ${"x".repeat(2_200_000)}\nexport * from "./competing.js";`,
+      ),
+      "src/competing.ts": "export function delegated() { return false; }",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expect(index.filesPartiallyIndexed).toBe(1);
+    expectWildcardSourceCertification(index, false);
+  });
+
+  it("keeps unresolved wildcard cycles uncertified", () => {
+    const { scope, fs } = makeScope(wildcardAuthorityFixture('export * from "./barrel.js";'));
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expectWildcardSourceCertification(index, false);
+  });
+
+  it("preserves explicit export precedence over an unread wildcard branch", () => {
+    const { scope, fs } = makeScope({
+      ...wildcardAuthorityFixture('export * from "./missing.js";'),
+      "src/barrel.ts": 'export { delegated } from "./target.js";\nexport * from "./missing.js";',
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    expectWildcardSourceCertification(index, true);
+  });
+});
