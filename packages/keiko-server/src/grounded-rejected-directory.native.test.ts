@@ -171,6 +171,34 @@ describe("native rejected-path eligibility after explicit admission", () => {
     const path = CASES[0].path;
     rejected(await retrieve("Explain ignored.ts", "directory", ["src"]), path);
   });
+  it("records an ignored ordinary HTML basename before later directory search", async () => {
+    const path = "src/ignored.html";
+    writeFileSync(join(root, path), "<html><body>hiddenFlow 937</body></html>\n");
+    writeFileSync(join(root, ".gitignore"), `${path}\n`);
+    rejected(await retrieve("Explain ignored.html", "directory", ["src"]), path);
+  });
+  it.each(["probe*.ts", "probe?.ts"])(
+    "keeps literal basename %s distinct from wildcard siblings before retention",
+    async (basename) => {
+      const path = `src/${basename}`;
+      writeFileSync(join(root, path), "export const literalFact = 937;\n");
+      for (let index = 0; index < 100; index += 1) {
+        const directory = `src/decoy-${String(index).padStart(3, "0")}`;
+        mkdirSync(join(root, directory));
+        writeFileSync(join(root, directory, "probe0.ts"), "export const siblingFact = 211;\n");
+      }
+      const result = await retrieve(`Explain \`${basename}\``, "directory", ["src"]);
+      expect(result.result.pack.files.map((file) => file.scopePath)).toContain(path);
+      expect(
+        result.log.events.find((event) => event.op === "search.connected-context.source-details")
+          ?.extra,
+      ).toMatchObject({
+        basenameDiscoveryMatchCount: 1,
+        explicitPathAdmittedCount: 1,
+        explicitPathRejectedCount: 0,
+      });
+    },
+  );
   it("never reads a rejected manifest through metadata helpers", async () => {
     const path = "src/package.json";
     writeFileSync(join(root, path), '{"name":"fixture","version":"1.0.0"}\n');
