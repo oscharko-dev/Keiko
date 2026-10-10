@@ -107,3 +107,23 @@ describe("positively requested general advice without source authority", () => {
     expect(result.rings.some((ring) => ring.kind === "lexical")).toBe(true);
   });
 });
+
+describe("whole supplied-context clauses preserve independent requests", () => {
+  it.each([
+    "My preferences are concise explanations, and I want you to explain the maximum operating limit in the customer manual. Please acknowledge these preferences.",
+    "My preferences are concise explanations while I want you to read the customer manual. Please acknowledge these preferences.",
+    "Meine Präferenzen sind kurze Antworten, und ich möchte die Angaben im Handbuch erklärt bekommen. Bitte bestätige diese Präferenzen.",
+  ])("retains source discovery for the complete mixed clause: %s", (text) => {
+    const result = plan(text);
+    expect(result.targetDecision?.conversationOnly).toBeUndefined();
+    expect(result.state).toBe("ready");
+    expect(result.rings.some((ring) => ring.kind === "lexical")).toBe(true);
+  });
+
+  it("rejects an unknown personal heading with a bounded pathological whitespace run", () => {
+    const text = `my ${" ".repeat(8192)}_. Please acknowledge these preferences.`;
+    const result = plan(text);
+    expect(result.targetDecision?.conversationOnly).toBeUndefined();
+    expect(result.query.text).toBe(text);
+  });
+});
