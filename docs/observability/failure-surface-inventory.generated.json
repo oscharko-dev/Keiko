@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "52125c6a8bee814bac81113c377da0ded031521711b0c43b4a41363afc970134"
+    "catalogDigest": "8b14fd944f345a7cf1ba2e1311e57f04b7a3eee6b7445899791dbdcaa3f0bb01"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 532,
-    "proofCount": 539,
-    "resolvedProofCount": 539,
-    "failureClassCount": 342,
+    "operationCount": 533,
+    "proofCount": 540,
+    "resolvedProofCount": 540,
+    "failureClassCount": 343,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -238,6 +238,7 @@
         "gateway.stream.completed",
         "gateway.stream.failed",
         "gateway.stream.started",
+        "gateway.tool-arguments.redacted",
         "gateway.tool-calling.verification",
         "gateway.tool-catalog.call-bound",
         "gateway.tool-catalog.native-passthrough",
@@ -867,6 +868,7 @@
     "gateway-tool-calling-capability": ["model-gateway.dependency-failure"],
     "gateway-voice-configuration": ["model-gateway.dependency-failure"],
     "gateway-tool-catalog": ["model-gateway.rejection"],
+    "gateway-tool-arguments": ["model-gateway.dependency-failure"],
     "gateway-tool-schema-rejection": ["model-gateway.dependency-failure"],
     "git-change-chat-connect": ["editor-delivery.rejection"],
     "git-change-chat-refresh": ["editor-delivery.rejection"],
@@ -1810,6 +1812,9 @@
     "gateway.stream.started.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
+    ],
+    "gateway.tool-arguments.redacted.emitted-line": [
+      "packages/keiko-model-gateway/src/openai-adapter.tool-arguments.test.ts"
     ],
     "gateway.tool-calling.verification.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "gateway.tool-catalog.call-bound.emitted-line": [

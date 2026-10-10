@@ -172,6 +172,19 @@ tokens, header values) from strings before they reach any error message, log cal
 artefact. All error constructors call `redact()` on provider-derived strings. Config serialisation
 omits credential fields.
 
+**Tool-call arguments are exact model output, not prose (#4009, 2026-10-10).** A governed tool
+consumes its arguments byte for byte: the changeset tool matches `oldString` against the file and
+writes `newString` as file content. `redact()`'s heuristic shape patterns are unsafe there. They
+match ordinary text: the Requesty benchmark's README prose "supports basic stock holds" reached the
+edit tool as "supports Basic [REDACTED] holds". Every exact replacement then failed as
+`old-string-not-found`, and created content would have been written changed. The OpenAI-compatible
+adapter therefore scrubs a tool call's name and arguments with `redactSecretLiterals()` only, which
+removes exactly the configured provider literals (API key and base URL) and nothing else. Answer
+text, reasoning and structured output keep the full `redact()`. The governed tools keep their own
+scope, authority, digest and secret-path checks. When a configured literal was removed from tool
+arguments, `gateway.tool-arguments.redacted` records it at `warn` under the call's correlation, with
+the model digest and the tool-call and changed-string counts, never the arguments or the secret.
+
 ### D8 — CLI surface: `keiko models`
 
 We will add a `models` sub-command to the CLI with two sub-commands: `list` (prints capability
