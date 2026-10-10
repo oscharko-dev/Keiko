@@ -5989,8 +5989,9 @@ function nonOverlappingExcerptWindows(
 
 function strongerExcerptWindow(
   candidate: ExcerptWindowStrength,
-  current: ExcerptWindowStrength,
+  current: ExcerptWindowStrength | undefined,
 ): ExcerptWindowStrength {
+  if (current === undefined) return candidate;
   if (candidate.tracePriority !== current.tracePriority) {
     return candidate.tracePriority > current.tracePriority ? candidate : current;
   }
@@ -6013,7 +6014,7 @@ function rankedExcerptWindows(
   atoms: readonly EvidenceAtom[],
 ): readonly LineWindow[] {
   const sorted = [...windows].sort((a, b) => a.startLine - b.startLine);
-  const strengths = sorted.map((): ExcerptWindowStrength => ({ tracePriority: 0, score: 0 }));
+  const strengths = sorted.map((): ExcerptWindowStrength | undefined => undefined);
   let unlocated: ExcerptWindowStrength = { tracePriority: 0, score: 0 };
   for (const atom of atoms) {
     const strength = { tracePriority: tracePriority(atom), score: atom.score };
@@ -6025,13 +6026,13 @@ function rankedExcerptWindows(
     const index = windowIndexContainingLine(sorted, range.startLine);
     const window = sorted[index];
     const current = strengths[index];
-    if (window !== undefined && current !== undefined && windowContainsAtom(window, atom))
+    if (window !== undefined && windowContainsAtom(window, atom))
       strengths[index] = strongerExcerptWindow(strength, current);
   }
   return sorted
     .map((window, index) => ({
       window,
-      strength: strongerExcerptWindow(strengths[index] ?? unlocated, unlocated),
+      strength: strengths[index] ?? unlocated,
     }))
     .sort(
       (a, b) =>
