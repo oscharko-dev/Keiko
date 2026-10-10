@@ -377,6 +377,53 @@ binary classification. Supported decoding and line-preserving secret redaction s
 parsing; incomplete, binary, unsupported, changed, unsafe or oversized sources cannot produce
 import edges. This buffer belongs to that read and does not add cross-request source retention.
 
+Explicit endpoint implementation questions reuse these existing graph and source readers.
+Current lexical source candidates may order endpoint intake before its existing structural file
+cap. A configured registration admits only a literal method and path with a direct handler in the
+same record; ambiguous, computed or spread declarations do not certify a handler. Handler
+admission retains the registration path and exact observed identifier span, then uses the
+existing lexical reference index to identify its current target. A global same-name lookup cannot
+certify that relationship. Definition traversal requires the existing TypeScript AST index, a
+current guarded source snapshot, an unambiguous lexical call binding and the complete call span
+inside an actually read excerpt. Calls belong to their nearest exact indexed callable declaration;
+uninvoked nested functions and unsupported anonymous owners cannot inherit the outer handler's
+identity. Known targets reuse their actual indexed definition spans and ranges rather than a
+name-only global lookup. Exact declaration identities distinguish same-line declarations.
+Imported targets retain the exact runtime module-export declaration through the existing
+re-export resolver; a same-named method or nested declaration cannot replace that identity.
+Runtime re-export declarations retain uncertainty when their source is unreadable, only partially
+observed or unresolved. A missing indexed export in such a branch is not proof of export absence
+and cannot certify a unique target from another branch. These checks retain existing read caps.
+Type-only imports and exports, ambiguous bindings and unavailable source projections do not
+certify runtime references. Package output-to-source mapping uses explicit `rootDir` and `outDir`
+from already guarded compiler metadata, an unambiguous configuration owned by the package, and
+only sources already admitted inside that package. It adds no read or candidate grant and does
+not admit generated output. Explicit unsupported package entries do not grant a root fallback.
+An unowned inline callable may supply a definition-location witness only when its fully observed
+lexical call and reference agree on the exact identifier and target declaration spans. Its target
+body uses the same guarded reader and finite target capacity. The existing definition evidence
+retains a resolved reference edge with the observed source and exact target coordinates, including
+that edge in its stable identity. Ranking and excerpt selection reuse declaration priority without
+changing lexical relevance, weights or floors. Continuation preserves the reference relationship
+and `source-graph-incomplete` uncertainty; generic structural targets receive no declaration
+promotion. This does not establish callback invocation or an outer-owner call edge.
+Precisely referenced definitions use their complete AST declaration ranges without appended
+context lines, preventing neighbouring definitions from consuming each other's excerpt grant.
+Existing own-return and direct-await annotations order certified calls with fair sibling traversal.
+Binding certification does not replace relevance with a constant score. Declaration promotion
+preserves its admitted score; a further definition reuses the original-query matcher on its actually
+read, redacted source, followed by the existing relationship attenuation. Explicit selected-file
+priority remains intact.
+Certified targets, including certified seeds, consume a finite request capacity bounded by the
+validated query's metadata capacity and the actual admitted compiler-AST definition count.
+Unique target identities terminate cycles; continuation ends when that capacity or the reachable
+graph is exhausted. Observation frontiers retain the validated query's per-level capacity, while
+seed discovery and symbol-search bounds remain separate. These implementation bounds remain
+inside the original search, read, excerpt, token and caller deadline grants. Closed omission
+reasons remain explicit in pack uncertainty; the existing Activity Log records uncertainty counts
+and actual read/final-prompt counts. Fragment and polyglot discoveries without that AST certification
+remain uncertified. This is source attribution, not proof that a conditional branch executed.
+
 The inclusive file-byte ceiling is owned once by `MAX_RECURSIVE_TEXT_FILE_BYTES` in the pure
 workspace contract primitives. Recursive matching, planner limits, document input admission and
 the grounded prompt use that same value. The prompt distinguishes supported document text
@@ -483,7 +530,10 @@ shared boundary never advances beyond the later anchor's source start; a tight g
 only part of either anchor, but midpoint clipping must not discard that later start. Unequal grants
 preserve complete anchors when their combined required bytes fit, and zero-byte grants emit no view.
 Selected files retain every distinct, already-admitted evidence range rather than independent
-per-file atom or window quotas. The existing safe excerpt reader batches those ranges from one
+per-file atom or window quotas. Priority-based overlap deduplication subtracts only already covered
+lines, preserving uncovered head, tail and bridge segments. Each remaining segment retains the
+strength of its overlapping evidence atoms; higher-priority anchor segments remain first under
+tight grants. The existing safe excerpt reader batches those ranges from one
 freshly classified, decoded and redacted file snapshot, preserves original line coordinates, and
 charges every returned fragment against the accepted cumulative byte grant. A stale location beyond
 physical EOF is an omitted range and cannot discard another valid requested window from that same

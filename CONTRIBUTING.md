@@ -92,6 +92,21 @@ identities before citation reconciliation. Physical reads remain actual I/O coun
 classification and parsing share one complete guarded source read rather than charging another
 classification read. Existing final-prompt, range and read observations describe these decisions
 without recording source text or paths.
+Endpoint definition traversal binds a registration's observed handler reference to its current
+lexical AST target. Further calls retain their exact callable owner and complete observed spans;
+same-named declarations and uninvoked nested functions do not certify that relationship.
+Imported targets retain exact runtime module-export identities. Explicit compiler output mappings
+reuse already guarded metadata and can address only admitted sources in the owning package.
+Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
+cannot certify a unique runtime target when a competing branch is unobserved.
+A guarded current definition reached through an observed inline-callable reference retains its
+definition evidence and a resolved reference edge. Declaration priority does not certify callback
+invocation; continuation retains that reference relationship and `source-graph-incomplete`.
+Partially overlapping excerpt windows retain uncovered lines and their originating strength;
+deduplication removes only lines already covered by a higher-priority window.
+Existing query evidence orders endpoint intake; bounded delegation traversal keeps the original
+workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
+Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
 
 `search.connected-context.answer-details` records answer kind, observed citation behaviour,
 declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,
