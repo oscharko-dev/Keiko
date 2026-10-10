@@ -15,7 +15,7 @@ npm install                # install all workspaces from the single root lockfil
 npm run provision:usearch  # ONCE per checkout — see AGENTS.md §2
 npm run build              # compile TypeScript outputs
 npm run typecheck          # strict type-checking for src + tests
-npm run lint               # ESLint, zero-warning policy
+npm run lint               # syntax policy + ESLint, zero warnings
 npm run format:check       # Prettier check
 npm test                   # run the unit test suite
 npm run arch:check         # dependency-cruiser + import-policy + contract-boundaries
@@ -23,6 +23,12 @@ npm run arch:check:negative
 ```
 
 See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area gate table.
+
+Root lint also runs the pinned, repository-wide [code-quality syntax policy](docs/qa/code-quality-policy.md)
+before typed ESLint and UI lint. `npm run check:code-quality-policy -- --mode census --json` reports
+all 22 noncosmetic rule dispositions; the initial three production guards enforce immediately.
+Other scopes activate through their accepted migrations. Local subsets are partial, and CI accepts
+only whole-repository enforcement. Source, parser, plugin, scope and inventory failures fail closed.
 
 ### Activity Log runtime changes
 

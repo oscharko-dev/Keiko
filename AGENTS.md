@@ -329,6 +329,14 @@ The bar is strict and **machine-enforced** — match it or the build is red.
 
     This is a temporary bridge, not a carve-out — decomposing the oversized files is tracked
     separately (audit KEIKO-0118, #2891).
+- **Noncosmetic syntax policy:** root `npm run lint` runs the pinned
+  `check:code-quality-policy` command before existing root/UI ESLint. Its initial production guards
+  reject widening followed by assertion, reflective invocation and non-spread accumulator copies.
+  All 22 rule dispositions remain in the census; later scope activation follows the accepted
+  migration owners. Naming/spacing additions are excluded. Unknown or empty scope, incomplete
+  parser visitation, plugin/configuration failure, source escape and activation shrink fail closed.
+  A local `--scope` result is partial; required CI accepts only whole-repository enforcement.
+  See [`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md).
 - **Prettier (the formatter is law):** 2-space indent, **double quotes**, semicolons,
   `printWidth: 100`, trailing commas everywhere, LF endings. Run `npm run format` before you
   finish; `format:check` is a CI gate.
