@@ -1485,11 +1485,15 @@ jobs:
         run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
 
   node-26-compatibility:
-    name: Node 26 compatibility
+    name: Node 26 compatibility (shard ${{ matrix.shard }}/2)
     needs: [change-scope, verified-tree]
     if: ${{ !cancelled() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     permissions:
       contents: read
     steps:
@@ -1518,8 +1522,8 @@ jobs:
         uses: ./.github/actions/setup-sandbox-isolation
       - name: Typecheck the complete package graph
         run: npm run typecheck
-      - name: Run the complete hermetic test suite
-        run: npm test
+      - name: Run this shard of the complete hermetic test suite
+        run: npm test -- --shard=${{ matrix.shard }}/2
       - name: Prepare packaged CLI
         run: npm run prepare:bin
       - name: Build UI (static export)

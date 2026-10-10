@@ -85,6 +85,12 @@ closed on any other state, so a red `dev` analysis turns the integration run red
 5. that run _executed_ every job D1 skips — a candidate that skipped one is not evidence, which
    forecloses a chain in which one reuse authorizes the next.
 
+The Node 26 compatibility matrix requires successful evidence for both exact shard job names.
+Each shard runs its partition of the full hermetic test inventory and independently retains the
+complete toolchain, typecheck, CLI, UI, offline preparation and native installable-package proofs.
+Missing, failed, cancelled or skipped evidence for either shard, or legacy single-job evidence,
+forces fresh execution; one successful shard cannot authorize reuse for the other.
+
 The portable secure-read matrix requires successful evidence for all four exact native job names,
 not merely one matching matrix prefix. Missing or unsuccessful evidence for either macOS
 architecture, Linux x64, or Windows x64 forces fresh execution. Its fixture is shared with the
