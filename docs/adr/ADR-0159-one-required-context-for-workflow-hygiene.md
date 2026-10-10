@@ -64,6 +64,13 @@ still executing on every pull request. What changes is how many check contexts r
 
 ## Decision
 
+**Epic qualification amendment (#3915).** The exact accepted integration branch
+`codex/epic-anti-slop-quality` receives the same four-tool hygiene evaluation on
+its pull requests and pushes, including zizmor. Existing dev and merge-group
+eligibility, all tool pins, checkout/failure guards and independent reporting
+remain intact. No wildcard or additional permission is introduced. The owning
+regression retains the original event clauses and adds this exact branch.
+
 **D1 — One job runs all four tools; nothing about the tools changes.**
 
 > **Amended by phase 3 — read this before the paragraph below.** The job was added to `ci.yml` in
@@ -234,7 +241,8 @@ one gate that failed. At roughly 55 seconds for the whole bundle, re-running all
 worth designing around — but the collapse is real and is not implied by "fewer contexts".
 
 A skipped gate now reports as a green context rather than a grey one. On `workflow_dispatch`, and on
-pull requests based on any branch other than `dev`, zizmor's condition is false: the standalone job
+pull requests based on any branch other than `dev` or the accepted
+`codex/epic-anti-slop-quality` branch, zizmor's condition is false: the standalone job
 concluded `skipped`, and the step inside a job whose other three gates ran concludes `success`.
 Branch protection already treated `skipped` as passing, so nothing about gating moves. It does
 change one thing in phase 3's favour: `scripts/verify-release-required-checks.mjs` accepts only

@@ -16,6 +16,21 @@ import {
 } from "./sonar-quality-gate-contract.mjs";
 
 const sonarBaseUrl = "https://sonarcloud.io";
+const sonarEpicBranch = "codex/epic-anti-slop-quality";
+
+function pullRequestBaselineFailures(analysis, baseRef) {
+  const { base, target } = analysis ?? {};
+  const failures = [];
+  if (baseRef !== SONAR_MAIN_BRANCH && baseRef !== sonarEpicBranch)
+    failures.push("SonarCloud baseline has no accepted GitHub target branch.");
+  if (target !== baseRef)
+    failures.push("SonarCloud baseline target differs from the GitHub target branch.");
+  const sameTarget = base === baseRef && typeof baseRef === "string";
+  const epicComparison = baseRef === sonarEpicBranch && base === SONAR_MAIN_BRANCH;
+  if (!sameTarget && !epicComparison)
+    failures.push("SonarCloud baseline comparison branch is missing or unaccepted.");
+  return failures;
+}
 
 function finiteNumber(value) {
   if (value === undefined || value === null || value === "") return undefined;
@@ -196,7 +211,12 @@ async function fetchEvidence(pullRequest, token, load = sonarJson) {
     analysis:
       entry === undefined
         ? undefined
-        : { commitSha: entry.commit?.sha, qualityGateStatus: entry.status?.qualityGateStatus },
+        : {
+            base: entry.base,
+            target: entry.target,
+            commitSha: entry.commit?.sha,
+            qualityGateStatus: entry.status?.qualityGateStatus,
+          },
     issuesTotal: finiteNumber(issues.total),
     measures: measuresFromPayload(measures),
     overallMeasures: measuresFromPayload(overall),
@@ -212,6 +232,7 @@ export async function runSonarPullRequestGateCli(input = {}) {
     throw new Error("SONAR_PULL_REQUEST and SONAR_HEAD_SHA are required.");
   await (input.run ?? runSonarPullRequestGate)({
     base: env.SONAR_BASE_SHA,
+    baseRef: env.SONAR_BASE_REF,
     headSha,
     pullRequest,
     token: env.SONAR_TOKEN,
@@ -220,6 +241,7 @@ export async function runSonarPullRequestGateCli(input = {}) {
 
 export async function runSonarPullRequestGate({
   base,
+  baseRef,
   execute,
   headSha,
   load = sonarJson,
@@ -229,8 +251,15 @@ export async function runSonarPullRequestGate({
   token,
 }) {
   const evidence = await fetchEvidence(pullRequest, token, load);
-  const analyzable = isAnalyzableChange({ base, execute, head: headSha, root });
-  const failures = evaluateSonarPullRequest({ ...evidence, analyzable, headSha });
+  // An epic child's GitHub diff cannot establish applicability for Sonar's main-branch
+  // comparison. Always require the full count-aware metrics for epic PRs; zero counts remain
+  // valid, while missing metrics and below-floor rates fail closed. Do not retarget the scanner.
+  const analyzable =
+    baseRef !== SONAR_MAIN_BRANCH || isAnalyzableChange({ base, execute, head: headSha, root });
+  const failures = [
+    ...pullRequestBaselineFailures(evidence.analysis, baseRef),
+    ...evaluateSonarPullRequest({ ...evidence, analyzable, headSha }),
+  ];
   if (failures.length > 0) throw new Error(failures.join(" "));
   log(`sonar-pr-quality-gate: PASS - PR #${pullRequest} is clean at ${headSha}.`);
 }

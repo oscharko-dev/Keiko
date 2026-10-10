@@ -21,6 +21,7 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
+      - codex/epic-anti-slop-quality
       - "release/**"
   pull_request:
     branches:
@@ -39,6 +40,7 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
+      - codex/epic-anti-slop-quality
       - "release/**"
   # ADR-0139 D7: code scanning also validates merge-queue groups.
   merge_group:

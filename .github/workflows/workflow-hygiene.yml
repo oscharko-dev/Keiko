@@ -25,6 +25,7 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
+      - codex/epic-anti-slop-quality
       - "release/**"
   pull_request:
     branches:
@@ -43,6 +44,7 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
+      - codex/epic-anti-slop-quality
       - "release/**"
     # `ready_for_review` comes from osv-scanner.yml's pull-request lane, which this job absorbs. The
     # other three types are GitHub's default set, made explicit so the union is readable in one place.
@@ -151,8 +153,8 @@ jobs:
         # The standalone `zizmor` job's job-level `if:` reproduced verbatim at step level. A job
         # never skips because a sibling job failed, so `!cancelled()` is what makes the step-level
         # evaluation surface identical to the job-level one - the trigger condition itself is
-        # unchanged, character for character.
-        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group') }}
+        # preserved for existing events, with exact epic eligibility under #3915.
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' && ((github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality')) || (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/codex/epic-anti-slop-quality')) || github.event_name == 'merge_group') }}
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
         with:
           version: "1.26.1"
