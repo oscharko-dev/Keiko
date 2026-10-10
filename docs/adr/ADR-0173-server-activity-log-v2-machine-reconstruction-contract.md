@@ -386,9 +386,13 @@ no implicit process sink, so constructing a fixture cannot contaminate the runni
 activity log. `UNKNOWN_CORRELATION_ID` remains available only when a reusable internal operation
 genuinely has neither a request, run, job, nor bootstrap context; it is not a bootstrap default.
 
-`parentCorrelationId` reuses the existing `isValidCorrelationId` shape guard; it is not a new trust
-boundary, and browser-supplied values are never accepted as authoritative without server-side
-validation — the same posture that already governs `correlationId`.
+Request resolution accepts a client identity only when its bounded header-safe shape also survives
+the existing writer label redaction unchanged. Otherwise it mints one UUID before response-header,
+route, gateway and parent propagation; a potentially secret-shaped value is neither echoed nor
+digested. Safe long identifiers, lowercase digests and UUIDs keep their identity.
+`parentCorrelationId` reuses the existing `isValidCorrelationId` shape and redaction-stability guard;
+browser-supplied values are never authoritative without server-side validation. Optional internal
+callers without a safe context retain the existing body-free unknown marker.
 
 ### D6 — The generated typed registry is the single production authority
 
