@@ -1,7 +1,7 @@
 // Deterministic retrieval-intent classification for connected-context planning.
 // This module is intentionally pure: no IO, no clock, no model calls.
 
-import { extractAnchors } from "./anchors.js";
+import { extractAnchors, NEXT_FRAMEWORK_TERM_RE } from "./anchors.js";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
@@ -117,7 +117,7 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "jest", pattern: /\bjest\b/iu },
   { term: "playwright", pattern: /\bplaywright\b/iu },
   { term: "cypress", pattern: /\bcypress\b/iu },
-  { term: "nextjs", pattern: /\bnext(?:\.js)?\b/iu },
+  { term: "nextjs", pattern: NEXT_FRAMEWORK_TERM_RE },
   { term: "react", pattern: /\breact\b/iu },
   { term: "eslint", pattern: /\beslint\b/iu },
   // Polyglot ecosystem routing is sourced from the shared registry so questions like "Which Java

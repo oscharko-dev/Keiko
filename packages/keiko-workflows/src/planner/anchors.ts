@@ -195,6 +195,10 @@ const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]{0,127}_[A-Za-z0-9_$]{1,12
 const FILENAME_RE =
   /(?<![\p{L}\p{M}\p{N}_$.-])([\p{L}\p{N}_$-][\p{L}\p{M}\p{N}_$-]{0,254}(?:\.[A-Za-z0-9]{1,16}){1,4})(?![\p{L}\p{M}\p{N}_$-]|\.[\p{L}\p{M}\p{N}_$-])/gu;
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
+// Bare "next" is ordinary grammar unless a framework spelling or technical noun/use binds it.
+// Intent classification consumes this same non-global pattern; it is not a public root export.
+export const NEXT_FRAMEWORK_TERM_RE =
+  /\bnext(?:\.?js)\b|\bnext(?=\s+(?:framework|version|configuration|config|router|app|application)\b)|\b(?:use|uses|using|with)\s+next(?=\s*[.!?]?\s*$)|^\s*next\s*$/iu;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
   readonly term: string;
@@ -202,7 +206,7 @@ const TECHNICAL_TERM_PATTERNS: readonly {
   { pattern: /\btype[\s_-]?script\b/gi, term: "typescript" },
   { pattern: /\bjava[\s_-]?script\b/gi, term: "javascript" },
   { pattern: /\bnode(?:\.js)?\b/gi, term: "node" },
-  { pattern: /\bnext(?:\.js)?\b/gi, term: "nextjs" },
+  { pattern: new RegExp(NEXT_FRAMEWORK_TERM_RE.source, "giu"), term: "nextjs" },
   { pattern: /\bpackage\.json\b/gi, term: "package.json" },
   { pattern: /\bpackage[\s_-]?manager\b/gi, term: "package-manager" },
   { pattern: /\btsconfig(?:\.[a-z0-9]+)?\b/gi, term: "tsconfig" },

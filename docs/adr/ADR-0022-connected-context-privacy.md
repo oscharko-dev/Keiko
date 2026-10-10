@@ -171,6 +171,13 @@ An explicitly connected repository or ordinary folder is sufficient scope for a 
 orientation or natural-language search request. A filename or symbol is useful for precision,
 but is not a prerequisite to inspect the user's accepted root. Empty and punctuation-only
 requests still require clarification, and implicit roots retain their narrowing guards.
+The canonical planner also recognizes fully parsed acknowledgement or receipt requests for
+supplied user context. These use the existing empty evidence pack when own assessment is allowed,
+without recursive discovery or source reads; disabled own assessment retains clarification. An
+independent source instruction, diagnostic, quoted target or path keeps source retrieval eligible.
+The original user input and conversation history remain model context. Ordinary "next steps"
+are literal prose; a Next.js spelling or a bound framework/version/use request retains its technical
+alias and metadata routing.
 Repository orientation retains the user's lexical terms and repository semantic provider. Recursive
 file discovery is a zero-evidence fallback after a complete term search, within the same search-call
 budget, alongside metadata and overview documents; a source-only folder must produce actual source

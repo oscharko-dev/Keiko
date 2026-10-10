@@ -336,6 +336,8 @@ export interface QueryTargetDecision {
   readonly definitionRequested: boolean;
   /** A completely parsed query-only file request; unknown continuations cannot narrow discovery. */
   readonly namedFileOnly?: true;
+  /** A completely parsed acknowledgement of supplied user context, without a source request. */
+  readonly conversationOnly?: true;
 }
 
 const SEARCH_COMMANDS = new Set(["find", "search", "locate", "suche", "finde", "lokalisiere"]);
@@ -449,6 +451,47 @@ function namedFileOnlyRequest(query: RetrievalQuery): boolean {
   if (shape === undefined) return false;
   const clauses = shape.split(/[.!?;\n&]/u).map(namedFileClauseDecision);
   return clauses.includes(true) && !clauses.includes(false);
+}
+
+const ACKNOWLEDGEMENT_REQUEST_RE =
+  /^(?:(?:please|bitte)\s+)?(?:(?:briefly|kurz)\s+)?(?:acknowledge|confirm(?:\s+receipt\s+of)?|bestätige(?:\s+den\s+erhalt\s+von)?)\s+(?:these|this|my|our|the|diese|diesen|dieses|meine|unsere)\s+(?:working\s+)?(?:preferences?|notes?|context|message|information|präferenzen|notizen|nachricht|informationen)(?:\s+in\s+(?:no\s+more\s+than\s+)?[\p{L}\d-]+\s+words)?$/iu;
+const SUPPLIED_CONTEXT_RE =
+  /^(?:my|our|this|these|meine|unsere|dies|diese)\b[^.!?;\n]*\b(?:is|are|ist|sind)\b/iu;
+const ACKNOWLEDGEMENT_OUTPUT_RE =
+  /^(?:(?:please|bitte)\s+)?(?:do\s+not\s+repeat\s+(?:the|this|these)\s+(?:note|notes|message|context)|wiederhole\s+(?:die|diese)\s+(?:notiz|notizen|nachricht)\s+nicht)$/iu;
+const INDEPENDENT_CONTEXT_COMMAND_RE =
+  /\b(?:then|also|please|while|dann|außerdem|bitte|während)\s+(?:explain|read|show|find|search|describe|erkläre|lies|zeige|suche|beschreibe)\b/iu;
+
+function suppliedContextClause(clause: string, index: number): boolean {
+  if (INDEPENDENT_CONTEXT_COMMAND_RE.test(clause)) return false;
+  if (SUPPLIED_CONTEXT_RE.test(clause)) return true;
+  // A supplied personal heading may be a fragment rather than an asserted source fact.
+  if (/^(?:my|our|meine|unsere)\s+[\p{L}\d -]+$/iu.test(clause))
+    return !REQUEST_COMMAND_RE.test(clause) && !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause);
+  // A neutral initial heading supplies context; it cannot authorize an instruction or question.
+  return (
+    index === 0 &&
+    /^[\p{L}\d][\p{L}\d -]*$/u.test(clause) &&
+    !REQUEST_COMMAND_RE.test(clause) &&
+    !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause)
+  );
+}
+
+function conversationOnlyRequest(query: RetrievalQuery, anchors: readonly SearchAnchor[]): boolean {
+  if (query.kind !== "natural-language" || anchors.some((anchor) => anchor.kind !== "literal"))
+    return false;
+  if (parseDiagnosticTraceText(query.text).detected || /[?`"']/u.test(query.text)) return false;
+  const clauses = queryContextOutsideQuotes(query.text)
+    .split(/[.!;\n]+/u)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  const acknowledgement = clauses.findIndex((clause) => ACKNOWLEDGEMENT_REQUEST_RE.test(clause));
+  if (acknowledgement < 0) return false;
+  return clauses.every((clause, index) =>
+    index < acknowledgement
+      ? suppliedContextClause(clause, index)
+      : index === acknowledgement || ACKNOWLEDGEMENT_OUTPUT_RE.test(clause),
+  );
 }
 
 function requestContentTargets(
@@ -579,6 +622,7 @@ export function resolveQueryTargetDecision(
     definitionSymbol: definitionTarget(query, kind, targets, definitionRequested),
     definitionRequested,
     ...(namedFileOnlyRequest(query) ? { namedFileOnly: true } : {}),
+    ...(conversationOnlyRequest(query, requested.anchors) ? { conversationOnly: true } : {}),
   };
 }
 
@@ -701,6 +745,25 @@ function decideClarification(
   return { state: "ready", clarification: undefined };
 }
 
+function plannedRequestDecision(
+  target: QueryTargetDecision,
+  references: readonly SearchReference[],
+  classification: RetrievalIntentClassification,
+  anchors: readonly SearchAnchor[],
+  scope: SelectedScope,
+): { classification: RetrievalIntentClassification; decision: ClarificationDecision } {
+  if (target.conversationOnly === true && references.length === 0) {
+    return {
+      classification: { intent: "clarification-needed", normalizedTerms: [] },
+      decision: {
+        state: "clarification-needed",
+        clarification: buildClarification("too-generic", TOO_GENERIC_QUESTIONS, 1),
+      },
+    };
+  }
+  return { classification, decision: decideClarification(anchors, scope, classification.intent) };
+}
+
 // ─── Plan ID derivation ───────────────────────────────────────────────────────
 
 interface PlanSeed {
@@ -820,6 +883,14 @@ export function createExplorationPlan(
   if (!scopeResult.ok) {
     return buildScopeInvalidPlan(input, resolved, classification);
   }
+  return buildSelectedScopePlan(input, resolved, classification);
+}
+
+function buildSelectedScopePlan(
+  input: CreatePlanInput,
+  resolved: ResolvedInputs,
+  classification: RetrievalIntentClassification,
+): ExplorationPlan {
   const extraction = extractRetrievalChannels(
     input.query.text,
     resolved.maxAnchors,
@@ -827,20 +898,32 @@ export function createExplorationPlan(
   );
   const searchAnchors = [...extraction.anchors, ...searchReferenceAnchors(extraction.references)];
   const targetDecision = resolveQueryTargetDecision(input.query, searchAnchors, input.maxAnchors);
-  const decision = decideClarification(searchAnchors, input.scope, classification.intent);
+  const { classification: plannedClassification, decision } = plannedRequestDecision(
+    targetDecision,
+    extraction.references,
+    classification,
+    searchAnchors,
+    input.scope,
+  );
   const { rings, directEvidenceLookup } =
     decision.state === "ready"
       ? composeRings(searchAnchors, input.scope, input.query, resolved.budget, targetDecision)
       : { rings: [], directEvidenceLookup: false };
-  const seed = readyPlanSeed(input, classification, searchAnchors, extraction.references, rings);
+  const seed = readyPlanSeed(
+    input,
+    plannedClassification,
+    searchAnchors,
+    extraction.references,
+    rings,
+  );
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     planId: derivePlanId(seed),
     state: decision.state,
-    retrievalIntent: classification.intent,
-    ...(classification.effectiveIntent === undefined
+    retrievalIntent: plannedClassification.intent,
+    ...(plannedClassification.effectiveIntent === undefined
       ? {}
-      : { effectiveRetrievalIntent: classification.effectiveIntent }),
+      : { effectiveRetrievalIntent: plannedClassification.effectiveIntent }),
     directEvidenceLookup,
     scope: input.scope,
     query: input.query,
