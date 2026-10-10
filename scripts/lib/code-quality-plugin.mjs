@@ -49,10 +49,11 @@ function compileFile(source, target) {
 // Node intentionally refuses to strip TS in node_modules. Compile immutable upstream source with
 // Keiko's existing compiler; the temporary ESM directory resolves the same locked plugin bridge.
 export function withCompiledPolicyPlugin(callback) {
+  const source = dirname(fileURLToPath(import.meta.resolve("oxlint-plugin-anti-slop")));
   const temporary = mkdtempSync(join(POLICY_TOOL_ROOT, "node_modules/.keiko-policy-"));
   try {
     writeFileSync(join(temporary, "package.json"), JSON.stringify({ type: "module" }));
-    compilePolicyPluginDirectory(join(POLICY_PLUGIN_ROOT, "src"), join(temporary, "src"));
+    compilePolicyPluginDirectory(source, join(temporary, "src"));
     return callback(temporary);
   } finally {
     rmSync(temporary, { recursive: true, force: true });

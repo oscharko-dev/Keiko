@@ -1,7 +1,7 @@
 export const UPSTREAM_COMMIT = "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b";
 export const RUNNER_VERSION = "1.78.0";
 export const UPSTREAM_VERSION = "0.1.2";
-export const INITIAL_GUARDS = new Set([
+const INITIAL_GUARDS = new Set([
   "anti-slop/no-reduce-accumulator-copy",
   "anti-slop/no-widen-then-assert",
   "anti-slop/no-reflect-apply",
@@ -106,7 +106,7 @@ export function validatePolicy(policy, previous = []) {
   return activationShrank(policy, previous) ? ["activation-shrank"] : [];
 }
 
-export function isRuleActive(rule, file) {
+function isRuleActive(rule, file) {
   return rule.activeScopes.some(
     (scope) =>
       scope === "repository" || scope === file.scope || (scope === "production" && file.production),

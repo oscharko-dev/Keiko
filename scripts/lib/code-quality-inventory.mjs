@@ -8,7 +8,7 @@ import { collectWorkspacePackages } from "../workspace-graph.mjs";
 import { isTestPath } from "../sonar-analysis-scope.mjs";
 import { resolveGitExecutable } from "../check-dependency-hygiene.mjs";
 
-export const POLICY_SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
+const POLICY_SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
 const TOOL_CATALOG_FIXTURES = new Set([
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
@@ -18,7 +18,7 @@ export function policyDigest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export function policyGit(root, args) {
+function policyGit(root, args) {
   return execFileSync(resolveGitExecutable(), args, {
     cwd: root,
     encoding: "utf8",
