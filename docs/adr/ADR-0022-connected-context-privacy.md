@@ -298,7 +298,11 @@ does not add source work; unknown or source-constrained independent clauses rema
 The existing target decision supplies a positive, completely parsed `namedFileOnly` result;
 finding a path somewhere in an otherwise unknown clause is insufficient. Closed file-list,
 file-contained fact and file-subject explanation forms retain canonical quote and presentation
-projection. Independent subordinate requests and unknown meaningful continuations remain broad.
+projection. A positively parsed return/open/read orientation to one exact query-named path may
+bind subsequent local function, method, section or value questions in the same request. Those
+questions cannot precede the orientation or choose among multiple distinct paths. Actual quoted
+targets, nonlocal locations, other source constraints, relationship/history requests and unknown
+meaningful continuations remain broad; this does not infer a source from prior conversation.
 The existing structural request context binds to that narrower search scope; the human's source
 scope and budgets remain unchanged. Independent clauses after commas, additional paths omitted
 by the bounded reference projection, definitions, diagnostics, relationships and history retain
@@ -607,7 +611,8 @@ Direct named implementation and ADR/RFC fact questions use lexical evidence plus
 filename batches; they do not schedule unrelated graph or history traversal. Named-file focus in
 Git and ordinary folders additionally requires every source request clause to stay bound to a
 named file. Canonical quotation parsing preserves possessives and contractions while retaining
-actual quoted search targets. Closed attached citation and word-limit instructions do not create
+actual quoted search targets. Closed attached citation instructions, including current implementation
+lines, and word-limit instructions do not create
 source targets; separately parsed general advice does not authorize additional source discovery. The canonical anchor producer retains quoted/path targets before removing presentation-only
 prose, and removes that prose before definition patterns or ordinary symbols can treat citation
 instructions as requested source content. Target-shape, definition and relationship classification

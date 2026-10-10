@@ -36,6 +36,7 @@ const SOURCE_ANSWER = "The value is 37. [src/target.ts:1]";
 const MANUAL_ANSWER = "The maximum operating limit is 37 units. [manual/customer.txt:2]";
 const POLICY_FILE = "packages/keiko-server/src/grounded-answer-assessment.ts";
 const POLICY_SOURCE = 'export const operatorPolicy = "allowed or disabled";\n';
+const RETURN_ANSWER = `normalizeGroundedAnswerAssessment applies the operator policy. [${POLICY_FILE}:2]`;
 const MIXED_ANSWER =
   `The operator policy is allowed or disabled. [${POLICY_FILE}:1]\n` +
   "<assessment>State observations and assumptions separately.</assessment>";
@@ -102,7 +103,9 @@ async function provider(requests: ProviderRequest[], responseText = ACK): Promis
         requests.length === 1
           ? prompt.includes("applies the operator's policy") &&
             prompt.includes(POLICY_SOURCE.trim())
-            ? MIXED_ANSWER
+            ? prompt.includes("Return to ")
+              ? RETURN_ANSWER
+              : MIXED_ANSWER
             : body.includes("Which Next.js version")
               ? "Next.js is 15.0.0. [package.json:1]"
               : body.includes("maximum operating limit")
@@ -183,7 +186,11 @@ function runtime(baseUrl: string, disabled: boolean): { deps: UiHandlerDeps; cha
 }
 function writePolicySource(root: string): void {
   mkdirSync(join(root, "packages/keiko-server/src"), { recursive: true });
-  writeFileSync(join(root, POLICY_FILE), POLICY_SOURCE);
+  writeFileSync(
+    join(root, POLICY_FILE),
+    POLICY_SOURCE +
+      "export function normalizeGroundedAnswerAssessment() { return operatorPolicy; }\n",
+  );
 }
 async function ask(
   port: number,
@@ -565,5 +572,37 @@ describe("native original source plus general-advice request", () => {
     expect(
       analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence,
     ).toMatchObject({ classification: "supported", corruptLineCount: 0 });
+  });
+});
+
+describe("native original return to a named source", () => {
+  it("sends only the freshly admitted source for the unchanged return question", async () => {
+    const question = await originalGeneralQuestion("compaction-source-return");
+    const requests: ProviderRequest[] = [];
+    const { deps, chatId } = runtime(await provider(requests), false);
+    const started = await startUiTestServer({
+      staticRoot: directory,
+      csp: buildCspHeader([]),
+      handlerDeps: deps,
+    });
+    servers.push(started.server);
+    const response = await ask(started.port, chatId, question, "original-source-return");
+    expect(response.status).toBe(200);
+    const answer = (await response.json()) as GroundedAnswer;
+    expect(answer.contextPack).toMatchObject({ filesInPrompt: 1 });
+    expect(answer.citations).toContainEqual(
+      expect.objectContaining({ scopePath: POLICY_FILE, lineRange: { startLine: 2, endLine: 2 } }),
+    );
+    expect(requests).toHaveLength(1);
+    const prompt = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt).toContain(question);
+    expect(prompt).toContain("export function normalizeGroundedAnswerAssessment()");
+    expect(prompt).not.toContain("export const preferences");
+    expect(
+      analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence,
+    ).toMatchObject({
+      classification: "supported",
+      corruptLineCount: 0,
+    });
   });
 });
