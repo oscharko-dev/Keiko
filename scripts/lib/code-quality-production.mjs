@@ -150,7 +150,7 @@ function manifestTargets(value) {
   return Object.values(value).flatMap(manifestTargets);
 }
 
-function emittedSources(root, contexts, files) {
+export function emittedSources(root, contexts, files) {
   const outputs = new Map();
   for (const config of contexts.values()) {
     if (config.options.noEmit) continue;
@@ -230,7 +230,7 @@ function resolvedSource(root, path, specifier, options, files, outputs, cache) {
 export function reconcileProductionSources(input) {
   const { root, files, contexts, workspaces, safeFile, classify } = input;
   const byPath = new Map(files.map((file) => [file.path, file]));
-  const outputs = emittedSources(root, contexts, byPath);
+  const outputs = input.outputs ?? emittedSources(root, contexts, byPath);
   const queue = [
     ...files.filter((file) => file.production).map((file) => file.path),
     ...publicSources(root, workspaces, outputs, byPath),

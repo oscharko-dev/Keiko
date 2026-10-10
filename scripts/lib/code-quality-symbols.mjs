@@ -1,0 +1,335 @@
+import { join, relative } from "node:path";
+import ts from "typescript";
+import {
+  createCompilerContext,
+  qualifiedAlias,
+  visitCompilerNodes,
+} from "./code-quality-compiler.mjs";
+import {
+  canonicalDeclaration,
+  compilerNodeAt,
+  qualifyContextDeclarations,
+} from "./code-quality-provenance.mjs";
+
+function typeFacts(type) {
+  const flags = type.flags;
+  if ((flags & ts.TypeFlags.Unknown) !== 0) return { kind: "unknown" };
+  if ((flags & ts.TypeFlags.Any) !== 0) return { kind: "any" };
+  if (type.isUnion())
+    return {
+      kind: "union",
+      members: type.types.length,
+      containsUnknown: type.types.some((member) => (member.flags & ts.TypeFlags.Unknown) !== 0),
+    };
+  if ((flags & ts.TypeFlags.Object) !== 0) return { kind: "object" };
+  if ((flags & ts.TypeFlags.Never) !== 0) return { kind: "never" };
+  return { kind: "primitive" };
+}
+
+function signatureFacts(context, signature) {
+  const predicate = context.checker.getTypePredicateOfSignature(signature);
+  return {
+    parameters: signature.parameters.map((parameter, index) => ({
+      index,
+      optional: Boolean(
+        parameter.valueDeclaration?.questionToken ?? parameter.valueDeclaration?.initializer,
+      ),
+      rest: Boolean(parameter.valueDeclaration?.dotDotDotToken),
+      type: typeFacts(
+        context.checker.getTypeOfSymbolAtLocation(parameter, parameter.valueDeclaration),
+      ),
+    })),
+    result: typeFacts(context.checker.getReturnTypeOfSignature(signature)),
+    predicate: predicate
+      ? {
+          kind: ts.TypePredicateKind[predicate.kind],
+          parameterIndex: predicate.parameterIndex ?? null,
+        }
+      : null,
+  };
+}
+
+function resolvedFacts(compiler, context, symbol, entry) {
+  symbol = qualifiedAlias(context, symbol, compiler.state.limits.aliases);
+  const identities = symbol.declarations.map((declaration) =>
+    canonicalDeclaration(compiler, declaration, entry),
+  );
+  const type =
+    (symbol.flags & ts.SymbolFlags.Type) !== 0 && !symbol.valueDeclaration
+      ? context.checker.getDeclaredTypeOfSymbol(symbol)
+      : context.checker.getTypeOfSymbolAtLocation(
+          symbol,
+          symbol.valueDeclaration ?? symbol.declarations[0],
+        );
+  return {
+    identities,
+    type: typeFacts(type),
+    signatures: type.getCallSignatures().map((signature) => signatureFacts(context, signature)),
+  };
+}
+
+function ownedSource(compiler, path) {
+  if (!compiler.state.subject.inventory.files.some((file) => file.path === path))
+    throw new TypeError("unaccounted-symbol-source");
+  compiler.read(path);
+  const context = compiler.program(path);
+  const source = context.program.getSourceFile(join(compiler.state.subject.root, path));
+  if (!source) throw new TypeError("untyped-symbol-source");
+  qualifyContextDeclarations(compiler, context);
+  return { context, source };
+}
+
+function resolveExport(compiler, request) {
+  const { context, source } = ownedSource(compiler, request.consumerPath);
+  const references = source.statements.filter(
+    (statement) =>
+      (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
+      statement.moduleSpecifier?.text === request.specifier,
+  );
+  if (references.length === 0) throw new TypeError("unresolved-export-entry");
+  const module = context.checker.getSymbolAtLocation(references[0].moduleSpecifier);
+  if (!module) throw new TypeError("unresolved-export-entry");
+  const symbol = context.checker
+    .getExportsOfModule(module)
+    .find((entry) => entry.name === request.exportName);
+  const entry = { specifier: request.specifier, exportName: request.exportName };
+  const facts = resolvedFacts(compiler, context, symbol, entry);
+  compiler.assertCurrent();
+  return facts;
+}
+
+function describeAt(compiler, request) {
+  const { context, source } = ownedSource(compiler, request.path);
+  const node = compilerNodeAt(compiler, source, request.offset);
+  const facts = resolvedFacts(compiler, context, context.checker.getSymbolAtLocation(node), null);
+  compiler.assertCurrent();
+  return facts;
+}
+
+function sameProducer(left, right) {
+  return (
+    left.owner === right.owner &&
+    left.producer.path === right.producer.path &&
+    left.producer.start === right.producer.start &&
+    left.producer.end === right.producer.end &&
+    left.producer.kind === right.producer.kind
+  );
+}
+
+function candidateDeclaration(compiler, symbol, identity) {
+  const subject = compiler.state.subject;
+  return symbol.declarations.some((declaration) => {
+    const path = relative(subject.root, declaration.getSourceFile().fileName).replaceAll("\\", "/");
+    return (subject.outputs.get(path) ?? path) === identity.producer.path;
+  });
+}
+
+function inertExpression(node) {
+  return (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node)
+  );
+}
+
+function unwrappedExpression(node) {
+  while (inertExpression(node)) node = node.expression;
+  return node;
+}
+
+function useKind(node) {
+  let outer = node;
+  while (inertExpression(outer.parent) && outer.parent.expression === outer) outer = outer.parent;
+  if (
+    (ts.isCallExpression(outer.parent) || ts.isNewExpression(outer.parent)) &&
+    outer.parent.expression === outer
+  )
+    return "call";
+  if (ts.isExportSpecifier(node.parent)) return "reexport";
+  if (ts.isTypeReferenceNode(node.parent) || ts.isTypeQueryNode(node.parent))
+    return "type-reference";
+  return "reference";
+}
+
+function referenceNode(node) {
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return true;
+  return (
+    ts.isIdentifier(node) &&
+    !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+  );
+}
+
+function staticMemberKey(compiler, context, node) {
+  const seen = new Set();
+  while (node) {
+    node = unwrappedExpression(node);
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    if (ts.isNumericLiteral(node)) return String(Number(node.text));
+    if (!ts.isIdentifier(node)) return undefined;
+    const symbol = context.checker.getSymbolAtLocation(node);
+    const initializer = aliasInitializer(symbol?.valueDeclaration);
+    if (!initializer) return undefined;
+    if (seen.has(symbol) || seen.size >= compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    seen.add(symbol);
+    node = initializer;
+  }
+  return undefined;
+}
+
+function expressionSymbol(compiler, context, node) {
+  node = unwrappedExpression(node);
+  if (!ts.isElementAccessExpression(node)) return context.checker.getSymbolAtLocation(node);
+  const key = staticMemberKey(compiler, context, node.argumentExpression);
+  if (key === undefined) return undefined;
+  const owner = context.checker.getNonNullableType(
+    context.checker.getTypeAtLocation(node.expression),
+  );
+  return context.checker.getPropertyOfType(owner, key);
+}
+
+function aliasInitializer(declaration) {
+  if (!declaration) return null;
+  if (
+    ts.isParameter(declaration) ||
+    ts.isBindingElement(declaration) ||
+    ts.isPropertyAssignment(declaration) ||
+    ts.isShorthandPropertyAssignment(declaration)
+  )
+    return undefined;
+  if (!ts.isVariableDeclaration(declaration)) return null;
+  if ((ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 || !declaration.initializer)
+    return undefined;
+  return declaration.initializer;
+}
+
+function matchesProducer(compiler, symbol, identity) {
+  if (!candidateDeclaration(compiler, symbol, identity)) return false;
+  return symbol.declarations.some((declaration) =>
+    sameProducer(canonicalDeclaration(compiler, declaration, identity.entry), identity),
+  );
+}
+
+function namespaceReceiver(compiler, context, node) {
+  const seen = new Set();
+  while (node) {
+    node = unwrappedExpression(node);
+    if (!ts.isIdentifier(node)) return false;
+    const symbol = context.checker.getSymbolAtLocation(node);
+    if (
+      symbol?.declarations?.some(
+        (declaration) =>
+          ts.isNamespaceImport(declaration) && !ts.isTypeOnlyImportDeclaration(declaration),
+      )
+    )
+      return true;
+    if (seen.has(symbol) || seen.size >= compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    seen.add(symbol);
+    node = aliasInitializer(symbol?.valueDeclaration);
+  }
+  return false;
+}
+
+function qualifiedMemberReceiver(compiler, context, node) {
+  node = unwrappedExpression(node);
+  if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return true;
+  return namespaceReceiver(compiler, context, node.expression);
+}
+
+function invocationSymbol(compiler, context, symbol, identity) {
+  const seen = new Set();
+  while (symbol) {
+    symbol = qualifiedAlias(context, symbol, compiler.state.limits.aliases);
+    if (matchesProducer(compiler, symbol, identity)) return symbol;
+    const initializer = aliasInitializer(symbol.valueDeclaration);
+    if (initializer === null) return symbol;
+    if (initializer === undefined) return undefined;
+    if (seen.has(symbol) || seen.size >= compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    seen.add(symbol);
+    if (!qualifiedMemberReceiver(compiler, context, initializer)) return undefined;
+    symbol = expressionSymbol(compiler, context, initializer);
+  }
+  return undefined;
+}
+
+function scanUses(compiler, path, identity, result) {
+  let owned;
+  try {
+    owned = ownedSource(compiler, path);
+  } catch (error) {
+    if (error.message !== "untyped-symbol-source") throw error;
+    result.untyped.push(path);
+    return;
+  }
+  const { context, source } = owned;
+  visitCompilerNodes(compiler.state, source, (node) => {
+    if (!referenceNode(node)) return;
+    const symbol = expressionSymbol(compiler, context, node);
+    if (!symbol) {
+      result.unresolved += 1;
+      return;
+    }
+    inspectUse(compiler, context, node, symbol, path, identity, result);
+  });
+}
+
+function inspectUse(compiler, context, node, symbol, path, identity, result) {
+  try {
+    symbol =
+      useKind(node) === "call"
+        ? invocationSymbol(compiler, context, symbol, identity)
+        : qualifiedAlias(context, symbol, compiler.state.limits.aliases);
+    if (!symbol) {
+      result.unresolved += 1;
+      return;
+    }
+  } catch (error) {
+    if (error.message !== "unresolved-owner-symbol") throw error;
+    result.unresolved += 1;
+    return;
+  }
+  if (!matchesProducer(compiler, symbol, identity)) return;
+  if (!qualifiedMemberReceiver(compiler, context, node)) {
+    result.unresolved += 1;
+    return;
+  }
+  result.uses.push({ path, start: node.getStart(), end: node.end, kind: useKind(node) });
+}
+
+function incomingUses(compiler, identity, paths) {
+  const production = compiler.state.subject.inventory.files
+    .filter((file) => file.production)
+    .map((file) => file.path);
+  const selected = paths ?? production;
+  const partial =
+    production.length !== selected.length || production.some((path) => !selected.includes(path));
+  const result = { uses: [], untyped: [], unresolved: 0 };
+  for (const path of new Set(selected)) scanUses(compiler, path, identity, result);
+  compiler.assertCurrent();
+  return {
+    ...result,
+    partial,
+    complete: !partial && result.untyped.length === 0 && result.unresolved === 0,
+  };
+}
+
+export function createSymbolResolver(subject, options = {}) {
+  const compiler = createCompilerContext(subject, options);
+  return {
+    resolveExport: (request) => resolveExport(compiler, request),
+    describeAt: (request) => describeAt(compiler, request),
+    incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
+    assertCurrent: compiler.assertCurrent,
+    close: compiler.close,
+    stats: () => ({
+      programs: compiler.state.programs.size,
+      created: compiler.state.created,
+      sourceBytes: compiler.state.bytes,
+      nodes: compiler.state.nodes,
+    }),
+  };
+}
