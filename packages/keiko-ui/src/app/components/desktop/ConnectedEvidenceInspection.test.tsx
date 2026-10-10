@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
@@ -28,6 +29,28 @@ function expand(): void {
 }
 
 describe("connected evidence inspection", () => {
+  it("shares the eager pending request through StrictMode replay and opening the table", async () => {
+    let complete:
+      ((response: Awaited<ReturnType<typeof fetchEvidenceManifest>>) => void) | undefined;
+    vi.mocked(fetchEvidenceManifest).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const onRead = vi.fn();
+    render(
+      <StrictMode>
+        <ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} onReadPaths={onRead} />
+      </StrictMode>,
+    );
+    expect(fetchEvidenceManifest).toHaveBeenCalledExactlyOnceWith("run-1");
+    expand();
+    complete?.({ manifest: manifest() });
+    await screen.findByRole("table", { name: "Files assembled for this answer" });
+    expect(fetchEvidenceManifest).toHaveBeenCalledOnce();
+    expect(onRead).toHaveBeenCalledOnce();
+  });
   it("reuses a completed manifest across repeated disclosure toggles", async () => {
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest() });
     const onRead = vi.fn();
@@ -39,7 +62,7 @@ describe("connected evidence inspection", () => {
     for (let index = 0; index < 5; index += 1) {
       toggleInspection(false);
       expand();
-      await waitFor(() => expect(onRead).toHaveBeenCalledTimes(index + 2));
+      await waitFor(() => expect(onRead).toHaveBeenCalledOnce());
       expect(fetchEvidenceManifest).toHaveBeenCalledExactlyOnceWith("run-1");
     }
   });
@@ -132,12 +155,13 @@ describe("connected evidence inspection", () => {
       manifest("run-2").connectedContext?.scope.sourceScopeFingerprint,
     );
   });
-  it("fetches only on expand and renders manifest metadata without claiming prompt-fit reads", async () => {
+  it("loads read metadata eagerly but records file-table opening only on expansion", async () => {
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest() });
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
     render(<ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} />);
-    expect(fetchEvidenceManifest).not.toHaveBeenCalled();
+    await waitFor(() => expect(fetchEvidenceManifest).toHaveBeenCalledOnce());
+    expect(writer).not.toHaveBeenCalled();
     expand();
     expect(
       await screen.findByRole("table", { name: "Files assembled for this answer" }),

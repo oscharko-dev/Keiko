@@ -44,6 +44,7 @@ export const EN_MESSAGES = {
     "This answer covers the connected file. It could not be fully searched (recorded exclusions: {detail}).",
   "grounded.reference.cited": "Cited evidence",
   "grounded.reference.readUncited": "Read, not cited",
+  "grounded.reference.unknown": "Read status unknown",
   "grounded.reference.unread": "Not read",
   "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
   "editor.taskWorkspaceAccess.checkingDescription":

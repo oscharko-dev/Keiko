@@ -77,10 +77,11 @@ export interface RepositoryReferenceRoot {
   readonly scopeFingerprints?: readonly string[] | undefined;
 }
 
-export type RepositoryReferenceEvidenceState = "cited" | "read-uncited" | "unread";
+export type RepositoryReferenceEvidenceState = "cited" | "read-uncited" | "unread" | "unknown";
 export interface RepositoryReferenceEvidence {
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly readPaths: readonly string[];
+  readonly readStatusVerified?: boolean | undefined;
   readonly inspectedPaths?:
     | readonly {
         readonly scopePath: string;
@@ -93,11 +94,13 @@ const EVIDENCE_CLASSES = {
   cited: "cmpCited",
   "read-uncited": "cmpReadUncited",
   unread: "cmpUnread",
+  unknown: "cmpUnread",
 } as const;
 const EVIDENCE_LABELS = {
   cited: "grounded.reference.cited",
   "read-uncited": "grounded.reference.readUncited",
   unread: "grounded.reference.unread",
+  unknown: "grounded.reference.unknown",
 } as const;
 
 function evidenceAccessibleLabel(
@@ -151,8 +154,17 @@ export function proseReferenceEvidenceState(
       ? roots.length === 1
       : inspectedReferenceOptions(reference, evidence, roots)?.citationActivation.reason ===
         "matched";
-  return attributed && evidence.readPaths.some((read) => normalizeReferencePath(read) === path)
-    ? "read-uncited"
+  const read = evidence.readPaths.some((entry) => normalizeReferencePath(entry) === path);
+  if (attributed && read) return "read-uncited";
+  return unreadReferenceState(evidence, read);
+}
+
+function unreadReferenceState(
+  evidence: RepositoryReferenceEvidence,
+  read: boolean,
+): RepositoryReferenceEvidenceState {
+  return evidence.readStatusVerified === false || (read && evidence.readStatusVerified === true)
+    ? "unknown"
     : "unread";
 }
 

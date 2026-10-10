@@ -13,6 +13,37 @@ const fingerprint = connectedScopeFingerprint({
 const roots = [{ root: "/repo", label: "repo", scopeFingerprints: [fingerprint] }];
 
 describe("answer-bound read paths", () => {
+  it("requires every bound run and matching persisted source before asserting absence", () => {
+    const answer = { ...connectedInspectionAnswer(), evidenceRunIds: ["run-1", "run-2"] };
+    const view = renderHook(() => useConnectedEvidenceReferences(answer, roots));
+    expect(view.result.current.evidence?.readStatusVerified).toBe(false);
+    act(() => view.result.current.onReadPaths("run-1", [], fingerprint));
+    expect(view.result.current.evidence?.readStatusVerified).toBe(false);
+    act(() => view.result.current.onReadPaths("run-2", [], "malformed"));
+    expect(view.result.current.evidence?.readStatusVerified).toBe(false);
+    act(() => view.result.current.onReadPaths("run-2", [], fingerprint));
+    expect(view.result.current.evidence?.readStatusVerified).toBe(true);
+  });
+  it("leaves same-root scope replacement unknown despite a completed old manifest", () => {
+    const replacement = connectedScopeFingerprint({
+      kind: "files",
+      root: "/repo",
+      relativePaths: ["src/feature/read.ts"],
+      connectedAtMs: 2,
+    });
+    const view = renderHook(
+      ({ scopeFingerprints }) =>
+        useConnectedEvidenceReferences(connectedInspectionAnswer(), [
+          { root: "/repo", label: "repo", scopeFingerprints },
+        ]),
+      { initialProps: { scopeFingerprints: [fingerprint] } },
+    );
+    act(() => view.result.current.onReadPaths("run-1", ["src/feature/read.ts"], fingerprint));
+    expect(view.result.current.evidence?.readStatusVerified).toBe(true);
+    view.rerender({ scopeFingerprints: [replacement] });
+    expect(view.result.current.evidence?.readStatusVerified).toBe(false);
+    expect(view.result.current.evidence?.readPaths).toEqual([]);
+  });
   it("clears reads across answer versions and ignores a stale or unrelated manifest", () => {
     const view = renderHook(({ answer }) => useConnectedEvidenceReferences(answer, roots), {
       initialProps: { answer: connectedInspectionAnswer() },

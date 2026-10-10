@@ -46,9 +46,13 @@ export function reportEvidenceInspection(
 type InspectionState =
   | { readonly kind: "pending" }
   | { readonly kind: "failed" }
-  | { readonly kind: "loaded"; readonly audit: EvidenceConnectedContextAudit };
+  | {
+      readonly kind: "loaded";
+      readonly runId: string;
+      readonly audit: EvidenceConnectedContextAudit;
+    };
 
-function recordLoadedInspection(
+function publishReadPaths(
   runId: string,
   audit: EvidenceConnectedContextAudit,
   onRead: ConnectedEvidenceInspectionProps["onReadPaths"],
@@ -59,49 +63,34 @@ function recordLoadedInspection(
     audit.scope.selectedPaths,
     audit.scope.sourceScopeFingerprint,
   );
-  reportEvidenceInspection({
-    reason: "file-table-opened",
-    readFileCount: audit.files.length,
-    omittedFileCount: audit.omitted.length,
-  });
 }
 
-function useManifestInspection(
-  runId: string,
-  open: boolean,
-  onReadPaths: ConnectedEvidenceInspectionProps["onReadPaths"],
-): InspectionState {
+async function loadConnectedAudit(runId: string): Promise<EvidenceConnectedContextAudit> {
+  const response = await fetchEvidenceManifest(runId);
+  const audit = response.manifest.connectedContext;
+  if (response.manifest.run.runId !== runId || audit === undefined)
+    throw new TypeError("INVALID_CONNECTED_EVIDENCE_MANIFEST");
+  return audit;
+}
+
+function useEvidenceAudit(runId: string, retry: number): InspectionState {
   const [state, setState] = useState<InspectionState>({ kind: "pending" });
-  const completed = useRef<
+  const request = useRef<
     | {
         readonly runId: string;
-        readonly audit: EvidenceConnectedContextAudit;
+        readonly retry: number;
+        readonly promise: Promise<EvidenceConnectedContextAudit>;
       }
     | undefined
   >(undefined);
-  const onRead = useRef(onReadPaths);
   useEffect(() => {
-    onRead.current = onReadPaths;
-  }, [onReadPaths]);
-  useEffect(() => {
-    if (!open) return;
-    if (completed.current?.runId === runId) {
-      setState({ kind: "loaded", audit: completed.current.audit });
-      recordLoadedInspection(runId, completed.current.audit, onRead.current);
-      return;
-    }
     let current = true;
-    const notifyRead = onRead.current;
+    if (request.current?.runId !== runId || request.current.retry !== retry)
+      request.current = { runId, retry, promise: loadConnectedAudit(runId) };
     setState({ kind: "pending" });
-    void fetchEvidenceManifest(runId)
-      .then((response) => {
-        if (!current) return;
-        const audit = response.manifest.connectedContext;
-        if (response.manifest.run.runId !== runId || audit === undefined)
-          throw new TypeError("INVALID_CONNECTED_EVIDENCE_MANIFEST");
-        completed.current = { runId, audit };
-        setState({ kind: "loaded", audit });
-        recordLoadedInspection(runId, audit, notifyRead);
+    void request.current.promise
+      .then((audit) => {
+        if (current) setState({ kind: "loaded", runId, audit });
       })
       .catch((failure: unknown) => {
         if (!current) return;
@@ -111,7 +100,36 @@ function useManifestInspection(
     return (): void => {
       current = false;
     };
+  }, [runId, retry]);
+  return state;
+}
+
+function useManifestInspection(
+  runId: string,
+  open: boolean,
+  onReadPaths: ConnectedEvidenceInspectionProps["onReadPaths"],
+): InspectionState {
+  const [retry, setRetry] = useState(0);
+  const state = useEvidenceAudit(runId, retry);
+  const failed = useRef(false);
+  useEffect(() => {
+    failed.current = state.kind === "failed";
+  }, [state]);
+  useEffect(() => {
+    if (open && failed.current) setRetry((previous) => previous + 1);
   }, [runId, open]);
+  useEffect(() => {
+    if (state.kind === "loaded" && state.runId === runId)
+      publishReadPaths(runId, state.audit, onReadPaths);
+  }, [runId, state, onReadPaths]);
+  useEffect(() => {
+    if (!open || state.kind !== "loaded" || state.runId !== runId) return;
+    reportEvidenceInspection({
+      reason: "file-table-opened",
+      readFileCount: state.audit.files.length,
+      omittedFileCount: state.audit.omitted.length,
+    });
+  }, [runId, open, state]);
   return state;
 }
 

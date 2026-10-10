@@ -5218,6 +5218,64 @@ it("explains repository grounding whenever a folder scope is connected", () => {
   expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
 });
 
+it("loads answer-bound read metadata before opening evidence and again after reload", async () => {
+  const answer = connectedInspectionAnswer();
+  vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: connectedInspectionManifest() });
+  const session = makeSession({
+    activeChat: makeChat({
+      connectedScopes: [
+        { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+      ],
+    }),
+    messages: [
+      makeMessage({
+        role: "assistant",
+        id: answer.assistantMessageId,
+        content: answer.content,
+        groundedAnswer: answer,
+      }),
+    ],
+  });
+  for (let reload = 0; reload < 2; reload += 1) {
+    const view = render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow openEditorFile={vi.fn(() => ({ ok: true as const, windowId: "file" }))} />
+      </ChatSessionProvider>,
+    );
+    expect(document.querySelector("details.grounded-evidence-disclosure")).not.toHaveAttribute(
+      "open",
+    );
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: /Open src\/feature\/read.ts.*Read, not cited/ });
+    expect(
+      screen.queryByRole("button", { name: /Open src\/feature\/read.ts.*Not read/ }),
+    ).not.toBeInTheDocument();
+    view.unmount();
+  }
+});
+
+it("does not assert an unread file while its manifest is unavailable", () => {
+  const answer = connectedInspectionAnswer();
+  vi.mocked(fetchEvidenceManifest).mockImplementation(() => new Promise(() => undefined));
+  renderWindow(
+    makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+        ],
+      }),
+      messages: [
+        makeMessage({ role: "assistant", content: answer.content, groundedAnswer: answer }),
+      ],
+    }),
+    { openEditorFile: vi.fn(() => ({ ok: true as const, windowId: "file" })) },
+  );
+  expect(
+    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Read status unknown/ }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Not read/ })).not.toBeInTheDocument();
+});
+
 it("updates an actual chat prose reference after its answer manifest is inspected", async () => {
   const answer = connectedInspectionAnswer();
   vi.mocked(fetchEvidenceManifest).mockResolvedValueOnce({
@@ -5243,7 +5301,7 @@ it("updates an actual chat prose reference after its answer manifest is inspecte
     { openEditorFile },
   );
   expect(
-    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Not read/ }),
+    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Read status unknown/ }),
   ).toBeInTheDocument();
   const user = userEvent.setup();
   const disclosure = document.querySelector("details.grounded-evidence-disclosure > summary");
@@ -5313,7 +5371,9 @@ it("does not attribute an old manifest first expanded after switching repositori
   expect(
     screen.queryByRole("button", { name: /Open src\/feature\/read.ts.*Read, not cited/ }),
   ).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Not read/ }));
+  await user.click(
+    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Read status unknown/ }),
+  );
   expect(openEditorFile).not.toHaveBeenCalled();
   expect(
     screen.getByRole("button", { name: "Select repository source: repo-b" }),
