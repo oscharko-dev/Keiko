@@ -93,7 +93,7 @@ function bracketReferenceAnchorText(text: string): string {
     const quote = text.charAt(offset - 1);
     if (PATH_QUOTE_CHARACTERS.has(quote) && quote === text.charAt(offset + raw.length)) return raw;
     const canonical = locatedPath ? `${located.path}:${String(located.line)}` : term;
-    return `\`${normalizeUnquotedFilePathToken(canonical)}\``;
+    return `\`${normalizeUnquotedFilePathToken(canonical)}\`${raw.endsWith(".") ? "." : ""}`;
   });
 }
 
