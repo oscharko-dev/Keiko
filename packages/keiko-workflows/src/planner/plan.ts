@@ -520,9 +520,9 @@ const GENERAL_ADVICE_QUESTION_RE =
 const SOURCE_ADVICE_ATTRIBUTION_RE =
   /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b/iu;
 const SOURCE_ADVICE_DETERMINER_RE =
-  /^(?:the|this|these|that|those|our|my|your|his|her|its|their|die|das|der|diese[nrs]?|unser[e]?|mein[e]?|dein[e]?|euer[e]?|ihr[e]?)$/iu;
+  /^(?:the|this|these|that|those|our|my|your|his|her|its|their|der|die|das|den|dem|des|dies(?:e|en|em|er|es)|(?:unser|mein|dein|sein|ihr)(?:e|en|em|er|es)?|euer(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu;
 const SOURCE_ADVICE_NOUN_RE =
-  /^(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence|code|implementations?|handbuch|handbücher|quellen?|dateien?|ordner|dokumente?|repository|implementierungen?)$/iu;
+  /^(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence|codes?|implementations?|handbuch(?:s|es)?|handbüchern?|quellen?|datei(?:en)?|ordner(?:s|n)?|dokument(?:s|es|e|en)?|repositorys?|implementierung(?:en)?)$/iu;
 const SOURCE_ADVICE_TOKEN_RE =
   /[\p{L}\p{M}\p{N}_-]+(?:['’][\p{L}\p{M}\p{N}_-]+)*|[^\p{L}\p{M}\p{N}\s_-]/gu;
 const SOURCE_ADVICE_BOUNDARY_RE =
