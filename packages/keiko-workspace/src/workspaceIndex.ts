@@ -53,6 +53,7 @@ export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 9;
 export interface WorkspaceIndexCandidatePathPolicy {
   readonly include: readonly string[];
   readonly exclude: readonly string[];
+  readonly excludeLiteralPaths?: readonly string[] | undefined;
 }
 
 export type WorkspaceIndexRecordKind = "text" | "binary" | "size-exceeded";
@@ -294,10 +295,14 @@ export function workspaceCandidatePathPolicyFingerprint(
 ): string {
   const hash = createHash("sha256");
   hash.update("keiko-workspace-index:candidate-path-policy:v1\0");
-  for (const [kind, patterns] of [
+  const groups: [string, readonly string[]][] = [
     ["include", policy?.include ?? []],
     ["exclude", policy?.exclude ?? []],
-  ] as const) {
+  ];
+  // Preserve existing fingerprints when no exact exclusions are supplied.
+  if (policy?.excludeLiteralPaths !== undefined && policy.excludeLiteralPaths.length > 0)
+    groups.push(["exclude-literal", policy.excludeLiteralPaths]);
+  for (const [kind, patterns] of groups) {
     hash.update(`${kind}\0`);
     // S2871: the comparator must stay code-unit stable, not locale-collated -- this ordering
     // feeds a persisted candidate-path policy fingerprint, so `compareStrings` reproduces the

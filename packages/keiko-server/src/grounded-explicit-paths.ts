@@ -41,10 +41,7 @@ import {
 import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import { safeProperty } from "@oscharko-dev/keiko-activity-log";
-import {
-  isExtractableConnectedDocumentPath,
-  isConnectedDocumentPath,
-} from "./grounded-document-evidence.js";
+import { isConnectedDocumentPath } from "./grounded-document-evidence.js";
 
 export const EXPLICIT_PATH_REJECTION_REASONS = [
   "outside-scope",
@@ -321,7 +318,7 @@ async function admitReference(
   reference: ExplicitPathReference,
   inputs: AdmissionInputs,
   state: AdmissionState,
-  classified = false,
+  classified?: SearchResult,
 ): Promise<void> {
   const path = normalizedExplicitReferencePath(reference, inputs.searchScope.workspace.root);
   const identity = `${path ?? reference.path}:${String(reference.line ?? "")}`;
@@ -352,10 +349,14 @@ async function classifiedPathRejection(
   path: string,
   inputs: AdmissionInputs,
   state: AdmissionState,
-  classified: boolean,
+  classified: SearchResult | undefined,
   snapshot: ValidatedPathSnapshot | undefined,
 ): Promise<ExplicitPathRejectionReason | "budget-exhausted" | undefined> {
-  if (classified || isConnectedDocumentPath(path)) return undefined;
+  if (isConnectedDocumentPath(path)) return undefined;
+  if (classified !== undefined)
+    return classified.atoms.some((atom) => atom.scopePath === path)
+      ? undefined
+      : rejectionReason(classified, path);
   if (admissionStopped(inputs)) return "budget-exhausted";
   const cached = state.classifications.get(path);
   if (cached !== undefined && currentClassification(cached, inputs)) return undefined;
@@ -449,7 +450,7 @@ async function classifyHumanSelectedFile(
   }
 }
 
-async function documentBasenamePaths(
+async function basenamePaths(
   reference: ExplicitPathReference,
   inputs: AdmissionInputs,
 ): Promise<readonly string[]> {
@@ -460,14 +461,21 @@ async function documentBasenamePaths(
   for (const [index, directory] of directories.entries()) {
     if (index > 0 && !inputs.tryReserveSearchCall()) break;
     const result = await discoverWorkspacePaths(
-      inputs.searchScope.workspace,
+      // This is metadata discovery only. Original ignore/generated policy is applied by
+      // admission before any classification probe, including ignored basename accounting.
+      { ...inputs.searchScope.workspace, ignoreLines: [] },
       {
         mode: "glob",
         directory,
-        query: `**/${reference.path}`,
+        query: "**/*",
         maxResults: BASENAME_MATCH_CAP,
       },
-      { nowMs: inputs.nowMs, deadlineAtMs: inputs.deadlineAtMs, signal: inputs.signal },
+      {
+        nowMs: inputs.nowMs,
+        deadlineAtMs: inputs.deadlineAtMs,
+        signal: inputs.signal,
+        exactBasename: reference.path,
+      },
       inputs.fs,
     );
     for (const entry of result.entries) if (entry.kind === "file") paths.add(entry.relativePath);
@@ -475,19 +483,24 @@ async function documentBasenamePaths(
   return [...paths].sort().slice(0, BASENAME_MATCH_CAP);
 }
 
-async function basenamePaths(
-  reference: ExplicitPathReference,
+async function classifyBasenamePaths(
+  paths: readonly string[],
   inputs: AdmissionInputs,
-): Promise<ReadonlySet<string>> {
-  if (isExtractableConnectedDocumentPath(reference.path))
-    return new Set(await documentBasenamePaths(reference, inputs));
-  const result = await findExplicitFiles(
-    inputs,
-    `**/${reference.path}`,
-    inputs.searchScope.relativePaths,
-    BASENAME_MATCH_CAP,
+): Promise<{ readonly classified: SearchResult | undefined; readonly matchCount: number }> {
+  const eligible = paths.filter((path) => pathPolicyRejection(path, inputs) === undefined);
+  const codePaths = eligible.filter(
+    (path) => !isConnectedDocumentPath(path) && !humanSelectedPath(path, inputs),
   );
-  return new Set(result.atoms.map((atom) => atom.scopePath));
+  const metadataMatches = eligible.length - codePaths.length;
+  if (codePaths.length === 0 || admissionStopped(inputs))
+    return { classified: undefined, matchCount: metadataMatches };
+  // Metadata enumeration and this bounded batch share the original basename-search grant.
+  // Only canonically admissible exact paths reach the existing live file classifier.
+  const classified = await findExplicitFiles(inputs, "**/*", codePaths, BASENAME_MATCH_CAP);
+  return {
+    classified,
+    matchCount: metadataMatches + new Set(classified.atoms.map((atom) => atom.scopePath)).size,
+  };
 }
 
 async function admitBasename(
@@ -502,9 +515,17 @@ async function admitBasename(
     if (humanSelectedPath(path, inputs) && path.split("/").at(-1) === reference.path)
       paths.add(path);
   }
-  state.basenameMatches += paths.size;
-  for (const path of paths)
-    await admitReference({ ...reference, path }, inputs, state, !humanSelectedPath(path, inputs));
+  const { classified, matchCount } = await classifyBasenamePaths([...paths], inputs);
+  state.basenameMatches += matchCount;
+  for (const path of paths) {
+    if (admissionStopped(inputs)) break;
+    await admitReference(
+      { ...reference, path },
+      inputs,
+      state,
+      humanSelectedPath(path, inputs) ? undefined : classified,
+    );
+  }
 }
 
 function observation(state: AdmissionState): ExplicitPathObservation {

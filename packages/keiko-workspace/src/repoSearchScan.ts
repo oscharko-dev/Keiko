@@ -85,6 +85,7 @@ import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import type { WorkspaceDirectorySnapshot } from "./workspaceDirectorySnapshot.js";
 import type {
   PreparedWorkspaceIndexEntry,
+  WorkspaceIndexCandidatePathPolicy,
   WorkspaceIndexDiscoveredFile,
   WorkspaceIndexRecord,
 } from "./workspaceIndex.js";
@@ -747,12 +748,7 @@ export interface SearchTextRunner {
   //                changed the width of same-line secrets, so redacted coordinates addressed text
   //                that is not in the file.
   readonly contentLane: WorkspaceContentLane;
-  readonly candidatePathGlobs?:
-    | {
-        readonly include: readonly string[];
-        readonly exclude: readonly string[];
-      }
-    | undefined;
+  readonly candidatePathGlobs?: WorkspaceIndexCandidatePathPolicy | undefined;
   readonly candidateContentFor?: ((scopePath: string) => string | undefined) | undefined;
   readonly candidatePathPredicate?: ((scopePath: string) => boolean) | undefined;
   readonly workspaceIndex?:

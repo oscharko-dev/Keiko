@@ -463,8 +463,20 @@ safe ignored-file exemption; pasted paths cannot acquire it. All primary referen
 before diagnostic pairing builds content graphs. The existing request-local structural context
 checks their rejected-path eligibility again when consuming a retained candidate inventory, so a
 rejected explicit source cannot be read through a helper graph or its prefix/probe lane. This does
-not disable bounded structural prefix reads for other eligible, unaddressed sources. Admitted paths
-reuse `repo.selectedFile`
+not disable bounded structural prefix reads for other eligible, unaddressed sources. Exact rejected
+paths also flow into the existing
+lexical and filename candidate policy before content reads, including finite discovery and rescue.
+Literal exclusions do not interpret filename metacharacters, and the existing persistent-index and
+request-local session identities bind that policy. Human Files exemptions do not create exclusions.
+Basename admission uses the existing path-only discovery with exact final-segment matching before
+bounded retention. This metadata-only enumeration observes ignored names so original admission can
+record their rejection before later search lanes; it grants no source authority. Canonically
+eligible code paths then use the existing single bounded classification batch under the original
+basename-search reservation. The discovery cap, safe Files exemption, and live content checks remain
+unchanged.
+Its match counter counts eligible discovery/classification results independently of later admission
+deduplication; raw ignored or binary metadata names do not become classified matches.
+Admitted paths reuse `repo.selectedFile`
 evidence, survive both relevance floors, and receive read-budget priority without widening byte or
 token grants. A valid line hint selects the existing located-source window; a hint beyond the file
 falls back to the default window and never claims an anchored read. Known dotted basenames use

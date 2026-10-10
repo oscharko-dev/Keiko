@@ -1297,6 +1297,7 @@ function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDe
 
 interface SearchInputs {
   readonly admittedPaths?: readonly string[] | undefined;
+  readonly rejectedPaths?: readonly string[] | undefined;
   readonly repoSemanticSearchProviderFor?:
     ((grant: SemanticRefreshUsageGrant) => SemanticSearchProvider | undefined) | undefined;
   readonly resolveRepoSemanticSearchProvider?:
@@ -2373,6 +2374,7 @@ function lexicalSearchOptions(inputs: SearchInputs): {
   fs: WorkspaceFs;
   nowMs: () => number;
   deadlineAtMs: number;
+  candidatePathGlobs?: NonNullable<Parameters<typeof searchText>[3]>["candidatePathGlobs"];
   searchHints: {
     retrievalIntent: Exclude<RetrievalIntent, "conversational-follow-up">;
     allowSourceInspection: boolean;
@@ -2380,10 +2382,14 @@ function lexicalSearchOptions(inputs: SearchInputs): {
   };
   signal?: AbortSignal;
 } {
+  const rejectedPaths = inputs.rejectedPaths;
   return {
     fs: inputs.fs,
     nowMs: inputs.nowMs,
     deadlineAtMs: inputs.deadlineAtMs,
+    ...(rejectedPaths === undefined || rejectedPaths.length === 0
+      ? {}
+      : { candidatePathGlobs: { include: [], exclude: [], excludeLiteralPaths: rejectedPaths } }),
     searchHints: {
       retrievalIntent: inputs.retrievalIntent,
       allowSourceInspection: true,
@@ -8836,6 +8842,7 @@ function connectedContextSearchInputs(
     hasGitMetadata: context.hasGitMetadata,
     recentPaths: context.worktreeRecency?.paths.map((path) => path.path),
     searchScope: context.searchScope,
+    rejectedPaths: [...runtime.rejectedExplicitPaths],
     query: input.query,
     targetDecision: plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors),
     anchors: planSearchAnchors(plan),
