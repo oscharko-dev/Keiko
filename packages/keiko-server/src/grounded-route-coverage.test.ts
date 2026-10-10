@@ -11,6 +11,7 @@ import {
 import { assembleContextPack, rankCandidates } from "@oscharko-dev/keiko-workflows";
 import { readExcerpt, type SearchScope, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
+import { endpointContractAdapter } from "@oscharko-dev/keiko-workspace";
 import { createStructuralAdapterRequestContext } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import {
   _readKeptExcerptsForTests,
@@ -18,6 +19,7 @@ import {
   type ExcerptInputs,
   type ExcerptReadSummary,
 } from "./grounded-orchestrator.js";
+import { selectGroundedCandidateFiles } from "./grounded-evidence-selection.js";
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
 import {
   collectDiscoveredSymbolTraceEvidence,
@@ -42,6 +44,8 @@ interface CoverageFixture {
   readonly searchScope: SearchScope;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
+  readonly ordinaryAtoms: readonly EvidenceAtom[];
+  readonly requestContext: ReturnType<typeof createStructuralAdapterRequestContext>;
   readonly trace: Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>;
   readonly files: Record<string, string>;
   readonly reads: Map<string, number>;
@@ -157,10 +161,11 @@ function observedCoverageFs(
 
 async function coverageFixture(
   text = "Trace POST /api/items through scope admission recursive candidate discovery and prompt fitting",
+  source: Readonly<Record<string, string>> = coverageFiles(),
 ): Promise<CoverageFixture> {
   const searchScope = coverageSearchScope();
   const scope = coverageScope(searchScope);
-  const files = { ...coverageFiles() };
+  const files = { ...source };
   const reads = new Map<string, number>();
   const checks = { stat: 0, realPath: 0 };
   const fs = observedCoverageFs(searchScope.workspace.root, files, reads, checks);
@@ -192,7 +197,46 @@ async function coverageFixture(
   reads.clear();
   checks.stat = 0;
   checks.realPath = 0;
-  return { fs, searchScope, scope, query, trace, files, reads, checks };
+  return {
+    fs,
+    searchScope,
+    scope,
+    query,
+    trace,
+    files,
+    reads,
+    checks,
+    ordinaryAtoms: routes.atoms,
+    requestContext,
+  };
+}
+
+function coverageRanking(atoms: readonly EvidenceAtom[]): ReturnType<typeof rankCandidates> {
+  const ranking = rankCandidates({
+    atoms,
+    anchors: [],
+    context: { retrievalIntent: "targeted-code-search" },
+  });
+  const priorityPaths = endpointPriorityPaths(atoms);
+  if (priorityPaths.size === 0) return ranking;
+  return {
+    ...ranking,
+    ...selectGroundedCandidateFiles({
+      ...ranking,
+      priorityPaths,
+      scopeKind: "workspace-root",
+      filesReadMax: null,
+      nowMs: NOW,
+    }),
+  };
+}
+
+function endpointPriorityPaths(atoms: readonly EvidenceAtom[]): ReadonlySet<string> {
+  return new Set(
+    atoms
+      .filter((atom) => atom.provenance.tool === "endpoint-contract-server-route")
+      .map((atom) => atom.scopePath),
+  );
 }
 
 function atomsByPath(atoms: readonly EvidenceAtom[]): ReadonlyMap<string, readonly EvidenceAtom[]> {
@@ -210,11 +254,7 @@ async function coverageRead(
   options: CoverageReadOptions = {},
 ): Promise<ExcerptReadSummary> {
   const atoms = options.atoms ?? fixture.trace.atoms;
-  const ranking = rankCandidates({
-    atoms,
-    anchors: [],
-    context: { retrievalIntent: "targeted-code-search" },
-  });
+  const ranking = coverageRanking(atoms);
   return _readKeptExcerptsForTests(
     options.paths ?? ranking.kept.map((candidate) => candidate.scopePath),
     {
@@ -223,6 +263,7 @@ async function coverageRead(
       budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
       initialUsage: USAGE,
       atomsByPath: atomsByPath(atoms),
+      priorityPaths: endpointPriorityPaths(atoms),
       nowMs: () => NOW,
       deadlineAtMs: Infinity,
       ...fixture.trace,
@@ -241,8 +282,10 @@ function readBytes(reads: ExcerptReadSummary): number {
     .reduce((bytes, window) => bytes + Buffer.byteLength(window.content), 0);
 }
 
-async function actualExplicitAtoms(fixture: CoverageFixture): Promise<readonly EvidenceAtom[]> {
-  const result = await retrieveConnectedContextPack(
+function actualPublicRetrieval(
+  fixture: CoverageFixture,
+): ReturnType<typeof retrieveConnectedContextPack> {
+  return retrieveConnectedContextPack(
     {
       scope: fixture.scope,
       query: fixture.query,
@@ -258,6 +301,10 @@ async function actualExplicitAtoms(fixture: CoverageFixture): Promise<readonly E
       activityLog: createBufferedServerLogSink(),
     },
   );
+}
+
+async function actualExplicitAtoms(fixture: CoverageFixture): Promise<readonly EvidenceAtom[]> {
+  const result = await actualPublicRetrieval(fixture);
   return result.pack.files.flatMap((file) =>
     file.excerpts
       .map((excerpt) => excerpt.atom)
@@ -265,18 +312,19 @@ async function actualExplicitAtoms(fixture: CoverageFixture): Promise<readonly E
   );
 }
 
-async function sentPrompt(fixture: CoverageFixture, reads: ExcerptReadSummary): Promise<string> {
+async function sentPrompt(
+  fixture: CoverageFixture,
+  reads: ExcerptReadSummary,
+  atoms: readonly EvidenceAtom[] = fixture.trace.atoms,
+  budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
+): Promise<string> {
   const { pack } = await assembleContextPack(
     {
       scope: fixture.scope,
       query: fixture.query,
-      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
-      atoms: fixture.trace.atoms,
-      ranked: rankCandidates({
-        atoms: fixture.trace.atoms,
-        anchors: [],
-        context: { retrievalIntent: "targeted-code-search" },
-      }).kept,
+      budget,
+      atoms,
+      ranked: coverageRanking(atoms).kept,
       omittedFromRanking: [],
       excerpts: reads.excerpts,
     },
@@ -288,7 +336,140 @@ async function sentPrompt(fixture: CoverageFixture, reads: ExcerptReadSummary): 
     .join("\n");
 }
 
+function sameFileCoverageFiles(): Readonly<Record<string, string>> {
+  const source = { ...coverageFiles() };
+  const continuation = source["src/z-processing.ts"] ?? "";
+  source["src/implementation.ts"] =
+    (source["src/implementation.ts"] ?? "")
+      .replace('import { continueProcessing } from "./z-processing.js";\n', "")
+      .replace(
+        "export function handleItem() { return () => processItem(); }",
+        "export function handleItem() { return processItem(); }",
+      ) +
+    "\n" +
+    continuation;
+  delete source["src/z-processing.ts"];
+  return source;
+}
+
+const REGISTRATION_FACT =
+  'const routes = [{ method: "POST", path: "/api/items", handler: handleItem }];';
+
+function configuredCoverageFiles(): Readonly<Record<string, string>> {
+  return {
+    ...coverageFiles(),
+    "src/routes.ts": ['import { handleItem } from "./implementation.js";', REGISTRATION_FACT].join(
+      "\n",
+    ),
+  };
+}
+const FITTING_FACT =
+  "return promptFittingBudget > scopeAdmissionBudget ? scopeAdmissionBudget : promptFittingBudget;";
+
+function allocationFiles(): Readonly<Record<string, string>> {
+  const source = { ...configuredCoverageFiles() };
+  const original = source["src/implementation.ts"] ?? "";
+  source["src/implementation.ts"] =
+    original.replace(
+      "  return connector();",
+      "  promptFittingBudgetAndScopeAdmission();\n  return connector();",
+    ) +
+    "\n" +
+    Array.from({ length: 30 }, () => "// separation").join("\n") +
+    [
+      "\nfunction promptFittingBudgetAndScopeAdmission() {",
+      "  const promptFittingBudget = 4096;",
+      "  const scopeAdmissionBudget = 2048;",
+      `  ${FITTING_FACT}`,
+      "}",
+    ].join("\n");
+  for (const [path, content] of Object.entries(source))
+    source[path] = content.replaceAll(
+      "Scope admission recursive candidate discovery prompt fitting bookkeeping.",
+      "unrelated accounting detail.",
+    );
+  return source;
+}
+
+async function allocationAtoms(fixture: CoverageFixture): Promise<readonly EvidenceAtom[]> {
+  const endpoints = await endpointContractAdapter.lookup(
+    fixture.searchScope,
+    fixture.query,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    fixture.fs,
+    { requestContext: fixture.requestContext, nowMs: () => NOW },
+  );
+  expect(endpoints.some((atom) => atom.scopePath === "src/routes.ts")).toBe(true);
+  return [...fixture.ordinaryAtoms, ...endpoints, ...fixture.trace.atoms];
+}
+
 describe("current route trace excerpt coverage", () => {
+  it("sends the actual route registration through public retrieval under the existing byte grant", async () => {
+    const fixture = await coverageFixture(undefined, sameFileCoverageFiles());
+    const result = await actualPublicRetrieval(fixture);
+    const prompt = buildGroundedGatewayMessages(fixture.query.text, result.pack, (value) => value)
+      .map((message) => message.content)
+      .join("\n");
+    expect(result.pack.usage.excerptBytes).toBeLessThanOrEqual(8192);
+    expect(prompt).toContain('router.post("/api/items", handleItem);');
+  });
+
+  it("retains the actual connector and continuation when both bodies share a selected file", async () => {
+    const fixture = await coverageFixture(undefined, sameFileCoverageFiles());
+    expect(fixture.files["src/z-processing.ts"]).toBeUndefined();
+    const reads = await coverageRead(fixture);
+    expect(readContent(reads, "src/implementation.ts")).toContain(CONNECTOR_FACT);
+    expect(readContent(reads, "src/implementation.ts")).toContain(DESCENT_FACT);
+    const prompt = await sentPrompt(fixture, reads);
+    expect(prompt).toContain(CONNECTOR_FACT);
+    expect(prompt).toContain(DESCENT_FACT);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+  });
+
+  it("preserves the ordinary first-ranked registration under the same one-file grant", async () => {
+    const fixture = await coverageFixture("Trace POST /api/items", configuredCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192, filesReadMax: 1 };
+    const normal = await coverageRead(fixture, {
+      atoms,
+      inputs: { routeCoverage: undefined, budget },
+    });
+    expect(readContent(normal, "src/routes.ts")).toContain(REGISTRATION_FACT);
+    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    expect(readContent(reads, "src/routes.ts")).toContain(REGISTRATION_FACT);
+    expect(await sentPrompt(fixture, reads, atoms, budget)).toContain(REGISTRATION_FACT);
+    expect(reads.excerpts.size).toBe(1);
+  });
+
+  it("preserves the normally ranked same-file fitting and scope body under the same byte grant", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain promptFittingBudget and scopeAdmissionBudget",
+      allocationFiles(),
+    );
+    const atoms = [...fixture.ordinaryAtoms, ...fixture.trace.atoms];
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 };
+    const normal = await coverageRead(fixture, {
+      atoms,
+      inputs: { routeCoverage: undefined, budget },
+    });
+    expect(await sentPrompt(fixture, normal, atoms, budget)).toContain(FITTING_FACT);
+    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    expect(readContent(reads, "src/implementation.ts")).toContain(FITTING_FACT);
+    expect(await sentPrompt(fixture, reads, atoms, budget)).toContain(FITTING_FACT);
+    expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+  });
+
+  it("retains registration and the later connected cross-file body within the existing byte grant", async () => {
+    const fixture = await coverageFixture("Trace POST /api/items", configuredCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const reads = await coverageRead(fixture, { atoms });
+    const prompt = await sentPrompt(fixture, reads, atoms);
+    expect(prompt).toContain(REGISTRATION_FACT);
+    expect(prompt).toContain(CONNECTOR_FACT);
+    expect(prompt).toContain(DESCENT_FACT);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+  });
+
   it("retains the actual low-relevance parent connector within a crowded selected file", async () => {
     const fixture = await coverageFixture();
     const connectorLine =

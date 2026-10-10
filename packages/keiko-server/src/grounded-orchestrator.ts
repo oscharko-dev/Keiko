@@ -3451,6 +3451,7 @@ async function discoverRequiredDefinitionsForRing(
 
 export interface ExcerptInputs {
   readonly routeCoverage?: RouteTraceCoverage | undefined;
+  readonly priorityPaths?: ReadonlySet<string> | undefined;
   readonly coveragePlan?: RouteCoverageReadPlan | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly anchors?: readonly string[] | undefined;
@@ -6234,9 +6235,10 @@ function fairCoverageEntries(
 ): readonly RouteTraceCoverageEntry[] {
   const byIdentity = new Map(entries.map((entry) => [entry.definitionIdentity, entry]));
   const paths = new Set<string>();
+  const parents = new Set(entries.map((entry) => entry.parentIdentity));
   const retained = new Map<string, RouteTraceCoverageEntry>();
   for (const entry of connectedCoverageOrder(entries)) {
-    if (paths.has(entry.atom.scopePath)) continue;
+    if (parents.has(entry.definitionIdentity) || paths.has(entry.atom.scopePath)) continue;
     const chain = connectedCoverageChain(entry, byIdentity);
     if (chain.length === 0) continue;
     for (const parent of chain) {
@@ -6278,38 +6280,70 @@ function explicitExcerptPaths(paths: readonly string[], inputs: ExcerptInputs): 
   );
 }
 
+function interleavedReadPaths(
+  ordinary: readonly string[],
+  connected: readonly string[],
+): readonly string[] {
+  const paths = new Set<string>();
+  for (let index = 0; index < Math.max(ordinary.length, connected.length); index += 1) {
+    const normal = ordinary[index];
+    const traced = connected[index];
+    if (normal !== undefined) paths.add(normal);
+    if (traced !== undefined) paths.add(traced);
+  }
+  return [...paths];
+}
+
+function connectedCoverageReserves(
+  entries: readonly RouteTraceCoverageEntry[],
+  totalBytes: number,
+): ReadonlyMap<string, number> {
+  const reserves = new Map<string, number>();
+  let remaining = totalBytes;
+  for (const entry of entries) {
+    const reserve = Math.min(remaining, entry.observedBytes, MAX_EXCERPT_WINDOW_BYTES);
+    if (reserve <= 0) break;
+    reserves.set(entry.atom.scopePath, (reserves.get(entry.atom.scopePath) ?? 0) + reserve);
+    remaining -= reserve;
+  }
+  return reserves;
+}
+
 function routeCoverageReadPlan(
   paths: readonly string[],
   inputs: ExcerptInputs,
 ): RouteCoverageReadPlan | undefined {
   const allowed = new Set(paths);
-  const entries = fairCoverageEntries(
-    selectedCoverageEntries(inputs).filter((entry) => allowed.has(entry.atom.scopePath)),
+  const selected = selectedCoverageEntries(inputs).filter((entry) =>
+    allowed.has(entry.atom.scopePath),
   );
+  const entries = fairCoverageEntries(selected);
   if (entries.length === 0) return undefined;
   const grouped = new Map<string, RouteTraceCoverageEntry[]>();
-  const reserves = new Map<string, number>();
-  let remaining = remainingExcerptCapacity(inputs).bytes;
-  for (const path of explicitExcerptPaths(paths, inputs)) {
-    const reserve = Math.min(
-      remaining,
-      inputs.knownFitFileBytes?.get(path) ?? MAX_EXCERPT_WINDOW_BYTES,
-    );
-    reserves.set(path, reserve);
-    remaining -= reserve;
+  const connected = new Set(entries.map((entry) => entry.definitionIdentity));
+  const byIdentity = new Map(selected.map((entry) => [entry.definitionIdentity, entry]));
+  for (const entry of [...entries, ...connectedCoverageOrder(selected)]) {
+    if (
+      !connected.has(entry.definitionIdentity) &&
+      connectedCoverageChain(entry, byIdentity).length === 0
+    )
+      continue;
+    const existing = grouped.get(entry.atom.scopePath) ?? [];
+    if (!existing.some((previous) => previous.definitionIdentity === entry.definitionIdentity))
+      grouped.set(entry.atom.scopePath, [...existing, entry]);
   }
-  for (const entry of entries) {
-    const reserve = Math.min(remaining, entry.observedBytes, MAX_EXCERPT_WINDOW_BYTES);
-    if (reserve <= 0) break;
-    const path = entry.atom.scopePath;
-    grouped.set(path, [...(grouped.get(path) ?? []), entry]);
-    reserves.set(path, (reserves.get(path) ?? 0) + reserve);
-    remaining -= reserve;
-  }
+  const share = distributeByteBudget(remainingExcerptCapacity(inputs).bytes, 2)[1] ?? 0;
+  const priorities = paths.filter((path) => inputs.priorityPaths?.has(path) === true);
   return {
-    paths: [...new Set([...explicitExcerptPaths(paths, inputs), ...grouped.keys(), ...paths])],
+    paths: [
+      ...new Set([
+        ...explicitExcerptPaths(paths, inputs),
+        ...priorities,
+        ...interleavedReadPaths(paths, [...grouped.keys()]),
+      ]),
+    ],
     entries: grouped,
-    reserves,
+    reserves: connectedCoverageReserves(entries, share),
   };
 }
 
@@ -6323,6 +6357,44 @@ function currentCoverageEntries(
   return entries;
 }
 
+function interleavedExcerptWindows(
+  ordinary: readonly LineWindow[],
+  connected: readonly LineWindow[],
+  explicit: readonly LineWindow[],
+): readonly LineWindow[] {
+  let windows = [...explicit];
+  for (let index = 0; index < Math.max(ordinary.length, connected.length); index += 1) {
+    for (const window of [connected[index], ordinary[index]]) {
+      if (window === undefined) continue;
+      const covered = [...windows].sort((a, b) => a.startLine - b.startLine);
+      windows = [...windows, ...uncoveredExcerptSegments(window, covered, 0)];
+    }
+  }
+  return windows;
+}
+
+function atomicCoverageWindows(
+  ordinary: readonly LineWindow[],
+  connected: readonly LineWindow[],
+  atoms: readonly EvidenceAtom[],
+): readonly LineWindow[] {
+  const boundaries = connected.flatMap((range) => [range.startLine, range.endLine + 1]);
+  const segments = ordinary.flatMap((window) => {
+    const starts = [
+      ...new Set([
+        window.startLine,
+        ...boundaries.filter((line) => line > window.startLine && line <= window.endLine),
+        window.endLine + 1,
+      ]),
+    ].sort((a, b) => a - b);
+    return starts.slice(0, -1).map((startLine, index) => ({
+      startLine,
+      endLine: (starts[index + 1] ?? window.endLine + 1) - 1,
+    }));
+  });
+  return rankedExcerptWindows(segments, atoms);
+}
+
 function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): ExcerptWindowSelection {
   const selection = excerptLineWindows(inputs.atomsByPath.get(path));
   const entries = currentCoverageEntries(path, inputs);
@@ -6330,27 +6402,17 @@ function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): Excerp
   const explicit = (inputs.atomsByPath.get(path) ?? []).filter(
     (atom) => atom.provenance.tool === "repo.selectedFile",
   );
-  let windows = excerptLineWindows(explicit).windows;
-  if (explicit.length === 0) windows = [];
-  for (const entry of entries) {
-    const range = entry.atom.lineRange;
-    if (range !== undefined)
-      windows = [
-        ...windows,
-        ...nonOverlappingExcerptWindows(
-          [range],
-          [...windows].sort((a, b) => a.startLine - b.startLine),
-        ),
-      ];
-  }
-  const covered = [...windows].sort((a, b) => a.startLine - b.startLine);
+  const ranges = entries.flatMap((entry) =>
+    entry.atom.lineRange === undefined ? [] : [entry.atom.lineRange],
+  );
   return {
     ...selection,
     coverageApplied: true,
-    windows: [
-      ...windows,
-      ...selection.windows.flatMap((window) => uncoveredExcerptSegments(window, covered, 0)),
-    ],
+    windows: interleavedExcerptWindows(
+      atomicCoverageWindows(selection.windows, ranges, inputs.atomsByPath.get(path) ?? []),
+      ranges,
+      explicit.length === 0 ? [] : excerptLineWindows(explicit).windows,
+    ),
   };
 }
 
@@ -7198,6 +7260,7 @@ function assembleOptionsFor(
 
 interface PreparedPackAssembly {
   readonly selection: ContextSelectionDiagnostics;
+  readonly priorityPaths: ReadonlySet<string>;
   readonly rerankerDiagnostics?: GroundedRerankerDiagnostics | undefined;
   readonly rerankFailure?: unknown;
   readonly reusedEvidenceAtomCount: number;
@@ -7411,7 +7474,7 @@ function selectRankedEvidencePool(
   atoms: readonly EvidenceAtom[],
   ranking: ReturnType<typeof rankCandidates>,
   reranker: PreselectionRerankerResult,
-): Pick<PreparedPackAssembly, "ordered" | "selection"> {
+): Pick<PreparedPackAssembly, "ordered" | "selection" | "priorityPaths"> {
   const { input, plan, nowMs } = args;
   const absoluteFloor =
     input.scope.kind === "files"
@@ -7443,6 +7506,7 @@ function selectRankedEvidencePool(
   const ordered = selectGroundedCandidateFiles(selectionInput);
   return {
     ordered: { ...ordered, rankingObservation: refined.rankingObservation },
+    priorityPaths: selectionInput.priorityPaths,
     selection: selectionQuality({
       candidates: reranker.candidates,
       selected: ordered.kept,
@@ -7481,7 +7545,13 @@ async function preparePackAssembly(
     signal: deps.signal,
     literal: plan.targetDecision?.kind === "literal-search",
   });
-  const { ordered, selection } = selectRankedEvidencePool(args, rings, atoms, ranking, reranker);
+  const { ordered, selection, priorityPaths } = selectRankedEvidencePool(
+    args,
+    rings,
+    atoms,
+    ranking,
+    reranker,
+  );
   const selectedPaths = new Set(ordered.kept.map((candidate) => candidate.scopePath));
   const selectedAtoms = selectPackAtoms(atoms, selectedPaths, input, plan);
   return {
@@ -7490,6 +7560,7 @@ async function preparePackAssembly(
     initialUsage: clampUsageToBudget(reranker.usage, plan.budget),
     ordered,
     selection,
+    priorityPaths,
     rerankerDiagnostics: reranker.diagnostics,
     rerankFailure: reranker.failure,
     atomsByPath: groupEvidenceAtomsByPath(selectedAtoms),
@@ -7943,6 +8014,7 @@ async function assembleGroundedPack(
     return cachedGroundedAssembly(ctx.cached, args, prepared, augmentedRings);
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
     routeCoverage: augmentedRings.routeCoverage,
+    priorityPaths: prepared.priorityPaths,
     knownFitFileBytes: augmentedRings.knownFitFileBytes,
     searchScope,
     fs,
