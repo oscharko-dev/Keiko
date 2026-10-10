@@ -84,8 +84,10 @@ describe("shared grounded assessment normalization", () => {
 });
 
 describe("untagged conversation authority preserves source and policy boundaries", () => {
-  it("keeps general future-work advice outside selected-source attribution", () => {
-    const content = "Your team should compare alternatives before writing files.";
+  it.each([
+    "Your team should compare alternatives before writing files.",
+    "Unser Team sollte Alternativen vergleichen, bevor es Dateien erstellt.",
+  ])("keeps general future-work advice outside selected-source attribution: %s", (content) => {
     const answer = normalizeGroundedAnswerAssessment(
       { content, usage: { promptTokens: 0, completionTokens: 0 } },
       "allowed",
@@ -103,6 +105,10 @@ describe("untagged conversation authority preserves source and policy boundaries
     ["These two connected files contain the value 37.", "allowed", true],
     ["These connected files contain the value 37.", "allowed", true],
     ["I cannot access the selected files.", "allowed", true],
+    ["In unseren Dateien steht der Grenzwert 37.", "allowed", true],
+    ["In den verbundenen Dokumenten steht der Grenzwert 37.", "allowed", true],
+    ["Der Wert dieser Dateien beträgt 37.", "allowed", true],
+    ["In euren ausgewählten Handbüchern steht der Grenzwert 37.", "allowed", true],
     ["I will compare the options.", "disabled", true],
   ] as const)(
     "does not label %s under %s / conversation=%s",

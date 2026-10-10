@@ -10381,7 +10381,6 @@ async function answerWithAvailableContext(
   deps: OrchestratorDeps,
   pack: ConnectedContextPack,
   plan: OrchestratorOutput["plan"],
-  sourceEvidenceAvailable: boolean,
   start: number,
   nowMs: () => number,
   declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"],
@@ -10395,7 +10394,10 @@ async function answerWithAvailableContext(
     declarationScopeIndexFor,
     plan?.targetDecision?.conversationOnly === true,
   );
-  const answer = repair.answer;
+  const answer = {
+    ...repair.answer,
+    noEvidence: !packHasUsableEvidence(singleSentEvidencePack(repair.answer, repair.pack)),
+  };
   logAcceptedGroundedAssessment(
     answer,
     deps.ownAssessmentPolicy,
@@ -10421,7 +10423,6 @@ async function answerWithAvailableContext(
     citationRepairDisposition: repair.disposition,
     followUp: repair.followUp,
     ...(plan === undefined ? {} : { plan }),
-    ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
   };
 }
 
@@ -10493,7 +10494,6 @@ export async function runGroundedExploration(
     requestDeps,
     pack,
     plan,
-    sourceEvidenceAvailable,
     start,
     nowMs,
     declarationScopeIndexFor,

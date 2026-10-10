@@ -88,7 +88,11 @@ async function originalNote(): Promise<string> {
   );
   return note.question;
 }
-async function provider(requests: ProviderRequest[], responseText = ACK): Promise<string> {
+async function provider(
+  requests: ProviderRequest[],
+  responseText = ACK,
+  sourceAnswer = SOURCE_ANSWER,
+): Promise<string> {
   const server = createServer((request, response): void => {
     let body = "";
     request.setEncoding("utf8");
@@ -112,7 +116,7 @@ async function provider(requests: ProviderRequest[], responseText = ACK): Promis
                 ? body.includes("The maximum operating limit is 37 units.")
                   ? MANUAL_ANSWER
                   : "<assessment>Acknowledged.</assessment>"
-                : SOURCE_ANSWER
+                : sourceAnswer
           : responseText;
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
@@ -511,8 +515,10 @@ describe("native mixed requests within supplied user context", () => {
 });
 
 describe("native source claims within empty-evidence conversation responses", () => {
-  it("keeps general future-work advice outside selected-source attribution", async () => {
-    const text = "Your team should compare alternatives before writing files.";
+  it.each([
+    "Your team should compare alternatives before writing files.",
+    "Unser Team sollte Alternativen vergleichen, bevor es Dateien erstellt.",
+  ])("keeps general future-work advice outside selected-source attribution: %s", async (text) => {
     assertPlainAssessment(
       await replyAfterSource("These are my working notes. Confirm receipt of this message.", text),
       text,
@@ -522,6 +528,9 @@ describe("native source claims within empty-evidence conversation responses", ()
     "Your selected files contain the value 37.",
     "These two connected files contain the value 37.",
     "These connected files contain the value 37.",
+    "In unseren Dateien steht der Grenzwert 37.",
+    "In den verbundenen Dokumenten steht der Grenzwert 37.",
+    "Der Wert dieser Dateien beträgt 37.",
   ])("retains source validation for %s", async (text) => {
     const answer = await replyAfterSource(
       "These are my working notes. Confirm receipt of this message.",
@@ -541,6 +550,46 @@ describe("native source claims within empty-evidence conversation responses", ()
       ),
     ).toMatchObject({ outcome: "none", sourceBackedChars: text.length, assessmentChars: 0 });
   });
+});
+
+describe("native marker-only repair for route paths", () => {
+  it.each(["app/users/[id]/page.tsx", "app/users/42/page.tsx"])(
+    "authenticates and persists the unchanged answer for %s",
+    async (scopePath) => {
+      const original = "The page renders users.";
+      const repaired = `The page renders users [${scopePath}:1].`;
+      const requests: ProviderRequest[] = [];
+      const { deps, chatId } = runtime(await provider(requests, repaired, original), false);
+      const path = join(directory, "workspace", scopePath);
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, 'export default function Page() { return "users"; }\n');
+      const started = await startUiTestServer({
+        staticRoot: directory,
+        csp: buildCspHeader([]),
+        handlerDeps: deps,
+      });
+      servers.push(started.server);
+      const response = await ask(started.port, chatId, `Explain ${scopePath}.`, "route-repair");
+      expect(response.status).toBe(200);
+      const answer = (await response.json()) as GroundedAnswer;
+      expect(answer.content).toBe(repaired);
+      expect(answer.citations).toContainEqual(
+        expect.objectContaining({ scopePath, lineRange: { startLine: 1, endLine: 1 } }),
+      );
+      expect(requests).toHaveLength(2);
+      expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
+      expect(
+        records().find(
+          (record) =>
+            record.op === "search.connected-context.answer-details" &&
+            record.correlationId === "route-repair",
+        ),
+      ).toMatchObject({ citationRepairDisposition: "applied", synthesisCallCount: 2 });
+      expect(
+        analyzeLogText(readPersistedActivityLog(join(directory, "state"))).evidence,
+      ).toMatchObject({ classification: "supported", corruptLineCount: 0 });
+    },
+  );
 });
 
 describe("native original source plus general-advice request", () => {

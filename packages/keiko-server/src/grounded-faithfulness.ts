@@ -395,6 +395,16 @@ const CITATION_TOKEN_MAX_CHARS = WORKSPACE_PORTABLE_PATH_MAX_BYTES + 64;
 const LITERAL_PATH_BRACKET = String.raw`\[[^\[\]\r\n]{1,255}\]`;
 const BRACKET_PATTERN = String.raw`\[((?:[^\[\]\r\n]|${LITERAL_PATH_BRACKET}){1,${CITATION_TOKEN_MAX_CHARS}})\]`;
 const FOLLOWING_BRACKET_RE = new RegExp(BRACKET_PATTERN, "y");
+
+/** Syntactic candidates reuse the citation parser's bounded literal-path bracket grammar. */
+export function* bracketedRepositoryCitationCandidates(
+  answerText: string,
+): IterableIterator<{ readonly start: number; readonly end: number; readonly text: string }> {
+  for (const match of answerText.matchAll(new RegExp(BRACKET_PATTERN, "gu"))) {
+    yield { start: match.index, end: match.index + match[0].length, text: match[0] };
+  }
+}
+
 // Formatting whitespace belongs to citation punctuation, never to the actual cited path.
 const CITATION_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
 const LINE_RANGE_SUFFIX_SOURCE = String.raw`${CITATION_HORIZONTAL_SPACE}:${CITATION_HORIZONTAL_SPACE}(\d{1,16})(?:${CITATION_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${CITATION_HORIZONTAL_SPACE}(\d{1,16}))?`;

@@ -1,6 +1,7 @@
 import { splitOwnAssessment } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import {
+  bracketedRepositoryCitationCandidates,
   parseInlineCitations,
   reconcileInlineCitations,
   reconcileNumericCitations,
@@ -9,6 +10,7 @@ import {
 
 const REPAIR_TEXT_MAX = 131_072;
 const INSERTION_MAX = 32;
+const MARKER_BODY_LENGTH_RE = /^.{1,512}$/su;
 const PADDING_MAX = 16;
 interface MarkerInsertion {
   readonly start: number;
@@ -50,13 +52,14 @@ function repairInsertions(
 ): readonly MarkerInsertion[] {
   const code = markdownCodeRanges(text);
   const result: MarkerInsertion[] = [];
-  for (const match of text.matchAll(/\[[^\]\r\n]{1,512}\]/gu)) {
-    const end = match.index + match[0].length;
-    if (code.some((range) => range.start <= match.index && range.end > match.index)) continue;
+  for (const match of bracketedRepositoryCitationCandidates(text)) {
+    const { start, end } = match;
+    if (!MARKER_BODY_LENGTH_RE.test(match.text.slice(1, -1))) continue;
+    if (code.some((range) => range.start <= start && range.end > start)) continue;
     if (text.charAt(end) === "(" || text.charAt(end) === "[") continue;
-    const lineStart = text.lastIndexOf("\n", match.index) + 1;
-    if (/^\s*Missing evidence:/iu.test(text.slice(lineStart, match.index))) continue;
-    if (supportedBracket(match[0], index, numericMarkers)) result.push({ start: match.index, end });
+    const lineStart = text.lastIndexOf("\n", start) + 1;
+    if (/^\s*Missing evidence:/iu.test(text.slice(lineStart, start))) continue;
+    if (supportedBracket(match.text, index, numericMarkers)) result.push({ start, end });
     if (result.length > INSERTION_MAX) return [];
   }
   return result;

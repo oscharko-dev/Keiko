@@ -10,6 +10,14 @@ const index: PackCitationIndex = {
   ]),
 };
 
+function citationIndexForPath(scopePath: string): PackCitationIndex {
+  return {
+    scopePaths: new Set([scopePath]),
+    sourceIdsByPath: new Map([[scopePath, new Set(["1"])]]),
+    lineWindowsBySourceId: new Map([["1", new Map([[scopePath, [{ startLine: 1, endLine: 1 }]]])]]),
+  };
+}
+
 describe("bounded marker-only citation repair", () => {
   it("never inserts a source citation inside the preserved own-assessment block", () => {
     const original = "Feature returns true.\n\n<assessment>General advice.</assessment>";
@@ -35,6 +43,50 @@ describe("bounded marker-only citation repair", () => {
     ["Feature returns true.", "Feature [src/Feature.ts:3] returns true."],
   ])("accepts only supported insertion into %s", (original, repaired) => {
     expect(validateCitationRepair(original, repaired, index)).toBe(true);
+  });
+
+  it.each(["app/users/[id]/page.tsx", "app/users/42/page.tsx"])(
+    "accepts supported marker-only insertion for route %s",
+    (scopePath) => {
+      const routeIndex = citationIndexForPath(scopePath);
+      expect(
+        validateCitationRepair(
+          "The page renders users.",
+          `The page renders users [${scopePath}:1].`,
+          routeIndex,
+        ),
+      ).toBe(true);
+      for (const repaired of [
+        `The page renders admins [${scopePath}:1].`,
+        `The page renders users [${scopePath}:2].`,
+        `The page renders users [${scopePath}:1](https://example.test).`,
+        `\`The page renders users [${scopePath}:1].\``,
+      ]) {
+        expect(validateCitationRepair("The page renders users.", repaired, routeIndex)).toBe(false);
+      }
+    },
+  );
+
+  it("preserves the original Unicode-codepoint marker bound for portable paths", () => {
+    const unicodePath = Array<string>(5).fill("𐐀".repeat(60)).join("/") + ".ts";
+    const boundaryPath = [168, 168, 169].map((count) => "a".repeat(count)).join("/") + ".ts";
+    const oversizedPath = [168, 168, 170].map((count) => "a".repeat(count)).join("/") + ".ts";
+    for (const scopePath of [unicodePath, boundaryPath]) {
+      expect(
+        validateCitationRepair(
+          "The page renders users.",
+          `The page renders users [${scopePath}:1].`,
+          citationIndexForPath(scopePath),
+        ),
+      ).toBe(true);
+    }
+    expect(
+      validateCitationRepair(
+        "The page renders users.",
+        `The page renders users [${oversizedPath}:1].`,
+        citationIndexForPath(oversizedPath),
+      ),
+    ).toBe(false);
   });
 
   it.each([

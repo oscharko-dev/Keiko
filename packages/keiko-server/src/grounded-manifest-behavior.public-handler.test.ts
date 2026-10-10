@@ -9,7 +9,7 @@ import {
   parseGatewayConfig,
   type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import { mockRequest, mockResponse } from "./_support.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
@@ -94,7 +94,10 @@ function scriptedModel(requests: GatewayCallRequest[]): ModelPort {
   };
 }
 
-function runtime(requests: GatewayCallRequest[]): { deps: UiHandlerDeps; chatId: string } {
+function runtime(
+  requests: GatewayCallRequest[],
+  ownAssessment: "disabled" | "allowed",
+): { deps: UiHandlerDeps; chatId: string } {
   const root = join(directory, "workspace");
   populate(root);
   const config = parseGatewayConfig({
@@ -104,7 +107,7 @@ function runtime(requests: GatewayCallRequest[]): { deps: UiHandlerDeps; chatId:
     capabilities: [
       { ...createDefaultChatCapability(MODEL), contextWindow: 32768, maxOutputTokens: 2048 },
     ],
-    groundedAnswers: { ownAssessment: "disabled" },
+    groundedAnswers: { ownAssessment },
   });
   const store = createInMemoryUiStore();
   stores.push(store);
@@ -128,14 +131,19 @@ function runtime(requests: GatewayCallRequest[]): { deps: UiHandlerDeps; chatId:
   };
 }
 
-async function ask(question: string): Promise<{
+async function ask(
+  question: string,
+  ownAssessment: "disabled" | "allowed" = "disabled",
+): Promise<{
   readonly answer: ConnectedContextGroundedAnswer;
   readonly requests: readonly GatewayCallRequest[];
   readonly completed: Readonly<Record<string, unknown>> | undefined;
   readonly source: Readonly<Record<string, unknown>> | undefined;
+  readonly deps: UiHandlerDeps;
+  readonly chatId: string;
 }> {
   const requests: GatewayCallRequest[] = [];
-  const { deps, chatId } = runtime(requests);
+  const { deps, chatId } = runtime(requests, ownAssessment);
   const response = await handleGroundedAsk(
     {
       req: mockRequest({ body: JSON.stringify({ chatId, content: question }) }),
@@ -158,10 +166,45 @@ async function ask(question: string): Promise<{
     requests,
     completed: records.find((record) => record.op === "search.connected-context.completed"),
     source: records.find((record) => record.op === "search.connected-context.source-details"),
+    deps,
+    chatId,
   };
 }
 
+function assertAuditEvidence(deps: UiHandlerDeps, answer: ConnectedContextGroundedAnswer): void {
+  expect(answer.evidenceRunId).toMatch(/^grounded-/u);
+  const manifest = loadEvidence(deps.evidenceStore, answer.evidenceRunId ?? "");
+  expect(manifest?.run.taskType).toBe("connected-context");
+  expect(manifest?.connectedContext?.summary.fileCount).toBeGreaterThan(0);
+  expect(manifest?.connectedContext?.summary.citationCount).toBe(answer.citations.length);
+  expect(JSON.stringify(manifest)).not.toContain(FACT);
+}
+
 describe("manifest behavior retains source search through the default public handler", () => {
+  it.each(["direct evidence", "initially empty with follow-up"])(
+    "persists authentic audit evidence for %s",
+    async (scenario) => {
+      const followUp = scenario === "initially empty with follow-up";
+      const { answer, requests, deps, chatId } = await ask(
+        followUp ? 'Find "NeverPresentToken" in this folder.' : QUESTION,
+        "allowed",
+      );
+      expect(requests).toHaveLength(followUp ? 2 : 1);
+      expect(firstPrompt(requests).includes(FACT)).toBe(!followUp);
+      const finalRequest = requests.at(-1);
+      if (finalRequest === undefined) throw new TypeError("Missing final synthesis dispatch");
+      expect(promptText(finalRequest)).toContain(FACT);
+      expect(answer.citations).toHaveLength(1);
+      expect(answer.citations[0]).toMatchObject({
+        scopePath: TARGET,
+        lineRange: { startLine: 3, endLine: 3 },
+      });
+      expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("no-evidence");
+      assertAuditEvidence(deps, answer);
+      expect(deps.store.listMessages(chatId).at(-1)?.groundedAnswer).toEqual(answer);
+    },
+  );
+
   it.each([
     QUESTION,
     QUESTION.replace("package manifests", "configuration envelopes"),
