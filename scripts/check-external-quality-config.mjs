@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const CODERABBIT_POLICY_DIGEST = "f6163d519117bf1cd183e26b53210c586cc78f6021630dcac689707183e81e6e";
+const CODERABBIT_POLICY_DIGEST = "13e8d44d1e01ad429bbb6961e28df6511f6737b6fdbfdfc6291e57bb0bf08688";
 const CODERABBIT_TEXT_CHECKS = [
   ['profile: "assertive"', "CodeRabbit must keep its assertive review profile"],
   [

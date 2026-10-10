@@ -52,8 +52,9 @@ aggregate that runs with `always()` and succeeds only when the protected-branch 
 and coverage/Sonar jobs all report `success`. Missing, cancelled, skipped, or failed dependencies
 therefore keep the required `ci` check red without forcing Sonar to wait behind unrelated package,
 retrieval, editor, and architecture gates. The scan itself still runs after "Coverage quality
-gates" so both LCOV reports exist. It runs only for pull requests targeting `dev` and pushes to
-`dev`; unrelated PR targets emit a successful not-applicable coverage/Sonar job rather than
+gates" so both LCOV reports exist. It runs for pull requests targeting `dev` or the exact accepted integration branch
+`codex/epic-anti-slop-quality` (#3915), and pushes to `dev`; unrelated PR targets emit a successful
+not-applicable coverage/Sonar job rather than
 silently omitting the required aggregate evidence.
 
 The scanner cache is disabled for the required analysis. This is deliberate even though it makes a
@@ -71,7 +72,8 @@ or narrowly incremental scan therefore fails the required PR context before GitH
 
 The scan step passes `-Dsonar.qualitygate.wait=true`, which makes the scanner poll the
 server-computed Quality Gate result and exit non-zero when it is red. The same `coverage-sonar` job
-then runs `scripts/check-sonar-pr-quality-gate.mjs` for pull requests targeting `dev`; its result is
+then runs `scripts/check-sonar-pr-quality-gate.mjs` for pull requests targeting `dev` or
+`codex/epic-anti-slop-quality`; its result is
 transitively mandatory through the required `ci` aggregate. The verifier
 queries SonarCloud for the exact PR and rejects stale analysis revisions, a native gate other than
 `OK`, any unresolved issue or new violation, new-code coverage below 85 percent, new-code
