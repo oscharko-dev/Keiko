@@ -21740,6 +21740,18 @@ button.figma-view-preview {
   justify-content: flex-end;
   min-width: 32px;
 }
+@container (max-width: 480px) {
+  .chat-scope-header:has(> [data-scope-notice]) {
+    row-gap: 0;
+    padding-block: 3px 0;
+  }
+  .chat-scope-header:has(> [data-scope-notice]) .scope-grounding {
+    row-gap: 0;
+  }
+  .chat-scope-header:has(> [data-scope-notice]) .scope-pill-wrap {
+    row-gap: 2px;
+  }
+}
 /* C178 — grounding control label (was fully inline-styled). */
 .scope-grounding {
   display: inline-flex;
