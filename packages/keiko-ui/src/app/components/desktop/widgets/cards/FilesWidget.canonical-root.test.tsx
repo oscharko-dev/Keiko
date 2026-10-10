@@ -90,7 +90,9 @@ describe("Files canonical root while a child is loading", () => {
         <FilesWidget root={native.alias} resolvedRoot={native.alias} {...props} />,
       );
       fireEvent.click(await screen.findByRole("treeitem", { name: /^nested$/u }));
-      await pending.entered;
+      await act(async () => {
+        await pending.entered;
+      });
       const root = await canonicalRoot(native);
       mounted.rerender(<FilesWidget root={root} resolvedRoot={root} {...props} />);
       await pending.release();
@@ -147,7 +149,9 @@ describe("Files canonical root while a child is loading", () => {
         />,
       );
       fireEvent.click(await screen.findByRole("treeitem", { name: /^nested$/u }));
-      await pending.entered;
+      await act(async () => {
+        await pending.entered;
+      });
       const root = `${native.root}/Beta`;
       mounted.rerender(<FilesWidget root={root} watchActive={false} />);
       await screen.findByRole("treeitem", { name: /two\.ts/u });

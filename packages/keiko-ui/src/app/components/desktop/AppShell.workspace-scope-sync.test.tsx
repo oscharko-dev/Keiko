@@ -14,7 +14,9 @@ import {
 } from "@/lib/client-diagnostics";
 import type { AppWindow, Connection } from "./windows/types";
 import { FilesWindowSessionHost } from "./widgets/SelectionAwareWorkspaceHosts";
-import type { WindowRenderContext } from "./windows/WindowsRegistry";
+import { registerWindowRender } from "./windows/WindowsRegistry";
+import { WindowFrame } from "./windows/WindowFrame";
+import { useLinkRevision } from "./hooks/useLinkRevision";
 import { nativeFilesChatFixture } from "../../../../../../tests/support/files-chat-native-support";
 import { usePublishChatWindowRuntime } from "./windows/chatWindowActivity";
 
@@ -31,24 +33,15 @@ const mocks = vi.hoisted(() => ({
   fetchFilesTree: vi.fn(),
 }));
 
-function filesContext(ws: UseWorkspaceResult, win: AppWindow): WindowRenderContext {
-  return {
-    windowId: win.id,
-    linkedRoot: null,
-    linkedFilePath: undefined,
-    linkedRoots: [],
-    linkedCapsuleIds: [],
-    linkedCapsuleSetIds: [],
-    linkedFigmaSnapshotRunIds: [],
-    activeRoot: null,
-    activeBinding: null,
-    updateCfg: (patch): void => ws.api.update(win.id, { cfg: { ...win.cfg, ...patch } }),
-    openWindow: ws.api.add,
-    focusWindow: ws.api.focus,
-    updateWindow: ws.api.update,
-    openEditorFile: ws.api.openEditorFile,
-  };
-}
+// Use WindowFrame's live cfgRef and immediate pending writes. A captured cfg mock can
+// restore a pre-ACK alias when several Files callbacks run in one commit.
+registerWindowRender("files", (cfg, ctx) => (
+  <FilesWindowSessionHost
+    cfg={cfg}
+    ctx={ctx}
+    root={typeof cfg["root"] === "string" ? cfg["root"] : undefined}
+  />
+));
 
 function NativeChatRuntime(): ReactNode {
   const chat = mocks.serverChat;
@@ -142,7 +135,8 @@ vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
   reportFilesScopeDecision: vi.fn(),
 }));
 vi.mock("./install/registerSw", () => ({ registerSw: vi.fn() }));
-vi.mock("./context/ChatSessionContext", () => ({
+vi.mock("./context/ChatSessionContext", async (original) => ({
+  ...(await original<typeof import("./context/ChatSessionContext")>()),
   ChatSessionProvider: ({ children }: { readonly children: ReactNode }): ReactNode => children,
 }));
 vi.mock("./hooks/useTheme", () => ({
@@ -182,6 +176,7 @@ vi.mock("./Workspace", () => ({
     readonly wsRef: RefObject<HTMLDivElement | null>;
   }): ReactNode => {
     mocks.workspace = ws;
+    const linkRevision = useLinkRevision(ws.wins, ws.conns);
     return (
       <main ref={wsRef} data-testid="workspace">
         {mocks.renderFiles ? (
@@ -199,11 +194,14 @@ vi.mock("./Workspace", () => ({
           ? ws.wins
               ?.filter((win) => win.type === "files")
               .map((win) => (
-                <FilesWindowSessionHost
+                <WindowFrame
                   key={win.id}
-                  cfg={win.cfg}
-                  ctx={filesContext(ws, win)}
-                  root={typeof win.cfg["root"] === "string" ? win.cfg["root"] : undefined}
+                  win={win}
+                  top
+                  connState={null}
+                  linkRevision={linkRevision}
+                  api={ws.api}
+                  wsRef={wsRef}
                 />
               ))
           : (ws.wins?.length ?? 0)}
@@ -347,6 +345,13 @@ afterEach((): void => {
 type NativeFilesSession = Awaited<ReturnType<typeof nativeFilesChatFixture>>;
 type FilesSelection = "file" | "directory" | "keep-folder";
 
+function assertKeepFolderPreference(selection: FilesSelection): void {
+  if (selection !== "keep-folder") return;
+  expect(mocks.workspace?.wins?.find((win) => win.type === "chat")?.cfg).toMatchObject({
+    keepFilesFolder: true,
+  });
+}
+
 async function mountNativeFilesSession(
   native: NativeFilesSession,
   kind: "canonical" | "symlink",
@@ -391,6 +396,7 @@ describe("AppShell canonical workspace scope synchronization", () => {
       const native = await nativeFilesChatFixture();
       try {
         await mountNativeFilesSession(native, kind, selection);
+        assertKeepFolderPreference(selection);
         fireEvent.pointerDown(screen.getByRole("button", { name: "Connect Files" }));
         fireEvent.pointerDown(screen.getByRole("button", { name: "Confirm Chat" }));
         await waitFor(() => expect(mocks.workspace?.conns[0]?.boundScopeKind).toBe("directory"));
