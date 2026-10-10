@@ -414,6 +414,15 @@ Binding certification does not replace relevance with a constant score. Declarat
 preserves its admitted score; a further definition reuses the original-query matcher on its actually
 read, redacted source, followed by the existing relationship attenuation. Explicit selected-file
 priority remains intact.
+Physical excerpt allocation preserves connected parent chains across already selected route files.
+Explicit human file selections remain first. The request-local traversal supplies only current,
+certified definition identities, observed parent relationships and actual body-byte requirements.
+Independent route roots share the allocation in observed branch order. Reservations stay inside
+the remaining excerpt-byte and file grants; they do not add selected paths or change relevance
+scores or invocation uncertainty. The existing guarded reader batches each file's ranges, charges
+actual returned bytes and reports omitted windows. A definition that loses currentness cannot
+retain its reserved priority; bytes already read from a subsequently stale definition are charged
+and its windows omitted.
 Certified targets, including certified seeds, consume a finite request capacity bounded by the
 validated query's metadata capacity and the actual admitted compiler-AST definition count.
 Unique target identities terminate cycles; continuation ends when that capacity or the reachable
