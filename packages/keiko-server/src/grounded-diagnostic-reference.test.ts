@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { testSourcePairingAdapter } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { INCIDENT_RETRIEVAL_FILES } from "../../../scripts/check-retrieval-quality.mjs";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { runConnectedRetrievalEval } from "./grounded-eval-support.js";
@@ -22,6 +23,31 @@ const FILES = {
 };
 
 describe("diagnostic retrieval uses references without injecting toolchain metadata", () => {
+  it("preserves the canonical mixed-case path at the structural pairing caller", async () => {
+    const lookup = vi.spyOn(testSourcePairingAdapter, "lookup");
+    try {
+      await runConnectedRetrievalEval({
+        files: FILES,
+        query: `Investigate ${TEST_PATH}`,
+        correlationId: "diagnostic-structural-case-pair",
+      });
+      const callIndex = lookup.mock.calls.findIndex(
+        ([, query]) => query.text.toLowerCase() === TEST_PATH.toLowerCase(),
+      );
+      expect(callIndex).toBeGreaterThanOrEqual(0);
+      expect(lookup.mock.calls[callIndex]?.[1].text).toBe(TEST_PATH);
+      const result = lookup.mock.results[callIndex];
+      if (result?.type !== "return") {
+        throw new Error("The structural pairing caller did not return a result.");
+      }
+      const atoms = await result.value;
+      expect(atoms.map((atom) => atom.scopePath)).toEqual([SOURCE_PATH]);
+      expect(atoms[0]?.provenance.tool).toBe("test-source-pairing");
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
   it("reads the mixed-case assertion frame and its paired source through production orchestration", async () => {
     const log = createBufferedServerLogSink();
     const { pack } = await runConnectedRetrievalEval({
