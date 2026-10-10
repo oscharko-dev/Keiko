@@ -4625,7 +4625,7 @@ function readOversizedSourcePrefix(
       fs,
       assertSourceAllowed === undefined
         ? undefined
-        : () => {
+        : (): void => {
             assertSourceAllowed(relativePath);
           },
     );
