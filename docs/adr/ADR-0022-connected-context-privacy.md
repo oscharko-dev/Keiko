@@ -329,8 +329,11 @@ its existing ranking-preview Map is not claimed to have those aggregate bounds. 
 probes remain live. Every reuse rechecks current eligibility, canonical root/path, strong file
 identity, nanosecond modification/change times and single-link membership before and after lookup,
 plus the reader's byte grant and request abort/deadline. Changed, weak, unavailable, partial or
-unretained sources take the established live reader. Scope, policy, filesystem and limits stay
-bound to the same request context; no text crosses requests or supplies final evidence reads.
+unretained sources take the established live reader. Request-bound complete and oversized-prefix
+reads recheck active eligibility after their own fresh metadata resolution and before descriptor
+I/O; standalone builders without that optional guard retain their existing behavior. Scope,
+policy, filesystem and limits remain bound to the same request context; no text crosses requests
+or supplies final evidence reads.
 Physical Activity Log I/O counters continue to count the actual underlying calls rather than
 charging a second body read for reused text. This bounded work reduction does not establish an
 actual model-response latency improvement.

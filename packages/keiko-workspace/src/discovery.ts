@@ -1300,10 +1300,13 @@ export function readWorkspaceFilePrefixForEvidence(
   relPath: string,
   maxBytes: number,
   fs: WorkspaceFs,
+  assertBeforeRead?: () => void,
 ): string | undefined {
   const readPrefix = fs.readFileUtf8Prefix;
   if (readPrefix === undefined) return undefined;
+  assertBeforeRead?.();
   const target = resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
+  assertBeforeRead?.();
   let rawText: string;
   try {
     rawText = readPrefix(target.resolvedPath, maxBytes, "reject", target.stat);
@@ -1311,6 +1314,7 @@ export function readWorkspaceFilePrefixForEvidence(
     mapPrefixReadFailure(error, target, maxBytes);
   }
   assertStablePrefixRead(workspace, fs, target);
+  assertBeforeRead?.();
   return redact(rawText, [], { preserveSourceLineBreaks: true });
 }
 

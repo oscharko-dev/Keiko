@@ -524,6 +524,38 @@ describe("complete request-local code-to-endpoint source reuse", () => {
     expect(fixture.bodies).toHaveLength(2);
   });
 
+  it("rechecks dynamic eligibility during the oversized prefix reader's own metadata resolve", async () => {
+    const fixture = measured({ [PATH]: SOURCE + " ".repeat(2_097_152) });
+    let prepared = false;
+    let targetStats = 0;
+    let allowed = true;
+    let prefixReads = 0;
+    const fs: WorkspaceFs = {
+      ...fixture.fs,
+      stat: (absolute): WorkspaceStat => {
+        const stat = fixture.fs.stat(absolute);
+        if (prepared && absolute.endsWith(PATH) && ++targetStats === 2) allowed = false;
+        return stat;
+      },
+      readFileUtf8Prefix: (absolute, cap, hardLinks, expected): string => {
+        prefixReads += 1;
+        const read = fixture.fs.readFileUtf8Prefix;
+        if (read === undefined) throw new TypeError("prefix fixture unavailable");
+        return read(absolute, cap, hardLinks, expected);
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), LIMITS, fs, {
+      isCandidateAllowed: () => allowed,
+    });
+    expect(context.candidatePaths()).toEqual([PATH]);
+    prepared = true;
+    const code = await context.codeIntelligenceIndex();
+    expect(allowed).toBe(false);
+    expect(prefixReads).toBe(0);
+    expect(code.filesIndexed).toBe(0);
+    expect(fixture.bodies).toHaveLength(0);
+  });
+
   it("checks dynamic eligibility again at the actual complete descriptor boundary", async () => {
     const fixture = measured();
     let denyOnNextStat = false;

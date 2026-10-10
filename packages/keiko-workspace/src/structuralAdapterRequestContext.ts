@@ -638,6 +638,9 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
           executionControl: this.executionControl,
           disableCache: true,
           readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),
+          assertSourceAllowed: (path) => {
+            this.assertSourceAllowed(path);
+          },
         },
       );
     });
