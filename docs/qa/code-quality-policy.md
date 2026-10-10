@@ -131,3 +131,31 @@ asserted opaque receiver cannot qualify through its type alone. Mutable, destruc
 callable indirection and unresolved computed members remain
 explicitly incomplete. These are compiler/source reference facts, not runtime function-object
 identity or higher-order responsibility proofs; they authorize no semantic exemption.
+
+### Responsibility checkpoint (inactive intermediate interface)
+
+Version 1 retains its exact policy/report keys, rule inventory, scopes and activation history.
+Version 2 adds closed responsibility records: stable id, owner, validator or structural-redactor
+kind, exact rule obligations, input/transform/output/consumer export selectors and repository proof
+paths. Historical version 1 has no responsibility records; version 2 history rejects downgrade,
+removal or rebinding of an existing obligation. Unknown authorization fields remain rejected.
+
+Selectors resolve actual current compiler-owned declarations and emitted public entries. The
+relationship validator's root barrel exposes its type identity only; its executable public entry
+is `@oscharko-dev/keiko-contracts/runtime/relationships-validation`. Proof paths bind current source
+bytes, not test execution. A source-compatible validator signature does not prove its implementation
+or its consumer. Structural redaction truthfully returns unknown and preserves structure; it does
+not establish domain validity or persistence safety.
+
+The intermediate evaluator reports structural `ready`, `incomplete` or `invalid` separately from
+semantic `pending` or `rejected`. No runtime proof execution mechanism is authorized by this
+interface, so `qualified` remains zero. Even a present proof file and separately passing owning
+Vitest tests cannot qualify CLI semantics. Version 2 enforcement fails while any responsibility
+remains unqualified; census still exposes pending facts. No responsibility suppresses upstream
+findings or changes active scopes. Existing version 1 production policy remains unchanged.
+
+Actual reference-validator/redactor preservation and counterfeit unknown-output controls live in
+the responsibility owning suite. They are useful runtime controls, not complete dataflow,
+validation-dominance, hostile-object or physical-sink proofs. Native sibling policy integration,
+versioned production records and shared real-parser fixture adaptation remain prerequisites for
+publishing the complete responsibility checkpoint.

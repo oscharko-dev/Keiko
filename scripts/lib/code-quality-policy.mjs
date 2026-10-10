@@ -89,21 +89,122 @@ function validRuleInventory(rules) {
   );
 }
 
-export function validatePolicy(policy, previous = []) {
-  if (!exactKeys(policy, ["version", "upstream", "runner", "rules"])) return ["invalid-policy"];
+function validSelector(selector) {
+  return (
+    exactKeys(selector, ["consumerPath", "specifier", "exportName"]) &&
+    validPath(selector.consumerPath) &&
+    boundedText(selector.specifier, 256) &&
+    boundedText(selector.exportName, 128)
+  );
+}
+
+function boundedText(value, limit) {
+  return typeof value === "string" && value.length > 0 && value.length <= limit;
+}
+
+function validPath(value) {
+  return (
+    boundedText(value, 1024) &&
+    !value.startsWith("/") &&
+    !value.includes("\\") &&
+    !value.split("/").some((part) => part === ".." || part === "")
+  );
+}
+
+function validResponsibility(record) {
+  const keys = [
+    "id",
+    "owner",
+    "kind",
+    "rules",
+    "input",
+    "transform",
+    "output",
+    "consumer",
+    "proofs",
+  ];
+  return (
+    exactKeys(record, keys) &&
+    boundedText(record.id, 128) &&
+    boundedText(record.owner, 256) &&
+    ["validator", "structural-redactor"].includes(record.kind) &&
+    validResponsibilityRules(record.rules) &&
+    [record.input, record.transform, record.output, record.consumer].every(validSelector) &&
+    validProofs(record.proofs)
+  );
+}
+
+function validResponsibilityRules(rules) {
+  return (
+    validScopes(rules) &&
+    rules.length > 0 &&
+    rules.every((rule) => NON_COSMETIC_RULES.includes(rule))
+  );
+}
+
+function validProofs(proofs) {
+  return validScopes(proofs) && proofs.length > 0 && proofs.length <= 16 && proofs.every(validPath);
+}
+
+function validResponsibilities(records) {
+  return (
+    Array.isArray(records) &&
+    records.length <= 256 &&
+    records.every(validResponsibility) &&
+    new Set(records.map((record) => record.id)).size === records.length
+  );
+}
+
+function canonicalIdentity(value) {
+  if (typeof value === "string") return value;
+  return JSON.stringify([value.consumerPath, value.specifier, value.exportName]);
+}
+
+function responsibilityShrank(policy, previous) {
+  return previous.some((baseline) =>
+    (baseline.responsibilities ?? []).some((record) => {
+      const current = (policy.responsibilities ?? []).find((entry) => entry.id === record.id);
+      if (!current) return true;
+      const identity = ["owner", "kind", "input", "transform", "output", "consumer"];
+      return (
+        identity.some(
+          (key) => canonicalIdentity(current[key]) !== canonicalIdentity(record[key]),
+        ) ||
+        record.rules.some((rule) => !current.rules.includes(rule)) ||
+        record.proofs.some((proof) => !current.proofs.includes(proof))
+      );
+    }),
+  );
+}
+
+function validateCurrentPolicy(policy) {
+  const keys = ["version", "upstream", "runner", "rules"];
+  if (policy?.version === 2) keys.push("responsibilities");
+  if (!exactKeys(policy, keys)) return ["invalid-policy"];
   const identity = [
-    policy.version === 1,
+    policy.version === 1 || policy.version === 2,
     policy.upstream === UPSTREAM_COMMIT,
     policy.runner === RUNNER_VERSION,
   ];
   if (!identity.every(Boolean)) return ["invalid-policy-identity"];
   if (!validRuleInventory(policy.rules)) return ["invalid-rule-inventory"];
+  if (policy.version === 2 && !validResponsibilities(policy.responsibilities))
+    return ["invalid-responsibilities"];
   const guards = policy.rules.filter((rule) => INITIAL_GUARDS.has(rule.id));
   if (guards.some((rule) => !rule.activeScopes.includes("production")))
     return ["initial-guard-disabled"];
-  if (previous.some((baseline) => validatePolicy(baseline).length > 0))
+  return [];
+}
+
+export function validatePolicy(policy, previous = []) {
+  const errors = validateCurrentPolicy(policy);
+  if (errors.length) return errors;
+  if (previous.some((baseline) => validateCurrentPolicy(baseline).length > 0))
     return ["invalid-baseline-policy"];
-  return activationShrank(policy, previous) ? ["activation-shrank"] : [];
+  if (activationShrank(policy, previous)) return ["activation-shrank"];
+  if (previous.some((baseline) => baseline.version === 2) && policy.version !== 2)
+    return ["responsibility-downgrade"];
+  return responsibilityShrank(policy, previous) ? ["responsibility-shrank"] : [];
 }
 
 function isRuleActive(rule, file) {

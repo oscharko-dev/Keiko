@@ -37,6 +37,11 @@ The validator:
 - Composes decisions in the order documented in [`docs/relationship-engine/denial-reasons.md`](../relationship-engine/denial-reasons.md): identity, kind compatibility, cardinality, cycle detection, scope, path containment, deny-list, lifecycle, endpoint liveness, payload-content, authority, schema-version.
 - Returns `RelationshipPolicyDecision { allowed, reasons[] }` per [`docs/relationship-engine/gap-analysis.md`](../relationship-engine/gap-analysis.md) Gap 3.
 - Is deterministic: identical inputs yield identical outputs.
+- Preserves an accepted record and its endpoint and metadata references. Optional `metadata`
+  accepts omission, an object subject to the existing forbidden-key checks, `null`, or explicit
+  `undefined`. The canonical `Relationship` type includes those existing accepted values; an
+  object-only consumer must narrow both `null` and `undefined` before reading its keys. Validation
+  does not normalize these forms or alter their own-property presence and serialization.
 
 Defence in depth: type-level parser (rejects malformed envelopes) → validator (deterministic decision) → SQL `STRICT` mode + `CHECK` constraints + `UNIQUE` partial indexes (third barrier). Even a buggy validator cannot persist a row that violates the schema invariants.
 
@@ -113,6 +118,11 @@ The non-authority invariant is enforced by composition: each boundary owns its g
 - **Idempotency**: mutating routes require an `Idempotency-Key` header. The current implementation applies replay caching to `POST /api/relationships` with a process-local cache whose TTL is 10 minutes and capacity is 1024. A divergent body on replay returns HTTP 409 with `relationship/idempotency-replay-mismatch`.
 - **Optimistic concurrency**: PATCH and DELETE require `If-Match: "<etag>"`. The etag is monotonic per row, formatted as `printf('%016x', updated_at) || '-' || lower(hex(randomblob(3)))`. Mismatch returns HTTP 412 with `relationship/optimistic-concurrency-conflict` and the current etag in the body.
 - **Schema versioning**: every envelope carries `schemaVersion: "1"`. Additive changes (new relationship type, object kind, lifecycle state, denial code) extend the closed sets without bumping. Breaking changes (rename, narrowing, removal) require a new literal `"2"` plus an ADR amending or superseding ADR-0031.
+- **Validated metadata compatibility**: correcting the TypeScript declaration to include already
+  accepted `null` and explicit `undefined` metadata changes no validation, stored schema, record
+  identity or serialized bytes. It requires no schema-version bump or data migration. A future
+  rejection or normalization of those accepted values would change this contract and must follow
+  the breaking-change rule above.
 - **Bounded queries**: max `limit: 256`, max `maxDepth: 3`, max `maxNodes: 1024`, max `maxRelationships: 2048`, max body size 16 KiB. Exceed → HTTP 400 with `relationship/bounded-query-exceeded`.
 
 The complete contract is in [`docs/relationship-engine/api-contract.md`](../relationship-engine/api-contract.md) §§5–7.

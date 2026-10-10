@@ -4,12 +4,14 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   collectPolicyInventory,
+  collectPolicySubject,
   policyDigest,
   readPreviousPolicies,
   selectPolicyScope,
 } from "./lib/code-quality-inventory.mjs";
 import { collectPolicyPackages } from "./lib/code-quality-packages.mjs";
 import { assessPolicyDiagnostics, validatePolicy } from "./lib/code-quality-policy.mjs";
+import { assessPolicyResponsibilities } from "./lib/code-quality-responsibilities.mjs";
 import { runnerIdentity, runNativePolicy } from "./lib/code-quality-runner.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,6 +25,9 @@ const FAILURE_REASONS = new Set([
   "initial-guard-disabled",
   "invalid-baseline-policy",
   "activation-shrank",
+  "invalid-responsibilities",
+  "responsibility-downgrade",
+  "responsibility-shrank",
   "tool-identity-mismatch",
   "runtime-tool-dependency",
   "upstream-identity-mismatch",
@@ -92,29 +97,23 @@ export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
   const errors = validatePolicy(policy, readPreviousPolicies(repositoryRoot));
   if (errors.length > 0) throw new TypeError(errors[0]);
   const tools = runnerIdentity();
-  const inventory = await collectPolicyInventory(repositoryRoot);
+  const subject = await collectPolicySubject(repositoryRoot);
+  const { inventory } = subject;
   const scope = selectPolicyScope(inventory.files, options.scope, process.env.CI === "true");
   validateActiveScopes(policy, inventory.files);
   const pack = collectPolicyPackages(repositoryRoot, inventory.packages);
   const scan = runNativePolicy(repositoryRoot, scope.files);
   const inventorySha256 = policyDigest(JSON.stringify(inventory));
-  if (
-    policyDigest(JSON.stringify(await collectPolicyInventory(repositoryRoot))) !==
-      inventorySha256 ||
-    policyDigest(readFileSync(resolve(repositoryRoot, "scripts/code-quality-policy.json"))) !==
-      policyDigest(source)
-  ) {
-    throw new TypeError("subject-changed-during-scan");
-  }
   const assessed = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
-  const outcome =
-    options.mode === "enforce" && assessed.violations.length > 0 ? "failed" : "passed";
+  const responsibilities =
+    policy.version === 2 ? assessPolicyResponsibilities(subject, policy, scope.files) : null;
+  await assertPolicySubjectCurrent(repositoryRoot, source, inventorySha256);
   return {
-    schemaVersion: 1,
+    schemaVersion: policy.version,
     subject: inventory.subject,
     mode: options.mode,
     scope: { id: scope.id, partial: scope.partial },
-    outcome,
+    outcome: policyOutcome(options, assessed, responsibilities),
     policySha256: policyDigest(source),
     tools,
     configSha256: scan.configSha256,
@@ -134,7 +133,26 @@ export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
     ...assessed,
     inventory,
     pack,
+    ...(responsibilities ? { responsibilities } : {}),
   };
+}
+
+async function assertPolicySubjectCurrent(repositoryRoot, source, inventorySha256) {
+  if (
+    policyDigest(JSON.stringify(await collectPolicyInventory(repositoryRoot))) !==
+      inventorySha256 ||
+    policyDigest(readFileSync(resolve(repositoryRoot, "scripts/code-quality-policy.json"))) !==
+      policyDigest(source)
+  )
+    throw new TypeError("subject-changed-during-scan");
+}
+
+function policyOutcome(options, assessed, responsibilities) {
+  const incomplete =
+    responsibilities && responsibilities.counts.qualified !== responsibilities.assessments.length;
+  return options.mode === "enforce" && (assessed.violations.length > 0 || incomplete)
+    ? "failed"
+    : "passed";
 }
 
 function validateActiveScopes(policy, files) {

@@ -1,3 +1,4 @@
+import { policyDigest } from "./code-quality-inventory.mjs";
 import { join, relative } from "node:path";
 import ts from "typescript";
 import {
@@ -323,6 +324,11 @@ export function createSymbolResolver(subject, options = {}) {
     resolveExport: (request) => resolveExport(compiler, request),
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
+    sourceIdentity: (path) => {
+      const sha256 = policyDigest(compiler.read(path));
+      compiler.assertCurrent();
+      return { path, sha256 };
+    },
     assertCurrent: compiler.assertCurrent,
     close: compiler.close,
     stats: () => ({

@@ -39,6 +39,18 @@ describe("configured canonical symbol resolver interface (#3918)", () => {
     expect(own.resolver.stats().created).toBe(0);
   });
 
+  it("binds non-executable proof source bytes to the same current subject", async () => {
+    const own = await fixture();
+    const identity = own.resolver.sourceIdentity("src/consumer.ts");
+    expect(identity).toEqual({
+      path: "src/consumer.ts",
+      sha256: own.subject.inventory.files.find((file) => file.path === "src/consumer.ts").sha256,
+    });
+    expect(() => own.resolver.sourceIdentity("../escape.ts")).toThrow();
+    own.put(identity.path, "export const changed = true;\n");
+    expect(() => own.resolver.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+
   it("uses real ECMAScript globals without admitting unrelated browser fixture APIs", () => {
     const own = createSymbolFixture();
     fixtures.push(own);

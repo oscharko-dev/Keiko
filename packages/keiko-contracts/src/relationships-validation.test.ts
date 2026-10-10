@@ -14,7 +14,7 @@
 //   * Context-gated codes: cardinality, lifecycle transition, endpoint resolver.
 //   * Determinism: same input → same result on two consecutive runs.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   ObjectReference,
   Relationship,
@@ -809,5 +809,47 @@ describe("validateRelationship — type narrowing on success", () => {
       expect(value.type).toBe("reads-context");
       expect(value.schemaVersion).toBe("1");
     }
+  });
+});
+
+describe("validateRelationship — accepted metadata type and identity (#3918)", () => {
+  it("includes null and explicit undefined in the validated contract", () => {
+    expectTypeOf<Relationship["metadata"]>().toEqualTypeOf<
+      Readonly<Record<string, unknown>> | null | undefined
+    >();
+  });
+
+  it.each([
+    { kind: "omitted", metadata: undefined, keyCount: 0 },
+    { kind: "object", metadata: { reason: "selected", retryCount: 3 }, keyCount: 2 },
+    { kind: "null", metadata: null, keyCount: 0 },
+    { kind: "undefined", metadata: undefined, keyCount: 0 },
+  ])("preserves $kind metadata through a null-aware consumer", ({ kind, metadata, keyCount }) => {
+    const payload = happy(
+      "reads-context",
+      endpoint("workflow-run", "metadata-source"),
+      endpoint("memory", "metadata-target"),
+    );
+    if (kind !== "omitted") payload.metadata = metadata;
+    const serialized = JSON.stringify(payload);
+    const result = validateRelationship(payload);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Expected accepted metadata");
+    const value: Relationship = result.value;
+    const explicitMetadata: Relationship = { ...value, metadata };
+    const count =
+      value.metadata === null || value.metadata === undefined
+        ? 0
+        : Object.keys(value.metadata).length;
+    expect(count).toBe(keyCount);
+    expect(value).toBe(payload);
+    expect(value.source).toBe(payload.source);
+    expect(value.target).toBe(payload.target);
+    expect(value.metadata).toBe(metadata);
+    expect(Object.hasOwn(value, "metadata")).toBe(kind !== "omitted");
+    expect(explicitMetadata.metadata).toBe(metadata);
+    expect(Object.hasOwn(explicitMetadata, "metadata")).toBe(true);
+    expect(JSON.stringify(value)).toBe(serialized);
+    expect(JSON.stringify(payload)).toBe(serialized);
   });
 });
