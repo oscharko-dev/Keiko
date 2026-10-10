@@ -1,5 +1,6 @@
 import { relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import {
   isPathWithinSelectedScope,
   isValidScopePath,
@@ -437,8 +438,13 @@ async function classifyHumanSelectedFile(
     return undefined;
   } catch (error) {
     if (error instanceof FileTooLargeError) return "size-exceeded";
-    if (error instanceof RepoSearchUnsupportedFileError && error.reason === "binary")
-      return "binary";
+    if (error instanceof RepoSearchUnsupportedFileError) {
+      if (error.reason === "binary") return "binary";
+      if (error.reason === "aborted")
+        throw Object.assign(new CancelledError("grounded selected-file request cancelled"), {
+          cause: error,
+        });
+    }
     throw error;
   }
 }

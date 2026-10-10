@@ -491,6 +491,10 @@ follow-up trigger, pass/admission counts, outcome, and configuration disposition
 path or answer body enters this log. Technical failures retain the existing closed error header,
 body-free frames, and causes. Normalized synthesis output is buffered before publication; unsafe,
 unknown, or excess declaration lines are removed before client delivery and history persistence.
+Intentional request cancellation retains the existing cancelled chat-turn state across reloads.
+An aborted native selected-file reader is translated at admission into the existing cancellation
+error, preserving its cause. The registered retrieval line remains WARN/cancelled and does not
+create a registered-failure support incident; actual read failures and timeouts remain distinct.
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
 An explicitly empty sent-pack inventory grants no source support; only absent legacy metadata may

@@ -3025,7 +3025,7 @@ async function runAdmittedGroundedAsk(
     return settled;
   } catch (error) {
     if (stagedAssistantId !== undefined) discardGroundedTurn(stagedAssistantId);
-    deps.store.failChatTurn(admitted.chat.id, groundedCommitTurnId(admitted));
+    failGroundedChatTurn(admitted, deps, error instanceof CancelledError);
     if (admitted.signal.aborted) return groundedCancelledResult();
     throw error;
   }
@@ -3101,6 +3101,18 @@ function groundedCancelledResult(): RouteResult {
   return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
 }
 
+function failGroundedChatTurn(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  cancelled: boolean,
+): void {
+  deps.store.failChatTurn(
+    prepared.chat.id,
+    groundedCommitTurnId(prepared),
+    prepared.signal.aborted || cancelled ? "cancelled" : "failed",
+  );
+}
+
 function settleGroundedChatTurn(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -3108,7 +3120,7 @@ function settleGroundedChatTurn(
 ): RouteResult {
   const commitTurnId = groundedCommitTurnId(prepared);
   if (result.status !== 200 || !groundedAnswerBody(result.body)) {
-    deps.store.failChatTurn(prepared.chat.id, commitTurnId);
+    failGroundedChatTurn(prepared, deps, result.status === 499);
     return result;
   }
   if (!groundedScopeStillCurrent(prepared, deps)) {
