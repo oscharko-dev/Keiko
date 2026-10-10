@@ -171,11 +171,45 @@ describe("native rejected-path eligibility after explicit admission", () => {
     const path = CASES[0].path;
     rejected(await retrieve("Explain ignored.ts", "directory", ["src"]), path);
   });
+  it("counts a basename match independently of an earlier full-path admission", async () => {
+    const result = await retrieve(`Explain ${VISIBLE} and visible.ts`, "directory", ["src"]);
+    expect(result.result.pack.files.map((file) => file.scopePath)).toContain(VISIBLE);
+    expect(
+      result.log.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra,
+    ).toMatchObject({
+      basenameDiscoveryTermCount: 1,
+      basenameDiscoveryMatchCount: 1,
+      explicitPathAdmittedCount: 1,
+      explicitPathRejectedCount: 0,
+    });
+  });
   it("records an ignored ordinary HTML basename before later directory search", async () => {
     const path = "src/ignored.html";
     writeFileSync(join(root, path), "<html><body>hiddenFlow 937</body></html>\n");
     writeFileSync(join(root, ".gitignore"), `${path}\n`);
-    rejected(await retrieve("Explain ignored.html", "directory", ["src"]), path);
+    const result = await retrieve("Explain ignored.html", "directory", ["src"]);
+    rejected(result, path);
+    expect(
+      result.log.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra,
+    ).toMatchObject({ basenameDiscoveryMatchCount: 0 });
+  });
+  it("does not count raw binary basename metadata as a classified match", async () => {
+    const path = "src/binary.ts";
+    writeFileSync(join(root, path), "\0".repeat(32));
+    const result = await retrieve("Explain binary.ts", "directory", ["src"]);
+    expect(result.result.pack.files.map((file) => file.scopePath)).not.toContain(path);
+    expect(result.reads.some((read) => read.path === join(root, path))).toBe(true);
+    expect(
+      result.log.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra,
+    ).toMatchObject({
+      basenameDiscoveryMatchCount: 0,
+      explicitPathAdmittedCount: 0,
+      explicitPathRejectedCount: 1,
+      explicitPathRejectionReasons: ["binary"],
+    });
   });
   it.each(["probe*.ts", "probe?.ts"])(
     "keeps literal basename %s distinct from wildcard siblings before retention",
