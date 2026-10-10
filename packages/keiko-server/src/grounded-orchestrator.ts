@@ -137,6 +137,7 @@ import {
   complete,
   contextPackIndexKey,
   extractAnchors,
+  extractPathReferences,
   DEFAULT_FILTER_OPTIONS,
   absoluteRelevanceFloor,
   weightsForIntent,
@@ -8895,8 +8896,8 @@ function connectedContextSearchInputs(
   };
 }
 
-/** Each meaningful request clause must still bind a named document; weak topics are real targets. */
-function onlyNamedDocumentRequestClauses(
+/** Each meaningful request clause must still bind a named file; weak topics are real targets. */
+function onlyNamedFileRequestClauses(
   question: string,
   references: readonly SearchReference[],
 ): boolean {
@@ -8904,8 +8905,11 @@ function onlyNamedDocumentRequestClauses(
     (remaining, reference) => remaining.replaceAll(reference.path.toLowerCase(), "\0"),
     question.toLowerCase(),
   );
-  const clauses = shape.split(/[.!?;\n&]|\b(?:and|und|sowie|then|dann)\b/iu);
+  const clauses = shape
+    .split(/[.!?;\n&]|\b(?:and|und|sowie|then|dann)\b/iu)
+    .flatMap((clause) => (clause.includes("\0") ? clause.split(",") : [clause]));
   return (
+    extractPathReferences(shape).length === 0 &&
     clauses.some((clause) => clause.includes("\0")) &&
     clauses.every(
       (clause) =>
@@ -8915,44 +8919,32 @@ function onlyNamedDocumentRequestClauses(
   );
 }
 
-function eligibleFocusedDocumentReferences(references: readonly SearchReference[]): boolean {
-  return (
-    references.length > 0 &&
-    references.every(
-      (reference) =>
-        reference.path.includes("/") && isOrdinaryFolderDocumentPath(reference.path, false),
-    )
-  );
+function eligibleFocusedFileReferences(references: readonly SearchReference[]): boolean {
+  return references.length > 0 && references.every((reference) => reference.path.includes("/"));
 }
 
-function isFocusedDocumentQuery(
-  input: OrchestratorInput,
-  context: LiveRetrievalContext,
-  plan: ExplorationPlan,
-): boolean {
+function isFocusedFileQuery(input: OrchestratorInput, plan: ExplorationPlan): boolean {
   const references = plan.references?.filter((reference) => reference.origin === "query") ?? [];
   return (
-    !context.hasGitMetadata &&
     input.query.kind === "natural-language" &&
+    effectiveRetrievalIntent(plan) !== "diagnostic-search" &&
     !requiresRelationshipOrHistoryRings(input.query) &&
     plan.targetDecision?.definitionRequested === false &&
-    eligibleFocusedDocumentReferences(references) &&
-    onlyNamedDocumentRequestClauses(input.query.text, references) &&
+    eligibleFocusedFileReferences(references) &&
+    onlyNamedFileRequestClauses(input.query.text, references) &&
     plan.targetDecision.targets.every((target) =>
       references.some((reference) => reference.path.toLowerCase() === target.term),
     )
   );
 }
 
-function unavailableDocumentTargetSummary(
+function unavailableFileTargetSummary(
   input: OrchestratorInput,
-  context: LiveRetrievalContext,
   plan: ExplorationPlan,
   admission: ExplicitPathAdmission,
   governor: GovernorState,
 ): RingRunSummary | undefined {
-  if (!isFocusedDocumentQuery(input, context, plan) || admission.selections.length !== 0)
-    return undefined;
+  if (!isFocusedFileQuery(input, plan) || admission.selections.length !== 0) return undefined;
   const { explicitPathRejectedCount, explicitPathAnchorCount } = admission.observation;
   if (explicitPathRejectedCount === 0 || explicitPathRejectedCount !== explicitPathAnchorCount)
     return undefined;
@@ -8967,7 +8959,7 @@ function unavailableDocumentTargetSummary(
   };
 }
 
-function focusedDocumentContext(
+function focusedFileContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   runtime: ConnectedContextRuntime,
@@ -8977,18 +8969,13 @@ function focusedDocumentContext(
 ): LiveRetrievalContext {
   const selections = admission.selections;
   if (
-    !isFocusedDocumentQuery(input, context, plan) ||
+    !isFocusedFileQuery(input, plan) ||
     selections.length === 0 ||
-    !selections.every(
-      (selection) =>
-        selection.path.includes("/") &&
-        selection.origin === "query" &&
-        isOrdinaryFolderDocumentPath(selection.path, false),
-    )
+    !selections.every((selection) => selection.path.includes("/") && selection.origin === "query")
   )
     return context;
   // Admission has already established canonical selected-scope membership. Focus discovery on
-  // the named documents; a repeated navigation vocabulary cannot broaden this factual lookup.
+  // the named files; unrelated lexical vocabulary cannot broaden this bounded factual lookup.
   const searchScope = {
     ...context.searchScope,
     relativePaths: [...new Set(selections.map((selection) => selection.path))],
@@ -9588,10 +9575,9 @@ async function retrieveAdmittedLiveRings(
   context: LiveRetrievalContext,
 ): Promise<{ readonly context: LiveRetrievalContext; readonly rings: RingRunSummary }> {
   const admitted = await liveExplicitPathAdmission(input, deps, plan, governor, runtime, context);
-  const focused = focusedDocumentContext(input, deps, runtime, context, plan, admitted.admission);
-  const unavailable = unavailableDocumentTargetSummary(
+  const focused = focusedFileContext(input, deps, runtime, context, plan, admitted.admission);
+  const unavailable = unavailableFileTargetSummary(
     input,
-    context,
     plan,
     admitted.admission,
     admitted.governor,

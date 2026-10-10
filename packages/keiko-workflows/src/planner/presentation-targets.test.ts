@@ -37,6 +37,19 @@ function plan(text: string): ReturnType<typeof createExplorationPlan> {
 }
 
 describe("presentation clauses do not create source targets or definition requests", () => {
+  it.each(["src/deep/window.ts", "src/deep/window.ts:301"])(
+    "preserves the presentation sentence boundary after raw path %s",
+    (path) => {
+      const result = plan(`Explain ${path}. Cite implementation lines.`);
+      expect(result.targetDecision?.definitionRequested).toBe(false);
+      expect(result.targetDecision?.targets).toEqual([]);
+      expect(
+        extractAnchors({ text: result.query.text, maxAnchors: 8 }).anchors.map(
+          (anchor) => anchor.term,
+        ),
+      ).not.toContain("lines");
+    },
+  );
   it("keeps the original model question and exact source reference without invented line symbols", () => {
     const result = plan(ORIGINAL);
     expect(result.query.text).toBe(ORIGINAL);
