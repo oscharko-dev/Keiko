@@ -11,9 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectPolicyInventory, readPreviousPolicies } from "../lib/code-quality-inventory.mjs";
+import {
+  collectPolicyInventory,
+  readPreviousPolicies,
+  selectPolicyScope,
+} from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
-import { URL } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 
 import { createPolicyFixtureRepository } from "./support/code-quality-fixture.mjs";
 
@@ -28,6 +32,46 @@ function trackedRepository() {
 }
 
 describe("actual tracked/build/workspace inventory (#3915)", () => {
+  it("reconciles the actual built workspace public surface with its full source inventory", async () => {
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const inventory = await collectPolicyInventory(root);
+    expect(inventory.packages).toHaveLength(27);
+    expect(inventory.files.some((file) => file.scope === "root-product" && file.production)).toBe(
+      true,
+    );
+    expect(inventory.files.some((file) => file.scope === "tooling" && file.production)).toBe(true);
+    expect(inventory.files.some((file) => file.scope === "native-host" && file.production)).toBe(
+      true,
+    );
+    expect(inventory.files.some((file) => file.scope === "documentary" && !file.production)).toBe(
+      true,
+    );
+    for (const path of [
+      "packages/keiko-local-knowledge/src/testing.ts",
+      "packages/keiko-workspace/src/testing.ts",
+      "packages/keiko-server/src/editor/lsp/testing/fakeLspProcess.ts",
+    ]) {
+      expect(inventory.files.find((file) => file.path === path)).toMatchObject({
+        production: true,
+        reason: "production-runtime-reachable",
+      });
+      expect(inventory.productionReachability.promoted).toContain(path);
+    }
+    expect(inventory.rootBuild.sources.length).toBeGreaterThan(0);
+    expect(inventory.packages.every((owner) => owner.build.sources.length > 0)).toBe(true);
+  }, 60_000);
+
+  it("selects real inventoried scopes and rejects empty or partial CI qualification", async () => {
+    const { files } = await collectPolicyInventory(trackedRepository());
+    const production = selectPolicyScope(files, "production", false);
+    expect(production).toMatchObject({ partial: true, files });
+    expect(selectPolicyScope(files, "package:alpha", false).files).toEqual(files);
+    expect(selectPolicyScope(files, "repository", true)).toMatchObject({ partial: false, files });
+    expect(() => selectPolicyScope(files, "unknown", false)).toThrow("unknown-or-empty-scope");
+    expect(() => selectPolicyScope(files, "production", true)).toThrow("partial-ci-scope");
+    expect(() => selectPolicyScope([], "repository", false)).toThrow("unknown-or-empty-scope");
+  });
+
   it("derives source membership and export targets from real manifests and TypeScript", async () => {
     const inventory = await collectPolicyInventory(trackedRepository());
     expect(inventory.packages).toHaveLength(1);

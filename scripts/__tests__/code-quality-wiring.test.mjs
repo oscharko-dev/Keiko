@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL, URL } from "node:url";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parse } from "yaml";
 import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
@@ -34,6 +35,27 @@ function enforcingFixture() {
   return root;
 }
 
+const executePolicy = promisify(execFile);
+async function isolatedPolicyReport(repositoryRoot, timeout = 180_000) {
+  const entry = new URL("../check-code-quality-policy.mjs", import.meta.url);
+  const args =
+    repositoryRoot === undefined
+      ? [fileURLToPath(entry), "--json"]
+      : [
+          "--input-type=module",
+          "-e",
+          `const { codeQualityPolicyMain } = await import(${JSON.stringify(entry.href)}); process.exitCode = await codeQualityPolicyMain(["--json"], ${JSON.stringify(repositoryRoot)});`,
+        ];
+  const { stdout } = await executePolicy(process.execPath, args, {
+    cwd: new URL("../../", import.meta.url),
+    encoding: "utf8",
+    timeout,
+    killSignal: "SIGKILL",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return JSON.parse(stdout);
+}
+
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 describe("production code-quality invocation wiring (#3915)", () => {
   it("emits exactly one receipt from the real parser on empty input", () => {
@@ -60,24 +82,37 @@ describe("production code-quality invocation wiring (#3915)", () => {
   });
 
   it("reports a full actual candidate verdict through the enforcing CLI owner", async () => {
+    const report = await isolatedPolicyReport();
+    expect(report).toMatchObject({
+      outcome: "passed",
+      mode: "enforce",
+      scope: { id: "repository", partial: false },
+    });
+    expect(report.counts.expected).toBe(report.counts.visited);
+    expect(report.counts.packages).toBe(27);
+    expect(report.counts.violations).toBe(0);
+    expect(report.rules).toHaveLength(22);
+    expect(report.pack).toHaveLength(27);
+  }, 195_000);
+
+  it("isolates a real completed policy receipt from a later parent console capture", async () => {
+    const root = createRuntimePolicyFixture("testing/logic.ts", "test-only");
+    roots.push(root);
     const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
-      expect(await codeQualityPolicyMain(["--json"])).toBe(0);
-      const report = JSON.parse(output.mock.calls[0][0]);
-      expect(report).toMatchObject({
-        outcome: "passed",
-        mode: "enforce",
-        scope: { id: "repository", partial: false },
-      });
+      const report = await isolatedPolicyReport(root, 15_000);
+      expect(report.outcome).toBe("passed");
+      expect(
+        report.inventory.files.find((file) => file.path === "packages/alpha/src/testing/logic.ts")
+          .production,
+      ).toBe(false);
       expect(report.counts.expected).toBe(report.counts.visited);
-      expect(report.counts.packages).toBe(27);
-      expect(report.counts.violations).toBe(0);
-      expect(report.rules).toHaveLength(22);
-      expect(report.pack).toHaveLength(27);
+      expect(report.pack[0].files).toContain("dist/testing/logic.js");
+      expect(output).not.toHaveBeenCalled();
     } finally {
       output.mockRestore();
     }
-  }, 60_000);
+  }, 20_000);
 
   it("returns an explicit failed verdict for malformed invocation", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
