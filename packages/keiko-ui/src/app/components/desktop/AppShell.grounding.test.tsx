@@ -113,6 +113,7 @@ const mocks = vi.hoisted(() => ({
   refreshActiveWorkspace: vi.fn(),
   mutateActiveWorkspace: vi.fn(),
   gatewaySetupDialogModuleLoaded: vi.fn(),
+  leftRailModuleLoaded: vi.fn(),
   newWindowDialogModuleLoaded: vi.fn(),
   paletteModuleLoaded: vi.fn(),
   updateStartupNoticeModuleLoaded: vi.fn(),
@@ -330,13 +331,16 @@ vi.mock("./Footer", () => ({
   ),
 }));
 
-vi.mock("./LeftRail", () => ({
-  LeftRail: ({ onNewChat }: { readonly onNewChat: () => void }): ReactNode => (
-    <button type="button" data-testid="left-rail" onClick={onNewChat}>
-      New chat
-    </button>
-  ),
-}));
+vi.mock("./LeftRail", () => {
+  mocks.leftRailModuleLoaded();
+  return {
+    LeftRail: ({ onNewChat }: { readonly onNewChat: () => void }): ReactNode => (
+      <button type="button" data-testid="left-rail" onClick={onNewChat}>
+        New chat
+      </button>
+    ),
+  };
+});
 
 vi.mock("./RightRail", () => ({
   RightRail: ({ onTool }: { readonly onTool: (id: string) => void }): ReactElement => {
@@ -417,6 +421,7 @@ const gestureOnlyShellModuleLoadsAtImport = {
   palette: mocks.paletteModuleLoaded.mock.calls.length,
   updateStartupNotice: mocks.updateStartupNoticeModuleLoaded.mock.calls.length,
 };
+const leftRailModuleLoadsAtImport = mocks.leftRailModuleLoaded.mock.calls.length;
 
 function chat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -732,6 +737,13 @@ async function renderMounted(): Promise<void> {
 }
 
 describe("AppShell grounding connections", () => {
+  it("defers navigation until the client shell mounts and preserves its new-chat action", async () => {
+    expect(leftRailModuleLoadsAtImport).toBe(0);
+    const user = userEvent.setup();
+    await renderMounted();
+    await user.click(await screen.findByTestId("left-rail"));
+    expect(await screen.findByRole("button", { name: "Confirm new chat" })).toBeVisible();
+  });
   beforeAll((): void => {
     originalDialogShowModal = installDialogMethod("showModal", mocks.dialogShowModal);
     originalDialogClose = installDialogMethod("close", mocks.dialogClose);
@@ -1221,7 +1233,7 @@ describe("AppShell grounding connections", () => {
     const user = userEvent.setup();
     await renderMounted();
 
-    await user.click(screen.getByTestId("left-rail"));
+    await user.click(await screen.findByTestId("left-rail"));
     // The dialog resolves through `next/dynamic(..., { ssr: false })` (first-load isolation), so it
     // arrives on the microtask after the gesture rather than in the same render.
     await user.click(await screen.findByRole("button", { name: "Confirm new chat" }));

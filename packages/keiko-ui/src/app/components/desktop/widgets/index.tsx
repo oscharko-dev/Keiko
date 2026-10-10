@@ -20,11 +20,15 @@ import {
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
-import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
+import type { BoundRootSurfaceType } from "./BoundRootTarget";
 import { ManagedTaskWorkspaceGate } from "./ManagedTaskWorkspaceGate";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
 
 const windowChunkFallback = createWindowChunkFallback("window chunk"); // i18n-exempt: diagnostic stage id, never rendered
+const BoundRootTarget = dynamic(
+  () => import("./BoundRootTarget").then((mod) => mod.BoundRootTarget),
+  { ssr: false, loading: windowChunkFallback },
+);
 const ChatWindowSessionHost = dynamic(
   () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.ChatWindowSessionHost),
   { ssr: false, loading: windowChunkFallback },
