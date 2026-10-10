@@ -581,7 +581,12 @@ retain content-match semantics and cannot receive synthetic nonmatching inspecti
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
 filename batches; they do not schedule unrelated graph or history traversal. Ordinary-folder
 named-document focus additionally requires every meaningful request clause to stay bound to a named
-document. The canonical anchor producer removes presentation-only clauses; an independent prose
+document. The canonical anchor producer retains quoted/path targets before removing presentation-only
+prose, and removes that prose before definition patterns or ordinary symbols can treat citation
+instructions as requested source content. Target-shape, definition and relationship classification
+use the same presentation projection; the original question and model prompt remain unchanged.
+Canonical reference wrapping preserves sentence boundaries so a following output clause remains
+separate. An independent prose
 topic, even without a quoted or typed identifier, retains recursive discovery. A rejected named
 document cannot stop discovery for that independent topic. Sole named-document requests retain
 focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,

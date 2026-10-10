@@ -286,11 +286,11 @@ function hasHistoryQuery(text: string): boolean {
 }
 
 function hasDefinitionLookup(text: string): boolean {
-  return hasQueryTerm(text, DEFINITION_LOOKUP_TERMS);
+  return hasQueryTerm(queryContextOutsideQuotes(text), DEFINITION_LOOKUP_TERMS);
 }
 
 function hasSymbolRelation(text: string): boolean {
-  return hasSymbolRelationshipQuery(text);
+  return hasSymbolRelationshipQuery(queryContextOutsideQuotes(text));
 }
 
 function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
@@ -318,7 +318,11 @@ export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boole
     (text, reference) => text.split(reference.path).join(" "),
     query.text,
   );
-  return hasHistoryQuery(prose) || hasSymbolRelation(prose) || ROUTE_TRAVERSAL_RE.test(prose);
+  return (
+    hasHistoryQuery(prose) ||
+    hasSymbolRelation(prose) ||
+    ROUTE_TRAVERSAL_RE.test(queryContextOutsideQuotes(prose))
+  );
 }
 
 const DIRECT_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
@@ -496,7 +500,7 @@ export function resolveQueryTargetDecision(
   else if (!requested.truncated && possibleTargets.length > 0)
     kind = positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
   const targets = kind === "literal-search" ? possibleTargets : strongTargets;
-  const definitionRequested = hasDefinitionLookup(queryContextOutsideQuotes(query.text));
+  const definitionRequested = hasDefinitionLookup(query.text);
   return {
     kind,
     targets,

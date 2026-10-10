@@ -171,10 +171,11 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // remains authoritative. No nested repetition or rescanning from every slash is necessary.
 const PATH_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
 const PRESENTATION_PATTERNS: readonly RegExp[] = [
-  /(^|[.!?;\n])\s*(?:please\s+)?cite(?:\s+(?:the|a|an|any|authoritative|relevant|supporting|source|sources|manual|manuals|file|files|and|line|lines|evidence)){1,16}\b/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?cite(?:\s+(?:the|a|an|any|authoritative|relevant|supporting|source|sources|manual|manuals|file|files|and|line|lines|evidence|(?:implementation|definition|code)\s+lines?)){1,16}\b(?:,\s*(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b)?/giu,
   /(^|[.!?;\n])\s*(?:please\s+)?keep\s+(?:the|your)\s+answer\s+(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b/giu,
   /(^|[.!?;\n])\s*(?:please\s+)?(?:answer|respond)\s+(?:briefly|concisely)\b/giu,
   /(^|[.!?;\n])\s*(?:bitte\s+)?antworte\s+(?:kurz|knapp)(?:\s+mit\s+(?:quellenangabe|quellen|belegen))?\b/giu,
+  /(^|[.!?;\n])\s*(?:bitte\s+)?zitiere(?:\s+(?:die|relevanten|quellen|quellzeilen|implementierungszeilen|definitionszeilen|zeilen|und)){1,16}\b(?:,\s*(?:unter|innerhalb\s+von)\s+\d{1,6}\s+(?:wörtern|sätzen|zeilen)\b)?/giu,
 ];
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
@@ -475,10 +476,12 @@ function collectQuotedTargets(
   return collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected, accept, replacement);
 }
 
-// Internal planner seam: quoted target contents are data, not instructions or diagnostic intent.
-// Extraction and contextual classification use the same contraction-safe quotation grammar.
+// Internal planner seam: quoted targets and output directives cannot create content intent.
+// Extraction and classification share the quotation and presentation grammar.
 export function queryContextOutsideQuotes(text: string): string {
-  return collectQuotedTargets(text, { anchors: [], truncated: false });
+  return withoutPresentationInstructions(
+    collectQuotedTargets(text, { anchors: [], truncated: false }),
+  );
 }
 
 // Same quote parser as extraction: the marker denotes accepted target data, never query prose.
@@ -487,7 +490,7 @@ export function queryShapeOutsideTargets(text: string, targets: readonly SearchA
   const shape = collectQuotedTargets(text, { anchors: [], truncated: false }, " \0 ", (value) =>
     terms.has(value.trim().toLowerCase()),
   );
-  return shape.replace(/[\p{L}\p{N}_$-]+/gu, (token) =>
+  return withoutPresentationInstructions(shape).replace(/[\p{L}\p{N}_$-]+/gu, (token) =>
     terms.has(token.toLowerCase()) ? " \0 " : token,
   );
 }
@@ -502,6 +505,9 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
   remaining = collectFilePathTokens(remaining, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
+  // Explicit target data has already been retained. Remove presentation prose before definition
+  // patterns can promote words such as "lines" into independently requested source symbols.
+  remaining = withoutPresentationInstructions(remaining);
   remaining = collectMatches(
     remaining,
     DEFINITION_TARGET_BEFORE_VERB_RE,
@@ -534,7 +540,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
-  const tokensConsidered = tokenizeRemaining(withoutPresentationInstructions(remaining), collected);
+  const tokensConsidered = tokenizeRemaining(remaining, collected);
   const selected = selectBoundedAnchors(collected, maxAnchors, caseSensitive);
   return { ...selected, tokensConsidered };
 }
