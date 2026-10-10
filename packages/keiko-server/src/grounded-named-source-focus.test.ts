@@ -250,6 +250,16 @@ describe("live-admitted query-named source focus under the original grants", () 
     expect(out.prompt).toContain("pumpResetDelay = 43");
   });
 
+  it("keeps an independent request in a subordinate clause beside a named file", async () => {
+    const root = await fixture();
+    const out = await retrieve(
+      root,
+      `Read ${TARGET} while also explaining pump reset delays. Cite implementation lines.`,
+    );
+    expect(out.result.pack.files.map((file) => file.scopePath)).toContain(SECOND);
+    expect(out.prompt).toContain("pumpResetDelay = 43");
+  });
+
   it("preserves breadth when the bounded reference projection cannot retain every named path", async () => {
     const root = await fixture(true);
     const paths = Array.from({ length: 7 }, (_, i) => `src/named-${String(i)}.ts`);
