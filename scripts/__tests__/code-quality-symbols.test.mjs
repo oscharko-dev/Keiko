@@ -39,6 +39,18 @@ describe("configured canonical symbol resolver interface (#3918)", () => {
     expect(own.resolver.stats().created).toBe(0);
   });
 
+  it("uses real ECMAScript globals without admitting unrelated browser fixture APIs", () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/standard.ts",
+      "export const values = new Map<string, number>(); export const ready: Promise<number> = Promise.resolve(1);",
+    );
+    expect(() => emitSymbolFixture(own.root)).not.toThrow();
+    own.put("packages/alpha/src/browser.ts", "export const title = document.title;");
+    expect(() => emitSymbolFixture(own.root)).toThrow("symbol-fixture-types");
+  });
+
   it("resolves real built main/subpath aliases and executes the packed owner behavior", async () => {
     const own = await fixture();
     const main = own.resolver.resolveExport(reference);
@@ -201,6 +213,7 @@ export function untyped(input: any): any { return input; }
         noEmit: true,
         strict: true,
         types: [],
+        lib: ["ES2022"],
       },
       include: ["src"],
     });
@@ -216,6 +229,7 @@ export function untyped(input: any): any { return input; }
         noEmit: true,
         strict: true,
         types: [],
+        lib: ["ES2022"],
         paths: { alpha: ["../alpha/src/index.ts"] },
       },
       include: ["src"],

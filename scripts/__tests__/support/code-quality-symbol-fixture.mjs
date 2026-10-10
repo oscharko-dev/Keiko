@@ -12,6 +12,7 @@ export function createSymbolFixture() {
   };
   const options = {
     target: "ES2022",
+    lib: ["ES2022"],
     module: "NodeNext",
     moduleResolution: "NodeNext",
     strict: true,
