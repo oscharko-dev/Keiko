@@ -158,11 +158,13 @@ export function assistantReferenceExcerptIds(
   const ids = new Set<string>();
   for (const reference of references.slice(0, 6)) {
     const file = pack.files.find((entry) => entry.scopePath === reference.path);
-    const best = file?.excerpts
-      .filter((excerpt) => excerptContainsReference(excerpt, reference))
-      .sort(
-        (a, b) => b.atom.score - a.atom.score || a.atom.stableId.localeCompare(b.atom.stableId),
-      )[0];
+    const current = file?.excerpts.filter((excerpt) =>
+      excerptContainsReference(excerpt, reference),
+    );
+    const windows = current?.length ? current : (file?.excerpts ?? []);
+    const best = [...windows].sort(
+      (a, b) => b.atom.score - a.atom.score || a.atom.stableId.localeCompare(b.atom.stableId),
+    )[0];
     if (best !== undefined) ids.add(best.atom.stableId);
   }
   return [...ids];

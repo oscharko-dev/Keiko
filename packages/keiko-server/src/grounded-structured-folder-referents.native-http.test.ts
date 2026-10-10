@@ -3,6 +3,8 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as workspace from "@oscharko-dev/keiko-workspace";
+import type { LineRange } from "@oscharko-dev/keiko-contracts/connected-context";
 import type {
   ChatConnectedScope,
   HybridGroundedAnswer,
@@ -48,6 +50,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await closeUiTestServer(server);
   for (const deps of runtimes.splice(0)) await deps.dispose?.();
   resetServerLogger();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   rmSync(directory, { recursive: true, force: true });
 });
@@ -340,7 +343,59 @@ function assertFresh(setup: Fixture, answer: HybridGroundedAnswer, referred = tr
   expect(answer.contextPack.folder.usage.filesRead).toBeGreaterThan(0);
 }
 
+interface NativeExcerptObservation {
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly returned?: readonly (LineRange | undefined)[];
+  readonly reason?: string;
+}
+
+function observeTargetExcerptReads(root: string): readonly NativeExcerptObservation[] {
+  const observations: NativeExcerptObservation[] = [];
+  const originalRead = workspace.readExcerpt;
+  vi.spyOn(workspace, "readExcerpt").mockImplementation((...args) => {
+    const [scope, request] = args;
+    if (scope.workspace.root !== root || request.scopePath !== TARGET) return originalRead(...args);
+    const selection = { startLine: request.startLine, endLine: request.endLine };
+    return originalRead(...args).then(
+      (result) => {
+        observations.push({
+          ...selection,
+          returned: (result.windows ?? [result]).map((entry) => entry.atom.lineRange),
+        });
+        return result;
+      },
+      (error: unknown) => {
+        observations.push({
+          ...selection,
+          reason:
+            error instanceof workspace.RepoSearchUnsupportedFileError ? error.reason : "other",
+        });
+        throw error;
+      },
+    );
+  });
+  return observations;
+}
+
 describe("structured folder citations through native follow-up admission", () => {
+  it("uses a current same-path window when mutation makes the previous line hint stale", async () => {
+    const setup = await fixture(true);
+    await numericHistory(setup);
+    writeFileSync(join(setup.root, TARGET), `export const shortenedValue = ${AFTER}\n`);
+    const observations = observeTargetExcerptReads(setup.root);
+    const answer = await ask(setup, "Explain that.");
+    expect(observations).toEqual([
+      { startLine: 61, endLine: 85, reason: "outside-range" },
+      { startLine: 1, endLine: 200, returned: [{ startLine: 1, endLine: 2 }] },
+    ]);
+    expect(setup.provider.evidence.at(-1)).toContain(AFTER);
+    const citation = answer.citations.find((item) => item.scopePath === TARGET);
+    expect(citation?.lineRange?.startLine).toBe(1);
+    expect(citation?.lineRange?.endLine).toBeLessThan(61);
+    expect(continuityCounts(setup, "continuityAdmittedCount")).toEqual([1, 0]);
+  });
+
   it("uses the persisted numeric folder citation to reread the changed line61 target", async () => {
     const setup = await fixture();
     await numericHistory(setup);
