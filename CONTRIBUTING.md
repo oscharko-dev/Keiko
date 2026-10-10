@@ -108,6 +108,9 @@ Physical excerpt allocation preserves connected parent chains across selected ro
 explicit human file selections. Reservations use request-local current definition witnesses and
 observed body-byte requirements within the existing grants. Independent route roots share the
 allocation; relevance scores, invocation uncertainty and actual omission reporting remain intact.
+Ordinary ranked evidence and connected definitions share the remaining byte grant; neither view
+reserves the whole pool. Existing selection priorities survive path ordering, and current
+definition boundaries split adjacent windows before the existing trace-priority and score ordering.
 Existing query evidence orders endpoint intake; bounded delegation traversal keeps the original
 workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
 Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
