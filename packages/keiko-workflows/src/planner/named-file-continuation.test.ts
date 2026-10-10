@@ -57,3 +57,8 @@ describe("arbitrary nonlocal objects after a named-file orientation", () => {
     expect(decision(text).namedFileOnly).toBeUndefined();
   });
 });
+
+it("keeps distinct case-sensitive path identities ambiguous for a local fact continuation", () => {
+  const text = "Read src/Policy.ts and src/policy.ts. Which function applies the policy?";
+  expect(decision(text).namedFileOnly).toBeUndefined();
+});
