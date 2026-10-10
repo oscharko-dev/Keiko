@@ -956,8 +956,14 @@ async function liveRefreshFragment(
     const sourceText = ctx.redactText(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     return { file, document: { ...document, sourceText, startLine: 1 } };
   } catch {
+    recordSemanticRefreshFailure(ctx, deadlineAtMs);
     return undefined;
   }
+}
+
+function recordSemanticRefreshFailure(ctx: EmbeddingContext, deadlineAtMs: number): void {
+  if (semanticOperationStopped(ctx) || refreshStopped(ctx, ctx.signal, deadlineAtMs)) return;
+  observePodDegradation(ctx, "pod-query-failed");
 }
 
 function compatibleRefreshVector(
@@ -1089,6 +1095,7 @@ async function refreshedSemanticHits(
       if (hit !== undefined) hits.push(hit);
     }
   } catch {
+    recordSemanticRefreshFailure(ctx, deadlineAtMs);
     return hits;
   }
   return hits;

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { axe } from "jest-axe";
 import type { Chat, ChatConnectedScope } from "@/lib/types";
 import { ChatScopeNotice } from "./ChatScopeNotice";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -35,6 +36,19 @@ afterEach(() => {
 });
 
 describe("acknowledged scope notice", () => {
+  it("keeps the acknowledged narrowing notice and folder controls accessible", async () => {
+    const changed = vi.fn();
+    const keep = vi.fn();
+    const view = render(
+      <ChatScopeNotice chat={chat(folder)} onChatChanged={changed} onKeepFolderChange={keep} />,
+    );
+    view.rerender(
+      <ChatScopeNotice chat={chat(file)} onChatChanged={changed} onKeepFolderChange={keep} />,
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("File: validation.ts");
+    expect(screen.getByRole("button", { name: "Keep folder" })).toBeEnabled();
+    expect(await axe(view.container)).toHaveNoViolations();
+  });
   it.each([false, true])(
     "restores the replaced same-root folder in either order (%s)",
     async (reverse) => {

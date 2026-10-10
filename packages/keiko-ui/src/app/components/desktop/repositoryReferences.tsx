@@ -260,7 +260,7 @@ const REPOSITORY_REFERENCE_PATTERN = new RegExp(
 // Exact/bracketed references have a known boundary, so their filenames may contain spaces or
 // other Unicode characters. The shared portable-path contract still owns path validity.
 const EXACT_REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`^@?([^:[\]\r\n]{1,4096}?)(?:${referenceLineRange(true, REFERENCE_HORIZONTAL_SPACE)})?$`,
+  String.raw`^@?([^:\r\n]{1,4096}?)(?:${referenceLineRange(true, REFERENCE_HORIZONTAL_SPACE)})?$`,
   "u",
 );
 const REPOSITORY_REFERENCE_SOURCE = `@?${REPOSITORY_REFERENCE_PATH_CORE}(?:${referenceLineRange(false)})?`;

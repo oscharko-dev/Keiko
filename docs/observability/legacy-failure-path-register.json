@@ -8672,12 +8672,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-workspace/src/structuralAdapterRequestContext.ts",
-      "owner": "currentCandidateContentMetadata",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-workspace/src/structuralAdapters.ts",
       "owner": "adapterAvailable",
       "kind": "unregistered-catch",

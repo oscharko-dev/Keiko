@@ -97,6 +97,25 @@ describe("diagnostic references preserve the user-term channel", () => {
     expect(result.anchors.map((anchor) => anchor.term)).toContain("paymentvalidator");
   });
 
+  it("retains the explicit human location beside a full diagnostic channel", () => {
+    const frames = Array.from(
+      { length: 8 },
+      (_value, index) => `    at execute (src/frame${String(index)}.ts:12:3)`,
+    );
+    const result = plan(["Explain src/z/final.ts:480.", ...frames].join("\n"));
+    expect(result.references).toHaveLength(6);
+    expect(result.references?.[0]).toEqual({
+      path: "src/frame0.ts",
+      line: 12,
+      origin: "diagnostic",
+    });
+    expect(result.references).toContainEqual({
+      path: "src/z/final.ts",
+      line: 480,
+      origin: "query",
+    });
+  });
+
   it("does not treat Object.get and a frame location as a direct HTTP-route lookup", () => {
     const result = plan("Why does this fail?\n    at Object.get (src/Feature/Probe.ts:9:3)");
     expect(result.directEvidenceLookup).toBe(false);

@@ -2496,19 +2496,24 @@ function recordScopeContextObservation(
   context: KnownFitScopeContext | undefined,
   readable: boolean,
 ): void {
-  const observation = context?.observation() ?? {
-    state: "gate-refused",
-    observedFileCount: 0,
-    retainedFileCount: 0,
-    chargedBytes: 0,
-    capacityBytes: inputs.scopeContextBytesMax,
-  };
+  const observation =
+    context?.observation() ?? gateRefusedScopeContext(inputs.scopeContextBytesMax);
   inputs.observeScopeContext?.({
     ...observation,
     ...(!readable && context !== undefined && observation.state !== "overflow"
       ? { state: "incomplete-traversal", retainedFileCount: 0 }
       : {}),
   });
+}
+
+function gateRefusedScopeContext(capacityBytes: number): ScopeContextObservation {
+  return {
+    state: "gate-refused",
+    observedFileCount: 0,
+    retainedFileCount: 0,
+    chargedBytes: 0,
+    capacityBytes,
+  };
 }
 
 function isKnownFitSourceAnchor(anchor: SearchAnchor): boolean {
@@ -3164,6 +3169,13 @@ function skipPlannedRing(
   if (reason === undefined) return false;
   decisions.skippedRingKinds.push(ring.kind);
   if (!decisions.ringSkipReasons.includes(reason)) decisions.ringSkipReasons.push(reason);
+  if (reason === "no-git-metadata" && requiresRelationshipOrHistoryRings(inputs.query))
+    evidence.uncertainty.push(
+      toolUnavailable(
+        "git-history unavailable: selected scope has no Git metadata",
+        inputs.nowMs(),
+      ),
+    );
   return true;
 }
 
@@ -6755,6 +6767,7 @@ function createGovernedRetrievalPlan(
 }
 
 interface AssembleGroundedPackInputs {
+  readonly sourceProgress: ConnectedContextProgress;
   readonly worktreeRecency?: WorktreeRecencyResult | undefined;
   readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
@@ -6860,6 +6873,7 @@ interface PreparedPackAssembly {
 }
 
 interface FinalContextPackInputs {
+  readonly sourceProgress: ConnectedContextProgress;
   readonly input: OrchestratorInput;
   readonly plan: ExplorationPlan;
   readonly rings: RingRunSummary;
@@ -7221,8 +7235,13 @@ async function assemblePackFromReads(
     },
     withoutMicroIndex(knownFitAssembleOptions(assembleOptions, rings)),
   );
-  cacheAssembledGroundedPack(inputs, assemble.pack);
-  return assemble.pack;
+  const pack = withRetrievalSourceDiagnostics(
+    assemble.pack,
+    inputs.sourceProgress,
+    assembleOptions.nowMs(),
+  );
+  cacheAssembledGroundedPack(inputs, pack);
+  return pack;
 }
 
 function atomsForCurrentReadWindows(
@@ -7583,7 +7602,7 @@ async function assembleGroundedPack(
   const prepared = await preparePackAssembly(args, augmentedRings);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined)
-    return cachedGroundedAssembly(ctx.cached, deps, prepared, augmentedRings);
+    return cachedGroundedAssembly(ctx.cached, args, prepared, augmentedRings);
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
     knownFitFileBytes: augmentedRings.knownFitFileBytes,
     searchScope,
@@ -7597,6 +7616,7 @@ async function assembleGroundedPack(
     deadlineAtMs,
   });
   const pack = await assemblePackFromReads({
+    sourceProgress: args.sourceProgress,
     input,
     plan,
     rings: augmentedRings,
@@ -7634,17 +7654,21 @@ function groundedAssemblyDetails(
 
 function cachedGroundedAssembly(
   pack: ConnectedContextPack,
-  deps: OrchestratorDeps,
+  args: AssembleGroundedPackInputs,
   prepared: PreparedPackAssembly,
   rings: RingRunSummary,
 ): GroundedPackAssembly {
+  const selected =
+    JSON.stringify(pack.diagnostics?.selection) === JSON.stringify(prepared.selection)
+      ? pack
+      : {
+          ...pack,
+          diagnostics: { rankedCandidates: [], ...pack.diagnostics, selection: prepared.selection },
+        };
   return {
     pack: withGroundedContextDiagnostics(
-      {
-        ...pack,
-        diagnostics: { rankedCandidates: [], ...pack.diagnostics, selection: prepared.selection },
-      },
-      deps,
+      withRetrievalSourceDiagnostics(selected, args.sourceProgress, args.nowMs()),
+      args.deps,
     ),
     ...groundedAssemblyDetails(prepared, rings),
     elapsedBudgetBlocked: false,
@@ -8899,18 +8923,34 @@ function eligibleFocusedFileReferences(references: readonly SearchReference[]): 
   return references.length > 0 && references.every((reference) => reference.path.includes("/"));
 }
 
-function isFocusedFileQuery(input: OrchestratorInput, plan: ExplorationPlan): boolean {
-  const references = plan.references?.filter((reference) => reference.origin === "query") ?? [];
+function focusedTargetsMatchReferences(
+  plan: ExplorationPlan,
+  references: readonly SearchReference[],
+): boolean {
   return (
-    input.query.kind === "natural-language" &&
-    effectiveRetrievalIntent(plan) !== "diagnostic-search" &&
-    !requiresRelationshipOrHistoryRings(input.query) &&
-    plan.targetDecision?.definitionRequested === false &&
-    eligibleFocusedFileReferences(references) &&
-    plan.targetDecision.namedFileOnly === true &&
+    plan.targetDecision?.namedFileOnly === true &&
     plan.targetDecision.targets.every((target) =>
       references.some((reference) => reference.path.toLowerCase() === target.term),
     )
+  );
+}
+
+function permitsFocusedFileQuery(input: OrchestratorInput, plan: ExplorationPlan): boolean {
+  return (
+    input.query.kind === "natural-language" &&
+    plan.targetDecision?.kind !== "literal-search" &&
+    effectiveRetrievalIntent(plan) !== "diagnostic-search" &&
+    !requiresRelationshipOrHistoryRings(input.query)
+  );
+}
+
+function isFocusedFileQuery(input: OrchestratorInput, plan: ExplorationPlan): boolean {
+  const references = plan.references?.filter((reference) => reference.origin === "query") ?? [];
+  return (
+    permitsFocusedFileQuery(input, plan) &&
+    plan.targetDecision?.definitionRequested === false &&
+    eligibleFocusedFileReferences(references) &&
+    focusedTargetsMatchReferences(plan, references)
   );
 }
 
@@ -9524,6 +9564,7 @@ function liveGroundedPackInputs(
   rings: RingRunSummary,
 ): AssembleGroundedPackInputs {
   return {
+    sourceProgress: runtime.progress,
     worktreeRecency: context.worktreeRecency,
     recordMetadataUnavailable: runtime.activity.metadataUnavailable,
     recordSymbolReadFailure: runtime.activity.symbolReadFailure,
@@ -9558,6 +9599,8 @@ async function retrieveAdmittedLiveRings(
     admitted.admission,
     admitted.governor,
   );
+  if (unavailable !== undefined)
+    runtime.progress.scopeContextObservation = gateRefusedScopeContext(plan.budget.excerptBytesMax);
   const discovered =
     unavailable ??
     (await runAllRings(
@@ -9603,7 +9646,7 @@ async function retrieveLiveConnectedContext(
   throwIfCancelled(deps.signal);
   const workspaceIndex = context.workspaceIndexActivity.diagnostics();
   const execution = connectedContextExecution(
-    withRetrievalSourceDiagnostics(assembled.pack, runtime.progress, runtime.nowMs()),
+    assembled.pack,
     plan,
     runtime.activity,
     {
@@ -9669,26 +9712,51 @@ function withRetrievalSourceDiagnostics(
   progress: ConnectedContextProgress,
   nowMs: number,
 ): ConnectedContextPack {
-  const scopeState = progress.scopeContextObservation?.state;
+  const observedScopeState = progress.scopeContextObservation?.state;
+  const scopeState = observedScopeState === "empty" ? undefined : observedScopeState;
   const semanticState = progress.sourceDecision?.semanticProviderDisposition;
+  const staleMarkers = staleSemanticMarker(
+    groundedSemanticFreshnessSummary(progress.semanticFreshness ?? [], pack),
+    nowMs,
+  );
+  const sourceDiagnostics = {
+    scopeContextState: scopeState,
+    semanticProviderDisposition: semanticState,
+  };
+  if (sameRetrievalSourceDiagnostics(pack, sourceDiagnostics, staleMarkers)) return pack;
   return {
     ...pack,
     uncertainty: [
-      ...pack.uncertainty,
-      ...staleSemanticMarker(
-        groundedSemanticFreshnessSummary(progress.semanticFreshness ?? [], pack),
-        nowMs,
-      ),
+      ...pack.uncertainty.filter((marker) => !isRetrievalSemanticStaleMarker(marker)),
+      ...staleMarkers,
     ],
     diagnostics: {
       rankedCandidates: [],
       ...pack.diagnostics,
-      ...(semanticState === undefined ? {} : { semanticProviderDisposition: semanticState }),
-      ...(scopeState === undefined || scopeState === "empty"
-        ? {}
-        : { scopeContextState: scopeState }),
+      ...sourceDiagnostics,
     },
   };
+}
+
+function sameRetrievalSourceDiagnostics(
+  pack: ConnectedContextPack,
+  diagnostics: Pick<
+    NonNullable<ConnectedContextPack["diagnostics"]>,
+    "scopeContextState" | "semanticProviderDisposition"
+  >,
+  staleMarkers: readonly UncertaintyMarker[],
+): boolean {
+  const priorStale = pack.uncertainty.filter(isRetrievalSemanticStaleMarker);
+  return (
+    pack.diagnostics?.scopeContextState === diagnostics.scopeContextState &&
+    pack.diagnostics?.semanticProviderDisposition === diagnostics.semanticProviderDisposition &&
+    priorStale.length === staleMarkers.length &&
+    priorStale.every((marker, index) => marker.claim === staleMarkers[index]?.claim)
+  );
+}
+
+function isRetrievalSemanticStaleMarker(marker: UncertaintyMarker): boolean {
+  return marker.kind === "stale-evidence" && marker.claim.startsWith("stale-semantic: ");
 }
 
 function metadataInjectionReason(

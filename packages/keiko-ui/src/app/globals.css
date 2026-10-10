@@ -21729,8 +21729,8 @@ button.figma-view-preview {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px 12px;
-  flex-wrap: wrap;
+  gap: 12px;
+  flex-wrap: nowrap;
   padding: 6px 16px 4px;
 }
 .chat-scope-header-actions {
@@ -21740,27 +21740,12 @@ button.figma-view-preview {
   justify-content: flex-end;
   min-width: 32px;
 }
-@container (max-width: 480px) {
-  .chat-scope-header:has(> [data-scope-notice]) {
-    row-gap: 0;
-    padding-block: 3px 0;
-  }
-  .chat-scope-header:has(> [data-scope-notice]) .scope-grounding {
-    row-gap: 0;
-  }
-  .chat-scope-header:has(> [data-scope-notice]) .scope-pill-wrap {
-    row-gap: 2px;
-  }
-}
 /* C178 — grounding control label (was fully inline-styled). */
 .scope-grounding {
   display: inline-flex;
-  flex: 1 1 260px;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  min-width: 0;
-  max-width: 100%;
   font-size: 12px;
 }
 .scope-grounding-label {

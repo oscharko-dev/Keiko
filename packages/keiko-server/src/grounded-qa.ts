@@ -56,7 +56,11 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { DEFAULT_LEXICAL_MATCH_LIMIT } from "@oscharko-dev/keiko-workflows";
+import {
+  DEFAULT_LEXICAL_MATCH_LIMIT,
+  extractAnchors,
+  type SearchAnchor,
+} from "@oscharko-dev/keiko-workflows";
 import {
   persistConnectedContextEvidence,
   type ConnectedContextEvidenceInput,
@@ -974,14 +978,18 @@ function excerptWithContent(
   excerpt: ContextExcerpt,
   content: string,
   scopeId: string,
+  lineOffset = 0,
 ): ContextExcerpt {
   const original = excerpt.atom.lineRange;
-  if (original === undefined || content.length === excerpt.content.length)
+  if (original === undefined || content === excerpt.content)
     return { ...excerpt, content, contentBytes: Buffer.byteLength(content, "utf8") };
   const lineCount = content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
   const lineRange = {
-    startLine: original.startLine,
-    endLine: Math.min(original.endLine, original.startLine + Math.max(1, lineCount) - 1),
+    startLine: original.startLine + lineOffset,
+    endLine: Math.min(
+      original.endLine,
+      original.startLine + lineOffset + Math.max(1, lineCount) - 1,
+    ),
   };
   const atom = {
     ...excerpt.atom,
@@ -998,6 +1006,60 @@ function excerptWithContent(
   return { ...excerpt, atom, content, contentBytes: Buffer.byteLength(content, "utf8") };
 }
 
+function fittingMatchedLine(
+  lines: readonly string[],
+  anchors: readonly SearchAnchor[],
+  maxBytes: number,
+): number | undefined {
+  let best: number | undefined;
+  let bestScore = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (Buffer.byteLength(line, "utf8") > maxBytes) continue;
+    const lower = line.toLowerCase();
+    const score = anchors.reduce(
+      (sum, anchor) => sum + (lower.includes(anchor.term.toLowerCase()) ? anchor.weight : 0),
+      0,
+    );
+    if (score <= bestScore) continue;
+    bestScore = score;
+    best = index;
+  }
+  return best;
+}
+
+function fittingExcerptContent(
+  excerpt: ContextExcerpt,
+  maxBytes: number,
+  anchors: readonly SearchAnchor[],
+): { readonly content: string; readonly lineOffset: number } {
+  const lines = excerpt.content.split("\n");
+  const matched =
+    excerpt.atom.lineRange === undefined ? undefined : fittingMatchedLine(lines, anchors, maxBytes);
+  if (matched === undefined)
+    return { content: clampUtf8Bytes(excerpt.content, maxBytes), lineOffset: 0 };
+  const sizes = lines.map((line) => Buffer.byteLength(line, "utf8"));
+  let start = matched;
+  let end = matched;
+  let remaining = maxBytes - (sizes[matched] ?? 0);
+  while (remaining > 0) {
+    const before = start > 0 ? adjacentLineBytes(sizes, start - 1) : Infinity;
+    const after = end + 1 < lines.length ? adjacentLineBytes(sizes, end + 1) : Infinity;
+    if (before <= remaining) {
+      start -= 1;
+      remaining -= before;
+    } else if (after <= remaining) {
+      end += 1;
+      remaining -= after;
+    } else break;
+  }
+  return { content: lines.slice(start, end + 1).join("\n"), lineOffset: start };
+}
+
+function adjacentLineBytes(sizes: readonly number[], index: number): number {
+  return (sizes[index] ?? 0) + 1;
+}
+
 function withPromptExcerptTotalByteBudget(
   pack: ConnectedContextPack,
   maxExcerptBytes: number,
@@ -1006,18 +1068,22 @@ function withPromptExcerptTotalByteBudget(
 ): ConnectedContextPack {
   if (maxExcerptBytes <= 0) return { ...pack, files: [] };
   const byFile = new Map<number, ContextExcerpt[]>();
+  const anchors = extractAnchors({ text: pack.query.text, maxAnchors: 8 }).anchors.filter(
+    (anchor) => anchor.kind !== "path",
+  );
   let remaining = Math.floor(maxExcerptBytes);
   for (const ranked of rankedPromptExcerpts(pack, requiredEvidencePaths, requiredEvidenceAtomIds)) {
     if (remaining <= 0) break;
     const fullBytes = Buffer.byteLength(ranked.excerpt.content, "utf8");
     if (fullBytes === 0) continue;
-    const content =
+    const fitted =
       fullBytes <= remaining
-        ? ranked.excerpt.content
-        : clampUtf8Bytes(ranked.excerpt.content, remaining);
+        ? { content: ranked.excerpt.content, lineOffset: 0 }
+        : fittingExcerptContent(ranked.excerpt, remaining, anchors);
+    const { content, lineOffset } = fitted;
     if (content.length === 0) break;
     const bucket = byFile.get(ranked.fileIndex) ?? [];
-    bucket.push(excerptWithContent(ranked.excerpt, content, pack.scope.scopeId));
+    bucket.push(excerptWithContent(ranked.excerpt, content, pack.scope.scopeId, lineOffset));
     byFile.set(ranked.fileIndex, bucket);
     remaining -= Buffer.byteLength(content, "utf8");
     if (fullBytes > Buffer.byteLength(content, "utf8")) break;

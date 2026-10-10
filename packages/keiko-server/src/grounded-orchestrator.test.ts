@@ -99,7 +99,7 @@ const echoAnswerer: GroundedAnswerer = {
 
 function fakeWorkspace(): WorkspaceInfo {
   return {
-    root: ROOT,
+    root: realpathSync(ROOT),
     selectedRoot: ROOT,
     name: "demo",
     version: "0.0.0",
@@ -1655,7 +1655,7 @@ describe("runGroundedExploration", () => {
         gitFileHistoryEvidence: provider,
       },
     );
-    expect(provider).toHaveBeenCalled();
+    expect(provider).not.toHaveBeenCalled();
     expect(out.pack.uncertainty.some((marker) => marker.claim.includes("git-history"))).toBe(true);
   });
 
@@ -4089,7 +4089,7 @@ describe("runGroundedExploration", () => {
       (single.operations.realPath -
         single.excerptReadOperations.realPath -
         single.listingGuardOperations.realPath);
-    expect(discoveryRealPathDelta).toBeLessThanOrEqual(32);
+    expect(discoveryRealPathDelta).toBeLessThanOrEqual(32 + additionalDiscoveryContentReads);
     expect(multi.operations.unboundedReadDir - single.operations.unboundedReadDir).toBe(0);
   });
 
@@ -4943,6 +4943,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("starts no retrieval or assembly IO after the absolute elapsed deadline", async () => {
+    const activityLog = createBufferedServerLogSink();
     const elapsedMsMax = 100;
     const deadlineAtMs = NOW + elapsedMsMax;
     let nowMs = NOW;
@@ -4979,6 +4980,7 @@ describe("runGroundedExploration", () => {
         detectWorkspace: () => fakeWorkspace(),
         fs: fs.fs,
         repoSemanticSearchProvider: semanticProvider,
+        activityLog,
         gitFileHistoryEvidence: () => {
           gitCalls += 1;
           return Promise.resolve([]);
@@ -4991,7 +4993,11 @@ describe("runGroundedExploration", () => {
     expect(gitCalls).toBe(0);
     expect(rerankerCalls).toBe(0);
     expect(fs.accessesAfterDeadline()).toBe(0);
-    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(
+      activityLog.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra?.explicitPathAdmittedCount,
+    ).toBe(1);
+    expect(out.pack.usage.searchCalls).toBe(2);
     expect(out.pack.usage.elapsedMs).toBe(elapsedMsMax);
     expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
@@ -5232,6 +5238,8 @@ describe("runGroundedExploration", () => {
   });
 
   it("starts no rankability filesystem operation after git-atom filtering is cancelled", async () => {
+    mkdirSync(join(ROOT, ".git"));
+    writeFileSync(join(ROOT, ".git/HEAD"), "ref: refs/heads/fixture\n");
     writeFileSync(join(ROOT, "src/recent-first.ts"), "export const recentFirst = true;\n");
     writeFileSync(join(ROOT, "src/recent-second.ts"), "export const recentSecond = true;\n");
     const firstTarget = realpathSync(join(ROOT, "src/recent-first.ts"));
@@ -5417,30 +5425,40 @@ describe("runGroundedExploration", () => {
     expect(importCalls).toBe(0);
   });
 
-  it("charges permitted deterministic searches without exceeding the request budget", async () => {
-    const activityLog = createBufferedServerLogSink();
-    const out = await retrieveConnectedContextPack(
-      input({
-        budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 11 },
-      }),
-      {
-        correlationId: undefined,
-        answerer: echoAnswerer,
-        nowMs: () => NOW,
-        detectWorkspace: () => fakeWorkspace(),
-        activityLog,
-      },
-    );
-    const completedDetails = activityLog.events.find(
-      (event) => event.op === "search.connected-context.completion-details",
-    );
-    const structural = recordEventExtra(completedDetails?.extra, "structural");
+  it.each([
+    [11, 0],
+    [12, 1],
+  ])(
+    "charges deterministic searches at the %i-call grant boundary",
+    async (searchCallsMax, fileSearchCount) => {
+      const activityLog = createBufferedServerLogSink();
+      const out = await retrieveConnectedContextPack(
+        input({
+          budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax },
+        }),
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+          activityLog,
+        },
+      );
+      const completedDetails = activityLog.events.find(
+        (event) => event.op === "search.connected-context.completion-details",
+      );
+      const structural = recordEventExtra(completedDetails?.extra, "structural");
 
-    expect(out.pack.usage.searchCalls).toBe(11);
-    expect(numericEventExtra(structural, "fileSearchCount")).toBe(1);
-    expect(numericEventExtra(structural, "textSearchCount")).toBe(0);
-    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-  });
+      expect(
+        activityLog.events.find((event) => event.op === "search.connected-context.source-details")
+          ?.extra?.explicitPathAdmittedCount,
+      ).toBe(1);
+      expect(out.pack.usage.searchCalls).toBe(searchCallsMax);
+      expect(numericEventExtra(structural, "fileSearchCount")).toBe(fileSearchCount);
+      expect(numericEventExtra(structural, "textSearchCount")).toBe(0);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    },
+  );
 
   it("clips answer-phase budget overages into a valid pack", async () => {
     let now = NOW;

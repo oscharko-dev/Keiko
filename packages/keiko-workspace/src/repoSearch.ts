@@ -599,6 +599,7 @@ function buildSearchTextRunner(
 ): SearchTextRunner {
   const semanticBounds =
     limits.maxFilesScanned === null ? DEFAULT_STREAMED_SEMANTIC_BOUNDS : undefined;
+  const matcher = buildMatcher(query, deps.queryInterpretation);
   const policy = resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints);
   return {
     scope,
@@ -611,7 +612,7 @@ function buildSearchTextRunner(
     startMs: deps.nowMs(),
     ...(deps.deadlineAtMs === undefined ? {} : { deadlineAtMs: deps.deadlineAtMs }),
     signal: deps.signal,
-    matcher: buildMatcher(query, deps.queryInterpretation),
+    matcher,
     ...(deps.queryInterpretation?.terms === undefined
       ? {}
       : { literalTerms: deps.queryInterpretation.terms }),

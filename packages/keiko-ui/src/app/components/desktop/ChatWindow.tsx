@@ -4366,7 +4366,10 @@ function LocalKnowledgeScopeControl({
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
-    <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
+    <div
+      className={`scope-grounding ${scopeNoticeStyles.cmpGrounding}`}
+      data-connected={connected ? "true" : "false"}
+    >
       <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
       <GroundingModeSelect
         value={value}
@@ -4444,7 +4447,10 @@ function ChatScopeHeaderImpl({
   const pendingGitChanges = pendingGitChangeComparisons ?? [];
   const connected = hasGroundingScope(chat) || pendingGitChanges.length > 0;
   return (
-    <div className="chat-scope-header" data-grounded={connected ? "true" : "false"}>
+    <div
+      className={`chat-scope-header ${scopeNoticeStyles.cmpScopeHeader}`}
+      data-grounded={connected ? "true" : "false"}
+    >
       <LocalKnowledgeScopeControl
         chat={chat}
         onChatChanged={onChatChanged}

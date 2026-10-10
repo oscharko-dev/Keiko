@@ -18,7 +18,11 @@ import type {
   ChatLocalKnowledgeScope,
   GroundingLimits,
 } from "@/lib/types";
-import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
+import type {
+  FilesScopeBindReply,
+  UseWorkspaceResult,
+  WorkspaceApi,
+} from "./hooks/useWorkspace.types";
 import { MAX_WORKSPACE_WINDOWS, sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import type { AppWindow, Connection } from "./windows/types";
@@ -37,7 +41,7 @@ interface WorkspaceHookOptions {
     chatWindowId: string,
     scope: ChatConnectedScope,
     target?: ChatBindingTarget,
-  ) => boolean | Promise<boolean>;
+  ) => FilesScopeBindReply | Promise<FilesScopeBindReply>;
   readonly onScopeUnbind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
@@ -1315,14 +1319,15 @@ describe("AppShell grounding connections", () => {
     mocks.updateChatConnectedScopes.mockResolvedValue({ chat: updated });
     await renderMounted();
 
-    let accepted = false;
+    let accepted: FilesScopeBindReply | undefined;
     await act(async () => {
-      accepted =
-        (await mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"))) ===
-        true;
+      accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+        "chat-window",
+        fileScope("/repo"),
+      );
     });
 
-    expect(accepted).toBe(true);
+    expect(accepted).toEqual(fileScope("/repo"));
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       "chat-1",
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -1438,7 +1443,7 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
     compensation.resolve({ chat: restored });
     await expect(binding).resolves.toBe(false);
-    await expect(concurrentBinding).resolves.toBe(true);
+    await expect(concurrentBinding).resolves.toEqual(fileScope("/other"));
     expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
       3,
       "chat-1",
@@ -1506,7 +1511,7 @@ describe("AppShell grounding connections", () => {
       fileScope("/repo"),
     );
 
-    expect(accepted).toBe(true);
+    expect(accepted).toEqual(fileScope("/repo"));
     expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       privateChat.id,
@@ -1542,7 +1547,7 @@ describe("AppShell grounding connections", () => {
         fileScope("/repo"),
       );
 
-      expect(accepted).toBe(true);
+      expect(accepted).toEqual(fileScope("/repo"));
       expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
@@ -1578,7 +1583,7 @@ describe("AppShell grounding connections", () => {
         fileScope("/repo"),
       );
 
-      expect(accepted).toBe(true);
+      expect(accepted).toEqual(fileScope("/repo"));
       expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
@@ -1702,8 +1707,8 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
     firstPersist.resolve({ chat: firstChat });
 
-    await expect(firstBinding).resolves.toBe(true);
-    await expect(secondBinding).resolves.toBe(true);
+    await expect(firstBinding).resolves.toEqual(firstScope);
+    await expect(secondBinding).resolves.toEqual(secondScope);
     expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
       2,
       "chat-1",
@@ -1748,7 +1753,7 @@ describe("AppShell grounding connections", () => {
         (record) => record.meta?.filesScopeDecision?.decision === "timeout-blocked",
       ),
     ).toBe(false);
-    await expect(binding).resolves.toBe(true);
+    await expect(binding).resolves.toEqual(nextScope);
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
   });
 
@@ -2033,7 +2038,9 @@ describe("AppShell grounding connections", () => {
       compensation.resolve({ chat: chat({ connectedScopes: [], updatedAt: 3 }) });
     });
     await act(async (): Promise<void> => {
-      expect(await bind?.("chat-window", fileScope("/after-recovery"))).toBe(true);
+      expect(await bind?.("chat-window", fileScope("/after-recovery"))).toEqual(
+        fileScope("/after-recovery"),
+      );
     });
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(3);
     expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([
@@ -3198,7 +3205,7 @@ describe("AppShell grounding connections", () => {
     view.rerender(<AppShell />);
     await act(async (): Promise<void> => {
       lookup.resolve({ chats: [initial] });
-      expect(await binding).toBe(true);
+      expect(await binding).toEqual(source);
     });
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();

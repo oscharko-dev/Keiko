@@ -1640,6 +1640,35 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     }
   });
 
+  it("records unreadable enabled refresh fragments as pod degradation", async () => {
+    const fixture = await staleFixture();
+    const observed = vi.fn<(observation: RepositoryPodRetrievalObservation) => void>();
+    try {
+      const provider = refreshProviderFor(fixture, {
+        fs: {
+          ...fixture.fs,
+          readFileBytes: (): Promise<Uint8Array> => Promise.reject(new Error("private-read-body")),
+        },
+        semanticRefreshFilesMax: 1,
+        observePodRetrieval: observed,
+      });
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(observed).toHaveBeenCalledWith({
+        mode: "pod-query-failed",
+        referenceCount: 0,
+        denseCandidateCount: 0,
+        lexicalCandidateCount: 0,
+        lexicalOrFallbackUsed: true,
+      });
+      expect(JSON.stringify(observed.mock.calls)).not.toContain("private-read-body");
+      expect(
+        fixture.embedding.mock.calls.some(([request]) => request.input.startsWith("Path: ")),
+      ).toBe(false);
+    } finally {
+      fixture.close();
+    }
+  });
+
   it("redacts live document input through the configured dependency redactor", async () => {
     const fixture = await staleFixture();
     try {

@@ -1,5 +1,6 @@
 import {
   isClientReportFailure,
+  isActivityLogCorrelationId,
   MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
   normalizeSupportReportCorrelationId,
   type DesktopSupportReportRequest,
@@ -15,7 +16,6 @@ import {
   SupportReportDeliveryCapacityError,
 } from "./support-report-download.js";
 import { readJsonRequestBodyOutcome } from "./bounded-request-body.js";
-import { isValidCorrelationId } from "./correlation.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { createInlineCompletionRateLimiter } from "./editor/inlineCompletionRateLimiter.js";
 import { runSupportReportJob, SupportReportJobError } from "./support-report-job.js";
@@ -53,20 +53,18 @@ function reportRequestFields(
   value: object,
   failure: DesktopSupportReportRequest["failure"],
 ): DesktopSupportReportRequest {
+  const correlationId = normalizeSupportReportCorrelationId(
+    "correlationId" in value ? value.correlationId : undefined,
+  );
   return {
     ...(failure === undefined ? {} : { failure }),
-    ...("correlationId" in value && typeof value.correlationId === "string"
-      ? { correlationId: value.correlationId }
-      : {}),
+    ...(correlationId === undefined ? {} : { correlationId }),
     ...("evidenceScope" in value ? { evidenceScope: "client-only" as const } : {}),
   };
 }
 
 function validReportCorrelation(value: object): boolean {
-  return (
-    !("correlationId" in value) ||
-    (typeof value.correlationId === "string" && isValidCorrelationId(value.correlationId))
-  );
+  return !("correlationId" in value) || isActivityLogCorrelationId(value.correlationId);
 }
 
 export async function handleCreateSupportReport(

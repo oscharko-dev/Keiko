@@ -4,12 +4,87 @@ vi.mock("./repositoryReferences", async (original) => {
   const actual = await original<typeof import("./repositoryReferences")>();
   return { ...actual, repositoryReferenceTextParts: vi.fn(actual.repositoryReferenceTextParts) };
 });
-import { repositoryReferenceTextParts } from "./repositoryReferences";
+import {
+  repositoryReferenceTextParts,
+  repositoryReferenceRootsForScopes,
+} from "./repositoryReferences";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import { SafeMarkdown } from "./SafeMarkdown";
 const roots = [{ root: "/workspace", label: "Workspace" }];
 afterEach(() => vi.clearAllMocks());
 
 describe("Markdown source boundaries", () => {
+  it("opens a literal bracket path from an inline-code citation", () => {
+    const open = vi.fn(() => ({ ok: true as const, windowId: "editor" }));
+    render(
+      <SafeMarkdown
+        source="`app/users/[id]/page.tsx:180–182`"
+        repositoryRoots={roots}
+        openRepositoryReference={open}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(open).toHaveBeenCalledExactlyOnceWith({
+      root: "/workspace",
+      path: "app/users/[id]/page.tsx",
+      lineStart: 180,
+      lineEnd: 182,
+    });
+  });
+  it.each([
+    "/private/[id]/page.tsx",
+    "C:/private/[id]/page.tsx",
+    "../[id]/page.tsx",
+    "app/../[id]/page.tsx",
+    "app/[\u202eid]/page.tsx",
+    "app/[\u0001id]/page.tsx",
+  ])("keeps an unsafe bracket path inert inside inline code: %s", (path) => {
+    const open = vi.fn();
+    render(
+      <SafeMarkdown
+        source={`\`${path}:180–182\``}
+        repositoryRoots={roots}
+        openRepositoryReference={open}
+      />,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+  });
+  it("uses the persisted source identity for duplicate literal bracket paths", () => {
+    const path = "app/users/[id]/page.tsx";
+    const scopes = ["/workspace/alpha", "/workspace/beta"].map((root) => ({
+      kind: "workspace-root" as const,
+      root,
+      relativePaths: [],
+      connectedAtMs: 1,
+    }));
+    const open = vi.fn(() => ({ ok: true as const, windowId: "editor" }));
+    render(
+      <SafeMarkdown
+        source={`\`source:2|${path}:180–182\``}
+        repositoryRoots={repositoryReferenceRootsForScopes(scopes, scopes[0]?.root ?? "")}
+        openRepositoryReference={open}
+        repositoryEvidence={{
+          citations: scopes.map((scope, index) => ({
+            scopePath: path,
+            sourceId: String(index + 1),
+            lineRange: { startLine: 180, endLine: 182 },
+            stableId: `atom-${String(index)}`,
+            score: 1,
+            sourceScopeFingerprint: connectedScopeFingerprint(scope),
+          })),
+          readPaths: [],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Cited evidence/ }));
+    expect(open).toHaveBeenCalledExactlyOnceWith({
+      root: "/workspace/beta",
+      path,
+      lineStart: 180,
+      lineEnd: 182,
+    });
+  });
   const explicitLocations = {
     code: (location: string): string => `\`${location}\``,
     brackets: (location: string): string => `[${location}]`,

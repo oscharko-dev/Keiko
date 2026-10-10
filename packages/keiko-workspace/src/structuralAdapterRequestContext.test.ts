@@ -1234,9 +1234,14 @@ describe("StructuralAdapterRequestContext", () => {
       let contentReads = 0;
       const fs: WorkspaceFs = {
         ...base,
-        // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
-        // readFileUtf8 fallback was removed), so the counter/clock-advance has to live there —
-        // mirrors countingFs's own readFileUtf8SameDescriptor wrapper above.
+        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+          const read = base.readFileBytes;
+          if (read === undefined) throw new TypeError("byte fixture missing");
+          const result = await read(absolutePath, maxBytes, hardLinkPolicy, expected);
+          contentReads += 1;
+          currentMs = 2;
+          return result;
+        },
         readFileUtf8SameDescriptor: (
           absolutePath,
           maxBytes,

@@ -1,5 +1,6 @@
 "use client";
 
+import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 
 // Issue #184 / Epic #532 — chat-header connected-scope pills. A chat may bind 1+N sources
@@ -183,7 +184,7 @@ function ScopePillItem({
   // which fires only when the connected-scope set actually changes. The aria-label still carries the
   // disambiguated accessible name and the title still carries the full path for the tooltip.
   return (
-    <span className="scope-pill-wrap">
+    <span className={`scope-pill-wrap ${scopeNoticeStyles.cmpPillWrap}`}>
       <span className="scope-pill">
         <span aria-hidden="true">●</span>
         <span aria-label={accessibleLabel} title={fullPath}>
@@ -291,7 +292,7 @@ export function ConnectedScopePill({
         />
       ))}
       {lastGroundedBudgetStatus !== undefined ? (
-        <span className="scope-pill-wrap">
+        <span className={`scope-pill-wrap ${scopeNoticeStyles.cmpPillWrap}`}>
           <span
             className="scope-pill-detail"
             style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}

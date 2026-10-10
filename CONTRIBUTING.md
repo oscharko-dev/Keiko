@@ -85,6 +85,13 @@ details describe calibrated floors, high/low confidence, addressed-file demotion
 disposition, continuity counts, and worktree/semantic freshness observations. Assembled reads and
 final sent evidence are distinct: `answer-details.filesInPrompt` describes what reached synthesis.
 Only counts, closed dispositions and digests enter the log, never paths, declarations or answers.
+The six-reference intake preserves the primary local trace frame and explicitly named question
+paths before secondary frames or conversation referents. Prompt fitting preserves a complete
+matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable
+identities before citation reconciliation. Physical reads remain actual I/O counts: import
+classification and parsing share one complete guarded source read rather than charging another
+classification read. Existing final-prompt, range and read observations describe these decisions
+without recording source text or paths.
 
 `search.connected-context.answer-details` records answer kind, observed citation behaviour,
 declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,

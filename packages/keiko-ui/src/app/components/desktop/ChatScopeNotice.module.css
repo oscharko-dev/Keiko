@@ -1,3 +1,24 @@
+.cmpScopeHeader[data-grounded] {
+  gap: 4px 12px;
+  flex-wrap: wrap;
+}
+.cmpGrounding[data-connected] {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 100%;
+}
+@container (max-width: 480px) {
+  .cmpScopeHeader:has(> [data-scope-notice]) {
+    row-gap: 0;
+    padding-block: 3px 0;
+  }
+  .cmpScopeHeader:has(> [data-scope-notice]) .cmpGrounding {
+    row-gap: 0;
+  }
+  .cmpScopeHeader:has(> [data-scope-notice]) .cmpPillWrap {
+    row-gap: 2px;
+  }
+}
 .cmpNotice {
   display: flex;
   align-items: center;

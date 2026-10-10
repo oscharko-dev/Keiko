@@ -221,6 +221,11 @@ is identified by its canonical omission count, separately from unavailable tool 
 The current traversal's incomplete flag and closed reasons are also projected; these counts
 do not imply the contents or specific encoding of an unread file. The existing prompt fitter charges this serialized metadata
 and line-number overhead against the actual model input budget.
+When that budget requires shrinking a located excerpt, a complete matching line that fits the
+remaining UTF-8 byte grant takes priority over an unrelated leading prefix. Adjacent complete
+lines may fill the remaining grant. The fitted excerpt retains its physical source offsets and
+rebinds its line range and stable identity; only that final sent range can authorize citations.
+If no matching complete line fits, the existing UTF-8-safe prefix fallback remains bounded.
 Fresh reads reserve each qualified file's observed byte requirement within the aggregate source
 budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt window. The pack
 cache fingerprints these per-path limits. Once the collector overflows, later files perform no
@@ -366,6 +371,11 @@ or supplies final evidence reads.
 Physical Activity Log I/O counters continue to count the actual underlying calls rather than
 charging a second body read for reused text. This bounded work reduction does not establish an
 actual model-response latency improvement.
+Import discovery likewise classifies and parses one complete, size-admitted source buffer through
+the existing guarded text-inspection reader. It does not read the same file again solely for
+binary classification. Supported decoding and line-preserving secret redaction still precede
+parsing; incomplete, binary, unsupported, changed, unsafe or oversized sources cannot produce
+import edges. This buffer belongs to that read and does not add cross-request source retention.
 
 The inclusive file-byte ceiling is owned once by `MAX_RECURSIVE_TEXT_FILE_BYTES` in the pure
 workspace contract primitives. Recursive matching, planner limits, document input admission and
@@ -515,7 +525,10 @@ Admission counters and the closed reason list are projected on the existing
 its bounded field contract. Its correlation joins the unchanged completion/read-budget evidence;
 the field cap and existing completed fields remain authoritative. Diagnostic traces reuse the
 bounded failure parser and an independent six-reference channel, leaving eight user-term anchors
-available. External runtime/generated frames are removed before the reference cap. Original path
+available. Within that unchanged cap, the primary local diagnostic frame precedes explicit
+question paths and supplied query references; secondary frames and conversation referents follow.
+A long trace therefore cannot consume every slot before the user's separately named file.
+External runtime/generated frames are removed before the reference cap. Original path
 casing and numeric source locations survive admission; the primary frame and its existing
 structural test/source pair receive the same eligibility and read-budget checks. Ordinary lexical
 search uses the independent question channel; the original trace remains model context and query

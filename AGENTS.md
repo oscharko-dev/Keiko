@@ -446,6 +446,13 @@ system that exists, never beside it:
   selection uses the final six available source-detail fields. Additional selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
+  The six-reference intake preserves the primary local trace frame and explicitly named question
+  paths before secondary frames or conversation referents. Prompt fitting preserves a complete
+  matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable
+  identities before citation reconciliation. Physical reads remain actual I/O counts: import
+  classification and parsing share one complete guarded source read rather than charging another
+  classification read. Existing final-prompt, range and read observations describe these decisions
+  without recording source text or paths.
   Optional augmentation skip detail and metadata retention capacity use completion-details;
   the completed and source-details emitters each retain at most 48 registered context fields.
   Selection-details records calibrated absolute/ordinary relative floors, the low-confidence

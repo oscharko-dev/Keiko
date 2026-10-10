@@ -25,8 +25,21 @@ import {
 } from "./connected-chat-record.mjs";
 
 const USAGE =
-  "connected-chat-run.mjs --campaign customer|knowledge|compaction|manual --repo <explicit-root> --runtime-state <private-json> --output <external-jsonl> [--corpus-witness <private-json>] [--prepare]";
-const REQUEST_TIMEOUT_MS = 120_000;
+  "connected-chat-run.mjs --campaign customer|knowledge|compaction|manual --repo <explicit-root> --runtime-state <private-json> --output <external-jsonl> [--corpus-witness <private-json>] [--request-timeout-ms <milliseconds>] [--prepare]";
+const DEFAULT_REQUEST_TIMEOUT_MS = 240_000;
+
+function requestTimeoutMs(value) {
+  if (value === undefined) return DEFAULT_REQUEST_TIMEOUT_MS;
+  const milliseconds = Number(value);
+  if (
+    !/^\d+$/u.test(value) ||
+    !Number.isInteger(milliseconds) ||
+    milliseconds < 1 ||
+    milliseconds > 2_147_483_647
+  )
+    throw new UsageError("invalid-request-timeout");
+  return milliseconds;
+}
 
 function sourceHead() {
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
@@ -72,7 +85,7 @@ function appendRecord(path, record) {
 
 async function request(session, method, path, body) {
   return session.request(method, path, body, {
-    signal: globalThis.AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: globalThis.AbortSignal.timeout(session.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
   });
 }
 
@@ -175,6 +188,7 @@ async function runCase(session, runtime, chat, row, evidenceStore) {
     timestamp: new Date().toISOString(),
     status: result.status,
     elapsedMs: Date.now() - startedAt,
+    requestTimeoutMs: session.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     ...(row.setup === undefined ? {} : { setup: row.setup }),
     persistedMessageCount: history.json.messages?.length,
     ...(await connectedChatObservation(runtime, result, manifests, row.target, binding)),
@@ -191,6 +205,7 @@ function campaignOptions() {
       "runtime-state": { type: "string" },
       output: { type: "string" },
       "corpus-witness": { type: "string" },
+      "request-timeout-ms": { type: "string" },
       prepare: { type: "boolean" },
     },
   });
@@ -198,6 +213,7 @@ function campaignOptions() {
   const campaign = parsed.values.campaign;
   if (!Object.hasOwn(CONNECTED_CHAT_CAMPAIGNS, campaign)) throw new UsageError("invalid-campaign");
   const cases = CONNECTED_CHAT_CAMPAIGNS[campaign];
+  const timeoutMs = requestTimeoutMs(parsed.values["request-timeout-ms"]);
   if (parsed.values.prepare) {
     console.log(
       JSON.stringify({
@@ -205,12 +221,12 @@ function campaignOptions() {
         campaign,
         caseIds: cases.map((row) => row.id),
         setupSynthesisTurns: cases.filter((row) => row.setupNote !== undefined).length,
-        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+        requestTimeoutMs: timeoutMs,
       }),
     );
     return undefined;
   }
-  return { values: parsed.values, campaign, cases };
+  return { values: parsed.values, campaign, cases, requestTimeoutMs: timeoutMs };
 }
 
 async function boundCampaignCases(parsed, root) {
@@ -234,7 +250,10 @@ async function setupCampaign(parsed) {
     ...process.env,
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: readFileSync(runtime.launcherPath, "utf8"),
   };
-  const session = await openApiSession(labBaseUrl(`http://127.0.0.1:${runtime.port}`), env);
+  const session = {
+    ...(await openApiSession(labBaseUrl(`http://127.0.0.1:${runtime.port}`), env)),
+    requestTimeoutMs: parsed.requestTimeoutMs,
+  };
   const chat = await createChat(session, root, runtime, parsed.campaign);
   const { createNodeEvidenceStore, resolveEvidenceDir } = await importBuilt(
     "keiko-evidence",

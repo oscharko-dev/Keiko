@@ -1,5 +1,6 @@
 "use client";
 
+import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 
 // Epic #189 Slice 3 M4 — connector-scope pills for the chat header.
@@ -130,7 +131,7 @@ function ConnectorPillItem(props: ConnectorPillItemProps): ReactNode {
   const disconnectLabel = t("localKnowledge.scopePill.disconnect", { label });
 
   return (
-    <span className="scope-pill-wrap">
+    <span className={`scope-pill-wrap ${scopeNoticeStyles.cmpPillWrap}`}>
       <span className="scope-pill scope-pill--connector">
         <span aria-hidden="true">◆</span>
         {/* GEN-UI-STATE-001 (WCAG 4.1.3): plain label span — NOT a live region. A per-pill

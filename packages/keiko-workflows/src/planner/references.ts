@@ -184,7 +184,13 @@ export function extractRetrievalChannels(
     origin: "diagnostic",
   }));
   const paths = pathReferenceExtraction(trace.questionText);
-  const references = uniqueReferences([...diagnosticFrames, ...paths.references, ...supplied]);
+  const references = uniqueReferences([
+    ...diagnosticFrames.slice(0, 1),
+    ...paths.references,
+    ...supplied.filter((reference) => reference.origin === "query"),
+    ...diagnosticFrames.slice(1),
+    ...supplied.filter((reference) => reference.origin !== "query"),
+  ]);
   const extraction = extractAnchors({
     text: paths.anchorText,
     maxAnchors: trace.questionText.length,
