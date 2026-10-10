@@ -73,6 +73,7 @@ node scripts/testing/coding-workbench-lab/connected-chat-run.mjs \
   --campaign knowledge \
   --repo /absolute/path/to/held/Keiko \
   --runtime-state /private/lab/runtime.json \
+  --request-timeout-ms 6000000 \
   --output /private/lab/knowledge-observations.jsonl
 ```
 
@@ -104,10 +105,16 @@ only a route digest/closed disposition. Do not print aliases, endpoints, keys or
 
 ## Observations and acceptance
 
-The driver uses the existing paired API session with an ordinary 120-second client cancellation
-ceiling per request. It stops on refusal, timeout, source drift, or interrupted observation. A
-timeout does not prove that no provider request occurred or that the server completed successfully;
-inspect the existing Activity Log before deciding whether another campaign can start.
+The driver uses the existing paired API session with a configurable client cancellation wait.
+`--request-timeout-ms` accepts a positive integer up to 2,147,483,647 milliseconds; the default is
+240,000 milliseconds. Choose the wait to cover the configured request envelope, including allowed
+synthesis, transport recovery and retrieval. The current campaign explicitly uses 6,000,000
+milliseconds to observe that existing envelope. This client wait does not enlarge the server's
+authority, read, token, elapsed or spend grants, or the provider's configured timeout and retries.
+Completion requires the actual answer and source-evidence review. The driver stops on refusal,
+timeout, source drift or interrupted observation. A timeout does not prove that no provider request
+occurred or that the server completed successfully; inspect the existing Activity Log before
+deciding whether another campaign can start.
 
 Local records contain response hashes and character counts, citation/declaration counts, expected
 target-retained-evidence/cited booleans, canonical scope/query digests, actual final-prompt file counts, physical
