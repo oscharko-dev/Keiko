@@ -253,6 +253,8 @@ import {
   collectDiscoveredSymbolTraceEvidence,
   collectFollowSymbolTraceEvidence,
   GROUNDED_TRACE_SEARCH_LIMITS,
+  type RouteTraceCoverage,
+  type RouteTraceCoverageEntry,
 } from "./grounded-symbol-trace.js";
 import {
   defaultGitFileHistoryEvidenceProvider,
@@ -2927,6 +2929,7 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly explicitAdmission?: ExplicitPathAdmission;
   readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
   readonly reusedEvidenceAtomCount?: number | undefined;
@@ -3447,6 +3450,8 @@ async function discoverRequiredDefinitionsForRing(
 }
 
 export interface ExcerptInputs {
+  readonly routeCoverage?: RouteTraceCoverage | undefined;
+  readonly coveragePlan?: RouteCoverageReadPlan | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly anchors?: readonly string[] | undefined;
   readonly searchScope: SearchScope;
@@ -5520,6 +5525,7 @@ function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly Evid
 }
 
 interface DeterministicContextEvidence {
+  readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
@@ -6174,6 +6180,193 @@ function rankedExcerptWindows(
 interface ExcerptWindowSelection {
   readonly windows: readonly LineWindow[];
   readonly omittedWindowCount: number;
+  readonly coverageApplied?: boolean | undefined;
+}
+
+interface RouteCoverageReadPlan {
+  readonly paths: readonly string[];
+  readonly entries: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
+  readonly reserves: ReadonlyMap<string, number>;
+}
+
+function sameCoverageLocation(candidate: EvidenceAtom, certified: EvidenceAtom): boolean {
+  return (
+    candidate.stableId === certified.stableId &&
+    candidate.scopePath === certified.scopePath &&
+    candidate.provenance.queryFingerprint === certified.provenance.queryFingerprint &&
+    candidate.provenance.tool === certified.provenance.tool &&
+    candidate.lineRange?.startLine === certified.lineRange?.startLine &&
+    candidate.lineRange?.endLine === certified.lineRange?.endLine
+  );
+}
+
+function selectedCoverageEntries(inputs: ExcerptInputs): readonly RouteTraceCoverageEntry[] {
+  const coverage = inputs.routeCoverage;
+  if (coverage?.matches(inputs.searchScope, inputs.fs) !== true) return [];
+  const selected = new Map(
+    [...inputs.atomsByPath.values()].flatMap((atoms) => atoms.map((atom) => [atom.stableId, atom])),
+  );
+  return coverage.entries.filter((entry) => {
+    const atom = selected.get(entry.atom.stableId);
+    if (atom === undefined || !sameCoverageLocation(atom, entry.atom)) return false;
+    return coverage.isCurrent(entry.atom);
+  });
+}
+
+function connectedCoverageChain(
+  entry: RouteTraceCoverageEntry,
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+): readonly RouteTraceCoverageEntry[] {
+  const chain: RouteTraceCoverageEntry[] = [];
+  const seen = new Set<string>();
+  let current: RouteTraceCoverageEntry | undefined = entry;
+  while (current !== undefined && !seen.has(current.definitionIdentity)) {
+    seen.add(current.definitionIdentity);
+    chain.push(current);
+    if (current.parentIdentity === undefined) return chain.reverse();
+    current = byIdentity.get(current.parentIdentity);
+  }
+  return [];
+}
+
+function fairCoverageEntries(
+  entries: readonly RouteTraceCoverageEntry[],
+): readonly RouteTraceCoverageEntry[] {
+  const byIdentity = new Map(entries.map((entry) => [entry.definitionIdentity, entry]));
+  const paths = new Set<string>();
+  const retained = new Map<string, RouteTraceCoverageEntry>();
+  for (const entry of connectedCoverageOrder(entries)) {
+    if (paths.has(entry.atom.scopePath)) continue;
+    const chain = connectedCoverageChain(entry, byIdentity);
+    if (chain.length === 0) continue;
+    for (const parent of chain) {
+      retained.set(parent.definitionIdentity, parent);
+      paths.add(parent.atom.scopePath);
+    }
+  }
+  return [...retained.values()];
+}
+
+function connectedCoverageOrder(
+  entries: readonly RouteTraceCoverageEntry[],
+): readonly RouteTraceCoverageEntry[] {
+  const children = new Map<string, RouteTraceCoverageEntry[]>();
+  const roots: RouteTraceCoverageEntry[][] = [];
+  for (const entry of entries) {
+    if (entry.parentIdentity === undefined) roots.push([entry]);
+    else children.set(entry.parentIdentity, [...(children.get(entry.parentIdentity) ?? []), entry]);
+  }
+  const seen = new Set<string>();
+  const ordered: RouteTraceCoverageEntry[] = [];
+  while (roots.some((stack) => stack.length > 0)) {
+    for (const stack of roots) {
+      const entry = stack.pop();
+      if (entry === undefined || seen.has(entry.definitionIdentity)) continue;
+      seen.add(entry.definitionIdentity);
+      ordered.push(entry);
+      stack.push(...[...(children.get(entry.definitionIdentity) ?? [])].reverse());
+    }
+  }
+  return ordered;
+}
+
+function explicitExcerptPaths(paths: readonly string[], inputs: ExcerptInputs): readonly string[] {
+  return paths.filter((path) =>
+    (inputs.atomsByPath.get(path) ?? []).some(
+      (atom) => atom.provenance.tool === "repo.selectedFile",
+    ),
+  );
+}
+
+function routeCoverageReadPlan(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+): RouteCoverageReadPlan | undefined {
+  const allowed = new Set(paths);
+  const entries = fairCoverageEntries(
+    selectedCoverageEntries(inputs).filter((entry) => allowed.has(entry.atom.scopePath)),
+  );
+  if (entries.length === 0) return undefined;
+  const grouped = new Map<string, RouteTraceCoverageEntry[]>();
+  const reserves = new Map<string, number>();
+  let remaining = remainingExcerptCapacity(inputs).bytes;
+  for (const path of explicitExcerptPaths(paths, inputs)) {
+    const reserve = Math.min(
+      remaining,
+      inputs.knownFitFileBytes?.get(path) ?? MAX_EXCERPT_WINDOW_BYTES,
+    );
+    reserves.set(path, reserve);
+    remaining -= reserve;
+  }
+  for (const entry of entries) {
+    const reserve = Math.min(remaining, entry.observedBytes, MAX_EXCERPT_WINDOW_BYTES);
+    if (reserve <= 0) break;
+    const path = entry.atom.scopePath;
+    grouped.set(path, [...(grouped.get(path) ?? []), entry]);
+    reserves.set(path, (reserves.get(path) ?? 0) + reserve);
+    remaining -= reserve;
+  }
+  return {
+    paths: [...new Set([...explicitExcerptPaths(paths, inputs), ...grouped.keys(), ...paths])],
+    entries: grouped,
+    reserves,
+  };
+}
+
+function currentCoverageEntries(
+  path: string,
+  inputs: ExcerptInputs,
+): readonly RouteTraceCoverageEntry[] | undefined {
+  const entries = inputs.coveragePlan?.entries.get(path);
+  if (entries?.every((entry) => inputs.routeCoverage?.isCurrent(entry.atom) === true) !== true)
+    return undefined;
+  return entries;
+}
+
+function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): ExcerptWindowSelection {
+  const selection = excerptLineWindows(inputs.atomsByPath.get(path));
+  const entries = currentCoverageEntries(path, inputs);
+  if (entries === undefined) return selection;
+  const explicit = (inputs.atomsByPath.get(path) ?? []).filter(
+    (atom) => atom.provenance.tool === "repo.selectedFile",
+  );
+  let windows = excerptLineWindows(explicit).windows;
+  if (explicit.length === 0) windows = [];
+  for (const entry of entries) {
+    const range = entry.atom.lineRange;
+    if (range !== undefined)
+      windows = [
+        ...windows,
+        ...nonOverlappingExcerptWindows(
+          [range],
+          [...windows].sort((a, b) => a.startLine - b.startLine),
+        ),
+      ];
+  }
+  const covered = [...windows].sort((a, b) => a.startLine - b.startLine);
+  return {
+    ...selection,
+    coverageApplied: true,
+    windows: [
+      ...windows,
+      ...selection.windows.flatMap((window) => uncoveredExcerptSegments(window, covered, 0)),
+    ],
+  };
+}
+
+function staleCoverageRead(
+  path: string,
+  inputs: ExcerptInputs,
+  selection: ExcerptWindowSelection,
+  result: ReadExcerptResult,
+): ReadPathExcerptWindowsResult | undefined {
+  if (selection.coverageApplied !== true || currentCoverageEntries(path, inputs) !== undefined)
+    return undefined;
+  const bytesConsumed =
+    result.windows === undefined
+      ? Buffer.byteLength(result.content)
+      : result.windows.reduce((bytes, window) => bytes + Buffer.byteLength(window.content), 0);
+  return { ...unreadExcerptWindows(selection, false), bytesConsumed };
 }
 
 function excerptLineWindows(
@@ -6280,13 +6473,19 @@ function qualifiedWholeFileRanges(
   );
 }
 
+function hasExplicitExcerptSelection(scopePath: string, inputs: ExcerptInputs): boolean {
+  return (inputs.atomsByPath.get(scopePath) ?? []).some(
+    (atom) => atom.provenance.tool === "repo.selectedFile",
+  );
+}
+
 async function readPathExcerptWindows(
   scopePath: string,
   inputs: ExcerptInputs,
   remainingBytes: number,
 ): Promise<ReadPathExcerptWindowsResult> {
   const windows: ExcerptWindow[] = [];
-  const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
+  const selection = coverageExcerptLineWindows(scopePath, inputs);
   const containingRange = containingExcerptRange(selection.windows);
   throwIfCancelled(inputs.signal);
   if (inputs.nowMs() >= inputs.deadlineAtMs || remainingBytes <= 0)
@@ -6310,12 +6509,12 @@ async function readPathExcerptWindows(
       deadlineAtMs: inputs.deadlineAtMs,
       ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     },
-    (inputs.atomsByPath.get(scopePath) ?? []).some(
-      (atom) => atom.provenance.tool === "repo.selectedFile",
-    ),
+    hasExplicitExcerptSelection(scopePath, inputs),
   );
   throwIfCancelled(inputs.signal);
   if (inputs.nowMs() >= inputs.deadlineAtMs) return unreadExcerptWindows(selection, true);
+  const stale = staleCoverageRead(scopePath, inputs, selection, result);
+  if (stale !== undefined) return stale;
   const appended = appendReadExcerptWindows(result, windows);
   return {
     windows,
@@ -6512,6 +6711,7 @@ async function readKeptExcerpts(
   keptPaths: readonly string[],
   inputs: ExcerptInputs,
 ): Promise<ExcerptReadSummary> {
+  throwIfCancelled(inputs.signal);
   const excerpts = new Map<string, readonly ExcerptWindow[]>();
   const uncertainty: UncertaintyMarker[] = [];
   const { files: remainingFiles, bytes: remainingBytes } = remainingExcerptCapacity(inputs);
@@ -6529,7 +6729,9 @@ async function readKeptExcerpts(
         stopped.elapsedBudgetBlocked,
       ),
     };
-  const readablePaths = keptPaths.slice(0, remainingFiles);
+  const coveragePlan = routeCoverageReadPlan(keptPaths, inputs);
+  const readablePaths = (coveragePlan?.paths ?? keptPaths).slice(0, remainingFiles);
+  const readInputs = { ...inputs, coveragePlan };
   if (readablePaths.length < keptPaths.length) {
     uncertainty.push(budgetClipped("budget-exhausted on filesRead", inputs.nowMs()));
   }
@@ -6543,8 +6745,11 @@ async function readKeptExcerpts(
     omitted: [],
     omittedWindowCount: 0,
     truncatedWindowCount: 0,
+    coverageReserves: new Map(
+      [...(coveragePlan?.reserves ?? [])].filter(([path]) => readablePaths.includes(path)),
+    ),
   };
-  await readExcerptWaves(readablePaths, inputs, state);
+  await readExcerptWaves(readablePaths, readInputs, state);
   uncertainty.push(...excerptReadLossSummary(state, inputs.nowMs));
   if (state.elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
@@ -6621,6 +6826,7 @@ function completedExcerptSummary(
 }
 
 interface ExcerptWaveState {
+  readonly coverageReserves: Map<string, number>;
   readonly omitted: OmittedContextEntry[];
   omittedWindowCount: number;
   truncatedWindowCount: number;
@@ -6640,16 +6846,17 @@ function appendExcerptWave(
   for (const task of results) {
     throwIfCancelled(inputs.signal);
     const { scopePath, result } = task;
+    state.coverageReserves.delete(scopePath);
     state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
+    state.omittedWindowCount += result?.omittedWindowCount ?? 0;
+    state.remainingBytes -= result?.bytesConsumed ?? 0;
     if (result === undefined || result.windows.length === 0) {
       if (task.omissionReason !== undefined)
         state.omitted.push({ scopePath, reason: task.omissionReason, omittedAtMs: inputs.nowMs() });
       continue;
     }
-    state.remainingBytes -= result.bytesConsumed;
     state.anchoredWindowCount += result.anchoredWindowCount;
     state.excerpts.set(scopePath, result.windows);
-    state.omittedWindowCount += result.omittedWindowCount;
     state.truncatedWindowCount += result.truncatedWindowCount;
   }
 }
@@ -6691,7 +6898,7 @@ async function readExcerptWaves(
   for await (const results of iterateSequentialResults(
     pendingExcerptWaves(paths, inputs, state),
     (wave) => {
-      const grants = excerptWaveGrants(wave, state.remainingBytes, inputs);
+      const grants = coverageExcerptWaveGrants(wave, state, inputs);
       return mapWithConcurrency(wave, 8, (scopePath, index) => {
         throwIfCancelled(inputs.signal);
         return readPathExcerptTask(scopePath, inputs, grants[index] ?? 0);
@@ -6699,6 +6906,26 @@ async function readExcerptWaves(
     },
   ))
     appendExcerptWave(results, inputs, state);
+}
+
+function coverageExcerptWaveGrants(
+  paths: readonly string[],
+  state: ExcerptWaveState,
+  inputs: ExcerptInputs,
+): readonly number[] {
+  const wave = new Set(paths);
+  let reserved = 0;
+  let future = 0;
+  for (const [path, bytes] of state.coverageReserves) {
+    if (wave.has(path)) reserved += bytes;
+    else future += bytes;
+  }
+  const extra = excerptWaveGrants(
+    paths,
+    Math.max(0, state.remainingBytes - reserved - future),
+    inputs,
+  );
+  return paths.map((path, index) => (state.coverageReserves.get(path) ?? 0) + (extra[index] ?? 0));
 }
 
 function excerptWaveGrants(
@@ -7558,6 +7785,7 @@ async function augmentRingsWithDeterministicAtoms(
     {
       ...deterministicRings,
       atoms: [...deterministicRings.atoms, ...discoveredTrace.atoms],
+      routeCoverage: discoveredTrace.routeCoverage,
       uncertainty: [...deterministicRings.uncertainty, ...discoveredTrace.uncertainty],
     },
     budget,
@@ -7714,6 +7942,7 @@ async function assembleGroundedPack(
   if (ctx.cached !== undefined)
     return cachedGroundedAssembly(ctx.cached, args, prepared, augmentedRings);
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
+    routeCoverage: augmentedRings.routeCoverage,
     knownFitFileBytes: augmentedRings.knownFitFileBytes,
     searchScope,
     fs,
