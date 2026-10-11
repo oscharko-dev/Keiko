@@ -483,8 +483,21 @@ system that exists, never beside it:
   evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
   When current coverage windows apply, independent search windows and unfunded discovered-definition
   windows share the residual byte grant through bounded queues after explicit human and funded
-  current windows. Unused portions return to their shared grant. Bounded initial opportunities also
-  protect portions for eligible later selected readable paths before expansion consumes the remainder.
+  current windows. Unused portions return to their shared grant.
+  Bounded initial opportunities protect portions for every already selected, file-capped readable
+  path, including definition-only evidence, before expansion consumes the remainder. When no current
+  coverage windows apply, manual selections come first, followed by existing definition context
+  windows overlapping an original ordinary atom range, the independent ordinary remainder and the
+  existing fallback. These opportunities do not certify declaration ownership or invocation.
+  The governed request's existing document collector checks the original remaining file and
+  excerpt-byte grant before each extraction. It bounds the redacted logical projection, including
+  UTF-8 separator bytes, within that capacity and discloses exhausted or truncated evidence. All positive returned document
+  projections reserve their bytes and distinct paths before code reads. Final usage preserves any
+  larger assembler usage and retains original initial usage plus actual consumed code bytes and
+  distinct positive-consumption paths plus all actually returned positive document projection bytes
+  and paths, even when later invalidation or assembly drops their published views. The reservation
+  does not enter assembler initial usage, so those contributions are not charged twice. Raw document
+  input, parser work and all filesystem I/O are outside these excerpt charges.
   Each batch uses one classified, redacted source snapshot. A later expansion uses a fresh guarded
   read and must match the first
   complete redacted-source fingerprint; a mismatch invalidates all views for that path without
