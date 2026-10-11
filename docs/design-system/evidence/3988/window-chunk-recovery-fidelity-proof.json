@@ -7,7 +7,7 @@
   "node": "v24.18.0",
   "sources": {
     "fallback": "da9a005857dc6de09ec52a495c6e3b146296aca39c67d683c776d99a8a56240a",
-    "harness": "440b60add3ba3babf05a76a893e50a486dd2b09dc17e9fe846830278e23ada8a",
+    "harness": "54ac5a9bf899c13467158124ffe60c62c127b76e631b90c831aa791390e6701f",
     "globalsCss": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871"
   },
   "captures": [

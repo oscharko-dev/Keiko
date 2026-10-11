@@ -64,6 +64,8 @@ async function dualResourceRecovery(
   const historyButton = page.getByRole("button", { name: "Chat History", exact: true });
   await expect(historyButton).toBeVisible();
   if (mode) {
+    // Firefox can replace the browsing context on the app's COOP-protected navigation.
+    await applyRecoveryMedia(page, mode);
     await page.evaluate(
       ({ theme, highContrast }) => {
         document.documentElement.dataset.theme = theme;
@@ -206,12 +208,7 @@ function recoverySourceHash(path: string): string {
 
 async function prepareRecoveryMode(page: Page, mode: RecoveryMode): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.emulateMedia({
-    colorScheme: mode.theme,
-    contrast: mode.contrast ?? "no-preference",
-    forcedColors: mode.forcedColors ?? "none",
-    reducedMotion: mode.reducedMotion ?? "no-preference",
-  });
+  await applyRecoveryMedia(page, mode);
   await page.addInitScript(
     ({ theme, highContrast }) => {
       window.localStorage.setItem("keiko.theme", theme);
@@ -220,6 +217,15 @@ async function prepareRecoveryMode(page: Page, mode: RecoveryMode): Promise<void
     },
     { theme: mode.theme, highContrast: mode.highContrast === true },
   );
+}
+
+async function applyRecoveryMedia(page: Page, mode: RecoveryMode): Promise<void> {
+  await page.emulateMedia({
+    colorScheme: mode.theme,
+    contrast: mode.contrast ?? "no-preference",
+    forcedColors: mode.forcedColors ?? "none",
+    reducedMotion: mode.reducedMotion ?? "no-preference",
+  });
 }
 
 async function captureRecovery(page: Page, mode: RecoveryMode): Promise<RecoveryCapture> {
