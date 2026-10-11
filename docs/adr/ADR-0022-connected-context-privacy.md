@@ -441,13 +441,22 @@ Reservations must fit both the remaining connected share and actual per-file rea
 do not add selected paths or change relevance scores or invocation uncertainty. Ordinary ranked
 evidence retains its share of the remaining byte grant. Existing human and endpoint selection
 priorities survive path ordering. Reserved windows precede ordinary extras, with explicit human
-windows first. When current coverage windows apply, independent search windows receive ordinary
-extra bytes before unfunded discovered-definition expansions. Those expansions remain a deduplicated
-fallback. The existing selection-details operation records planned ordinary ranges on attempted
-reader paths, ordinary ranges intersected by nonempty returned views, and deferred definition ranges.
+windows first. When current coverage windows apply, independent search windows and unfunded
+discovered-definition windows share the residual byte grant through bounded queues after explicit
+human and funded current windows.
+Unused portions return to their shared grant. Bounded initial opportunities also protect portions
+for eligible later selected readable paths before expansion consumes the remainder. Each batch uses
+one classified, redacted source snapshot. A later expansion uses a fresh guarded read and must match
+the first complete redacted-source fingerprint; a mismatch invalidates all views for that path
+without refunding consumed bytes. Subsequent passes exclude processed ranges and retain actual
+partial-view identities rather than claiming complete bodies from clipped reads.
+The existing selection-details operation records planned ordinary ranges on attempted
+reader paths, ordinary ranges intersected by nonempty returned views, and deferred definition
+ranges.
 An intersection count does not certify complete source content; truncation and omission counts
 remain authoritative. Separately identified actual returned partial views retain their own ranges,
-content and physical-view digests through assembly, without inferred continuity or uncharged separators.
+content and physical-view digests through assembly, without inferred continuity or uncharged
+separators.
 Multiple unidentified uncovered views remain fail-closed, and conflicting views retain uncertainty.
 Bounded observations do not establish that an arbitrarily large function was fully read; actual
 truncation and omissions remain authoritative.

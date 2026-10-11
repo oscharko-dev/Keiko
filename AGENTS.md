@@ -481,8 +481,15 @@ system that exists, never beside it:
   upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
   branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
   evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
-  When current coverage windows apply, independent search windows receive ordinary extra bytes
-  before unfunded discovered-definition expansions. Those expansions remain a deduplicated fallback.
+  When current coverage windows apply, independent search windows and unfunded discovered-definition
+  windows share the residual byte grant through bounded queues after explicit human and funded
+  current windows. Unused portions return to their shared grant. Bounded initial opportunities also
+  protect portions for eligible later selected readable paths before expansion consumes the remainder.
+  Each batch uses one classified, redacted source snapshot. A later expansion uses a fresh guarded
+  read and must match the first
+  complete redacted-source fingerprint; a mismatch invalidates all views for that path without
+  refunding consumed bytes. Subsequent passes exclude processed ranges and retain actual partial-view
+  identities rather than claiming complete bodies from clipped reads.
   The existing selection-details operation records planned ordinary ranges on attempted reader paths,
   ordinary ranges intersected by nonempty returned views, and deferred definition ranges. An
   intersection count does not certify complete source content; truncation and omission counts remain
