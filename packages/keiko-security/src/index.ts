@@ -14,6 +14,7 @@ export {
   isCredentialKeyName,
   objectContainsCredentialKey,
   REDACTION_PLACEHOLDER,
+  redactSecretLiterals,
 } from "./redaction.js";
 
 export { assertValidRunId } from "./runid.js";

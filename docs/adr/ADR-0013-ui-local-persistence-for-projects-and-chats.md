@@ -431,7 +431,10 @@ is never world-readable.
 `"Mistral-Small-3.1-24B-Instruct-2503"`) — never an API key, provider URL, deployment mapping,
 or authentication credential. The BFF accepts only capability registry entries with
 `kind === "chat"`; the store layer also rejects URL-, JSON-, and secret-shaped values before they
-can be written. The `short_result` column (chat messages) is passed through
+can be written. A registry id can retain one trailing `@region` qualifier (letters, digits and
+hyphens), as regional OpenAI-compatible gateways require. This does not admit email domains,
+repeated qualifiers or credential-bearing URLs, and the existing length bound still applies.
+The `short_result` column (chat messages) is passed through
 `deepRedactStrings(value, redactor)` before persistence, using the same `UiHandlerDeps.redactor`
 the BFF already applies to live payloads (ADR-0011 D9). No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.

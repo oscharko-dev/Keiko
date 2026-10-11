@@ -6,7 +6,34 @@ import {
   isCredentialKeyName,
   objectContainsCredentialKey,
   redact,
+  redactSecretLiterals,
 } from "./redaction.js";
+
+describe("redactSecretLiterals", () => {
+  it("removes only the configured literals and keeps every heuristic lookalike byte for byte", () => {
+    const prose = [
+      "The starter implementation supports basic stock holds,",
+      "Authorization: Bearer fixture-token-value",
+      'password: "hunter2", api_key=example, https://user:pass@host.test/x',
+      "+49 30 12345678 DE89 3704 0044 0532 0130 00",
+    ].join("\n");
+    expect(redactSecretLiterals(prose, [])).toBe(prose);
+    expect(redact(prose)).not.toBe(prose);
+    expect(redactSecretLiterals(`key=opaque-key-1 ${prose} opaque-key-1`, ["opaque-key-1"])).toBe(
+      `key=[REDACTED] ${prose} [REDACTED]`,
+    );
+  });
+
+  it("escapes regular-expression metacharacters and skips empty literals", () => {
+    expect(redactSecretLiterals("a.b a+b a.b", ["a.b", ""])).toBe("[REDACTED] a+b [REDACTED]");
+  });
+
+  it("agrees with redact() on every configured literal", () => {
+    const secrets = ["https://provider.example/v1", "opaque-secret-value"];
+    const leaked = "call https://provider.example/v1 with opaque-secret-value";
+    expect(redactSecretLiterals(leaked, secrets)).toBe(redact(leaked, secrets));
+  });
+});
 
 describe("redact", () => {
   it.each(["+", "-", ".", "2026-10-"])("redacts URL credentials after the %s prefix", (prefix) => {

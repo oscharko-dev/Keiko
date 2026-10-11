@@ -49,7 +49,9 @@ const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED
 export const MAX_CHAT_TITLE_LEN = 256;
 
 const MAX_SELECTED_MODEL_LEN = 160;
-const SELECTED_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._/\- ]*$/;
+// A registry id may end in a gateway region qualifier. Keep email domains, URLs and
+// repeated qualifiers outside this grammar; the BFF still requires a configured chat id.
+const SELECTED_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._/\- ]*(?:@[A-Za-z0-9][A-Za-z0-9-]*)?$/;
 const FORBIDDEN_SELECTED_MODEL_TERMS = [
   "apiKey",
   "api_key",

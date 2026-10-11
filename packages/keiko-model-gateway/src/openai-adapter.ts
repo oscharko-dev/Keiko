@@ -54,7 +54,7 @@ import {
   reasoningText,
   textFromContent,
 } from "./normalize.js";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redact, redactSecretLiterals } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import {
   OTHER_OUTPUT_TOKEN_FIELD,
@@ -317,6 +317,30 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-stream-read"],
   proofIds: ["chat.response.streamed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// #4009: the arguments of a governed changeset edit lost a configured provider secret before
+// reaching the tool. They are otherwise passed byte for byte, so this is the only change the gateway
+// makes to them; a positive count is a diagnostic fact (an `oldString` it touched cannot match).
+const TOOL_ARGUMENTS_REDACTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-arguments.redacted",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "openai-adapter.logToolArgumentsRedacted",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    toolCallCount: { type: "integer", dataClass: "count", required: true },
+    redactedStringCount: { type: "integer", dataClass: "count", required: true },
+  },
+  diagnosticWhen: [{ field: "redactedStringCount", positive: true }],
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tool-arguments"],
+  proofIds: ["gateway.tool-arguments.redacted.emitted-line"],
   releaseImpact: "patch",
 });
 const GATEWAY_EGRESS_CODES: Record<OutboundHttpEgressErrorCode, GatewayEgressErrorCode> = {
@@ -864,22 +888,42 @@ export class ResponseRedactionError extends MalformedToolCallError {}
 // this constant, let alone that limit).
 const MAX_REDACT_DEPTH = 32;
 
-function redactUnknown(value: unknown, secrets: readonly string[], depth = 0): unknown {
+// How a model value is scrubbed: `redact()` (configured literals plus heuristic secret shapes) for
+// content, structured output and every tool except the changeset edit, or the configured literals
+// alone for changeset-edit arguments, which are workspace file content (#4009). `changed` counts
+// the strings the scrub altered.
+interface ValueScrub {
+  readonly secrets: readonly string[];
+  readonly text: (value: string) => string;
+  changed: number;
+}
+
+function heuristicScrub(secrets: readonly string[]): ValueScrub {
+  return { secrets, text: (value) => redact(value, secrets), changed: 0 };
+}
+
+function literalScrub(secrets: readonly string[]): ValueScrub {
+  return { secrets, text: (value) => redactSecretLiterals(value, secrets), changed: 0 };
+}
+
+function redactUnknown(value: unknown, scrub: ValueScrub, depth = 0): unknown {
   if (depth >= MAX_REDACT_DEPTH) {
     throw new ResponseRedactionError(
       "gateway response payload exceeds the maximum redaction depth",
-      secrets,
+      scrub.secrets,
     );
   }
   if (typeof value === "string") {
-    return redact(value, secrets);
+    const scrubbed = scrub.text(value);
+    if (scrubbed !== value) scrub.changed += 1;
+    return scrubbed;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactUnknown(item, secrets, depth + 1));
+    return value.map((item) => redactUnknown(item, scrub, depth + 1));
   }
   if (isRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, secrets, depth + 1)]),
+      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, scrub, depth + 1)]),
     );
   }
   return value;
@@ -889,28 +933,52 @@ function redactRecord(
   value: Record<string, unknown> | null,
   secrets: readonly string[],
 ): Record<string, unknown> | null {
-  return value === null ? null : (redactUnknown(value, secrets) as Record<string, unknown>);
+  return value === null
+    ? null
+    : (redactUnknown(value, heuristicScrub(secrets)) as Record<string, unknown>);
 }
 
-function redactToolCall(call: NormalizedToolCall, secrets: readonly string[]): NormalizedToolCall {
+// A tool call's name is matched against the offered catalog. The governed changeset edit executes
+// its arguments exactly as they arrive: an `oldString` must match its file and a `newString` is the
+// content that gets written, so they lose only the configured provider secrets, never text that
+// merely looks like a credential (#4009). Every other tool's arguments are displayed (`question`)
+// or sent outward (`keiko_research_fetch`), so they keep the full heuristic redaction.
+function redactToolCall(
+  call: NormalizedToolCall,
+  secrets: readonly string[],
+  exactContent: ValueScrub,
+  isExactContentTool: (alias: string) => boolean,
+): NormalizedToolCall {
+  const name = redact(call.name, secrets);
+  const scrub = isExactContentTool(name) ? exactContent : heuristicScrub(secrets);
   return {
     ...call,
-    name: redact(call.name, secrets),
-    arguments: redactUnknown(call.arguments, secrets) as Record<string, unknown>,
+    name,
+    arguments: redactUnknown(call.arguments, scrub) as Record<string, unknown>,
   };
+}
+
+interface RedactedResponse {
+  readonly response: NormalizedResponse;
+  readonly toolArgumentsRedacted: number;
 }
 
 function redactResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
-): NormalizedResponse {
-  return {
+  isExactContentTool: (alias: string) => boolean,
+): RedactedResponse {
+  const exactContent = literalScrub(secrets);
+  const redacted: NormalizedResponse = {
     ...response,
     content: redact(response.content, secrets),
-    toolCalls: response.toolCalls.map((call) => redactToolCall(call, secrets)),
+    toolCalls: response.toolCalls.map((call) =>
+      redactToolCall(call, secrets, exactContent, isExactContentTool),
+    ),
     structuredOutput: redactRecord(response.structuredOutput, secrets),
     ...(response.reasoning === undefined ? {} : { reasoning: redact(response.reasoning, secrets) }),
   };
+  return { response: redacted, toolArgumentsRedacted: exactContent.changed };
 }
 
 function providerReportedUsage(payload: unknown): boolean {
@@ -925,10 +993,15 @@ function bindCatalogResponse(
   secrets: readonly string[],
   catalog: GatewayToolCatalogBridge,
   usageReported: boolean,
+  onToolArgumentsRedacted: (redactedStringCount: number, toolCallCount: number) => void,
 ): NormalizedResponse {
   try {
     catalog.assertNativeTransport(response);
-    return bindNormalizedToolCalls(redactResponse(response, secrets), catalog.bindCalls);
+    const redacted = redactResponse(response, secrets, catalog.isExactContentTool);
+    if (redacted.toolArgumentsRedacted > 0) {
+      onToolArgumentsRedacted(redacted.toolArgumentsRedacted, response.toolCalls.length);
+    }
+    return bindNormalizedToolCalls(redacted.response, catalog.bindCalls);
   } catch (error) {
     if (usageReported) retainMeasuredCatalogFailureUsage(error, response.usage);
     throw error;
@@ -1823,7 +1896,33 @@ export class OpenAiAdapter implements ProviderAdapter {
       request.responseFormat?.type === "json_schema",
     );
     assertUsableAssistantResponse(normalized, config.modelId, secrets);
-    return bindCatalogResponse(normalized, secrets, catalog, providerReportedUsage(payload));
+    return bindCatalogResponse(
+      normalized,
+      secrets,
+      catalog,
+      providerReportedUsage(payload),
+      (redactedStringCount, toolCallCount) => {
+        this.logToolArgumentsRedacted(config.modelId, redactedStringCount, toolCallCount);
+      },
+    );
+  }
+
+  // #4009: changeset-edit arguments lose only the configured provider secrets. When that happened
+  // the tool received changed text, so the line names how many argument strings changed, at `warn`:
+  // a scrubbed `oldString` cannot match its file. Counts only, never the arguments or the secret.
+  private logToolArgumentsRedacted(
+    modelId: string,
+    redactedStringCount: number,
+    toolCallCount: number,
+  ): void {
+    const correlationId = logCorrelationId(this.log);
+    this.log.write(
+      activityLogEvent(
+        TOOL_ARGUMENTS_REDACTED_OPERATION,
+        { level: "warn", ...(correlationId === undefined ? {} : { correlationId }) },
+        { modelId: logModelId(modelId), toolCallCount, redactedStringCount },
+      ),
+    );
   }
 
   // One line per streamed read, body-free (ADR-0003): how it ended, how many data events it had,

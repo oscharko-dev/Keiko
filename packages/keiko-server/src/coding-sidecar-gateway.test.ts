@@ -6586,6 +6586,91 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
   });
 });
 
+describe("coding sidecar gateway forwards tool-call arguments byte for byte (#4009)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  // The README of the failing Requesty benchmark run: its prose "supports basic stock holds" was
+  // rewritten to "supports Basic [REDACTED] holds" on its way to the changeset tool.
+  const README =
+    "# Inventory reservation engine\n\nSynthetic warehouse checkout service. The starter " +
+    "implementation supports basic stock holds,\nbut can partially mutate inventory on failure " +
+    "and has no lifecycle or idempotency handling.\nRun `npm test` for its two starter tests. " +
+    "The accepted enhancement is in SPEC.md.\n";
+  const NEW_README = "# Inventory reservation engine\n\nUse bearer tokens, not basic auth.\n";
+
+  function changesetEditAnswer(): Response {
+    const args = JSON.stringify({
+      changeset: {
+        selectedFiles: ["README.md"],
+        files: [
+          {
+            file: "README.md",
+            expectedContentHash: createHash("sha256").update(README).digest("hex"),
+          },
+        ],
+        edits: [{ file: "README.md", oldString: README, newString: NEW_README, replaceAll: false }],
+        deletions: [],
+        renames: [],
+      },
+    });
+    const fragments = args.match(/[\s\S]{1,11}/gu) ?? [];
+    return providerSse([
+      sseDelta({
+        role: "assistant",
+        tool_calls: [
+          {
+            index: 0,
+            id: "call-readme",
+            type: "function",
+            function: { name: "keiko_changeset_edit", arguments: "" },
+          },
+        ],
+      }),
+      ...fragments.map((fragment) =>
+        sseDelta({ tool_calls: [{ index: 0, function: { arguments: fragment } }] }),
+      ),
+      sseFinish("tool_calls"),
+      sseData({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 120 } }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  it("hands the runtime the exact oldString and newString the provider sent", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(changesetEditAnswer())),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-4009-exact-arguments"),
+    );
+
+    expect(result).toBe(STREAMING);
+    const call = frameDeltas(response.body()).flatMap(
+      (delta) =>
+        (delta.tool_calls as
+          readonly { readonly function?: { readonly arguments?: string } }[] | undefined) ?? [],
+    )[0];
+    const forwarded = JSON.parse(call?.function?.arguments ?? "{}") as {
+      readonly changeset?: { readonly edits?: readonly Record<string, unknown>[] };
+    };
+    const edit = forwarded.changeset?.edits?.[0];
+    expect(edit?.oldString).toBe(README);
+    expect(edit?.newString).toBe(NEW_README);
+    expect(response.body()).not.toContain("[REDACTED]");
+    expect(sink.events.some((event) => event.op === "gateway.tool-arguments.redacted")).toBe(false);
+    expect(JSON.stringify(sink.events)).not.toContain("basic stock holds");
+  });
+});
+
 // #3878: the model's reasoning (`reasoning_content`) reaches OpenCode as `delta.reasoning_content`,
 // the field its OpenAI-compatible provider turns into a reasoning part, and the log records only
 // its share of the turn, never its text.

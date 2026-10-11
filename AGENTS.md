@@ -665,6 +665,10 @@ previous line, the deltas that grew a live part (`liveDeltaCount`), the ones tha
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
 (`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
+Changeset-edit arguments reach the governed edit tool byte for byte (#4009): the gateway removes
+only the configured provider literals from them, never a heuristic secret shape; every other
+tool's arguments keep the full redaction. When a literal was removed,
+`gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
 `answerRepair: "steered"` (the coding sidecar route alone; #3873, F17, F23), and the log records it
