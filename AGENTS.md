@@ -806,8 +806,8 @@ no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name,
 `search.citations.reconciled` records numeric-reference and file-location reconciliation for
 Knowledge Pod, connected-folder, multi-source and hybrid answers under the request correlation.
 `citationKind` distinguishes `numeric` from `file`; hybrid answers may emit one line of each kind.
-The closed outcome (`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) and
-reference, attached and dangling counts describe the actual reconciliation. File lines also carry
+The closed outcome (`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`,
+`assessment-only`) and reference, attached and dangling counts describe the actual reconciliation. File lines also carry
 ambiguous-marker and dropped-implicit counts. Weak-overlap and grouped-marker counts are optional:
 absence means they were not measured on that path, not zero. `gateway.discovery.alias-intersection` carries
 the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
