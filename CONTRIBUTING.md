@@ -124,10 +124,13 @@ When current coverage windows apply, independent search windows and unfunded dis
 windows share the residual byte grant through bounded queues after explicit human and funded
 current windows. Unused portions return to their shared grant.
 Bounded initial opportunities protect portions for every already selected, file-capped readable
-path, including definition-only evidence, before expansion consumes the remainder. When no current
-coverage windows apply, manual selections come first, followed by existing definition context
-windows overlapping an original ordinary atom range, the independent ordinary remainder and the
-existing fallback. These opportunities do not certify declaration ownership or invocation.
+path, including definition-only evidence, before expansion consumes the remainder. Paths without a
+retained nonempty initial view retry shared bytes before already served paths expand, preserving the
+existing order within each group. When no current coverage windows apply, manual selections come
+first, followed by existing definition context windows overlapping an original ordinary atom range,
+the independent ordinary remainder and the existing fallback. These opportunities do not certify
+declaration ownership or invocation.
+
 The governed request's existing document collector checks the original remaining file and
 excerpt-byte grant before each extraction. It bounds the redacted logical projection, including
 UTF-8 separator bytes, within that capacity and discloses exhausted or truncated evidence. All positive returned document
