@@ -562,6 +562,52 @@ function busyOrdinaryMethodFiles(): Readonly<Record<string, string>> {
   };
 }
 
+function busyUnfundedDefinitionFiles(): Readonly<Record<string, string>> {
+  const files = { ...busyOrdinaryMethodFiles() };
+  files["src/implementation.ts"] = [
+    'import { stage0 } from "./stage-0.js";',
+    (files["src/implementation.ts"] ?? "").replace("  return true;", "  return stage0();"),
+    ...Array.from({ length: 12 }, (_unused, index) =>
+      [
+        ...Array.from({ length: 40 }, () => "// separate independent ordinary method"),
+        `export class RequestAdmission${String(index)} {`,
+        "  scopeAdmissionBudgetAndPromptFittingBudget() {",
+        "    const scopeAdmissionBudget = 1024;",
+        "    const promptFittingBudget = 2048;",
+        ...Array.from(
+          { length: 16 },
+          (_unusedAssignment, assignment) =>
+            `    const admittedBudget${String(assignment)} = scopeAdmissionBudget + promptFittingBudget;`,
+        ),
+        "    return scopeAdmissionBudget + promptFittingBudget;",
+        "  }",
+        "}",
+      ].join("\n"),
+    ),
+    ...Array.from({ length: 40 }, () => "// separate useful current definition"),
+    "export function governRequest() {",
+    ...Array.from(
+      { length: 38 },
+      (_unused, index) => `  const recordedCheckpoint${String(index)} = ${String(index)};`,
+    ),
+    "  const scopeAdmissionBudget = 1024;",
+    "  const promptFittingBudget = 2048;",
+    "  return scopeAdmissionBudget + promptFittingBudget;",
+    "}",
+  ].join("\n");
+  for (let index = 0; index < 7; index += 1) {
+    const next = index === 6 ? "governRequest" : `stage${String(index + 1)}`;
+    const imported = index === 6 ? "./implementation.js" : `./stage-${String(index + 1)}.js`;
+    files[`src/stage-${String(index)}.ts`] = [
+      `import { ${next} } from "${imported}";`,
+      `export function stage${String(index)}() {`,
+      `  return ${next}("${"observed connector detail ".repeat(72)}");`,
+      "}",
+    ].join("\n");
+  }
+  return files;
+}
+
 async function busyOrdinaryMethodRange(
   fixture: CoverageFixture,
 ): Promise<NonNullable<EvidenceAtom["lineRange"]>> {
@@ -691,6 +737,48 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("retains a useful unfunded definition beside the independent ordinary method", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      busyUnfundedDefinitionFiles(),
+    );
+    const methodRange = await busyOrdinaryMethodRange(fixture);
+    const target = fixture.trace.routeCoverage?.entries.find((entry) =>
+      fixture.files[entry.atom.scopePath]
+        ?.split("\n")
+        [(entry.atom.lineRange?.startLine ?? 1) - 1]?.includes("export function governRequest("),
+    );
+    expect(target).toBeDefined();
+    const targetRange = target?.atom.lineRange;
+    if (target === undefined || targetRange === undefined)
+      throw new TypeError("fixture requires the actual current target definition");
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    expect(target.atom.edge?.kind).toBe("reference");
+    const body = (fixture.files[target.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(targetRange.startLine - 1, targetRange.endLine)
+      .join("\n");
+    expect(target.observedBytes).toBe(Buffer.byteLength(body));
+    const atoms = await allocationAtoms(fixture);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    const methodBody = (fixture.files[target.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(methodRange.startLine - 1, methodRange.endLine)
+      .join("\n");
+    expect(Buffer.byteLength(body) + Buffer.byteLength(methodBody)).toBeLessThan(4096);
+    expect(
+      coverageRanking(atoms).kept.some(
+        (candidate) => candidate.scopePath === target.atom.scopePath,
+      ),
+    ).toBe(true);
+    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+    const prompt = await sentPrompt(fixture, reads, atoms, budget);
+    expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expectOrdinaryMethodViews(fixture, reads, pack, prompt, methodRange);
+    expectOrdinaryMethodViews(fixture, reads, pack, prompt, targetRange);
+  });
+
   it("counts a nonempty partial ordinary view without claiming the entire method was read", async () => {
     const fixture = await coverageFixture(
       "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
