@@ -673,6 +673,44 @@ function crossWaveCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function sharedRelevanceFiles(): Readonly<Record<string, string>> {
+  const files: Record<string, string> = {
+    "src/routes.ts": ['import { handleItem } from "./implementation.js";', REGISTRATION_FACT].join(
+      "\n",
+    ),
+  };
+  files["src/implementation.ts"] = [
+    ...Array.from(
+      { length: 9 },
+      (_value, index) =>
+        `import { retainRecord${String(index)} } from "./record-${String(index)}.js";`,
+    ),
+    "export function handleItem(value) { return prepareRecord(value); }",
+    "function prepareRecord(value) {",
+    ...Array.from({ length: 9 }, (_value, index) => `  retainRecord${String(index)}(value);`),
+    "  return scopeAdmissionAndPromptFitting(value);",
+    "}",
+    ...Array.from({ length: 35 }, () => "// separate the source declarations"),
+    "function scopeAdmissionAndPromptFitting(value) {",
+    "  const scopeAdmissionBudget = 1024;",
+    "  const promptFittingBudget = 2048;",
+    ...Array.from({ length: 24 }, () => "  // preserve the current selected terminal source body"),
+    "  return scopeAdmissionBudget + promptFittingBudget + value;",
+    "}",
+  ].join("\n");
+  for (let index = 0; index < 9; index += 1)
+    files[`src/record-${String(index)}.ts`] = [
+      `export function retainRecord${String(index)}(value) {`,
+      ...Array.from(
+        { length: 20 },
+        () => "  // unrelated accounting detail for the existing ledger",
+      ),
+      "  return value;",
+      "}",
+    ].join("\n");
+  return files;
+}
+
 function deferredCrossWaveFiles(): Readonly<Record<string, string>> {
   const files = { ...crossWaveCoverageFiles() };
   files["src/ordinary.ts"] = (files["src/ordinary.ts"] ?? "").replace(
@@ -1169,6 +1207,80 @@ describe("current route trace excerpt coverage", () => {
     ).toBe(true);
     expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
     expectFullTerminalView(fixture, reads, pack, prompt);
+  });
+
+  it("retains a stronger same-file target when weaker files compete for shared connected bytes", async () => {
+    const fixture = await coverageFixture(undefined, sharedRelevanceFiles());
+    const originalAtoms = JSON.stringify(fixture.trace.atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const target = entries.find((entry) =>
+      fixture.files[entry.atom.scopePath]
+        ?.split("\n")
+        [(entry.atom.lineRange?.startLine ?? 1) - 1]?.includes(
+          "function scopeAdmissionAndPromptFitting(",
+        ),
+    );
+    const range = target?.atom.lineRange;
+    if (target === undefined || range === undefined)
+      throw new TypeError("fixture requires the actual current terminal definition");
+    const weak = entries.filter((entry) => entry.atom.scopePath.startsWith("src/record-"));
+    expect(weak.length).toBe(9);
+    expect(weak.every((entry) => entry.atom.score < target.atom.score)).toBe(true);
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    const parent = entries.find((entry) => entry.definitionIdentity === target.parentIdentity);
+    if (parent === undefined) throw new TypeError("fixture requires the actual current parent");
+    expect(target.parentWitness?.parentIdentity).toBe(parent.definitionIdentity);
+    expect(target.parentWitness?.targetIdentity).toBe(target.definitionIdentity);
+    expect(fixture.trace.routeCoverage?.isCurrent(parent.atom)).toBe(true);
+    expect(
+      fixture.files[target.atom.scopePath]?.split("\n")[
+        (target.parentWitness?.lineRange.startLine ?? 1) - 1
+      ],
+    ).toBe("  return scopeAdmissionAndPromptFitting(value);");
+    const atoms = await allocationAtoms(fixture);
+    expect(
+      coverageRanking(atoms).kept.some((item) => item.scopePath === target.atom.scopePath),
+    ).toBe(true);
+    const lines = (fixture.files[target.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine);
+    const body = lines.join("\n");
+    expect(target.observedBytes).toBe(Buffer.byteLength(body));
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 };
+    for (const paths of [["src/routes.ts", "src/implementation.ts"], undefined]) {
+      const { reads, requests } = await observedCoverageRead(fixture, {
+        paths,
+        atoms,
+        inputs: { budget },
+      });
+      const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+      const messages = await sentPrompt(fixture, reads, atoms, budget);
+      expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      expect(
+        readContent(reads, target.atom.scopePath).includes(body),
+        JSON.stringify({
+          restricted: paths !== undefined,
+          targetScore: target.atom.score,
+          targetRange: range,
+          targetBytes: target.observedBytes,
+          weakScores: weak.map((entry) => entry.atom.score),
+          nativeRequests: requests.map((request) => ({
+            path: request.scopePath,
+            funded: request.ranges,
+            grant: request.maxTotalBytes,
+            first: request.firstRoundOnly,
+          })),
+        }),
+      ).toBe(true);
+      expect(
+        pack.files
+          .find((file) => file.scopePath === target.atom.scopePath)
+          ?.excerpts.some((excerpt) => excerpt.content.includes(body)),
+      ).toBe(true);
+      for (const [index, line] of lines.entries())
+        expect(messages).toContain(`${String(range.startLine + index)} | ${line}`);
+    }
+    expect(JSON.stringify(fixture.trace.atoms)).toBe(originalAtoms);
   });
 
   it("conserves invalidated returned code and retained document grants together", async () => {

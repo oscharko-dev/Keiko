@@ -6262,7 +6262,6 @@ interface CoverageAdmission {
 
 interface CoverageQueueOpportunity {
   remainingBytes: number;
-  funded: boolean;
 }
 
 function fairCoverageEntries(
@@ -6282,16 +6281,10 @@ function fairCoverageEntries(
       admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs, opportunity.remainingBytes)
     ) {
       opportunity.remainingBytes -= state.bytes - previousBytes;
-      opportunity.funded = true;
     }
   }
-  for (const entry of targets) {
-    const opportunity = opportunities.get(entry.definitionIdentity);
-    if (opportunity?.funded !== false) continue;
-    if (admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs))
-      opportunity.funded = true;
-  }
-  for (const entry of targets) admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs);
+  for (const entry of sharedCoverageTargets(entries, byIdentity))
+    admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs);
   return [...state.windows.values()].flat();
 }
 
@@ -6332,7 +6325,7 @@ function coverageQueueOpportunities(
     const files = coverageTargetsByPath(root);
     const fileGrants = distributeByteBudget(rootGrants[index] ?? 0, files.length);
     for (const [fileIndex, targets] of files.entries()) {
-      const opportunity = { remainingBytes: fileGrants[fileIndex] ?? 0, funded: false };
+      const opportunity = { remainingBytes: fileGrants[fileIndex] ?? 0 };
       for (const target of targets) opportunities.set(target.definitionIdentity, opportunity);
     }
   }
@@ -6425,6 +6418,17 @@ function relevantCoverageTargets(
   return interleavedCoverageTargets(
     coverageRootTargets(entries, byIdentity).map((root) =>
       interleavedCoverageTargets(coverageTargetsByPath(root)),
+    ),
+  );
+}
+
+function sharedCoverageTargets(
+  entries: readonly RouteTraceCoverageEntry[],
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+): readonly RouteTraceCoverageEntry[] {
+  return interleavedCoverageTargets(
+    coverageRootTargets(entries, byIdentity).map((root) =>
+      [...root].sort((a, b) => b.atom.score - a.atom.score),
     ),
   );
 }
