@@ -44,6 +44,39 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     }
   });
 
+  it("registers eight exact manual ingress obligations without activating more rules", () => {
+    expect(policy.version).toBe(2);
+    expect(policy.responsibilities.map(({ id }) => id)).toEqual([
+      "manual-job-create-route-handler",
+      "manual-job-refresh-route-handler",
+      "manual-source-refresh-consumer",
+      "manual-source-persistence-consumer",
+      "manual-summary-update-persistence-consumer",
+      "manual-source-scope-composition",
+      "manual-summary-projection",
+      "manual-limit-diagnostic-public-proof",
+    ]);
+    for (const record of policy.responsibilities) {
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.transform).toEqual(record.output);
+      const { parameterIndex, ...input } = record.input;
+      expect(parameterIndex).toBe(0);
+      expect(input).toEqual(record.transform);
+    }
+    const removed = structuredClone(policy);
+    removed.responsibilities.pop();
+    expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+    const legacy = {
+      version: 1,
+      upstream: policy.upstream,
+      runner: policy.runner,
+      rules: policy.rules,
+    };
+    expect(validatePolicy(legacy)).toEqual([]);
+    expect(validatePolicy(legacy, [policy])).toContain("responsibility-downgrade");
+  });
+
   it("rejects missing, duplicated, unknown, cosmetic and malformed rule policies", () => {
     const altered = [
       { ...policy, rules: policy.rules.slice(1) },

@@ -81,7 +81,8 @@ describe("production code-quality invocation wiring (#3915)", () => {
   it("reports a full actual candidate verdict through the enforcing CLI owner", async () => {
     const report = await isolatedPolicyReport();
     expect(report).toMatchObject({
-      outcome: "passed",
+      outcome: "failed",
+      enforcementOutcome: "passed",
       mode: "enforce",
       scope: { id: "repository", partial: false },
     });
@@ -89,6 +90,12 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(report.counts.packages).toBe(27);
     expect(report.counts.violations).toBe(0);
     expect(report.rules).toHaveLength(22);
+    expect(report.responsibilities.counts).toMatchObject({ ready: 8, pending: 8, qualified: 0 });
+    expect(
+      report.responsibilities.assessments.every(({ proofs }) =>
+        proofs.every(({ executed }) => executed === false),
+      ),
+    ).toBe(true);
     expect(report.pack).toHaveLength(27);
   }, 195_000);
 
@@ -98,7 +105,10 @@ describe("production code-quality invocation wiring (#3915)", () => {
     const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       const report = await isolatedPolicyReport(root, 15_000);
-      expect(report.outcome).toBe("passed");
+      expect(report.enforcementOutcome).toBe("passed");
+      expect(report.outcome).toBe("failed");
+      expect(report.responsibilities.assessments).toEqual([]);
+      expect(report.responsibilities.counts).toMatchObject({ pending: 0, qualified: 0 });
       expect(
         report.inventory.files.find((file) => file.path === "packages/alpha/src/testing/logic.ts")
           .production,

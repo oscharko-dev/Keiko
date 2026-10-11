@@ -70,11 +70,18 @@ export function createRuntimePolicyFixture(helper, linkage = "runtime") {
   return root;
 }
 
+export function fixtureOwnedPolicy(records = []) {
+  const { upstream, runner, rules } = JSON.parse(
+    readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
+  );
+  return { version: 2, upstream, runner, rules, responsibilities: records };
+}
+
 export function configureEnforcingPolicyFixture(root) {
   mkdirSync(join(root, "scripts"), { recursive: true });
   writeFileSync(
     join(root, "scripts/code-quality-policy.json"),
-    readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
+    JSON.stringify(fixtureOwnedPolicy()),
   );
   copyNativePolicyFixtureSources(root);
 }

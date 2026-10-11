@@ -1,14 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import {
-  mkdtempSync,
-  mkdirSync,
-  rmSync,
-  writeFileSync,
-  readFileSync,
-  unlinkSync,
-  symlinkSync,
-} from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,7 +11,12 @@ import {
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
 import { fileURLToPath, URL } from "node:url";
 
-import { createPolicyFixtureRepository } from "./support/code-quality-fixture.mjs";
+import {
+  createPolicyFixtureRepository,
+  fixtureOwnedPolicy,
+} from "./support/code-quality-fixture.mjs";
+
+import { responsibilityRecord } from "./support/code-quality-responsibility-fixture.mjs";
 
 const roots = [];
 afterEach(() => {
@@ -229,11 +226,52 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     await expect(collectPolicyInventory(root)).rejects.toThrow("invalid-build-config");
   });
 
+  it("retains fixture-owned responsibility obligations through complete ancestry", () => {
+    const root = trackedRepository();
+    mkdirSync(join(root, "scripts"));
+    const baseline = fixtureOwnedPolicy([responsibilityRecord()]);
+    const commit = (value) => {
+      writeFileSync(join(root, "scripts/code-quality-policy.json"), JSON.stringify(value));
+      execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-m",
+          "Record responsibility history",
+        ],
+        { cwd: root, stdio: "ignore" },
+      );
+    };
+    commit(baseline);
+    const removed = fixtureOwnedPolicy();
+    commit(removed);
+    writeFileSync(join(root, "unrelated.txt"), "Unrelated fixture metadata");
+    commit(removed);
+    const history = readPreviousPolicies(root);
+    expect(validatePolicy(removed, history)).toContain("responsibility-shrank");
+    const legacy = {
+      version: 1,
+      upstream: baseline.upstream,
+      runner: baseline.runner,
+      rules: baseline.rules,
+    };
+    expect(validatePolicy(legacy, history)).toContain("responsibility-downgrade");
+    const rebound = structuredClone(baseline);
+    rebound.responsibilities[0].consumer.owner = "beta";
+    expect(validatePolicy(rebound, history)).toContain("responsibility-shrank");
+    expect(history.some(({ responsibilities }) => responsibilities?.length === 1)).toBe(true);
+  });
+
   it("rejects an activation removed two commits earlier", () => {
     const root = trackedRepository();
-    const policy = JSON.parse(
-      readFileSync(new URL("../code-quality-policy.json", import.meta.url), "utf8"),
-    );
+    const policy = fixtureOwnedPolicy();
     mkdirSync(join(root, "scripts"));
     const active = structuredClone(policy);
     active.rules.find((rule) => rule.id === "anti-slop/no-chained-type-assertions").activeScopes = [
@@ -267,9 +305,7 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
 
   it("retains an activated merge parent even when the merge tree matches the other parent", () => {
     const root = trackedRepository();
-    const policy = JSON.parse(
-      readFileSync(new URL("../code-quality-policy.json", import.meta.url), "utf8"),
-    );
+    const policy = fixtureOwnedPolicy();
     mkdirSync(join(root, "scripts"));
     const git = (args) =>
       execFileSync(

@@ -1,17 +1,16 @@
 import { readFileSync, symlinkSync } from "node:fs";
-import { pathToFileURL, URL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { createSymbolFixture, emitSymbolFixture } from "./code-quality-symbol-fixture.mjs";
+
+import { fixtureOwnedPolicy } from "./code-quality-fixture.mjs";
 
 function assembleResponsibilityFixture(prepare, additionalOwners = []) {
   return createSymbolFixture(true, prepare, additionalOwners);
 }
 
 export function responsibilityPolicy(records = []) {
-  const policy = JSON.parse(
-    readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
-  );
-  return { ...policy, version: 2, responsibilities: records };
+  return fixtureOwnedPolicy(records);
 }
 
 export function responsibilityRecord(kind = "validator") {

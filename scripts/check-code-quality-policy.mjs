@@ -109,7 +109,7 @@ export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
   const inventorySha256 = policyDigest(JSON.stringify(inventory));
   const rawAssessment = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
   const responsibilities =
-    policy.version === 2 ? assessPolicyResponsibilities(subject, policy, scope.files) : null;
+    policy.version === 2 ? assessPolicyResponsibilities(subject, policy) : null;
   const assessed = responsibilities
     ? adaptResponsibilityDiagnostics(rawAssessment, responsibilities)
     : rawAssessment;

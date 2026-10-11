@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "upstream": "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
   "runner": "1.78.0",
   "rules": [
@@ -156,6 +156,264 @@
       "migrationIssue": 3989,
       "reason": "Require measured cost and ownership/omission equivalence; accept fixed-state immutable copies when proven.",
       "activeScopes": []
+    }
+  ],
+  "responsibilities": [
+    {
+      "id": "manual-job-create-route-handler",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-job",
+        "exportName": "validateHtmlManualPodCreateRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-job",
+        "exportName": "validateHtmlManualPodCreateRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-job",
+        "exportName": "validateHtmlManualPodCreateRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-server/src/routes.ts",
+        "specifier": "./manual/manual-pod-routes.js",
+        "exportName": "handleCreateHtmlManualPod",
+        "owner": "@oscharko-dev/keiko-server"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/html-manual-job.test.ts",
+        "packages/keiko-server/src/manual/manual-pod-routes.test.ts"
+      ]
+    },
+    {
+      "id": "manual-job-refresh-route-handler",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-job",
+        "exportName": "validateHtmlManualPodRefreshRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-job",
+        "exportName": "validateHtmlManualPodRefreshRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-routes.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-job",
+        "exportName": "validateHtmlManualPodRefreshRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-server/src/routes.ts",
+        "specifier": "./manual/manual-pod-routes.js",
+        "exportName": "handleRefreshHtmlManualPod",
+        "owner": "@oscharko-dev/keiko-server"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/html-manual-job.test.ts",
+        "packages/keiko-server/src/manual/manual-pod-routes.test.ts"
+      ]
+    },
+    {
+      "id": "manual-source-refresh-consumer",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-pod-refresh.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualSource",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-pod-refresh.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualSource"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-pod-refresh.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualSource"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-local-knowledge/src/index.ts",
+        "specifier": "./manual-pod-refresh.js",
+        "exportName": "refreshHtmlManualPod",
+        "owner": "@oscharko-dev/keiko-local-knowledge"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/html-manual-source.test.ts",
+        "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts"
+      ]
+    },
+    {
+      "id": "manual-source-persistence-consumer",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-source-metadata.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualSource",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-source-metadata.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualSource"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-source-metadata.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualSource"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-local-knowledge/src/index.ts",
+        "specifier": "./manual-source-metadata.js",
+        "exportName": "persistHtmlManualSourceMetadata",
+        "owner": "@oscharko-dev/keiko-local-knowledge"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/html-manual-source.test.ts",
+        "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
+        "packages/keiko-local-knowledge/src/manual-pod.test.ts",
+        "tests/activity-log-scenarios/bff.test.ts"
+      ]
+    },
+    {
+      "id": "manual-summary-update-persistence-consumer",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-source-metadata.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh",
+        "exportName": "validateManualRefreshChangeSummary",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-source-metadata.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh",
+        "exportName": "validateManualRefreshChangeSummary"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-local-knowledge/src/manual-source-metadata.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh",
+        "exportName": "validateManualRefreshChangeSummary"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-local-knowledge/src/index.ts",
+        "specifier": "./manual-source-metadata.js",
+        "exportName": "updateHtmlManualRefreshState",
+        "owner": "@oscharko-dev/keiko-local-knowledge"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/html-manual-refresh.test.ts",
+        "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
+        "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts",
+        "tests/activity-log-scenarios/bff.test.ts"
+      ]
+    },
+    {
+      "id": "manual-source-scope-composition",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-service.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualCrawlScope",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-service.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualCrawlScope"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-service.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualCrawlScope"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-server/src/manual/manual-pod-service.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualSource",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/html-manual-source.test.ts"]
+    },
+    {
+      "id": "manual-summary-projection",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-local-knowledge/src/knowledge-pods.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh",
+        "exportName": "validateManualRefreshChangeSummary",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-local-knowledge/src/knowledge-pods.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh",
+        "exportName": "validateManualRefreshChangeSummary"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-local-knowledge/src/knowledge-pods.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh",
+        "exportName": "validateManualRefreshChangeSummary"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-server/src/local-knowledge-handlers.ts",
+        "specifier": "@oscharko-dev/keiko-local-knowledge",
+        "exportName": "buildKnowledgePodSummary",
+        "owner": "@oscharko-dev/keiko-local-knowledge"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/html-manual-refresh.test.ts",
+        "packages/keiko-local-knowledge/src/knowledge-pods.test.ts",
+        "tests/activity-log-scenarios/memory-knowledge.test.ts"
+      ]
+    },
+    {
+      "id": "manual-limit-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/html-manual-source.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualScopeLimits",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/html-manual-source.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualScopeLimits"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/html-manual-source.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "validateHtmlManualScopeLimits"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/html-manual-source.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
+        "exportName": "countPublicManualLimitDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/html-manual-source.test.ts"]
     }
   ]
 }

@@ -40,6 +40,39 @@ function executeCensusChild(root, ci) {
   });
 }
 
+function executeScopedPolicyChild(root, scope, json) {
+  const entry = new URL("../check-code-quality-policy.mjs", import.meta.url).href;
+  const args = ["--scope", scope, ...(json ? ["--json"] : [])];
+  const source = `import { codeQualityPolicyMain } from ${JSON.stringify(entry)};
+    process.exitCode = await codeQualityPolicyMain(${JSON.stringify(args)}, ${JSON.stringify(root)});`;
+  return spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    env: { ...process.env, CI: "false" },
+    encoding: "utf8",
+    timeout: 45_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
+}
+
+function prepareInvalidScopedConsumer(own, variant) {
+  if (variant === "missing") own.record.consumer.exportName = "missing";
+  if (variant === "foreign") own.record.consumer.owner = "alpha";
+  if (variant === "unbound") {
+    own.put(
+      "packages/beta/src/owner.ts",
+      "export function consume(input: number): number { return input; }",
+    );
+    emitSymbolFixture(own.root, "packages/beta");
+  }
+  for (const rule of own.policy.rules) {
+    if (own.record.rules.includes(rule.id))
+      rule.activeScopes = rule.activeScopes.filter(
+        (scope) => !["package:alpha", "package:beta"].includes(scope),
+      );
+  }
+  own.put("scripts/code-quality-policy.json", own.policy);
+}
+
 const roots = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -58,6 +91,98 @@ function responsibilityOwnerCensus(report) {
   expect(report.census).toHaveLength(native.length + owner.length);
   return owner;
 }
+
+describe("registered graph remains global for scoped CLI diagnostics (#3918)", () => {
+  it.each([
+    ["package:alpha", true],
+    ["package:alpha", false],
+    ["native-host", true],
+    ["native-host", false],
+  ])(
+    "assesses the complete cross-owner graph for scope %s (JSON %s)",
+    (scope, json) => {
+      const own = createCrossOwnerEnforcementFixture();
+      roots.push(own.root);
+      const child = executeScopedPolicyChild(own.root, scope, json);
+      expect(child.error).toBeUndefined();
+      expect(child.stderr).toBe("");
+      if (!json) {
+        expect(child.stdout).toContain("enforcement=PASSED; combined=FAILED");
+        expect(child.stdout).toContain("semantic-qualified=0; semantic-pending=1");
+        expect(child.stdout).toContain("partial");
+      } else {
+        const report = JSON.parse(child.stdout);
+        expect(report.scope).toEqual({ id: scope, partial: true });
+        expect(report.counts.expected).toBe(
+          report.inventory.files.filter((file) => file.scope === scope).length,
+        );
+        expect(report.counts.visited).toBe(report.counts.expected);
+        expect(report.responsibilities.assessments[0].reasons).toEqual([]);
+        expect(report.responsibilities.assessments[0].consumerBinding.bound).toBe(true);
+        expect(report.responsibilities.counts).toMatchObject({
+          ready: 1,
+          pending: 1,
+          qualified: 0,
+        });
+        expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
+        expect(report.enforcementOutcome).toBe("passed");
+        expect(report.outcome).toBe("failed");
+        expect(
+          report.census.every(({ path }) =>
+            scope === "native-host"
+              ? path.startsWith("native/")
+              : path.startsWith("packages/alpha/"),
+          ),
+        ).toBe(true);
+        expect(
+          report.adaptations.every(({ finding }) => finding.path === "packages/alpha/src/owner.ts"),
+        ).toBe(true);
+        if (scope === "native-host") {
+          expect(report.census).toHaveLength(11);
+          expect(report.adaptations).toEqual([]);
+        } else expect(report.adaptations).toHaveLength(1);
+      }
+      expect(child.status).toBe(0);
+    },
+    60_000,
+  );
+
+  it.each([
+    ["missing", "unresolved-responsibility-facts", true],
+    ["missing", "unresolved-responsibility-facts", false],
+    ["foreign", "foreign-responsibility-owner", true],
+    ["foreign", "foreign-responsibility-owner", false],
+    ["unbound", "unbound-responsibility-consumer", true],
+    ["unbound", "unbound-responsibility-consumer", false],
+  ])(
+    "refuses inactive global %s consumer (%s) outside Native scope (JSON %s)",
+    (variant, reason, json) => {
+      const own = createCrossOwnerEnforcementFixture();
+      roots.push(own.root);
+      prepareInvalidScopedConsumer(own, variant);
+      const child = executeScopedPolicyChild(own.root, "native-host", json);
+      expect(child.error).toBeUndefined();
+      expect(child.stderr).toBe("");
+      if (!json) expect(child.stdout).toContain("enforcement=FAILED; combined=FAILED");
+      else {
+        const report = JSON.parse(child.stdout);
+        expect(report.responsibilities.assessments[0].reasons).toContain(reason);
+        expect(report.responsibilities.assessments[0].reasons).not.toContain(
+          "partial-responsibility-scope",
+        );
+        expect(report.responsibilities.assessments[0].structural).not.toBe("ready");
+        expect(report.responsibilities.counts.qualified).toBe(0);
+        expect(report.enforcementOutcome).toBe("failed");
+        expect(report.outcome).toBe("failed");
+        expect(report.violations).toEqual([]);
+        expect(report.adaptations).toEqual([]);
+        expect(report.census).toHaveLength(11);
+      }
+      expect(child.status).toBe(1);
+    },
+    60_000,
+  );
+});
 
 describe("v2 static enforcement keeps combined semantic qualification pending (#3918)", () => {
   it.each([

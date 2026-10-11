@@ -94,7 +94,7 @@ subject SHA alone is not a claim that uncommitted additions are committed or tha
 passed. Publish committed-head evidence in the existing issue/PR record. No permanent violation
 baseline, bulk suppression register or separate evidence store is introduced.
 
-The internal #3918 compiler interface is descriptive and inactive in the policy entrypoint.
+The internal #3918 compiler interface supplies descriptive facts to responsibility assessment.
 `collectPolicySubject` shares the inventory's already parsed effective compiler contexts and its
 single output-to-source map. `collectPolicyInventory` retains its public result. A resolver lazily
 builds context-owned TypeScript programs, keeping NodeNext, Bundler and source-path overrides
@@ -130,8 +130,7 @@ rechecking: changes to the enumerated tracked or nonignored path set invalidate 
 membership. This includes
 new root/package consumers and requires no second config, program, packaging or analyzer census.
 Callers release retained graphs with `close`; released resolvers cannot be reused.
-Unsupported or unresolved semantic situations remain incomplete or fail closed. Responsibility
-assessment, boundary exemptions, migration and scope activation are subsequent #3918 checkpoints.
+Unsupported or unresolved semantic situations remain incomplete or fail closed. Runtime semantic qualification and further migration/scope activation remain subsequent #3918 checkpoints.
 
 Incoming member references use actual checker-owned properties and canonical declaration provenance,
 including dot access, literal/template element access and bounded immutable const key/callee aliases.
@@ -143,7 +142,7 @@ callable indirection and unresolved computed members remain
 explicitly incomplete. These are compiler/source reference facts, not runtime function-object
 identity or higher-order responsibility proofs; they authorize no semantic exemption.
 
-### Responsibility checkpoint (inactive intermediate interface)
+### Responsibility checkpoint (production registrations, pending semantics)
 
 Version 1 retains its exact policy/report keys, rule inventory, scopes and activation history.
 Version 2 adds closed responsibility records: stable id, owner, validator or structural-redactor
@@ -151,6 +150,29 @@ kind, exact rule obligations, input/transform/output/consumer export selectors a
 paths. The input selector names an exact nonnegative canonical `parameterIndex`; its closed shape
 and historical identity reject removal or rebinding of that slot. Historical version 1 has no responsibility records; version 2 history rejects downgrade,
 removal or rebinding of an existing obligation. Unknown authorization fields remain rejected.
+
+The production policy registers eight manual ingress/consumer pairs: create and refresh request
+route handlers, source-scope composition, source refresh, source INSERT, summary projection,
+summary UPDATE, and the public limit diagnostic checker. Each selects only
+`anti-slop/no-unknown-parameters` for its observed canonical unknown input parameter 0. Input,
+transform and output refer to that same validator; the consumer has its separate canonical owner.
+No new rule scope is activated. Other raw-helper, dictionary, return or body slots are not granted
+by these records. Proof paths bind owning sources and remain unexecuted in the CLI.
+
+Responsibility assessment is global on every CLI invocation, against the complete inventory and
+all registered records. A local `--scope` still selects only Native parser input and raw diagnostic
+enforcement: `scope`, expected/visited/findings and the raw census describe that selected scan.
+Inventory, package membership and responsibility facts describe the complete registered graph.
+Invalid or missing registered facts fail static enforcement even when their owner or inactive
+rule is outside the selected scan. Adaptations match only actual selected violations at exact sites.
+The direct assessment API with explicit partial files still refuses incomplete responsibility
+scope; the CLI does not pass a partial file set to that API. CI subset-command refusal is unchanged.
+
+Real-parser fixtures construct their own v2 policy from all current production rule objects,
+upstream and runner identities, plus their own actual records. They never copy foreign production
+records and remove them from history. Empty ordinary fixtures preserve static PASS/combined FAIL;
+responsibility fixtures preserve alpha/beta owners and the complete Native census. Synthetic Git
+history remains complete and rejects removal, rebinding, shrink and downgrade through merge parents.
 
 Selectors resolve actual current compiler-owned declarations and emitted public entries. The
 relationship validator's root barrel exposes its type identity only; its executable public entry
@@ -207,8 +229,7 @@ start/end offsets and declaration-map ownership retain their UTF-16 contract. Gu
 are reused without an additional program or analyzer run; returned facts cannot mutate the cache,
 and current source/config/package membership guards still invalidate reuse.
 No body, consumer, package, assertion or typed domain output is exempted.
-Other rule obligations stay applicable and receive no adaptation from these slots. Existing version
-1 production policy and every activation/history guard remain unchanged.
+Other rule obligations stay applicable and receive no adaptation from these slots. Historical version 1 behavior and every activation/history guard remain unchanged.
 
 The existing bounded resolver supplies canonical callable slots, call references, flat index-signature
 facts and types before inert assertions. Recursive dictionary indexes are classified without walking
