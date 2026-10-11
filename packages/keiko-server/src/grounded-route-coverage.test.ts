@@ -1,3 +1,4 @@
+import * as documentLane from "./grounded-document-evidence.js";
 import { describe, expect, it, vi } from "vitest";
 import * as workspace from "@oscharko-dev/keiko-workspace";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -1137,6 +1138,125 @@ describe("current route trace excerpt coverage", () => {
     );
     expect(remaining.filesReadMax, values).toBeLessThanOrEqual(budget.filesReadMax - consumedFiles);
   });
+
+  it.each([
+    { dimension: "files", excerptBytesMax: 24576, filesReadMax: 1 },
+    { dimension: "bytes", excerptBytesMax: 9, filesReadMax: 13 },
+    { dimension: "healthy", excerptBytesMax: 24576, filesReadMax: 2 },
+  ])(
+    "enforces finite shared document projection capacity ($dimension)",
+    async ({ dimension, excerptBytesMax, filesReadMax }) => {
+      const pdf = mixedAccountingFiles()["docs/manual.pdf"];
+      if (pdf === undefined) throw new TypeError("fixture requires the real bounded PDF");
+      const fixture = await coverageFixture("Read docs/first.pdf and docs/second.pdf", {
+        "docs/first.pdf": pdf,
+        "docs/second.pdf": pdf,
+      });
+      const scope = {
+        ...fixture.scope,
+        kind: "files" as const,
+        relativePaths: ["docs/first.pdf", "docs/second.pdf"],
+        explicitConnection: true,
+      };
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax, filesReadMax };
+      let projections = 0;
+      let projectedBytes = 0;
+      const projectedPaths: string[] = [];
+      let documentOmissions: readonly { readonly scopePath: string; readonly reason: string }[] =
+        [];
+      let nativeCalls = 0;
+      const native = documentLane.collectConnectedDocumentEvidence;
+      const observer = vi
+        .spyOn(documentLane, "collectConnectedDocumentEvidence")
+        .mockImplementation(async (...args) => {
+          const documents = await native(...args);
+          nativeCalls += 1;
+          projections += documents.excerpts.size;
+          projectedPaths.push(...documents.excerpts.keys());
+          documentOmissions = documents.omitted.map((entry) => ({
+            scopePath: entry.scopePath,
+            reason: entry.reason,
+          }));
+          projectedBytes += [...documents.excerpts.values()].reduce(
+            (bytes, windows) =>
+              bytes + windows.reduce((sum, view) => sum + Buffer.byteLength(view.content), 0),
+            0,
+          );
+          return documents;
+        });
+      const result = await retrieveConnectedContextPack(
+        { scope, query: fixture.query, workspaceRoot: fixture.searchScope.workspace.root, budget },
+        {
+          correlationId: undefined,
+          fs: fixture.fs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fixture.searchScope.workspace,
+          answerer: { answer: () => Promise.resolve("No synthesis was requested") },
+          activityLog: createBufferedServerLogSink(),
+        },
+      ).finally(() => observer.mockRestore());
+      expect(nativeCalls).toBe(1);
+      expect(
+        result.pack.files.some((file) =>
+          file.excerpts.some(
+            (view) =>
+              view.atom.provenance.kind === "document-extract" &&
+              view.content.includes("Hello PDF"),
+          ),
+        ),
+      ).toBe(true);
+      const validation = validateConnectedContextPack(result.pack);
+      expect(validation.ok).toBe(true);
+      const remaining = remainingPublicReadGrant(fixture, result);
+      const values = JSON.stringify({
+        nativeCalls,
+        projections,
+        projectedBytes,
+        projectedPaths,
+        documentOmissions,
+        usageFiles: result.pack.usage.filesRead,
+        usageBytes: result.pack.usage.excerptBytes,
+        selectedFiles: result.pack.files.length,
+        fileGrant: budget.filesReadMax,
+        byteGrant: budget.excerptBytesMax,
+        validatorOk: validation.ok,
+        remainingFiles: remaining.filesReadMax,
+        remainingBytes: remaining.excerptBytesMax,
+      });
+      expect(projections, values).toBeLessThanOrEqual(budget.filesReadMax);
+      expect(projectedBytes, values).toBeLessThanOrEqual(budget.excerptBytesMax);
+      if (dimension === "healthy") {
+        expect([...projectedPaths].sort(), values).toEqual([...scope.relativePaths].sort());
+        expect(result.pack.files.map((file) => file.scopePath).sort(), values).toEqual(
+          [...scope.relativePaths].sort(),
+        );
+        for (const path of scope.relativePaths) {
+          expect(
+            result.pack.files
+              .find((file) => file.scopePath === path)
+              ?.excerpts.map((view) => view.content)
+              .join("\n"),
+            values,
+          ).toContain("Hello PDF");
+        }
+      } else {
+        const unprojected = scope.relativePaths.filter((path) => !projectedPaths.includes(path));
+        expect(unprojected, values).toHaveLength(1);
+        for (const path of unprojected) {
+          expect(documentOmissions, values).toContainEqual({
+            scopePath: path,
+            reason: "budget-exhausted",
+          });
+        }
+      }
+      expect(result.pack.usage.filesRead, values).toBeGreaterThanOrEqual(projections);
+      expect(result.pack.usage.excerptBytes, values).toBeGreaterThanOrEqual(projectedBytes);
+      expect(remaining.filesReadMax, values).toBeLessThanOrEqual(budget.filesReadMax - projections);
+      expect(remaining.excerptBytesMax, values).toBeLessThanOrEqual(
+        budget.excerptBytesMax - projectedBytes,
+      );
+    },
+  );
 
   it("preserves the finite shared grant when invalidated code saturates it beside a retained document", async () => {
     const fixture = await coverageFixture(

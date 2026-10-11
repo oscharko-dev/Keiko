@@ -264,6 +264,7 @@ import {
   collectConnectedDocumentEvidence,
   isConnectedDocumentPath,
   isExtractableConnectedDocumentPath,
+  documentProjectionUsage,
   type DocumentEvidenceResult,
 } from "./grounded-document-evidence.js";
 import {
@@ -8189,7 +8190,7 @@ async function assemblePackFromReads(
     withoutMicroIndex(knownFitAssembleOptions(assembleOptions, rings)),
   );
   const pack = withRetrievalSourceDiagnostics(
-    withExcerptReadUsage(assemble.pack, prepared.initialUsage, excerptReads),
+    withExcerptReadUsage(assemble.pack, prepared.initialUsage, excerptReads, documentEvidence),
     inputs.sourceProgress,
     assembleOptions.nowMs(),
   );
@@ -8201,25 +8202,20 @@ function withExcerptReadUsage(
   pack: ConnectedContextPack,
   initialUsage: ExplorationUsage,
   reads: ExcerptReadSummary,
+  documentEvidence: DocumentEvidenceResult,
 ): ConnectedContextPack {
-  const documents = pack.files.filter((file) =>
-    file.excerpts.some((excerpt) => excerpt.atom.provenance.kind === "document-extract"),
-  );
-  const documentBytes = documents.reduce(
-    (bytes, file) => bytes + file.excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
-    0,
-  );
+  const documents = documentProjectionUsage(documentEvidence.excerpts);
   return {
     ...pack,
     usage: {
       ...pack.usage,
       filesRead: Math.max(
         pack.usage.filesRead,
-        initialUsage.filesRead + (reads.filesRead ?? 0) + documents.length,
+        initialUsage.filesRead + (reads.filesRead ?? 0) + documents.filesRead,
       ),
       excerptBytes: Math.max(
         pack.usage.excerptBytes,
-        initialUsage.excerptBytes + (reads.bytesConsumed ?? 0) + documentBytes,
+        initialUsage.excerptBytes + (reads.bytesConsumed ?? 0) + documents.excerptBytes,
       ),
     },
   };
@@ -8484,6 +8480,8 @@ async function prepareGroundedAssembly(
     nowMs,
     signal: deps.signal,
     deadlineAtMs,
+    budget: plan.budget,
+    initialUsage: prepared.initialUsage,
   });
   const hasDocumentEvidence =
     documentEvidence.atoms.length > 0 || documentEvidence.omitted.length > 0;
@@ -8575,14 +8573,11 @@ function excerptCapacityWithDocuments(
   documents: DocumentEvidenceResult,
 ): ExplorationUsage {
   if (documents.excerpts.size === 0) return initialUsage;
-  const documentBytes = [...documents.excerpts.values()].reduce(
-    (bytes, windows) => bytes + utf8ByteLength(windows.map((view) => view.content).join("\n")),
-    0,
-  );
+  const usage = documentProjectionUsage(documents.excerpts);
   return {
     ...initialUsage,
-    filesRead: initialUsage.filesRead + documents.excerpts.size,
-    excerptBytes: initialUsage.excerptBytes + documentBytes,
+    filesRead: initialUsage.filesRead + usage.filesRead,
+    excerptBytes: initialUsage.excerptBytes + usage.excerptBytes,
   };
 }
 
