@@ -1309,6 +1309,11 @@ function seedManualSummary(
 }
 
 describe("examined manual refresh summary rejection evidence", () => {
+  it("preserves both public summary functions' original JavaScript arity", () => {
+    expect(buildKnowledgePodSummary).toHaveLength(2);
+    expect(listKnowledgePodSummaries).toHaveLength(2);
+  });
+
   it.each([
     ["invalid-json", "{fixture-invalid", 1, 0],
     ["invalid-summary", JSON.stringify({ schemaVersion: "unsupported" }), 0, 1],
