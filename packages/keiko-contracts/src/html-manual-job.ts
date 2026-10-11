@@ -126,26 +126,27 @@ function onlyKnownKeys(
 
 function isHtmlManualPodRefreshRequest(
   input: unknown,
-  errors: string[],
+  state: { errors: string[] },
 ): input is HtmlManualPodRefreshRequest {
   if (!isRecord(input)) {
-    errors.push("request must be an object");
+    state.errors = ["request must be an object"];
     return false;
   }
-  const keyErrors = onlyKnownKeys(input, ["capsuleId", "sourceId"], "request");
-  errors.push(...keyErrors);
+  const errors = onlyKnownKeys(input, ["capsuleId", "sourceId"], "request");
+  state.errors = errors;
+  const knownKeys = errors.length === 0;
   const capsuleIdValid = isSafeManualPodId(input.capsuleId);
   if (!capsuleIdValid) errors.push("capsuleId must be a safe id token");
   const sourceIdValid = isSafeManualPodId(input.sourceId);
   if (!sourceIdValid) errors.push("sourceId must be a safe id token");
-  return keyErrors.length === 0 && capsuleIdValid && sourceIdValid;
+  return knownKeys && capsuleIdValid && sourceIdValid;
 }
 
 export function validateHtmlManualPodRefreshRequest(
   input: unknown,
 ): LocalKnowledgeValidation<HtmlManualPodRefreshRequest> {
-  const errors: string[] = [];
-  if (!isHtmlManualPodRefreshRequest(input, errors)) return { ok: false, errors };
+  const state: { errors: string[] } = { errors: [] };
+  if (!isHtmlManualPodRefreshRequest(input, state)) return { ok: false, errors: state.errors };
   return { ok: true, value: input };
 }
 

@@ -1,8 +1,55 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import {
   validateHtmlManualPodCreateRequest,
   validateHtmlManualPodRefreshRequest,
 } from "./html-manual-job.js";
+
+const ARRAY_INTERACTION_CONTROL = `
+import { validateHtmlManualPodRefreshRequest as validate } from "@oscharko-dev/keiko-contracts/runtime/html-manual-job";
+const operation = process.argv[1];
+const normalPush = Array.prototype.push;
+const failure = new TypeError("fixture-push");
+const observations = [];
+let calls = 0;
+let result;
+let caught;
+function observedPush(...args) {
+  calls++;
+  if (operation.endsWith("throw")) throw failure;
+  normalPush.call(observations, { before: Array.from(this), args, receiver: this });
+  return normalPush.apply(this, args);
+}
+const value = { capsuleId: "cap-1", sourceId: "src-1" };
+if (operation.startsWith("unknown")) value.scope = "x";
+if (operation.endsWith("record")) { value.capsuleId = 42; value.sourceId = null; }
+const input = operation === "nonrecord-throw" ? null : new Proxy(value, {
+  ownKeys(target) { Array.prototype.push = observedPush; return Reflect.ownKeys(target); }
+});
+if (input === null) Array.prototype.push = observedPush;
+try { result = validate(input); } catch (error) { caught = error; }
+finally { Array.prototype.push = normalPush; }
+console.log(JSON.stringify({
+  ok: result?.ok ?? false,
+  errors: result?.errors ?? null,
+  identity: result?.value === input,
+  threw: caught === failure,
+  calls,
+  frames: observations.map(({ before, args }) => ({ before, args })),
+  returnedReceivers: observations.every(({ receiver }) => receiver === result?.errors)
+}));
+`;
+
+function observeArrayInteractions(operation: string): string {
+  const child = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", ARRAY_INTERACTION_CONTROL, operation],
+    { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
+  );
+  expect(child.error).toBeUndefined();
+  expect(child.status).toBe(0);
+  return child.stdout;
+}
 
 describe("validateHtmlManualPodRefreshRequest", () => {
   it("accepts a well-formed refresh request", () => {
@@ -132,6 +179,90 @@ describe("validateHtmlManualPodRefreshRequest", () => {
       ok: false,
       errors: ["request must be an object"],
     });
+  });
+
+  it.each([
+    {
+      operation: "success-throw",
+      expected: {
+        ok: true,
+        errors: null,
+        identity: true,
+        threw: false,
+        calls: 0,
+        frames: [],
+        returnedReceivers: true,
+      },
+    },
+    {
+      operation: "unknown-throw",
+      expected: {
+        ok: false,
+        errors: ["request must not include scope"],
+        identity: false,
+        threw: false,
+        calls: 0,
+        frames: [],
+        returnedReceivers: true,
+      },
+    },
+    {
+      operation: "nonrecord-throw",
+      expected: {
+        ok: false,
+        errors: ["request must be an object"],
+        identity: false,
+        threw: false,
+        calls: 0,
+        frames: [],
+        returnedReceivers: true,
+      },
+    },
+    {
+      operation: "invalid-record",
+      expected: {
+        ok: false,
+        errors: ["capsuleId must be a safe id token", "sourceId must be a safe id token"],
+        identity: false,
+        threw: false,
+        calls: 2,
+        frames: [
+          { before: [], args: ["capsuleId must be a safe id token"] },
+          {
+            before: ["capsuleId must be a safe id token"],
+            args: ["sourceId must be a safe id token"],
+          },
+        ],
+        returnedReceivers: true,
+      },
+    },
+    {
+      operation: "unknown-record",
+      expected: {
+        ok: false,
+        errors: [
+          "request must not include scope",
+          "capsuleId must be a safe id token",
+          "sourceId must be a safe id token",
+        ],
+        identity: false,
+        threw: false,
+        calls: 2,
+        frames: [
+          {
+            before: ["request must not include scope"],
+            args: ["capsuleId must be a safe id token"],
+          },
+          {
+            before: ["request must not include scope", "capsuleId must be a safe id token"],
+            args: ["sourceId must be a safe id token"],
+          },
+        ],
+        returnedReceivers: true,
+      },
+    },
+  ])("preserves isolated error-array interactions for $operation", ({ operation, expected }) => {
+    expect(observeArrayInteractions(operation)).toBe(`${JSON.stringify(expected)}\n`);
   });
 
   it("rejects non-objects, extra keys, and unsafe ids", () => {
