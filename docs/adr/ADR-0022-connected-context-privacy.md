@@ -431,9 +431,10 @@ using their unique physical-line and separator costs. A compact span is bound to
 current parent, exact child and accepted source coordinates; it does not narrow or copy a definition
 certificate. Unobserved, anchored or partially clipped caller spans receive no compact priority.
 Independent route roots and their file queues receive bounded initial byte portions from the
-existing connected share. Their targets take turns within those portions; existing query relevance
-orders targets within each file and sets initial file order, with stable ties. After that bounded
-pass, unserved queues retry unused shared bytes before further expansion.
+existing connected share. Existing certified traversal sets file order; existing query relevance
+orders targets within each file, with stable ties. Roots and their file queues take turns within
+those portions. After that bounded pass, unserved queues retry unused shared bytes before further
+expansion.
 Shared ancestors reserve bytes once; upgrades retain funded target windows, later
 same-file targets remain eligible, and oversized branches receive no partial reservation.
 Reservations must fit both the remaining connected share and actual per-file read capacity; they

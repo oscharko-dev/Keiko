@@ -473,9 +473,10 @@ system that exists, never beside it:
   parent caller spans inside the existing connected share and actual per-file read capacity. A
   compact caller span remains bound to its original current parent, exact child and observed source
   coordinates; it does not acquire a new definition certificate. Independent roots and files within
-  each root receive bounded initial byte portions. Their targets take turns within those portions;
-  existing query relevance orders targets within each file and sets initial file order, with stable
-  ties. After that bounded pass, unserved queues retry unused shared bytes before further expansion.
+  each root receive bounded initial byte portions. Existing certified traversal sets file order;
+  existing query relevance orders targets within each file, with stable ties. Roots and their file
+  queues take turns within those portions. After that bounded pass, unserved queues retry unused
+  shared bytes before further expansion.
   Shared physical lines and separators are charged once;
   upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
   branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
