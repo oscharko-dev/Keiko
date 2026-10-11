@@ -786,7 +786,7 @@ function certifiedBodyCalls(
     clipping.reasons.add("source-graph-incomplete");
     clipping.frontierOmitted += unsupported;
   }
-  return current.flatMap((call) => {
+  return current.flatMap<ObservedBodyTarget>((call) => {
     const parentIdentity =
       observation.definition === undefined ? undefined : definitionIdentity(observation.definition);
     const parentWitness = observedParentWitness(call, observation);
