@@ -8,14 +8,14 @@
   max-width: 100%;
 }
 @container (max-width: 480px) {
-  .cmpScopeHeader:has(> [data-scope-notice]) {
+  .cmpScopeHeader[data-grounded="true"] {
     row-gap: 0;
     padding-block: 3px 0;
   }
-  .cmpScopeHeader:has(> [data-scope-notice]) .cmpGrounding {
+  .cmpScopeHeader[data-grounded="true"] .cmpGrounding {
     row-gap: 0;
   }
-  .cmpScopeHeader:has(> [data-scope-notice]) .cmpPillWrap {
+  .cmpScopeHeader[data-grounded="true"] .cmpPillWrap {
     row-gap: 2px;
   }
 }

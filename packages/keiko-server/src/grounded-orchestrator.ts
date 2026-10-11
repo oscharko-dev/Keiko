@@ -7051,7 +7051,9 @@ function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): Excerp
   const atoms = inputs.atomsByPath.get(path) ?? [];
   const selection = excerptLineWindows(atoms);
   const entries = currentCoverageEntries(path, inputs);
-  if (entries === undefined) return ordinaryExcerptLineWindows(selection, atoms);
+  if (entries === undefined) {
+    return ordinaryExcerptLineWindows(selection, atoms);
+  }
   return scheduledCoverageWindows(
     selection,
     atoms,
@@ -7069,13 +7071,16 @@ function ordinaryExcerptLineWindows(
     (atom) =>
       atom.provenance.tool === "discovered-symbol-definition" &&
       atom.lineRange !== undefined &&
-      ordinary.some(
-        (candidate) =>
-          candidate.lineRange !== undefined &&
-          overlappingLineWindows(lineWindowForAtom(atom), candidate.lineRange),
-      ),
+      (atom.edge === undefined ||
+        ordinary.some(
+          (candidate) =>
+            candidate.lineRange !== undefined &&
+            overlappingLineWindows(lineWindowForAtom(atom), candidate.lineRange),
+        )),
   );
-  const explicit = ordinary.filter((atom) => atom.provenance.tool === "repo.selectedFile");
+  const explicit = ordinary.filter(
+    (atom) => atom.provenance.tool === "repo.selectedFile" && atom.lineRange !== undefined,
+  );
   const prefix = prioritizedExcerptWindows(
     anchors.length === 0 ? [] : excerptLineWindows(anchors).windows,
     explicit.length === 0 ? [] : excerptLineWindows(explicit).windows,
@@ -7611,11 +7616,7 @@ async function readKeptExcerpts(
     readInputs,
     readablePaths,
   );
-  const initialPaths = readablePaths;
-  reserveInitialExcerptOpportunities(initialPaths, readInputs, state);
-  await readExcerptWaves(initialPaths, { ...readInputs, firstExcerptRound: true }, state);
-  state.coverageReserves.clear();
-  await readExcerptExpansionWaves(readablePaths, readInputs, state);
+  await readPreparedExcerptWaves(readablePaths, readInputs, state);
   uncertainty.push(...excerptReadLossSummary(state, inputs.nowMs));
   if (state.elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
@@ -7623,19 +7624,45 @@ async function readKeptExcerpts(
   return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
 }
 
+async function readPreparedExcerptWaves(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): Promise<void> {
+  if (!requiresBoundedExcerptOpportunities(inputs)) {
+    await readExcerptWaves(paths, inputs, state);
+    return;
+  }
+  reserveInitialExcerptOpportunities(paths, inputs, state);
+  await readExcerptWaves(paths, { ...inputs, firstExcerptRound: true }, state);
+  state.coverageReserves.clear();
+  await readExcerptExpansionWaves(paths, inputs, state);
+}
+
+function requiresBoundedExcerptOpportunities(inputs: ExcerptInputs): boolean {
+  if (inputs.coveragePlan !== undefined) return true;
+  return [...inputs.atomsByPath.values()].some((atoms) =>
+    atoms.some((atom) => tracePriority(atom) > 0 && atom.provenance.tool !== "repo.selectedFile"),
+  );
+}
+
 async function readExcerptExpansionWaves(
   paths: readonly string[],
   inputs: ExcerptInputs,
   state: ExcerptWaveState,
 ): Promise<void> {
+  const unavailablePaths = new Set(state.omitted.map((entry) => entry.scopePath));
+  const retryablePaths = paths.filter((path) => !unavailablePaths.has(path));
   const servedPaths = new Set(
-    paths.filter((path) => state.excerpts.get(path)?.some((view) => view.content.length > 0)),
+    retryablePaths.filter((path) =>
+      state.excerpts.get(path)?.some((view) => view.content.length > 0),
+    ),
   );
   const expansionInputs = { ...inputs, previousExcerptResults: state.pathResults };
   for (const alreadyServed of [false, true]) {
     if (state.elapsedBudgetBlocked || state.remainingBytes <= 0) return;
     await readExcerptWaves(
-      paths.filter((path) => servedPaths.has(path) === alreadyServed),
+      retryablePaths.filter((path) => servedPaths.has(path) === alreadyServed),
       expansionInputs,
       state,
     );
