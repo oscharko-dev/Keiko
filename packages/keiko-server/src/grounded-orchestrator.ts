@@ -6366,6 +6366,7 @@ function coverageAdmissionWithOwnedContinuation(
   entry: RouteTraceCoverageEntry,
   admission: SharedCoverageAdmission,
   minimumScore: number,
+  ranked?: RouteTraceCoverageEntry,
 ): CoverageAdmission {
   let selected = state;
   let parent = entry;
@@ -6382,11 +6383,36 @@ function coverageAdmissionWithOwnedContinuation(
       requireBranch,
     );
     if (next === undefined) return selected;
+    if (
+      next.entry.atom.score < minimumScore &&
+      hasFeasibleCompetingCoverageTarget(selected, ranked, admission, minimumScore)
+    )
+      return selected;
     selected = next.state;
     parent = next.entry;
     threshold = undefined;
     requireBranch = false;
   }
+}
+
+function hasFeasibleCompetingCoverageTarget(
+  state: CoverageAdmission,
+  ranked: RouteTraceCoverageEntry | undefined,
+  admission: SharedCoverageAdmission,
+  minimumScore: number,
+): boolean {
+  if (ranked === undefined) return false;
+  for (const targets of admission.byPath.values()) {
+    for (const entry of targets) {
+      if (entry.atom.score < minimumScore) break;
+      if (
+        !state.targets.has(entry.definitionIdentity) &&
+        coverageAdmissionWithTarget(state, entry, admission) !== undefined
+      )
+        return true;
+    }
+  }
+  return false;
 }
 
 function nextOwnedCoverageContinuation(
@@ -6484,6 +6510,7 @@ function coverageAdmissionWithFairTarget(
         entry,
         admission,
         coverageFileHeadScore(ranked ?? entry, admission),
+        ranked,
       );
       if (continuation.targets.size > state.targets.size) return continuation;
       continue;
@@ -6503,7 +6530,7 @@ function coverageAdmissionWithOwnedOpportunity(
   ranked: RouteTraceCoverageEntry | undefined,
 ): CoverageAdmission {
   const threshold = coverageFileHeadScore(fair, admission);
-  const own = coverageAdmissionWithOwnedContinuation(state, fair, admission, threshold);
+  const own = coverageAdmissionWithOwnedContinuation(state, fair, admission, threshold, ranked);
   if (own.targets.size > state.targets.size) return own;
   const parents =
     ranked === undefined
@@ -6520,7 +6547,13 @@ function coverageAdmissionWithOwnedOpportunity(
       coverageFileHeadScore(parent, admission) < threshold
     )
       continue;
-    const candidate = coverageAdmissionWithOwnedContinuation(state, parent, admission, threshold);
+    const candidate = coverageAdmissionWithOwnedContinuation(
+      state,
+      parent,
+      admission,
+      threshold,
+      ranked,
+    );
     if (candidate.targets.size > state.targets.size) return candidate;
   }
   return state;

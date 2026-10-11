@@ -506,7 +506,12 @@ system that exists, never beside it:
   This gives a multi-body source continuation one bounded opportunity while standalone terminal
   leaves keep their existing ranked and deferred turns. Already funded connectors can be
   traversed without counting as progress; after the first new target, lower-relevance descendants
-  and terminal leaves may complete that chain. Existing source order selects one branch, and
+  and terminal leaves may complete that chain.
+  During a ranked shared turn, a continuation below the nominated head yields when an unfunded
+  selected body at or above that head still fits the existing whole-target guards from the same
+  pre-child state. The feasibility probe is discarded and spends no reservation; deferred final
+  retries retain their existing admission rules.
+  Existing source order selects one branch, and
   identity tracking bounds recursive cycles. Every target still passes the existing currentness,
   whole-definition, physical-window and connected-share checks; a failed extension retains the
   original feasible joint proposal.
