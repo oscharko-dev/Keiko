@@ -117,9 +117,13 @@ compact caller span remains bound to its original current parent, exact child an
 coordinates; it does not acquire a new definition certificate. Independent roots and files within
 each root receive bounded initial byte portions. Existing certified traversal sets file order;
 existing query relevance orders targets within each file, with stable ties. Roots and their file
-queues take turns within those portions. After that bounded pass, shared retries interleave the
-existing root-local relevance order with the existing root/file turns. Stable ties and relevance
-within each file remain intact. Later targets in an already served file remain eligible.
+queues take turns within those portions. After that bounded pass, shared opportunities combine
+the existing root-local relevance nominations with the existing root/file turns. Each relevance
+nomination considers its file's higher-scored and tied whole targets in stable certified traversal
+order. Existing admission checks retain the longest prospective prefix that fits jointly with
+the nominated file turn. If no joint proposal fits, the feasible relevance proposal is retained.
+This bounded tradeoff applies to new targets; previously funded targets remain intact. Whole
+targets that fail admission remain separately retryable, including later targets in served files.
 Aggregate same-file unions consume the connected share; each physical excerpt retains its existing
 per-window limit. Shared physical lines and separators are charged once;
 upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
