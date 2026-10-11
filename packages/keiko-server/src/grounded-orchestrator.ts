@@ -6316,11 +6316,16 @@ function admitCoverageTarget(
   const chain = connectedCoverageChain(entry, byIdentity);
   if (chain.length === 0) return false;
   const candidate = proposedCoverageWindows(chain, state.windows);
-  const costs = coverageWindowCosts([...candidate.values()].flat());
+  const windows = [...candidate.values()].flat();
+  const costs = coverageWindowCosts(windows);
   const bytes = [...costs.values()].reduce((sum, cost) => sum + cost, 0);
   if (bytes > totalBytes || bytes - state.bytes > marginalBytes) return false;
   if (
-    [...costs].some(([path, cost]) => cost > remainingExcerptWindowBytes(path, totalBytes, inputs))
+    windows.some(
+      (window) =>
+        (coverageWindowCosts([window]).get(window.entry.atom.scopePath) ?? 0) >
+        remainingExcerptWindowBytes(window.entry.atom.scopePath, totalBytes, inputs),
+    )
   )
     return false;
   state.windows = candidate;

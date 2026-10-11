@@ -711,6 +711,35 @@ function sharedRelevanceFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function multiWindowCoverageFiles(): Readonly<Record<string, string>> {
+  const padding =
+    "  // Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget";
+  const body = (declaration: string, returned: string): string =>
+    [declaration, ...Array.from({ length: 34 }, () => padding), returned, "}"].join("\n");
+  const files: Record<string, string> = {
+    "src/routes.ts": ['import { handleItem } from "./implementation.js";', REGISTRATION_FACT].join(
+      "\n",
+    ),
+    "src/implementation.ts": [
+      body("export function handleItem(value) {", "  return governRequest(value);"),
+      ...Array.from({ length: 30 }, () => "// separate current callable declarations"),
+      body("function governRequest(value) {", "  return inspectCandidates(value);"),
+      ...Array.from({ length: 30 }, () => "// separate current callable declarations"),
+      body("function inspectCandidates(value) {", "  return value;"),
+    ].join("\n"),
+  };
+  for (let index = 0; index < 9; index += 1)
+    files[`src/ordinary-${String(index)}.ts`] = [
+      `export class OrdinaryEvidence${String(index)} {`,
+      "  explain() {",
+      ...Array.from({ length: 34 }, () => padding),
+      "    return scopeAdmissionBudget + promptFittingBudget;",
+      "  }",
+      "}",
+    ].join("\n");
+  return files;
+}
+
 function deferredCrossWaveFiles(): Readonly<Record<string, string>> {
   const files = { ...crossWaveCoverageFiles() };
   files["src/ordinary.ts"] = (files["src/ordinary.ts"] ?? "").replace(
@@ -1033,6 +1062,106 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("retains multiple safe same-file target windows beyond one physical window's byte cap", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      multiWindowCoverageFiles(),
+    );
+    const atoms = await allocationAtoms(fixture);
+    const targets =
+      fixture.trace.routeCoverage?.entries.filter(
+        (entry) => entry.atom.scopePath === "src/implementation.ts",
+      ) ?? [];
+    expect(targets).toHaveLength(3);
+    expect(targets.every((entry) => fixture.trace.routeCoverage?.isCurrent(entry.atom))).toBe(true);
+    const ranges = targets.map((entry) => {
+      if (entry.atom.lineRange === undefined)
+        throw new TypeError("fixture requires actual complete target ranges");
+      expect(entry.observedBytes).toBeLessThan(4096);
+      return entry.atom.lineRange;
+    });
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    const native = await readExcerpt(
+      fixture.searchScope,
+      {
+        scopePath: "src/implementation.ts",
+        startLine: Math.min(...ranges.map((range) => range.startLine)),
+        endLine: Math.max(...ranges.map((range) => range.endLine)),
+        ranges,
+        maxBytes: 8192,
+        maxTotalBytes: budget.excerptBytesMax,
+        maxWindows: ranges.length,
+      },
+      { fs: fixture.fs, nowMs: () => NOW },
+    );
+    expect(native.windows).toHaveLength(3);
+    const calibrated: ExcerptReadSummary = {
+      excerpts: new Map([
+        [
+          "src/implementation.ts",
+          (native.windows ?? []).map((window) => {
+            const range = window.atom.lineRange;
+            if (range === undefined)
+              throw new TypeError("native view requires actual source range");
+            expect(window.truncated).toBe(false);
+            expect(Buffer.byteLength(window.content)).toBeLessThanOrEqual(8192);
+            return { ...range, content: window.content, identity: window.atom.stableId };
+          }),
+        ],
+      ]),
+      uncertainty: [],
+      elapsedBudgetBlocked: false,
+    };
+    expect(readBytes(calibrated)).toBeGreaterThan(8192);
+    const current = await observedCoverageRead(fixture, { atoms, inputs: { budget } });
+    const ordinary = atoms.filter((atom) => atom.scopePath.startsWith("src/ordinary-"));
+    expect(new Set(ordinary.map((atom) => atom.scopePath)).size).toBe(9);
+    expect(coverageRanking(atoms).kept).toHaveLength(11);
+    for (const target of targets.filter((entry) => entry.parentIdentity !== undefined)) {
+      const parent = targets.find((entry) => entry.definitionIdentity === target.parentIdentity);
+      expect(parent).toBeDefined();
+      expect(target.parentWitness?.parentIdentity).toBe(parent?.definitionIdentity);
+      expect(target.parentWitness?.targetIdentity).toBe(target.definitionIdentity);
+    }
+    expect(current.requests.every((request) => request.maxBytes <= 8192)).toBe(true);
+    for (const reads of [calibrated, current.reads]) {
+      const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+      const messages = await sentPrompt(fixture, reads, atoms, budget);
+      expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      for (const target of targets) {
+        const range = target.atom.lineRange;
+        if (range === undefined) throw new TypeError("fixture requires actual target range");
+        const lines = (fixture.files[target.atom.scopePath] ?? "")
+          .split("\n")
+          .slice(range.startLine - 1, range.endLine);
+        const body = lines.join("\n");
+        expect(
+          readContent(reads, target.atom.scopePath).includes(body),
+          JSON.stringify({
+            calibration: reads === calibrated,
+            targetRange: range,
+            bodyBytes: Buffer.byteLength(body),
+            returnedBytes: readBytes(reads),
+            nativeRequests: current.requests.map((request) => ({
+              path: request.scopePath,
+              funded: request.ranges,
+              grant: request.maxTotalBytes,
+              maxBytes: request.maxBytes,
+              first: request.firstRoundOnly,
+            })),
+          }),
+        ).toBe(true);
+        expect(
+          pack.files
+            .find((file) => file.scopePath === target.atom.scopePath)
+            ?.excerpts.some((excerpt) => excerpt.content === body),
+        ).toBe(true);
+        for (const [index, line] of lines.entries())
+          expect(messages).toContain(`${String(range.startLine + index)} | ${line}`);
+      }
+    }
+  });
+
   it("retains the exact endpoint registration inside a crowded ordinary window", async () => {
     const nearby = "// Trace route pipeline and explain neighboring evidence.";
     const registration =
