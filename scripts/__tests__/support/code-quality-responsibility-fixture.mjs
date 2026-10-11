@@ -3,6 +3,10 @@ import { pathToFileURL, URL } from "node:url";
 import { join } from "node:path";
 import { createSymbolFixture, emitSymbolFixture } from "./code-quality-symbol-fixture.mjs";
 
+function assembleResponsibilityFixture(prepare, additionalOwners = []) {
+  return createSymbolFixture(true, prepare, additionalOwners);
+}
+
 export function responsibilityPolicy(records = []) {
   const policy = JSON.parse(
     readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
@@ -30,7 +34,10 @@ export function responsibilityRecord(kind = "validator") {
 }
 
 export function createResponsibilityFixture(variant = "valid") {
-  const own = createSymbolFixture(true);
+  return assembleResponsibilityFixture((own) => configureResponsibilityFixture(own, variant));
+}
+
+function configureResponsibilityFixture(own, variant = "valid") {
   const validator =
     variant === "unchecked"
       ? "export function validate(input: unknown): unknown { return input; }"
@@ -51,7 +58,6 @@ export function createResponsibilityFixture(variant = "valid") {
     'import { validate, consume } from "alpha/runtime"; export const result = validate(1); export const value = consume(1);',
   );
   own.put("packages/alpha/src/proof.test.ts", "export const proof = true;\n");
-  emitSymbolFixture(own.root);
   return own;
 }
 
@@ -60,7 +66,11 @@ export async function executeResponsibilityFixture(own) {
 }
 
 export function createEnforcementFixture(kind = "validator", variant = "valid") {
-  const own = createResponsibilityFixture();
+  return assembleResponsibilityFixture((own) => configureEnforcementFixture(own, kind, variant));
+}
+
+function configureEnforcementFixture(own, kind = "validator", variant = "valid") {
+  configureResponsibilityFixture(own);
   const validator =
     "export function validate(input: unknown): { ok: true; value: number } | { ok: false } { return typeof input === 'number' ? { ok: true, value: input } : { ok: false }; }";
   const consumer =
@@ -76,8 +86,8 @@ export function createEnforcementFixture(kind = "validator", variant = "valid") 
   const policy = responsibilityPolicy([record]);
   activateResponsibilityFixtureRules(policy, record);
   own.put("scripts/code-quality-policy.json", policy);
-  emitSymbolFixture(own.root);
-  return { ...own, record, policy };
+  Object.assign(own, { record, policy });
+  return own;
 }
 
 function activateResponsibilityFixtureRules(policy, record) {
@@ -108,7 +118,14 @@ export function replaceEnforcementOwner(own, variant) {
 }
 
 export function createCrossOwnerEnforcementFixture(variant = "valid") {
-  const own = createEnforcementFixture();
+  return assembleResponsibilityFixture(
+    (own) => configureCrossOwnerEnforcementFixture(own, variant),
+    ["packages/beta"],
+  );
+}
+
+function configureCrossOwnerEnforcementFixture(own, variant = "valid") {
+  configureEnforcementFixture(own);
   const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
   own.put("packages/beta/tsconfig.json", config);
   own.put("packages/beta/package.json", {
@@ -141,15 +158,21 @@ export function createCrossOwnerEnforcementFixture(variant = "valid") {
     );
   }
   own.put("scripts/code-quality-policy.json", own.policy);
-  emitSymbolFixture(own.root, "packages/beta");
   return own;
 }
 
 export function createConsumerSeamFixture(variant = "direct") {
-  const own = createCrossOwnerEnforcementFixture();
+  return assembleResponsibilityFixture(
+    (own) => configureConsumerSeamFixture(own, variant),
+    ["packages/beta"],
+  );
+}
+
+function configureConsumerSeamFixture(own, variant = "direct") {
+  configureCrossOwnerEnforcementFixture(own);
   own.put("src/public-consumer.test.mjs", 'export { consume } from "beta/runtime";\n');
   if (["alias", "callback"].includes(variant)) {
-    replaceConsumerCallFixture(own, variant);
+    configureConsumerCallFixture(own, variant);
     return own;
   }
   const checked =
@@ -182,11 +205,15 @@ export function createConsumerSeamFixture(variant = "direct") {
     "packages/beta/src/owner.ts",
     `import { validate } from "alpha/runtime"; ${bodies[variant]}`,
   );
-  emitSymbolFixture(own.root, "packages/beta");
   return own;
 }
 
 export function replaceConsumerCallFixture(own, variant) {
+  configureConsumerCallFixture(own, variant);
+  emitSymbolFixture(own.root, "packages/beta");
+}
+
+function configureConsumerCallFixture(own, variant) {
   const imported = 'import { validate } from "alpha/runtime";';
   const checked =
     'const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value;';
@@ -219,11 +246,14 @@ export function replaceConsumerCallFixture(own, variant) {
       `${imported} export function handleValidateImpl(input: number): number { ${checked} }`,
     );
   own.put("packages/beta/src/owner.ts", bodies[variant]);
-  emitSymbolFixture(own.root, "packages/beta");
 }
 
 export function createRawHelperEnforcementFixture(variant = "direct") {
-  const own = createEnforcementFixture();
+  return assembleResponsibilityFixture((own) => configureRawHelperEnforcementFixture(own, variant));
+}
+
+function configureRawHelperEnforcementFixture(own, variant = "direct") {
+  configureEnforcementFixture(own);
   own.put("packages/alpha/src/owner.ts", rawHelperSource(variant));
   if (["nonzero", "unicode-extra-slot"].includes(variant)) {
     own.record.input.parameterIndex = 1;
@@ -240,7 +270,6 @@ export function createRawHelperEnforcementFixture(variant = "direct") {
   own.record.rules.push("anti-slop/no-runtime-typeof", "anti-slop/no-known-value-widening");
   activateResponsibilityFixtureRules(own.policy, own.record);
   own.put("scripts/code-quality-policy.json", own.policy);
-  emitSymbolFixture(own.root);
   return own;
 }
 
@@ -375,7 +404,10 @@ function rawHelperVariant(source, variant) {
 }
 
 export function createDiagnosticFixture(variant = "direct") {
-  const own = createSymbolFixture(true);
+  return assembleResponsibilityFixture((own) => configureDiagnosticFixture(own, variant));
+}
+
+function configureDiagnosticFixture(own, variant = "direct") {
   const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
   config.exclude = ["**/*.test.ts"];
   own.put("packages/alpha/tsconfig.json", config);
@@ -385,7 +417,6 @@ export function createDiagnosticFixture(variant = "direct") {
   );
   own.put("src/consumer.ts", 'import { parse } from "alpha"; export const result = parse(1);');
   own.put("packages/alpha/src/proof.test.ts", diagnosticProofSource(variant));
-  emitSymbolFixture(own.root);
   const path = "packages/alpha/src/proof.test.ts";
   const selector = { consumerPath: path, specifier: "alpha", exportName: "parse" };
   const record = {
@@ -403,7 +434,8 @@ export function createDiagnosticFixture(variant = "direct") {
     },
     proofs: [path],
   };
-  return { ...own, record, policy: responsibilityPolicy([record]) };
+  Object.assign(own, { record, policy: responsibilityPolicy([record]) });
+  return own;
 }
 
 function diagnosticProofSource(variant) {
@@ -445,7 +477,14 @@ function diagnosticProofSource(variant) {
 }
 
 export function createForeignDiagnosticFixture() {
-  const own = createDiagnosticFixture();
+  return assembleResponsibilityFixture(
+    (own) => configureForeignDiagnosticFixture(own),
+    ["packages/beta"],
+  );
+}
+
+function configureForeignDiagnosticFixture(own) {
+  configureDiagnosticFixture(own);
   const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
   own.put("packages/beta/tsconfig.json", config);
   own.put("packages/beta/package.json", {
@@ -457,7 +496,6 @@ export function createForeignDiagnosticFixture() {
   own.put("packages/beta/src/owner.ts", "export const healthy = true;\n");
   own.put("packages/beta/src/proof.test.ts", diagnosticProofSource("direct"));
   symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
-  emitSymbolFixture(own.root, "packages/beta");
   const path = "packages/beta/src/proof.test.ts";
   for (const role of ["input", "transform", "output", "consumer"])
     own.record[role].consumerPath = path;
@@ -467,7 +505,13 @@ export function createForeignDiagnosticFixture() {
 }
 
 export function createDictionaryEnforcementFixture(variant = "direct") {
-  const own = createEnforcementFixture();
+  return assembleResponsibilityFixture((own) =>
+    configureDictionaryEnforcementFixture(own, variant),
+  );
+}
+
+function configureDictionaryEnforcementFixture(own, variant = "direct") {
+  configureEnforcementFixture(own);
   const source = dictionaryCheckingSource();
   const sources = {
     ...dictionarySignatureVariants(source),
@@ -478,7 +522,6 @@ export function createDictionaryEnforcementFixture(variant = "direct") {
   own.record.rules.push("anti-slop/no-unsafe-dictionary-type", "anti-slop/no-known-value-widening");
   activateResponsibilityFixtureRules(own.policy, own.record);
   own.put("scripts/code-quality-policy.json", own.policy);
-  emitSymbolFixture(own.root);
   return own;
 }
 

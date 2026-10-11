@@ -8,7 +8,11 @@ import {
   createPolicyFixtureRepository,
 } from "./code-quality-fixture.mjs";
 
-export function createSymbolFixture(includeNativeHost = false) {
+export function createSymbolFixture(
+  includeNativeHost = false,
+  prepare = undefined,
+  additionalOwners = [],
+) {
   const root = createPolicyFixtureRepository();
   if (includeNativeHost) copyNativePolicyFixtureSources(root);
   const put = (path, value) => {
@@ -39,8 +43,11 @@ export function createSymbolFixture(includeNativeHost = false) {
   put(".gitignore", "**/dist/\nnode_modules/\n");
   mkdirSync(join(root, "node_modules"));
   symlinkSync(join(root, "packages/alpha"), join(root, "node_modules/alpha"));
+  const own = { root, put };
+  prepare?.(own);
   emitSymbolFixture(root);
-  return { root, put };
+  for (const directory of additionalOwners) emitSymbolFixture(root, directory);
+  return own;
 }
 
 function configureSymbolOwner(put, options) {

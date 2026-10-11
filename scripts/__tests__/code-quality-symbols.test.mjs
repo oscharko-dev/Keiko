@@ -10,6 +10,12 @@ import { declarationMapPosition } from "../lib/code-quality-provenance.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
   createConsumerSeamFixture,
+  createResponsibilityFixture,
+  createEnforcementFixture,
+  createCrossOwnerEnforcementFixture,
+  createForeignDiagnosticFixture,
+  replaceConsumerCallFixture,
+  replaceEnforcementOwner,
   createDiagnosticFixture,
   createDictionaryEnforcementFixture,
   createRawHelperEnforcementFixture,
@@ -25,9 +31,21 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
 });
 
+vi.mock("typescript", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      getPreEmitDiagnostics: vi.fn(actual.default.getPreEmitDiagnostics),
+    },
+  };
+});
+
 const { execFileSync: originalExecFileSync } = await vi.importActual("node:child_process");
 const fixtures = [];
 afterEach(() => {
+  vi.mocked(ts.getPreEmitDiagnostics).mockClear();
   vi.mocked(execFileSync).mockReset();
   vi.mocked(execFileSync).mockImplementation(originalExecFileSync);
   for (const { root, resolver } of fixtures.splice(0)) {
@@ -45,6 +63,75 @@ async function fixture(options = {}) {
 const reference = { consumerPath: "src/consumer.ts", specifier: "alpha", exportName: "parse" };
 
 describe("configured canonical symbol resolver interface (#3918)", () => {
+  it.each([
+    ["symbol", createSymbolFixture, ["alpha"]],
+    ["responsibility", createResponsibilityFixture, ["alpha"]],
+    ["enforcement", createEnforcementFixture, ["alpha"]],
+    ["raw-helper", createRawHelperEnforcementFixture, ["alpha"]],
+    ["dictionary", createDictionaryEnforcementFixture, ["alpha"]],
+    ["diagnostic", createDiagnosticFixture, ["alpha"]],
+    ["foreign-diagnostic", createForeignDiagnosticFixture, ["alpha", "beta"]],
+    ["cross-owner", createCrossOwnerEnforcementFixture, ["alpha", "beta"]],
+    ["consumer", createConsumerSeamFixture, ["alpha", "beta"]],
+    ["consumer-callback", () => createConsumerSeamFixture("callback"), ["alpha", "beta"]],
+  ])("finalizes %s assembly once per actual owner", async (_name, create, owners) => {
+    const own = create();
+    fixtures.push(own);
+    const calls = vi.mocked(execFileSync).mock.calls.filter(([, args]) => args[0] === "-p");
+    const checked = vi.mocked(ts.getPreEmitDiagnostics).mock.calls.length;
+    for (const owner of owners) {
+      const directory = join(own.root, "packages", owner);
+      const declaration = readFileSync(join(directory, "dist/owner.d.ts"), "utf8");
+      expect(declaration.length).toBeGreaterThan(0);
+      const map = JSON.parse(readFileSync(join(directory, "dist/owner.d.ts.map"), "utf8"));
+      expect(map.sources).toContain("../src/owner.ts");
+      expect(map.mappings.length).toBeGreaterThan(0);
+      const runtime = await import(pathToFileURL(join(directory, "dist/owner.js")).href);
+      if (owner === "alpha") {
+        expect(runtime.validate(_name === "dictionary" ? { value: 1 } : 1)).toEqual(
+          _name.includes("diagnostic") ? [] : { ok: true, value: 1 },
+        );
+        expect(runtime.validate(null)).toEqual(
+          _name.includes("diagnostic") ? ["invalid"] : { ok: false },
+        );
+      } else if (_name === "foreign-diagnostic") expect(runtime.healthy).toBe(true);
+      else expect(runtime.consume(1)).toBe(1);
+    }
+    expect(calls.map(([, args]) => args[1])).toEqual(
+      owners.map((owner) => join(own.root, "packages", owner, "tsconfig.json")),
+    );
+    expect(checked).toBe(owners.length);
+    for (const [, , options] of calls)
+      expect(options).toMatchObject({
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024 * 1024,
+      });
+  });
+
+  it("keeps returned-fixture mutation compilation eager and roots independent", async () => {
+    const first = createEnforcementFixture();
+    fixtures.push(first);
+    const second = createConsumerSeamFixture();
+    fixtures.push(second);
+    expect(first.root).not.toBe(second.root);
+    vi.mocked(execFileSync).mockClear();
+    vi.mocked(ts.getPreEmitDiagnostics).mockClear();
+    replaceEnforcementOwner(first, "lying-predicate");
+    replaceConsumerCallFixture(second, "alias");
+    expect(vi.mocked(ts.getPreEmitDiagnostics)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(execFileSync).mock.calls.map(([, args]) => args[1])).toEqual([
+      join(first.root, "packages/alpha/tsconfig.json"),
+      join(second.root, "packages/beta/tsconfig.json"),
+    ]);
+    const runtime = await import(
+      pathToFileURL(join(second.root, "packages/beta/dist/owner.js")).href
+    );
+    expect(runtime.consume(42)).toBe(42);
+    second.resolver = createSymbolResolver(await collectPolicySubject(second.root));
+    expect(second.resolver.resolveExport(second.record.consumer).identities).toHaveLength(1);
+  });
+
   it("resolves exact raw helper checking operations through its actual compiler owner", async () => {
     const own = createRawHelperEnforcementFixture();
     fixtures.push(own);
