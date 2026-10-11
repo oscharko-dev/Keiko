@@ -6299,7 +6299,11 @@ function fairCoverageEntries(
       opportunity.remainingBytes -= state.bytes - previousBytes;
     }
   }
-  for (const entry of sharedCoverageTargets(entries, byIdentity))
+  const sharedTargets = interleavedCoverageTargets([
+    sharedCoverageTargets(entries, byIdentity),
+    targets,
+  ]);
+  for (const entry of sharedTargets)
     admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs);
   return [...state.windows.values()].flat();
 }
