@@ -433,6 +433,7 @@ jobs:
       - run: npm run lint
         env:
           NODE_OPTIONS: --max-old-space-size=12288
+      - run: npm run check:native-host-code-quality
       - run: npm run format:check
       - name: UI i18n guard
         env:

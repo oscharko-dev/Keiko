@@ -1,6 +1,6 @@
 import { maxBytes } from "./keiko-host-packet-data.mjs";
 import { createServer } from "node:http";
-import { Cause, Context, Effect, Exit, References } from "effect";
+import { Cause, Context, Effect, Exit, Predicate, References } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
 import { HttpRouter } from "effect/unstable/http";
 
@@ -43,12 +43,14 @@ export function serveFixedHostRoutes(makeRoutes, input, signal, ready = writeEnd
     const app = Context.get(context, HttpRouter.HttpRouter).asHttpEffect();
     yield* http.serve(app.pipe(Effect.provide(context)));
     if (signal.aborted) return yield* Effect.interrupt;
-    if (http.address._tag !== "TcpAddress") return yield* Effect.die("host-address-invalid");
-    yield* Effect.sync(() => {
-      ready(`http://127.0.0.1:${http.address.port}`);
-    });
+    yield* publishFixedHostReadiness(http.address, ready);
     return yield* Effect.never;
   });
+}
+
+export function publishFixedHostReadiness(address, ready) {
+  if (!Predicate.isTagged(address, "TcpAddress")) return Effect.die("host-address-invalid");
+  return Effect.sync(() => ready(`http://127.0.0.1:${address.port}`));
 }
 
 function startPacketLifetime(stream) {

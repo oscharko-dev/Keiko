@@ -10,6 +10,7 @@ import coveragePlugin from "../code-quality-coverage-plugin.mjs";
 import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
 import {
+  configureEnforcingPolicyFixture,
   createPolicyFixtureRepository,
   createRuntimePolicyFixture,
 } from "./support/code-quality-fixture.mjs";
@@ -21,11 +22,7 @@ afterEach(() => {
 function enforcingFixture() {
   const root = createPolicyFixtureRepository();
   roots.push(root);
-  mkdirSync(join(root, "scripts"));
-  writeFileSync(
-    join(root, "scripts/code-quality-policy.json"),
-    read("scripts/code-quality-policy.json"),
-  );
+  configureEnforcingPolicyFixture(root);
   const manifestPath = join(root, "packages/alpha/package.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   manifest.version = "0.0.0";
@@ -210,6 +207,53 @@ describe("production code-quality invocation wiring (#3915)", () => {
     },
     60_000,
   );
+
+  it.each([false, true])(
+    "qualifies the actual native owner through the real CLI with violation=%s",
+    async (violating) => {
+      const root = enforcingFixture();
+      if (violating)
+        writeFileSync(
+          join(root, "native/opencode-service-host/violation.mjs"),
+          'export const value = { _tag: "Ready", value: 1 };',
+        );
+      const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        expect(await codeQualityPolicyMain(["--json"], root)).toBe(violating ? 1 : 0);
+        const report = JSON.parse(output.mock.calls[0][0]);
+        expect(report.counts.expected).toBe(report.counts.visited);
+        const native = report.inventory.files.filter((file) => file.scope === "native-host");
+        expect(native).toHaveLength(violating ? 4 : 3);
+        expect(native.every((file) => file.production)).toBe(true);
+        expect(report.counts.violations).toBe(violating ? 1 : 0);
+        if (violating)
+          expect(report.violations).toContainEqual(
+            expect.objectContaining({
+              path: "native/opencode-service-host/violation.mjs",
+              rule: "anti-slop-effect/no-manual-tagged-construction",
+            }),
+          );
+      } finally {
+        output.mockRestore();
+      }
+    },
+    60_000,
+  );
+
+  it("refuses malformed native owner input through the actual CLI parser", async () => {
+    const root = enforcingFixture();
+    writeFileSync(join(root, "native/opencode-service-host/entry.mjs"), "export const broken = (");
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await codeQualityPolicyMain(["--json"], root)).toBe(1);
+      expect(error.mock.calls[0][0]).toContain("invalid-production-source");
+      expect(output).not.toHaveBeenCalled();
+    } finally {
+      output.mockRestore();
+      error.mockRestore();
+    }
+  }, 60_000);
 
   it("executes the whole enforcing policy before typed root/UI lint in required Core quality", () => {
     const manifest = JSON.parse(read("package.json"));
