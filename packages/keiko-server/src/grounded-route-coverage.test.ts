@@ -549,6 +549,38 @@ function bulkySameFileConnectorFiles(): Readonly<Record<string, string>> {
   };
 }
 
+function expectFullTerminalView(
+  fixture: CoverageFixture,
+  reads: ExcerptReadSummary,
+  pack: ConnectedContextPack,
+  prompt: string,
+): void {
+  const target = fixture.trace.routeCoverage?.entries.find((entry) =>
+    fixture.files[entry.atom.scopePath]
+      ?.split("\n")
+      [(entry.atom.lineRange?.startLine ?? 1) - 1]?.includes("export function stage8("),
+  );
+  const range = target?.atom.lineRange;
+  expect(target).toBeDefined();
+  if (target === undefined || range === undefined)
+    throw new TypeError("fixture requires the actual terminal declaration range");
+  const lines = (fixture.files[target.atom.scopePath] ?? "")
+    .split("\n")
+    .slice(range.startLine - 1, range.endLine);
+  const body = lines.join("\n");
+  expect(readContent(reads, target.atom.scopePath)).toContain(body);
+  const excerpt = pack.files
+    .find((file) => file.scopePath === target.atom.scopePath)
+    ?.excerpts.find(
+      (view) =>
+        view.atom.lineRange?.startLine === range.startLine &&
+        view.atom.lineRange.endLine === range.endLine,
+    );
+  expect(excerpt?.content).toBe(body);
+  for (const [index, line] of lines.entries())
+    expect(prompt).toContain(`${String(range.startLine + index)} | ${line}`);
+}
+
 describe("current route trace excerpt coverage", () => {
   it("keeps separately returned same-file connector views through Grounded assembly", async () => {
     const fixture = await coverageFixture(undefined, bulkySameFileConnectorFiles());
@@ -563,6 +595,7 @@ describe("current route trace excerpt coverage", () => {
     expect(prompt).toContain(DESCENT_FACT);
     expect(readBytes(reads)).toBeLessThanOrEqual(8192);
     const pack = await assembledCoveragePack(fixture, reads);
+    expectFullTerminalView(fixture, reads, pack, prompt);
     const excerpts = pack.files.flatMap((file) => file.excerpts);
     expect(excerpts.some((excerpt) => excerpt.atom.edge?.kind === "reference")).toBe(true);
     expect(
