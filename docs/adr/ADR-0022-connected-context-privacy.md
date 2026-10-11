@@ -440,9 +440,10 @@ those portions. After that bounded pass, existing relevance orders shared retrie
 with stable ties and turns between roots. Later targets in an already served file remain eligible.
 Shared ancestors reserve bytes once; upgrades retain funded target windows, later
 same-file targets remain eligible, and oversized branches receive no partial reservation.
-Reservations must fit both the remaining connected share and actual per-file read capacity; they
-do not add selected paths or change relevance scores or invocation uncertainty. Ordinary ranked
-evidence retains its share of the remaining byte grant. Existing human and endpoint selection
+Aggregate same-file unions must fit the remaining connected share; each physical excerpt retains
+its existing per-window byte limit. Reservations do not add selected paths or change relevance
+scores or invocation uncertainty. Ordinary ranked evidence retains its share of the remaining byte
+grant. Existing human and endpoint selection
 priorities survive path ordering. Reserved windows precede ordinary extras, with explicit human
 windows first. When current coverage windows apply, independent search windows and unfunded
 discovered-definition windows share the residual byte grant through bounded queues after explicit

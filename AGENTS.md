@@ -473,7 +473,7 @@ system that exists, never beside it:
   split broader ordinary windows. Uncovered surrounding evidence retains its relevance and priority;
   these spans do not certify handler invocation.
   Physical excerpt allocation funds selected, current target definition windows and their observed
-  parent caller spans inside the existing connected share and actual per-file read capacity. A
+  parent caller spans inside the existing connected share and each physical excerpt's byte limit. A
   compact caller span remains bound to its original current parent, exact child and observed source
   coordinates; it does not acquire a new definition certificate. Independent roots and files within
   each root receive bounded initial byte portions. Existing certified traversal sets file order;
@@ -481,7 +481,8 @@ system that exists, never beside it:
   queues take turns within those portions. After that bounded pass, existing relevance orders shared
   retries within each root, with stable ties and turns between roots. Later targets in an already
   served file remain eligible.
-  Shared physical lines and separators are charged once;
+  Aggregate same-file unions consume the connected share; each physical excerpt retains its existing
+  per-window limit. Shared physical lines and separators are charged once;
   upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
   branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
   evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
