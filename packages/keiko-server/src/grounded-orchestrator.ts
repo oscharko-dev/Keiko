@@ -6417,12 +6417,12 @@ function coverageTargetsByPath(
   entries: readonly RouteTraceCoverageEntry[],
 ): readonly (readonly RouteTraceCoverageEntry[])[] {
   const files = new Map<string, RouteTraceCoverageEntry[]>();
-  for (const entry of [...entries].sort((a, b) => b.atom.score - a.atom.score)) {
+  for (const entry of entries) {
     const queue = files.get(entry.atom.scopePath) ?? [];
     queue.push(entry);
     files.set(entry.atom.scopePath, queue);
   }
-  return [...files.values()];
+  return [...files.values()].map((queue) => queue.sort((a, b) => b.atom.score - a.atom.score));
 }
 
 function interleavedCoverageTargets(

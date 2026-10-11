@@ -481,6 +481,22 @@ function repeatedFileCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function returnedContinuationFiles(): Readonly<Record<string, string>> {
+  const files = { ...configuredCoverageFiles() };
+  files["src/implementation.ts"] = (files["src/implementation.ts"] ?? "").replace(
+    'import { continueProcessing } from "./z-processing.js";',
+    'import { stage8 as continueProcessing } from "./z-processing.js";',
+  );
+  files["src/z-processing.ts"] = [
+    "export function stage8(root) {",
+    ...Array.from({ length: 14 }, () => "  // Preserve the physical continuation source body."),
+    `  ${DESCENT_FACT}`,
+    "  return root;",
+    "}",
+  ].join("\n");
+  return files;
+}
+
 function ordinaryCoverageFiles(): Readonly<Record<string, string>> {
   const files = { ...branchCoverageFiles() };
   const ordinaryFact = "return scopeAdmissionBudget + promptFittingBudget;";
@@ -582,6 +598,34 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("keeps a returned continuation before higher-scoring shallow called targets", async () => {
+    const fixture = await coverageFixture(undefined, returnedContinuationFiles());
+    const target = fixture.trace.routeCoverage?.entries.find(
+      (entry) => entry.atom.scopePath === "src/z-processing.ts",
+    );
+    expect(target).toBeDefined();
+    if (target === undefined) throw new TypeError("fixture requires the current continuation");
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    expect(target.atom.edge?.kind).toBe("reference");
+    expect(target.observedBytes).toBe(
+      Buffer.byteLength(fixture.files["src/z-processing.ts"] ?? ""),
+    );
+    const shallow = fixture.trace.routeCoverage?.entries.filter((entry) =>
+      entry.atom.scopePath.startsWith("src/helper-"),
+    );
+    expect(shallow?.length).toBe(9);
+    expect(shallow?.every((entry) => entry.atom.score > target.atom.score)).toBe(true);
+    const reads = await coverageRead(fixture);
+    const pack = await assembledCoveragePack(fixture, reads);
+    const prompt = await sentPrompt(fixture, reads);
+    expectFullTerminalView(fixture, reads, pack, prompt);
+    expect(prompt).toContain(DESCENT_FACT);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+    expect(pack.uncertainty.some((item) => item.claim.includes("source-graph-incomplete"))).toBe(
+      true,
+    );
+  });
+
   it("keeps separately returned same-file connector views through Grounded assembly", async () => {
     const fixture = await coverageFixture(undefined, bulkySameFileConnectorFiles());
     const reads = await coverageRead(fixture);
