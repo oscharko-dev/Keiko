@@ -593,6 +593,28 @@ describe("representable gateway schemas", () => {
   });
 });
 
+describe("exact-content tool resolution (#4009)", () => {
+  it("names only the offered changeset edit, resolved by catalog identity", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const exact = bridge.tools.map((tool) => tool.name).filter(bridge.isExactContentTool);
+    expect(exact).toEqual(["keiko_changeset_edit"]);
+    expect(bridge.isExactContentTool("question")).toBe(false);
+    expect(bridge.isExactContentTool("keiko_research_fetch")).toBe(false);
+    expect(bridge.isExactContentTool("unoffered_changeset_edit")).toBe(false);
+  });
+
+  it("names no exact-content tool without a catalog advertisement", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: undefined },
+      (): number => NOW,
+    );
+    expect(bridge.isExactContentTool("keiko_changeset_edit")).toBe(false);
+  });
+});
+
 describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
   it("merges a bound advertisement's native extensions into the model-visible tool list", () => {
     const bridge = createGatewayToolCatalogBridge(

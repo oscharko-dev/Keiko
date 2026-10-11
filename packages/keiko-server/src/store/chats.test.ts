@@ -28,6 +28,34 @@ afterEach(() => {
 });
 
 describe("createChat", () => {
+  it.each([
+    "azure/example-chat@germanywestcentral",
+    "vertex/example-chat@eu",
+    "bedrock/example-chat@eu-central-1",
+  ])("persists and updates a region-qualified registry id: %s", (modelId) => {
+    const chat = store.createChat(proj, "Regional model", modelId);
+    expect(store.findChatById(chat.id)?.selectedModel).toBe(modelId);
+    store.updateChat(chat.id, { selectedModel: "example-chat" });
+    store.updateChat(chat.id, { selectedModel: modelId });
+    expect(store.listChats(proj)[0]?.selectedModel).toBe(modelId);
+  });
+
+  it.each([
+    "person@example.com",
+    "chat@eu@other",
+    "chat@",
+    "chat@-eu",
+    "chat@eu/other",
+    "https://user@host.example/model",
+    "chat?api_key=secret@eu",
+    `${"m".repeat(160)}@eu`,
+  ])("rejects unsafe or malformed region-qualified ids: %s", (modelId) => {
+    expect(() => store.createChat(proj, "Rejected model", modelId)).toThrow(UiStoreError);
+    const chat = store.createChat(proj, "Existing model", "example-chat");
+    expect(() => store.updateChat(chat.id, { selectedModel: modelId })).toThrow(UiStoreError);
+    expect(store.findChatById(chat.id)?.selectedModel).toBe("example-chat");
+  });
+
   it("creates a chat scoped to the project", () => {
     const c = store.createChat(proj, "Hello", "example-chat-model", { branchLabel: "main" });
     expect(c.projectPath).toBe(proj);

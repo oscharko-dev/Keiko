@@ -17178,6 +17178,54 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.tool-arguments.redacted",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "openai-adapter.logToolArgumentsRedacted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 256,
+      },
+      toolCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      redactedStringCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-tool-arguments"],
+    proofIds: ["gateway.tool-arguments.redacted.emitted-line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "redactedStringCount",
+        positive: true,
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.tool-calling.verification",
     category: "gateway",
     owner: "keiko-server",

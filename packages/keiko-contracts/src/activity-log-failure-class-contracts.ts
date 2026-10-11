@@ -4502,6 +4502,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "gateway-tool-arguments",
+    requiredProductSurfaces: ["keiko-model-gateway"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["gateway.tool-arguments.redacted"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["gateway.tool-arguments.redacted"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["gateway.tool-arguments.redacted"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["gateway.tool-arguments.redacted"],
+    requiredEvidenceClasses: ["completeness-state", "count", "loss-state", "opaque-id"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "gateway-tool-schema-rejection",
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {
