@@ -38,6 +38,157 @@ import {
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
 
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import {
+  freshStore,
+  DEFAULT_EMBEDDING,
+} from "../../packages/keiko-local-knowledge/src/_support.js";
+import { createInMemoryManualFetcher } from "../../packages/keiko-local-knowledge/src/crawl/index.js";
+import { createDefaultParserRegistry } from "../../packages/keiko-local-knowledge/src/parsers/index.js";
+import { scriptedAdapter } from "../../packages/keiko-local-knowledge/src/testing.js";
+import {
+  createHtmlManualPod,
+  type CreateHtmlManualPodDeps,
+} from "../../packages/keiko-local-knowledge/src/manual-pod.js";
+import { refreshHtmlManualPod } from "../../packages/keiko-local-knowledge/src/manual-pod-refresh.js";
+import { updateHtmlManualRefreshState } from "../../packages/keiko-local-knowledge/src/manual-source-metadata.js";
+import {
+  buildHttpManualSource,
+  executeJob,
+  initialJob,
+  manualPodJobRegistry,
+  createTerminalState,
+} from "../../packages/keiko-server/src/manual/manual-pod-service.js";
+import type {
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
+
+interface ManualWriterScenario {
+  readonly deps: CreateHtmlManualPodDeps;
+  readonly source: HtmlManualSource;
+  readonly cleanup: () => void;
+}
+
+function manualWriterFixture(): ManualWriterScenario {
+  const fresh = freshStore();
+  const built = buildHttpManualSource({
+    displayName: "Fixture manual",
+    origin: "https://manual.example.invalid",
+    pathPrefix: null,
+  });
+  if (!built.ok) throw new TypeError("manual fixture producer refused");
+  const source = { ...built.source, limits: { ...DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } };
+  return {
+    source,
+    cleanup: fresh.cleanup,
+    deps: {
+      store: fresh.store,
+      capsuleId: "bff-manual-capsule" as KnowledgeCapsuleId,
+      sourceId: "bff-manual-source" as KnowledgeSourceId,
+      embeddingModelIdentity: DEFAULT_EMBEDDING,
+      embeddingAdapter: scriptedAdapter({ identity: DEFAULT_EMBEDDING }),
+      parserRegistry: createDefaultParserRegistry(),
+      fetcher: createInMemoryManualFetcher(
+        new Map([
+          [
+            "https://manual.example.invalid/",
+            {
+              html: "<html><title>Fixture</title><body><p>Private body marker enough ordinary words to produce a real chunk.</p></body></html>",
+            },
+          ],
+        ]),
+      ),
+    },
+  };
+}
+
+type ManualWriterFailure = "source-insert" | "summary-update" | "persisted-source";
+
+async function driveManualWriterFailure(mode: ManualWriterFailure, jobId: string): Promise<void> {
+  const fixture = manualWriterFixture();
+  const { deps, source } = fixture;
+  const controller = new AbortController();
+  const base = initialJob(
+    jobId,
+    mode === "source-insert" ? "create" : "refresh",
+    deps.capsuleId,
+    deps.sourceId,
+  );
+  manualPodJobRegistry.register(base, controller);
+  try {
+    await executeJob(jobId, base, controller, async (onCrawlEvent) => {
+      if (mode === "source-insert") {
+        const result = await createHtmlManualPod(
+          {
+            ...deps,
+            onCrawlEvent: (event) => {
+              onCrawlEvent(event);
+              if (event.kind === "completed")
+                Reflect.set(source.limits, "timeoutMs", source.limits.timeoutMs + 1);
+            },
+          },
+          source,
+        );
+        return { progress: result.progress, state: createTerminalState(result.progress) };
+      }
+      await createHtmlManualPod(deps, source);
+      if (mode === "persisted-source")
+        deps.store._internal.db
+          .prepare(
+            "UPDATE html_manual_sources SET source_fingerprint = '' WHERE capsule_id = ? AND source_id = ?",
+          )
+          .run(deps.capsuleId, deps.sourceId);
+      const refreshed = await refreshHtmlManualPod({ ...deps, onCrawlEvent });
+      const bytes = JSON.stringify(refreshed.changeSummary).replace(
+        "{",
+        '{"outcome":"discarded-private-marker",',
+      );
+      updateHtmlManualRefreshState(deps.store, deps.capsuleId, deps.sourceId, {
+        lastRefreshedAt: refreshed.changeSummary.refreshedAt,
+        lastCrawlRunId: "bff-manual-run",
+        changeSummaryJson: bytes,
+      });
+      return { progress: refreshed.progress, state: createTerminalState(refreshed.progress) };
+    });
+    expect(manualPodJobRegistry.get(jobId)?.state).toBe("failed");
+  } finally {
+    controller.abort();
+    fixture.cleanup();
+  }
+}
+
+function expectManualWriterFailureEvidence(
+  stateDir: string,
+  jobId: string,
+  mode: ManualWriterFailure,
+): void {
+  const text = readPersistedActivityLog(stateDir);
+  const records = persistedActivityLogLines(text, "server.diagnostic.failure").map(parseLine);
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    correlationId: jobId,
+    diagnosticOperation: "manual-pod.job",
+    source: "manual-pod.service",
+    errorKind: "internal",
+  });
+  if (mode !== "persisted-source")
+    expect(records[0]).toMatchObject({
+      code:
+        mode === "source-insert"
+          ? "HTML_MANUAL_SOURCE_INVALID"
+          : "HTML_MANUAL_SUMMARY_NONCANONICAL",
+    });
+  for (const marker of [
+    "manual.example.invalid",
+    "discarded-private-marker",
+    "Private body marker",
+    "capsules.db",
+  ])
+    expect(text).not.toContain(marker);
+}
+
 function parseLine(line: string | undefined): Record<string, unknown> {
   return JSON.parse(line ?? "") as Record<string, unknown>;
 }
@@ -369,6 +520,47 @@ describe("Activity Log scenario: bff", () => {
       expect.arrayContaining(["server-diagnostic", "http-request"]),
     );
     expectDependencyFailureEvidence(stateDir, requestCorrelationId, secondCorrelationId);
+  });
+
+  it.each(["source-insert", "summary-update", "persisted-source"] as const)(
+    "reconstructs the actual manual owner refusal through default job diagnostics (%s)",
+    async (mode) => {
+      const startedAtMs = Date.now();
+      const jobId = `bff-manual-${mode}`;
+      await driveManualWriterFailure(mode, jobId);
+      const trace = await expectActivityLogScenario("bff.dependency-failure", {
+        stateDir,
+        startedAtMs,
+        expectedOps: ["server.diagnostic.failure"],
+      });
+      expect(trace.failureClasses).toContain("server-diagnostic");
+      expectManualWriterFailureEvidence(stateDir, jobId, mode);
+    },
+  );
+
+  it("does not emit a refusal diagnostic for an actual healthy manual create job", async () => {
+    const fixture = manualWriterFixture();
+    const controller = new AbortController();
+    const base = initialJob(
+      "bff-manual-healthy",
+      "create",
+      fixture.deps.capsuleId,
+      fixture.deps.sourceId,
+    );
+    manualPodJobRegistry.register(base, controller);
+    try {
+      await executeJob(base.jobId, base, controller, async () => {
+        const result = await createHtmlManualPod(fixture.deps, fixture.source);
+        return { progress: result.progress, state: createTerminalState(result.progress) };
+      });
+      expect(manualPodJobRegistry.get(base.jobId)?.state).toBe("succeeded");
+      expect(
+        persistedActivityLogLines(readPersistedActivityLog(stateDir), "server.diagnostic.failure"),
+      ).toHaveLength(0);
+    } finally {
+      controller.abort();
+      fixture.cleanup();
+    }
   });
 
   it("drives chat admission and PR-description turn authority rejections to a complete rejection record", async () => {

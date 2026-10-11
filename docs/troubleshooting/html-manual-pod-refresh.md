@@ -4,16 +4,47 @@ This runbook addresses failures and unexpected behavior when refreshing an index
 manual Knowledge Pod. Each entry follows the troubleshooting guide format
 ([Symptom / Root Cause / Diagnostic Steps / Resolution](./README.md)).
 
-**Current status:** the refresh capability, its fail-closed behavior, and its diagnostics
-are implemented and covered by the automated regression suite (`manual-pod-refresh.test.ts`,
-`manual-refresh-change-summary.test.ts`) at the domain, contract, and UI-render layers. The
-symptoms, root causes, and diagnostics panel content described below reflect that validated
-behavior. A live, user-triggerable refresh entry point (a BFF trigger route and a
-`gatewayFetch`-backed HTTP fetcher for intranet manuals) is an explicit, tracked follow-up —
-see [Known limitations and follow-ups](../local-knowledge/html-manual-refresh-lifecycle-ledger.md#known-limitations-and-follow-ups).
-Until that route ships, the steps below describe the behavior an operator will see once
-refresh is invoked through that entry point, not a flow that is reachable in the running
-product today.
+**Current status:** live, human-triggered HTTP manual creation and explicitly confirmed refresh are
+implemented through the existing BFF jobs and UI polling. The HTTP fetcher remains behind the server
+transport/egress boundary and its independent manual-pod private-network opt-in. Opening a citation or
+producing a documentation proposal/approval starts no crawl. Local-root creation is not exposed by the
+live create route. The domain refresh capability and diagnostics retain their existing bounds; see the
+[lifecycle ledger](../local-knowledge/html-manual-refresh-lifecycle-ledger.md#known-limitations-and-follow-ups)
+for post-crawl limitations.
+
+## Manual job fails at metadata validation
+
+**Symptom**
+
+The manual create/refresh job settles as failed. The validated support timeline contains
+`server.diagnostic.failure` for `manual-pod.job` under that job's correlation, with source
+`manual-pod.service`. Writer refusal codes are `HTML_MANUAL_SOURCE_INVALID`,
+`HTML_MANUAL_SUMMARY_INVALID_JSON`, `HTML_MANUAL_SUMMARY_INVALID_SHAPE`, or
+`HTML_MANUAL_SUMMARY_NONCANONICAL`; the error text and log contain no rejected source or summary body.
+
+**Root Cause**
+
+The physical writer refused current selected source facts or captured refresh-summary bytes. Source
+facts are revalidated before INSERT, including schema/name/redirect facts and consistent scope-kind
+observations. UPDATE requires the captured summary to validate and roundtrip to exactly the supplied
+bytes. Duplicate keys, malformed/incomplete shape, unknown fields and non-roundtripping formatting
+cannot be retained as trusted summary content. Normal producer bytes are preserved.
+
+**Diagnostic Steps**
+
+Export the job-correlated incident through the existing support workflow, validate it with
+`keiko support analyze`, and inspect the registered failure class, correlation, code and sufficiency.
+Do not attach raw source data or SQLite summary bytes to a report. A healthy job has no refusal
+diagnostic. The diagnostic errorKind follows the existing error-class mapping, not the new code.
+
+**Resolution**
+
+Repair the producer or stored source through the existing governed workflow, then start a new human
+confirmed operation. Do not normalize rejected bytes silently, bypass validation, widen crawl limits
+or invent an approval token. A refused metadata statement leaves its row unchanged, but create source
+attachment or refresh apply/index work may already have happened; inspect the existing pod before
+retrying. This is not a whole-job rollback guarantee. Independently omitted reader summaries still
+need their own owner evidence and are not covered by the writer diagnostic.
 
 ## Refresh reports "reached a crawl limit" or "removed pages not detected"
 

@@ -8,6 +8,8 @@ import type {
   KnowledgeSource,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { validateHtmlManualSource } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { validateManualRefreshChangeSummary } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 
 import { listCapsuleSources } from "./source-lifecycle.js";
@@ -112,10 +114,92 @@ export interface ResolveHtmlManualCitationTargetInput {
   readonly anchorId?: string;
 }
 
-// Persist the approved manual source at pod-create time. Additionally records the approved crawl
-// limits and an initial scope version (Epic #1856, Issue #1890) so a later refresh can reconstruct
-// and re-run the exact bounded crawl without widening scope. `INSERT OR REPLACE` resets the row to
-// its create-time shape; refresh bookkeeping is written separately via `updateHtmlManualRefreshState`.
+type ManualMetadataFailureCode =
+  | "HTML_MANUAL_SOURCE_INVALID"
+  | "HTML_MANUAL_SUMMARY_INVALID_JSON"
+  | "HTML_MANUAL_SUMMARY_INVALID_SHAPE"
+  | "HTML_MANUAL_SUMMARY_NONCANONICAL";
+
+class ManualMetadataValidationError extends TypeError {
+  readonly code: ManualMetadataFailureCode;
+  constructor(code: ManualMetadataFailureCode) {
+    super("manual-metadata-validation-failed");
+    this.code = code;
+  }
+}
+
+interface CapturedManualScope {
+  readonly kinds: readonly HtmlManualSourceKind[];
+  readonly rootPath: string | null;
+  readonly entryPath: string | null | undefined;
+  readonly origin: string | null;
+  readonly pathPrefix: string | null;
+}
+
+interface CapturedManualSource {
+  readonly kind: HtmlManualSourceKind;
+  readonly fingerprint: string;
+  readonly fields: CapturedManualScope;
+  readonly createdAt: number;
+  readonly limits: Omit<DocumentationManualScopeLimits, "followRedirects">;
+}
+
+function captureManualScope(scope: HtmlManualSource["scope"]): CapturedManualScope {
+  const rootKind = scope.kind;
+  const rootPath = rootKind === "html-manual-local" ? scope.rootPath : null;
+  const entryKind = scope.kind;
+  const entryPath = entryKind === "html-manual-local" ? scope.entryPath : null;
+  const originKind = scope.kind;
+  const origin = originKind === "html-manual-http" ? scope.origin : null;
+  const prefixKind = scope.kind;
+  const pathPrefix = prefixKind === "html-manual-http" ? scope.pathPrefix : null;
+  return {
+    kinds: [rootKind, entryKind, originKind, prefixKind],
+    rootPath,
+    entryPath,
+    origin,
+    pathPrefix,
+  };
+}
+
+function captureManualSource(
+  store: KnowledgeStore,
+  source: HtmlManualSource,
+  scope: HtmlManualSource["scope"],
+  limits: DocumentationManualScopeLimits,
+): CapturedManualSource {
+  const kind = scope.kind;
+  const fingerprint = source.sourceFingerprint;
+  const fields = captureManualScope(scope);
+  const createdAt = store._internal.now();
+  const capturedLimits = {
+    maxPages: limits.maxPages,
+    maxDepth: limits.maxDepth,
+    maxBytes: limits.maxBytes,
+    maxLinkSample: limits.maxLinkSample,
+    timeoutMs: limits.timeoutMs,
+  };
+  // These three extra observations qualify previously trusted typed input at the writer.
+  const schemaVersion = source.schemaVersion;
+  const proposedPodName = source.proposedPodName;
+  const followRedirects = limits.followRedirects;
+  const selectedScope =
+    kind === "html-manual-local"
+      ? { kind, rootPath: fields.rootPath, entryPath: fields.entryPath }
+      : { kind, origin: fields.origin, pathPrefix: fields.pathPrefix };
+  const checked = validateHtmlManualSource({
+    schemaVersion,
+    scope: selectedScope,
+    limits: { ...capturedLimits, followRedirects },
+    sourceFingerprint: fingerprint,
+    proposedPodName,
+  });
+  if (!fields.kinds.every((observed) => observed === kind) || !checked.ok)
+    throw new ManualMetadataValidationError("HTML_MANUAL_SOURCE_INVALID");
+  return { kind, fingerprint, fields, createdAt, limits: capturedLimits };
+}
+
+// The checked captured values are bound without rereading the original mutable source.
 export function persistHtmlManualSourceMetadata(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -124,71 +208,84 @@ export function persistHtmlManualSourceMetadata(
 ): void {
   const scope = source.scope;
   const limits = source.limits;
-  store._internal.db
-    .prepare(
-      [
-        "INSERT OR REPLACE INTO html_manual_sources (",
-        "  capsule_id, source_id, source_kind, source_fingerprint, root_path, entry_path,",
-        "  origin, path_prefix, created_at, max_pages, max_depth, max_bytes, max_link_sample,",
-        "  timeout_ms, follow_redirects, source_scope_version",
-        ") VALUES (:capsule_id, :source_id, :source_kind, :source_fingerprint, :root_path,",
-        "  :entry_path, :origin, :path_prefix, :created_at, :max_pages, :max_depth, :max_bytes,",
-        "  :max_link_sample, :timeout_ms, :follow_redirects, :source_scope_version)",
-      ].join(" "),
-    )
-    .run({
-      capsule_id: capsuleId,
-      source_id: sourceId,
-      source_kind: scope.kind,
-      source_fingerprint: source.sourceFingerprint,
-      root_path: scope.kind === "html-manual-local" ? scope.rootPath : null,
-      entry_path: scope.kind === "html-manual-local" ? (scope.entryPath ?? null) : null,
-      origin: scope.kind === "html-manual-http" ? scope.origin : null,
-      path_prefix: scope.kind === "html-manual-http" ? scope.pathPrefix : null,
-      created_at: store._internal.now(),
-      max_pages: limits.maxPages,
-      max_depth: limits.maxDepth,
-      max_bytes: limits.maxBytes,
-      max_link_sample: limits.maxLinkSample,
-      timeout_ms: limits.timeoutMs,
-      // The governed limits contract pins followRedirects to false; a manual crawl never follows
-      // redirects. Persist 0; the column exists for a possible future governed override.
-      follow_redirects: 0,
-      source_scope_version: HTML_MANUAL_SOURCE_SCOPE_VERSION,
-    });
+  const statement = store._internal.db.prepare(
+    [
+      "INSERT OR REPLACE INTO html_manual_sources (",
+      "  capsule_id, source_id, source_kind, source_fingerprint, root_path, entry_path,",
+      "  origin, path_prefix, created_at, max_pages, max_depth, max_bytes, max_link_sample,",
+      "  timeout_ms, follow_redirects, source_scope_version",
+      ") VALUES (:capsule_id, :source_id, :source_kind, :source_fingerprint, :root_path,",
+      "  :entry_path, :origin, :path_prefix, :created_at, :max_pages, :max_depth, :max_bytes,",
+      "  :max_link_sample, :timeout_ms, :follow_redirects, :source_scope_version)",
+    ].join(" "),
+  );
+  const captured = captureManualSource(store, source, scope, limits);
+  statement.run({
+    capsule_id: capsuleId,
+    source_id: sourceId,
+    source_kind: captured.kind,
+    source_fingerprint: captured.fingerprint,
+    root_path: captured.fields.rootPath,
+    entry_path: captured.fields.entryPath ?? null,
+    origin: captured.fields.origin,
+    path_prefix: captured.fields.pathPrefix,
+    created_at: captured.createdAt,
+    max_pages: captured.limits.maxPages,
+    max_depth: captured.limits.maxDepth,
+    max_bytes: captured.limits.maxBytes,
+    max_link_sample: captured.limits.maxLinkSample,
+    timeout_ms: captured.limits.timeoutMs,
+    follow_redirects: 0,
+    source_scope_version: HTML_MANUAL_SOURCE_SCOPE_VERSION,
+  });
 }
 
-// Record the outcome of an explicit refresh run. Only the additive bookkeeping columns are touched;
-// the approved scope, fingerprint, and limits are never mutated by a refresh (scope preservation).
 export interface HtmlManualRefreshState {
   readonly lastRefreshedAt: number;
   readonly lastCrawlRunId: string;
   readonly changeSummaryJson: string;
 }
 
+function validateCapturedSummary(bytes: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes);
+  } catch {
+    throw new ManualMetadataValidationError("HTML_MANUAL_SUMMARY_INVALID_JSON");
+  }
+  const checked = validateManualRefreshChangeSummary(parsed);
+  if (!checked.ok) throw new ManualMetadataValidationError("HTML_MANUAL_SUMMARY_INVALID_SHAPE");
+  if (JSON.stringify(checked.value) !== bytes)
+    throw new ManualMetadataValidationError("HTML_MANUAL_SUMMARY_NONCANONICAL");
+}
+
+// Only this metadata UPDATE is refused atomically; earlier refresh apply work is not rolled back.
 export function updateHtmlManualRefreshState(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceId: KnowledgeSourceId,
   state: HtmlManualRefreshState,
 ): void {
-  store._internal.db
-    .prepare(
-      [
-        "UPDATE html_manual_sources SET",
-        "  last_refreshed_at = :last_refreshed_at,",
-        "  last_crawl_run_id = :last_crawl_run_id,",
-        "  last_change_summary_json = :last_change_summary_json",
-        "WHERE capsule_id = :capsule_id AND source_id = :source_id",
-      ].join(" "),
-    )
-    .run({
-      capsule_id: capsuleId,
-      source_id: sourceId,
-      last_refreshed_at: state.lastRefreshedAt,
-      last_crawl_run_id: state.lastCrawlRunId,
-      last_change_summary_json: state.changeSummaryJson,
-    });
+  const statement = store._internal.db.prepare(
+    [
+      "UPDATE html_manual_sources SET",
+      "  last_refreshed_at = :last_refreshed_at,",
+      "  last_crawl_run_id = :last_crawl_run_id,",
+      "  last_change_summary_json = :last_change_summary_json",
+      "WHERE capsule_id = :capsule_id AND source_id = :source_id",
+    ].join(" "),
+  );
+  const lastRefreshedAt = state.lastRefreshedAt;
+  const lastCrawlRunId = state.lastCrawlRunId;
+  const bytes = state.changeSummaryJson;
+  validateCapturedSummary(bytes);
+  statement.run({
+    capsule_id: capsuleId,
+    source_id: sourceId,
+    last_refreshed_at: lastRefreshedAt,
+    last_crawl_run_id: lastCrawlRunId,
+    last_change_summary_json: bytes,
+  });
 }
 
 export function readHtmlManualSourceMetadata(
