@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import type {
   HtmlManualCrawlScope,
   HtmlManualSource,
+  KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgePodSummary,
   KnowledgeSourceId,
@@ -83,6 +84,7 @@ export interface RefreshHtmlManualPodDeps {
   readonly idSource?: () => string;
   readonly auditSink?: AuditEventSink;
   readonly logSink?: KnowledgeLogSink | undefined;
+  readonly correlationId?: string | undefined;
   readonly onCrawlEvent?: (event: ManualCrawlEvent) => void;
   readonly onIndexEvent?: (event: IndexingEvent) => void;
 }
@@ -302,6 +304,16 @@ function shouldApply(crawl: ManualCrawlResult): boolean {
   return crawl.status === "completed" && crawl.pages.length > 0;
 }
 
+function buildRefreshSummary(
+  deps: RefreshHtmlManualPodDeps,
+  capsule: KnowledgeCapsule,
+): KnowledgePodSummary {
+  return buildKnowledgePodSummary(deps.store, capsule, {
+    logSink: deps.logSink,
+    correlationId: deps.correlationId,
+  });
+}
+
 export async function refreshHtmlManualPod(
   deps: RefreshHtmlManualPodDeps,
 ): Promise<RefreshHtmlManualPodResult> {
@@ -350,7 +362,7 @@ export async function refreshHtmlManualPod(
     sourceId,
     crawl,
     ...(applied.indexing !== undefined ? { indexing: applied.indexing } : {}),
-    summary: buildKnowledgePodSummary(store, capsule),
+    summary: buildRefreshSummary(deps, capsule),
     progress: buildHtmlManualIndexingProgress(crawl, applied.indexing),
     changeSummary,
     applied: willApply,

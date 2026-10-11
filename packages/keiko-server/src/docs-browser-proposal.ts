@@ -1,3 +1,4 @@
+import { processServerLogSink } from "./process-log-sink.js";
 // Epic #1852 — indexable HTML manual proposal + consent BFF routes (child issues #1866–#1869).
 //
 // Two additive, product-level routes that extend the governed documentation browser (ADR-0113):
@@ -111,11 +112,17 @@ export function computeManualRootFingerprint(rawTarget: string): string | null {
 // configured. Read-only: no indexing job, no recovery writes, no model call. On any store error the
 // caller simply loses already-indexed detection for this request (fail-open toward "not indexed",
 // which only ever asks the user to review a scope they must approve anyway).
-function safeListKnowledgePods(deps: UiHandlerDeps): readonly KnowledgePodSummary[] {
+function safeListKnowledgePods(
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): readonly KnowledgePodSummary[] {
   let handle: ReturnType<typeof openKnowledgeStoreForDeps> | null = null;
   try {
     handle = openKnowledgeStoreForDeps(deps);
-    return listKnowledgePodSummaries(handle.store);
+    return listKnowledgePodSummaries(handle.store, undefined, {
+      logSink: processServerLogSink(),
+      correlationId,
+    });
   } catch {
     return [];
   } finally {
@@ -272,7 +279,7 @@ export async function handleDocsBrowserPropose(
   const proposal = resolveManualProposal(
     outcome.request.target,
     deps,
-    safeListKnowledgePods,
+    (options) => safeListKnowledgePods(options, ctx.correlationId),
     outcome.request.lastNavigationReason,
   );
   if (!validateDocumentationIndexingProposal(proposal).ok) {
@@ -291,7 +298,7 @@ export async function handleDocsBrowserApprove(
   const decision = resolveManualApproval(
     outcome.request.target,
     deps,
-    safeListKnowledgePods,
+    (options) => safeListKnowledgePods(options, ctx.correlationId),
     outcome.request.lastNavigationReason,
   );
   if (!decision.ok) {

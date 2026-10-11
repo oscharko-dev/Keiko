@@ -259,8 +259,13 @@ Writer refusals use fixed body-free TypeError codes. The existing manual job cat
 `server.diagnostic.failure` under the actual job correlation through the default registered Activity
 Log writer; no leaf logger or new operation is introduced. A refused statement leaves its metadata
 row unchanged. Source refusal may follow capsule/source attachment; summary refusal may follow refresh
-apply/index work. Neither is a whole-create or whole-refresh rollback guarantee. Summary omission at
-an independent reader remains a separate observability obligation.
+apply/index work. Neither is a whole-create or whole-refresh rollback guarantee. The independent summary reader retains omission and first-valid-source behavior. Its owning
+`knowledge.manual-refresh-summary.rejected` operation settles examined invalid JSON/summary counts,
+a closed reason and whether a later valid summary was returned, under the actual request/job/run
+correlation. Absent or healthy records and pod-set-only listings emit no rejection. Existing injected
+KnowledgeLogSink and the registered physical writer carry this evidence; unbound or failed sinks
+retain the existing explicit loss ceiling. No raw persisted bytes, source identifiers or validation
+messages enter the event, and no second scan or repair write is performed.
 
 ## Extension: citation-driven navigation for HTML manual chat answers (Epic #1854)
 

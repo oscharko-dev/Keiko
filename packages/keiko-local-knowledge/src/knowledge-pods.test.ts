@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   CapsuleSetId,
@@ -10,6 +15,7 @@ import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import { validateKnowledgePodSummary } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 import {
   htmlManualSourceFingerprintTag,
@@ -25,6 +31,12 @@ import {
 import { createCapsule } from "./capsule-lifecycle.js";
 import { createCapsuleSet } from "./capsule-set-lifecycle.js";
 import { KnowledgeStoreError } from "./errors.js";
+import type { KnowledgeLogEvent } from "./knowledge-log.js";
+import { computeManualRefreshChangeSummary } from "./manual-refresh-change-summary.js";
+import {
+  persistHtmlManualSourceMetadata,
+  updateHtmlManualRefreshState,
+} from "./manual-source-metadata.js";
 import {
   buildKnowledgePodSetSummary,
   buildKnowledgePodSummary,
@@ -1240,4 +1252,258 @@ describe("Knowledge Pod projection parity (M2.12)", () => {
       env.cleanup();
     }
   });
+});
+
+function healthyManualSummary(): ReturnType<typeof computeManualRefreshChangeSummary> {
+  return computeManualRefreshChangeSummary({
+    priorFingerprints: new Map(),
+    newPages: [],
+    crawl: {
+      status: "empty",
+      pages: [],
+      denied: [],
+      stats: {
+        discovered: 0,
+        fetched: 0,
+        accepted: 0,
+        deniedCount: 0,
+        bytesFetched: 0,
+      },
+    },
+    indexing: undefined,
+    sourceKind: "html-manual-http",
+    applied: false,
+    refreshedAt: 4242,
+  });
+}
+
+function seedManualSummary(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+  bytes: string | undefined,
+): void {
+  addSourceToCapsule(store, capsuleId, {
+    ...sampleSourceInput(sourceId),
+    tags: [htmlManualSourceKindTag("html-manual-http"), htmlManualSourceFingerprintTag("fp-obs")],
+  });
+  persistHtmlManualSourceMetadata(store, capsuleId, sourceId, {
+    schemaVersion: "1",
+    scope: { kind: "html-manual-http", origin: "https://manual.example.invalid", pathPrefix: null },
+    limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+    sourceFingerprint: "fp-obs",
+    proposedPodName: "Fixture manual",
+  });
+  if (bytes === undefined) return;
+  updateHtmlManualRefreshState(store, capsuleId, sourceId, {
+    lastRefreshedAt: 4242,
+    lastCrawlRunId: "run-obs",
+    changeSummaryJson: JSON.stringify(healthyManualSummary()),
+  });
+  // Seed explicitly historical/corrupt bytes after a healthy public write. Current writers reject them.
+  store._internal.db
+    .prepare(
+      "UPDATE html_manual_sources SET last_change_summary_json = :bytes WHERE capsule_id = :capsuleId AND source_id = :sourceId",
+    )
+    .run({ bytes, capsuleId, sourceId });
+}
+
+describe("examined manual refresh summary rejection evidence", () => {
+  it.each([
+    ["invalid-json", "{fixture-invalid", 1, 0],
+    ["invalid-summary", JSON.stringify({ schemaVersion: "unsupported" }), 0, 1],
+    ["invalid-summary", JSON.stringify({ ...healthyManualSummary(), unknown: true }), 0, 1],
+  ] as const)(
+    "settles %s through its owning port without changing omission or bytes",
+    (_reason, bytes, jsonCount, summaryCount) => {
+      const env = freshStore();
+      try {
+        const capsule = createCapsule(env.store, sampleCapsuleInput());
+        seedManualSummary(env.store, capsule.id, "obs-source" as KnowledgeSourceId, bytes);
+        const events: KnowledgeLogEvent[] = [];
+        const summary = buildKnowledgePodSummary(env.store, capsule, {
+          correlationId: "manual-obs-request",
+          logSink: { write: (event) => events.push(event) },
+        });
+        expect(summary.manualRefresh).toBeUndefined();
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          op: "knowledge.manual-refresh-summary.rejected",
+          correlationId: "manual-obs-request",
+          errorKind: "validation-failed",
+          extra: {
+            invalidJsonCount: jsonCount,
+            invalidSummaryCount: summaryCount,
+            reason: _reason,
+            summaryReturned: false,
+          },
+        });
+        const event = events[0];
+        if (event === undefined) throw new TypeError("Expected reader rejection evidence");
+        expect(
+          expectActivityLogProof(
+            "knowledge.manual-refresh-summary.rejected.omission",
+            formatActivityLogProofLine(event),
+          ),
+        ).toMatchObject({
+          correlationId: "manual-obs-request",
+          invalidJsonCount: jsonCount,
+          invalidSummaryCount: summaryCount,
+        });
+        expect(JSON.stringify(events)).not.toContain(bytes);
+        expect(
+          env.store._internal.db
+            .prepare("SELECT last_change_summary_json AS bytes FROM html_manual_sources")
+            .get(),
+        ).toEqual({ bytes });
+      } finally {
+        env.cleanup();
+      }
+    },
+  );
+
+  it("counts only examined refusals and stops at the first valid source", () => {
+    const env = freshStore();
+    try {
+      const capsule = createCapsule(env.store, sampleCapsuleInput());
+      const healthy = healthyManualSummary();
+      for (const [index, bytes] of [
+        "{broken",
+        "{}",
+        JSON.stringify(healthy),
+        "{unexamined",
+      ].entries()) {
+        seedManualSummary(
+          env.store,
+          capsule.id,
+          `obs-${String(index)}` as KnowledgeSourceId,
+          bytes,
+        );
+      }
+      const prepare = vi.spyOn(env.store._internal.db, "prepare");
+      const events: KnowledgeLogEvent[] = [];
+      const summary = buildKnowledgePodSummary(env.store, capsule, {
+        correlationId: "manual-obs-mixed",
+        logSink: { write: (event) => events.push(event) },
+      });
+      expect(summary.manualRefresh).toEqual(healthy);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.extra).toEqual({
+        invalidJsonCount: 1,
+        invalidSummaryCount: 1,
+        reason: "mixed",
+        summaryReturned: true,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(
+        prepare.mock.calls.filter(([sql]) => sql.includes("SELECT * FROM html_manual_sources")),
+      ).toHaveLength(3);
+      prepare.mockRestore();
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it.each([undefined, JSON.stringify(healthyManualSummary())])(
+    "emits no refusal for absent or first-valid metadata",
+    (bytes) => {
+      const env = freshStore();
+      try {
+        const capsule = createCapsule(env.store, sampleCapsuleInput());
+        seedManualSummary(env.store, capsule.id, "healthy-obs" as KnowledgeSourceId, bytes);
+        const write = vi.fn();
+        buildKnowledgePodSummary(env.store, capsule, {
+          logSink: { write },
+          correlationId: "manual-obs-healthy",
+        });
+        expect(write).not.toHaveBeenCalled();
+        listKnowledgePodSummaries(env.store, "pod-set", {
+          logSink: { write },
+          correlationId: "manual-obs-sets",
+        });
+        expect(write).not.toHaveBeenCalled();
+      } finally {
+        env.cleanup();
+      }
+    },
+  );
+});
+
+describe("manual summary evidence transport limits", () => {
+  it("counts an unwired port as loss without changing the rejected projection", () => {
+    const env = freshStore();
+    try {
+      const capsule = createCapsule(env.store, sampleCapsuleInput());
+      seedManualSummary(env.store, capsule.id, "unwired-manual" as KnowledgeSourceId, "{invalid");
+      const before = activityLogLossCounters()["port-unwired"];
+      expect(buildKnowledgePodSummary(env.store, capsule).manualRefresh).toBeUndefined();
+      expect(activityLogLossCounters()["port-unwired"]).toBe(before + 1);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it.each([false, true])(
+    "retains loss when a failed transport accepts its fallback: %s",
+    (acceptFallback) => {
+      const env = freshStore();
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+      try {
+        const capsule = createCapsule(env.store, sampleCapsuleInput());
+        seedManualSummary(env.store, capsule.id, "failed-manual" as KnowledgeSourceId, "{invalid");
+        const before = activityLogLossCounters()["port-sink-failed"];
+        const events: KnowledgeLogEvent[] = [];
+        const summary = buildKnowledgePodSummary(env.store, capsule, {
+          correlationId: "manual-failed-transport",
+          logSink: {
+            write: (event) => {
+              if (!acceptFallback || event.op === "knowledge.manual-refresh-summary.rejected")
+                throw new TypeError("fixture transport unavailable");
+              events.push(event);
+            },
+          },
+        });
+        expect(summary.manualRefresh).toBeUndefined();
+        expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+        expect(events.map((event) => event.op)).toEqual(
+          acceptFallback ? ["knowledge.log.sink-failed"] : [],
+        );
+        expect(warning).toHaveBeenCalledTimes(acceptFallback ? 0 : 1);
+        if (acceptFallback)
+          expect(formatActivityLogProofLine(events[0] ?? {})).not.toContain(
+            "fixture transport unavailable",
+          );
+      } finally {
+        warning.mockRestore();
+        env.cleanup();
+      }
+    },
+  );
+
+  it.each(["extra-field", "wrong-type"] as const)(
+    "refuses %s mutation at registered serialization",
+    (mutation) => {
+      const env = freshStore();
+      try {
+        const capsule = createCapsule(env.store, sampleCapsuleInput());
+        seedManualSummary(env.store, capsule.id, "mutated-manual" as KnowledgeSourceId, "{invalid");
+        const events: KnowledgeLogEvent[] = [];
+        buildKnowledgePodSummary(env.store, capsule, {
+          logSink: { write: (event) => events.push(event) },
+          correlationId: "manual-event-mutation",
+        });
+        const event = events[0];
+        if (event?.extra === undefined) throw new TypeError("Expected registered reader event");
+        expect(formatActivityLogProofLine(event)).toContain(
+          "knowledge.manual-refresh-summary.rejected",
+        );
+        if (mutation === "extra-field") Reflect.set(event.extra, "privateBody", "never serialize");
+        else Reflect.set(event.extra, "invalidJsonCount", "invalid");
+        expect(() => formatActivityLogProofLine(event)).toThrow();
+      } finally {
+        env.cleanup();
+      }
+    },
+  );
 });

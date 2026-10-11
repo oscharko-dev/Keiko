@@ -43,8 +43,35 @@ Repair the producer or stored source through the existing governed workflow, the
 confirmed operation. Do not normalize rejected bytes silently, bypass validation, widen crawl limits
 or invent an approval token. A refused metadata statement leaves its row unchanged, but create source
 attachment or refresh apply/index work may already have happened; inspect the existing pod before
-retrying. This is not a whole-job rollback guarantee. Independently omitted reader summaries still
-need their own owner evidence and are not covered by the writer diagnostic.
+retrying. This is not a whole-job rollback guarantee. Reader-summary rejection uses its separate owning event described below; it is not covered by the writer diagnostic.
+
+## Refresh detail is omitted from a pod projection
+
+**Symptom**
+
+The pod remains available but its refresh detail is absent. An examined legacy/corrupt summary emits
+`knowledge.manual-refresh-summary.rejected` under the request, job or run correlation. A later valid
+source can still provide refresh detail; `summaryReturned` distinguishes that outcome.
+
+**Root Cause**
+
+The reader encountered malformed persisted JSON or a summary that fails the canonical contract.
+Ordinary absent metadata is not a failure and emits no rejection. Counts cover only sources examined
+before the first valid summary, not every source in the pod.
+
+**Diagnostic Steps**
+
+Use the existing local support query/export and validated support analyzer for the affected
+correlation. Inspect `invalidJsonCount`, `invalidSummaryCount`, the closed `reason` and
+`summaryReturned`. Read completeness, loss and writer readiness before treating an absent event as
+proof of healthy metadata. The event deliberately contains no raw JSON, path, source identifier or
+validation message.
+
+**Resolution**
+
+Preserve the existing pod and investigate through the governed refresh workflow. The reader does
+not rewrite storage, widen crawl authority or restore corrupt data automatically. Do not repair the
+record with direct SQL or treat reader omission as a whole-refresh rollback.
 
 ## Refresh reports "reached a crawl limit" or "removed pages not detected"
 

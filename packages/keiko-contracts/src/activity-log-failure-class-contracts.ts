@@ -6,6 +6,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "knowledge-manual-summary-validation",
+    requiredProductSurfaces: ["keiko-local-knowledge"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: [],
+      failure: ["knowledge.manual-refresh-summary.rejected"],
+      loss: [],
+    },
+    requiredCausalOperations: ["knowledge.manual-refresh-summary.rejected"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["knowledge.manual-refresh-summary.rejected"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "browser-handoff",
     requiredProductSurfaces: ["keiko-cli"],
     requiredLifecycleOperations: {

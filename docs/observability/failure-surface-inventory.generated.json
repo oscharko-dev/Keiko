@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "52125c6a8bee814bac81113c377da0ded031521711b0c43b4a41363afc970134"
+    "catalogDigest": "784aa514e8759ce73dffa060b5dea69f27bf3dc67725ef79903cbedce25d52c9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 532,
-    "proofCount": 539,
-    "resolvedProofCount": 539,
-    "failureClassCount": 342,
+    "operationCount": 533,
+    "proofCount": 540,
+    "resolvedProofCount": 540,
+    "failureClassCount": 343,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -456,6 +456,7 @@
         "indexing.start.accepted",
         "indexing.start.refused",
         "knowledge.log.sink-failed",
+        "knowledge.manual-refresh-summary.rejected",
         "knowledge.store.encryption-rejected",
         "knowledge.store.quarantined",
         "memory-vault.log.sink-failed",
@@ -706,6 +707,7 @@
     }
   ],
   "failureClassScenarios": {
+    "knowledge-manual-summary-validation": ["memory-knowledge.rejection"],
     "browser-handoff": ["ui.dependency-failure"],
     "chat-context-management": ["bff.dependency-failure"],
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
@@ -2088,6 +2090,9 @@
     ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
+    ],
+    "knowledge.manual-refresh-summary.rejected.omission": [
+      "packages/keiko-local-knowledge/src/knowledge-pods.test.ts"
     ],
     "knowledge.store.encryption-rejected.mode": [
       "packages/keiko-local-knowledge/src/store.log-sink-safety.test.ts"

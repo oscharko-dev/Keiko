@@ -1,3 +1,11 @@
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
+import { CORRELATION_RESPONSE_HEADER } from "./correlation.js";
+import {
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 // Epic #1852 — POST /api/docs-browser/propose + /approve integration and resolver tests. The routes
 // run live through createUiServer so the CSRF/state-change gate and JSON handling exercise the real
 // path; the resolver unit tests inject a pod lister to prove already-indexed duplicate detection.
@@ -63,7 +71,7 @@ interface CitationFixture {
   readonly close: () => Promise<void>;
 }
 
-async function seedManualCitationFixture(): Promise<CitationFixture> {
+async function seedManualCitationFixture(corruptSummary = false): Promise<CitationFixture> {
   const staticRoot = await mkdtemp(join(tmpdir(), "keiko-docs-propose-citation-"));
   const uiDbPath = join(staticRoot, "ui.sqlite");
   const store = openKnowledgeStore({
@@ -94,12 +102,25 @@ async function seedManualCitationFixture(): Promise<CitationFixture> {
       maxDepth: 3,
       maxBytes: 2_000_000,
       maxLinkSample: 50,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs,
       followRedirects: false,
     },
     sourceFingerprint: "fp-propose-citation",
     proposedPodName: "Device Handbook",
   });
+  if (corruptSummary) {
+    // Historical corruption and manual source tags on an otherwise healthy actual indexed fixture.
+    const tags = JSON.stringify([
+      htmlManualSourceKindTag("html-manual-http"),
+      htmlManualSourceFingerprintTag("fp-propose-citation"),
+    ]);
+    store._internal.db
+      .prepare("UPDATE knowledge_sources SET tags_json = :tags WHERE id = :id")
+      .run({ tags, id: seeded.sourceId });
+    store._internal.db
+      .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
+      .run({ bytes: "{private-docs-summary" });
+  }
   const chunkId = seeded.chunkIds[0];
   store.close();
   if (chunkId === undefined) throw new Error("manual citation seed has no chunk");
@@ -470,4 +491,47 @@ describe("citation-opened manual target resolution (AUDIT-E1852-001)", () => {
     const proposal = resolveManualProposal(target, stubDeps(), () => []);
     expect(proposal.state).toBe("likely-manual");
   });
+});
+
+describe("default documentation proposal summary evidence", () => {
+  it.each(["propose", "approve"] as const)(
+    "retains the actual %s HTTP correlation without starting a crawl",
+    async (route) => {
+      const citation = await seedManualCitationFixture(true);
+      const events: ServerLogEvent[] = [];
+      setServerLogger(
+        createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+      );
+      const staticRoot = await mkdtemp(join(tmpdir(), "keiko-docs-summary-obs-"));
+      const started = await startUiTestServer({
+        staticRoot,
+        csp: buildCspHeader([]),
+        handlerDeps: citation.deps,
+      });
+      try {
+        const response = await post({ port: started.port, close: () => Promise.resolve() }, route, {
+          target: "https://manual.internal/index.html",
+        });
+        expect(response.status).toBeLessThan(500);
+        const rejected = events.filter(
+          (event) => event.op === "knowledge.manual-refresh-summary.rejected",
+        );
+        expect(rejected).toHaveLength(1);
+        expect(rejected[0]?.correlationId).toBe(response.headers.get(CORRELATION_RESPONSE_HEADER));
+        expect(rejected[0]?.extra).toMatchObject({ invalidJsonCount: 1, summaryReturned: false });
+        expect(events.filter((event) => event.op.startsWith("manual.crawl."))).toHaveLength(0);
+        expect(JSON.stringify(events)).not.toContain("private-docs-summary");
+      } finally {
+        await new Promise<void>((resolve) =>
+          started.server.close(() => {
+            resolve();
+          }),
+        );
+        resetServerLogger();
+        citation.deps.store.close();
+        await citation.close();
+        await rm(staticRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });

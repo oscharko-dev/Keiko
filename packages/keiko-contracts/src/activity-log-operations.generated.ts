@@ -24146,6 +24146,53 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "knowledge.manual-refresh-summary.rejected",
+    category: "diagnostic",
+    owner: "keiko-local-knowledge",
+    emitter: "knowledge-pods.logManualRefreshSummaryRejection",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      invalidJsonCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      invalidSummaryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["invalid-json", "invalid-summary", "mixed"],
+      },
+      summaryReturned: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["knowledge-manual-summary-validation"],
+    proofIds: ["knowledge.manual-refresh-summary.rejected.omission"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "knowledge.store.encryption-rejected",
     category: "diagnostic",
     owner: "keiko-local-knowledge",
