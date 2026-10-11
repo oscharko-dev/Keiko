@@ -239,7 +239,28 @@ export function redact(
   for (const pattern of BUILTIN_PATTERNS) {
     output = output.replace(pattern, REDACTED);
   }
-  for (const secret of additionalSecrets) {
+  return redactLiteralSpans(output, additionalSecrets, preserveSourceLineBreaks);
+}
+
+/**
+ * Removes only the exact secret literals the caller holds (a provider's API key and base URL),
+ * never a heuristic shape. For model output an exact consumer reads byte for byte, such as the
+ * arguments of a governed tool call: `redact()`'s shape patterns rewrite ordinary text
+ * ("basic stock holds" becomes "Basic [REDACTED] holds"), so an exact replacement no longer matches
+ * its file and written content is silently changed (#4009). Content shown to people or written to
+ * diagnostics still goes through `redact()`.
+ */
+export function redactSecretLiterals(input: string, secrets: readonly string[]): string {
+  return redactLiteralSpans(input, secrets, false);
+}
+
+function redactLiteralSpans(
+  input: string,
+  secrets: readonly string[],
+  preserveSourceLineBreaks: boolean,
+): string {
+  let output = input;
+  for (const secret of secrets) {
     if (secret.length === 0) {
       continue;
     }

@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c8a08d3b257c6a93a036c19ea95384584f29670de4aecad1de5eb0f0e6a8d6b0" as const;
+  "3958fe5385aa4de2d43c36b7c060f2955e0ce3ecb141b0ddf40854092e4ce29f" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 344,
-  completeClassCount: 344,
+  supportedClassCount: 345,
+  completeClassCount: 345,
   completeness: "complete",
   classes: [
     {
@@ -21921,6 +21921,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "gateway-tool-arguments",
+      requirementContract: "gateway-tool-arguments",
+      productSurfaces: ["keiko-model-gateway"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.tool-arguments.redacted"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "gateway.tool-arguments.redacted",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["gateway.tool-arguments.redacted"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "gateway.tool-arguments.redacted",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "redactedStringCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "toolCallCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.tool-arguments.redacted.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "gateway-tool-calling-capability",
       requirementContract: "gateway-tool-calling-capability",
       productSurfaces: ["keiko-server"],
@@ -41581,6 +41643,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.stream.completed": "model-gateway",
     "gateway.stream.failed": "model-gateway",
     "gateway.stream.started": "model-gateway",
+    "gateway.tool-arguments.redacted": "model-gateway",
     "gateway.tool-calling.verification": "model-gateway",
     "gateway.tool-catalog.call-bound": "model-gateway",
     "gateway.tool-catalog.native-passthrough": "model-gateway",
