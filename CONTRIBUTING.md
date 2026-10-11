@@ -125,9 +125,11 @@ the nominated file turn. If no joint proposal fits, the feasible relevance propo
 This bounded tradeoff applies to new targets; previously funded targets remain intact. Whole
 targets that fail admission remain separately retryable, including later targets in served files.
 A shared file turn advances only after a newly funded whole relevance prefix makes progress.
-The file nomination searches existing order for the first jointly feasible target in a different
-physical file whose existing relevance-ordered queue head is not fully funded. A weaker target or
-compact caller window does not complete that head's file opportunity.
+Pending file nominations use their existing relevance-ordered queue head's score, highest first,
+with stable existing ties and within-file nomination order. The first jointly feasible target in a
+different physical file whose queue head is not fully funded receives the shared file turn.
+Infeasible nominations remain eligible without blocking feasible nominations in other files.
+A weaker target or compact caller window does not complete that head's file opportunity.
 A nomination that adds no prefix target cannot donate fresh fair-only bytes; deferred file turns
 remain eligible for a final guarded retry in their existing order.
 Aggregate same-file unions consume the connected share; each physical excerpt retains its existing
