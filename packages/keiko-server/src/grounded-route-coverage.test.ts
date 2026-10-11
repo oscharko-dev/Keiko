@@ -285,13 +285,14 @@ function readBytes(reads: ExcerptReadSummary): number {
 
 function actualPublicRetrieval(
   fixture: CoverageFixture,
+  budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
 ): ReturnType<typeof retrieveConnectedContextPack> {
   return retrieveConnectedContextPack(
     {
       scope: fixture.scope,
       query: fixture.query,
       workspaceRoot: fixture.searchScope.workspace.root,
-      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
+      budget,
     },
     {
       correlationId: undefined,
@@ -844,6 +845,27 @@ describe("current route trace excerpt coverage", () => {
       expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
     },
   );
+  it("keeps an initial ordinary body when later expansion exhausts its shared grant", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      crossWaveCoverageFiles(),
+    );
+    const range = await crossWaveOrdinaryRange(fixture);
+    const atoms = await allocationAtoms(fixture);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    const readPack = await assembledCoveragePack(fixture, reads, atoms, budget);
+    const readPrompt = await sentPrompt(fixture, reads, atoms, budget);
+    expectCrossWaveOrdinaryViews(fixture, reads, readPack, readPrompt, range);
+    expect(reads.observation?.stopReasons).toContain("byte-grant");
+    const { pack } = await actualPublicRetrieval(fixture, budget);
+    const prompt = buildGroundedGatewayMessages(fixture.query.text, pack, (value) => value)
+      .map((message) => message.content)
+      .join("\n");
+    expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(budget.excerptBytesMax);
+  });
+
   it("retains a useful unfunded definition beside the independent ordinary method", async () => {
     const fixture = await coverageFixture(
       "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",

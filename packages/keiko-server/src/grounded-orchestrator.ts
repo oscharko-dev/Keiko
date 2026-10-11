@@ -7462,7 +7462,9 @@ function* pendingExcerptWaves(
     next += wave.length;
   }
   if (next < paths.length && state.remainingBytes <= 0) {
-    state.byteBudgetOmittedPaths = paths.slice(next);
+    state.byteBudgetOmittedPaths = paths
+      .slice(next)
+      .filter((path) => !state.excerpts.get(path)?.some((view) => view.content.length > 0));
     state.uncertainty.push(budgetClipped("budget-exhausted on excerptBytes", inputs.nowMs()));
   }
 }
