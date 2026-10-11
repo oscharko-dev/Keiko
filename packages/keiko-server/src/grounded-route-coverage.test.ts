@@ -801,6 +801,37 @@ function delayedStrongFileCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function requirePendingBodyFixtureEntry<T>(entry: T | undefined, description: string): T {
+  if (entry === undefined) throw new TypeError(`fixture requires ${description}`);
+  return entry;
+}
+
+function pendingSameFileBodyCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...delayedStrongFileCoverageFiles() };
+  const body = files["src/scope-admission.ts"] ?? "";
+  files["src/implementation.ts"] = [
+    (files["src/implementation.ts"] ?? "").replace(
+      'import { admitScope } from "./scope-admission.js";\n',
+      "",
+    ),
+    ...Array.from({ length: 30 }, () => "// separate the current callable declarations"),
+    body,
+  ].join("\n");
+  delete files["src/scope-admission.ts"];
+  for (let index = 0; index < 9; index += 1)
+    files[`src/record-${String(index)}.ts`] = (
+      files[`src/record-${String(index)}.ts`] ?? ""
+    ).replace(
+      "  return value;",
+      "  const scopeAdmissionBudget = 1024;\n  return scopeAdmissionBudget + value;",
+    );
+  files["src/z-processing.ts"] = (files["src/z-processing.ts"] ?? "").replace(
+    "  return root;",
+    "  const scopeAdmissionBudget = 1024;\n  return scopeAdmissionBudget + root;",
+  );
+  return files;
+}
+
 function pendingFileRelevanceCoverageFiles(): Readonly<Record<string, string>> {
   const files = { ...delayedStrongFileCoverageFiles() };
   let caller = files["src/implementation.ts"] ?? "";
@@ -1422,6 +1453,159 @@ describe("current route trace excerpt coverage", () => {
         for (const [index, line] of lines.entries())
           expect(messages, metadata).toContain(`${String(range.startLine + index)} | ${line}`);
       }
+    }
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+  });
+
+  it("retains a competing pending same-file body after its physical head is fully funded", async () => {
+    const fixture = await coverageFixture(undefined, pendingSameFileBodyCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const prefix = entries.filter((entry) =>
+      /^function scopeAdmissionAndPromptFitting\d+\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    const target = entries.find((entry) =>
+      /^export function admitScope\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    const later = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
+    const weak = entries.filter((entry) => entry.atom.scopePath.startsWith("src/record-"));
+    expect(prefix).toHaveLength(6);
+    expect(weak).toHaveLength(9);
+    const pending = requirePendingBodyFixtureEntry(target, "the actual pending same-file target");
+    const continuation = requirePendingBodyFixtureEntry(later, "the actual usable later file");
+    expect(weak.every((entry) => entry.atom.score <= pending.atom.score)).toBe(true);
+    expect(pending.atom.score).toBeGreaterThanOrEqual(continuation.atom.score);
+    expect(prefix.every((entry) => entry.atom.score >= pending.atom.score)).toBe(true);
+    const parent = entries.find((entry) => entry.definitionIdentity === pending.parentIdentity);
+    const caller = requirePendingBodyFixtureEntry(parent, "the actual common caller");
+    const head = [...entries]
+      .filter((entry) => entry.atom.scopePath === pending.atom.scopePath)
+      .sort((left, right) => right.atom.score - left.atom.score)[0];
+    const physicalHead = requirePendingBodyFixtureEntry(head, "the actual physical file head");
+    expect(pending.atom.scopePath).toBe("src/implementation.ts");
+    expect(physicalHead.atom.score).toBeGreaterThan(pending.atom.score);
+    expect(physicalHead.definitionIdentity).not.toBe(pending.definitionIdentity);
+    const watched = [physicalHead, caller, ...prefix, continuation, pending].map((entry) => {
+      const range = entry.atom.lineRange;
+      if (range === undefined)
+        throw new TypeError("fixture requires actual complete declaration ranges");
+      const lines = (fixture.files[entry.atom.scopePath] ?? "")
+        .split("\n")
+        .slice(range.startLine - 1, range.endLine);
+      const body = lines.join("\n");
+      expect(fixture.trace.routeCoverage?.isCurrent(entry.atom)).toBe(true);
+      expect(entry.observedBytes).toBe(Buffer.byteLength(body));
+      expect(entry.observedBytes).toBeLessThan(4096);
+      if (entry !== caller && entry !== physicalHead) {
+        expect(entry.parentWitness?.parentIdentity).toBe(caller.definitionIdentity);
+        expect(entry.parentWitness?.targetIdentity).toBe(entry.definitionIdentity);
+      }
+      return { entry, range, lines, body };
+    });
+    const selected = new Set(coverageRanking(atoms).kept.map((candidate) => candidate.scopePath));
+    expect(watched.every(({ entry }) => selected.has(entry.atom.scopePath))).toBe(true);
+    expect(weak.every((entry) => selected.has(entry.atom.scopePath))).toBe(true);
+    const targetRange = pending.atom.lineRange;
+    if (targetRange === undefined)
+      throw new TypeError("fixture requires the actual pending whole target range");
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    for (const paths of [
+      ["src/routes.ts", "src/implementation.ts", continuation.atom.scopePath],
+      undefined,
+    ]) {
+      const { reads, requests } = await observedCoverageRead(fixture, {
+        paths,
+        atoms,
+        inputs: { budget },
+      });
+      const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+      const messages = await sentPrompt(fixture, reads, atoms, budget);
+      expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      expect(requests.every((request) => request.maxBytes <= 8192)).toBe(true);
+      const borrowed = weak.filter((entry) =>
+        requests.some(
+          (request) =>
+            request.scopePath === entry.atom.scopePath &&
+            request.ranges?.some(
+              (window) =>
+                window.startLine <= (entry.atom.lineRange?.startLine ?? Infinity) &&
+                window.endLine >= (entry.atom.lineRange?.endLine ?? Infinity),
+            ),
+        ),
+      );
+      const metadata = JSON.stringify({
+        restricted: paths !== undefined,
+        watched: watched.map(({ entry, range, body }) => ({
+          path: entry.atom.scopePath,
+          range,
+          score: entry.atom.score,
+          bytes: Buffer.byteLength(body),
+          read: readContent(reads, entry.atom.scopePath).includes(body),
+        })),
+        head: {
+          identity: physicalHead.definitionIdentity,
+          score: physicalHead.atom.score,
+          range: physicalHead.atom.lineRange,
+        },
+        target: { identity: pending.definitionIdentity, score: pending.atom.score },
+        actualFullyFundedCompetitorHeads: borrowed.map((entry) => ({
+          path: entry.atom.scopePath,
+          range: entry.atom.lineRange,
+          score: entry.atom.score,
+        })),
+        weakScores: weak.map((entry) => entry.atom.score),
+        bytesReturned: readBytes(reads),
+        requests: requests.map((request) => ({
+          path: request.scopePath,
+          funded: request.ranges,
+          grant: request.maxTotalBytes,
+          first: request.firstRoundOnly,
+        })),
+      });
+      const headRange = physicalHead.atom.lineRange;
+      if (headRange === undefined) throw new TypeError("fixture requires the actual head range");
+      expect(
+        requests.some(
+          (request) =>
+            request.scopePath === physicalHead.atom.scopePath &&
+            request.ranges?.some(
+              (window) =>
+                window.startLine <= headRange.startLine && window.endLine >= headRange.endLine,
+            ),
+        ),
+        metadata,
+      ).toBe(true);
+      for (const { entry, range, lines, body } of watched) {
+        expect(readContent(reads, entry.atom.scopePath).includes(body), metadata).toBe(true);
+        expect(
+          pack.files
+            .find((file) => file.scopePath === entry.atom.scopePath)
+            ?.excerpts.some((view) => view.content.includes(body)),
+          metadata,
+        ).toBe(true);
+        for (const [index, line] of lines.entries())
+          expect(messages, metadata).toContain(`${String(range.startLine + index)} | ${line}`);
+      }
+      expect(
+        requests.some(
+          (request) =>
+            request.scopePath === pending.atom.scopePath &&
+            request.ranges?.some(
+              (window) =>
+                window.startLine <= targetRange.startLine && window.endLine >= targetRange.endLine,
+            ),
+        ),
+        metadata,
+      ).toBe(true);
     }
     expect(JSON.stringify(atoms)).toBe(originalAtoms);
   });
