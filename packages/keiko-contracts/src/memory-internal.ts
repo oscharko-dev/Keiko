@@ -45,7 +45,8 @@ export function isStringArray(value: unknown): value is readonly string[] {
 }
 
 export function isMember<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 export function isSafeText(value: unknown, maxChars: number): value is string {
@@ -58,46 +59,59 @@ export function isSafeText(value: unknown, maxChars: number): value is string {
   return !FORBIDDEN_CONTROL_RE.test(value);
 }
 
-export function validateTags(field: string, input: unknown, errors: string[]): void {
+export function validateTags(field: string, input: unknown, errors: string[]): boolean {
   if (!isStringArray(input)) {
     errors.push(`${field} must be a string array`);
-    return;
+    return false;
   }
   if (input.length > MEMORY_TAGS_MAX_COUNT) {
     errors.push(`${field} must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
-    return;
+    return false;
   }
   for (const tag of input) {
     if (tag.length === 0 || tag.length > MEMORY_TAG_MAX_CHARS || FORBIDDEN_CONTROL_RE.test(tag)) {
       errors.push(`${field} entry must be a non-empty bounded control-free string`);
-      return;
+      return false;
     }
   }
+  return true;
 }
 
-export function validateRetentionHint(field: string, input: unknown, errors: string[]): void {
+export function validateRetentionHint(field: string, input: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(input)) {
     errors.push(`${field} must be an object when set`);
-    return;
+    return false;
   }
   if (!isNonEmptyTrimmedString(input.policyKey)) {
     errors.push(`${field}.policyKey must be a non-empty string`);
+    valid = false;
   }
   if (input.retainUntil !== undefined && !isFiniteNonNegativeNumber(input.retainUntil)) {
     errors.push(`${field}.retainUntil must be a finite non-negative number when set`);
+    valid = false;
   }
   if (input.notes !== undefined && !isSafeText(input.notes, MEMORY_REASON_MAX_CHARS)) {
     errors.push(`${field}.notes must be a bounded control-free string when set`);
+    valid = false;
   }
+  return valid;
 }
 
-export function validateOptionalReference(field: string, value: unknown, errors: string[]): void {
+export function validateOptionalReference(
+  field: string,
+  value: unknown,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (value === undefined) {
-    return;
+    return true;
   }
   if (!isNonEmptyTrimmedString(value)) {
     errors.push(`${field} must be a non-empty string when set`);
+    valid = false;
   }
+  return valid;
 }
 
 // Shared helpers used by both record-validation and operation-validation modules. Lifted

@@ -3,7 +3,9 @@
 // precisely at the broken invariant — the same mutation-robust pattern used by
 // local-knowledge.test.ts and connected-context.test.ts.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
+import { spawnSync } from "node:child_process";
+import * as publicMemory from "@oscharko-dev/keiko-contracts/memory";
 import {
   MEMORY_AUDIT_ACTION_KINDS,
   MEMORY_EDGE_KINDS,
@@ -1478,3 +1480,431 @@ const _unusedTypeAnchor = (): void => {
   };
   const _b: MemoryAuditRecordId = audit("ar-1");
 };
+
+// These ordinary-object controls preserve the existing observation schedule, not a
+// guarantee that a getter cannot change after validation. The original before receipt
+// retains the pre-migration production behavior.
+describe("public memory observation preservation", () => {
+  it.each([
+    { kind: "global" },
+    { kind: "user", userId: "user" },
+    { kind: "workspace", workspaceId: "workspace" },
+    { kind: "project", projectId: "project" },
+    { kind: "workflow", workflowDefinitionId: "workflow" },
+  ])("retains each scope arm by identity: $kind", (scope) => {
+    const result = publicMemory.validateMemoryScope(scope);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(scope);
+  });
+
+  it.each([
+    { kind: "string-list", items: ["one", "two"] },
+    { kind: "key-value", entries: [{ key: "key", value: "value" }] },
+  ])("retains root, nested values and serialized bytes for $kind", (payload) => {
+    const record = happyRecord();
+    const input = {
+      ...record,
+      payload,
+      retentionHint: { policyKey: "default", retainUntil: 0, notes: "note" },
+    };
+    const bytes = JSON.stringify(input);
+    const result = publicMemory.validateMemoryRecord(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.scope).toBe(record.scope);
+    expect(result.value.provenance).toBe(record.provenance);
+    expect(result.value.validity).toBe(record.validity);
+    expect(result.value.tags).toBe(record.tags);
+    expect(result.value.retentionHint).toBe(input.retentionHint);
+    expect(result.value.payload).toBe(payload);
+    expect(JSON.stringify(result.value)).toBe(bytes);
+    const checked = publicMemory.validateMemoryStructuredPayload(payload);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    expect(checked.value).toBe(payload);
+    if (checked.value.kind === "string-list") expect(checked.value.items).toBe(payload.items);
+    else {
+      expect(checked.value.entries).toBe(payload.entries);
+      expect(checked.value.entries[0]).toBe(payload.entries?.[0]);
+    }
+  });
+
+  it.each(["payload", "staleReason", "retentionHint"])(
+    "preserves omitted and own-undefined %s while refusing null",
+    (field) => {
+      const omitted = happyRecord();
+      const explicit = { ...omitted, [field]: undefined };
+      for (const input of [omitted, explicit]) {
+        const result = publicMemory.validateMemoryRecord(input);
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.value).toBe(input);
+          expect(Object.hasOwn(result.value, field)).toBe(Object.hasOwn(input, field));
+          expect(JSON.stringify(result.value)).toBe(JSON.stringify(input));
+        }
+      }
+      expect(publicMemory.validateMemoryRecord({ ...omitted, [field]: null }).ok).toBe(false);
+    },
+  );
+
+  it("preserves open expiry omission and own-undefined beside null refusal", () => {
+    for (const input of [{ validFrom: 0 }, { validFrom: 0, validUntil: undefined }]) {
+      const result = publicMemory.validateMemoryValidityInterval(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(Object.hasOwn(result.value, "validUntil")).toBe(Object.hasOwn(input, "validUntil"));
+      }
+    }
+    expect(publicMemory.validateMemoryValidityInterval({ validFrom: 0, validUntil: null }).ok).toBe(
+      false,
+    );
+  });
+
+  it("retains ordered diagnostics across independent record failures", () => {
+    const result = publicMemory.validateMemoryRecord({
+      ...happyRecord(),
+      schemaVersion: "2",
+      scope: { kind: "user", userId: "" },
+      body: "",
+      pinned: 0,
+      type: "invalid",
+      status: "invalid",
+      createdAt: 2,
+      updatedAt: 1,
+      payload: { kind: "string-list", items: [""] },
+      provenance: { ...happyProvenance(), confidence: 2 },
+      validity: { validFrom: 2, validUntil: 1 },
+      tags: [""],
+      retentionHint: { policyKey: "" },
+    });
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'record.schemaVersion must be the literal "1"',
+        "record.scope.userId must be a non-empty string for kind=user",
+        "record.body must be a bounded control-free non-empty string",
+        "record.pinned must be a boolean",
+        "record.type must be one of episodic|semantic-fact|procedural|preference|correction|decision|negative|pinned",
+        "record.status must be one of proposed|accepted|rejected|superseded|archived|forgotten|conflicted|expired",
+        "record.updatedAt must be greater than or equal to record.createdAt",
+        "record.payload.items entry must be a non-empty bounded control-free string",
+        "record.provenance.confidence must be a finite number in [0, 1]",
+        "record.validity.validUntil must be greater than or equal to validFrom",
+        "record.tags entry must be a non-empty bounded control-free string",
+        "record.retentionHint.policyKey must be a non-empty string",
+      ],
+    });
+  });
+
+  it("reads scope through its original Proxy receiver in order", () => {
+    const reads: string[] = [];
+    const scope = new Proxy(
+      { kind: "user", userId: "user" },
+      {
+        get(target, key, receiver): unknown {
+          expect(receiver).toBe(scope);
+          reads.push(String(key));
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const result = publicMemory.validateMemoryScope(scope);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(scope);
+    expect(reads).toEqual(["kind", "kind", "userId"]);
+  });
+
+  it("retains repeated validity reads including a changing final getter", () => {
+    const reads: string[] = [];
+    let untilReads = 0;
+    const input = {
+      get validFrom(): number {
+        reads.push("from");
+        return 1;
+      },
+      get validUntil(): number {
+        reads.push("until");
+        return ++untilReads === 3 ? 0 : 2;
+      },
+    };
+    expect(publicMemory.validateMemoryValidityInterval(input)).toEqual({
+      ok: false,
+      errors: ["validity.validUntil must be greater than or equal to validFrom"],
+    });
+    expect(reads).toEqual(["from", "until", "until", "from", "until", "from"]);
+    expect(publicMemory.validateMemoryValidityInterval({ validFrom: 1, validUntil: 2 }).ok).toBe(
+      true,
+    );
+  });
+
+  it("propagates the exact error at the second expiry getter read", () => {
+    const failure = new TypeError("fixture getter failure");
+    let reads = 0;
+    const input = {
+      validFrom: 1,
+      get validUntil(): number {
+        if (++reads === 2) throw failure;
+        return 2;
+      },
+    };
+    expect.assertions(3);
+    try {
+      publicMemory.validateMemoryValidityInterval(input);
+    } catch (error: unknown) {
+      expect(error).toBe(failure);
+    }
+    expect(reads).toBe(2);
+    expect(publicMemory.validateMemoryValidityInterval({ validFrom: 1 }).ok).toBe(true);
+  });
+
+  it("preserves payload array reads, iteration and receiver", () => {
+    const reads: string[] = [];
+    const items = new Proxy(["item"], {
+      get(target, key, receiver): unknown {
+        expect(receiver).toBe(items);
+        reads.push(String(key));
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    let itemReads = 0;
+    const payload = {
+      kind: "string-list",
+      get items(): string[] {
+        itemReads++;
+        return items;
+      },
+    };
+    expect(publicMemory.validateMemoryStructuredPayload(payload).ok).toBe(true);
+    expect(itemReads).toBe(3);
+    expect(reads).toEqual(["length", "Symbol(Symbol.iterator)", "length", "0", "length"]);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    "refuses invalid optional expiry and record timestamps %s",
+    (value) => {
+      expect(
+        publicMemory.validateMemoryValidityInterval({ validFrom: 0, validUntil: value }).ok,
+      ).toBe(false);
+      expect(publicMemory.validateMemoryRecord({ ...happyRecord(), createdAt: value }).ok).toBe(
+        false,
+      );
+      expect(publicMemory.validateMemoryRecord({ ...happyRecord(), updatedAt: value }).ok).toBe(
+        false,
+      );
+      expect(
+        publicMemory.validateMemoryRecord({ ...happyRecord(), createdAt: 0, updatedAt: 0 }).ok,
+      ).toBe(true);
+    },
+  );
+
+  it("retains distinct coordinate and record ID grammar", () => {
+    const id = " ../\uff41/record ";
+    expect(publicMemory.validateMemoryScope({ kind: "user", userId: id }).ok).toBe(true);
+    expect(publicMemory.validateMemoryRecord({ ...happyRecord(), id }).ok).toBe(true);
+  });
+
+  it("accepts exact payload count/text boundaries without normalization", () => {
+    const items = Array.from({ length: 128 }, () => "\uff41\t\n\r" + "x".repeat(4092));
+    const payload = { kind: "string-list", items };
+    expect(publicMemory.validateMemoryStructuredPayload(payload).ok).toBe(true);
+    const entries = Array.from({ length: 128 }, () => ({
+      key: "k".repeat(64),
+      value: "x".repeat(4096),
+    }));
+    expect(publicMemory.validateMemoryStructuredPayload({ kind: "key-value", entries }).ok).toBe(
+      true,
+    );
+    expect(items[0]).toBe("\uff41\t\n\r" + "x".repeat(4092));
+  });
+});
+
+describe("public memory optional and root observation preservation", () => {
+  it.each([
+    "sourceConversationId",
+    "sourceWorkflowRunId",
+    "sourceEvidenceManifestId",
+    "modelIdentity",
+    "captureRationale",
+  ])("preserves provenance optional %s and refuses null", (field) => {
+    const omitted = happyProvenance();
+    for (const input of [omitted, { ...omitted, [field]: undefined }]) {
+      const result = publicMemory.validateMemoryProvenance(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(Object.hasOwn(result.value, field)).toBe(Object.hasOwn(input, field));
+      }
+    }
+    expect(publicMemory.validateMemoryProvenance({ ...omitted, [field]: null }).ok).toBe(false);
+  });
+
+  it("retains root field observation order and receiver", () => {
+    const reads: string[] = [];
+    const input = new Proxy(happyRecord(), {
+      get(target, key, receiver): unknown {
+        expect(receiver).toBe(input);
+        reads.push(String(key));
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const result = publicMemory.validateMemoryRecord(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(reads).toEqual([
+      "schemaVersion",
+      "scope",
+      "id",
+      "body",
+      "pinned",
+      "staleReason",
+      "type",
+      "status",
+      "createdAt",
+      "updatedAt",
+      "createdAt",
+      "updatedAt",
+      "updatedAt",
+      "createdAt",
+      "payload",
+      "provenance",
+      "validity",
+      "tags",
+      "retentionHint",
+    ]);
+  });
+
+  it("propagates a fixture-owned payload iterator failure without rewriting it", () => {
+    const failure = new TypeError("fixture iterator failure");
+    const items = ["item"];
+    Object.defineProperty(items, Symbol.iterator, {
+      value(): never {
+        throw failure;
+      },
+    });
+    expect.assertions(2);
+    try {
+      publicMemory.validateMemoryStructuredPayload({ kind: "string-list", items });
+    } catch (error: unknown) {
+      expect(error).toBe(failure);
+    }
+    expect(
+      publicMemory.validateMemoryStructuredPayload({ kind: "string-list", items: ["item"] }).ok,
+    ).toBe(true);
+  });
+});
+
+it("keeps own-undefined expiry in the public presence-branch type", () => {
+  const input = { validFrom: 0, validUntil: undefined };
+  const result = publicMemory.validateMemoryValidityInterval(input);
+  expect(result.ok).toBe(true);
+  if (result.ok && "validUntil" in result.value) {
+    expectTypeOf(result.value.validUntil).toEqualTypeOf<number | undefined>();
+    expect(result.value.validUntil).toBeUndefined();
+    expect(result.value).toBe(input);
+  }
+});
+
+it("keeps the proven public optional types honest under required presence", () => {
+  expectTypeOf<Required<publicMemory.MemoryValidityInterval>["validUntil"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryModelIdentity>["modelRevision"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceConversationId"]>().toEqualTypeOf<
+    publicMemory.ConversationId | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceWorkflowRunId"]>().toEqualTypeOf<
+    publicMemory.WorkflowRunId | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceEvidenceManifestId"]>().toEqualTypeOf<
+    publicMemory.EvidenceManifestId | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["modelIdentity"]>().toEqualTypeOf<
+    publicMemory.MemoryModelIdentity | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryProvenance>["captureRationale"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRetentionHint>["retainUntil"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRetentionHint>["notes"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRecord>["payload"]>().toEqualTypeOf<
+    publicMemory.MemoryStructuredPayload | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRecord>["staleReason"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryRecord>["retentionHint"]>().toEqualTypeOf<
+    publicMemory.MemoryRetentionHint | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryEdge>["confidence"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<publicMemory.MemoryEdge>["provenanceSummary"]>().toEqualTypeOf<
+    string | undefined
+  >();
+});
+
+// MEM4013-HOSTILE-EVERY-001 / MEM4013-HOSTILE-PUSH-001: intrinsic mutations stay
+// inside disposable processes; each challenge has a production healthy control.
+const MEMORY_INTRINSIC_CONTROL = `
+import { strict as assert } from "node:assert";
+import { validateMemoryScope, validateMemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+const healthy = {
+  id: "memory-fixture", schemaVersion: "1", scope: { kind: "global" },
+  type: "episodic", body: "fixture", status: "accepted", pinned: false, tags: [],
+  provenance: { sourceKind: "explicit-user-instruction", capturedAt: 0, confidence: 1, sensitivity: "public" },
+  validity: { validFrom: 0 }, createdAt: 0, updatedAt: 0,
+};
+const scopeControl = validateMemoryScope(healthy.scope);
+const recordControl = validateMemoryRecord(healthy);
+assert.equal(scopeControl.ok, true);
+assert.equal(scopeControl.value, healthy.scope);
+assert.equal(recordControl.ok, true);
+assert.equal(recordControl.value, healthy);
+const push = Object.getOwnPropertyDescriptor(Array.prototype, "push");
+const every = Object.getOwnPropertyDescriptor(Array.prototype, "every");
+let reads = 0;
+let result;
+try {
+  if (process.argv[1] === "push") {
+    result = validateMemoryScope({ get kind() {
+      reads++;
+      Array.prototype.push = function () { throw new Error("fixture-push"); };
+      return "invalid-fixture-kind";
+    } });
+  } else {
+    result = validateMemoryRecord({ ...healthy, schemaVersion: "invalid-fixture-version", get id() {
+      reads++;
+      Array.prototype.every = function () { return true; };
+      return "memory-fixture";
+    } });
+  }
+} finally {
+  Object.defineProperty(Array.prototype, "push", push);
+  Object.defineProperty(Array.prototype, "every", every);
+}
+assert.equal(reads, 1);
+assert.deepEqual(result, { ok: false, errors: [process.argv[1] === "push"
+  ? "scope.kind must be one of user|workspace|project|workflow|global"
+  : 'record.schemaVersion must be the literal "1"'] });
+`;
+
+it.each(["push", "every"])(
+  "preserves public refusal after a getter replaces Array.%s",
+  (method) => {
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", MEMORY_INTRINSIC_CONTROL, method],
+      { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
+    );
+    expect(child.error).toBeUndefined();
+    expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: "" });
+  },
+);
