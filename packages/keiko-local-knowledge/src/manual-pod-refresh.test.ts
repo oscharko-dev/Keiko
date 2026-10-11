@@ -449,11 +449,13 @@ describe("refreshHtmlManualPod", () => {
     await createBasePod();
     const mutated = baseManual();
     mutated.set(GUIDE, manualPage("Guide Rewritten", ["/"]));
-    await refreshHtmlManualPod(refreshDeps(mutated));
+    const result = await refreshHtmlManualPod(refreshDeps(mutated));
 
     const metadata = readHtmlManualSourceMetadata(store, CAPSULE_ID, SOURCE_ID);
     expect(metadata?.lastRefreshedAt).toBeGreaterThan(0);
     expect(metadata?.lastCrawlRunId).toBeTruthy();
+    expect(metadata?.lastChangeSummaryJson).toBe(JSON.stringify(result.changeSummary));
+    expect(metadata?.lastRefreshedAt).toBe(result.changeSummary.refreshedAt);
     const persisted = JSON.parse(metadata?.lastChangeSummaryJson ?? "{}") as unknown;
     expect(validateManualRefreshChangeSummary(persisted).ok).toBe(true);
   });
@@ -552,8 +554,20 @@ describe("refreshHtmlManualPod", () => {
       )
       .run({ c: CAPSULE_ID, s: SOURCE_ID });
 
-    await expect(refreshHtmlManualPod(refreshDeps(baseManual()))).rejects.toThrow(
-      /persisted manual source is invalid/u,
-    );
+    const deps = refreshDeps(baseManual());
+    let fetches = 0;
+    const fetcher = deps.fetcher;
+    await expect(
+      refreshHtmlManualPod({
+        ...deps,
+        fetcher: {
+          fetchManualPage: (...args) => {
+            fetches += 1;
+            return fetcher.fetchManualPage(...args);
+          },
+        },
+      }),
+    ).rejects.toThrow(/persisted manual source is invalid/u);
+    expect(fetches).toBe(0);
   });
 });

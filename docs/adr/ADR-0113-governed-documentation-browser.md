@@ -79,8 +79,9 @@ deliberate rendering deferral**, not an inline content renderer and not an unres
 - **Denied / limited classes.** Public/external HTTP(S) targets are declined; non-http(s)/file schemes
   are unsupported; credentials embedded in a target are rejected and collapsed into a generic
   `invalid-target` so the response never hints a credential was present.
-- **Opening is never consent to crawl or index.** No route crawls, follows links, captures, persists,
-  refreshes, or sends any content to a model. Indexing is a disabled, clearly future affordance.
+- **Opening is never consent to crawl or index.** Documentation navigation and proposal routes never
+  crawl, capture, persist, refresh, or send content to a model. The separate, explicitly triggered
+  manual create/refresh jobs below do not inherit consent from opening a citation.
 - **Evidence redaction.** Only `scheme://host[:port]` origin summaries and a `/` or `/…` path shape
   cross the wire. Query strings, fragments, credentials, and local paths never appear in results,
   diagnostics, or UI copy. Result construction re-applies `stripUnsafeFormatChars` +
@@ -141,7 +142,8 @@ false`, denied link classes, a redacted proposed pod name, and `estimatedPageCou
   `approved: false` (compile-time literals). `POST /api/docs-browser/approve` re-derives the proposal
   server-side, refuses anything non-approvable or already-indexed, and returns a minimal, redaction-safe
   `DocumentationIndexingApproval` handoff (source kind, an opaque `sourceFingerprint` hash of the
-  normalized root, redacted summaries, and the governed limits) for the future crawler epic (#1853).
+  normalized root, redacted summaries, and the governed limits) for the contracts/domain handoff.
+  The implemented live create route below derives its source independently and consumes no approval token.
   Producing a proposal or an approval starts no crawl or index.
 - **Capability widening.** `DocumentationBrowserCapability.indexingProposalAvailable` widens from a hard
   `false` to a boolean that is true only for proposal-eligible classes (local file, loopback, intranet).
@@ -149,16 +151,17 @@ false`, denied link classes, a redacted proposed pod name, and `estimatedPageCou
 - **Duplicate prevention.** `KnowledgePodSummary` gains an optional, content-free `manualSourceFingerprint`
   so an existing HTML-manual pod can be matched by normalized-root hash (never a raw path). The match is
   a pure contract function; the fingerprint is computed downstream in `keiko-server` (the leaf contracts
-  layer cannot hash). A future manual pod (#1853) sets it; until then detection safely reports "not
-  indexed".
+  layer cannot hash). Implemented manual pods persist that fingerprint; proposal detection remains
+  a read-only lookup and never creates a pod.
 - **Redaction is unchanged and re-proved.** No proposal, preview, approval, diagnostic, or UI state
   carries a raw HTML body, query, fragment, credential, cookie, private path, or provider endpoint.
   Issue #1870 is the hard gate: a regression suite runs the propose/approve routes against a hostile
   target battery on a real store and fails if any capsule, indexing job, model-port request, or leaked
   secret/path appears.
 
-Actual rendering or capture of a manual, and the crawler/indexer that consumes the approval handoff,
-remain out of scope and still require the separately security-reviewed, CSP-scoped path noted above.
+Rendered browser capture remains out of scope and requires the separately security-reviewed,
+CSP-scoped path noted above. Static crawling is implemented under the following trust boundary;
+proposal/approval production alone still initiates no job.
 
 ## Extension: crawler trust boundary for static HTML manuals (Epic #1853)
 
@@ -237,6 +240,27 @@ is an independent manual-pod deployment opt-in (`KEIKO_MANUAL_POD_ALLOW_PRIVATE_
 inherited from the model-gateway private-network setting. The live create path does not consume a
 `DocumentationIndexingApproval` token; the earlier proposal/approval handoff is not an automatic job
 trigger.
+
+**Physical metadata persistence (#3918).** The source INSERT captures the selected scope, fingerprint,
+limits and clock observations once, canonical-validates those captured facts and binds the same facts.
+Contradictory scope-kind observations and widened redirects are refused. The writer additionally reads
+schemaVersion, proposedPodName and followRedirects at this boundary; it does not promise stability of
+an original mutable object after validation. Safe absolute local roots remain a domain capability,
+without adding a live local-root create input.
+
+The refresh metadata UPDATE captures its timestamp, crawl-run ID and summary bytes before validation.
+It parses and canonical-validates the summary and requires JSON roundtrip byte equality before binding
+those same bytes. Duplicate-key discarded content, malformed shape and non-roundtripping strings are
+refused, never silently normalized. This intentionally tightens the public writer's compatibility;
+the real refresh producer's JSON remains unchanged. No new fixed byte cap is introduced at this public
+string boundary; parse/serialize cost follows the supplied length.
+
+Writer refusals use fixed body-free TypeError codes. The existing manual job catch emits
+`server.diagnostic.failure` under the actual job correlation through the default registered Activity
+Log writer; no leaf logger or new operation is introduced. A refused statement leaves its metadata
+row unchanged. Source refusal may follow capsule/source attachment; summary refusal may follow refresh
+apply/index work. Neither is a whole-create or whole-refresh rollback guarantee. Summary omission at
+an independent reader remains a separate observability obligation.
 
 ## Extension: citation-driven navigation for HTML manual chat answers (Epic #1854)
 

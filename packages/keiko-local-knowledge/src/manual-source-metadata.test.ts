@@ -15,7 +15,7 @@
 
 import { pathToFileURL } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DocumentId,
@@ -26,6 +26,7 @@ import type {
 import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 
 import { createCapsule } from "./capsule-lifecycle.js";
+import { computeManualRefreshChangeSummary } from "./manual-refresh-change-summary.js";
 import { insertDocumentRow } from "./discovery/persist.js";
 import {
   persistHtmlManualSourceMetadata,
@@ -83,6 +84,25 @@ function localManualSource(overrides: Partial<HtmlManualSource> = {}): HtmlManua
   };
 }
 
+function producerSummaryJson(): string {
+  return JSON.stringify(
+    computeManualRefreshChangeSummary({
+      priorFingerprints: new Map(),
+      newPages: [],
+      crawl: {
+        status: "empty",
+        pages: [],
+        denied: [],
+        stats: { discovered: 0, fetched: 0, accepted: 0, deniedCount: 0, bytesFetched: 0 },
+      },
+      indexing: undefined,
+      sourceKind: "html-manual-http",
+      applied: false,
+      refreshedAt: 4242,
+    }),
+  );
+}
+
 // Seeds a `documents` row whose `document_path` is `${rootPath}/${relativeSuffix}` so
 // `documentRelativePath` strips the folder-scope root prefix and yields `relativeSuffix`
 // unmodified as `relativePath` — the exact hand-off point `targetForMetadata` receives.
@@ -131,6 +151,225 @@ describe("manual-source-metadata", () => {
 
   afterEach(() => {
     fixture.cleanup();
+  });
+
+  describe("physical manual persistence boundary", () => {
+    it.each(["schema", "redirect", "empty-prefix", "mixed-kind", "mixed-fields"])(
+      "rejects selected invalid source facts before INSERT (%s)",
+      (kind) => {
+        persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, localManualSource());
+        const before = readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID);
+        const source = httpManualSource({
+          limits: { ...DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS },
+        });
+        if (kind === "schema") Reflect.set(source, "schemaVersion", "2");
+        if (kind === "redirect") Reflect.set(source.limits, "followRedirects", true);
+        if (kind === "empty-prefix") Reflect.set(source.scope, "pathPrefix", "");
+        if (kind === "mixed-kind") {
+          let reads = 0;
+          Object.defineProperty(source.scope, "kind", {
+            get: () => (++reads === 1 ? "html-manual-local" : "html-manual-http"),
+          });
+        }
+        if (kind === "mixed-fields") {
+          Reflect.set(source.scope, "rootPath", "/srv/manuals");
+          Reflect.set(source.scope, "entryPath", "guide.html");
+          let reads = 0;
+          Object.defineProperty(source.scope, "kind", {
+            get: () => {
+              reads += 1;
+              return reads === 2 || reads === 3 ? "html-manual-local" : "html-manual-http";
+            },
+          });
+        }
+        expect(() => {
+          persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, source);
+        }).toThrow(
+          expect.objectContaining({
+            name: "TypeError",
+            code: "HTML_MANUAL_SOURCE_INVALID",
+            message: "manual-metadata-validation-failed",
+          }),
+        );
+        expect(readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID)).toStrictEqual(
+          before,
+        );
+      },
+    );
+
+    it.each(["invalid-json", "incomplete", "unknown", "duplicate", "noncanonical", "primitive"])(
+      "rejects invalid captured summary bytes before UPDATE (%s)",
+      (kind) => {
+        persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, localManualSource());
+        const before = readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID);
+        const healthy = producerSummaryJson();
+        let bytes = healthy;
+        if (kind === "invalid-json") bytes = "{";
+        if (kind === "incomplete") bytes = '{"outcome":"updated"}';
+        if (kind === "unknown") bytes = healthy.replace("{", '{"privateField":"body-marker",');
+        if (kind === "duplicate") bytes = healthy.replace("{", '{"outcome":"body-marker",');
+        if (kind === "noncanonical") bytes = " " + healthy;
+        if (kind === "primitive") bytes = "null";
+        expect(() => {
+          updateHtmlManualRefreshState(fixture.store, CAPSULE_ID, SOURCE_ID, {
+            lastRefreshedAt: 4242,
+            lastCrawlRunId: "run-xyz",
+            changeSummaryJson: bytes,
+          });
+        }).toThrow(TypeError);
+        expect(readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID)).toStrictEqual(
+          before,
+        );
+      },
+    );
+  });
+
+  describe("captured writer facts", () => {
+    it("binds the checked selected source facts once and preserves ordinary read order", () => {
+      const events: string[] = [];
+      let fingerprintReads = 0;
+      const source: HtmlManualSource = {
+        get scope() {
+          events.push("scope");
+          return scope;
+        },
+        get limits() {
+          events.push("limits");
+          return limits;
+        },
+        get sourceFingerprint() {
+          events.push("fingerprint");
+          return ++fingerprintReads === 1 ? "fp-captured" : "";
+        },
+        get schemaVersion(): "1" {
+          events.push("schema");
+          return "1";
+        },
+        get proposedPodName() {
+          events.push("name");
+          return "Captured manual";
+        },
+      };
+      const scope: HtmlManualSource["scope"] = {
+        get kind(): "html-manual-http" {
+          events.push("kind");
+          return "html-manual-http";
+        },
+        get origin() {
+          events.push("origin");
+          return "https://docs.internal";
+        },
+        get pathPrefix() {
+          events.push("prefix");
+          return null;
+        },
+      };
+      const bounds = DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS;
+      const limits = {
+        get maxPages(): number {
+          events.push("pages");
+          return bounds.maxPages;
+        },
+        get maxDepth(): number {
+          events.push("depth");
+          return bounds.maxDepth;
+        },
+        get maxBytes(): number {
+          events.push("bytes");
+          return bounds.maxBytes;
+        },
+        get maxLinkSample(): number {
+          events.push("sample");
+          return bounds.maxLinkSample;
+        },
+        get timeoutMs(): number {
+          events.push("timeout");
+          return bounds.timeoutMs;
+        },
+        get followRedirects(): false {
+          events.push("redirects");
+          return false;
+        },
+      };
+      const db = fixture.store._internal.db;
+      const prepare = db.prepare.bind(db);
+      const prepared = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        events.push("prepare");
+        return prepare(sql);
+      });
+      const clock = vi.spyOn(fixture.store._internal, "now").mockImplementation(() => {
+        events.push("clock");
+        return 4000;
+      });
+      try {
+        persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, source);
+      } finally {
+        prepared.mockRestore();
+        clock.mockRestore();
+      }
+      expect(events).toStrictEqual([
+        "scope",
+        "limits",
+        "prepare",
+        "kind",
+        "fingerprint",
+        "kind",
+        "kind",
+        "kind",
+        "origin",
+        "kind",
+        "prefix",
+        "clock",
+        "pages",
+        "depth",
+        "bytes",
+        "sample",
+        "timeout",
+        "schema",
+        "name",
+        "redirects",
+      ]);
+      expect(fingerprintReads).toBe(1);
+      expect(
+        readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID)?.sourceFingerprint,
+      ).toBe("fp-captured");
+    });
+
+    it("binds healthy captured summary bytes without rereading the original state", () => {
+      persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, localManualSource());
+      const bytes = producerSummaryJson();
+      let reads = 0;
+      updateHtmlManualRefreshState(fixture.store, CAPSULE_ID, SOURCE_ID, {
+        lastRefreshedAt: 4242,
+        lastCrawlRunId: "captured-run",
+        get changeSummaryJson() {
+          return ++reads === 1 ? bytes : "body-marker";
+        },
+      });
+      expect(reads).toBe(1);
+      expect(readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID)).toMatchObject({
+        lastRefreshedAt: 4242,
+        lastCrawlRunId: "captured-run",
+        lastChangeSummaryJson: bytes,
+      });
+    });
+
+    it.each([undefined, "guide.html"])(
+      "preserves local absolute root and optional entry %s",
+      (entryPath) => {
+        persistHtmlManualSourceMetadata(
+          fixture.store,
+          CAPSULE_ID,
+          SOURCE_ID,
+          localManualSource({
+            scope: { kind: "html-manual-local", rootPath: "/srv/manuals-root", entryPath },
+          }),
+        );
+        const metadata = readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID);
+        expect(metadata?.rootPath).toBe("/srv/manuals-root");
+        expect(metadata?.entryPath).toBe(entryPath);
+      },
+    );
   });
 
   describe("persistHtmlManualSourceMetadata / readHtmlManualSourceMetadata", () => {
@@ -189,13 +428,13 @@ describe("manual-source-metadata", () => {
       updateHtmlManualRefreshState(fixture.store, CAPSULE_ID, SOURCE_ID, {
         lastRefreshedAt: 4242,
         lastCrawlRunId: "run-xyz",
-        changeSummaryJson: '{"outcome":"updated"}',
+        changeSummaryJson: producerSummaryJson(),
       });
 
       const metadata = readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID);
       expect(metadata?.lastRefreshedAt).toBe(4242);
       expect(metadata?.lastCrawlRunId).toBe("run-xyz");
-      expect(metadata?.lastChangeSummaryJson).toBe('{"outcome":"updated"}');
+      expect(metadata?.lastChangeSummaryJson).toBe(producerSummaryJson());
       // Scope preservation: the approved fingerprint, kind, and limits are untouched by a refresh.
       expect(metadata?.sourceFingerprint).toBe("fp-local-manual");
       expect(metadata?.sourceKind).toBe("html-manual-local");
@@ -318,9 +557,19 @@ describe("manual-source-metadata", () => {
           CAPSULE_ID,
           SOURCE_ID,
           httpManualSource({
-            scope: { kind: "html-manual-http", origin: "https://docs.internal", pathPrefix },
+            scope: {
+              kind: "html-manual-http",
+              origin: "https://docs.internal",
+              pathPrefix: pathPrefix === "" ? null : pathPrefix,
+            },
           }),
         );
+        if (pathPrefix === "")
+          fixture.store._internal.db
+            .prepare(
+              "UPDATE html_manual_sources SET path_prefix = '' WHERE capsule_id = ? AND source_id = ?",
+            )
+            .run(CAPSULE_ID, SOURCE_ID);
         const documentId = seedDocument(fixture.store, `doc-prefix-${pathPrefix}`, relativeSuffix);
 
         const result = resolveHtmlManualCitationTarget(fixture.store, resolveInput(documentId));
@@ -352,12 +601,12 @@ describe("manual-source-metadata", () => {
     });
 
     it("fails with target-unsupported for an html-manual-local source with no persisted rootPath", () => {
-      persistHtmlManualSourceMetadata(
-        fixture.store,
-        CAPSULE_ID,
-        SOURCE_ID,
-        localManualSource({ scope: { kind: "html-manual-local", rootPath: "" } }),
-      );
+      persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, localManualSource());
+      fixture.store._internal.db
+        .prepare(
+          "UPDATE html_manual_sources SET root_path = '' WHERE capsule_id = ? AND source_id = ?",
+        )
+        .run(CAPSULE_ID, SOURCE_ID);
       const documentId = seedDocument(fixture.store, "doc-local-no-root", "guide.html");
 
       const result = resolveHtmlManualCitationTarget(fixture.store, resolveInput(documentId));
@@ -430,9 +679,14 @@ describe("manual-source-metadata", () => {
         CAPSULE_ID,
         SOURCE_ID,
         httpManualSource({
-          scope: { kind: "html-manual-http", origin: "https://docs.internal", pathPrefix: "" },
+          scope: { kind: "html-manual-http", origin: "https://docs.internal", pathPrefix: null },
         }),
       );
+      fixture.store._internal.db
+        .prepare(
+          "UPDATE html_manual_sources SET path_prefix = '' WHERE capsule_id = ? AND source_id = ?",
+        )
+        .run(CAPSULE_ID, SOURCE_ID);
       const documentId = seedDocument(
         fixture.store,
         "doc-empty-prefix-bypass",

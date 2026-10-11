@@ -22,12 +22,10 @@ redacted change summary (counts + reason codes + an opaque crawl-run fingerprint
 
 ## Delivery scope
 
-This epic delivers the refresh **capability, diagnostics, and their surfacing** at the domain,
-contract, and UI-render layers. A live server-side refresh **trigger** (BFF route) and a
-`gatewayFetch`-backed HTTP fetcher for intranet (`html-manual-http`) manuals are an explicit
-follow-up — see [Known limitations and follow-ups](#known-limitations-and-follow-ups). HTML manual
-pod _creation_ itself is not yet server-wired, so adding a network-egress refresh route is a separate
-governed change that requires its own security review.
+The original refresh epic delivered the domain/contract/UI-render capability. Live human-triggered
+HTTP create and explicitly confirmed refresh jobs have since shipped (Issue #2063), with BFF request
+validation, the server-owned HTTP fetcher and UI polling. Documentation navigation/proposal/approval
+remain separate and initiate no job. Live local-root create selection remains unavailable.
 
 ## Reuse anchors
 
@@ -190,31 +188,35 @@ overstated the guarantee for the still-open case above. They now say a page may 
 unsearchable" and will be retried on a future refresh, which is accurate for both the fixed and the
 still-open sub-case.
 
-### Deferred: server-side refresh trigger route and HTTP fetcher
+### Implemented: live jobs and physical metadata validation
 
-The refresh capability, diagnostics, and their surfacing are implemented and locally verified.
-The following are explicitly out of scope for this epic and are follow-up work:
+The BFF create/refresh routes and `gatewayFetch`-backed HTTP fetcher are implemented in the server,
+retaining scope, transport and independent manual-pod deployment consent. The UI has an explicit
+refresh confirmation and polls body-free job progress. This corrects the historical deferred status;
+it does not make documentation opening or proposal approval an execution trigger.
 
-- **BFF refresh trigger route:** an HTTP endpoint that triggers a refresh from the UI. HTML manual
-  pod _creation_ is not yet server-wired, so wiring a refresh route is a separate change. It will
-  need same-origin/CSRF handling, the correlation-id error-observability pattern, and progress
-  surfacing.
-- **`gatewayFetch`-backed HTTP `ManualCrawlFetcher`:** the refresh is agnostic to the fetcher
-  (an injected interface). A `WorkspaceFs`-backed fetcher covers local (`html-manual-local`)
-  manuals. An HTTP fetcher for intranet (`html-manual-http`) manuals introduces network egress and
-  must land in `keiko-server` (never `keiko-local-knowledge`, trust-9) behind its own egress, TLS,
-  DNS-rebinding, and credential security review.
-- **UI refresh-initiation UX and live progress streaming:** the current UI panel is read-only — it
-  renders the last redacted refresh summary from `KnowledgePodSummary.manualRefresh`. A refresh
-  button, confirm dialog, and live progress indicator depend on the deferred trigger route.
+The metadata writer now validates captured selected source facts before INSERT and captured summary
+bytes before UPDATE. It never rereads the original source/state to bind SQL after checking. Additional
+schema/name/redirect observations and inconsistent kind refusal are intentional writer hardening;
+ordinary selected-field order, clock/prepare position, approved IDs/limits and healthy summary bytes
+remain intact. Canonical summary validation plus exact JSON roundtrip refuses discarded duplicate-key
+content or non-roundtripping formatting without silently normalizing it. No universal input-byte cap
+or permanent mutable-reference guarantee is added.
+
+Actual owner refusal is caught by the existing manual job runner and written through registered
+`server.diagnostic.failure`; the BFF scenario reconstructs its job correlation and fixed body-free
+code through support analysis. A refused metadata statement leaves its target row unchanged, but
+source attachment or refresh apply/index may precede it. The narrower post-crawl limitations above
+remain; no whole-job rollback is claimed. Independently omitted refresh summaries at the pod reader
+remain an open observability obligation.
 
 ### Legacy pods (pre-v27)
 
 A refresh over an `html_manual_sources` row written before migration v27 (which has no persisted
 limits) falls back to the governed default limits. Because the defaults are the maximum allowed
 bound, this never widens beyond policy; a refresh could, however, crawl a wider budget than a
-pre-v27 pod originally used. In practice there are no such legacy manual pods yet, because pod
-creation is not server-wired.
+pre-v27 pod originally used. Historical/corrupt rows remain readable for compatibility; public source persistence rejects invalid
+new rows, while refresh independently reconstructs and validates stored state before fetch/index.
 
 ## Local gate outcomes
 

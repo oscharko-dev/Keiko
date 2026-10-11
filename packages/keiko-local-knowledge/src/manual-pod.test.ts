@@ -15,6 +15,7 @@ import {
   readHtmlManualSourceMetadata,
   resolveHtmlManualCitationTarget,
 } from "./manual-source-metadata.js";
+import { listCapsuleSources } from "./source-lifecycle.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import type { KnowledgeStore } from "./store.js";
 import { scriptedAdapter } from "./testing.js";
@@ -87,6 +88,32 @@ describe("createHtmlManualPod", () => {
       sourceFingerprint: "fp-docs-internal",
       origin: "https://docs.internal",
     });
+  });
+
+  it("refuses a source mutated across the crawl await at the actual metadata writer", async () => {
+    const source = {
+      ...httpManualSource(),
+      limits: { ...DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS },
+    };
+    const events: string[] = [];
+    const deps = podDeps(MANUAL_PAGES);
+    await expect(
+      createHtmlManualPod(
+        {
+          ...deps,
+          onCrawlEvent: (event) => {
+            events.push(event.kind);
+            if (event.kind === "completed")
+              Reflect.set(source.limits, "timeoutMs", source.limits.timeoutMs + 1);
+          },
+        },
+        source,
+      ),
+    ).rejects.toThrow(expect.objectContaining({ code: "HTML_MANUAL_SOURCE_INVALID" }));
+    expect(events).toContain("completed");
+    expect(readHtmlManualSourceMetadata(store, deps.capsuleId, deps.sourceId)).toBeUndefined();
+    // Attachment precedes the writer; refusal does not promise whole-create rollback.
+    expect(listCapsuleSources(store, deps.capsuleId)).toHaveLength(1);
   });
 
   it("resolves a manual citation target from persisted approved source metadata", async () => {
