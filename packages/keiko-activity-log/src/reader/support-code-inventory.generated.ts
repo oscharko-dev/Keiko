@@ -2704,6 +2704,7 @@ export const SUPPORT_CODE_ERROR_CLASSES: readonly string[] = [
   "LspServerRequestError",
   "MalformedJsonBodyError",
   "MalformedToolCallError",
+  "ManualMetadataValidationError",
   "ManualPodRequestError",
   "MemoryCaptureProjectionReadError",
   "MemoryStorageError",

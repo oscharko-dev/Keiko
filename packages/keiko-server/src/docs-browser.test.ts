@@ -24,6 +24,7 @@ import {
   persistHtmlManualSourceMetadata,
   resolveKnowledgeStorePath,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import { createRunRegistry } from "./runs.js";
@@ -178,7 +179,7 @@ async function seedManualCitation(runtimeStateDir: string): Promise<string> {
         maxDepth: 3,
         maxBytes: 2_000_000,
         maxLinkSample: 50,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs,
         followRedirects: false,
       },
       sourceFingerprint: "fp-docs-browser-manual",
@@ -232,7 +233,7 @@ async function seedMismatchedChunkCitation(runtimeStateDir: string): Promise<str
         maxDepth: 3,
         maxBytes: 2_000_000,
         maxLinkSample: 50,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs,
         followRedirects: false,
       },
       sourceFingerprint: "fp-docs-browser-mismatch-target",
