@@ -80,7 +80,7 @@ function responsibilitySlots(resolver, record, roles) {
   const parameter = input.parameters[record.input.parameterIndex];
   if (parameter?.type.kind !== "unknown")
     throw new TypeError("unresolved-responsibility-raw-parameter");
-  const slots = [{ ...parameter, rule: "anti-slop/no-unknown-parameters" }];
+  const slots = resolver.rawCheckingSlots(roles.input.identities[0], record.input.parameterIndex);
   if (record.kind === "structural-redactor") {
     const output = resolver.callableSlots(roles.output.identities[0]);
     if (output.result?.type.kind !== "unknown")

@@ -171,3 +171,157 @@ export function replaceConsumerCallFixture(own, variant) {
   own.put("packages/beta/src/owner.ts", bodies[variant]);
   emitSymbolFixture(own.root, "packages/beta");
 }
+
+export function createRawHelperEnforcementFixture(variant = "direct") {
+  const own = createEnforcementFixture();
+  own.put("packages/alpha/src/owner.ts", rawHelperSource(variant));
+  if (["nonzero", "unicode-extra-slot"].includes(variant)) {
+    own.record.input.parameterIndex = 1;
+    own.put(
+      "src/consumer.ts",
+      'import { validate, consume } from "alpha/runtime"; export const result = validate(0, 1); export const value = consume(1);',
+    );
+  }
+  if (variant === "other-api")
+    own.put(
+      "packages/alpha/src/other.ts",
+      'export function other(input: unknown): boolean { return typeof input === "number"; }',
+    );
+  own.record.rules.push("anti-slop/no-runtime-typeof", "anti-slop/no-known-value-widening");
+  for (const rule of own.policy.rules) {
+    if (own.record.rules.includes(rule.id)) rule.activeScopes = ["production"];
+  }
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+function directRawHelperSource() {
+  return [
+    "function finite(input: unknown): input is number {",
+    '  return typeof input === "number" && Number.isFinite(input);',
+    "}",
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } {",
+    "  if (!finite(input)) return { ok: false };",
+    "  const narrowed: number = input;",
+    "  if (!finite(narrowed)) return { ok: false };",
+    "  return { ok: true, value: narrowed };",
+    "}",
+    "export function consume(input: number): number {",
+    "  const result = validate(input);",
+    '  if (!result.ok) throw new TypeError("invalid");',
+    "  return result.value;",
+    "}",
+    "",
+  ].join("\n");
+}
+
+function rawHelperSource(variant) {
+  const source = directRawHelperSource();
+  const variants = {
+    wrapper: () => rawWrapperSource(),
+    "unicode-wrapper": () => rawWrapperSource().replaceAll("input", "είσοδος"),
+    property: () => rawPropertySource(),
+    "partially-narrowed": () =>
+      rawPropertySource().replace(
+        'typeof input !== "object" || input === null',
+        'input === null || typeof input !== "object"',
+      ),
+    nonzero: () => nonzeroRawSource(source),
+    "unicode-extra-slot": () =>
+      source
+        .replace("validate(input: unknown)", "validate(λλλλλλλλλλλλλλλλ: unknown, input: unknown)")
+        .replace("validate(input)", "validate(0, input)"),
+    "parameter-write": () =>
+      source.replace("  if (!finite(input))", "  input = 42;\n  if (!finite(input))"),
+    "helper-write": () =>
+      source.replace("  return typeof input", "  input = 42; return typeof input"),
+    "extra-slot": () =>
+      source.replace(
+        "validate(input: unknown)",
+        "validate(input: unknown, unrelated: unknown = 42)",
+      ),
+    "other-api": () => source,
+    "literal-erasure": () => source + "const known = 42; const erased: unknown = known;\n",
+    "unrelated-typeof": () => source + "const unrelated = typeof 42;\n",
+    unicode: () => "/* λ boundary */\n" + source.replaceAll("finite", "πεπερασμένο"),
+  };
+  return variants[variant]?.() ?? rawHelperVariant(source, variant);
+}
+
+function rawPropertySource() {
+  return [
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function checked(input: unknown): boolean { return finite(input); }",
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } {",
+    '  if (typeof input !== "object" || input === null || !("etag" in input)) return {ok:false};',
+    '  const raw = input["etag"]; if (!checked(raw) || !finite(raw)) return {ok:false};',
+    "  if (!finite(raw)) return {ok:false}; return {ok:true,value:raw};",
+    "}",
+    'export function consume(input: number): number { const result = validate({etag:input}); if(!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "",
+  ].join("\n");
+}
+
+function nonzeroRawSource(source) {
+  return source
+    .replace("finite(input: unknown)", "finite(prefix: number, input: unknown)")
+    .replace("validate(input: unknown)", "validate(prefix: number, input: unknown)")
+    .replaceAll("finite(input)", "finite(0, input)")
+    .replace("finite(narrowed)", "finite(0, narrowed)")
+    .replace("validate(input)", "validate(0, input)");
+}
+
+function rawWrapperSource() {
+  return [
+    "type Result = { ok: true; value: number } | { ok: false };",
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function checked(input: unknown): Result { if (!finite(input)) return {ok:false}; return {ok:true,value:input}; }",
+    "export function validate(input: unknown): Result { return checked(input); }",
+    'export function consume(input: number): number { const result=validate(input); if(!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "",
+  ].join("\n");
+}
+
+function rawHelperVariant(source, variant) {
+  const additions = {
+    direct: "",
+    export: "export { finite };",
+    "export-alias": "export { finite as guard };",
+    trusted: "function unrelated(input: number): boolean { return finite(input); }",
+    "exported-trusted":
+      "export function unrelated(input: number): boolean { return finite(input); }",
+    returned: "export function escape(): typeof finite { return finite; }",
+    callback: "const unused = (): boolean => finite(42);",
+    "mutable-callee": "let guard = finite; guard(42);",
+    "destructured-callee": "const { guard } = { guard: finite }; guard(42);",
+    "computed-callee": "const holder = { guard: finite }; holder['guard'](42);",
+  };
+  if (Object.hasOwn(additions, variant)) return source + additions[variant] + "\n";
+  const insertions = {
+    "nested-unused": "function unused(): boolean { return finite(input); }",
+    "deferred-class": "class Deferred { value = finite(input); }",
+    "asserted-origin": "finite(input as unknown);",
+    "nonnull-origin": "finite(input!);",
+    "satisfies-origin": "finite(input satisfies number);",
+    "erased-origin": "const erased: unknown = input; finite(erased);",
+    "mutable-origin": "let raw = input; finite(raw);",
+    "reassigned-origin": "let raw = input; raw = 42; finite(raw);",
+    "destructured-origin": "const { value: raw } = { value: input }; finite(raw);",
+    aliases:
+      "const first = input; const second: number = first; const guard = finite; guard(second);",
+  };
+  if (Object.hasOwn(insertions, variant))
+    return source.replace(
+      "  const narrowed: number = input;",
+      insertions[variant] + "\n  const narrowed: number = input;",
+    );
+  if (variant === "self-cycle")
+    return source.replace("return typeof input", "finite(input); return typeof input");
+  if (variant === "mutual-cycle")
+    return (
+      source.replace("return typeof input", "other(input); return typeof input") +
+      "function other(input: unknown): boolean { return finite(input); }\n"
+    );
+  throw new TypeError("unknown raw helper fixture variant");
+}

@@ -173,11 +173,28 @@ not semantic or migration qualification. Version 1 report shape and command beha
 Static enforcement fails on active applicable findings and incomplete or rejected required static
 facts, including missing/foreign owners, missing/noncallable or unbound consumers, missing proofs and unsafe
 unknown or open-dictionary validator outputs. Merely unexecuted runtime and consumer proofs remain
-pending without becoming static rejection. The evaluator adapts only an assigned canonical raw
-parameter's exact annotation location for `no-unknown-parameters`, and a structural redactor's
-truthful raw return annotation for `no-unknown-returns`. The raw census retains every finding;
-each adaptation carries the responsibility id and exact checker-owned slot. No body, consumer,
-package, assertion or typed domain output is exempted. Additional unknown parameters remain active.
+pending without becoming static rejection. The evaluator adapts the assigned canonical raw
+parameter's exact annotation, and exact private same-source helper parameter annotations reached
+by bounded direct calls forwarding that parameter or its static property projection. Parentheses
+and immutable const aliases preserve this origin; assertions, non-null assertions, `satisfies`,
+explicit unknown/open-dictionary erasure, mutable or destructured bindings and computed dispatch do not.
+Every helper value reference must be accounted for by this closure or an immutable local callee alias.
+Unrelated trusted callers, exports/reexports, return/container/callback escapes, unused nested
+functions, deferred classes and self/mutual cycles withdraw the helper adaptation or leave facts
+incomplete. Extra unknown parameters and other APIs remain checked.
+
+Within this closure, `no-runtime-typeof` adapts only an exact operand whose checker type remains
+unknown and whose raw origin is retained. A partially narrowed or typed operand remains enforced.
+`no-known-value-widening` adapts only an exact informative argument recheck against an actual
+checker-bound type-predicate parameter in the same qualified closure, while retaining informative
+local types. It never adapts variable/property/assignment/return erasure or assertions. A structural
+redactor's truthful raw return annotation remains the sole `no-unknown-returns` adaptation.
+The raw census retains every finding, and each adaptation carries the responsibility id and exact
+checker-owned slot. Native diagnostic line/columns use UTF-8 bytes from the actual source; compiler
+start/end offsets and declaration-map ownership retain their UTF-16 contract. Guarded resolver facts
+are reused without an additional program or analyzer run; returned facts cannot mutate the cache,
+and current source/config/package membership guards still invalidate reuse.
+No body, consumer, package, assertion or typed domain output is exempted.
 Other rule obligations stay applicable and receive no adaptation from these slots. Existing version
 1 production policy and every activation/history guard remain unchanged.
 

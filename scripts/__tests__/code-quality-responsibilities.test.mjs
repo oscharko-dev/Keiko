@@ -18,6 +18,7 @@ import {
   createCrossOwnerEnforcementFixture,
   replaceEnforcementOwner,
   replaceConsumerCallFixture,
+  createRawHelperEnforcementFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 
 const roots = [];
@@ -27,6 +28,202 @@ afterEach(() => {
 });
 
 describe("v2 static enforcement keeps combined semantic qualification pending (#3918)", () => {
+  it("adapts exact raw helper and informative predicate recheck sites without semantic trust", async () => {
+    const own = createRawHelperEnforcementFixture();
+    roots.push(own.root);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const exit = await codeQualityPolicyMain(["--json"], own.root);
+    const report = JSON.parse(log.mock.calls[0][0]);
+    for (const rule of [
+      "anti-slop/no-unknown-parameters",
+      "anti-slop/no-runtime-typeof",
+      "anti-slop/no-known-value-widening",
+    ]) {
+      const findings = report.census.filter((finding) => finding.rule === rule);
+      expect(findings.length).toBeGreaterThan(0);
+      expect(findings.every((finding) => finding.path === "packages/alpha/src/owner.ts")).toBe(
+        true,
+      );
+    }
+    expect(
+      report.enforcementOutcome,
+      JSON.stringify({
+        scope: report.scope,
+        counts: report.counts,
+        census: report.census,
+        adaptations: report.adaptations,
+        violations: report.violations,
+      }),
+    ).toBe("passed");
+    expect(report.violations).toEqual([]);
+    expect(report.adaptations.map(({ finding }) => finding)).toEqual(report.census);
+    expect(report.outcome).toBe("failed");
+    expect(report.responsibilities.counts.qualified).toBe(0);
+    expect(report.responsibilities.counts.pending).toBe(1);
+    expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
+    expect(exit).toBe(0);
+  }, 60_000);
+
+  it.each(["wrapper", "unicode-wrapper", "aliases", "property", "nonzero", "unicode"])(
+    "adapts the complete native raw checking census for %s without runtime qualification",
+    async (variant) => {
+      const own = createRawHelperEnforcementFixture(variant);
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(
+        report.enforcementOutcome,
+        JSON.stringify({
+          census: report.census,
+          adaptations: report.adaptations,
+          violations: report.violations,
+          assessments: report.responsibilities.assessments,
+        }),
+      ).toBe("passed");
+      expect(report.violations).toEqual([]);
+      expect(report.adaptations.map(({ finding }) => finding)).toEqual(report.census);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.counts.pending).toBe(1);
+      expect(report.outcome).toBe("failed");
+      if (["wrapper", "unicode-wrapper"].includes(variant)) {
+        expect(
+          report.census.filter(({ rule }) => rule === "anti-slop/no-unknown-parameters"),
+        ).toHaveLength(2);
+        expect(
+          report.adaptations.some(({ slot }) => slot.kind === "parameter" && slot.line === 3),
+        ).toBe(true);
+      }
+    },
+    60_000,
+  );
+
+  it.each([
+    "export",
+    "export-alias",
+    "trusted",
+    "exported-trusted",
+    "returned",
+    "callback",
+    "mutable-callee",
+    "destructured-callee",
+    "computed-callee",
+    "nested-unused",
+    "deferred-class",
+    "asserted-origin",
+    "nonnull-origin",
+    "satisfies-origin",
+    "erased-origin",
+    "parameter-write",
+    "helper-write",
+    "mutable-origin",
+    "reassigned-origin",
+    "destructured-origin",
+    "self-cycle",
+    "mutual-cycle",
+  ])(
+    "keeps real helper diagnostics enforced for unsupported %s provenance",
+    async (variant) => {
+      const own = createRawHelperEnforcementFixture(variant);
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      const nativeTypeof = report.census.filter(
+        ({ rule }) => rule === "anti-slop/no-runtime-typeof",
+      );
+      expect(nativeTypeof).toHaveLength(1);
+      expect(report.violations).toEqual(expect.arrayContaining(nativeTypeof));
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.adaptations.some(({ finding }) => nativeTypeof.includes(finding))).toBe(false);
+      if (variant.endsWith("cycle")) {
+        expect(report.adaptations).toEqual([]);
+        expect(report.responsibilities.assessments[0].structural).toBe("incomplete");
+      }
+    },
+    60_000,
+  );
+
+  it.each(["extra-slot", "other-api", "literal-erasure", "unrelated-typeof", "partially-narrowed"])(
+    "does not borrow checking slots for %s native diagnostics",
+    async (variant) => {
+      const own = createRawHelperEnforcementFixture(variant);
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(report.census.length).toBeGreaterThan(3);
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.violations.length).toBeGreaterThan(0);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.counts.ready).toBe(1);
+      expect(report.adaptations).toHaveLength(3);
+      expect(
+        report.violations.every(
+          (finding) => !report.adaptations.some((adapted) => adapted.finding === finding),
+        ),
+      ).toBe(true);
+    },
+    60_000,
+  );
+
+  it("does not let a Unicode byte-column collision borrow the selected raw parameter's slot", async () => {
+    const own = createRawHelperEnforcementFixture("unicode-extra-slot");
+    roots.push(own.root);
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "enforce" },
+      own.root,
+    );
+    const unknowns = report.census.filter(({ rule }) => rule === "anti-slop/no-unknown-parameters");
+    expect(unknowns).toHaveLength(2);
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const line = source.split("\n").find((value) => value.startsWith("export function validate"));
+    const selectedUtf16Column = line.indexOf("input: unknown") + "input: ".length + 1;
+    expect(unknowns[0].column).toBe(selectedUtf16Column);
+    expect(unknowns[1].column).toBeGreaterThan(selectedUtf16Column);
+    expect(report.adaptations.map(({ finding }) => finding)).toContainEqual(unknowns[1]);
+    expect(report.violations).toEqual([unknowns[0]]);
+    expect(report.enforcementOutcome).toBe("failed");
+    expect(report.responsibilities.counts.qualified).toBe(0);
+  }, 60_000);
+
+  it("matches the native Unicode truthful structural-redactor return annotation without altering compiler offsets", async () => {
+    const own = createEnforcementFixture("structural-redactor");
+    roots.push(own.root);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      [
+        "export function validate(είσοδος: unknown): unknown { return είσοδος; }",
+        'export function consume(input: number): number { const result = validate(input); if (typeof result !== "number") throw new TypeError("invalid"); return result; }',
+        "",
+      ].join("\n"),
+    );
+    emitSymbolFixture(own.root);
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "enforce" },
+      own.root,
+    );
+    const nativeReturn = report.census.filter(
+      ({ rule }) => rule === "anti-slop/no-unknown-returns",
+    );
+    expect(nativeReturn).toHaveLength(1);
+    const adaptation = report.adaptations.find(
+      ({ finding }) => finding.rule === nativeReturn[0].rule,
+    );
+    expect(adaptation.finding).toEqual(nativeReturn[0]);
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    expect(source.slice(adaptation.slot.start, adaptation.slot.end)).toBe("unknown");
+    expect(report.enforcementOutcome).toBe("passed");
+    expect(report.violations).toEqual([]);
+    expect(report.adaptations).toHaveLength(2);
+    expect(report.responsibilities.counts.qualified).toBe(0);
+    expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
+  }, 60_000);
+
   it.each(["validator", "structural-redactor"])(
     "adapts only the canonical raw slots of a healthy %s and discloses both verdicts",
     async (kind) => {

@@ -7,6 +7,7 @@ import { collectPolicyInventory, collectPolicySubject } from "../lib/code-qualit
 import ts from "typescript";
 import { declarationMapPosition } from "../lib/code-quality-provenance.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
+import { createRawHelperEnforcementFixture } from "./support/code-quality-responsibility-fixture.mjs";
 import {
   createSymbolFixture,
   emitSymbolFixture,
@@ -38,6 +39,48 @@ async function fixture(options = {}) {
 const reference = { consumerPath: "src/consumer.ts", specifier: "alpha", exportName: "parse" };
 
 describe("configured canonical symbol resolver interface (#3918)", () => {
+  it("resolves exact raw helper checking operations through its actual compiler owner", async () => {
+    const own = createRawHelperEnforcementFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const slots = own.resolver.rawCheckingSlots(identity, 0);
+    expect(slots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ rule: "anti-slop/no-runtime-typeof", line: 2, column: 10 }),
+        expect.objectContaining({ rule: "anti-slop/no-known-value-widening", line: 7, column: 15 }),
+      ]),
+    );
+  }, 15_000);
+  it("reuses guarded raw checking facts without exposing a mutable cache or surviving source changes", async () => {
+    const own = createRawHelperEnforcementFixture("aliases");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const first = own.resolver.rawCheckingSlots(identity, 0);
+    const before = own.resolver.stats();
+    const expected = structuredClone(first);
+    first[0].column = 999;
+    expect(own.resolver.rawCheckingSlots(identity, 0)).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+    own.put("packages/alpha/src/owner.ts", "export const changed = true;\n");
+    expect(() => own.resolver.rawCheckingSlots(identity, 0)).toThrow("symbol-subject-changed");
+  }, 15_000);
+
+  it.each([{ aliases: 1 }, { nodes: 1 }])(
+    "keeps raw checking traversal inside actual configured budgets %j",
+    async (limits) => {
+      const own = createRawHelperEnforcementFixture("aliases");
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root), limits);
+      expect(() => {
+        const identity = own.resolver.resolveExport(own.record.input).identities[0];
+        return own.resolver.rawCheckingSlots(identity, 0);
+      }).toThrow(/symbol-(alias|node)-budget/u);
+    },
+    15_000,
+  );
+
   it("qualifies actual native nested/generated owner declarations without API-emitter map equivalence", async () => {
     const own = createSymbolFixture();
     fixtures.push(own);
