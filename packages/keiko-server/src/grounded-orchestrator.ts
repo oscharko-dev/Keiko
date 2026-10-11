@@ -6372,13 +6372,46 @@ function coverageAdmissionWithFairTarget(
   state: CoverageAdmission,
   targets: readonly RouteTraceCoverageEntry[],
   admission: SharedCoverageAdmission,
+  ranked?: RouteTraceCoverageEntry,
 ): CoverageAdmission | undefined {
   for (const entry of targets) {
     if (state.targets.has(entry.definitionIdentity)) continue;
-    const candidate = coverageAdmissionWithTarget(state, entry, admission);
+    const candidate = coverageAdmissionWithCompetingFairTarget(state, ranked, entry, admission);
     if (candidate !== undefined) return candidate;
   }
   return undefined;
+}
+
+function coverageAdmissionWithCompetingFairTarget(
+  state: CoverageAdmission,
+  ranked: RouteTraceCoverageEntry | undefined,
+  fair: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+): CoverageAdmission | undefined {
+  if (ranked === undefined) return coverageAdmissionWithTarget(state, fair, admission);
+  const targets = admission.byPath.get(ranked.atom.scopePath) ?? [];
+  const head = targets[0];
+  if (head === undefined || !admission.state.targets.has(head.definitionIdentity))
+    return coverageAdmissionWithTarget(state, fair, admission);
+  const threshold = coverageFileHeadScore(fair, admission);
+  const proposal = copyCoverageAdmission(state);
+  let joint = coverageAdmissionWithTarget(proposal, fair, admission);
+  for (const entry of targets) {
+    if (entry.atom.score < threshold) break;
+    if (proposal.targets.has(entry.definitionIdentity)) continue;
+    if (
+      !admitCoverageTarget(
+        entry,
+        admission.byIdentity,
+        proposal,
+        admission.totalBytes,
+        admission.inputs,
+      )
+    )
+      continue;
+    joint = coverageAdmissionWithTarget(proposal, fair, admission) ?? joint;
+  }
+  return joint;
 }
 
 function sharedCoverageFairTargets(
@@ -6441,7 +6474,7 @@ function admitSharedCoveragePrefix(
       continue;
     admitted = true;
     fairTargets ??= sharedCoverageFairTargets(ranked, fair, admission);
-    joint = coverageAdmissionWithFairTarget(proposal, fairTargets, admission) ?? joint;
+    joint = coverageAdmissionWithFairTarget(proposal, fairTargets, admission, ranked) ?? joint;
   }
   if (!admitted && ranked !== undefined) return;
   if (!admitted) joint = coverageAdmissionWithFairTarget(proposal, fair, admission);
