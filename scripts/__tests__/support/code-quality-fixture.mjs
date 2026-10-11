@@ -76,6 +76,10 @@ export function configureEnforcingPolicyFixture(root) {
     join(root, "scripts/code-quality-policy.json"),
     readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
   );
+  copyNativePolicyFixtureSources(root);
+}
+
+export function copyNativePolicyFixtureSources(root) {
   const owner = "native/opencode-service-host";
   mkdirSync(join(root, owner), { recursive: true });
   for (const name of ["host.mjs", "entry.mjs", "guard-seams.mjs"])

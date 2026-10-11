@@ -42,6 +42,19 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+function responsibilityOwnerCensus(report) {
+  const native = report.census.filter(({ path }) => path.startsWith("native/"));
+  expect(native.filter(({ rule }) => rule === "anti-slop/no-runtime-typeof")).toHaveLength(9);
+  expect(
+    native.filter(({ rule }) => rule === "anti-slop/no-conditional-empty-object-spread"),
+  ).toHaveLength(2);
+  expect(native).toHaveLength(11);
+  expect(report.adaptations.some(({ finding }) => finding.path.startsWith("native/"))).toBe(false);
+  const owner = report.census.filter(({ path }) => path === "packages/alpha/src/owner.ts");
+  expect(report.census).toHaveLength(native.length + owner.length);
+  return owner;
+}
+
 describe("v2 static enforcement keeps combined semantic qualification pending (#3918)", () => {
   it("adapts exact raw helper and informative predicate recheck sites without semantic trust", async () => {
     const own = createRawHelperEnforcementFixture();
@@ -49,12 +62,13 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const exit = await codeQualityPolicyMain(["--json"], own.root);
     const report = JSON.parse(log.mock.calls[0][0]);
+    const ownerCensus = responsibilityOwnerCensus(report);
     for (const rule of [
       "anti-slop/no-unknown-parameters",
       "anti-slop/no-runtime-typeof",
       "anti-slop/no-known-value-widening",
     ]) {
-      const findings = report.census.filter((finding) => finding.rule === rule);
+      const findings = ownerCensus.filter((finding) => finding.rule === rule);
       expect(findings.length).toBeGreaterThan(0);
       expect(findings.every((finding) => finding.path === "packages/alpha/src/owner.ts")).toBe(
         true,
@@ -71,7 +85,7 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
       }),
     ).toBe("passed");
     expect(report.violations).toEqual([]);
-    expect(report.adaptations.map(({ finding }) => finding)).toEqual(report.census);
+    expect(report.adaptations.map(({ finding }) => finding)).toEqual(ownerCensus);
     expect(report.outcome).toBe("failed");
     expect(report.responsibilities.counts.qualified).toBe(0);
     expect(report.responsibilities.counts.pending).toBe(1);
@@ -98,7 +112,9 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
         }),
       ).toBe("passed");
       expect(report.violations).toEqual([]);
-      expect(report.adaptations.map(({ finding }) => finding)).toEqual(report.census);
+      expect(report.adaptations.map(({ finding }) => finding)).toEqual(
+        responsibilityOwnerCensus(report),
+      );
       expect(report.responsibilities.counts.qualified).toBe(0);
       expect(report.responsibilities.counts.pending).toBe(1);
       expect(report.outcome).toBe("failed");
@@ -146,7 +162,7 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
         { scope: "repository", mode: "enforce" },
         own.root,
       );
-      const nativeTypeof = report.census.filter(
+      const nativeTypeof = responsibilityOwnerCensus(report).filter(
         ({ rule }) => rule === "anti-slop/no-runtime-typeof",
       );
       expect(nativeTypeof).toHaveLength(1);
@@ -193,7 +209,9 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
       { scope: "repository", mode: "enforce" },
       own.root,
     );
-    const unknowns = report.census.filter(({ rule }) => rule === "anti-slop/no-unknown-parameters");
+    const unknowns = responsibilityOwnerCensus(report).filter(
+      ({ rule }) => rule === "anti-slop/no-unknown-parameters",
+    );
     expect(unknowns).toHaveLength(2);
     const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
     const line = source.split("\n").find((value) => value.startsWith("export function validate"));

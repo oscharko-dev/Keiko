@@ -30,7 +30,7 @@ export function responsibilityRecord(kind = "validator") {
 }
 
 export function createResponsibilityFixture(variant = "valid") {
-  const own = createSymbolFixture();
+  const own = createSymbolFixture(true);
   const validator =
     variant === "unchecked"
       ? "export function validate(input: unknown): unknown { return input; }"
@@ -74,12 +74,18 @@ export function createEnforcementFixture(kind = "validator", variant = "valid") 
   );
   const record = responsibilityRecord(kind);
   const policy = responsibilityPolicy([record]);
-  for (const rule of policy.rules) {
-    if (record.rules.includes(rule.id)) rule.activeScopes = ["production"];
-  }
+  activateResponsibilityFixtureRules(policy, record);
   own.put("scripts/code-quality-policy.json", policy);
   emitSymbolFixture(own.root);
   return { ...own, record, policy };
+}
+
+function activateResponsibilityFixtureRules(policy, record) {
+  const scopes = [record.owner, record.consumer.owner].map((owner) => `package:${owner}`);
+  for (const rule of policy.rules) {
+    if (record.rules.includes(rule.id))
+      rule.activeScopes = [...new Set([...rule.activeScopes, ...scopes])];
+  }
 }
 
 export function replaceEnforcementOwner(own, variant) {
@@ -124,6 +130,7 @@ export function createCrossOwnerEnforcementFixture(variant = "valid") {
   );
   own.record.consumer.specifier = "beta/runtime";
   own.record.consumer.owner = "beta";
+  activateResponsibilityFixtureRules(own.policy, own.record);
   if (variant === "alias-producer")
     own.put("packages/beta/src/owner.ts", 'export { consume } from "alpha/runtime";');
   if (variant === "noncallable") {
@@ -188,9 +195,7 @@ export function createRawHelperEnforcementFixture(variant = "direct") {
       'export function other(input: unknown): boolean { return typeof input === "number"; }',
     );
   own.record.rules.push("anti-slop/no-runtime-typeof", "anti-slop/no-known-value-widening");
-  for (const rule of own.policy.rules) {
-    if (own.record.rules.includes(rule.id)) rule.activeScopes = ["production"];
-  }
+  activateResponsibilityFixtureRules(own.policy, own.record);
   own.put("scripts/code-quality-policy.json", own.policy);
   emitSymbolFixture(own.root);
   return own;

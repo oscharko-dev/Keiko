@@ -3,10 +3,14 @@ import { mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { nativeCompilerExecutable } from "../../lib/code-quality-provenance.mjs";
 import ts from "typescript";
-import { createPolicyFixtureRepository } from "./code-quality-fixture.mjs";
+import {
+  copyNativePolicyFixtureSources,
+  createPolicyFixtureRepository,
+} from "./code-quality-fixture.mjs";
 
-export function createSymbolFixture() {
+export function createSymbolFixture(includeNativeHost = false) {
   const root = createPolicyFixtureRepository();
+  if (includeNativeHost) copyNativePolicyFixtureSources(root);
   const put = (path, value) => {
     mkdirSync(join(root, path, ".."), { recursive: true });
     writeFileSync(join(root, path), typeof value === "string" ? value : JSON.stringify(value));
