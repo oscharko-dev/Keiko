@@ -617,6 +617,213 @@ function repeatedFileCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function finiteOwnedContinuationFiles(): Readonly<Record<string, string>> {
+  const files = { ...sharedPrefixCoverageFiles() };
+  files["src/implementation.ts"] = [
+    'import { collectInventory } from "./inventory-scan.js";',
+    (files["src/implementation.ts"] ?? "").replace(
+      "  return continueProcessing(value);",
+      "  const inventory = collectInventory(value);\n  return continueProcessing(inventory);",
+    ),
+  ].join("\n");
+  files["src/inventory-scan.ts"] = [
+    'import { discoverEntries } from "./inventory-walk.js";',
+    "export function collectInventory(root) {",
+    ...Array.from({ length: 8 }, () => "  // Keep the complete selected inventory source body."),
+    "  const inventory = discoverEntries(root);",
+    "  return inventory;",
+    "}",
+  ].join("\n");
+  files["src/inventory-walk.ts"] = finiteInventoryWalkSource();
+  return files;
+}
+
+function finiteInventoryWalkSource(): string {
+  const separation = Array.from({ length: 24 }, () => "// Separate selected declarations.");
+  const detail = Array.from(
+    { length: 8 },
+    () => "  // Keep the actual directory inventory detail.",
+  );
+  return [
+    "export function discoverEntries(root) {",
+    ...detail,
+    "  const inventory = [];",
+    "  descend(root, inventory);",
+    "  return inventory;",
+    "}",
+    ...separation,
+    "function descend(root, inventory) {",
+    ...detail,
+    "  const children = directoryEntries(root);",
+    "  for (const child of children) handleEntry(child, inventory);",
+    "  return inventory;",
+    "}",
+    ...separation,
+    "function handleEntry(entry, inventory) {",
+    ...detail,
+    "  inventory.push(entry);",
+    "  if (entry.directory) descend(entry, inventory);",
+    "  return inventory;",
+    "}",
+  ].join("\n");
+}
+
+type FiniteOwnedContinuationEntry = NonNullable<
+  CoverageFixture["trace"]["routeCoverage"]
+>["entries"][number];
+
+type FiniteOwnedContinuationIndex = Awaited<
+  ReturnType<CoverageFixture["requestContext"]["codeIntelligenceIndex"]>
+>;
+
+interface FiniteOwnedContinuationView {
+  readonly entry: FiniteOwnedContinuationEntry;
+  readonly range: NonNullable<EvidenceAtom["lineRange"]>;
+  readonly lines: readonly string[];
+  readonly body: string;
+}
+
+function finiteOwnedContinuationEntry(
+  fixture: CoverageFixture,
+  entries: readonly FiniteOwnedContinuationEntry[],
+  index: FiniteOwnedContinuationIndex,
+  name: string,
+): FiniteOwnedContinuationEntry {
+  const entry = entries.find((candidate) =>
+    (
+      fixture.files[candidate.atom.scopePath]?.split("\n")[
+        (candidate.atom.lineRange?.startLine ?? 1) - 1
+      ] ?? ""
+    ).includes(`function ${name}(`),
+  );
+  if (entry === undefined) throw new TypeError("fixture requires the actual selected branch");
+  const parent = entries.find((candidate) => candidate.definitionIdentity === entry.parentIdentity);
+  if (parent === undefined) throw new TypeError("fixture requires the actual observed caller");
+  const parentRange = parent.atom.lineRange;
+  if (parentRange === undefined) throw new TypeError("fixture requires the complete parent span");
+  const call = index.calls.find(
+    (candidate) =>
+      candidate.targetName === name &&
+      candidate.targetPath === entry.atom.scopePath &&
+      candidate.callerPath === parent.atom.scopePath &&
+      candidate.callerDefinition?.lineRange.startLine === parentRange.startLine &&
+      candidate.callerDefinition.lineRange.endLine === parentRange.endLine,
+  );
+  if (call === undefined) throw new TypeError("fixture requires the actual owned lexical call");
+  expect(call.confidence).toBe("resolved");
+  expect(call.binding).toBe("lexical");
+  expect(call.callerSpan).toBeDefined();
+  expect(call.resultUsage).toBeUndefined();
+  expect(call.awaited).toBeUndefined();
+  expect(entry.parentWitness?.parentIdentity).toBe(parent.definitionIdentity);
+  expect(entry.parentWitness?.targetIdentity).toBe(entry.definitionIdentity);
+  expect(entry.parentWitness?.callerSpan).toEqual(call.callerSpan);
+  return entry;
+}
+
+function finiteOwnedContinuationViews(
+  fixture: CoverageFixture,
+  entries: readonly FiniteOwnedContinuationEntry[],
+  prefix: readonly FiniteOwnedContinuationEntry[],
+  branch: readonly FiniteOwnedContinuationEntry[],
+): readonly FiniteOwnedContinuationView[] {
+  expect(prefix).toHaveLength(6);
+  expect(
+    prefix.every((entry) => branch.every((child) => entry.atom.score > child.atom.score)),
+  ).toBe(true);
+  const caller = entries.find((entry) => entry.definitionIdentity === branch[0]?.parentIdentity);
+  const later = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
+  if (caller === undefined || later === undefined)
+    throw new TypeError("fixture requires the actual common caller and usable later file");
+  const watched = [caller, ...prefix, later, ...branch].map((entry) => {
+    const range = entry.atom.lineRange;
+    if (range === undefined) throw new TypeError("fixture requires complete declaration ranges");
+    const lines = (fixture.files[entry.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine);
+    const body = lines.join("\n");
+    expect(fixture.trace.routeCoverage?.isCurrent(entry.atom)).toBe(true);
+    expect(entry.observedBytes).toBe(Buffer.byteLength(body));
+    expect(entry.observedBytes).toBeLessThan(4096);
+    return { entry, range, lines, body };
+  });
+  return watched;
+}
+
+function finiteOwnedContinuationMetadata(
+  reads: ExcerptReadSummary,
+  requests: readonly ReadExcerptRequest[],
+  watched: readonly FiniteOwnedContinuationView[],
+  restricted: readonly string[] | undefined,
+): string {
+  const metadata = JSON.stringify({
+    restricted: restricted !== undefined,
+    watched: watched.map(({ entry, range, body }) => ({
+      path: entry.atom.scopePath,
+      range,
+      score: entry.atom.score,
+      bytes: Buffer.byteLength(body),
+      read: readContent(reads, entry.atom.scopePath).includes(body),
+    })),
+    requests: requests.map((request) => ({
+      path: request.scopePath,
+      funded: request.ranges,
+      grant: request.maxTotalBytes,
+    })),
+  });
+  return metadata;
+}
+
+function expectFiniteOwnedContinuationBody(
+  reads: ExcerptReadSummary,
+  pack: ConnectedContextPack,
+  prompt: string,
+  requests: readonly ReadExcerptRequest[],
+  { entry, range, lines, body }: FiniteOwnedContinuationView,
+  metadata: string,
+): void {
+  expect(readContent(reads, entry.atom.scopePath).includes(body), metadata).toBe(true);
+  expect(
+    pack.files
+      .find((file) => file.scopePath === entry.atom.scopePath)
+      ?.excerpts.some((view) => view.content.includes(body)),
+    metadata,
+  ).toBe(true);
+  for (const [lineIndex, line] of lines.entries())
+    expect(prompt, metadata).toContain(`${String(range.startLine + lineIndex)} | ${line}`);
+  expect(
+    requests.some(
+      (request) =>
+        request.scopePath === entry.atom.scopePath &&
+        request.ranges?.some(
+          (window) => window.startLine <= range.startLine && window.endLine >= range.endLine,
+        ),
+    ),
+    metadata,
+  ).toBe(true);
+}
+
+async function expectFiniteOwnedContinuationRead(
+  fixture: CoverageFixture,
+  atoms: readonly EvidenceAtom[],
+  budget: typeof DEFAULT_EXPLORATION_BUDGET,
+  watched: readonly FiniteOwnedContinuationView[],
+  restricted: readonly string[] | undefined,
+): Promise<void> {
+  const { reads, requests } = await observedCoverageRead(fixture, {
+    paths: restricted,
+    atoms,
+    inputs: { budget },
+  });
+  const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+  const prompt = await sentPrompt(fixture, reads, atoms, budget);
+  expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+  expect(requests.every((request) => request.maxBytes <= 8192)).toBe(true);
+  const metadata = finiteOwnedContinuationMetadata(reads, requests, watched, restricted);
+  for (const view of watched)
+    expectFiniteOwnedContinuationBody(reads, pack, prompt, requests, view, metadata);
+}
+
 function returnedContinuationFiles(): Readonly<Record<string, string>> {
   const files = { ...configuredCoverageFiles() };
   files["src/implementation.ts"] = (files["src/implementation.ts"] ?? "").replace(
@@ -2837,6 +3044,35 @@ describe("current route trace excerpt coverage", () => {
     expect(prompt).toContain("export function handleItem() { return () => processItem(); }");
     expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
     expectOrdinaryMethodViews(fixture, reads, pack, prompt, range);
+  });
+
+  it("retains complete assigned and statement-call traversal bodies beside useful file opportunities", async () => {
+    const fixture = await coverageFixture(undefined, finiteOwnedContinuationFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const originalUncertainty = JSON.stringify(fixture.trace.uncertainty);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const index = await fixture.requestContext.codeIntelligenceIndex();
+    const prefix = entries.filter((entry) =>
+      /^function scopeAdmissionAndPromptFitting\d+\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    const names = ["collectInventory", "discoverEntries", "descend", "handleEntry"];
+    const branch = names.map((name) => finiteOwnedContinuationEntry(fixture, entries, index, name));
+    const watched = finiteOwnedContinuationViews(fixture, entries, prefix, branch);
+    const selected = new Set(coverageRanking(atoms).kept.map((candidate) => candidate.scopePath));
+    expect(watched.every(({ entry }) => selected.has(entry.atom.scopePath))).toBe(true);
+    const paths = [
+      ...new Set(["src/routes.ts", ...watched.map(({ entry }) => entry.atom.scopePath)]),
+    ];
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    for (const restricted of [paths, undefined])
+      await expectFiniteOwnedContinuationRead(fixture, atoms, budget, watched, restricted);
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+    expect(JSON.stringify(fixture.trace.uncertainty)).toBe(originalUncertainty);
   });
 
   it("keeps a returned continuation before higher-scoring shallow called targets", async () => {

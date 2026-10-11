@@ -82,6 +82,7 @@ interface RouteTraceParentWitness extends RouteTraceObservedLines {
   readonly targetIdentity: string;
   readonly lineRange: NonNullable<EvidenceAtom["lineRange"]>;
   readonly callerSpan: NonNullable<CodeCallEdge["callerSpan"]>;
+  readonly ownedSourceCall?: true | undefined;
 }
 
 export interface RouteTraceCoverageEntry {
@@ -795,7 +796,8 @@ function certifiedBodyCalls(
           call,
           sourceReference: observation.sourceReference === true,
           parentIdentity,
-          parentWitness,
+          parentWitness:
+            parentWitness === undefined ? undefined : { ...parentWitness, ownedSourceCall: true },
         },
       ];
     return call.callerDefinition === undefined &&
