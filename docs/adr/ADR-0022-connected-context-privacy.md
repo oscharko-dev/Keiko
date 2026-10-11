@@ -426,19 +426,25 @@ priority remains intact.
 Physical excerpt allocation preserves connected parent chains across already selected route files.
 Explicit human file selections remain first. The request-local traversal supplies only current,
 certified definition identities, observed parent relationships and actual body-byte requirements.
-Independent route roots take turns; files within each root take turns before a file's next target.
-Existing query relevance orders targets within each file and sets initial file order, with stable ties.
-Admission requires the additional observed body bytes of a complete selected, current parent chain
-to fit the connected share. Shared ancestors reserve bytes once; later same-file targets remain
-eligible, and oversized branches receive no partial reservation. Reservations stay inside the
-remaining excerpt-byte and file grants; they do not add selected paths or change relevance scores
-or invocation uncertainty. Ordinary ranked evidence and connected definitions share the remaining
-byte grant; connected reservations cannot consume the whole pool. Existing human and endpoint
-selection priorities survive path ordering. Reserved definition windows precede ordinary extras,
-with explicit human windows first. Actual returned coverage windows retain the existing physical-view
-digest so adjacent windows cannot introduce uncharged bytes during assembly. Bounded observations
-do not establish that an arbitrarily large function was fully read; actual truncation and omissions
-remain authoritative.
+Admission funds the selected target definition window and each current observed parent caller span,
+using their unique physical-line and separator costs. A compact span is bound to the original
+current parent, exact child and accepted source coordinates; it does not narrow or copy a definition
+certificate. Unobserved, anchored or partially clipped caller spans receive no compact priority.
+Independent route roots and their file queues receive bounded initial byte portions from the
+existing connected share. Their targets take turns within those portions; existing query relevance
+orders targets within each file and sets initial file order, with stable ties. After that bounded
+pass, unserved queues retry unused shared bytes before further expansion.
+Shared ancestors reserve bytes once; upgrades retain funded target windows, later
+same-file targets remain eligible, and oversized branches receive no partial reservation.
+Reservations must fit both the remaining connected share and actual per-file read capacity; they
+do not add selected paths or change relevance scores or invocation uncertainty. Ordinary ranked
+evidence retains its share of the remaining byte grant. Existing human and endpoint selection
+priorities survive path ordering. Reserved windows precede ordinary extras, with explicit human
+windows first. Separately identified actual returned partial views retain their own ranges, content
+and physical-view digests through assembly, without inferred continuity or uncharged separators.
+Multiple unidentified uncovered views remain fail-closed, and conflicting views retain uncertainty.
+Bounded observations do not establish that an arbitrarily large function was fully read; actual
+truncation and omissions remain authoritative.
 The existing guarded reader batches each file's ranges, charges
 actual returned bytes and reports omitted windows. A definition that loses currentness cannot
 retain its reserved priority; bytes already read from a subsequently stale definition are charged

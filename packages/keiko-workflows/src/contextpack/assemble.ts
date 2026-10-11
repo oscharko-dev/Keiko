@@ -263,16 +263,15 @@ function contextWindowsForAtom(
     return matching.filter((window) => window.identity !== undefined || window === legacy);
   }
   // A single shortened read can still provide useful evidence for part of a broad range.
-  // Multiple uncovered windows must not fabricate continuity across a gap or conflicting read.
-  if (source.length !== 1) return [];
-  const window = source[0];
   const range = atom.lineRange;
-  return window !== undefined &&
-    range !== undefined &&
-    window.startLine <= range.endLine &&
-    window.endLine >= range.startLine
-    ? [window]
-    : [];
+  if (range === undefined) return [];
+  // Identified read views remain separate; they do not imply continuity across unread lines.
+  return source.filter(
+    (window) =>
+      (source.length === 1 || window.identity !== undefined) &&
+      window.startLine <= range.endLine &&
+      window.endLine >= range.startLine,
+  );
 }
 
 interface CompactedContextWindows {

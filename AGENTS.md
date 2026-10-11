@@ -469,16 +469,23 @@ system that exists, never beside it:
   invocation; continuation retains that reference relationship and `source-graph-incomplete`.
   Partially overlapping excerpt windows retain uncovered lines and their originating strength;
   deduplication removes only lines already covered by a higher-priority window.
-  Physical excerpt allocation admits complete selected, current definition branches whose additional
-  observed body bytes fit the connected share. Independent roots and files within each root take
-  turns; existing query relevance orders targets within each file and sets initial file order, with
-  stable ties. Shared ancestors reserve bytes once, later same-file targets remain
-  eligible, and an oversized branch spends no partial reservation. Explicit human selections remain
-  first, and ordinary ranked evidence retains its share of the existing grant. Reserved definition
-  windows precede ordinary extras; their actual returned physical-view identities prevent adjacent
-  windows from introducing uncharged bytes during assembly. Bounded observations do not establish
-  that an arbitrarily large function was fully read. File and deadline grants, current-source checks,
-  invocation uncertainty and actual truncation/omission reporting remain authoritative.
+  Physical excerpt allocation funds selected, current target definition windows and their observed
+  parent caller spans inside the existing connected share and actual per-file read capacity. A
+  compact caller span remains bound to its original current parent, exact child and observed source
+  coordinates; it does not acquire a new definition certificate. Independent roots and files within
+  each root receive bounded initial byte portions. Their targets take turns within those portions;
+  existing query relevance orders targets within each file and sets initial file order, with stable
+  ties. After that bounded pass, unserved queues retry unused shared bytes before further expansion.
+  Shared physical lines and separators are charged once;
+  upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
+  branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
+  evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
+  Separately identified returned partial views retain their actual ranges, contents and physical-view
+  identities through assembly, without inventing continuity or uncharged separators. Unidentified
+  multiple uncovered views remain fail-closed; conflicting views retain uncertainty. Bounded
+  observations do not establish that an arbitrarily large function was fully read. File and deadline
+  grants, current-source checks, invocation uncertainty and actual truncation/omission reporting
+  remain authoritative.
   Existing query evidence orders endpoint intake; bounded delegation traversal keeps the original
   workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
   Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
