@@ -492,6 +492,11 @@ system that exists, never beside it:
   Each group uses its existing relevance-ordered queue head's score, highest first, with stable
   existing ties and within-file nomination order. The first jointly feasible target in a different
   physical file whose queue head is not fully funded receives the shared file turn.
+  When the relevance file's head was already fully funded in committed state before the turn,
+  its pending whole targets at or above the nominated other file's queue-head score also
+  participate in that joint proposal. Each guarded additional target retains the last feasible
+  joint prefix with the same nominated file, including the original joint proposal as fallback.
+  Funding the head only inside a provisional proposal does not enable this extension.
   Infeasible nominations remain eligible without blocking feasible nominations in other files.
   A weaker target or compact caller window does not complete that head's file opportunity.
   Higher and tied file heads retain their existing relevance turns and guarded deferred retries.
