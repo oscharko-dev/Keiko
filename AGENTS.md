@@ -486,11 +486,15 @@ system that exists, never beside it:
   This bounded tradeoff applies to new targets; previously funded targets remain intact. Whole
   targets that fail admission remain separately retryable, including later targets in served files.
   A shared file turn advances only after a newly funded whole relevance prefix makes progress.
-  Pending file nominations use their existing relevance-ordered queue head's score, highest first,
-  with stable existing ties and within-file nomination order. The first jointly feasible target in a
-  different physical file whose queue head is not fully funded receives the shared file turn.
+  Pending file nominations first consider existing queue heads below the current relevance
+  nomination's score. Nominations from files with higher or tied heads remain fallback candidates
+  when no target from the first group fits jointly.
+  Each group uses its existing relevance-ordered queue head's score, highest first, with stable
+  existing ties and within-file nomination order. The first jointly feasible target in a different
+  physical file whose queue head is not fully funded receives the shared file turn.
   Infeasible nominations remain eligible without blocking feasible nominations in other files.
   A weaker target or compact caller window does not complete that head's file opportunity.
+  Higher and tied file heads retain their existing relevance turns and guarded deferred retries.
   A nomination that adds no prefix target cannot donate fresh fair-only bytes; deferred file turns
   remain eligible for a final guarded retry in their existing order.
   Aggregate same-file unions consume the connected share; each physical excerpt retains its existing
