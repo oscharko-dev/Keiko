@@ -3,6 +3,7 @@ import { readFileSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
 import { collectPolicyMembership, policyDigest } from "./code-quality-inventory.mjs";
+import { compareStrings } from "./compare-strings.mjs";
 
 const DEFAULT_LIMITS = Object.freeze({
   programs: 2,
@@ -80,15 +81,43 @@ function subjectFingerprint(subject) {
   );
 }
 
-export function createCompilerContext(subject, options = {}) {
+function proofManifest(subject, roots) {
+  const entries = roots
+    .map(({ owner, paths }) => {
+      if (!subject.contexts.has(owner) || !Array.isArray(paths))
+        throw new TypeError("invalid-proof-context");
+      const selected = [...new Set(paths)].sort(compareStrings);
+      for (const path of selected) {
+        const file = subject.inventory.files.find((entry) => entry.path === path);
+        const actual = [...subject.contexts.keys()]
+          .filter((key) => key === "" || path.startsWith(`${key}/`))
+          .sort((a, b) => b.length - a.length)[0];
+        if (!file || file.production || !/\.test\.[cm]?tsx?$/u.test(path) || actual !== owner)
+          throw new TypeError("invalid-proof-root");
+        regularSource(join(subject.root, path));
+      }
+      return Object.freeze({ owner, paths: Object.freeze(selected) });
+    })
+    .sort((a, b) => a.owner.localeCompare(b.owner));
+  if (new Set(entries.map(({ owner }) => owner)).size !== entries.length)
+    throw new TypeError("duplicate-proof-owner");
+  return Object.freeze(entries);
+}
+
+export function createCompilerContext(subject, options = {}, roots = []) {
   const state = {
     subject,
+    proofRoots: roots,
+    proofManifest: proofManifest(subject, roots),
+    proofFingerprint: policyDigest(JSON.stringify(roots)),
     limits: limitsFrom(options),
     inputs: observedInputs(subject),
     fingerprint: subjectFingerprint(subject),
     snapshots: new Map(),
     programs: new Map(),
     emissions: new Map(),
+    declarations: new Map(),
+    proofFailures: new Map(),
     bytes: 0,
     nodes: 0,
     emittedBytes: 0,
@@ -100,10 +129,23 @@ export function createCompilerContext(subject, options = {}) {
     read: (path) => readOwned(state, path),
     context: (path) => ownerContext(state, path),
     program: (path) => programFor(state, path),
+    proofProgram: (path) => programFor(state, path, "proof"),
+    resolveModule: (source, specifier, config, mode) =>
+      ts.resolveModuleName(
+        specifier,
+        source,
+        config.options,
+        compilerHost(state, config),
+        undefined,
+        undefined,
+        mode,
+      ).resolvedModule,
     assertCurrent: () => assertCurrent(state),
     close: () => {
       state.programs.clear();
       state.emissions.clear();
+      state.declarations.clear();
+      state.proofFailures.clear();
       state.snapshots.clear();
       state.closed = true;
     },
@@ -160,14 +202,62 @@ function compilerHost(state, config) {
   return host;
 }
 
-function programFor(state, path) {
-  assertOpen(state);
+function immutableProofOption(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutableProofOption));
+  if (!value || typeof value !== "object") return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(value).map(([key, option]) => [key, immutableProofOption(option)]),
+    ),
+  );
+}
+
+function proofConfiguration(config, fileNames) {
+  const options = Object.fromEntries(
+    Object.entries(config.options).map(([key, value]) => [
+      key,
+      // The compiler's original config AST is not a plain option collection and stays untouched.
+      key === "configFile" ? value : immutableProofOption(value),
+    ]),
+  );
+  const configFile = Object.getOwnPropertyDescriptor(config.options, "configFile");
+  if (configFile) Object.defineProperty(options, "configFile", configFile);
+  options.noEmit = true;
+  return Object.freeze({
+    ...config,
+    fileNames: Object.freeze(fileNames),
+    options: Object.freeze(options),
+  });
+}
+
+function programConfig(state, path, role) {
   const { owner, config } = ownerContext(state, path);
   if (!config) throw new TypeError("symbol-context-missing");
-  const cached = state.programs.get(owner);
+  if (role === "production") return { owner, config, key: JSON.stringify([owner, role, []]) };
+  const entry = state.proofManifest.find((value) => value.owner === owner);
+  if (!entry?.paths.includes(path)) throw new TypeError("undeclared-proof-root");
+  const fileNames = [
+    ...new Set([...config.fileNames, ...entry.paths.map((root) => join(state.subject.root, root))]),
+  ].sort(compareStrings);
+  return {
+    owner,
+    config: proofConfiguration(config, fileNames),
+    key: JSON.stringify([owner, role, entry.paths]),
+  };
+}
+
+function programFor(state, path, role = "production") {
+  assertOpen(state);
+  if (role === "proof") assertCurrent(state);
+  const { owner, config, key } = programConfig(state, path, role);
+  const failure = state.proofFailures.get(key);
+  if (failure) throw failure;
+  const cached = state.programs.get(key);
   if (cached) {
-    state.programs.delete(owner);
-    state.programs.set(owner, cached);
+    state.programs.delete(key);
+    state.programs.set(key, cached);
     return cached;
   }
   assertCurrent(state);
@@ -177,15 +267,21 @@ function programFor(state, path) {
     projectReferences: config.projectReferences,
     host: compilerHost(state, config),
   });
+  state.created += 1;
+  if (role === "proof" && ts.getPreEmitDiagnostics(program).length) {
+    const error = new TypeError("unqualified-proof-context");
+    state.proofFailures.set(key, error);
+    throw error;
+  }
   const context = {
+    role,
     owner,
     config,
     program,
     checker: program.getTypeChecker(),
     qualified: new Set(),
   };
-  state.created += 1;
-  state.programs.set(owner, context);
+  state.programs.set(key, context);
   if (state.programs.size > state.limits.programs)
     state.programs.delete(state.programs.keys().next().value);
   return context;
@@ -193,6 +289,8 @@ function programFor(state, path) {
 
 function assertCurrent(state) {
   assertOpen(state);
+  if (policyDigest(JSON.stringify(state.proofRoots)) !== state.proofFingerprint)
+    throw new TypeError("symbol-proof-context-changed");
   if (subjectFingerprint(state.subject) !== state.fingerprint)
     throw new TypeError("symbol-context-changed");
   const current = collectPolicyMembership(state.subject.root).paths;

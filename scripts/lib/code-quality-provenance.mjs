@@ -161,7 +161,7 @@ function matchingMap(compiler, emitted, outputPath, freshMap, mapPath, mapText) 
   }
 }
 
-function qualifiedDeclarationBytes(compiler, path) {
+export function qualifiedDeclarationBytes(compiler, path) {
   const source = compiler.state.subject.outputs.get(path);
   if (!source) throw new TypeError("unqualified-declaration-owner");
   const emitted = emitProducer(compiler, source);
@@ -179,7 +179,7 @@ function qualifiedDeclarationBytes(compiler, path) {
     !matchingMap(compiler, emitted, outputPath, freshMap, mapPath, mapText)
   )
     throw new TypeError("stale-declaration-provenance");
-  return { source, mapPath, mapText };
+  return { source, mapPath, mapText, declarationText };
 }
 
 export function qualifyContextDeclarations(compiler, context) {

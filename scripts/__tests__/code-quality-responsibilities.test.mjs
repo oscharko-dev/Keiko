@@ -12,6 +12,8 @@ import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import { deepRedactStrings, createAuditRedactor } from "@oscharko-dev/keiko-security/redaction";
 import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import {
+  createDiagnosticFixture,
+  createForeignDiagnosticFixture,
   responsibilityPolicy,
   responsibilityRecord,
   createResponsibilityFixture,
@@ -892,4 +894,132 @@ describe("real public reference boundaries retain structural behavior", () => {
     expect(JSON.stringify(input)).toBe(before);
     expect(JSON.stringify(deepRedactStrings(output, redact))).toBe(JSON.stringify(output));
   });
+});
+
+describe("closed public diagnostic proof (#3918)", () => {
+  it("accepts the exact closed diagnostic record", () => {
+    const own = createDiagnosticFixture();
+    roots.push(own.root);
+    expect(validatePolicy(own.policy)).toEqual([]);
+  });
+  it("makes the excluded owning proof structurally ready without semantic qualification", async () => {
+    const own = createDiagnosticFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.assessments[0].structural).toBe("ready");
+    expect(report.counts.qualified).toBe(0);
+  });
+});
+
+describe("public diagnostic proof controls (#3918)", () => {
+  it.each([
+    "constant",
+    "discarded",
+    "receiver",
+    "input",
+    "mutable",
+    "asserted",
+    "nonnull",
+    "satisfies",
+    "nested",
+    "extra",
+    "counterfeit",
+    "wrapper",
+    "destructured",
+    "dynamic",
+    "overload",
+  ])("refuses %s diagnostic result binding", async (variant) => {
+    const own = createDiagnosticFixture(variant);
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).not.toBe("ready");
+    expect(report.counts.qualified).toBe(0);
+  });
+  it("compiles the foreign owning proof before refusing diagnostic ownership", async () => {
+    const own = createForeignDiagnosticFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/beta", paths: own.record.proofs },
+    ]);
+    try {
+      expect(resolver.resolveProofConsumer(own.record.consumer).identities[0].owner).toBe("beta");
+      expect(resolver.resolveProofExport(own.record.input).identities[0].owner).toBe("alpha");
+    } finally {
+      resolver.close();
+    }
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.assessments[0].reasons).toContain("foreign-responsibility-owner");
+    expect(report.counts.qualified).toBe(0);
+  });
+  it.each([
+    "extra",
+    "legacy",
+    "proof",
+    "owner",
+    "kind",
+    "input",
+    "transform",
+    "output",
+    "consumer",
+    "rules",
+  ])("rejects %s closed diagnostic record drift", (variant) => {
+    const own = createDiagnosticFixture();
+    roots.push(own.root);
+    const baseline = structuredClone(own.policy);
+    const record = own.policy.responsibilities[0];
+    if (variant === "extra") record.consumer.authorized = true;
+    else if (variant === "legacy") record.kind = "validator";
+    else if (variant === "proof") record.proofs = ["packages/alpha/src/other.test.ts"];
+    else if (variant === "rules") record.rules = [record.rules[0]];
+    else if (["owner", "kind"].includes(variant))
+      record[variant] = variant === "owner" ? "beta" : "structural-redactor";
+    else record[variant].exportName = "rebound";
+    expect(validatePolicy(own.policy, [baseline]).length).toBeGreaterThan(0);
+  });
+  it("keeps partial producer scope incomplete and runtime proof pending", async () => {
+    const own = createDiagnosticFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const report = assessPolicyResponsibilities(
+      subject,
+      own.policy,
+      subject.inventory.files.filter((file) => file.path !== "packages/alpha/src/owner.ts"),
+    );
+    expect(report.assessments[0].reasons).toContain("partial-responsibility-scope");
+    const full = assessPolicyResponsibilities(subject, own.policy);
+    expect(full.assessments[0].proofs[0].executed).toBe(false);
+    expect(full.counts.pending).toBe(1);
+  });
+});
+
+describe("diagnostic raw slot exact Native positions (#3918)", () => {
+  it("adapts only the selected multibyte raw parameter beside another unknown subject", async () => {
+    const own = createDiagnosticFixture();
+    roots.push(own.root);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      'export function validate(είσοδος: unknown, unrelated: unknown = 1): readonly string[] { return typeof είσοδος === "number" ? [] : ["invalid"]; }\n',
+    );
+    emitSymbolFixture(own.root);
+    for (const rule of own.policy.rules)
+      if (own.record.rules.includes(rule.id))
+        rule.activeScopes = [...new Set([...rule.activeScopes, "package:alpha"])];
+    own.put("scripts/code-quality-policy.json", own.policy);
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "enforce" },
+      own.root,
+    );
+    const native = report.census.filter(
+      (entry) =>
+        entry.path === "packages/alpha/src/owner.ts" &&
+        entry.rule === "anti-slop/no-unknown-parameters",
+    );
+    expect(native).toHaveLength(2);
+    expect(report.adaptations.map(({ finding }) => finding)).toContainEqual(native[0]);
+    expect(report.adaptations.map(({ finding }) => finding)).not.toContainEqual(native[1]);
+    expect(report.responsibilities.counts.qualified).toBe(0);
+    expect(report.outcome).toBe("failed");
+  }, 60_000);
 });

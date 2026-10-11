@@ -11,6 +11,7 @@ import {
   canonicalDeclaration,
   compilerNodeAt,
   qualifyContextDeclarations,
+  qualifiedDeclarationBytes,
 } from "./code-quality-provenance.mjs";
 
 function typeFacts(type) {
@@ -89,19 +90,19 @@ function resolvedFacts(compiler, context, symbol, entry) {
   };
 }
 
-function ownedSource(compiler, path) {
+function ownedSource(compiler, path, proof = false) {
   if (!compiler.state.subject.inventory.files.some((file) => file.path === path))
     throw new TypeError("unaccounted-symbol-source");
   compiler.read(path);
-  const context = compiler.program(path);
+  const context = proof ? compiler.proofProgram(path) : compiler.program(path);
   const source = context.program.getSourceFile(join(compiler.state.subject.root, path));
   if (!source) throw new TypeError("untyped-symbol-source");
   qualifyContextDeclarations(compiler, context);
   return { context, source };
 }
 
-function resolveExport(compiler, request) {
-  const { context, source } = ownedSource(compiler, request.consumerPath);
+function resolveExport(compiler, request, proof = false) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, proof);
   const references = source.statements.filter(
     (statement) =>
       (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
@@ -115,8 +116,304 @@ function resolveExport(compiler, request) {
     .find((entry) => entry.name === request.exportName);
   const entry = { specifier: request.specifier, exportName: request.exportName };
   const facts = resolvedFacts(compiler, context, symbol, entry);
+  if (proof) qualifyPublicEntry(compiler, context, source, references, request, facts);
   compiler.assertCurrent();
   return facts;
+}
+
+function sourceOverride(config, specifier) {
+  return Object.keys(config.options.paths ?? {}).some(
+    (pattern) =>
+      pattern === specifier ||
+      (pattern.includes("*") &&
+        specifier.startsWith(pattern.split("*")[0]) &&
+        specifier.endsWith(pattern.split("*")[1])),
+  );
+}
+
+function declarationModule(compiler, context, source, literal, publicEntry = false) {
+  const mode = ts.getModeForUsageLocation(source, literal, context.config.options);
+  if (sourceOverride(context.config, literal.text))
+    throw new TypeError("unsupported-public-source-override");
+  const resolved = compiler.resolveModule(source.fileName, literal.text, context.config, mode);
+  if (!resolved) throw new TypeError("unresolved-public-declaration-entry");
+  const path = relative(compiler.state.subject.root, resolved.resolvedFileName).replaceAll(
+    "\\",
+    "/",
+  );
+  if (publicEntry) return selectedPublicEntry(compiler, literal.text, resolved, path, mode);
+  if (!compiler.state.subject.outputs.has(path))
+    throw new TypeError("unqualified-public-declaration-entry");
+  return path;
+}
+
+function closedPublicTarget(target) {
+  return Boolean(
+    target &&
+    Object.keys(target).length === 2 &&
+    Object.hasOwn(target, "import") &&
+    Object.hasOwn(target, "types") &&
+    typeof target.types === "string" &&
+    typeof target.import === "string" &&
+    target.types.startsWith("./") &&
+    target.import.startsWith("./"),
+  );
+}
+
+function publicPackageOwner(subject, specifier, resolved, mode) {
+  const owner = subject.inventory.packages.find((entry) => entry.name === resolved.packageId?.name);
+  if (
+    mode !== ts.ModuleKind.ESNext ||
+    !owner ||
+    !(specifier === owner.name || specifier.startsWith(`${owner.name}/`))
+  )
+    throw new TypeError("unqualified-public-declaration-entry");
+  return owner;
+}
+
+function selectedPublicEntry(compiler, specifier, resolved, path, mode) {
+  const subject = compiler.state.subject;
+  const owner = publicPackageOwner(subject, specifier, resolved, mode);
+  const manifest = JSON.parse(compiler.read(`${owner.directory}/package.json`));
+  const key = specifier === owner.name ? "." : `.${specifier.slice(owner.name.length)}`;
+  const target = manifest.exports?.[key];
+  if (!closedPublicTarget(target)) throw new TypeError("unsupported-public-declaration-entry");
+  const declaration = `${owner.directory}/${target.types.slice(2)}`;
+  const runtime = `${owner.directory}/${target.import.slice(2)}`;
+  const source = subject.outputs.get(declaration);
+  if (
+    !source ||
+    subject.outputs.get(runtime) !== source ||
+    ![declaration, source].includes(path) ||
+    !/\.d\.[cm]?ts$/u.test(declaration)
+  )
+    throw new TypeError("unqualified-public-declaration-entry");
+  compiler.read(runtime);
+  return declaration;
+}
+
+function publicDeclarationSource(compiler, context, path) {
+  compiler.assertCurrent();
+  const cached = compiler.state.declarations.get(path);
+  if (cached) return cached;
+  const { declarationText } = qualifiedDeclarationBytes(compiler, path);
+  const source = ts.createSourceFile(
+    join(compiler.state.subject.root, path),
+    declarationText,
+    context.config.options.target,
+    true,
+  );
+  source.impliedNodeFormat = ts.getImpliedNodeFormatForFile(
+    source.fileName,
+    undefined,
+    {
+      ...ts.sys,
+      readFile: (absolute) =>
+        compiler.read(relative(compiler.state.subject.root, absolute).replaceAll("\\", "/")),
+    },
+    context.config.options,
+  );
+  visitCompilerNodes(compiler.state, source, () => undefined);
+  compiler.state.declarations.set(path, source);
+  return source;
+}
+
+function publicExportCandidates(source, name) {
+  const functions = source.statements.filter(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === name &&
+      node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword),
+  );
+  const exports = source.statements
+    .filter(
+      (node) =>
+        ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause),
+    )
+    .flatMap((node) =>
+      node.exportClause.elements
+        .filter((entry) => entry.name.text === name)
+        .map((entry) => ({ node, entry })),
+    );
+  return { functions, exports };
+}
+
+function namedValueReexport(node, entry) {
+  return (
+    !node.isTypeOnly &&
+    !entry.isTypeOnly &&
+    node.moduleSpecifier &&
+    ts.isStringLiteral(node.moduleSpecifier)
+  );
+}
+
+function publicDeclaration(compiler, context, path, name, seen) {
+  if (seen.has(path) || seen.size >= compiler.state.limits.aliases)
+    throw new TypeError("symbol-alias-budget");
+  seen.add(path);
+  const source = publicDeclarationSource(compiler, context, path);
+  const { functions, exports } = publicExportCandidates(source, name);
+  if (functions.length === 1 && exports.length === 0)
+    return canonicalDeclaration(compiler, functions[0], null);
+  if (functions.length || exports.length !== 1)
+    throw new TypeError("unsupported-public-declaration-entry");
+  const { node, entry } = exports[0];
+  if (!namedValueReexport(node, entry)) throw new TypeError("unsupported-public-declaration-entry");
+  return publicDeclaration(
+    compiler,
+    context,
+    declarationModule(compiler, context, source, node.moduleSpecifier),
+    entry.propertyName?.text ?? entry.name.text,
+    seen,
+  );
+}
+
+function qualifyPublicEntry(compiler, context, source, references, request, facts) {
+  if (references.length !== 1 || facts.identities.length !== 1)
+    throw new TypeError("ambiguous-public-declaration-entry");
+  const statement = references[0];
+  if (
+    !ts.isImportDeclaration(statement) ||
+    statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword
+  )
+    throw new TypeError("unsupported-public-declaration-entry");
+  const entry = declarationModule(compiler, context, source, statement.moduleSpecifier, true);
+  const canonical = publicDeclaration(compiler, context, entry, request.exportName, new Set());
+  if (!sameProducer(canonical, facts.identities[0]))
+    throw new TypeError("mismatched-public-declaration-producer");
+}
+
+function resolveProofConsumer(compiler, request) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+  const module = context.checker.getSymbolAtLocation(source);
+  const symbol = context.checker
+    .getExportsOfModule(module)
+    .find((entry) => entry.name === request.exportName);
+  const facts = resolvedFacts(compiler, context, symbol, null);
+  compiler.assertCurrent();
+  return facts;
+}
+
+function directDiagnosticCallable(callable) {
+  return Boolean(
+    callable.body &&
+    !callable.typeParameters?.length &&
+    !callable.asteriskToken &&
+    callable.parameters.length === 1 &&
+    callable.body.statements.length === 2,
+  );
+}
+
+function diagnosticCallable(context, source, name) {
+  const module = context.checker.getSymbolAtLocation(source);
+  const symbol = context.checker.getExportsOfModule(module).find((entry) => entry.name === name);
+  const declarations = symbol?.declarations ?? [];
+  if (declarations.length !== 1 || !ts.isFunctionDeclaration(declarations[0])) return null;
+  const callable = declarations[0];
+  if (!directDiagnosticCallable(callable)) return null;
+  return diagnosticParameter(context, callable.parameters[0]) ? callable : null;
+}
+
+function diagnosticParameter(context, parameter) {
+  return (
+    ts.isIdentifier(parameter.name) &&
+    !parameter.initializer &&
+    !parameter.questionToken &&
+    !parameter.dotDotDotToken &&
+    (context.checker.getTypeAtLocation(parameter).flags & ts.TypeFlags.Unknown) !== 0
+  );
+}
+
+function diagnosticResult(callable) {
+  const [assignment, returned] = callable.body.statements;
+  if (
+    !ts.isVariableStatement(assignment) ||
+    assignment.declarationList.flags !== ts.NodeFlags.Const ||
+    assignment.declarationList.declarations.length !== 1 ||
+    !ts.isReturnStatement(returned)
+  )
+    return null;
+  const local = assignment.declarationList.declarations[0];
+  const call = local.initializer;
+  if (
+    !ts.isIdentifier(local.name) ||
+    !directDiagnosticCall(call) ||
+    !diagnosticLength(returned.expression)
+  )
+    return null;
+  return { local, call, argument: call.arguments[0], result: returned.expression };
+}
+
+function directDiagnosticCall(call) {
+  return Boolean(
+    call &&
+    ts.isCallExpression(call) &&
+    ts.isIdentifier(call.expression) &&
+    !call.typeArguments?.length &&
+    call.arguments.length === 1 &&
+    ts.isIdentifier(call.arguments[0]),
+  );
+}
+
+function diagnosticLength(result) {
+  return Boolean(
+    result &&
+    ts.isPropertyAccessExpression(result) &&
+    ts.isIdentifier(result.expression) &&
+    result.name.text === "length",
+  );
+}
+
+function directDiagnosticProducer(compiler, context, call, producer) {
+  const callee = context.checker.getSymbolAtLocation(call.expression);
+  const imported = callee?.declarations?.[0];
+  if (
+    !imported ||
+    !ts.isImportSpecifier(imported) ||
+    imported.isTypeOnly ||
+    imported.parent.parent.phaseModifier === ts.SyntaxKind.TypeKeyword
+  )
+    return false;
+  const canonical = qualifiedAlias(context, callee, compiler.state.limits.aliases);
+  return (
+    canonical.declarations.length === 1 &&
+    sameProducer(canonicalDeclaration(compiler, canonical.declarations[0], null), producer)
+  );
+}
+
+function readonlyDiagnosticResult(context, call) {
+  const signature = context.checker.getResolvedSignature(call);
+  const type = context.checker.getReturnTypeOfSignature(signature);
+  const args = context.checker.getTypeArguments(type);
+  return (
+    context.checker.isArrayType(type) &&
+    type.symbol?.name === "ReadonlyArray" &&
+    args.length === 1 &&
+    (args[0].flags & ts.TypeFlags.String) !== 0
+  );
+}
+
+function diagnosticBinding(compiler, request, producer) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+  const callable = diagnosticCallable(context, source, request.exportName);
+  const result = callable && diagnosticResult(callable);
+  if (!result || !directDiagnosticProducer(compiler, context, result.call, producer))
+    return { bound: false };
+  const { local, call, argument } = result;
+  if (
+    context.checker.getSymbolAtLocation(argument) !==
+      context.checker.getSymbolAtLocation(callable.parameters[0].name) ||
+    context.checker.getSymbolAtLocation(result.result.expression) !==
+      context.checker.getSymbolAtLocation(local.name)
+  )
+    return { bound: false };
+  const bound = readonlyDiagnosticResult(context, call);
+  compiler.assertCurrent();
+  return {
+    bound,
+    implementation: canonicalDeclaration(compiler, callable, null),
+    calls: [{ path: request.consumerPath, start: call.getStart(), end: call.end }],
+  };
 }
 
 function describeAt(compiler, request) {
@@ -827,11 +1124,14 @@ function expressionFactsAt(compiler, request) {
   return facts;
 }
 
-export function createSymbolResolver(subject, options = {}) {
-  const compiler = createCompilerContext(subject, options);
+export function createSymbolResolver(subject, options = {}, proofRoots = []) {
+  const compiler = createCompilerContext(subject, options, proofRoots);
   const rawSlots = new Map();
   return {
     resolveExport: (request) => resolveExport(compiler, request),
+    resolveProofExport: (request) => resolveExport(compiler, request, true),
+    resolveProofConsumer: (request) => resolveProofConsumer(compiler, request),
+    diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
     callableSlots: (identity) => callableSlots(compiler, identity),

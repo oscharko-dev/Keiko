@@ -1,14 +1,24 @@
 import { createSymbolResolver } from "./code-quality-symbols.mjs";
+import { compareStrings } from "./compare-strings.mjs";
 
 function inventoryFile(subject, path) {
   return subject.inventory.files.find((file) => file.path === path);
 }
 
 function resolveRoles(resolver, record) {
+  if (record.kind !== "diagnostic-checker")
+    return Object.fromEntries(
+      ["input", "transform", "output", "consumer"].map((role) => [
+        role,
+        resolver.resolveExport(record[role]),
+      ]),
+    );
   return Object.fromEntries(
     ["input", "transform", "output", "consumer"].map((role) => [
       role,
-      resolver.resolveExport(record[role]),
+      role === "consumer"
+        ? resolver.resolveProofConsumer(record[role])
+        : resolver.resolveProofExport(record[role]),
     ]),
   );
 }
@@ -22,7 +32,9 @@ function ownershipReasons(subject, record, roles) {
       reasons.push("foreign-responsibility-owner");
     if (
       facts.identities.some(
-        (identity) => !inventoryFile(subject, identity.producer.path)?.production,
+        (identity) =>
+          !inventoryFile(subject, identity.producer.path)?.production &&
+          !(record.kind === "diagnostic-checker" && role === "consumer"),
       )
     )
       reasons.push("nonproduction-responsibility-source");
@@ -32,8 +44,26 @@ function ownershipReasons(subject, record, roles) {
   return reasons;
 }
 
+function diagnosticIdentityReasons(record, roles, reasons) {
+  if (record.kind === "diagnostic-checker") {
+    const producer = JSON.stringify(
+      roles.input.identities.map(({ owner, producer }) => ({ owner, producer })),
+    );
+    if (
+      [roles.transform, roles.output].some(
+        (facts) =>
+          JSON.stringify(facts.identities.map(({ owner, producer }) => ({ owner, producer }))) !==
+          producer,
+      )
+    )
+      reasons.push("mismatched-diagnostic-producer");
+    if (record.consumer.owner !== record.owner) reasons.push("foreign-responsibility-owner");
+  }
+}
+
 function signatureReasons(record, roles) {
   const reasons = [];
+  diagnosticIdentityReasons(record, roles, reasons);
   const output = roles.output.signatures[0]?.result.kind;
   if (record.kind === "validator" && ["unknown", "any"].includes(output))
     reasons.push("unchecked-validator-output");
@@ -92,11 +122,14 @@ function responsibilitySlots(resolver, record, roles) {
 
 function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   if (consumerReason || reasons.length) return null;
-  const binding = resolver.consumerCalls(
-    roles.consumer.identities[0],
-    roles.transform.identities[0],
-    record.consumer.owner,
-  );
+  const binding =
+    record.kind === "diagnostic-checker"
+      ? resolver.diagnosticBinding(record.consumer, roles.transform.identities[0])
+      : resolver.consumerCalls(
+          roles.consumer.identities[0],
+          roles.transform.identities[0],
+          record.consumer.owner,
+        );
   if (!binding.bound) reasons.push("unbound-responsibility-consumer");
   return binding;
 }
@@ -106,10 +139,15 @@ function assessRecord(subject, resolver, record, files) {
   const paths = [record.input, record.transform, record.output, record.consumer].map(
     (selector) => selector.consumerPath,
   );
-  if (paths.some((path) => !selected.has(path)))
+  if (record.kind !== "diagnostic-checker" && paths.some((path) => !selected.has(path)))
     return pendingRecord(record, "incomplete", ["partial-responsibility-scope"]);
   try {
     const roles = resolveRoles(resolver, record);
+    if (
+      record.kind === "diagnostic-checker" &&
+      !roles.input.identities.every((identity) => selected.has(identity.producer.path))
+    )
+      return pendingRecord(record, "incomplete", ["partial-responsibility-scope"]);
     const reasons = [
       ...ownershipReasons(subject, record, roles),
       ...signatureReasons(record, roles),
@@ -177,7 +215,20 @@ function pendingRecord(record, structural, reasons) {
 }
 
 export function assessPolicyResponsibilities(subject, policy, files = subject.inventory.files) {
-  const resolver = createSymbolResolver(subject);
+  const manifest = new Map();
+  for (const record of policy.responsibilities ?? []) {
+    if (record.kind !== "diagnostic-checker") continue;
+    const owner = subject.inventory.packages.find((entry) => entry.name === record.consumer.owner);
+    if (!owner || !record.proofs.includes(record.consumer.consumerPath)) continue;
+    const paths = manifest.get(owner.directory) ?? [];
+    paths.push(record.consumer.consumerPath);
+    manifest.set(owner.directory, [...new Set(paths)].sort(compareStrings));
+  }
+  const resolver = createSymbolResolver(
+    subject,
+    {},
+    [...manifest].map(([owner, paths]) => ({ owner, paths })),
+  );
   try {
     const assessments = (policy.responsibilities ?? []).map((record) =>
       assessRecord(subject, resolver, record, files),

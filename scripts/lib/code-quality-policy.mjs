@@ -101,6 +101,13 @@ function validSelector(selector, input = false) {
   );
 }
 
+function validDiagnosticConsumer(selector) {
+  if (!exactKeys(selector, ["kind", "owner", "consumerPath", "specifier", "exportName"]))
+    return false;
+  const { kind, ...legacy } = selector;
+  return kind === "public-api-proof" && validConsumerSelector(legacy);
+}
+
 function validConsumerSelector(selector) {
   if (!exactKeys(selector, ["consumerPath", "specifier", "exportName", "owner"])) return false;
   const { owner, ...exportSelector } = selector;
@@ -136,11 +143,13 @@ function validResponsibility(record) {
     exactKeys(record, keys) &&
     boundedText(record.id, 128) &&
     boundedText(record.owner, 256) &&
-    ["validator", "structural-redactor"].includes(record.kind) &&
+    ["validator", "structural-redactor", "diagnostic-checker"].includes(record.kind) &&
     validResponsibilityRules(record.rules) &&
     validSelector(record.input, true) &&
     [record.transform, record.output].every((selector) => validSelector(selector)) &&
-    validConsumerSelector(record.consumer) &&
+    (record.kind === "diagnostic-checker"
+      ? validDiagnosticConsumer(record.consumer)
+      : validConsumerSelector(record.consumer)) &&
     validProofs(record.proofs)
   );
 }
@@ -168,6 +177,8 @@ function validResponsibilities(records) {
 
 function canonicalIdentity(value) {
   if (typeof value === "string") return value;
+  if (value.kind === "public-api-proof")
+    return JSON.stringify([value.kind, canonicalIdentity({ ...value, kind: undefined })]);
   return JSON.stringify([
     value.consumerPath,
     value.specifier,

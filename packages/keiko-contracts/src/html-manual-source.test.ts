@@ -25,6 +25,20 @@ import {
   type HtmlManualSource,
 } from "./html-manual-source.js";
 
+import { validateHtmlManualScopeLimits as publicManualLimitDiagnostics } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+
+export function countPublicManualLimitDiagnostics(input: unknown): number {
+  const diagnostics = publicManualLimitDiagnostics(input);
+  return diagnostics.length;
+}
+
+describe("shipped public manual diagnostic consumer", () => {
+  it("executes the public checker on healthy and malformed input", () => {
+    expect(countPublicManualLimitDiagnostics(DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS)).toBe(0);
+    expect(countPublicManualLimitDiagnostics(null)).toBeGreaterThan(0);
+  });
+});
+
 const RLO = String.fromCodePoint(0x202e);
 
 function approvalFixture(

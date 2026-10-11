@@ -330,3 +330,95 @@ function rawHelperVariant(source, variant) {
     );
   throw new TypeError("unknown raw helper fixture variant");
 }
+
+export function createDiagnosticFixture(variant = "direct") {
+  const own = createSymbolFixture(true);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+  config.exclude = ["**/*.test.ts"];
+  own.put("packages/alpha/tsconfig.json", config);
+  own.put(
+    "packages/alpha/src/owner.ts",
+    'export function validate(input: unknown): readonly string[] { return typeof input === "number" ? [] : ["invalid"]; }\n',
+  );
+  own.put("src/consumer.ts", 'import { parse } from "alpha"; export const result = parse(1);');
+  own.put("packages/alpha/src/proof.test.ts", diagnosticProofSource(variant));
+  emitSymbolFixture(own.root);
+  const path = "packages/alpha/src/proof.test.ts";
+  const selector = { consumerPath: path, specifier: "alpha", exportName: "parse" };
+  const record = {
+    ...responsibilityRecord(),
+    kind: "diagnostic-checker",
+    input: { ...selector, parameterIndex: 0 },
+    transform: selector,
+    output: selector,
+    consumer: {
+      kind: "public-api-proof",
+      owner: "alpha",
+      consumerPath: path,
+      specifier: "alpha",
+      exportName: "countDiagnostics",
+    },
+    proofs: [path],
+  };
+  return { ...own, record, policy: responsibilityPolicy([record]) };
+}
+
+function diagnosticProofSource(variant) {
+  const prefix = 'import { parse as check } from "alpha";\n';
+  const bodies = {
+    direct: "const diagnostics = check(input); return diagnostics.length;",
+    constant: "const diagnostics = check(input); return 0;",
+    discarded:
+      "check(input); const diagnostics: readonly string[] = []; return diagnostics.length;",
+    receiver:
+      "const diagnostics = check(input); const other: readonly string[] = []; return other.length;",
+    input: "const diagnostics = check(1); return diagnostics.length;",
+    mutable: "let diagnostics = check(input); return diagnostics.length;",
+    asserted: "const diagnostics = check(input as unknown); return diagnostics.length;",
+    nonnull: "const diagnostics = check(input!); return diagnostics.length;",
+    satisfies: "const diagnostics = check(input satisfies unknown); return diagnostics.length;",
+    nested: "const diagnostics = (() => check(input))(); return diagnostics.length;",
+    extra: "const diagnostics = check(input); check(input); return diagnostics.length;",
+    wrapper: "const diagnostics = helper(input); return diagnostics.length;",
+    destructured: "const [diagnostics] = [check(input)]; return diagnostics.length;",
+    dynamic:
+      "const diagnostics = Reflect.apply(check, undefined, [input]); return diagnostics.length;",
+    overload: "const diagnostics = check(input); return diagnostics.length;",
+    counterfeit: "const diagnostics = fake(input); return diagnostics.length;",
+  };
+  const extra =
+    variant === "wrapper"
+      ? "function helper(input: unknown): readonly string[] { return check(input); }\n"
+      : variant === "counterfeit"
+        ? "function fake(input: unknown): readonly string[] { return []; }\n"
+        : "";
+  if (!(variant in bodies)) throw new TypeError("invalid diagnostic fixture variant");
+  return (
+    prefix +
+    extra +
+    (variant === "overload" ? "export function countDiagnostics(input: number): number;\n" : "") +
+    `export function countDiagnostics(input: unknown): number { ${bodies[variant]} }\n`
+  );
+}
+
+export function createForeignDiagnosticFixture() {
+  const own = createDiagnosticFixture();
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+  own.put("packages/beta/tsconfig.json", config);
+  own.put("packages/beta/package.json", {
+    name: "beta",
+    type: "module",
+    version: "0.0.0",
+    exports: { ".": { types: "./dist/owner.d.ts", import: "./dist/owner.js" } },
+  });
+  own.put("packages/beta/src/owner.ts", "export const healthy = true;\n");
+  own.put("packages/beta/src/proof.test.ts", diagnosticProofSource("direct"));
+  symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
+  emitSymbolFixture(own.root, "packages/beta");
+  const path = "packages/beta/src/proof.test.ts";
+  for (const role of ["input", "transform", "output", "consumer"])
+    own.record[role].consumerPath = path;
+  own.record.consumer.owner = "beta";
+  own.record.proofs = [path];
+  return own;
+}

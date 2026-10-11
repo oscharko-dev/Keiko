@@ -230,3 +230,48 @@ or unsupported implementation facts remain incomplete and grant no raw-slot adap
 These call facts establish bounded source participation, not callback execution, validation
 dominance, result flow or runtime safety. Semantic obligations remain pending, qualified counts
 remain zero, and no proof path or prior test result qualifies them.
+
+### Nonproduction public diagnostic proofs
+
+Version 2 also permits the closed `diagnostic-checker` responsibility kind. Its consumer
+is explicitly `{ kind: "public-api-proof", owner, consumerPath, specifier, exportName }`:
+a test-local exported function, not a production data consumer. The selected owner test must
+appear in the record's proof list. Input, transform and output resolve to the same canonical
+production diagnostic callable. The consumer forwards its single unknown parameter to one
+direct named value import, stores the readonly string-array result in one immutable local,
+and returns that local's length. The result must have the checker's intrinsic readonly-array
+identity; a local interface named `ReadonlyArray` cannot substitute for it. Constants,
+discarded results, different receivers, local
+counterfeits, wrappers, extra statements, mutable/destructured aliases, dynamic dispatch,
+assertions and overloaded callables do not qualify this bounded shape. This grants no typed
+data output, array-return exemption, dictionary waiver or complete incoming-use proof.
+
+One resolver derives a detached owner-to-selected-test-root manifest before assessment. Proof
+contexts retain the owner's original production roots, strict options and project references,
+adding only declared owning test roots and `noEmit: true`. Production contexts and Native
+emission remain unchanged. Derived roots and plain compiler-option collections are detached
+and immutable; the original config AST and project references stay untouched. Currentness
+is checked before proof cache reuse, including cached compilation refusals. Both roles share
+the existing two-Program LRU and cumulative
+source, node, alias and emission budgets. Manifest, ownership, configuration, membership and
+observed source/declaration/map changes invalidate the resolver; closing clears both roles
+and declaration caches. A foreign test must genuinely compile under its own owner before
+ownership refusal can be evidenced.
+
+Public imports use the actual importing source's resolution mode and effective options.
+The supported package entry has exactly `types` and `import` targets and uses ES module
+import mode. Actual resolver package identity and the literal requested export subpath must
+agree with the guarded package manifest and inventoried declaration/runtime output ownership.
+Matching source overrides and unsupported conditional export forms remain incomplete. The
+runtime target must exist as a regular current guarded file. Every actual declaration entry
+and supported named value reexport passes the existing original-production Native byte and
+complete normalized-map guard, including source-redirected entries; the final canonical
+producer must match the proof checker's source identity. This proves declaration/source
+binding, not arbitrary JavaScript semantics. Ordinary owning Vitest tests execute the shipped
+public runtime with healthy and malformed controls separately.
+
+CLI proof facts remain `executed: false`, semantic `qualified` remains zero, and combined
+qualification stays incomplete while proofs are pending. Separate static enforcement and
+actual owning tests/current CI/independent audits retain their existing meanings. Production
+policy version 1, activation inventory, legacy selectors and historical obligations are
+unchanged. There is no new proof runner, pre-PR wrapper or source-hash trust certificate.
