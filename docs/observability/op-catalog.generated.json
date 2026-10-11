@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "784aa514e8759ce73dffa060b5dea69f27bf3dc67725ef79903cbedce25d52c9",
+    "catalogDigest": "7921705b07710325de05e787d74969db02b75903e7c88f509ac510e918ba4430",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -25309,7 +25309,7 @@
         "proofIds": ["knowledge.manual-refresh-summary.rejected.omission"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-local-knowledge/src/knowledge-pods.ts:74",
-        "emitterSites": ["packages/keiko-local-knowledge/src/knowledge-pods.ts:363"]
+        "emitterSites": ["packages/keiko-local-knowledge/src/knowledge-pods.ts:373"]
       },
       {
         "contractKind": "activity-log-operation",

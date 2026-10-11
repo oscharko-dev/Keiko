@@ -161,6 +161,11 @@ export function listKnowledgePodSummaries(
   store: KnowledgeStore,
   kind?: KnowledgePodSummaryKind,
   evidence?: ManualSummaryEvidence,
+): readonly KnowledgePodSummary[];
+export function listKnowledgePodSummaries(
+  store: KnowledgeStore,
+  kind?: KnowledgePodSummaryKind,
+  ...[evidence]: [evidence?: ManualSummaryEvidence | undefined]
 ): readonly KnowledgePodSummary[] {
   // Scope the projection to the requested kind before building. Building a summary can fail
   // closed on corrupt state, so materializing an unrelated collection here would let one
@@ -180,6 +185,11 @@ export function buildKnowledgePodSummary(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
   evidence?: ManualSummaryEvidence,
+): KnowledgePodSummary;
+export function buildKnowledgePodSummary(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  ...[evidence]: [evidence?: ManualSummaryEvidence | undefined]
 ): KnowledgePodSummary {
   const sources = listCapsuleSources(store, capsule.id);
   const counts = capsuleCounts(store, capsule.id);
