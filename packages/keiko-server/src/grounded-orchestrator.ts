@@ -6327,8 +6327,11 @@ function admitSharedCoverageEntries(
     }),
   );
   const admission = { byIdentity, byPath, state, totalBytes, inputs };
-  for (let index = 0; index < Math.max(ranked.length, targets.length); index += 1)
-    admitSharedCoveragePrefix(ranked[index], targets[index], admission);
+  for (const entry of ranked) admitSharedCoveragePrefix(entry, targets, admission);
+  for (const entry of targets) {
+    if (!state.targets.has(entry.definitionIdentity))
+      admitSharedCoveragePrefix(undefined, [entry], admission);
+  }
 }
 
 function copyCoverageAdmission(state: CoverageAdmission): CoverageAdmission {
@@ -6365,12 +6368,46 @@ function sharedCoveragePrefix(
   );
 }
 
+function coverageAdmissionWithFairTarget(
+  state: CoverageAdmission,
+  targets: readonly RouteTraceCoverageEntry[],
+  admission: SharedCoverageAdmission,
+): CoverageAdmission | undefined {
+  for (const entry of targets) {
+    if (state.targets.has(entry.definitionIdentity)) continue;
+    const candidate = coverageAdmissionWithTarget(state, entry, admission);
+    if (candidate !== undefined) return candidate;
+  }
+  return undefined;
+}
+
+function sharedCoverageFairTargets(
+  ranked: RouteTraceCoverageEntry | undefined,
+  fair: readonly RouteTraceCoverageEntry[],
+  admission: SharedCoverageAdmission,
+): readonly RouteTraceCoverageEntry[] {
+  if (ranked === undefined) return fair;
+  const fundedPaths = new Set(
+    [...admission.byPath].flatMap(([path, targets]) => {
+      const head = targets[0];
+      return head !== undefined && admission.state.targets.has(head.definitionIdentity)
+        ? [path]
+        : [];
+    }),
+  );
+  return fair.filter(
+    (entry) =>
+      entry.atom.scopePath !== ranked.atom.scopePath && !fundedPaths.has(entry.atom.scopePath),
+  );
+}
+
 function admitSharedCoveragePrefix(
   ranked: RouteTraceCoverageEntry | undefined,
-  fair: RouteTraceCoverageEntry | undefined,
+  fair: readonly RouteTraceCoverageEntry[],
   admission: SharedCoverageAdmission,
 ): void {
   const prefix = sharedCoveragePrefix(ranked, admission);
+  let fairTargets: readonly RouteTraceCoverageEntry[] | undefined;
   const proposal = copyCoverageAdmission(admission.state);
   let joint: CoverageAdmission | undefined;
   let admitted = false;
@@ -6387,13 +6424,19 @@ function admitSharedCoveragePrefix(
     )
       continue;
     admitted = true;
-    joint = coverageAdmissionWithTarget(proposal, fair, admission) ?? joint;
+    fairTargets ??= sharedCoverageFairTargets(ranked, fair, admission);
+    joint = coverageAdmissionWithFairTarget(proposal, fairTargets, admission) ?? joint;
   }
-  if (!admitted) joint = coverageAdmissionWithTarget(proposal, fair, admission);
+  if (!admitted && ranked !== undefined) return;
+  if (!admitted) joint = coverageAdmissionWithFairTarget(proposal, fair, admission);
   const selected = joint ?? proposal;
-  admission.state.windows = selected.windows;
-  admission.state.bytes = selected.bytes;
-  for (const identity of selected.targets) admission.state.targets.add(identity);
+  publishCoverageAdmission(admission.state, selected);
+}
+
+function publishCoverageAdmission(state: CoverageAdmission, selected: CoverageAdmission): void {
+  state.windows = selected.windows;
+  state.bytes = selected.bytes;
+  for (const identity of selected.targets) state.targets.add(identity);
 }
 
 function admitCoverageTarget(
