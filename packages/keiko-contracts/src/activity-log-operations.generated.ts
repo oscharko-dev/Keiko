@@ -28704,6 +28704,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      excerptOrdinaryRangeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      excerptOrdinaryServedRangeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      excerptDeferredDefinitionRangeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

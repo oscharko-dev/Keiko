@@ -732,6 +732,9 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     continuityReferentCount: { type: "integer", dataClass: "count", required: false },
     continuityAdmittedCount: { type: "integer", dataClass: "count", required: false },
     continuityRejectedCount: { type: "integer", dataClass: "count", required: false },
+    excerptOrdinaryRangeCount: { type: "integer", dataClass: "count", required: false },
+    excerptOrdinaryServedRangeCount: { type: "integer", dataClass: "count", required: false },
+    excerptDeferredDefinitionRangeCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -3472,6 +3475,9 @@ interface ExcerptReadObservation {
   readonly unreadFileCount: number;
   readonly stopReasons: readonly ExcerptStopReason[];
   readonly readBudgetBlocked: boolean;
+  readonly ordinaryRangeCount?: number | undefined;
+  readonly ordinaryServedRangeCount?: number | undefined;
+  readonly deferredDefinitionRangeCount?: number | undefined;
 }
 
 export interface ExcerptReadSummary {
@@ -6182,6 +6188,8 @@ interface ExcerptWindowSelection {
   readonly windows: readonly LineWindow[];
   readonly omittedWindowCount: number;
   readonly coverageApplied?: boolean | undefined;
+  readonly ordinaryWindows?: readonly LineWindow[] | undefined;
+  readonly deferredDefinitionRangeCount?: number | undefined;
 }
 
 interface RouteCoverageReadPlan {
@@ -6574,25 +6582,60 @@ function atomicCoverageWindows(
   return rankedExcerptWindows(segments, atoms);
 }
 
-function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): ExcerptWindowSelection {
-  const selection = excerptLineWindows(inputs.atomsByPath.get(path));
-  const entries = currentCoverageEntries(path, inputs);
-  if (entries === undefined) return selection;
-  const explicit = (inputs.atomsByPath.get(path) ?? []).filter(
-    (atom) => atom.provenance.tool === "repo.selectedFile",
+function independentOrdinaryWindows(atoms: readonly EvidenceAtom[]): readonly LineWindow[] {
+  const ordinary = atoms.filter((atom) => atom.provenance.tool !== "discovered-symbol-definition");
+  return ordinary.length === 0 ? [] : excerptLineWindows(ordinary).windows;
+}
+
+function overlappingLineWindows(left: LineWindow, right: LineWindow): boolean {
+  return left.startLine <= right.endLine && right.startLine <= left.endLine;
+}
+
+function scheduledCoverageWindows(
+  selection: ExcerptWindowSelection,
+  atoms: readonly EvidenceAtom[],
+  ranges: readonly LineWindow[],
+): ExcerptWindowSelection {
+  const explicit = atoms.filter((atom) => atom.provenance.tool === "repo.selectedFile");
+  const funded = prioritizedExcerptWindows(
+    ranges,
+    explicit.length === 0 ? [] : excerptLineWindows(explicit).windows,
   );
-  const ranges = entries.map((entry) => entry.lineRange);
+  const ordinary = prioritizedExcerptWindows(independentOrdinaryWindows(atoms), funded).slice(
+    funded.length,
+  );
+  const protectedWindows = [...funded, ...ordinary];
+  const deferred = prioritizedExcerptWindows(
+    atomicCoverageWindows(selection.windows, ranges, atoms),
+    protectedWindows,
+  ).slice(protectedWindows.length);
+  const definitions = atoms.filter(
+    (atom) =>
+      atom.provenance.tool === "discovered-symbol-definition" && atom.lineRange !== undefined,
+  );
   return {
     ...selection,
     coverageApplied: true,
-    windows: prioritizedExcerptWindows(
-      [
-        ...ranges,
-        ...atomicCoverageWindows(selection.windows, ranges, inputs.atomsByPath.get(path) ?? []),
-      ],
-      explicit.length === 0 ? [] : excerptLineWindows(explicit).windows,
-    ),
+    ordinaryWindows: ordinary,
+    deferredDefinitionRangeCount: deferred.filter((window) =>
+      definitions.some(
+        (atom) => atom.lineRange !== undefined && overlappingLineWindows(window, atom.lineRange),
+      ),
+    ).length,
+    windows: [...protectedWindows, ...deferred],
   };
+}
+
+function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): ExcerptWindowSelection {
+  const atoms = inputs.atomsByPath.get(path) ?? [];
+  const selection = excerptLineWindows(atoms);
+  const entries = currentCoverageEntries(path, inputs);
+  if (entries === undefined) return selection;
+  return scheduledCoverageWindows(
+    selection,
+    atoms,
+    entries.map((entry) => entry.lineRange),
+  );
 }
 
 function staleCoverageRead(
@@ -6638,6 +6681,9 @@ interface ReadPathExcerptWindowsResult {
   readonly omittedWindowCount: number;
   readonly truncatedWindowCount: number;
   readonly deadlineReached: boolean;
+  readonly ordinaryRangeCount?: number | undefined;
+  readonly ordinaryServedRangeCount?: number | undefined;
+  readonly deferredDefinitionRangeCount?: number | undefined;
 }
 
 type ExcerptSkippedReason = "too-large" | "unsupported" | "timeout";
@@ -6761,6 +6807,7 @@ async function readPathExcerptWindows(
   const appended = appendReadExcerptWindows(result, windows, selection.coverageApplied === true);
   return {
     windows,
+    ...excerptQueueObservation(selection, windows),
     bytesConsumed: appended.bytes,
     truncatedWindowCount: appended.truncated,
     anchoredWindowCount: Math.max(
@@ -6827,11 +6874,31 @@ function unreadExcerptWindows(
 ): ReadPathExcerptWindowsResult {
   return {
     windows: [],
+    ...excerptQueueObservation(selection, []),
     bytesConsumed: 0,
     truncatedWindowCount: 0,
     anchoredWindowCount: 0,
     omittedWindowCount: selection.omittedWindowCount + selection.windows.length,
     deadlineReached,
+  };
+}
+
+function excerptQueueObservation(
+  selection: ExcerptWindowSelection,
+  windows: readonly ExcerptWindow[],
+): Pick<
+  ExcerptReadObservation,
+  "ordinaryRangeCount" | "ordinaryServedRangeCount" | "deferredDefinitionRangeCount"
+> {
+  if (selection.ordinaryWindows === undefined) return {};
+  return {
+    ordinaryRangeCount: selection.ordinaryWindows.length,
+    ordinaryServedRangeCount: selection.ordinaryWindows.filter((requested) =>
+      windows.some(
+        (returned) => returned.content.length > 0 && overlappingLineWindows(requested, returned),
+      ),
+    ).length,
+    deferredDefinitionRangeCount: selection.deferredDefinitionRangeCount ?? 0,
   };
 }
 
@@ -7042,16 +7109,19 @@ function completedExcerptSummary(
   return {
     excerpts: state.excerpts,
     uncertainty: state.uncertainty,
-    observation: excerptReadObservation(
-      keptPaths.length - state.excerpts.size,
-      state.omittedWindowCount,
-      state.truncatedWindowCount,
-      readablePaths.length < keptPaths.length,
-      (state.byteBudgetOmittedPaths?.length ?? 0) > 0 ||
-        (state.remainingBytes <= 0 &&
-          (state.omittedWindowCount > 0 || state.truncatedWindowCount > 0)),
-      state.elapsedBudgetBlocked,
-    ),
+    observation: {
+      ...excerptReadObservation(
+        keptPaths.length - state.excerpts.size,
+        state.omittedWindowCount,
+        state.truncatedWindowCount,
+        readablePaths.length < keptPaths.length,
+        (state.byteBudgetOmittedPaths?.length ?? 0) > 0 ||
+          (state.remainingBytes <= 0 &&
+            (state.omittedWindowCount > 0 || state.truncatedWindowCount > 0)),
+        state.elapsedBudgetBlocked,
+      ),
+      ...excerptQueueObservationSummary(state),
+    },
     omitted: [
       ...state.omitted,
       ...(stoppedPaths.length === 0 ? [] : budgetExcerptOmissions(stoppedPaths, nowMs())),
@@ -7079,6 +7149,35 @@ interface ExcerptWaveState {
   anchoredWindowCount: number;
   elapsedBudgetBlocked: boolean;
   byteBudgetOmittedPaths: readonly string[] | undefined;
+  ordinaryRangeCount?: number | undefined;
+  ordinaryServedRangeCount?: number | undefined;
+  deferredDefinitionRangeCount?: number | undefined;
+}
+
+function excerptQueueObservationSummary(
+  state: ExcerptWaveState,
+): Pick<
+  ExcerptReadObservation,
+  "ordinaryRangeCount" | "ordinaryServedRangeCount" | "deferredDefinitionRangeCount"
+> {
+  if (state.ordinaryRangeCount === undefined) return {};
+  return {
+    ordinaryRangeCount: state.ordinaryRangeCount,
+    ordinaryServedRangeCount: state.ordinaryServedRangeCount ?? 0,
+    deferredDefinitionRangeCount: state.deferredDefinitionRangeCount ?? 0,
+  };
+}
+
+function appendExcerptQueueObservation(
+  result: ReadPathExcerptWindowsResult | undefined,
+  state: ExcerptWaveState,
+): void {
+  if (result?.ordinaryRangeCount === undefined) return;
+  state.ordinaryRangeCount = (state.ordinaryRangeCount ?? 0) + result.ordinaryRangeCount;
+  state.ordinaryServedRangeCount =
+    (state.ordinaryServedRangeCount ?? 0) + (result.ordinaryServedRangeCount ?? 0);
+  state.deferredDefinitionRangeCount =
+    (state.deferredDefinitionRangeCount ?? 0) + (result.deferredDefinitionRangeCount ?? 0);
 }
 
 function appendExcerptWave(
@@ -7089,6 +7188,7 @@ function appendExcerptWave(
   for (const task of results) {
     throwIfCancelled(inputs.signal);
     const { scopePath, result } = task;
+    appendExcerptQueueObservation(result, state);
     state.coverageReserves.delete(scopePath);
     state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
     state.omittedWindowCount += result?.omittedWindowCount ?? 0;
@@ -9260,6 +9360,7 @@ function selectionDetailsActivityExtra(
     ...worktreeActivityExtra(status),
     ...status.semanticFreshness,
     ...selectionQualityActivityExtra(status),
+    ...excerptSchedulingActivityExtra(status.excerptObservation),
     ...(status.referenceObservation === undefined
       ? {}
       : {
@@ -9272,6 +9373,17 @@ function selectionDetailsActivityExtra(
         }),
     completeness: "complete",
     loss: "none",
+  };
+}
+
+function excerptSchedulingActivityExtra(
+  observation: ExcerptReadObservation | undefined,
+): Partial<ActivityLogFields<typeof SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION>> {
+  if (observation?.ordinaryRangeCount === undefined) return {};
+  return {
+    excerptOrdinaryRangeCount: observation.ordinaryRangeCount,
+    excerptOrdinaryServedRangeCount: observation.ordinaryServedRangeCount ?? 0,
+    excerptDeferredDefinitionRangeCount: observation.deferredDefinitionRangeCount ?? 0,
   };
 }
 

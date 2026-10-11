@@ -522,6 +522,99 @@ function ordinaryCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function busyOrdinaryMethodFiles(): Readonly<Record<string, string>> {
+  const helpers = Array.from({ length: 18 }, (_value, index) =>
+    [
+      `function helper${String(index)}() {`,
+      ...Array.from(
+        { length: 60 },
+        (_unused, line) => `  const checkpoint${String(line)} = ${String(line)};`,
+      ),
+      "  return false;",
+      "}",
+    ].join("\n"),
+  );
+  return {
+    "src/routes.ts": ['import { handleItem } from "./implementation.js";', REGISTRATION_FACT].join(
+      "\n",
+    ),
+    "src/implementation.ts": [
+      "export function handleItem() { return () => processItem(); }",
+      "function processItem() {",
+      ...helpers.map((_value, index) => `  helper${String(index)}();`),
+      "  return true;",
+      "}",
+      ...helpers,
+      ...Array.from({ length: 40 }, () => "// separate ordinary source"),
+      "export class ScopeAdmission {",
+      "  scopeAdmissionBudgetAndPromptFittingBudget() {",
+      "    const scopeAdmissionBudget = 1024;",
+      "    const promptFittingBudget = 2048;",
+      ...Array.from(
+        { length: 16 },
+        (_unused, index) =>
+          `    const admittedBudget${String(index)} = scopeAdmissionBudget + promptFittingBudget;`,
+      ),
+      "    return scopeAdmissionBudget + promptFittingBudget;",
+      "  }",
+      "}",
+    ].join("\n"),
+  };
+}
+
+async function busyOrdinaryMethodRange(
+  fixture: CoverageFixture,
+): Promise<NonNullable<EvidenceAtom["lineRange"]>> {
+  const index = await fixture.requestContext.codeIntelligenceIndex();
+  const method = index.symbols.find(
+    (symbol) =>
+      symbol.scopePath === "src/implementation.ts" &&
+      symbol.name === "scopeAdmissionBudgetAndPromptFittingBudget",
+  );
+  expect(method).toBeDefined();
+  if (method === undefined) throw new TypeError("fixture requires the actual indexed method");
+  const entries = fixture.trace.routeCoverage?.entries ?? [];
+  const helpers = entries.filter((entry) =>
+    /^helper\d+$/u.test(entry.atom.edge?.target.symbol ?? ""),
+  );
+  expect(helpers).toHaveLength(18);
+  expect(helpers.every((entry) => fixture.trace.routeCoverage?.isCurrent(entry.atom))).toBe(true);
+  expect(
+    entries.some((entry) => entry.atom.lineRange?.startLine === method.lineRange.startLine),
+  ).toBe(false);
+  expect(index.calls.some((call) => call.targetName === method.name)).toBe(false);
+  expect(
+    fixture.ordinaryAtoms.some(
+      (atom) =>
+        atom.scopePath === method.scopePath &&
+        (atom.lineRange?.startLine ?? Infinity) <= method.lineRange.startLine &&
+        (atom.lineRange?.endLine ?? 0) >= method.lineRange.startLine,
+    ),
+  ).toBe(true);
+  return method.lineRange;
+}
+
+function expectOrdinaryMethodViews(
+  fixture: CoverageFixture,
+  reads: ExcerptReadSummary,
+  pack: ConnectedContextPack,
+  prompt: string,
+  range: NonNullable<EvidenceAtom["lineRange"]>,
+): void {
+  const lines = (fixture.files["src/implementation.ts"] ?? "")
+    .split("\n")
+    .slice(range.startLine - 1, range.endLine);
+  const body = lines.join("\n");
+  expect(readContent(reads, "src/implementation.ts")).toContain(body);
+  expect(
+    pack.files
+      .find((file) => file.scopePath === "src/implementation.ts")
+      ?.excerpts.some((excerpt) => excerpt.content.includes(body)),
+  ).toBe(true);
+  for (const [index, line] of lines.entries())
+    expect(prompt).toContain(`${String(range.startLine + index)} | ${line}`);
+}
+
 function bulkyConnectorFiles(): Readonly<Record<string, string>> {
   const files: Record<string, string> = {
     "src/routes.ts": ['import { handleItem } from "./implementation.js";', REGISTRATION_FACT].join(
@@ -598,6 +691,62 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("counts a nonempty partial ordinary view without claiming the entire method was read", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      busyOrdinaryMethodFiles(),
+    );
+    const range = await busyOrdinaryMethodRange(fixture);
+    const reads = await coverageRead(fixture, {
+      atoms: await allocationAtoms(fixture),
+      inputs: { budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 1024 } },
+    });
+    const returned = reads.excerpts.get("src/implementation.ts") ?? [];
+    expect(
+      returned.some(
+        (view) =>
+          view.content.length > 0 &&
+          view.startLine <= range.endLine &&
+          view.endLine >= range.startLine,
+      ),
+    ).toBe(true);
+    const body = (fixture.files["src/implementation.ts"] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine)
+      .join("\n");
+    expect(readContent(reads, "src/implementation.ts")).not.toContain(body);
+    expect(reads.observation?.ordinaryServedRangeCount).toBeGreaterThan(0);
+    expect(reads.observation?.truncatedWindowCount).toBeGreaterThan(0);
+    expect(readBytes(reads)).toBeLessThanOrEqual(1024);
+  });
+
+  it("preserves the ordinary lexical method beside current same-file definitions", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      busyOrdinaryMethodFiles(),
+    );
+    const range = await busyOrdinaryMethodRange(fixture);
+    const atoms = await allocationAtoms(fixture);
+    expect(
+      coverageRanking(atoms).kept.some((item) => item.scopePath === "src/implementation.ts"),
+    ).toBe(true);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    const normal = await coverageRead(fixture, {
+      atoms,
+      inputs: { routeCoverage: undefined, budget },
+    });
+    const normalPack = await assembledCoveragePack(fixture, normal, atoms, budget);
+    const normalPrompt = await sentPrompt(fixture, normal, atoms, budget);
+    expectOrdinaryMethodViews(fixture, normal, normalPack, normalPrompt, range);
+    expect(readBytes(normal)).toBeLessThanOrEqual(budget.excerptBytesMax);
+    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+    const prompt = await sentPrompt(fixture, reads, atoms, budget);
+    expect(prompt).toContain("export function handleItem() { return () => processItem(); }");
+    expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expectOrdinaryMethodViews(fixture, reads, pack, prompt, range);
+  });
+
   it("keeps a returned continuation before higher-scoring shallow called targets", async () => {
     const fixture = await coverageFixture(undefined, returnedContinuationFiles());
     const target = fixture.trace.routeCoverage?.entries.find(

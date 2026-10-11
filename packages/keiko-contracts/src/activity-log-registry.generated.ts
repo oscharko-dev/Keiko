@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "aadcddb3433c5b1f661afc0c3c918b701421d18123e4f0c6e367a00d9c56f879" as const;
+  "c8a08d3b257c6a93a036c19ea95384584f29670de4aecad1de5eb0f0e6a8d6b0" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13373,6 +13373,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "exactPathSignalPresentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "excerptDeferredDefinitionRangeCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "excerptOrdinaryRangeCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "excerptOrdinaryServedRangeCount",
               type: "integer",
               dataClass: "count",
               required: false,
