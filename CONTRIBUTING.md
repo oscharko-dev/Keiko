@@ -120,6 +120,12 @@ Shared physical lines and separators are charged once;
 upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
 branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
 evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
+When current coverage windows apply, independent search windows receive ordinary extra bytes
+before unfunded discovered-definition expansions. Those expansions remain a deduplicated fallback.
+The existing selection-details operation records planned ordinary ranges on attempted reader paths,
+ordinary ranges intersected by nonempty returned views, and deferred definition ranges. An
+intersection count does not certify complete source content; truncation and omission counts remain
+authoritative.
 Separately identified returned partial views retain their actual ranges, contents and physical-view
 identities through assembly, without inventing continuity or uncharged separators. Unidentified
 multiple uncovered views remain fail-closed; conflicting views retain uncertainty. Bounded
