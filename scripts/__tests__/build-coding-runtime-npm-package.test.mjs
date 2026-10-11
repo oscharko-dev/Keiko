@@ -482,6 +482,79 @@ describe("coding runtime npm package", () => {
 });
 
 describe.skipIf(process.platform === "win32")("inactive original service package candidate", () => {
+  it("stages the same private host producer without the macOS-only npm runtime package", async () => {
+    const outDir = join(scratch(), "host-only");
+    const result = await builder.stageCodingRuntimeNpmServiceHost({
+      target: "linux-x64",
+      outDir,
+      deps: serviceFixtureDeps(),
+    });
+    expect(result.qualification).toBe("private-functional-unapproved");
+    expect(result.attestation.treeSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(existsSync(join(outDir, "package.json"))).toBe(false);
+    const provenance = JSON.parse(
+      readFileSync(join(result.root, "evidence/build-provenance.json")),
+    );
+    for (const source of provenance.sourceFiles) {
+      expect(
+        createHash("sha256")
+          .update(readFileSync(join(result.root, source.path)))
+          .digest("hex"),
+      ).toBe(source.sha256);
+    }
+    await expect(
+      builder.stageCodingRuntimeNpmServiceHost({ target: "linux-x64", outDir }),
+    ).rejects.toThrow("fixed-host-staging-directory-exists");
+    await expect(
+      builder.stageCodingRuntimeNpmServiceHost({
+        target: "invented",
+        outDir: join(scratch(), "new"),
+      }),
+    ).rejects.toThrow();
+  });
+
+  it.each(["invented", "windows-x64"])(
+    "refuses unsupported host target %s before any installer or artifact actuation",
+    async (target) => {
+      const outDir = join(scratch(), "host-only");
+      const calls = [];
+      const deps = {
+        installHost: () => {
+          calls.push("install");
+          throw new TypeError("unexpected-host-install");
+        },
+        stageNode: () => {
+          calls.push("node");
+          throw new TypeError("unexpected-node-staging");
+        },
+        hostSbom: () => {
+          calls.push("sbom");
+          throw new TypeError("unexpected-sbom-production");
+        },
+      };
+      await expect(
+        builder.stageCodingRuntimeNpmServiceHost({ target, outDir, deps }),
+      ).rejects.toThrow("fixed-host-target-unsupported");
+      expect(calls).toEqual([]);
+      expect(existsSync(outDir)).toBe(false);
+    },
+  );
+
+  it.each(["macos-arm64", "macos-x64"])(
+    "retains supported private host staging for %s",
+    async (target) => {
+      const outDir = join(scratch(), "host-only");
+      const result = await builder.stageCodingRuntimeNpmServiceHost({
+        target,
+        outDir,
+        deps: serviceFixtureDeps(),
+      });
+      expect(result.qualification).toBe("private-functional-unapproved");
+      expect(result.attestation.treeSha256).toMatch(/^[a-f0-9]{64}$/u);
+      expect(existsSync(join(result.root, "runtime/node"))).toBe(true);
+    },
+  );
+
   it("declares each actual original host import in its private locked dependencies", async () => {
     const root = await builtServicePayload();
     const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));

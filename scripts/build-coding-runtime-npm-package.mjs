@@ -481,6 +481,18 @@ async function inspectPackedService(owners, candidate, tarballPath) {
 }
 
 /** Private nonpublishable engineering artifact; no catalog approval, selector, or license exception. */
+export async function stageCodingRuntimeNpmServiceHost(input) {
+  const target = portableTargetByName(input.target);
+  if (target?.nodePlatform !== "linux" && target?.nodePlatform !== "darwin")
+    throw new TypeError("fixed-host-target-unsupported");
+  if (existsSync(input.outDir)) throw new TypeError("fixed-host-staging-directory-exists");
+  const owners = await serviceHostOwners();
+  const host = await stageFixedHost({ ...input, deps: input.deps ?? {} }, owners);
+  const attestation = await attestServiceHost(host.root, owners);
+  return { ...host, attestation, qualification: "private-functional-unapproved" };
+}
+
+/** Private nonpublishable engineering artifact; no catalog approval, selector, or license exception. */
 export async function buildCodingRuntimeNpmServiceHostCandidate(input) {
   const deps = input.deps ?? {};
   const build = await buildCodingRuntimeNpmPackage({ ...input, deps });

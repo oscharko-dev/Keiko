@@ -253,7 +253,8 @@
     "test:e2e:coding-issue-ci": "playwright test --config tests/e2e/config/playwright.coding-issue-ci.config.ts --project=chromium",
     "test:e2e:coding-issue-journey:live": "playwright test --config tests/e2e/config/playwright.coding-issue-journey.config.ts --project=chromium",
     "test:e2e:coding-issue-handoff": "playwright test --config tests/e2e/config/playwright.coding-issue-handoff.config.ts --project=chromium",
-    "check:code-quality-policy": "node scripts/check-code-quality-policy.mjs"
+    "check:code-quality-policy": "node scripts/check-code-quality-policy.mjs",
+    "check:native-host-code-quality": "node scripts/check-native-host-code-quality.mjs"
   },
   "overrides": {
     "aria-query": "5.3.2",

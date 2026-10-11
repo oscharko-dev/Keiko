@@ -1,0 +1,175 @@
+{
+  "issue": 3988,
+  "finding": "CI4011-003",
+  "verdict": "PASS",
+  "harness": "tests/e2e/window-chunk-stall.smoke.spec.ts",
+  "browser": "chromium",
+  "node": "v24.18.0",
+  "sources": {
+    "fallback": "da9a005857dc6de09ec52a495c6e3b146296aca39c67d683c776d99a8a56240a",
+    "harness": "54ac5a9bf899c13467158124ffe60c62c127b76e631b90c831aa791390e6701f",
+    "globalsCss": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871"
+  },
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "screenshotSha256": "7459d9e7da40ba6b04edd81f264c3191f46fc05ec73a7f3b1aef5e3b4a48072f",
+      "mode": {
+        "file": "01-dark.png",
+        "theme": "dark"
+      },
+      "appearance": {
+        "theme": "dark",
+        "highContrast": false,
+        "contrast": false,
+        "forcedColors": false,
+        "reducedMotion": false
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0,
+      "violationIds": []
+    },
+    {
+      "file": "02-light.png",
+      "screenshotSha256": "850e5f335196fb8d55fe067b986fb91895b593e80578eaada2fe72f53543a287",
+      "mode": {
+        "file": "02-light.png",
+        "theme": "light"
+      },
+      "appearance": {
+        "theme": "light",
+        "highContrast": false,
+        "contrast": false,
+        "forcedColors": false,
+        "reducedMotion": false
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0,
+      "violationIds": []
+    },
+    {
+      "file": "03-dark-high-contrast.png",
+      "screenshotSha256": "edb27fb7ee514346582706aed2578b8446f58c5b7b81049c7e927f6e4bd6769e",
+      "mode": {
+        "file": "03-dark-high-contrast.png",
+        "theme": "dark",
+        "highContrast": true
+      },
+      "appearance": {
+        "theme": "dark",
+        "highContrast": true,
+        "contrast": false,
+        "forcedColors": false,
+        "reducedMotion": false
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0,
+      "violationIds": []
+    },
+    {
+      "file": "04-light-high-contrast.png",
+      "screenshotSha256": "6ed7e3b54ef3620f89200fa448f39c59f271f3d013747793e731cf874568c715",
+      "mode": {
+        "file": "04-light-high-contrast.png",
+        "theme": "light",
+        "highContrast": true
+      },
+      "appearance": {
+        "theme": "light",
+        "highContrast": true,
+        "contrast": false,
+        "forcedColors": false,
+        "reducedMotion": false
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0,
+      "violationIds": []
+    },
+    {
+      "file": "05-prefers-contrast.png",
+      "screenshotSha256": "edb27fb7ee514346582706aed2578b8446f58c5b7b81049c7e927f6e4bd6769e",
+      "mode": {
+        "file": "05-prefers-contrast.png",
+        "theme": "dark",
+        "contrast": "more"
+      },
+      "appearance": {
+        "theme": "dark",
+        "highContrast": false,
+        "contrast": true,
+        "forcedColors": false,
+        "reducedMotion": false
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0,
+      "violationIds": []
+    },
+    {
+      "file": "06-forced-colors.png",
+      "screenshotSha256": "33be820d3bfe0f7520471264619b1f2fb1b27739c6e90576b7a8be019c54c80d",
+      "mode": {
+        "file": "06-forced-colors.png",
+        "theme": "dark",
+        "forcedColors": "active"
+      },
+      "appearance": {
+        "theme": "dark",
+        "highContrast": false,
+        "contrast": false,
+        "forcedColors": true,
+        "reducedMotion": false
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0,
+      "violationIds": []
+    },
+    {
+      "file": "07-reduced-motion.png",
+      "screenshotSha256": "7459d9e7da40ba6b04edd81f264c3191f46fc05ec73a7f3b1aef5e3b4a48072f",
+      "mode": {
+        "file": "07-reduced-motion.png",
+        "theme": "dark",
+        "reducedMotion": "reduce"
+      },
+      "appearance": {
+        "theme": "dark",
+        "highContrast": false,
+        "contrast": false,
+        "forcedColors": false,
+        "reducedMotion": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0,
+      "violationIds": []
+    }
+  ],
+  "scope": "Existing loading/stalled recovery and inherited button styles; no new component family"
+}
