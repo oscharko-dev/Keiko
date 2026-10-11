@@ -320,9 +320,9 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// #4009: a model's tool-call arguments lost a configured provider secret before reaching the tool.
-// The arguments are otherwise passed byte for byte, so this is the only change the gateway makes to
-// them; a positive count is a diagnostic fact (an `oldString` it touched can no longer match).
+// #4009: the arguments of a governed changeset edit lost a configured provider secret before
+// reaching the tool. They are otherwise passed byte for byte, so this is the only change the gateway
+// makes to them; a positive count is a diagnostic fact (an `oldString` it touched cannot match).
 const TOOL_ARGUMENTS_REDACTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -889,8 +889,9 @@ export class ResponseRedactionError extends MalformedToolCallError {}
 const MAX_REDACT_DEPTH = 32;
 
 // How a model value is scrubbed: `redact()` (configured literals plus heuristic secret shapes) for
-// content and structured output, or the configured literals alone for tool-call arguments, which a
-// governed tool consumes byte for byte (#4009). `changed` counts the strings the scrub altered.
+// content, structured output and every tool except the changeset edit, or the configured literals
+// alone for changeset-edit arguments, which are workspace file content (#4009). `changed` counts
+// the strings the scrub altered.
 interface ValueScrub {
   readonly secrets: readonly string[];
   readonly text: (value: string) => string;
@@ -937,14 +938,19 @@ function redactRecord(
     : (redactUnknown(value, heuristicScrub(secrets)) as Record<string, unknown>);
 }
 
-// A tool call's name is matched against the offered catalog, and its arguments are executed by the
-// governed tool exactly as they arrive: an `oldString` must match its file and a `newString` is the
-// content that gets written. Both therefore lose only the configured provider secrets, never text
-// that merely looks like a credential (#4009). The governed tool still applies its own scope,
-// authority, digest and secret-path checks.
-function redactToolCall(call: NormalizedToolCall, scrub: ValueScrub): NormalizedToolCall {
-  const name = scrub.text(call.name);
-  if (name !== call.name) scrub.changed += 1;
+// A tool call's name is matched against the offered catalog. The governed changeset edit executes
+// its arguments exactly as they arrive: an `oldString` must match its file and a `newString` is the
+// content that gets written, so they lose only the configured provider secrets, never text that
+// merely looks like a credential (#4009). Every other tool's arguments are displayed (`question`)
+// or sent outward (`keiko_research_fetch`), so they keep the full heuristic redaction.
+function redactToolCall(
+  call: NormalizedToolCall,
+  secrets: readonly string[],
+  exactContent: ValueScrub,
+  isExactContentTool: (alias: string) => boolean,
+): NormalizedToolCall {
+  const name = redact(call.name, secrets);
+  const scrub = isExactContentTool(name) ? exactContent : heuristicScrub(secrets);
   return {
     ...call,
     name,
@@ -960,16 +966,19 @@ interface RedactedResponse {
 function redactResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
+  isExactContentTool: (alias: string) => boolean,
 ): RedactedResponse {
-  const toolScrub = literalScrub(secrets);
+  const exactContent = literalScrub(secrets);
   const redacted: NormalizedResponse = {
     ...response,
     content: redact(response.content, secrets),
-    toolCalls: response.toolCalls.map((call) => redactToolCall(call, toolScrub)),
+    toolCalls: response.toolCalls.map((call) =>
+      redactToolCall(call, secrets, exactContent, isExactContentTool),
+    ),
     structuredOutput: redactRecord(response.structuredOutput, secrets),
     ...(response.reasoning === undefined ? {} : { reasoning: redact(response.reasoning, secrets) }),
   };
-  return { response: redacted, toolArgumentsRedacted: toolScrub.changed };
+  return { response: redacted, toolArgumentsRedacted: exactContent.changed };
 }
 
 function providerReportedUsage(payload: unknown): boolean {
@@ -988,7 +997,7 @@ function bindCatalogResponse(
 ): NormalizedResponse {
   try {
     catalog.assertNativeTransport(response);
-    const redacted = redactResponse(response, secrets);
+    const redacted = redactResponse(response, secrets, catalog.isExactContentTool);
     if (redacted.toolArgumentsRedacted > 0) {
       onToolArgumentsRedacted(redacted.toolArgumentsRedacted, response.toolCalls.length);
     }
@@ -1898,8 +1907,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     );
   }
 
-  // #4009: tool-call arguments lose only the configured provider secrets. When that happened the
-  // tool received changed text, so the line names how many argument strings changed, at `warn`:
+  // #4009: changeset-edit arguments lose only the configured provider secrets. When that happened
+  // the tool received changed text, so the line names how many argument strings changed, at `warn`:
   // a scrubbed `oldString` cannot match its file. Counts only, never the arguments or the secret.
   private logToolArgumentsRedacted(
     modelId: string,

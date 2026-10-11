@@ -78,7 +78,7 @@ const REQUEST: GatewayRequest = {
   toolCatalog: openCodeGatewayCatalogAdvertisement(NOW),
 };
 
-function wholeBody(args: Record<string, unknown>): Response {
+function wholeBody(args: Record<string, unknown>, name = "keiko_changeset_edit"): Response {
   return new Response(
     JSON.stringify({
       choices: [
@@ -90,7 +90,7 @@ function wholeBody(args: Record<string, unknown>): Response {
               {
                 id: "call_readme",
                 type: "function",
-                function: { name: "keiko_changeset_edit", arguments: JSON.stringify(args) },
+                function: { name, arguments: JSON.stringify(args) },
               },
             ],
           },
@@ -291,5 +291,45 @@ describe("tool-call arguments reach the governed tool byte for byte (#4009)", ()
     const response = await value.call(REQUEST, PROVIDER);
     expect(response.content).not.toContain("fixture-token-value");
     expect(response.content).toContain("[REDACTED]");
+  });
+
+  // Independent review on PR #4012: only the changeset edit consumes its arguments as file content.
+  // A native `question` is shown to the operator and a research target is fetched from the
+  // internet, so a credential-shaped value the model echoed must still be scrubbed from both.
+  it.each([
+    [
+      "question",
+      {
+        questions: [
+          {
+            header: "Token",
+            question: "Use Authorization: Bearer fixture-token-value for the mirror?",
+            options: [{ label: "Yes", description: "token=abc123secret" }],
+          },
+        ],
+      },
+    ],
+    ["keiko_research_fetch", { target: "https://docs.example.test/?api_key=fixture-canary-value" }],
+  ])("keeps heuristic redaction of %s arguments", async (name, args) => {
+    const response = await adapter(() => wholeBody(args, name)).call(REQUEST, PROVIDER);
+    const serialized = JSON.stringify(response.toolCalls);
+    expect(response.toolCalls[0]?.name).toBe(name);
+    expect(serialized).toContain("[REDACTED]");
+    expect(serialized).not.toContain("fixture-token-value");
+    expect(serialized).not.toContain("abc123secret");
+    expect(serialized).not.toContain("fixture-canary-value");
+  });
+
+  it("records no exact-content scrub for a heuristically redacted tool", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    await adapter(
+      () =>
+        wholeBody(
+          { target: `https://docs.example.test/?q=${PROVIDER.apiKey}` },
+          "keiko_research_fetch",
+        ),
+      events,
+    ).call(REQUEST, PROVIDER);
+    expect(redactionLines(events)).toEqual([]);
   });
 });
