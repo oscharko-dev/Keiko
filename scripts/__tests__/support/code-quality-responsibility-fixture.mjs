@@ -137,3 +137,37 @@ export function createCrossOwnerEnforcementFixture(variant = "valid") {
   emitSymbolFixture(own.root, "packages/beta");
   return own;
 }
+
+export function replaceConsumerCallFixture(own, variant) {
+  const imported = 'import { validate } from "alpha/runtime";';
+  const checked =
+    'const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value;';
+  const bodies = {
+    arrow: `${imported} export const consume = (input: number): number => { ${checked} };`,
+    expression: `${imported} export const consume = function(input: number): number { ${checked} };`,
+    alias: `${imported} function handleValidateImpl(input: number): number { ${checked} } export const consume = handleValidateImpl;`,
+    callback: `${imported} function withOp(action: () => number): number { return action(); } function handleValidateImpl(input: number): number { return withOp(() => { ${checked} }); } export const consume = handleValidateImpl;`,
+    namespace: `import * as ns from "alpha/runtime"; const validate = ns.validate; function handleValidateImpl(input: number): number { ${checked} } export const consume = handleValidateImpl;`,
+    reexport: 'export { handleValidateImpl as consume } from "./implementation.js";',
+    fake: "function validate(input: number): number { return input; } export function consume(input: number): number { return validate(input); }",
+    mutable: `${imported} let selected = validate; export function consume(input: number): number { selected(input); return input; }`,
+    destructured:
+      'import * as ns from "alpha/runtime"; const { validate } = ns; export function consume(input: number): number { validate(input); return input; }',
+    computed:
+      'import * as ns from "alpha/runtime"; let key: "validate" = "validate"; const selected = ns[key]; export function consume(input: number): number { selected(input); return input; }',
+    unused: `${imported} export function consume(input: number): number { const unused = () => validate(input); return input; }`,
+    nested: `${imported} export function consume(input: number): number { function unused(): unknown { return validate(input); } return input; }`,
+    class: `${imported} export function consume(input: number): number { class Deferred { result = validate(input); } return input; }`,
+    dispatch: `${imported} function dispatch(action: typeof validate, input: number): number { action(input); return input; } export function consume(input: number): number { return dispatch(validate, input); }`,
+    foreign:
+      'import { consume as implementation } from "alpha/runtime"; export const consume = implementation;',
+    "mutable-consumer": `${imported} function handleValidateImpl(input: number): number { ${checked} } export let consume = handleValidateImpl;`,
+  };
+  if (variant === "reexport")
+    own.put(
+      "packages/beta/src/implementation.ts",
+      `${imported} export function handleValidateImpl(input: number): number { ${checked} }`,
+    );
+  own.put("packages/beta/src/owner.ts", bodies[variant]);
+  emitSymbolFixture(own.root, "packages/beta");
+}

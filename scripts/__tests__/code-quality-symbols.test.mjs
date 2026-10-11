@@ -821,3 +821,55 @@ export function untyped(input: any): any { return input; }
     expect(own.resolver.incomingUses(identity).complete).toBe(false);
   });
 });
+
+describe("canonical consumer implementation call binding (#3918)", () => {
+  async function consumerFixture(body, options = {}) {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8") + body,
+    );
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject, options);
+    return own;
+  }
+
+  it("keeps a public const alias distinct from the actual inline-callback implementation", async () => {
+    const own = await consumerFixture(
+      "function withOp(action: () => unknown): unknown { return action(); } function handle(input: number): unknown { return withOp(() => validate(input)); } export const consume = handle;",
+    );
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    const bound = own.resolver.consumerCalls(consumer, producer, "alpha");
+    expect(consumer.producer.kind).toBe("VariableDeclaration");
+    expect(bound.implementation.producer.kind).toBe("FunctionDeclaration");
+    expect(bound.bound).toBe(true);
+    expect(bound.calls).toHaveLength(1);
+    const call = bound.calls[0];
+    expect(readFileSync(join(own.root, call.path), "utf8").slice(call.start, call.end)).toBe(
+      "validate(input)",
+    );
+  });
+
+  it("uses the actual alias budget for exported implementation chains", async () => {
+    const own = await consumerFixture(
+      "function handle(input: number): unknown { return validate(input); } const second = handle; const first = second; export const consume = first;",
+      { aliases: 1 },
+    );
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    expect(() => own.resolver.consumerCalls(consumer, producer, "alpha")).toThrow(
+      "symbol-alias-budget",
+    );
+  });
+});

@@ -17,6 +17,7 @@ import {
   createEnforcementFixture,
   createCrossOwnerEnforcementFixture,
   replaceEnforcementOwner,
+  replaceConsumerCallFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 
 const roots = [];
@@ -123,6 +124,94 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
     expect(report.responsibilities.assessments[0].roles.consumer.identities[0].owner).toBe("beta");
     expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
   }, 60_000);
+
+  it("rejects a declared consumer that never calls the producer, despite a real decoy call", async () => {
+    const own = createCrossOwnerEnforcementFixture();
+    roots.push(own.root);
+    own.put(
+      "packages/beta/src/owner.ts",
+      'import { validate } from "alpha/runtime"; export function decoy(input: number): number { const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value; } export function consume(input: number): number { return input; }',
+    );
+    emitSymbolFixture(own.root, "packages/beta");
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "enforce" },
+      own.root,
+    );
+    expect(report.enforcementOutcome).toBe("failed");
+    expect(report.responsibilities.assessments[0].reasons).toContain(
+      "unbound-responsibility-consumer",
+    );
+    expect(report.adaptations).toEqual([]);
+    expect(report.violations.length).toBeGreaterThan(0);
+    expect(report.responsibilities.counts.qualified).toBe(0);
+  }, 60_000);
+
+  it.each(["alias", "callback", "namespace", "reexport", "arrow", "expression"])(
+    "binds the actual %s consumer implementation without semantic trust",
+    async (variant) => {
+      const own = createCrossOwnerEnforcementFixture();
+      roots.push(own.root);
+      replaceConsumerCallFixture(own, variant);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      const assessment = report.responsibilities.assessments[0];
+      expect(report.enforcementOutcome).toBe("passed");
+      expect(assessment.consumerBinding.bound).toBe(true);
+      expect(assessment.consumerBinding.calls).toHaveLength(1);
+      expect(assessment.consumerBinding.implementation.owner).toBe("beta");
+      expect(assessment.consumerBinding.implementation.producer.kind).toBe(
+        ["arrow", "expression"].includes(variant) ? "VariableDeclaration" : "FunctionDeclaration",
+      );
+      expect(assessment.proofs[0].executed).toBe(false);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.counts.pending).toBe(1);
+      expect(report.outcome).toBe("failed");
+      if (variant !== "reexport")
+        expect(assessment.roles.consumer.identities[0].producer.kind).toBe("VariableDeclaration");
+    },
+    60_000,
+  );
+
+  it.each(["fake", "mutable", "destructured", "computed", "unused", "nested", "dispatch", "class"])(
+    "keeps %s consumer indirection unbound and the raw slot enforced",
+    async (variant) => {
+      const own = createCrossOwnerEnforcementFixture();
+      roots.push(own.root);
+      replaceConsumerCallFixture(own, variant);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.responsibilities.assessments[0].reasons).toContain(
+        "unbound-responsibility-consumer",
+      );
+      expect(report.adaptations).toEqual([]);
+      expect(report.violations.length).toBeGreaterThan(0);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+    },
+    60_000,
+  );
+
+  it.each(["foreign", "mutable-consumer"])(
+    "refuses an unsupported %s consumer implementation",
+    async (variant) => {
+      const own = createCrossOwnerEnforcementFixture();
+      roots.push(own.root);
+      replaceConsumerCallFixture(own, variant);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.responsibilities.assessments[0].structural).toBe("incomplete");
+      expect(report.adaptations).toEqual([]);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+    },
+    60_000,
+  );
 
   it.each([
     ["wrong-producer", "foreign-responsibility-owner"],

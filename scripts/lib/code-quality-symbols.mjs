@@ -337,23 +337,100 @@ function incomingUses(compiler, identity, paths) {
   };
 }
 
-function declarationCallable(compiler, identity) {
+function ownedDeclaration(compiler, identity) {
   const { context, source } = ownedSource(compiler, identity.producer.path);
   let node = compilerNodeAt(compiler, source, identity.producer.start);
   while (node && ts.SyntaxKind[node.kind] !== identity.producer.kind) node = node.parent;
   if (!node || !sameProducer(canonicalDeclaration(compiler, node, identity.entry), identity))
     throw new TypeError("mismatched-responsibility-producer");
+  return { context, source, node };
+}
+
+function runtimeCallable(node) {
+  return (
+    node &&
+    (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)) &&
+    node.body
+  );
+}
+
+function declarationCallable(compiler, identity) {
+  const { context, source, node } = ownedDeclaration(compiler, identity);
   const callable = ts.isVariableDeclaration(node) ? node.initializer : node;
-  if (
-    !callable ||
-    !(
-      ts.isFunctionDeclaration(callable) ||
-      ts.isFunctionExpression(callable) ||
-      ts.isArrowFunction(callable)
-    )
-  )
-    throw new TypeError("unsupported-responsibility-callable");
+  if (!runtimeCallable(callable)) throw new TypeError("unsupported-responsibility-callable");
   return { context, source, callable };
+}
+
+function consumerImplementation(compiler, identity) {
+  const seen = new Set();
+  while (identity) {
+    const { context, source, node } = ownedDeclaration(compiler, identity);
+    const initializer = aliasInitializer(node);
+    const callable = initializer ? unwrappedExpression(initializer) : node;
+    if (runtimeCallable(callable)) return { context, source, callable, identity };
+    if (!initializer || !qualifiedMemberReceiver(compiler, context, initializer)) break;
+    const key = JSON.stringify(identity.producer);
+    if (seen.has(key) || seen.size >= compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    seen.add(key);
+    const symbol = qualifiedAlias(
+      context,
+      expressionSymbol(compiler, context, initializer),
+      compiler.state.limits.aliases,
+    );
+    if (symbol.declarations.length !== 1) break;
+    identity = canonicalDeclaration(compiler, symbol.declarations[0], null);
+  }
+  throw new TypeError("unsupported-responsibility-consumer-implementation");
+}
+
+function inlineCallArgument(node) {
+  if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
+  if (node.name) return false;
+  while (inertExpression(node.parent)) node = node.parent;
+  return ts.isCallExpression(node.parent) && node.parent.arguments.includes(node);
+}
+
+function participatingCall(node, callable) {
+  for (let parent = node.parent; parent && parent !== callable; parent = parent.parent) {
+    if (ts.isClassLike(parent)) return false;
+    if (ts.isFunctionLike(parent) && !inlineCallArgument(parent)) return false;
+  }
+  return true;
+}
+
+function canonicalCall(compiler, context, expression, producer) {
+  if (!qualifiedMemberReceiver(compiler, context, expression)) return false;
+  try {
+    const symbol = invocationSymbol(
+      compiler,
+      context,
+      expressionSymbol(compiler, context, expression),
+      producer,
+    );
+    return Boolean(symbol && matchesProducer(compiler, symbol, producer));
+  } catch (error) {
+    if (error.message !== "unresolved-owner-symbol") throw error;
+    return false;
+  }
+}
+
+function consumerCalls(compiler, identity, producer, expectedOwner) {
+  const implementation = consumerImplementation(compiler, identity);
+  if (implementation.identity.owner !== expectedOwner)
+    throw new TypeError("foreign-responsibility-consumer-implementation");
+  const calls = [];
+  visitCompilerNodes(compiler.state, implementation.callable.body, (node) => {
+    if (!ts.isCallExpression(node) || !participatingCall(node, implementation.callable)) return;
+    if (!canonicalCall(compiler, implementation.context, node.expression, producer)) return;
+    calls.push({
+      path: implementation.identity.producer.path,
+      start: node.getStart(),
+      end: node.end,
+    });
+  });
+  compiler.assertCurrent();
+  return { implementation: implementation.identity, calls, bound: calls.length > 0 };
 }
 
 function annotationSlot(context, source, annotation, identity, kind, index = null) {
@@ -403,6 +480,8 @@ export function createSymbolResolver(subject, options = {}) {
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
     callableSlots: (identity) => callableSlots(compiler, identity),
+    consumerCalls: (identity, producer, expectedOwner) =>
+      consumerCalls(compiler, identity, producer, expectedOwner),
     expressionFactsAt: (request) => expressionFactsAt(compiler, request),
     sourceIdentity: (path) => {
       const sha256 = policyDigest(compiler.read(path));

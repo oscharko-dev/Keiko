@@ -90,6 +90,17 @@ function responsibilitySlots(resolver, record, roles) {
   return slots.filter((slot) => record.rules.includes(slot.rule));
 }
 
+function bindConsumer(resolver, record, roles, consumerReason, reasons) {
+  if (consumerReason || reasons.length) return null;
+  const binding = resolver.consumerCalls(
+    roles.consumer.identities[0],
+    roles.transform.identities[0],
+    record.consumer.owner,
+  );
+  if (!binding.bound) reasons.push("unbound-responsibility-consumer");
+  return binding;
+}
+
 function assessRecord(subject, resolver, record, files) {
   const selected = new Set(files.map((file) => file.path));
   const paths = [record.input, record.transform, record.output, record.consumer].map(
@@ -104,6 +115,7 @@ function assessRecord(subject, resolver, record, files) {
       ...signatureReasons(record, roles),
     ];
     const consumerReason = consumerSignatureReason(roles.consumer);
+    const binding = bindConsumer(resolver, record, roles, consumerReason, reasons);
     const proofs = proofFacts(subject, resolver, record);
     const slots =
       reasons.length || consumerReason ? [] : responsibilitySlots(resolver, record, roles);
@@ -115,6 +127,7 @@ function assessRecord(subject, resolver, record, files) {
         consumerReason ? [...reasons, consumerReason] : reasons,
       ),
       roles,
+      ...(binding ? { consumerBinding: binding } : {}),
       proofs,
       slots,
     };

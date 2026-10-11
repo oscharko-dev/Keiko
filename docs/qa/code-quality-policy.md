@@ -171,7 +171,7 @@ This is a disclosed v2 command-contract refinement,
 not semantic or migration qualification. Version 1 report shape and command behavior are unchanged.
 
 Static enforcement fails on active applicable findings and incomplete or rejected required static
-facts, including missing/foreign owners, missing/noncallable consumers, missing proofs and unsafe
+facts, including missing/foreign owners, missing/noncallable or unbound consumers, missing proofs and unsafe
 unknown or open-dictionary validator outputs. Merely unexecuted runtime and consumer proofs remain
 pending without becoming static rejection. The evaluator adapts only an assigned canonical raw
 parameter's exact annotation location for `no-unknown-parameters`, and a structural redactor's
@@ -201,5 +201,15 @@ consumer declarations are bound to `consumer.owner`. This permits existing cross
 without relocating code or introducing a foreign-owner permission. Import-anchor paths do not establish
 exported declaration ownership. Consumer ownership is part of historical selector identity; missing,
 malformed, mismatched or rebound ownership fails closed. Producer selectors still reject extra owner
-fields. This static identity does not prove a real validation/call relationship or runtime safety;
-semantic obligations remain pending and no proof path or prior test result qualifies them.
+fields. The resolver keeps that public identity separate from its actual callable implementation, following
+bounded immutable const aliases and current checker-bound imports/reexports. The implementation
+must retain `consumer.owner` and contain a canonical lexical call to the declared transform producer.
+A decoy call in another export cannot bind the named consumer. Direct inline call-argument callbacks
+participate lexically; named nested functions and unused locally assigned lambdas are separate
+implementations. Deferred class scopes also remain separate and cannot bind an enclosing consumer.
+Mutable, destructured or unresolved computed dispatch remains unbound. Missing
+or unsupported implementation facts remain incomplete and grant no raw-slot adaptation.
+
+These call facts establish bounded source participation, not callback execution, validation
+dominance, result flow or runtime safety. Semantic obligations remain pending, qualified counts
+remain zero, and no proof path or prior test result qualifies them.
