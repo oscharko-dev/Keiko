@@ -8202,14 +8202,24 @@ function withExcerptReadUsage(
   initialUsage: ExplorationUsage,
   reads: ExcerptReadSummary,
 ): ConnectedContextPack {
+  const documents = pack.files.filter((file) =>
+    file.excerpts.some((excerpt) => excerpt.atom.provenance.kind === "document-extract"),
+  );
+  const documentBytes = documents.reduce(
+    (bytes, file) => bytes + file.excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
+    0,
+  );
   return {
     ...pack,
     usage: {
       ...pack.usage,
-      filesRead: Math.max(pack.usage.filesRead, initialUsage.filesRead + (reads.filesRead ?? 0)),
+      filesRead: Math.max(
+        pack.usage.filesRead,
+        initialUsage.filesRead + (reads.filesRead ?? 0) + documents.length,
+      ),
       excerptBytes: Math.max(
         pack.usage.excerptBytes,
-        initialUsage.excerptBytes + (reads.bytesConsumed ?? 0),
+        initialUsage.excerptBytes + (reads.bytesConsumed ?? 0) + documentBytes,
       ),
     },
   };

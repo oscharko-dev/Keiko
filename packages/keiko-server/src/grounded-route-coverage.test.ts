@@ -672,6 +672,31 @@ function crossWaveCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function mixedAccountingFiles(): Readonly<Record<string, string>> {
+  const files = { ...crossWaveCoverageFiles() };
+  files["docs/manual.pdf"] = `%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 44 >> stream
+BT /F1 24 Tf 72 72 Td (Hello PDF) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref
+0 6
+0000000000 65535 f
+0000000010 00000 n
+0000000063 00000 n
+0000000122 00000 n
+0000000248 00000 n
+0000000342 00000 n
+trailer << /Root 1 0 R /Size 6 >>
+startxref
+412
+%%EOF`;
+  return files;
+}
+
 async function crossWaveOrdinaryRange(
   fixture: CoverageFixture,
 ): Promise<NonNullable<EvidenceAtom["lineRange"]>> {
@@ -1028,6 +1053,91 @@ describe("current route trace excerpt coverage", () => {
       expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
     },
   );
+  it("conserves invalidated returned code and retained document grants together", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget; inspect docs/manual.pdf",
+      mixedAccountingFiles(),
+    );
+    const budget = {
+      ...DEFAULT_EXPLORATION_BUDGET,
+      excerptBytesMax: 24576,
+      filesReadMax: 13,
+      elapsedMsMax: 1000,
+    };
+    const consumedByPath = new Map<string, number>();
+    const nativeRead = workspace.readExcerpt;
+    let now = NOW;
+    const spy = vi.spyOn(workspace, "readExcerpt").mockImplementation(async (...args) => {
+      const result = await nativeRead(...args);
+      if (args[1].rangeQueues === undefined) return result;
+      const returned = (result.windows ?? [result]).reduce(
+        (bytes, view) => bytes + Buffer.byteLength(view.content),
+        0,
+      );
+      if (returned > 0) {
+        const path = args[1].scopePath;
+        consumedByPath.set(path, (consumedByPath.get(path) ?? 0) + returned);
+        now = NOW + (budget.elapsedMsMax ?? 0);
+      }
+      return result;
+    });
+    const activityLog = createBufferedServerLogSink();
+    const result = await retrieveConnectedContextPack(
+      {
+        scope: fixture.scope,
+        query: fixture.query,
+        workspaceRoot: fixture.searchScope.workspace.root,
+        budget,
+      },
+      {
+        correlationId: undefined,
+        fs: fixture.fs,
+        nowMs: () => now,
+        detectWorkspace: () => fixture.searchScope.workspace,
+        answerer: { answer: () => Promise.resolve("No synthesis was requested") },
+        activityLog,
+      },
+    ).finally(() => spy.mockRestore());
+    const codeConsumed = [...consumedByPath.values()].reduce((bytes, value) => bytes + value, 0);
+    expect(codeConsumed).toBeGreaterThan(0);
+    for (const path of consumedByPath.keys()) {
+      expect(result.pack.files.some((file) => file.scopePath === path)).toBe(false);
+      expect(result.pack.omitted.some((entry) => entry.scopePath === path)).toBe(true);
+    }
+    const document = result.pack.files.find((file) => file.scopePath === "docs/manual.pdf");
+    expect(document).toBeDefined();
+    if (document === undefined) throw new TypeError("fixture requires a retained real document");
+    expect(document.excerpts.map((view) => view.content).join("\n")).toContain("Hello PDF");
+    expect(
+      document.excerpts.every((view) => view.atom.provenance.kind === "document-extract"),
+    ).toBe(true);
+    const documentBytes = document.excerpts.reduce((bytes, view) => bytes + view.contentBytes, 0);
+    expect(documentBytes).toBeGreaterThan(0);
+    const consumed = codeConsumed + documentBytes;
+    expect(consumed).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+    const remaining = remainingPublicReadGrant(fixture, result);
+    const consumedFiles = consumedByPath.size + 1;
+    const values = JSON.stringify({
+      codeConsumed,
+      documentBytes,
+      consumed,
+      consumedFiles,
+      usageBytes: result.pack.usage.excerptBytes,
+      usageFiles: result.pack.usage.filesRead,
+      remainingBytes: remaining.excerptBytesMax,
+      remainingFiles: remaining.filesReadMax,
+    });
+    expect(result.pack.usage.excerptBytes, values).toBeGreaterThanOrEqual(codeConsumed);
+    expect(result.pack.usage.filesRead, values).toBeGreaterThanOrEqual(consumedByPath.size);
+    expect(result.pack.usage.excerptBytes, values).toBeGreaterThanOrEqual(consumed);
+    expect(result.pack.usage.filesRead, values).toBeGreaterThanOrEqual(consumedFiles);
+    expect(remaining.excerptBytesMax, values).toBeLessThanOrEqual(
+      budget.excerptBytesMax - consumed,
+    );
+    expect(remaining.filesReadMax, values).toBeLessThanOrEqual(budget.filesReadMax - consumedFiles);
+  });
+
   it("keeps guarded read charges after expansion invalidates the returned source", async () => {
     const fixture = await coverageFixture(
       "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
