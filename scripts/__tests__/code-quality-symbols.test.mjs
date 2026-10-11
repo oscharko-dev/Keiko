@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync, rmSync, unlinkSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, rmSync, unlinkSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -130,6 +130,244 @@ describe("configured canonical symbol resolver interface (#3918)", () => {
     expect(runtime.consume(42)).toBe(42);
     second.resolver = createSymbolResolver(await collectPolicySubject(second.root));
     expect(second.resolver.resolveExport(second.record.consumer).identities).toHaveLength(1);
+  });
+
+  it("reuses detached export facts for an exact repeated selector without compiler traversal", async () => {
+    const own = await fixture();
+    const selector = { ...reference };
+    const first = own.resolver.resolveExport(selector);
+    const expected = structuredClone(first);
+    const before = own.resolver.stats();
+    first.identities[0].owner = "caller-mutation";
+    const repeated = own.resolver.resolveExport({ ...reference });
+    expect(repeated).toEqual(expected);
+    expect(repeated).not.toBe(first);
+    expect(own.resolver.stats()).toEqual(before);
+    selector.exportName = "caller-selector-mutation";
+    repeated.identities[0].owner = "second-caller-mutation";
+    expect(own.resolver.resolveExport({ ...reference })).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+  });
+
+  it("keeps changing accessor export entries out of the data-selector cache", async () => {
+    const own = await fixture();
+    const expected = own.resolver.resolveExport(reference);
+    own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "validate",
+    });
+    let specifierReads = 0;
+    let exportReads = 0;
+    const request = {
+      get consumerPath() {
+        return reference.consumerPath;
+      },
+      get specifier() {
+        return ++specifierReads === 1 ? "alpha" : "alpha/runtime";
+      },
+      get exportName() {
+        return ++exportReads === 1 ? "parse" : "validate";
+      },
+    };
+    const cold = own.resolver.resolveExport(request);
+    expect(cold.identities[0].entry).toEqual({
+      specifier: "alpha/runtime",
+      exportName: "validate",
+    });
+    expect(own.resolver.resolveExport(reference)).toEqual(expected);
+  });
+
+  it.each(["accessor", "inherited", "proxy"])(
+    "preserves the original cold property schedule for %s selectors",
+    async (kind) => {
+      const own = await fixture();
+      const expected = own.resolver.resolveExport(reference);
+      const reads = [];
+      const descriptors = Object.fromEntries(
+        Object.entries(reference).map(([name, value]) => [
+          name,
+          {
+            get() {
+              reads.push(name);
+              expect(this).toBe(request);
+              return value;
+            },
+          },
+        ]),
+      );
+      let request;
+      if (kind === "proxy")
+        request = new Proxy(
+          { ...reference },
+          {
+            get(target, name, receiver) {
+              reads.push(name);
+              return Reflect.get(target, name, receiver);
+            },
+            getOwnPropertyDescriptor() {
+              throw new Error("unexpected-descriptor-trap");
+            },
+          },
+        );
+      else
+        request =
+          kind === "inherited"
+            ? Object.create(Object.defineProperties({}, descriptors))
+            : Object.defineProperties({}, descriptors);
+      const before = own.resolver.stats();
+      expect(own.resolver.resolveExport(request)).toEqual(expected);
+      expect(reads).toEqual([
+        "consumerPath",
+        "specifier",
+        "specifier",
+        "exportName",
+        "specifier",
+        "exportName",
+      ]);
+      expect(own.resolver.stats().nodes).toBeGreaterThan(before.nodes);
+    },
+  );
+
+  it.each(["accessor", "proxy"])("preserves the first cold %s error", async (kind) => {
+    const own = await fixture();
+    own.resolver.resolveExport(reference);
+    const error = new Error("selector-read-failure");
+    const reads = [];
+    const request =
+      kind === "proxy"
+        ? new Proxy(
+            { ...reference },
+            {
+              get(_target, name) {
+                reads.push(name);
+                throw error;
+              },
+              getOwnPropertyDescriptor() {
+                throw new Error("unexpected-descriptor-trap");
+              },
+            },
+          )
+        : {
+            get consumerPath() {
+              reads.push("consumerPath");
+              throw error;
+            },
+            get specifier() {
+              throw new Error("unexpected-specifier-read");
+            },
+            get exportName() {
+              throw new Error("unexpected-export-read");
+            },
+          };
+    expect(() => own.resolver.resolveExport(request)).toThrow(error);
+    expect(reads).toEqual(["consumerPath"]);
+    expect(own.resolver.resolveExport(reference).identities[0].entry).toEqual({
+      specifier: "alpha",
+      exportName: "parse",
+    });
+  });
+
+  it.each(["array", "function"])("reuses own data selectors on a %s request", async (kind) => {
+    const own = await fixture();
+    const expected = own.resolver.resolveExport(reference);
+    const before = own.resolver.stats();
+    const request = Object.assign(
+      kind === "array"
+        ? []
+        : function selector() {
+            return undefined;
+          },
+      reference,
+    );
+    expect(own.resolver.resolveExport(request)).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+  });
+
+  it.each([
+    { ...reference, consumerPath: "packages/alpha/src/owner.ts" },
+    { ...reference, specifier: "missing" },
+    { ...reference, exportName: "missing" },
+    { ...reference, specifier: { toString: () => reference.specifier } },
+  ])("keeps export fact keys exact and nonstring selectors cold %j", async (selector) => {
+    const own = await fixture();
+    own.resolver.resolveExport(reference);
+    expect(() => own.resolver.resolveExport(selector)).toThrow();
+    expect(own.resolver.resolveExport(reference).identities).toHaveLength(1);
+  });
+
+  it("retains only one successful export selector and releases it on close", async () => {
+    const own = await fixture();
+    own.resolver.resolveExport(reference);
+    const first = own.resolver.stats();
+    own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "validate",
+    });
+    const second = own.resolver.stats();
+    expect(second.nodes).toBeGreaterThan(first.nodes);
+    own.resolver.resolveExport(reference);
+    expect(own.resolver.stats().nodes).toBeGreaterThan(second.nodes);
+    own.resolver.close();
+    expect(() => own.resolver.resolveExport(reference)).toThrow("symbol-resolver-closed");
+  });
+
+  it.each(["source", "config", "manifest", "membership"])(
+    "keeps complete %s currentness validation on export fact hits",
+    async (kind) => {
+      const own = await fixture();
+      own.resolver.resolveExport(reference);
+      const paths = {
+        source: "packages/alpha/src/owner.ts",
+        config: "packages/alpha/tsconfig.json",
+        manifest: "packages/alpha/package.json",
+        membership: "packages/alpha/src/added.ts",
+      };
+      const path = paths[kind];
+      own.put(
+        path,
+        kind === "membership"
+          ? "export const added = 1;"
+          : readFileSync(join(own.root, path), "utf8") + "\n",
+      );
+      expect(() => own.resolver.resolveExport(reference)).toThrow(
+        kind === "membership" ? "symbol-membership-changed" : "symbol-subject-changed",
+      );
+    },
+  );
+
+  it.each(["owner.d.ts", "owner.d.ts.map"])(
+    "refuses same-byte generated %s symlinks on export fact hits",
+    async (name) => {
+      const own = await fixture();
+      own.resolver.resolveExport(reference);
+      const path = join(own.root, "packages/alpha/dist", name);
+      const replacement = `${path}.retained`;
+      writeFileSync(replacement, readFileSync(path));
+      unlinkSync(path);
+      symlinkSync(replacement, path);
+      expect(() => own.resolver.resolveExport(reference)).toThrow("unsafe-symbol-source");
+    },
+  );
+
+  it("keeps proof roles distinct and rechecks same-byte public runtime symlinks on hits", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const expected = own.resolver.resolveProofExport(own.record.input);
+    const before = own.resolver.stats();
+    expect(own.resolver.resolveProofExport({ ...own.record.input })).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+    expect(() => own.resolver.resolveExport(own.record.input)).toThrow("untyped-symbol-source");
+    const path = join(own.root, "packages/alpha/dist/index.js");
+    const replacement = `${path}.retained`;
+    writeFileSync(replacement, readFileSync(path));
+    unlinkSync(path);
+    symlinkSync(replacement, path);
+    expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow("unsafe-symbol-source");
   });
 
   it("resolves exact raw helper checking operations through its actual compiler owner", async () => {

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
@@ -16,7 +16,7 @@ const TOOL_CATALOG_FIXTURES = new Set([
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
 ]);
 export function policyDigest(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
+  return hash("sha256", bytes, "hex");
 }
 
 function policyGit(root, args) {

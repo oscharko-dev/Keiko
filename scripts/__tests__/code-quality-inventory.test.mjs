@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
@@ -5,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   collectPolicyInventory,
+  policyDigest,
   readPreviousPolicies,
   selectPolicyScope,
 } from "../lib/code-quality-inventory.mjs";
@@ -361,4 +363,51 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     });
     expect(() => readPreviousPolicies(shallow)).toThrow("incomplete-policy-history");
   });
+});
+
+describe("policy digest byte identity (#3918)", () => {
+  it.each([
+    ["", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    ["abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"],
+  ])("matches the standard SHA-256 vector for %j", (input, expected) => {
+    expect(policyDigest(input)).toBe(expected);
+    expect(policyDigest(Buffer.from(input))).toBe(expected);
+  });
+
+  it.each(["Keiko 😀 漢字", "\ud800", "a".repeat(6 * 1024 * 1024)])(
+    "preserves UTF-8 string and ready byte identities",
+    (input) => {
+      expect(policyDigest(input)).toBe(policyDigest(Buffer.from(input, "utf8")));
+    },
+  );
+
+  it("keeps invalid UTF-8 bytes distinct from decoded source text", () => {
+    const bytes = Buffer.from([128, 255, 0]);
+    expect(policyDigest(bytes)).not.toBe(policyDigest(bytes.toString("utf8")));
+  });
+
+  it("hashes only each byte view's selected region without mutating it", () => {
+    const backing = Uint8Array.from([99, 0, 128, 255, 3, 88]);
+    const before = backing.slice();
+    const expected = policyDigest(Buffer.from([0, 128, 255, 3]));
+    for (const view of [
+      Buffer.from(backing.buffer, 1, 4),
+      new Uint8Array(backing.buffer, 1, 4),
+      new DataView(backing.buffer, 1, 4),
+    ]) {
+      expect(policyDigest(view)).toBe(expected);
+    }
+    expect(backing).toEqual(before);
+    expect(policyDigest(backing)).not.toBe(expected);
+  });
+
+  it.each([undefined, null, 1, {}, [], new ArrayBuffer(1)])(
+    "rejects malformed input with the native argument-type failure",
+    (input) => {
+      expect(() => policyDigest(input)).toThrow(TypeError);
+      expect(() => policyDigest(input)).toThrow(
+        expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }),
+      );
+    },
+  );
 });

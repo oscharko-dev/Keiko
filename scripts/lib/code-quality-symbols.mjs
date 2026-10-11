@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { types } from "node:util";
 import { policyDigest } from "./code-quality-inventory.mjs";
 import { join, relative } from "node:path";
 import ts from "typescript";
@@ -1322,12 +1323,66 @@ function expressionFactsAt(compiler, request) {
   return facts;
 }
 
+function exportFactKey(request, proof) {
+  if (
+    request === null ||
+    (typeof request !== "object" && typeof request !== "function") ||
+    types.isProxy(request)
+  )
+    return undefined;
+  const selectors = ["consumerPath", "specifier", "exportName"].map((name) =>
+    Object.getOwnPropertyDescriptor(request, name),
+  );
+  if (
+    !selectors.every(
+      (entry) => entry && Object.hasOwn(entry, "value") && typeof entry.value === "string",
+    )
+  )
+    return undefined;
+  return JSON.stringify([proof, ...selectors.map((entry) => entry.value)]);
+}
+
+function ownedExportSnapshots(compiler) {
+  const paths = [...compiler.state.snapshots.keys()].map((absolute) =>
+    relative(compiler.state.subject.root, absolute).replaceAll("\\", "/"),
+  );
+  return paths.filter(
+    (path) =>
+      path !== ".." &&
+      !path.startsWith("../") &&
+      (compiler.state.subject.outputs.has(path) ||
+        (path.endsWith(".map") && compiler.state.subject.outputs.has(path.slice(0, -4)))),
+  );
+}
+
+function createExportFactCache(compiler) {
+  let entry;
+  return {
+    resolve: (request, proof = false) => {
+      const key = exportFactKey(request, proof);
+      if (key !== undefined && entry?.key === key) {
+        for (const path of entry.paths) compiler.read(path);
+        compiler.assertCurrent();
+        return structuredClone(entry.facts);
+      }
+      const facts = resolveExport(compiler, request, proof);
+      if (key !== undefined)
+        entry = { key, facts: structuredClone(facts), paths: ownedExportSnapshots(compiler) };
+      return structuredClone(facts);
+    },
+    close: () => {
+      entry = undefined;
+    },
+  };
+}
+
 export function createSymbolResolver(subject, options = {}, proofRoots = []) {
   const compiler = createCompilerContext(subject, options, proofRoots);
   const rawSlots = new Map();
+  const exportFacts = createExportFactCache(compiler);
   return {
-    resolveExport: (request) => resolveExport(compiler, request),
-    resolveProofExport: (request) => resolveExport(compiler, request, true),
+    resolveExport: (request) => exportFacts.resolve(request),
+    resolveProofExport: (request) => exportFacts.resolve(request, true),
     resolveProofConsumer: (request) => resolveProofConsumer(compiler, request),
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
     describeAt: (request) => describeAt(compiler, request),
@@ -1348,7 +1403,10 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
       return { path, sha256 };
     },
     assertCurrent: compiler.assertCurrent,
-    close: compiler.close,
+    close: () => {
+      exportFacts.close();
+      compiler.close();
+    },
     stats: () => ({
       programs: compiler.state.programs.size,
       created: compiler.state.created,
