@@ -658,6 +658,12 @@ configuration disposition. Each joins the original correlation and source/query 
 erase the first declaration. Assembled file reads remain audit and physical-usage facts and must
 not be presented as proof that every excerpt reached the model.
 
+Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
+optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
+`memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
+and originating request retain the existing causal link. Candidate counts and model-authored
+marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
+
 Follow-up outcomes are `not-needed`, `answered`, `still-insufficient`, `budget-refused`,
 `elapsed-refused`, or `disabled`. A substantive second answer can be `answered` while retaining an
 uncited-answer warning; this never opens a third synthesis slot. Technical failures retain a closed

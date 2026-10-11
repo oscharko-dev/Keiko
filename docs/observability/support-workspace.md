@@ -213,6 +213,11 @@ report availability reason. Unknown facts are omitted rather than inferred from 
    delivery to synthesis. The first and second prompts retain the original source/query identities
    and use `followUpPass` 0 and 1 even when the selection fingerprint changes. An `answered`
    follow-up can still carry an uncited-answer warning; this warning does not grant another call.
+   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
+   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
+   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
+   and originating request retain the existing causal link. Candidate counts and model-authored
+   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
    For a deliberately source-free answer, only `search.answer.assessed` with `policy: allowed`,
    `outcome: assessment-only`, zero `sourceBackedChars`, a nonempty assessment and
    `phase: accepted-final` can dispose incidental selection or empty-semantic findings. It must

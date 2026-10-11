@@ -169,6 +169,12 @@ An eligible `conversational-follow-up` retains the previous targeted or diagnost
 planning; concrete new targets and new traces classify independently. The registered completed
 and clarification operations retain the actual turn classification.
 
+Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
+optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
+`memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
+and originating request retain the existing causal link. Candidate counts and model-authored
+marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
+
 `client.scope.notice` records scope narrowing, widening, folder pinning and adding missing evidence
 under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
 `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
