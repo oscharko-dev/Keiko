@@ -436,8 +436,9 @@ certificate. Unobserved, anchored or partially clipped caller spans receive no c
 Independent route roots and their file queues receive bounded initial byte portions from the
 existing connected share. Existing certified traversal sets file order; existing query relevance
 orders targets within each file, with stable ties. Roots and their file queues take turns within
-those portions. After that bounded pass, existing relevance orders shared retries within each root,
-with stable ties and turns between roots. Later targets in an already served file remain eligible.
+those portions. After that bounded pass, shared retries interleave the existing root-local relevance
+order with the existing root/file turns. Stable ties and relevance within each file remain intact.
+Later targets in an already served file remain eligible.
 Shared ancestors reserve bytes once; upgrades retain funded target windows, later
 same-file targets remain eligible, and oversized branches receive no partial reservation.
 Aggregate same-file unions must fit the remaining connected share; each physical excerpt retains
