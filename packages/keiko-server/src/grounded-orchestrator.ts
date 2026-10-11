@@ -6306,6 +6306,7 @@ function fairCoverageEntries(
 interface SharedCoverageAdmission {
   readonly byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>;
   readonly byPath: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
+  readonly ownedChildren: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
   readonly state: CoverageAdmission;
   readonly totalBytes: number;
   readonly inputs: ExcerptInputs;
@@ -6326,7 +6327,8 @@ function admitSharedCoverageEntries(
       return path === undefined ? [] : [[path, queue] as const];
     }),
   );
-  const admission = { byIdentity, byPath, state, totalBytes, inputs };
+  const ownedChildren = ownedCoverageChildren(entries, byIdentity);
+  const admission = { byIdentity, byPath, ownedChildren, state, totalBytes, inputs };
   for (const entry of ranked) admitSharedCoveragePrefix(entry, targets, admission);
   for (const entry of targets) {
     if (!state.targets.has(entry.definitionIdentity))
@@ -6336,6 +6338,82 @@ function admitSharedCoverageEntries(
 
 function copyCoverageAdmission(state: CoverageAdmission): CoverageAdmission {
   return { windows: new Map(state.windows), bytes: state.bytes, targets: new Set(state.targets) };
+}
+
+function ownedCoverageChildren(
+  entries: readonly RouteTraceCoverageEntry[],
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+): ReadonlyMap<string, readonly RouteTraceCoverageEntry[]> {
+  const children = new Map<string, RouteTraceCoverageEntry[]>();
+  for (const entry of connectedCoverageOrder(entries)) {
+    const witness = entry.parentWitness;
+    if (
+      witness?.ownedSourceCall !== true ||
+      witness.parentIdentity !== entry.parentIdentity ||
+      witness.targetIdentity !== entry.definitionIdentity ||
+      !byIdentity.has(witness.parentIdentity)
+    )
+      continue;
+    const targets = children.get(witness.parentIdentity) ?? [];
+    targets.push(entry);
+    children.set(witness.parentIdentity, targets);
+  }
+  return children;
+}
+
+function coverageAdmissionWithOwnedContinuation(
+  state: CoverageAdmission,
+  entry: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+  minimumScore: number,
+): CoverageAdmission {
+  let selected = state;
+  let parent = entry;
+  const seen = new Set([entry.definitionIdentity]);
+  let threshold: number | undefined = minimumScore;
+  for (;;) {
+    const next = nextOwnedCoverageContinuation(selected, parent, seen, admission, threshold);
+    if (next === undefined) return selected;
+    selected = next.state;
+    parent = next.entry;
+    threshold = undefined;
+  }
+}
+
+function nextOwnedCoverageContinuation(
+  state: CoverageAdmission,
+  parent: RouteTraceCoverageEntry,
+  seen: Set<string>,
+  admission: SharedCoverageAdmission,
+  minimumScore: number | undefined,
+): { readonly state: CoverageAdmission; readonly entry: RouteTraceCoverageEntry } | undefined {
+  const pending = [...(admission.ownedChildren.get(parent.definitionIdentity) ?? [])].reverse();
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === undefined) continue;
+    if (seen.has(entry.definitionIdentity)) continue;
+    seen.add(entry.definitionIdentity);
+    if (state.targets.has(entry.definitionIdentity)) {
+      pending.push(...[...(admission.ownedChildren.get(entry.definitionIdentity) ?? [])].reverse());
+      continue;
+    }
+    if (!canStartOwnedCoverageContinuation(entry, minimumScore, admission)) continue;
+    const candidate = coverageAdmissionWithTarget(state, entry, admission);
+    if (candidate !== undefined) return { state: candidate, entry };
+  }
+  return undefined;
+}
+
+function canStartOwnedCoverageContinuation(
+  entry: RouteTraceCoverageEntry,
+  minimumScore: number | undefined,
+  admission: SharedCoverageAdmission,
+): boolean {
+  return (
+    minimumScore === undefined ||
+    (entry.atom.score >= minimumScore &&
+      (admission.ownedChildren.get(entry.definitionIdentity)?.length ?? 0) > 0)
+  );
 }
 
 function coverageAdmissionWithTarget(
@@ -6375,11 +6453,42 @@ function coverageAdmissionWithFairTarget(
   ranked?: RouteTraceCoverageEntry,
 ): CoverageAdmission | undefined {
   for (const entry of targets) {
-    if (state.targets.has(entry.definitionIdentity)) continue;
+    if (state.targets.has(entry.definitionIdentity)) {
+      const continuation = coverageAdmissionWithOwnedContinuation(
+        state,
+        entry,
+        admission,
+        coverageFileHeadScore(entry, admission),
+      );
+      if (continuation.targets.size > state.targets.size) return continuation;
+      continue;
+    }
     const candidate = coverageAdmissionWithCompetingFairTarget(state, ranked, entry, admission);
-    if (candidate !== undefined) return candidate;
+    if (candidate !== undefined)
+      return coverageAdmissionWithOwnedOpportunity(candidate, entry, targets, admission);
   }
   return undefined;
+}
+
+function coverageAdmissionWithOwnedOpportunity(
+  state: CoverageAdmission,
+  fair: RouteTraceCoverageEntry,
+  targets: readonly RouteTraceCoverageEntry[],
+  admission: SharedCoverageAdmission,
+): CoverageAdmission {
+  const threshold = coverageFileHeadScore(fair, admission);
+  const own = coverageAdmissionWithOwnedContinuation(state, fair, admission, threshold);
+  if (own.targets.size > state.targets.size) return own;
+  for (const parent of targets) {
+    if (
+      !state.targets.has(parent.definitionIdentity) ||
+      coverageFileHeadScore(parent, admission) < threshold
+    )
+      continue;
+    const candidate = coverageAdmissionWithOwnedContinuation(state, parent, admission, threshold);
+    if (candidate.targets.size > state.targets.size) return candidate;
+  }
+  return state;
 }
 
 function coverageAdmissionWithCompetingFairTarget(
@@ -6429,10 +6538,7 @@ function sharedCoverageFairTargets(
     }),
   );
   const pending = fair
-    .filter(
-      (entry) =>
-        entry.atom.scopePath !== ranked.atom.scopePath && !fundedPaths.has(entry.atom.scopePath),
-    )
+    .filter((entry) => isPendingCoverageFairTarget(entry, ranked, fundedPaths, admission))
     .sort(
       (left, right) =>
         coverageFileHeadScore(right, admission) - coverageFileHeadScore(left, admission),
@@ -6441,6 +6547,40 @@ function sharedCoverageFairTargets(
     ...pending.filter((entry) => coverageFileHeadScore(entry, admission) < ranked.atom.score),
     ...pending.filter((entry) => coverageFileHeadScore(entry, admission) >= ranked.atom.score),
   ];
+}
+
+function isPendingCoverageFairTarget(
+  entry: RouteTraceCoverageEntry,
+  ranked: RouteTraceCoverageEntry,
+  fundedPaths: ReadonlySet<string>,
+  admission: SharedCoverageAdmission,
+): boolean {
+  return (
+    entry.atom.scopePath !== ranked.atom.scopePath &&
+    (!fundedPaths.has(entry.atom.scopePath) ||
+      (admission.state.targets.has(entry.definitionIdentity) &&
+        hasPendingOwnedCoverageContinuation(entry, admission)))
+  );
+}
+
+function hasPendingOwnedCoverageContinuation(
+  entry: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+): boolean {
+  const pending = [...(admission.ownedChildren.get(entry.definitionIdentity) ?? [])];
+  const seen = new Set([entry.definitionIdentity]);
+  const threshold = coverageFileHeadScore(entry, admission);
+  while (pending.length > 0) {
+    const child = pending.pop();
+    if (child === undefined || seen.has(child.definitionIdentity)) continue;
+    seen.add(child.definitionIdentity);
+    if (!admission.state.targets.has(child.definitionIdentity)) {
+      if (canStartOwnedCoverageContinuation(child, threshold, admission)) return true;
+      continue;
+    }
+    pending.push(...(admission.ownedChildren.get(child.definitionIdentity) ?? []));
+  }
+  return false;
 }
 
 function coverageFileHeadScore(
