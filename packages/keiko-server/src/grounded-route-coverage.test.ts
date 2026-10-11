@@ -1033,6 +1033,90 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("retains the exact endpoint registration inside a crowded ordinary window", async () => {
+    const nearby = "// Trace route pipeline and explain neighboring evidence.";
+    const registration =
+      'const routes = [{ method: "POST", path: "/api/items", handler: handleRecord }];';
+    const source = {
+      "src/routes.ts": [
+        ...Array.from({ length: 40 }, () => nearby),
+        registration,
+        ...Array.from({ length: 20 }, () => nearby),
+      ].join("\n"),
+    };
+    const fixture = await coverageFixture(
+      "Trace POST /api/items route pipeline and explain neighboring evidence",
+      source,
+    );
+    const atoms = await allocationAtoms(fixture);
+    const endpoint = atoms.find(
+      (atom) => atom.provenance.tool === "endpoint-contract-server-route",
+    );
+    expect(endpoint).toBeDefined();
+    expect(endpoint?.lineRange).toEqual({ startLine: 41, endLine: 41 });
+    expect(endpoint?.edge).toBeUndefined();
+    expect(fixture.trace.routeCoverage?.entries ?? []).toHaveLength(0);
+    expect(fixture.ordinaryAtoms.some((atom) => atom.provenance.tool === "repo.searchText")).toBe(
+      true,
+    );
+    expect(coverageRanking(atoms).kept.map((entry) => entry.scopePath)).toContain("src/routes.ts");
+    const fullBudget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 };
+    const full = await observedCoverageRead(fixture, { atoms, inputs: { budget: fullBudget } });
+    expect(readContent(full.reads, "src/routes.ts")).toContain(registration);
+    expect(await sentPrompt(fixture, full.reads, atoms, fullBudget)).toContain(
+      `41 | ${registration}`,
+    );
+    expect(await sentPrompt(fixture, full.reads, atoms, fullBudget)).toContain(`1 | ${nearby}`);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 256 };
+    expect(Buffer.byteLength(registration)).toBeLessThan(budget.excerptBytesMax);
+    const result = await observedCoverageRead(fixture, { atoms, inputs: { budget } });
+    expect(readBytes(result.reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expect(result.requests.every((request) => request.ranges?.length === 0)).toBe(true);
+    expect(readContent(result.reads, "src/routes.ts")).toContain(registration);
+    const pack = await assembledCoveragePack(fixture, result.reads, atoms, budget);
+    expect(
+      pack.files
+        .flatMap((file) => file.excerpts)
+        .some((view) => view.content.includes(registration)),
+    ).toBe(true);
+    expect(await sentPrompt(fixture, result.reads, atoms, budget)).toContain(
+      `41 | ${registration}`,
+    );
+    expect(readContent(result.reads, "src/routes.ts")).toContain(nearby);
+  });
+
+  it("keeps adjacent actual endpoint registrations independently readable", async () => {
+    const registrations = [
+      '  { method: "POST", path: "/api/items", handler: firstHandler },',
+      '  { method: "POST", path: "/api/items", handler: secondHandler },',
+    ];
+    const fixture = await coverageFixture("Trace POST /api/items route pipeline", {
+      "src/routes.ts": [
+        ...Array.from({ length: 40 }, () => "// Trace route pipeline context."),
+        "const routes = [",
+        ...registrations,
+        "];",
+      ].join("\n"),
+    });
+    const atoms = await allocationAtoms(fixture);
+    expect(
+      atoms
+        .filter((atom) => atom.provenance.tool === "endpoint-contract-server-route")
+        .map((atom) => atom.lineRange),
+    ).toEqual([
+      { startLine: 42, endLine: 42 },
+      { startLine: 43, endLine: 43 },
+    ]);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 256 };
+    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    const prompt = await sentPrompt(fixture, reads, atoms, budget);
+    for (const [index, line] of registrations.entries()) {
+      expect(readContent(reads, "src/routes.ts")).toContain(line);
+      expect(prompt).toContain(`${String(42 + index)} | ${line}`);
+    }
+    expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+  });
+
   it("retains ordinary opportunity for a selected definition when route coverage is absent", async () => {
     const fixture = await coverageFixture(undefined, disconnectedDefinitionFiles());
     const atoms = await allocationAtoms(fixture);

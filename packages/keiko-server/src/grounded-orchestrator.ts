@@ -6078,11 +6078,27 @@ interface ExcerptWindowStrength {
   readonly score: number;
 }
 
+function mergedPriorityWindows(atoms: readonly EvidenceAtom[]): readonly LineWindow[] {
+  const surrounding = mergeLineWindows(atoms.map(lineWindowForAtom));
+  const registrations = atoms.flatMap((atom) => {
+    const range = atom.lineRange;
+    return atom.provenance.kind === "structural" &&
+      atom.provenance.tool === "endpoint-contract-server-route" &&
+      range !== undefined
+      ? [range, lineWindowForAtom(atom)]
+      : [];
+  });
+  if (registrations.length === 0) return surrounding;
+  return [...atomicCoverageWindows(surrounding, registrations, atoms)].sort(
+    (a, b) => a.startLine - b.startLine,
+  );
+}
+
 function mergeWindowsByTracePriority(atomsForPath: readonly EvidenceAtom[]): readonly LineWindow[] {
   let selected: readonly LineWindow[] = [];
   for (const priority of [2, 1, 0]) {
-    const windows = mergeLineWindows(
-      atomsForPath.filter((atom) => tracePriority(atom) === priority).map(lineWindowForAtom),
+    const windows = mergedPriorityWindows(
+      atomsForPath.filter((atom) => tracePriority(atom) === priority),
     );
     selected = selected
       .concat(nonOverlappingExcerptWindows(windows, selected))
