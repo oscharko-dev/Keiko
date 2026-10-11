@@ -3483,6 +3483,8 @@ interface ExcerptReadObservation {
 }
 
 export interface ExcerptReadSummary {
+  readonly bytesConsumed?: number | undefined;
+  readonly filesRead?: number | undefined;
   readonly observation?: ExcerptReadObservation | undefined;
   readonly omitted?: readonly OmittedContextEntry[] | undefined;
   readonly byteBudgetOmittedPaths?: readonly string[] | undefined;
@@ -7208,6 +7210,8 @@ function initialExcerptWaveState(
     excerpts,
     uncertainty,
     remainingBytes,
+    bytesConsumed: 0,
+    readPaths: new Set(),
     anchoredWindowCount: 0,
     elapsedBudgetBlocked: false,
     byteBudgetOmittedPaths: undefined,
@@ -7262,6 +7266,8 @@ function completedExcerptSummary(
   );
   return {
     excerpts: state.excerpts,
+    bytesConsumed: state.bytesConsumed,
+    filesRead: state.readPaths.size,
     uncertainty: state.uncertainty,
     observation: {
       ...excerptReadObservation(
@@ -7301,6 +7307,8 @@ interface ExcerptWaveState {
   readonly excerpts: Map<string, readonly ExcerptWindow[]>;
   readonly uncertainty: UncertaintyMarker[];
   remainingBytes: number;
+  bytesConsumed: number;
+  readonly readPaths: Set<string>;
   anchoredWindowCount: number;
   elapsedBudgetBlocked: boolean;
   byteBudgetOmittedPaths: readonly string[] | undefined;
@@ -7347,7 +7355,10 @@ function appendExcerptWave(
     if (previous !== undefined) subtractExcerptResultObservation(previous, state);
     state.coverageReserves.delete(scopePath);
     state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
-    state.remainingBytes -= result?.bytesConsumed ?? 0;
+    const bytesConsumed = result?.bytesConsumed ?? 0;
+    state.remainingBytes -= bytesConsumed;
+    state.bytesConsumed += bytesConsumed;
+    if (bytesConsumed > 0) state.readPaths.add(scopePath);
     if (result?.invalidatesPrevious === true) state.excerpts.delete(scopePath);
     const merged = mergeExcerptResult(previous, result);
     if (merged !== undefined) {
@@ -8161,12 +8172,30 @@ async function assemblePackFromReads(
     withoutMicroIndex(knownFitAssembleOptions(assembleOptions, rings)),
   );
   const pack = withRetrievalSourceDiagnostics(
-    assemble.pack,
+    withExcerptReadUsage(assemble.pack, prepared.initialUsage, excerptReads),
     inputs.sourceProgress,
     assembleOptions.nowMs(),
   );
   cacheAssembledGroundedPack(inputs, pack);
   return pack;
+}
+
+function withExcerptReadUsage(
+  pack: ConnectedContextPack,
+  initialUsage: ExplorationUsage,
+  reads: ExcerptReadSummary,
+): ConnectedContextPack {
+  return {
+    ...pack,
+    usage: {
+      ...pack.usage,
+      filesRead: Math.max(pack.usage.filesRead, initialUsage.filesRead + (reads.filesRead ?? 0)),
+      excerptBytes: Math.max(
+        pack.usage.excerptBytes,
+        initialUsage.excerptBytes + (reads.bytesConsumed ?? 0),
+      ),
+    },
+  };
 }
 
 function atomsForCurrentReadWindows(

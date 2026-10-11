@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as workspace from "@oscharko-dev/keiko-workspace";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  validateConnectedContextPack,
   type ConnectedContextPack,
   type EvidenceAtom,
   type ExplorationUsage,
@@ -22,6 +24,7 @@ import {
 } from "./grounded-orchestrator.js";
 import { selectGroundedCandidateFiles } from "./grounded-evidence-selection.js";
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
+import { remainingTurnBudget } from "./grounded-follow-up.js";
 import {
   collectDiscoveredSymbolTraceEvidence,
   GROUNDED_TRACE_SEARCH_LIMITS,
@@ -286,6 +289,7 @@ function readBytes(reads: ExcerptReadSummary): number {
 function actualPublicRetrieval(
   fixture: CoverageFixture,
   budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
+  activityLog = createBufferedServerLogSink(),
 ): ReturnType<typeof retrieveConnectedContextPack> {
   return retrieveConnectedContextPack(
     {
@@ -300,9 +304,63 @@ function actualPublicRetrieval(
       nowMs: () => NOW,
       detectWorkspace: () => fixture.searchScope.workspace,
       answerer: { answer: () => Promise.resolve("observed source") },
-      activityLog: createBufferedServerLogSink(),
+      activityLog,
     },
   );
+}
+
+function invalidatingExpansionRead(fixture: CoverageFixture): {
+  readonly bytes: Map<string, number>;
+  readonly invalidatedPath: () => string | undefined;
+  readonly restore: () => void;
+} {
+  const nativeRead = workspace.readExcerpt;
+  const bytes = new Map<string, number>();
+  let invalidated: string | undefined;
+  const spy = vi.spyOn(workspace, "readExcerpt").mockImplementation(async (...args) => {
+    const path = args[1].scopePath;
+    if (
+      invalidated === undefined &&
+      args[1].expectedSourceFingerprint !== undefined &&
+      (bytes.get(path) ?? 0) > 0
+    ) {
+      invalidated = path;
+      fixture.files[path] = "// replacement source after the initial guarded read";
+    }
+    const result = await nativeRead(...args);
+    if (args[1].rangeQueues === undefined) return result;
+    const consumed = (result.windows ?? [result]).reduce(
+      (total, window) => total + Buffer.byteLength(window.content),
+      0,
+    );
+    bytes.set(path, (bytes.get(path) ?? 0) + consumed);
+    return result;
+  });
+  return { bytes, invalidatedPath: () => invalidated, restore: () => spy.mockRestore() };
+}
+
+function remainingPublicReadGrant(
+  fixture: CoverageFixture,
+  result: Awaited<ReturnType<typeof retrieveConnectedContextPack>>,
+): ReturnType<typeof remainingTurnBudget> {
+  const initial = {
+    content: "No synthesis was requested",
+    usage: { promptTokens: 0, completionTokens: 0 },
+  };
+  return remainingTurnBudget({
+    input: {
+      scope: fixture.scope,
+      query: fixture.query,
+      workspaceRoot: fixture.searchScope.workspace.root,
+    },
+    deps: {},
+    pack: result.pack,
+    initial,
+    nowMs: () => NOW,
+    deadlineAtMs: Infinity,
+    retrieve: () => Promise.resolve(result),
+    answer: () => Promise.resolve(initial),
+  });
 }
 
 async function actualExplicitAtoms(fixture: CoverageFixture): Promise<readonly EvidenceAtom[]> {
@@ -845,6 +903,63 @@ describe("current route trace excerpt coverage", () => {
       expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
     },
   );
+  it("keeps guarded read charges after expansion invalidates the returned source", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      crossWaveCoverageFiles(),
+    );
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576, filesReadMax: 12 };
+    const observation = invalidatingExpansionRead(fixture);
+    const activityLog = createBufferedServerLogSink();
+    const result = await actualPublicRetrieval(fixture, budget, activityLog).finally(
+      observation.restore,
+    );
+    const invalidated = observation.invalidatedPath();
+    expect(invalidated).toBeDefined();
+    if (invalidated === undefined) throw new TypeError("fixture requires a real expansion read");
+    expect(observation.bytes.get(invalidated)).toBeGreaterThan(0);
+    expect(result.pack.files.some((file) => file.scopePath === invalidated)).toBe(false);
+    expect(result.pack.omitted.some((entry) => entry.scopePath === invalidated)).toBe(true);
+    const messages = buildGroundedGatewayMessages(
+      fixture.query.text,
+      result.pack,
+      (value) => value,
+    );
+    expect(JSON.stringify(messages)).not.toContain(
+      "replacement source after the initial guarded read",
+    );
+    const consumed = [...observation.bytes.values()].reduce((total, bytes) => total + bytes, 0);
+    const packed = result.pack.files
+      .flatMap((file) => file.excerpts)
+      .reduce((total, excerpt) => total + excerpt.contentBytes, 0);
+    expect(consumed).toBeGreaterThan(packed);
+    expect(consumed).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+    const remaining = remainingPublicReadGrant(fixture, result);
+    const filesRead = [...observation.bytes.values()].filter((bytes) => bytes > 0).length;
+    expect(
+      result.pack.usage.filesRead,
+      JSON.stringify({ filesRead, selected: result.pack.files.length }),
+    ).toBeGreaterThanOrEqual(filesRead);
+    expect(
+      result.pack.usage.excerptBytes,
+      JSON.stringify({
+        consumed,
+        packed,
+        remaining: remaining.excerptBytesMax,
+        invalidatedBytes: observation.bytes.get(invalidated),
+      }),
+    ).toBeGreaterThanOrEqual(consumed);
+    expect(
+      activityLog.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+    ).toMatchObject({
+      usageExcerptBytes: result.pack.usage.excerptBytes,
+      usageFilesRead: result.pack.usage.filesRead,
+    });
+    expect(remaining.excerptBytesMax).toBeLessThanOrEqual(budget.excerptBytesMax - consumed);
+    expect(remaining.filesReadMax).toBeLessThanOrEqual(budget.filesReadMax - filesRead);
+  });
+
   it("keeps an initial ordinary body when later expansion exhausts its shared grant", async () => {
     const fixture = await coverageFixture(
       "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
