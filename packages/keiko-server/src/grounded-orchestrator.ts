@@ -6261,9 +6261,24 @@ function relevantCoverageTargets(
     branch.push(entry);
     roots.set(root.definitionIdentity, branch);
   }
-  const queues = [...roots.values()].map((branch) =>
-    branch.sort((a, b) => b.atom.score - a.atom.score),
-  );
+  return interleavedCoverageTargets([...roots.values()].map(fairCoverageTargetsByPath));
+}
+
+function fairCoverageTargetsByPath(
+  entries: readonly RouteTraceCoverageEntry[],
+): readonly RouteTraceCoverageEntry[] {
+  const files = new Map<string, RouteTraceCoverageEntry[]>();
+  for (const entry of [...entries].sort((a, b) => b.atom.score - a.atom.score)) {
+    const queue = files.get(entry.atom.scopePath) ?? [];
+    queue.push(entry);
+    files.set(entry.atom.scopePath, queue);
+  }
+  return interleavedCoverageTargets([...files.values()]);
+}
+
+function interleavedCoverageTargets(
+  queues: readonly (readonly RouteTraceCoverageEntry[])[],
+): readonly RouteTraceCoverageEntry[] {
   const targets: RouteTraceCoverageEntry[] = [];
   for (let index = 0; queues.some((queue) => index < queue.length); index += 1)
     for (const queue of queues) {

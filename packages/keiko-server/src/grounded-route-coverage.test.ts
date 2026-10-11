@@ -441,6 +441,34 @@ function branchCoverageFiles(): Readonly<Record<string, string>> {
   return source;
 }
 
+function repeatedFileCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...configuredCoverageFiles() };
+  let implementation = files["src/implementation.ts"] ?? "";
+  for (let index = 0; index < 9; index += 1) {
+    delete files[`src/helper-${String(index)}.ts`];
+    implementation = implementation
+      .replace(
+        `import { bookkeeping${String(index)} as externalBookkeeping${String(index)} } from "./helper-${String(index)}.js";`,
+        "",
+      )
+      .replace(`  externalBookkeeping${String(index)}();`, "")
+      .replace(
+        bookkeepingBody(index),
+        bookkeepingBody(index).replace(
+          "  return false;",
+          [
+            "  // Scope admission recursive candidate discovery prompt fitting bookkeeping.",
+            "  // Scope admission recursive candidate discovery prompt fitting bookkeeping.",
+            "  // Scope admission recursive candidate discovery prompt fitting bookkeeping.",
+            "  return false;",
+          ].join("\n"),
+        ),
+      );
+  }
+  files["src/implementation.ts"] = implementation;
+  return files;
+}
+
 function ordinaryCoverageFiles(): Readonly<Record<string, string>> {
   const files = { ...branchCoverageFiles() };
   const ordinaryFact = "return scopeAdmissionBudget + promptFittingBudget;";
@@ -564,6 +592,39 @@ describe("current route trace excerpt coverage", () => {
     expect(prompt).toContain(TERMINAL_FACT);
     expect(prompt).toContain(SECOND_TERMINAL_FACT);
     expect(prompt).toContain(DESCENT_FACT);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+  });
+
+  it("shares one root's connected grant across files before repeated same-file targets", async () => {
+    const fixture = await coverageFixture(undefined, repeatedFileCoverageFiles());
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const target = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
+    const helpers = entries.filter(
+      (entry) =>
+        entry.atom.scopePath === "src/implementation.ts" &&
+        fixture.files[entry.atom.scopePath]
+          ?.split("\n")
+          .slice((entry.atom.lineRange?.startLine ?? 1) - 1, entry.atom.lineRange?.endLine)
+          .join("\n")
+          .includes("return false;"),
+    );
+    expect(target).toBeDefined();
+    if (target === undefined) throw new TypeError("fixture requires a connected target");
+    expect(target.atom.edge?.kind).toBe("reference");
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    expect(target.observedBytes).toBeGreaterThanOrEqual(
+      Buffer.byteLength(fixture.files["src/z-processing.ts"] ?? ""),
+    );
+    expect(helpers.length).toBe(9);
+    expect(helpers.every((entry) => entry.atom.score > target.atom.score)).toBe(true);
+    expect(
+      coverageRanking(fixture.trace.atoms).kept.some(
+        (entry) => entry.scopePath === target.atom.scopePath,
+      ),
+    ).toBe(true);
+    const reads = await coverageRead(fixture);
+    expect(readContent(reads, "src/implementation.ts")).toContain(CONNECTOR_FACT);
+    expect(await sentPrompt(fixture, reads)).toContain(DESCENT_FACT);
     expect(readBytes(reads)).toBeLessThanOrEqual(8192);
   });
 
