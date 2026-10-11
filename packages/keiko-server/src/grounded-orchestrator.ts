@@ -6299,13 +6299,101 @@ function fairCoverageEntries(
       opportunity.remainingBytes -= state.bytes - previousBytes;
     }
   }
-  const sharedTargets = interleavedCoverageTargets([
-    sharedCoverageTargets(entries, byIdentity),
-    targets,
-  ]);
-  for (const entry of sharedTargets)
-    admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs);
+  admitSharedCoverageEntries(entries, targets, byIdentity, state, totalBytes, inputs);
   return [...state.windows.values()].flat();
+}
+
+interface SharedCoverageAdmission {
+  readonly byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>;
+  readonly byPath: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
+  readonly state: CoverageAdmission;
+  readonly totalBytes: number;
+  readonly inputs: ExcerptInputs;
+}
+
+function admitSharedCoverageEntries(
+  entries: readonly RouteTraceCoverageEntry[],
+  targets: readonly RouteTraceCoverageEntry[],
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+  state: CoverageAdmission,
+  totalBytes: number,
+  inputs: ExcerptInputs,
+): void {
+  const ranked = sharedCoverageTargets(entries, byIdentity);
+  const byPath = new Map(
+    coverageTargetsByPath(connectedCoverageOrder(entries)).flatMap((queue) => {
+      const path = queue[0]?.atom.scopePath;
+      return path === undefined ? [] : [[path, queue] as const];
+    }),
+  );
+  const admission = { byIdentity, byPath, state, totalBytes, inputs };
+  for (let index = 0; index < Math.max(ranked.length, targets.length); index += 1)
+    admitSharedCoveragePrefix(ranked[index], targets[index], admission);
+}
+
+function copyCoverageAdmission(state: CoverageAdmission): CoverageAdmission {
+  return { windows: new Map(state.windows), bytes: state.bytes, targets: new Set(state.targets) };
+}
+
+function coverageAdmissionWithTarget(
+  state: CoverageAdmission,
+  entry: RouteTraceCoverageEntry | undefined,
+  admission: SharedCoverageAdmission,
+): CoverageAdmission | undefined {
+  const candidate = copyCoverageAdmission(state);
+  if (
+    entry !== undefined &&
+    !admitCoverageTarget(
+      entry,
+      admission.byIdentity,
+      candidate,
+      admission.totalBytes,
+      admission.inputs,
+    )
+  )
+    return undefined;
+  return candidate;
+}
+
+function sharedCoveragePrefix(
+  ranked: RouteTraceCoverageEntry | undefined,
+  admission: SharedCoverageAdmission,
+): readonly RouteTraceCoverageEntry[] {
+  if (ranked === undefined) return [];
+  return (admission.byPath.get(ranked.atom.scopePath) ?? []).filter(
+    (entry) => entry.atom.score >= ranked.atom.score,
+  );
+}
+
+function admitSharedCoveragePrefix(
+  ranked: RouteTraceCoverageEntry | undefined,
+  fair: RouteTraceCoverageEntry | undefined,
+  admission: SharedCoverageAdmission,
+): void {
+  const prefix = sharedCoveragePrefix(ranked, admission);
+  const proposal = copyCoverageAdmission(admission.state);
+  let joint: CoverageAdmission | undefined;
+  let admitted = false;
+  for (const entry of prefix) {
+    if (proposal.targets.has(entry.definitionIdentity)) continue;
+    if (
+      !admitCoverageTarget(
+        entry,
+        admission.byIdentity,
+        proposal,
+        admission.totalBytes,
+        admission.inputs,
+      )
+    )
+      continue;
+    admitted = true;
+    joint = coverageAdmissionWithTarget(proposal, fair, admission) ?? joint;
+  }
+  if (!admitted) joint = coverageAdmissionWithTarget(proposal, fair, admission);
+  const selected = joint ?? proposal;
+  admission.state.windows = selected.windows;
+  admission.state.bytes = selected.bytes;
+  for (const identity of selected.targets) admission.state.targets.add(identity);
 }
 
 function admitCoverageTarget(
