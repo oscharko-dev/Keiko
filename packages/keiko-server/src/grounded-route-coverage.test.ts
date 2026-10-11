@@ -494,7 +494,74 @@ function ordinaryCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function bulkyConnectorFiles(): Readonly<Record<string, string>> {
+  const files: Record<string, string> = {
+    "src/routes.ts": ['import { handleItem } from "./implementation.js";', REGISTRATION_FACT].join(
+      "\n",
+    ),
+    "src/implementation.ts": [
+      'import { stage0 } from "./stage-0.js";',
+      "export function handleItem() { return () => stage0(selectedRoot); }",
+    ].join("\n"),
+  };
+  for (let index = 0; index < 8; index += 1)
+    files[`src/stage-${String(index)}.ts`] = [
+      `import { stage${String(index + 1)} } from "./stage-${String(index + 1)}.js";`,
+      `export function stage${String(index)}(selectedRoot) {`,
+      ...Array.from({ length: 28 }, () => "  // unrelated bookkeeping for the existing ledger"),
+      `  return stage${String(index + 1)}(selectedRoot);`,
+      "}",
+    ].join("\n");
+  files["src/stage-8.ts"] = [
+    "export function stage8(selectedRoot) {",
+    "  // Scope admission recursive candidate discovery and prompt fitting.",
+    `  ${DESCENT_FACT}`,
+    "  return selectedRoot;",
+    "}",
+  ].join("\n");
+  return files;
+}
+
 describe("current route trace excerpt coverage", () => {
+  it("sends the full relevant target and observed connectors without funding unrelated ancestor bodies", async () => {
+    const fixture = await coverageFixture(undefined, bulkyConnectorFiles());
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const target = entries.find((entry) => entry.atom.scopePath === "src/stage-8.ts");
+    expect(target).toBeDefined();
+    if (target === undefined) throw new TypeError("fixture requires a current observed target");
+    expect(target.atom.edge?.kind).toBe("reference");
+    expect(
+      entries.every((entry) => fixture.trace.routeCoverage?.isCurrent(entry.atom) === true),
+    ).toBe(true);
+    expect(
+      entries.every(
+        (entry) =>
+          entry.observedBytes >=
+          Buffer.byteLength(
+            (fixture.files[entry.atom.scopePath] ?? "")
+              .split("\n")
+              .slice((entry.atom.lineRange?.startLine ?? 1) - 1, entry.atom.lineRange?.endLine)
+              .join("\n")
+              .trim(),
+          ),
+      ),
+    ).toBe(true);
+    expect(entries.reduce((sum, entry) => sum + entry.observedBytes, 0)).toBeGreaterThan(8192);
+    expect(
+      coverageRanking(fixture.trace.atoms).kept.some(
+        (entry) => entry.scopePath === target.atom.scopePath,
+      ),
+    ).toBe(true);
+    const reads = await coverageRead(fixture);
+    const prompt = await sentPrompt(fixture, reads);
+    expect(readContent(reads, "src/stage-8.ts")).toContain(fixture.files["src/stage-8.ts"]);
+    expect(prompt).toContain(DESCENT_FACT);
+    for (let index = 0; index < 8; index += 1)
+      expect(prompt).toContain(`return stage${String(index + 1)}(selectedRoot);`);
+    expect(prompt).toContain("return () => stage0(selectedRoot);");
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+  });
+
   it("shares the connected grant between two actual registered handler roots", async () => {
     const files = { ...branchCoverageFiles() };
     const secondFact = "return scopeAdmissionCompleted(selectedRoot);";
