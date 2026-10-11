@@ -6652,12 +6652,42 @@ function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): Excerp
   const atoms = inputs.atomsByPath.get(path) ?? [];
   const selection = excerptLineWindows(atoms);
   const entries = currentCoverageEntries(path, inputs);
-  if (entries === undefined) return selection;
+  if (entries === undefined) return ordinaryExcerptLineWindows(selection, atoms);
   return scheduledCoverageWindows(
     selection,
     atoms,
     entries.map((entry) => entry.lineRange),
   );
+}
+
+function ordinaryExcerptLineWindows(
+  selection: ExcerptWindowSelection,
+  atoms: readonly EvidenceAtom[],
+): ExcerptWindowSelection {
+  const ordinary = atoms.filter((atom) => atom.provenance.tool !== "discovered-symbol-definition");
+  if (ordinary.length === 0) return selection;
+  const anchors = atoms.filter(
+    (atom) =>
+      atom.provenance.tool === "discovered-symbol-definition" &&
+      atom.lineRange !== undefined &&
+      ordinary.some(
+        (candidate) =>
+          candidate.lineRange !== undefined &&
+          overlappingLineWindows(lineWindowForAtom(atom), candidate.lineRange),
+      ),
+  );
+  const explicit = ordinary.filter((atom) => atom.provenance.tool === "repo.selectedFile");
+  const prefix = prioritizedExcerptWindows(
+    anchors.length === 0 ? [] : excerptLineWindows(anchors).windows,
+    explicit.length === 0 ? [] : excerptLineWindows(explicit).windows,
+  );
+  return {
+    ...selection,
+    windows: prioritizedExcerptWindows(
+      [...excerptLineWindows(ordinary).windows, ...selection.windows],
+      prefix,
+    ),
+  };
 }
 
 function staleCoverageRead(
@@ -7182,7 +7212,7 @@ async function readKeptExcerpts(
     readInputs,
     readablePaths,
   );
-  const initialPaths = initialExcerptOpportunityPaths(readablePaths, readInputs);
+  const initialPaths = readablePaths;
   reserveInitialExcerptOpportunities(initialPaths, readInputs, state);
   await readExcerptWaves(initialPaths, { ...readInputs, firstExcerptRound: true }, state);
   state.coverageReserves.clear();
@@ -7375,19 +7405,6 @@ function appendExcerptWave(
     state.anchoredWindowCount += result.anchoredWindowCount;
     state.excerpts.set(scopePath, merged?.windows ?? result.windows);
   }
-}
-
-function initialExcerptOpportunityPaths(
-  paths: readonly string[],
-  inputs: ExcerptInputs,
-): readonly string[] {
-  return paths.filter(
-    (path) =>
-      inputs.coveragePlan?.eligiblePaths.has(path) === true ||
-      (inputs.atomsByPath.get(path) ?? []).some(
-        (atom) => atom.provenance.tool !== "discovered-symbol-definition",
-      ),
-  );
 }
 
 function reserveInitialExcerptOpportunities(

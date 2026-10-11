@@ -12,7 +12,12 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { assembleContextPack, rankCandidates } from "@oscharko-dev/keiko-workflows";
-import { readExcerpt, type SearchScope, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import {
+  readExcerpt,
+  type ReadExcerptRequest,
+  type SearchScope,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { endpointContractAdapter } from "@oscharko-dev/keiko-workspace";
 import { createStructuralAdapterRequestContext } from "@oscharko-dev/keiko-workspace/code-intelligence";
@@ -276,6 +281,54 @@ async function coverageRead(
   );
 }
 
+async function observedCoverageRead(
+  fixture: CoverageFixture,
+  options: CoverageReadOptions = {},
+): Promise<{
+  readonly reads: ExcerptReadSummary;
+  readonly requests: readonly ReadExcerptRequest[];
+}> {
+  const requests: ReadExcerptRequest[] = [];
+  const native = workspace.readExcerpt;
+  const observer = vi.spyOn(workspace, "readExcerpt").mockImplementation((...args) => {
+    requests.push(args[1]);
+    return native(...args);
+  });
+  try {
+    return { reads: await coverageRead(fixture, options), requests };
+  } finally {
+    observer.mockRestore();
+  }
+}
+
+function expectTargetCoverageFunding(
+  fixture: CoverageFixture,
+  requests: readonly ReadExcerptRequest[],
+  scopePath: string,
+  funded: boolean,
+): void {
+  const target = fixture.trace.routeCoverage?.entries.find(
+    (entry) => entry.atom.scopePath === scopePath,
+  );
+  const range = target?.atom.lineRange;
+  if (range === undefined)
+    throw new TypeError("fixture requires the actual target declaration range");
+  const targetRequests = requests.filter((request) => request.scopePath === scopePath);
+  expect(targetRequests.length).toBeGreaterThan(0);
+  if (funded) {
+    expect(
+      targetRequests.some((request) =>
+        request.ranges?.some(
+          (window) => window.startLine === range.startLine && window.endLine === range.endLine,
+        ),
+      ),
+    ).toBe(true);
+    return;
+  }
+  expect(targetRequests.every((request) => (request.ranges?.length ?? 0) === 0)).toBe(true);
+  expect(targetRequests.every((request) => request.rangeQueues?.length === 1)).toBe(true);
+}
+
 function readContent(reads: ExcerptReadSummary, path: string): string {
   return (reads.excerpts.get(path) ?? []).map((window) => window.content).join("\n");
 }
@@ -460,6 +513,29 @@ function allocationFiles(): Readonly<Record<string, string>> {
       "unrelated accounting detail.",
     );
   return source;
+}
+
+function disconnectedDefinitionFiles(): Readonly<Record<string, string>> {
+  return {
+    "src/routes.ts": [
+      'import { handleItem } from "./implementation.js";',
+      REGISTRATION_FACT,
+      ...Array.from(
+        { length: 100 },
+        () => "// Scope admission recursive candidate discovery prompt fitting bookkeeping.",
+      ),
+    ].join("\n"),
+    "src/implementation.ts": [
+      'import { finalizeRecord } from "./z-handler.js";',
+      "export function handleItem(value) { return finalizeRecord(value); }",
+    ].join("\n"),
+    "src/z-handler.ts": [
+      "export function finalizeRecord(value) {",
+      "  const normalized = String(value);",
+      "  return normalized.trim();",
+      "}",
+    ].join("\n"),
+  };
 }
 
 async function allocationAtoms(fixture: CoverageFixture): Promise<readonly EvidenceAtom[]> {
@@ -859,6 +935,55 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("retains ordinary opportunity for a selected definition when route coverage is absent", async () => {
+    const fixture = await coverageFixture(undefined, disconnectedDefinitionFiles());
+    const atoms = await allocationAtoms(fixture);
+    const target = fixture.trace.routeCoverage?.entries.find(
+      (entry) => entry.atom.scopePath === "src/z-handler.ts",
+    );
+    const range = target?.atom.lineRange;
+    if (target === undefined || range === undefined)
+      throw new TypeError("fixture requires the current registered handler definition");
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    expect(target.atom.provenance.tool).toBe("discovered-symbol-definition");
+    const targetAtoms = atoms.filter((atom) => atom.scopePath === target.atom.scopePath);
+    expect(targetAtoms.length).toBeGreaterThan(0);
+    expect(
+      targetAtoms.every((atom) => atom.provenance.tool === "discovered-symbol-definition"),
+    ).toBe(true);
+    expect(
+      coverageRanking(atoms).kept.some(
+        (candidate) => candidate.scopePath === target.atom.scopePath,
+      ),
+    ).toBe(true);
+    const body = (fixture.files[target.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine)
+      .join("\n");
+    expect(target.observedBytes).toBe(Buffer.byteLength(body));
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 1536 };
+    for (const coverage of [fixture.trace.routeCoverage, undefined]) {
+      const reads = await coverageRead(fixture, {
+        atoms,
+        inputs: { routeCoverage: coverage, budget },
+      });
+      const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+      const prompt = await sentPrompt(fixture, reads, atoms, budget);
+      expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      expect(prompt).toContain(REGISTRATION_FACT);
+      expect(
+        reads.excerpts.get(target.atom.scopePath)?.some((view) => view.content.includes(body)),
+      ).toBe(true);
+      expect(
+        pack.files
+          .find((file) => file.scopePath === target.atom.scopePath)
+          ?.excerpts.some((excerpt) => excerpt.content.includes(body)),
+      ).toBe(true);
+      for (const [offset, line] of body.split("\n").entries())
+        expect(prompt).toContain(`${String(range.startLine + offset)} | ${line}`);
+    }
+  });
+
   it.each([false, true])(
     "preserves the selected ordinary body across later reader waves (coverage=%s)",
     async (coverage) => {
@@ -1449,7 +1574,8 @@ describe("current route trace excerpt coverage", () => {
     const singleReadCount = fixture.reads.get("/workspace/src/z-processing.ts");
     expect(singleReadCount).toBeGreaterThan(0);
     fixture.reads.clear();
-    const reads = await coverageRead(fixture);
+    const { reads, requests } = await observedCoverageRead(fixture);
+    expectTargetCoverageFunding(fixture, requests, "src/z-processing.ts", true);
     expect(readContent(reads, "src/z-processing.ts")).toContain(DESCENT_FACT);
     expect(await sentPrompt(fixture, reads)).toContain(DESCENT_FACT);
     expect(fixture.reads.size).toBeGreaterThan(0);
@@ -1484,8 +1610,9 @@ describe("current route trace excerpt coverage", () => {
               provenance: { ...atom.provenance, queryFingerprint: "foreign-query" },
             }))
           : fixture.trace.atoms;
-      const reads = await coverageRead(fixture, { atoms, inputs });
-      expect(readContent(reads, "src/z-processing.ts")).not.toContain(DESCENT_FACT);
+      const { reads, requests } = await observedCoverageRead(fixture, { atoms, inputs });
+      expectTargetCoverageFunding(fixture, requests, "src/z-processing.ts", false);
+      expect(readContent(reads, "src/z-processing.ts")).toContain(DESCENT_FACT);
       expect(readBytes(reads)).toBeLessThanOrEqual(8192);
     },
   );
@@ -1504,16 +1631,18 @@ describe("current route trace excerpt coverage", () => {
     expect(parent).toBeDefined();
     const atoms = fixture.trace.atoms.filter((atom) => atom.stableId !== parent?.atom.stableId);
     expect(atoms.length).toBeLessThan(fixture.trace.atoms.length);
-    const disconnected = await coverageRead(fixture, { atoms });
-    expect(readContent(disconnected, "src/z-processing.ts")).not.toContain(DESCENT_FACT);
+    const { reads: disconnected, requests } = await observedCoverageRead(fixture, { atoms });
+    expectTargetCoverageFunding(fixture, requests, "src/z-processing.ts", false);
+    expect(readContent(disconnected, "src/z-processing.ts")).toContain(DESCENT_FACT);
   });
 
   it("does not retain the priority of an indexed definition after its source changes", async () => {
     const fixture = await coverageFixture();
     fixture.files["src/implementation.ts"] =
       (fixture.files["src/implementation.ts"] ?? "") + "\n// changed after trace admission";
-    const reads = await coverageRead(fixture);
-    expect(readContent(reads, "src/z-processing.ts")).not.toContain(DESCENT_FACT);
+    const { reads, requests } = await observedCoverageRead(fixture);
+    expectTargetCoverageFunding(fixture, requests, "src/z-processing.ts", false);
+    expect(readContent(reads, "src/z-processing.ts")).toContain(DESCENT_FACT);
     expect(readBytes(reads)).toBeLessThanOrEqual(8192);
   });
 
