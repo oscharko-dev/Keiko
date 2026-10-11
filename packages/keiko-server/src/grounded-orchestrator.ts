@@ -6371,12 +6371,21 @@ function coverageAdmissionWithOwnedContinuation(
   let parent = entry;
   const seen = new Set([entry.definitionIdentity]);
   let threshold: number | undefined = minimumScore;
+  let requireBranch = true;
   for (;;) {
-    const next = nextOwnedCoverageContinuation(selected, parent, seen, admission, threshold);
+    const next = nextOwnedCoverageContinuation(
+      selected,
+      parent,
+      seen,
+      admission,
+      threshold,
+      requireBranch,
+    );
     if (next === undefined) return selected;
     selected = next.state;
     parent = next.entry;
     threshold = undefined;
+    requireBranch = false;
   }
 }
 
@@ -6386,33 +6395,49 @@ function nextOwnedCoverageContinuation(
   seen: Set<string>,
   admission: SharedCoverageAdmission,
   minimumScore: number | undefined,
+  requireBranch: boolean,
 ): { readonly state: CoverageAdmission; readonly entry: RouteTraceCoverageEntry } | undefined {
-  const pending = [...(admission.ownedChildren.get(parent.definitionIdentity) ?? [])].reverse();
+  const pending = ownedCoverageContinuationChildren(parent, minimumScore, admission).reverse();
   while (pending.length > 0) {
-    const entry = pending.pop();
-    if (entry === undefined) continue;
+    const next = pending.pop();
+    if (next === undefined) continue;
+    const { entry, minimumScore: threshold } = next;
     if (seen.has(entry.definitionIdentity)) continue;
     seen.add(entry.definitionIdentity);
     if (state.targets.has(entry.definitionIdentity)) {
-      pending.push(...[...(admission.ownedChildren.get(entry.definitionIdentity) ?? [])].reverse());
+      const nextThreshold = canStartOwnedCoverageContinuation(entry, threshold, admission)
+        ? undefined
+        : threshold;
+      pending.push(...ownedCoverageContinuationChildren(entry, nextThreshold, admission).reverse());
       continue;
     }
-    if (!canStartOwnedCoverageContinuation(entry, minimumScore, admission)) continue;
+    if (!canStartOwnedCoverageContinuation(entry, threshold, admission, requireBranch)) continue;
     const candidate = coverageAdmissionWithTarget(state, entry, admission);
     if (candidate !== undefined) return { state: candidate, entry };
   }
   return undefined;
 }
 
+function ownedCoverageContinuationChildren(
+  parent: RouteTraceCoverageEntry,
+  minimumScore: number | undefined,
+  admission: SharedCoverageAdmission,
+): { readonly entry: RouteTraceCoverageEntry; readonly minimumScore: number | undefined }[] {
+  return (admission.ownedChildren.get(parent.definitionIdentity) ?? []).map((entry) => ({
+    entry,
+    minimumScore,
+  }));
+}
+
 function canStartOwnedCoverageContinuation(
   entry: RouteTraceCoverageEntry,
   minimumScore: number | undefined,
   admission: SharedCoverageAdmission,
+  requireBranch = true,
 ): boolean {
   return (
-    minimumScore === undefined ||
-    (entry.atom.score >= minimumScore &&
-      (admission.ownedChildren.get(entry.definitionIdentity)?.length ?? 0) > 0)
+    (minimumScore === undefined || entry.atom.score >= minimumScore) &&
+    (!requireBranch || (admission.ownedChildren.get(entry.definitionIdentity)?.length ?? 0) > 0)
   );
 }
 
@@ -6458,14 +6483,14 @@ function coverageAdmissionWithFairTarget(
         state,
         entry,
         admission,
-        coverageFileHeadScore(entry, admission),
+        coverageFileHeadScore(ranked ?? entry, admission),
       );
       if (continuation.targets.size > state.targets.size) return continuation;
       continue;
     }
     const candidate = coverageAdmissionWithCompetingFairTarget(state, ranked, entry, admission);
     if (candidate !== undefined)
-      return coverageAdmissionWithOwnedOpportunity(candidate, entry, targets, admission);
+      return coverageAdmissionWithOwnedOpportunity(candidate, entry, targets, admission, ranked);
   }
   return undefined;
 }
@@ -6475,11 +6500,21 @@ function coverageAdmissionWithOwnedOpportunity(
   fair: RouteTraceCoverageEntry,
   targets: readonly RouteTraceCoverageEntry[],
   admission: SharedCoverageAdmission,
+  ranked: RouteTraceCoverageEntry | undefined,
 ): CoverageAdmission {
   const threshold = coverageFileHeadScore(fair, admission);
   const own = coverageAdmissionWithOwnedContinuation(state, fair, admission, threshold);
   if (own.targets.size > state.targets.size) return own;
-  for (const parent of targets) {
+  const parents =
+    ranked === undefined
+      ? targets
+      : [
+          ...targets,
+          ...(admission.byPath.get(ranked.atom.scopePath) ?? []).filter((entry) =>
+            admission.state.targets.has(entry.definitionIdentity),
+          ),
+        ];
+  for (const parent of parents) {
     if (
       !state.targets.has(parent.definitionIdentity) ||
       coverageFileHeadScore(parent, admission) < threshold
@@ -6537,8 +6572,17 @@ function sharedCoverageFairTargets(
         : [];
     }),
   );
+  const minimumScore = fair.reduce(
+    (score, entry) =>
+      fundedPaths.has(entry.atom.scopePath)
+        ? score
+        : Math.min(score, coverageFileHeadScore(entry, admission)),
+    coverageFileHeadScore(ranked, admission),
+  );
   const pending = fair
-    .filter((entry) => isPendingCoverageFairTarget(entry, ranked, fundedPaths, admission))
+    .filter((entry) =>
+      isPendingCoverageFairTarget(entry, ranked, fundedPaths, admission, minimumScore),
+    )
     .sort(
       (left, right) =>
         coverageFileHeadScore(right, admission) - coverageFileHeadScore(left, admission),
@@ -6554,31 +6598,36 @@ function isPendingCoverageFairTarget(
   ranked: RouteTraceCoverageEntry,
   fundedPaths: ReadonlySet<string>,
   admission: SharedCoverageAdmission,
+  minimumScore: number,
 ): boolean {
   return (
     entry.atom.scopePath !== ranked.atom.scopePath &&
     (!fundedPaths.has(entry.atom.scopePath) ||
       (admission.state.targets.has(entry.definitionIdentity) &&
-        hasPendingOwnedCoverageContinuation(entry, admission)))
+        hasPendingOwnedCoverageContinuation(entry, admission, minimumScore)))
   );
 }
 
 function hasPendingOwnedCoverageContinuation(
   entry: RouteTraceCoverageEntry,
   admission: SharedCoverageAdmission,
+  minimumScore: number,
 ): boolean {
-  const pending = [...(admission.ownedChildren.get(entry.definitionIdentity) ?? [])];
+  const pending = ownedCoverageContinuationChildren(entry, minimumScore, admission);
   const seen = new Set([entry.definitionIdentity]);
-  const threshold = coverageFileHeadScore(entry, admission);
   while (pending.length > 0) {
-    const child = pending.pop();
-    if (child === undefined || seen.has(child.definitionIdentity)) continue;
+    const next = pending.pop();
+    if (next === undefined || seen.has(next.entry.definitionIdentity)) continue;
+    const { entry: child, minimumScore: threshold } = next;
     seen.add(child.definitionIdentity);
     if (!admission.state.targets.has(child.definitionIdentity)) {
       if (canStartOwnedCoverageContinuation(child, threshold, admission)) return true;
       continue;
     }
-    pending.push(...(admission.ownedChildren.get(child.definitionIdentity) ?? []));
+    const nextThreshold = canStartOwnedCoverageContinuation(child, threshold, admission)
+      ? undefined
+      : threshold;
+    pending.push(...ownedCoverageContinuationChildren(child, nextThreshold, admission));
   }
   return false;
 }

@@ -63,7 +63,7 @@ interface CoverageFixture {
 }
 
 interface CoverageReadOptions {
-  readonly paths?: readonly string[];
+  readonly paths?: readonly string[] | undefined;
   readonly atoms?: readonly EvidenceAtom[];
   readonly inputs?: Partial<ExcerptInputs>;
 }
@@ -638,6 +638,32 @@ function finiteOwnedContinuationFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function fundedHeadContinuationFiles(): Readonly<Record<string, string>> {
+  const files = { ...finiteOwnedContinuationFiles() };
+  const scan = (files["src/inventory-scan.ts"] ?? "").replace(
+    "  const inventory = discoverEntries(root);",
+    "  const scopeAdmissionBudget = 1024;\n  const inventory = discoverEntries(root);",
+  );
+  files["src/implementation.ts"] = [
+    'import { discoverEntries } from "./inventory-walk.js";',
+    (files["src/implementation.ts"] ?? "").replace(
+      'import { collectInventory } from "./inventory-scan.js";\n',
+      "",
+    ),
+    ...Array.from({ length: 30 }, () => "// Separate the current owned source declarations."),
+    scan.replace('import { discoverEntries } from "./inventory-walk.js";\n', ""),
+  ].join("\n");
+  delete files["src/inventory-scan.ts"];
+  for (let index = 0; index < 9; index += 1)
+    files[`src/record-${String(index)}.ts`] = (
+      files[`src/record-${String(index)}.ts`] ?? ""
+    ).replace(
+      "  return value;",
+      "  const scopeAdmissionBudget = 1024;\n  return scopeAdmissionBudget + value;",
+    );
+  return files;
+}
+
 function finiteInventoryWalkSource(): string {
   const separation = Array.from({ length: 24 }, () => "// Separate selected declarations.");
   const detail = Array.from(
@@ -822,6 +848,49 @@ async function expectFiniteOwnedContinuationRead(
   const metadata = finiteOwnedContinuationMetadata(reads, requests, watched, restricted);
   for (const view of watched)
     expectFiniteOwnedContinuationBody(reads, pack, prompt, requests, view, metadata);
+}
+
+function expectBorrowedHeadContinuationBody(
+  reads: ExcerptReadSummary,
+  pack: ConnectedContextPack,
+  prompt: string,
+  { entry, range, lines, body }: FiniteOwnedContinuationView,
+  metadata: string,
+): void {
+  expect(readContent(reads, entry.atom.scopePath).includes(body), metadata).toBe(true);
+  expect(
+    pack.files
+      .find((file) => file.scopePath === entry.atom.scopePath)
+      ?.excerpts.some((view) => view.content.includes(body)),
+    metadata,
+  ).toBe(true);
+  for (const [lineIndex, line] of lines.entries())
+    expect(prompt, metadata).toContain(`${String(range.startLine + lineIndex)} | ${line}`);
+}
+
+async function expectBorrowedHeadContinuationRead(
+  fixture: CoverageFixture,
+  atoms: readonly EvidenceAtom[],
+  budget: typeof DEFAULT_EXPLORATION_BUDGET,
+  watched: readonly FiniteOwnedContinuationView[],
+  requiredFunding: ReadonlySet<string>,
+  restricted: readonly string[] | undefined,
+): Promise<void> {
+  const { reads, requests } = await observedCoverageRead(fixture, {
+    paths: restricted,
+    atoms,
+    inputs: { budget },
+  });
+  const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+  const prompt = await sentPrompt(fixture, reads, atoms, budget);
+  expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+  expect(requests.every((request) => request.maxBytes <= 8192)).toBe(true);
+  const metadata = finiteOwnedContinuationMetadata(reads, requests, watched, restricted);
+  for (const view of watched) {
+    expectBorrowedHeadContinuationBody(reads, pack, prompt, view, metadata);
+    if (requiredFunding.has(view.entry.definitionIdentity))
+      expectFiniteOwnedContinuationBody(reads, pack, prompt, requests, view, metadata);
+  }
 }
 
 function returnedContinuationFiles(): Readonly<Record<string, string>> {
@@ -3073,6 +3142,63 @@ describe("current route trace excerpt coverage", () => {
       await expectFiniteOwnedContinuationRead(fixture, atoms, budget, watched, restricted);
     expect(JSON.stringify(atoms)).toBe(originalAtoms);
     expect(JSON.stringify(fixture.trace.uncertainty)).toBe(originalUncertainty);
+  });
+
+  it("borrows an external file head threshold for a pending owned branch beneath a funded head", async () => {
+    const fixture = await coverageFixture(undefined, fundedHeadContinuationFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const index = await fixture.requestContext.codeIntelligenceIndex();
+    const branch = ["collectInventory", "discoverEntries", "descend", "handleEntry"].map((name) =>
+      finiteOwnedContinuationEntry(fixture, entries, index, name),
+    );
+    const seed = requirePendingBodyFixtureEntry(branch[0], "the actual owned branch seed");
+    const prefix = entries.filter((entry) =>
+      /^function scopeAdmissionAndPromptFitting\d+\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    const head = requirePendingBodyFixtureEntry(
+      entries.find(
+        (entry) =>
+          entry.atom.scopePath === seed.atom.scopePath && entry.parentIdentity === undefined,
+      ),
+      "the selected physical root head",
+    );
+    const borrowers = entries.filter((entry) =>
+      /^src\/record-\d+\.ts$/u.test(entry.atom.scopePath),
+    );
+    expect(borrowers).toHaveLength(9);
+    expect(seed.atom.score).toBeLessThan(head.atom.score);
+    expect(borrowers.every((entry) => seed.atom.score >= entry.atom.score)).toBe(true);
+    expect(branch.every((entry) => entry.parentWitness?.ownedSourceCall === true)).toBe(true);
+    const watched = finiteOwnedContinuationViews(fixture, entries, prefix, branch);
+    const headRange = requirePendingBodyFixtureEntry(head.atom.lineRange, "the complete root head");
+    const headLines = (fixture.files[head.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(headRange.startLine - 1, headRange.endLine);
+    const protectedViews = [
+      { entry: head, range: headRange, lines: headLines, body: headLines.join("\n") },
+      ...watched,
+    ];
+    const paths = [
+      ...new Set(["src/routes.ts", ...watched.map(({ entry }) => entry.atom.scopePath)]),
+    ];
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    const requiredFunding = new Set([head, ...branch].map((entry) => entry.definitionIdentity));
+    for (const restricted of [paths, undefined])
+      await expectBorrowedHeadContinuationRead(
+        fixture,
+        atoms,
+        budget,
+        protectedViews,
+        requiredFunding,
+        restricted,
+      );
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
   });
 
   it("keeps a returned continuation before higher-scoring shallow called targets", async () => {
