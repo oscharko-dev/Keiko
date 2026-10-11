@@ -4,6 +4,8 @@ import { URL } from "node:url";
 import { assessPolicyDiagnostics, validatePolicy } from "../lib/code-quality-policy.mjs";
 import { classifyPolicyPath, selectPolicyScope } from "../lib/code-quality-inventory.mjs";
 
+import { publicParserRecord } from "./support/code-quality-symbol-fixture.mjs";
+
 const policy = JSON.parse(readFileSync(new URL("../code-quality-policy.json", import.meta.url)));
 const files = [
   { path: "src/main.ts", scope: "root-product", production: true },
@@ -155,4 +157,27 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       ),
     ).toThrow();
   });
+});
+
+describe("closed public parser schema (#3918)", () => {
+  it("accepts only the exact first parser obligation", () => {
+    const candidate = { ...policy, responsibilities: [publicParserRecord()] };
+    expect(validatePolicy(candidate)).toEqual([]);
+    candidate.responsibilities[0].rules.push("anti-slop/no-unknown-returns");
+    expect(validatePolicy(candidate)).toContain("invalid-responsibilities");
+  });
+  it.each(["parameter", "consumer", "extra", "removed", "rebound"])(
+    "refuses %s parser contract drift",
+    (variant) => {
+      const candidate = { ...policy, responsibilities: [publicParserRecord()] };
+      const baseline = structuredClone(candidate);
+      const record = candidate.responsibilities[0];
+      if (variant === "parameter") record.input.parameterIndex = 1;
+      if (variant === "consumer") delete record.consumer.kind;
+      if (variant === "extra") record.authorized = true;
+      if (variant === "removed") candidate.responsibilities = [];
+      if (variant === "rebound") record.kind = "diagnostic-checker";
+      expect(validatePolicy(candidate, [baseline]).length).toBeGreaterThan(0);
+    },
+  );
 });

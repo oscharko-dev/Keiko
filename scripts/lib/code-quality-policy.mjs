@@ -127,6 +127,21 @@ function validPath(value) {
   );
 }
 
+function validPublicParserRules(record) {
+  return (
+    record.kind !== "public-parser" ||
+    (record.rules.length === 1 &&
+      record.rules[0] === "anti-slop/no-unknown-parameters" &&
+      record.input?.parameterIndex === 0)
+  );
+}
+
+function validResponsibilityConsumer(record) {
+  return ["diagnostic-checker", "public-parser"].includes(record.kind)
+    ? validDiagnosticConsumer(record.consumer)
+    : validConsumerSelector(record.consumer);
+}
+
 function validResponsibility(record) {
   const keys = [
     "id",
@@ -143,13 +158,14 @@ function validResponsibility(record) {
     exactKeys(record, keys) &&
     boundedText(record.id, 128) &&
     boundedText(record.owner, 256) &&
-    ["validator", "structural-redactor", "diagnostic-checker"].includes(record.kind) &&
+    ["validator", "structural-redactor", "diagnostic-checker", "public-parser"].includes(
+      record.kind,
+    ) &&
     validResponsibilityRules(record.rules) &&
+    validPublicParserRules(record) &&
     validSelector(record.input, true) &&
     [record.transform, record.output].every((selector) => validSelector(selector)) &&
-    (record.kind === "diagnostic-checker"
-      ? validDiagnosticConsumer(record.consumer)
-      : validConsumerSelector(record.consumer)) &&
+    validResponsibilityConsumer(record) &&
     validProofs(record.proofs)
   );
 }

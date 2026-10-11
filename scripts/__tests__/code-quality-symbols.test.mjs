@@ -21,6 +21,7 @@ import {
   createRawHelperEnforcementFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 import {
+  createPublicParserFixture,
   createSymbolFixture,
   emitSymbolFixture,
   packSymbolFixture,
@@ -1705,4 +1706,128 @@ describe("dictionary bounded refusal controls (#3918)", () => {
     },
     30_000,
   );
+});
+
+describe("public parser symbol and runtime binding (#3918)", () => {
+  it("binds the actual named public subpath and unchanged runtime results", async () => {
+    const own = createPublicParserFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+    const binding = own.resolver.parserBinding(own.record.consumer, producer);
+    expect(binding).toMatchObject({ bound: true, status: "ready" });
+    const runtime = await import(
+      pathToFileURL(join(own.root, "packages/alpha/src/proof.test.ts")).href
+    );
+    expect(runtime.publicParse(7)).toEqual({ ok: true, value: 7 });
+    expect(runtime.publicParse(null)).toEqual({ ok: false, errors: ["invalid"] });
+  });
+  it.each([{ nodes: 1 }, { sourceBytes: 1 }, { emitBytes: 1 }])(
+    "retains actual configured parser budgets %j",
+    async (options) => {
+      const own = createPublicParserFixture();
+      fixtures.push(own);
+      const subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(subject, options, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow();
+    },
+  );
+  it("rechecks proof/runtime snapshots and never shares mutable binding facts", async () => {
+    const own = createPublicParserFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+    const first = own.resolver.parserBinding(own.record.consumer, producer);
+    first.bound = false;
+    expect(own.resolver.parserBinding(own.record.consumer, producer).bound).toBe(true);
+    own.put(
+      own.record.consumer.consumerPath,
+      readFileSync(join(own.root, own.record.consumer.consumerPath), "utf8") + "\n",
+    );
+    expect(() => own.resolver.parserBinding(own.record.consumer, producer)).toThrow();
+  });
+});
+
+describe("public parser separate executed controls (#3918)", () => {
+  it.each(["unknown", "any"])(
+    "rejects declaration-only nested %s weakening through the strict owning proof",
+    async (erasure) => {
+      const own = createPublicParserFixture("nested-typed");
+      fixtures.push(own);
+      const proof =
+        readFileSync(join(own.root, own.record.consumer.consumerPath), "utf8") +
+        `
+      type Nested = Extract<ParseResult, { ok: true }>["value"]["nested"];
+      type IsAny<T> = 0 extends (1 & T) ? true : false;
+      export const retainedType: IsAny<Nested> = false;
+      export function nestedNumber(result: ParseResult): number {
+        if (!result.ok) throw new TypeError("invalid");
+        return result.value.nested;
+      }
+    `;
+      own.put(own.record.consumer.consumerPath, proof);
+      let subject = await collectPolicySubject(own.root);
+      let resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      try {
+        expect(resolver.resolveProofConsumer(own.record.consumer).signatures).toHaveLength(1);
+      } finally {
+        resolver.close();
+      }
+      const owner = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+      own.put("packages/alpha/src/owner.ts", owner.replace("nested: number", `nested: ${erasure}`));
+      emitSymbolFixture(own.root);
+      const runtime = await import(
+        pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+      );
+      expect(runtime.validate(7)).toEqual({ ok: true, value: { nested: 7 } });
+      subject = await collectPolicySubject(own.root);
+      resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      try {
+        expect(() => resolver.resolveProofConsumer(own.record.consumer)).toThrow(
+          "unqualified-proof-context",
+        );
+      } finally {
+        resolver.close();
+      }
+    },
+  );
+  it("rejects a same-signature unchecked body through actual public runtime assertions", async () => {
+    const own = createPublicParserFixture();
+    fixtures.push(own);
+    const owner = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    own.put(
+      "packages/alpha/src/owner.ts",
+      owner.replace('{ ok: false, errors: ["invalid"] }', "{ ok: true, value: 0 }"),
+    );
+    emitSymbolFixture(own.root);
+    const runtime = await import(
+      pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+    );
+    expect(runtime.validate(7)).toEqual({ ok: true, value: 7 });
+    expect(() =>
+      expect(runtime.validate(null)).toEqual({ ok: false, errors: ["invalid"] }),
+    ).toThrow();
+    const subject = await collectPolicySubject(own.root);
+    const resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    try {
+      const producer = resolver.resolveProofExport(own.record.input).identities[0];
+      expect(resolver.parserBinding(own.record.consumer, producer).status).toBe("ready");
+    } finally {
+      resolver.close();
+    }
+  });
 });

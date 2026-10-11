@@ -7,7 +7,10 @@ import { codeQualityPolicyMain, executeCodeQualityPolicy } from "../check-code-q
 import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
 import { assessPolicyResponsibilities } from "../lib/code-quality-responsibilities.mjs";
-import { emitSymbolFixture } from "./support/code-quality-symbol-fixture.mjs";
+import {
+  createPublicParserFixture,
+  emitSymbolFixture,
+} from "./support/code-quality-symbol-fixture.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import { deepRedactStrings, createAuditRedactor } from "@oscharko-dev/keiko-security/redaction";
 import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
@@ -1402,5 +1405,149 @@ describe("dictionary actual Native refusal controls (#3918)", () => {
       expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
     },
     60_000,
+  );
+});
+
+describe("closed public parser responsibility (#3918)", () => {
+  it.each([
+    "direct",
+    "typed-index",
+    "recursive",
+    "nested-unknown",
+    "instantiated-result",
+    "result-alias",
+  ])("keeps %s shallow facts structural-ready and semantics pending", async (variant) => {
+    const own = createPublicParserFixture(variant);
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("ready");
+    expect(report.assessments[0].proofs[0].executed).toBe(false);
+    expect(report.counts).toMatchObject({ qualified: 0, pending: 1 });
+  });
+  it.each(["unknown", "any", "unknown-index", "any-index"])(
+    "rejects immediate %s output",
+    async (variant) => {
+      const own = createPublicParserFixture(variant);
+      roots.push(own.root);
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.assessments[0].structural).toBe("invalid");
+      expect(report.assessments[0].reasons).toContain("unchecked-public-parser-output");
+      expect(report.counts.rejected).toBe(1);
+    },
+  );
+  it.each(["optional-value", "extra-envelope", "mutable-errors"])(
+    "keeps unsupported %s envelope incomplete",
+    async (variant) => {
+      const own = createPublicParserFixture(variant);
+      roots.push(own.root);
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.assessments[0].structural).toBe("incomplete");
+      expect(report.counts.pending).toBe(1);
+    },
+  );
+  it.each([
+    "constant",
+    "discarded",
+    "input",
+    "mutable",
+    "asserted",
+    "nonnull",
+    "satisfies",
+    "nested",
+    "extra",
+    "destructured",
+    "alias",
+    "counterfeit",
+    "asserted-result",
+    "asserted-return",
+    "annotated-local",
+    "counterfeit-type",
+  ])("never adapts %s forwarding", async (variant) => {
+    const own = createPublicParserFixture(variant);
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).not.toBe("ready");
+    expect(report.assessments[0].slots ?? []).toEqual([]);
+    expect(report.counts.qualified).toBe(0);
+  });
+  it("requires same owner, declared proof, actual selector and complete producer scope", async () => {
+    const own = createPublicParserFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const partial = assessPolicyResponsibilities(
+      subject,
+      own.policy,
+      subject.inventory.files.filter((file) => file.path !== "packages/alpha/src/owner.ts"),
+    );
+    expect(partial.assessments[0].reasons).toContain("partial-responsibility-scope");
+    own.record.consumer.specifier = "alpha";
+    expect(assessPolicyResponsibilities(subject, own.policy).assessments[0].structural).not.toBe(
+      "ready",
+    );
+    own.record.consumer.specifier = "alpha/runtime";
+    own.record.proofs = ["packages/alpha/src/absent.test.ts"];
+    expect(assessPolicyResponsibilities(subject, own.policy).assessments[0].structural).toBe(
+      "incomplete",
+    );
+  });
+});
+
+describe("public parser owner and export refusal (#3918)", () => {
+  it("compiles the genuine foreign proof before refusing its owner", async () => {
+    const own = createPublicParserFixture("foreign-proof");
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/beta", paths: own.record.proofs },
+    ]);
+    try {
+      expect(resolver.resolveProofConsumer(own.record.consumer).identities[0].owner).toBe("beta");
+      expect(resolver.resolveProofExport(own.record.input).identities[0].owner).toBe("alpha");
+    } finally {
+      resolver.close();
+    }
+    expect(assessPolicyResponsibilities(subject, own.policy).assessments[0].reasons).toContain(
+      "foreign-responsibility-owner",
+    );
+  });
+  it("refuses a type-only public entry with a type-correct proof", async () => {
+    const own = createPublicParserFixture("type-only");
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    try {
+      expect(resolver.resolveProofConsumer(own.record.consumer).signatures).toHaveLength(1);
+    } finally {
+      resolver.close();
+    }
+    expect(assessPolicyResponsibilities(subject, own.policy).assessments[0].structural).toBe(
+      "incomplete",
+    );
+  });
+});
+
+describe("public parser canonical producer premises (#3918)", () => {
+  it.each(["generic", "explicit-this"])(
+    "keeps %s producer unsupported without raw slots",
+    async (variant) => {
+      const own = createPublicParserFixture(variant);
+      roots.push(own.root);
+      const subject = await collectPolicySubject(own.root);
+      const resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      try {
+        expect(resolver.resolveProofConsumer(own.record.consumer).signatures).toHaveLength(1);
+        expect(resolver.resolveProofExport(own.record.input).signatures).toHaveLength(1);
+      } finally {
+        resolver.close();
+      }
+      const report = assessPolicyResponsibilities(subject, own.policy);
+      expect(report.assessments[0].structural).toBe("incomplete");
+      expect(report.assessments[0].slots).toEqual([]);
+      expect(report.counts.qualified).toBe(0);
+    },
   );
 });

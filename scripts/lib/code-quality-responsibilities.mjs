@@ -5,8 +5,12 @@ function inventoryFile(subject, path) {
   return subject.inventory.files.find((file) => file.path === path);
 }
 
+function proofConsumerKind(record) {
+  return ["diagnostic-checker", "public-parser"].includes(record.kind);
+}
+
 function resolveRoles(resolver, record) {
-  if (record.kind !== "diagnostic-checker")
+  if (!proofConsumerKind(record))
     return Object.fromEntries(
       ["input", "transform", "output", "consumer"].map((role) => [
         role,
@@ -34,7 +38,7 @@ function ownershipReasons(subject, record, roles) {
       facts.identities.some(
         (identity) =>
           !inventoryFile(subject, identity.producer.path)?.production &&
-          !(record.kind === "diagnostic-checker" && role === "consumer"),
+          !(proofConsumerKind(record) && role === "consumer"),
       )
     )
       reasons.push("nonproduction-responsibility-source");
@@ -45,7 +49,7 @@ function ownershipReasons(subject, record, roles) {
 }
 
 function diagnosticIdentityReasons(record, roles, reasons) {
-  if (record.kind === "diagnostic-checker") {
+  if (proofConsumerKind(record)) {
     const producer = JSON.stringify(
       roles.input.identities.map(({ owner, producer }) => ({ owner, producer })),
     );
@@ -56,7 +60,11 @@ function diagnosticIdentityReasons(record, roles, reasons) {
           producer,
       )
     )
-      reasons.push("mismatched-diagnostic-producer");
+      reasons.push(
+        record.kind === "public-parser"
+          ? "mismatched-public-parser-producer"
+          : "mismatched-diagnostic-producer",
+      );
     if (record.consumer.owner !== record.owner) reasons.push("foreign-responsibility-owner");
   }
 }
@@ -120,8 +128,16 @@ function responsibilitySlots(resolver, record, roles) {
   return slots.filter((slot) => record.rules.includes(slot.rule));
 }
 
+function publicParserConsumer(resolver, record, roles, reasons) {
+  const binding = resolver.parserBinding(record.consumer, roles.transform.identities[0]);
+  if (binding.status === "invalid") reasons.push("unchecked-public-parser-output");
+  return binding;
+}
+
 function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   if (consumerReason || reasons.length) return null;
+  if (record.kind === "public-parser")
+    return publicParserConsumer(resolver, record, roles, reasons);
   const binding =
     record.kind === "diagnostic-checker"
       ? resolver.diagnosticBinding(record.consumer, roles.transform.identities[0])
@@ -134,17 +150,23 @@ function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   return binding;
 }
 
+function bindingConsumerReason(record, binding, consumerReason) {
+  return record.kind === "public-parser" && binding?.status === "incomplete"
+    ? "unsupported-public-parser-binding"
+    : consumerReason;
+}
+
 function assessRecord(subject, resolver, record, files) {
   const selected = new Set(files.map((file) => file.path));
   const paths = [record.input, record.transform, record.output, record.consumer].map(
     (selector) => selector.consumerPath,
   );
-  if (record.kind !== "diagnostic-checker" && paths.some((path) => !selected.has(path)))
+  if (!proofConsumerKind(record) && paths.some((path) => !selected.has(path)))
     return pendingRecord(record, "incomplete", ["partial-responsibility-scope"]);
   try {
     const roles = resolveRoles(resolver, record);
     if (
-      record.kind === "diagnostic-checker" &&
+      proofConsumerKind(record) &&
       !roles.input.identities.every((identity) => selected.has(identity.producer.path))
     )
       return pendingRecord(record, "incomplete", ["partial-responsibility-scope"]);
@@ -152,8 +174,9 @@ function assessRecord(subject, resolver, record, files) {
       ...ownershipReasons(subject, record, roles),
       ...signatureReasons(record, roles),
     ];
-    const consumerReason = consumerSignatureReason(roles.consumer);
-    const binding = bindConsumer(resolver, record, roles, consumerReason, reasons);
+    const signatureReason = consumerSignatureReason(roles.consumer);
+    const binding = bindConsumer(resolver, record, roles, signatureReason, reasons);
+    const consumerReason = bindingConsumerReason(record, binding, signatureReason);
     const proofs = proofFacts(subject, resolver, record);
     const slots =
       reasons.length || consumerReason ? [] : responsibilitySlots(resolver, record, roles);
@@ -217,7 +240,7 @@ function pendingRecord(record, structural, reasons) {
 export function assessPolicyResponsibilities(subject, policy, files = subject.inventory.files) {
   const manifest = new Map();
   for (const record of policy.responsibilities ?? []) {
-    if (record.kind !== "diagnostic-checker") continue;
+    if (!proofConsumerKind(record)) continue;
     const owner = subject.inventory.packages.find((entry) => entry.name === record.consumer.owner);
     if (!owner || !record.proofs.includes(record.consumer.consumerPath)) continue;
     const paths = manifest.get(owner.directory) ?? [];

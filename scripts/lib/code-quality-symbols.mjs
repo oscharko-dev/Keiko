@@ -417,6 +417,181 @@ function diagnosticBinding(compiler, request, producer) {
   };
 }
 
+function parserCallable(context, source, name) {
+  const callable = diagnosticCallable(context, source, name);
+  if (
+    !callable?.type ||
+    callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+  )
+    return null;
+  return callable;
+}
+
+function parserResult(callable) {
+  const [assignment, returned] = callable.body.statements;
+  if (
+    !ts.isVariableStatement(assignment) ||
+    assignment.declarationList.flags !== ts.NodeFlags.Const ||
+    assignment.declarationList.declarations.length !== 1 ||
+    !ts.isReturnStatement(returned) ||
+    !returned.expression ||
+    !ts.isIdentifier(returned.expression)
+  )
+    return null;
+  const local = assignment.declarationList.declarations[0];
+  if (!ts.isIdentifier(local.name) || local.type || !directDiagnosticCall(local.initializer))
+    return null;
+  return { local, call: local.initializer, result: returned.expression };
+}
+
+function parserImport(context, call, specifier) {
+  const symbol = context.checker.getSymbolAtLocation(call.expression);
+  const imported = symbol?.declarations?.[0];
+  if (!imported || !ts.isImportSpecifier(imported)) return false;
+  const statement = imported.parent.parent.parent;
+  return ts.isImportDeclaration(statement) && statement.moduleSpecifier.text === specifier;
+}
+
+function sameParserFlow(context, callable, result) {
+  return (
+    context.checker.getSymbolAtLocation(result.call.arguments[0]) ===
+      context.checker.getSymbolAtLocation(callable.parameters[0].name) &&
+    context.checker.getSymbolAtLocation(result.result) ===
+      context.checker.getSymbolAtLocation(result.local.name)
+  );
+}
+
+function parserSignature(context, call) {
+  const signature = context.checker.getResolvedSignature(call);
+  if (!signature || signature.typeParameters?.length || signature.parameters.length !== 1)
+    return null;
+  if (!requiredUnknownParserParameter(context, signature.parameters[0])) return null;
+  const signatures = context.checker.getTypeAtLocation(call.expression).getCallSignatures();
+  return signatures.length === 1 && canonicalParserSignature(context, signatures[0])
+    ? signature
+    : null;
+}
+
+function canonicalParserSignature(context, signature) {
+  const declaration = signature.declaration;
+  return Boolean(
+    declaration &&
+    !declaration.typeParameters?.length &&
+    !signature.typeParameters?.length &&
+    !signature.thisParameter &&
+    declaration.parameters.length === 1 &&
+    requiredUnknownParserParameter(context, signature.parameters[0]),
+  );
+}
+
+function requiredUnknownParserParameter(context, parameter) {
+  const declaration = parameter.valueDeclaration;
+  return Boolean(
+    declaration &&
+    ts.isIdentifier(declaration.name) &&
+    declaration.name.text !== "this" &&
+    !declaration.questionToken &&
+    !declaration.initializer &&
+    !declaration.dotDotDotToken &&
+    typeFacts(context.checker.getTypeOfSymbolAtLocation(parameter, declaration)).kind === "unknown",
+  );
+}
+
+function requiredParserFields(type, names) {
+  const properties = type.getProperties();
+  return (
+    properties.length === names.length &&
+    properties.every(
+      (property) =>
+        names.includes(property.name) && (property.flags & ts.SymbolFlags.Optional) === 0,
+    ) &&
+    typeIndexes(type).length === 0
+  );
+}
+
+function parserProperty(context, type, name, call) {
+  const property = type.getProperty(name);
+  return property && context.checker.getTypeOfSymbolAtLocation(property, call);
+}
+
+function parserArm(context, type, call) {
+  const ok = parserProperty(context, type, "ok", call);
+  if (!ok || (ok.flags & ts.TypeFlags.BooleanLiteral) === 0) return null;
+  if (ok.intrinsicName === "true" && requiredParserFields(type, ["ok", "value"])) return "success";
+  if (ok.intrinsicName === "false" && requiredParserFields(type, ["ok", "errors"]))
+    return "failure";
+  return null;
+}
+
+function intrinsicParserErrors(context, type) {
+  if (!context.checker.isArrayType(type) || type.symbol?.name !== "ReadonlyArray") return false;
+  if (
+    !type.symbol.declarations?.every((declaration) =>
+      context.program.isSourceFileDefaultLibrary(declaration.getSourceFile()),
+    )
+  )
+    return false;
+  const args = context.checker.getTypeArguments(type);
+  return args.length === 1 && (args[0].flags & ts.TypeFlags.String) !== 0;
+}
+
+function parserEnvelope(context, type, call) {
+  if (!type.isUnion() || type.types.length !== 2) return { status: "incomplete" };
+  const success = type.types.find((arm) => parserArm(context, arm, call) === "success");
+  const failure = type.types.find((arm) => parserArm(context, arm, call) === "failure");
+  if (
+    !success ||
+    !failure ||
+    !intrinsicParserErrors(context, parserProperty(context, failure, "errors", call))
+  )
+    return { status: "incomplete" };
+  const value = typeFacts(parserProperty(context, success, "value", call));
+  const unsafe =
+    ["unknown", "any"].includes(value.kind) ||
+    value.containsUnknown ||
+    value.indexes?.some((index) => ["unknown", "any"].includes(index.kind));
+  return { status: unsafe ? "invalid" : "ready", value };
+}
+
+function producerParserResult(compiler, context, callable, signature) {
+  const type = context.checker.getReturnTypeOfSignature(signature);
+  const annotation = context.checker.getTypeAtLocation(callable.type);
+  if (!type.aliasSymbol || annotation !== type || annotation.aliasSymbol !== type.aliasSymbol)
+    return null;
+  const declarations = type.aliasSymbol.declarations ?? [];
+  if (declarations.length !== 1) return null;
+  const identity = canonicalDeclaration(compiler, declarations[0], null);
+  const producer = canonicalDeclaration(compiler, signature.declaration, null);
+  const file = compiler.state.subject.inventory.files.find(
+    (entry) => entry.path === identity.producer.path,
+  );
+  return identity.owner === producer.owner && file?.production ? type : null;
+}
+
+function parserBinding(compiler, request, producer) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+  const callable = parserCallable(context, source, request.exportName);
+  const result = callable && parserResult(callable);
+  if (
+    !result ||
+    !parserImport(context, result.call, request.specifier) ||
+    !directDiagnosticProducer(compiler, context, result.call, producer) ||
+    !sameParserFlow(context, callable, result)
+  )
+    return { bound: false, status: "incomplete" };
+  const signature = parserSignature(context, result.call);
+  const type = signature && producerParserResult(compiler, context, callable, signature);
+  if (!type) return { bound: false, status: "incomplete" };
+  const envelope = parserEnvelope(context, type, result.call);
+  compiler.assertCurrent();
+  return {
+    ...envelope,
+    bound: envelope.status === "ready",
+    implementation: canonicalDeclaration(compiler, callable, null),
+    calls: [{ path: request.consumerPath, start: result.call.getStart(), end: result.call.end }],
+  };
+}
+
 function describeAt(compiler, request) {
   const { context, source } = ownedSource(compiler, request.path);
   const node = compilerNodeAt(compiler, source, request.offset);
@@ -1385,6 +1560,7 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     resolveProofExport: (request) => exportFacts.resolve(request, true),
     resolveProofConsumer: (request) => resolveProofConsumer(compiler, request),
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
+    parserBinding: (request, producer) => parserBinding(compiler, request, producer),
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
     callableSlots: (identity) => callableSlots(compiler, identity),
