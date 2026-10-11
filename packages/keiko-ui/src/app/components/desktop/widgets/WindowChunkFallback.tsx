@@ -1,5 +1,5 @@
 import { SupportReportButton } from "../SupportReportButton";
-import { useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { StagePlaceholder } from "./StagePlaceholder";
 import type { WindowStage } from "../hooks/useWindowStageEvidence";
@@ -26,26 +26,32 @@ export function createWindowChunkFallback(
   function WindowChunkFallback(): ReactNode {
     const t = useTranslate();
     const [stalled, setStalled] = useState(false);
+    const fallback = useRef<HTMLDivElement>(null);
+    const recovery = useRef<HTMLDivElement>(null);
+    // React can defer even synchronous commits behind a missing chunk stylesheet. Reveal only
+    // this already-mounted recovery DOM so the human can reload without waiting for that commit.
+    const onStall = useCallback((): void => {
+      revealRecovery(fallback.current, recovery.current, t("window.chunkStalled"));
+      setStalled(true);
+    }, [t]);
     return (
-      <>
+      <div ref={fallback}>
         <StagePlaceholder
           stage={stage}
           marker={{
             "data-window-chunk": stalled ? "stalled" : "loading",
           }} /* i18n-exempt: DOM state marker, never rendered */
-          onStall={setStalled}
+          onStall={onStall}
         >
           {t(stalled ? "window.chunkStalled" : "common.loading")}
         </StagePlaceholder>
-        {stalled ? (
-          <>
-            <button type="button" className="lk-btn" onClick={reload}>
-              {t("shell.error.reload")}
-            </button>
-            <SupportReportButton />
-          </>
-        ) : null}
-      </>
+        <div ref={recovery} hidden={!stalled}>
+          <button type="button" className="lk-btn" onClick={reload}>
+            {t("shell.error.reload")}
+          </button>
+          <SupportReportButton />
+        </div>
+      </div>
     );
   }
   return WindowChunkFallback;
@@ -53,4 +59,17 @@ export function createWindowChunkFallback(
 
 function reloadKeiko(): void {
   window.location.reload();
+}
+
+function revealRecovery(
+  fallback: HTMLDivElement | null,
+  recovery: HTMLDivElement | null,
+  message: string,
+): void {
+  const placeholder = fallback?.querySelector("output");
+  if (placeholder) {
+    placeholder.textContent = message;
+    placeholder.dataset.windowChunk = "stalled";
+  }
+  if (recovery) recovery.hidden = false;
 }

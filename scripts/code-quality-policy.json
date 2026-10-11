@@ -119,36 +119,36 @@
       "id": "anti-slop-effect/no-manual-effect-error-tag",
       "disposition": "Effect-host-only",
       "migrationIssue": 3988,
-      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
-      "activeScopes": []
+      "reason": "Qualified against exact Effect 4.0.0-rc.112 and OpenCode 2.0.10 in the private native host; no repository-wide Effect service classification or adoption.",
+      "activeScopes": ["native-host"]
     },
     {
       "id": "anti-slop-effect/no-manual-tag-comparison",
       "disposition": "Effect-host-only",
       "migrationIssue": 3988,
-      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
-      "activeScopes": []
+      "reason": "Qualified against exact Effect 4.0.0-rc.112 and OpenCode 2.0.10 in the private native host; no repository-wide Effect service classification or adoption.",
+      "activeScopes": ["native-host"]
     },
     {
       "id": "anti-slop-effect/no-manual-tagged-construction",
       "disposition": "Effect-host-only",
       "migrationIssue": 3988,
-      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
-      "activeScopes": []
+      "reason": "Qualified against exact Effect 4.0.0-rc.112 and OpenCode 2.0.10 in the private native host; no repository-wide Effect service classification or adoption.",
+      "activeScopes": ["native-host"]
     },
     {
       "id": "anti-slop-effect/no-service-constructor-imports",
       "disposition": "Effect-host-only",
       "migrationIssue": 3988,
-      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
-      "activeScopes": []
+      "reason": "Qualified against exact Effect 4.0.0-rc.112 and OpenCode 2.0.10 in the private native host; no repository-wide Effect service classification or adoption.",
+      "activeScopes": ["native-host"]
     },
     {
       "id": "anti-slop-effect/prefer-effect-match",
       "disposition": "Effect-host-only",
       "migrationIssue": 3988,
-      "reason": "Qualify against the pinned native OpenCode host; no repository-wide Effect adoption.",
-      "activeScopes": []
+      "reason": "Qualified against exact Effect 4.0.0-rc.112 and OpenCode 2.0.10 in the private native host; no repository-wide Effect service classification or adoption.",
+      "activeScopes": ["native-host"]
     },
     {
       "id": "oxc/no-accumulating-spread",

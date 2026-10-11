@@ -65,13 +65,24 @@ export function createRuntimePolicyFixture(helper, linkage = "runtime") {
       `export { maximum } from "${target}";`,
     );
   emitRuntimeFixture(root);
-  mkdirSync(join(root, "scripts"));
+  configureEnforcingPolicyFixture(root);
+  writeFileSync(join(root, ".gitignore"), "**/dist/\n");
+  return root;
+}
+
+export function configureEnforcingPolicyFixture(root) {
+  mkdirSync(join(root, "scripts"), { recursive: true });
   writeFileSync(
     join(root, "scripts/code-quality-policy.json"),
     readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
   );
-  writeFileSync(join(root, ".gitignore"), "**/dist/\n");
-  return root;
+  const owner = "native/opencode-service-host";
+  mkdirSync(join(root, owner), { recursive: true });
+  for (const name of ["host.mjs", "entry.mjs", "guard-seams.mjs"])
+    writeFileSync(
+      join(root, owner, name),
+      readFileSync(new URL(`../../../${owner}/${name}`, import.meta.url)),
+    );
 }
 
 function emitRuntimeFixture(root) {
