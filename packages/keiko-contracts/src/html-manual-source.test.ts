@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import {
   DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   type DocumentationIndexingApproval,
@@ -356,5 +357,98 @@ describe("parseHtmlManualSourceTagMetadata fail-closed (KEIKO-0785)", () => {
       htmlManualSourceFingerprintTag("abcdef01"),
     ]);
     expect(md).toEqual({ sourceKind: "html-manual-local", sourceFingerprint: "abcdef01" });
+  });
+});
+
+const SOURCE_ERROR_RECORDING_CONTROL = `
+import { validateHtmlManualCrawlScope, validateHtmlManualSource, deriveHtmlManualSource } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS as limits } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+const operation = process.argv[1];
+const scope = { kind: "html-manual-http", origin: "https://manual.example.invalid", pathPrefix: null };
+const source = { schemaVersion: "1", scope, limits, sourceFingerprint: "fp-fixture", proposedPodName: "Manual fixture" };
+const approval = { schemaVersion: "1", approved: true, sourceKind: scope.kind, sourceFingerprint: "fp-fixture", originSummary: scope.origin, pathPrefixSummary: "/", proposedPodName: "Manual fixture", limits };
+if (operation === "schema") source.schemaVersion = "2";
+if (operation === "identity") source.sourceFingerprint = "";
+if (operation === "limits") source.limits = { ...limits, maxPages: 0 };
+if (operation.startsWith("limits-")) {
+  const key = operation.slice("limits-".length);
+  source.limits = { ...limits, [key]: limits[key] + 1 };
+}
+if (operation === "scope-origin") scope.origin = "ftp://manual.example.invalid";
+if (operation === "scope-prefix") scope.pathPrefix = "//other.invalid";
+if (operation === "scope-local") Object.assign(scope, { kind: "html-manual-local", rootPath: "../escape" });
+if (operation === "derive-kind") approval.sourceKind = "html-manual-local";
+const normalPush = Array.prototype.push;
+let result;
+Array.prototype.push = function () { return this.length; };
+try {
+  result = operation.startsWith("derive")
+    ? deriveHtmlManualSource({ approval, scope, computedFingerprint: operation === "derive-fingerprint" ? "other" : "fp-fixture" })
+    : operation.startsWith("scope") ? validateHtmlManualCrawlScope(scope) : validateHtmlManualSource(source);
+} finally { Array.prototype.push = normalPush; }
+console.log(JSON.stringify({ ok: result.ok }));
+`;
+
+describe("substantive manual source validation", () => {
+  it.each([
+    ["healthy", true],
+    ["scope-healthy", true],
+    ["derive-healthy", true],
+    ["schema", false],
+    ["identity", false],
+    ["limits", false],
+    ["limits-maxDepth", false],
+    ["limits-maxLinkSample", false],
+    ["limits-timeoutMs", false],
+    ["scope-origin", false],
+    ["scope-prefix", false],
+    ["scope-local", false],
+    ["derive-kind", false],
+    ["derive-fingerprint", false],
+  ])(
+    "checks %s independently of error recording",
+    (operation, ok) => {
+      const child = spawnSync(
+        process.execPath,
+        ["--input-type=module", "--eval", SOURCE_ERROR_RECORDING_CONTROL, operation],
+        { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
+      );
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe(`${JSON.stringify({ ok })}\n`);
+    },
+    15_000,
+  );
+});
+
+describe("manual source preservation", () => {
+  it.each([false, true])("retains source and scope identity and bytes, frozen=%s", (frozen) => {
+    const input = sourceFixture();
+    if (frozen) {
+      Object.freeze(input.scope);
+      Object.freeze(input);
+    }
+    const before = JSON.stringify(input);
+    const result = validateHtmlManualSource(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.scope).toBe(input.scope);
+      expect(result.value.limits).toBe(input.limits);
+    }
+    expect(JSON.stringify(input)).toBe(before);
+  });
+
+  it("retains accepted own undefined without promising a string", () => {
+    const input = { kind: "html-manual-local", rootPath: "docs", entryPath: undefined };
+    const before = JSON.stringify(input);
+    const result = validateHtmlManualCrawlScope(input);
+    expect(result.ok).toBe(true);
+    if (result.ok && result.value.kind === "html-manual-local") {
+      expect(result.value).toBe(input);
+      expect(Object.hasOwn(result.value, "entryPath")).toBe(true);
+      expect(result.value.entryPath).toBeUndefined();
+    }
+    expect(JSON.stringify(input)).toBe(before);
   });
 });
