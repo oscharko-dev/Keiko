@@ -8570,6 +8570,22 @@ async function excerptBoundCacheIdentity(
   return current.every((entry, index) => entry === captured[index]) ? captured : undefined;
 }
 
+function excerptCapacityWithDocuments(
+  initialUsage: ExplorationUsage,
+  documents: DocumentEvidenceResult,
+): ExplorationUsage {
+  if (documents.excerpts.size === 0) return initialUsage;
+  const documentBytes = [...documents.excerpts.values()].reduce(
+    (bytes, windows) => bytes + utf8ByteLength(windows.map((view) => view.content).join("\n")),
+    0,
+  );
+  return {
+    ...initialUsage,
+    filesRead: initialUsage.filesRead + documents.excerpts.size,
+    excerptBytes: initialUsage.excerptBytes + documentBytes,
+  };
+}
+
 async function assembleGroundedPack(
   args: AssembleGroundedPackInputs,
 ): Promise<GroundedPackAssembly> {
@@ -8592,7 +8608,7 @@ async function assembleGroundedPack(
     searchScope,
     fs,
     budget: plan.budget,
-    initialUsage: prepared.initialUsage,
+    initialUsage: excerptCapacityWithDocuments(prepared.initialUsage, ctx.documentEvidence),
     atomsByPath: prepared.atomsByPath,
     anchors: plan.anchors.filter((anchor) => anchor.kind !== "path").map((anchor) => anchor.term),
     nowMs,
