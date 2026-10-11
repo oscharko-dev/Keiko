@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { URL } from "node:url";
+import { URL, pathToFileURL } from "node:url";
 import { codeQualityPolicyMain, executeCodeQualityPolicy } from "../check-code-quality-policy.mjs";
 import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
@@ -12,6 +12,7 @@ import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import { deepRedactStrings, createAuditRedactor } from "@oscharko-dev/keiko-security/redaction";
 import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import {
+  createConsumerSeamFixture,
   createDiagnosticFixture,
   createDictionaryEnforcementFixture,
   createForeignDiagnosticFixture,
@@ -59,6 +60,101 @@ function responsibilityOwnerCensus(report) {
 }
 
 describe("v2 static enforcement keeps combined semantic qualification pending (#3918)", () => {
+  it.each([
+    "direct",
+    "alias",
+    "callback",
+    "one",
+    "two",
+    "overload",
+    "siblingAlias",
+    "overloadAlias",
+  ])(
+    "binds actual public consumer seam %s without runtime semantic promotion",
+    async (variant) => {
+      const own = createConsumerSeamFixture(variant);
+      roots.push(own.root);
+      const runtime = await import(
+        pathToFileURL(join(own.root, "src/public-consumer.test.mjs")).href
+      );
+      expect(runtime.consume(1)).toBe(1);
+      expect(() => runtime.consume("malformed")).toThrow(TypeError);
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const exit = await codeQualityPolicyMain(["--json"], own.root);
+      const report = JSON.parse(log.mock.calls[0][0]);
+      const owner = responsibilityOwnerCensus(report);
+      expect(owner.some(({ rule }) => rule === "anti-slop/no-unknown-parameters")).toBe(true);
+      expect(report.counts.visited).toBe(report.counts.expected);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.assessments[0].proofs?.[0]?.executed ?? false).toBe(false);
+      expect(report.outcome).toBe("failed");
+      expect(
+        {
+          exit,
+          enforcement: report.enforcementOutcome,
+          assessment: report.responsibilities.assessments[0],
+        },
+        JSON.stringify({ counts: report.counts, owner, violations: report.violations }),
+      ).toMatchObject({
+        exit: 0,
+        enforcement: "passed",
+        assessment: { structural: "ready", consumerBinding: { bound: true } },
+      });
+    },
+    60_000,
+  );
+
+  it.each([
+    "exported",
+    "exportAlias",
+    "escaped",
+    "mutableSibling",
+    "destructuredSibling",
+    "computedSibling",
+    "unusedSibling",
+    "nestedSibling",
+    "classSibling",
+    "mixedOverload",
+    "overloadSelf",
+    "mixedAlias",
+    "mixedCycle",
+    "cycle",
+    "mutual",
+    "ambiguous",
+  ])(
+    "refuses unsupported private consumer seam %s without borrowing raw slots",
+    async (variant) => {
+      const own = createConsumerSeamFixture(variant);
+      roots.push(own.root);
+      const runtime = await import(
+        pathToFileURL(join(own.root, "src/public-consumer.test.mjs")).href
+      );
+      expect(runtime.consume(1)).toBe(1);
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const exit = await codeQualityPolicyMain(["--json"], own.root);
+      const report = JSON.parse(log.mock.calls[0][0]);
+      responsibilityOwnerCensus(report);
+      expect(
+        exit,
+        JSON.stringify({
+          counts: report.counts,
+          assessment: report.responsibilities.assessments[0],
+          adaptations: report.adaptations.length,
+          violations: report.violations.length,
+        }),
+      ).toBe(1);
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.responsibilities.assessments[0].structural).not.toBe("ready");
+      expect(report.adaptations).toEqual([]);
+      expect(report.violations.some(({ rule }) => rule === "anti-slop/no-unknown-parameters")).toBe(
+        true,
+      );
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.outcome).toBe("failed");
+    },
+    60_000,
+  );
+
   it.each(["boundary-free", "inactive-raw"])(
     "does not certify empty v2 semantic qualification for %s JSON/text reporting",
     async (variant) => {
@@ -460,7 +556,17 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
     60_000,
   );
 
-  it.each(["fake", "mutable", "destructured", "computed", "unused", "nested", "dispatch", "class"])(
+  it.each([
+    "fake",
+    "mutable",
+    "destructured",
+    "computed",
+    "computed-alias",
+    "unused",
+    "nested",
+    "dispatch",
+    "class",
+  ])(
     "keeps %s consumer indirection unbound and the raw slot enforced",
     async (variant) => {
       const own = createCrossOwnerEnforcementFixture();

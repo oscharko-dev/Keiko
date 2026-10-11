@@ -233,6 +233,11 @@ malformed, mismatched or rebound ownership fails closed. Producer selectors stil
 fields. The resolver keeps that public identity separate from its actual callable implementation, following
 bounded immutable const aliases and current checker-bound imports/reexports. The implementation
 must retain `consumer.owner` and contain a canonical lexical call to the declared transform producer.
+A finite checker-bound walk may follow private same-source top-level siblings through direct calls
+and immutable aliases. Exported or escaping helpers, cycles and exhausted existing budgets cannot
+authorize participation. One public overload signature may map to a unique runtime body on the same
+current canonical symbol; public and implementation identities remain distinct. Multiple signatures
+or ambiguous bodies remain unsupported. This walk grants no helper raw-origin or dictionary slots.
 A decoy call in another export cannot bind the named consumer. Direct inline call-argument callbacks
 participate lexically; named nested functions and unused locally assigned lambdas are separate
 implementations. Deferred class scopes also remain separate and cannot bind an enclosing consumer.

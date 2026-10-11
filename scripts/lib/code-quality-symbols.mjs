@@ -666,6 +666,8 @@ function consumerImplementation(compiler, identity) {
     const initializer = aliasInitializer(node);
     const callable = initializer ? unwrappedExpression(initializer) : node;
     if (runtimeCallable(callable)) return { context, source, callable, identity };
+    const overload = consumerOverload(compiler, context, source, node);
+    if (overload) return overload;
     if (!initializer || !qualifiedMemberReceiver(compiler, context, initializer)) break;
     const key = JSON.stringify(identity.producer);
     if (seen.has(key) || seen.size >= compiler.state.limits.aliases)
@@ -676,10 +678,34 @@ function consumerImplementation(compiler, identity) {
       expressionSymbol(compiler, context, initializer),
       compiler.state.limits.aliases,
     );
-    if (symbol.declarations.length !== 1) break;
-    identity = canonicalDeclaration(compiler, symbol.declarations[0], null);
+    const declaration = consumerAliasDeclaration(symbol);
+    if (!declaration) break;
+    identity = canonicalDeclaration(compiler, declaration, null);
   }
   throw new TypeError("unsupported-responsibility-consumer-implementation");
+}
+
+function consumerAliasDeclaration(symbol) {
+  const declarations = symbol.declarations;
+  if (declarations.length === 1) return declarations[0];
+  if (declarations.length !== 2 || !declarations.every(ts.isFunctionDeclaration)) return null;
+  return declarations.find((declaration) => !declaration.body);
+}
+
+function bodylessNamedFunction(node) {
+  return ts.isFunctionDeclaration(node) && !node.body && Boolean(node.name);
+}
+
+function consumerOverload(compiler, context, source, node) {
+  if (!bodylessNamedFunction(node)) return null;
+  const symbol = context.checker.getSymbolAtLocation(node.name);
+  const declarations = symbol?.declarations ?? [];
+  if (declarations.length !== 2 || !declarations.includes(node)) return null;
+  const bodies = declarations.filter((declaration) => runtimeCallable(declaration));
+  if (bodies.length !== 1) return null;
+  const callable = bodies[0];
+  if (callable.getSourceFile() !== source || callable.parent !== source) return null;
+  return { context, source, callable, identity: canonicalDeclaration(compiler, callable, null) };
 }
 
 function inlineCallArgument(node) {
@@ -713,20 +739,123 @@ function canonicalCall(compiler, context, expression, producer) {
   }
 }
 
+function consumerParticipatingCalls(compiler, state) {
+  const calls = [];
+  visitCompilerNodes(compiler.state, state.callable.body, (node) => {
+    if (ts.isCallExpression(node) && participatingCall(node, state.callable)) calls.push(node);
+  });
+  return calls;
+}
+
+function consumerStates(compiler, implementation) {
+  const nodes = [];
+  visitCompilerNodes(compiler.state, implementation.source, (node) => nodes.push(node));
+  const root = {
+    ...implementation,
+    compiler,
+    nodes,
+    declaration: implementation.callable,
+    incoming: [],
+  };
+  root.key = root.identity.producer.start;
+  const states = new Map([[root.key, root]]);
+  for (const state of states.values()) {
+    state.calls = consumerParticipatingCalls(compiler, state);
+    for (const call of state.calls) consumerEdge(state, call, states);
+  }
+  const complete = new Set();
+  for (const key of states.keys()) assertConsumerAcyclic(states, key, new Set(), complete);
+  return { root, states, qualified: qualifiedRawStates(root, states) };
+}
+
+function knownConsumerTarget(state, expression, states) {
+  expression = rawParentheses(expression);
+  if (!ts.isIdentifier(expression)) return null;
+  const declaration = state.context.checker.getSymbolAtLocation(expression)?.valueDeclaration;
+  if (!eligibleConsumerDeclaration(state, declaration)) return null;
+  const target = rawCallableTarget(state.compiler, state.source, declaration, null);
+  if (!target) return null;
+  const implementation = existingConsumerImplementation(state.compiler, target.identity);
+  if (!implementation || implementation.source !== state.source) return null;
+  const known = states.get(implementation.identity.producer.start);
+  return known && sameProducer(implementation.identity, known.identity) ? known : null;
+}
+
+function eligibleConsumerDeclaration(state, declaration) {
+  return (
+    sameSourceConsumerDeclaration(declaration, state.source) &&
+    (!ts.isVariableDeclaration(declaration) || directConsumerAlias(state, declaration))
+  );
+}
+
+function sameSourceConsumerDeclaration(declaration, source) {
+  return (
+    declaration?.getSourceFile() === source &&
+    (ts.isFunctionDeclaration(declaration) || ts.isVariableDeclaration(declaration))
+  );
+}
+
+function directConsumerAlias(state, declaration) {
+  const seen = new Set();
+  let expression = aliasInitializer(declaration);
+  while (expression) {
+    expression = rawParentheses(expression);
+    if (runtimeCallable(expression)) return true;
+    if (!ts.isIdentifier(expression)) return false;
+    const node = rawCallableBinding(state.compiler, state.context, state.source, expression, seen);
+    if (!node) return false;
+    if (ts.isFunctionDeclaration(node)) return true;
+    expression = aliasInitializer(node);
+  }
+  return false;
+}
+
+function existingConsumerImplementation(compiler, identity) {
+  try {
+    return consumerImplementation(compiler, identity);
+  } catch (error) {
+    if (error.message !== "unsupported-responsibility-consumer-implementation") throw error;
+    return null;
+  }
+}
+
+function consumerEdge(state, call, states) {
+  const target =
+    localRawCallable(state.compiler, state.context, state.source, call.expression) ??
+    knownConsumerTarget(state, call.expression, states);
+  if (!target) return;
+  const key = target.identity.producer.start;
+  if (exportedDeclaration(target.declaration) && !states.has(key)) return;
+  if (!states.has(key)) {
+    if (states.size >= state.compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    states.set(key, { ...state, ...target, key, incoming: [], calls: [] });
+  }
+  states.get(key).incoming.push({ state: state.key, call });
+}
+
+function assertConsumerAcyclic(states, key, active, complete) {
+  if (active.has(key)) throw new TypeError("unsupported-consumer-helper-cycle");
+  if (complete.has(key)) return;
+  const next = new Set(active).add(key);
+  for (const edge of states.get(key).incoming)
+    assertConsumerAcyclic(states, edge.state, next, complete);
+  complete.add(key);
+}
+
 function consumerCalls(compiler, identity, producer, expectedOwner) {
   const implementation = consumerImplementation(compiler, identity);
   if (implementation.identity.owner !== expectedOwner)
     throw new TypeError("foreign-responsibility-consumer-implementation");
+  const { states, qualified } = consumerStates(compiler, implementation);
   const calls = [];
-  visitCompilerNodes(compiler.state, implementation.callable.body, (node) => {
-    if (!ts.isCallExpression(node) || !participatingCall(node, implementation.callable)) return;
-    if (!canonicalCall(compiler, implementation.context, node.expression, producer)) return;
-    calls.push({
-      path: implementation.identity.producer.path,
-      start: node.getStart(),
-      end: node.end,
-    });
-  });
+  for (const state of states.values()) {
+    if (!qualified.has(state.key)) continue;
+    for (const node of state.calls) {
+      if (!canonicalCall(compiler, state.context, node.expression, producer)) continue;
+      calls.push({ path: state.identity.producer.path, start: node.getStart(), end: node.end });
+    }
+  }
   compiler.assertCurrent();
   return { implementation: implementation.identity, calls, bound: calls.length > 0 };
 }

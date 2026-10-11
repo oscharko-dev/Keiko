@@ -9,6 +9,7 @@ import { createCompilerContext } from "../lib/code-quality-compiler.mjs";
 import { declarationMapPosition } from "../lib/code-quality-provenance.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
+  createConsumerSeamFixture,
   createDiagnosticFixture,
   createDictionaryEnforcementFixture,
   createRawHelperEnforcementFixture,
@@ -871,6 +872,60 @@ export function untyped(input: any): any { return input; }
 });
 
 describe("canonical consumer implementation call binding (#3918)", () => {
+  it.each(["direct", "one", "two", "overload"])(
+    "resolves the actual implementation of public consumer seam %s",
+    async (variant) => {
+      const own = createConsumerSeamFixture(variant);
+      fixtures.push(own);
+      const runtime = await import(
+        pathToFileURL(join(own.root, "src/public-consumer.test.mjs")).href
+      );
+      expect(runtime.consume(1)).toBe(1);
+      own.subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(own.subject);
+      const producer = own.resolver.resolveExport(own.record.transform).identities[0];
+      const consumerFacts = own.resolver.resolveExport(own.record.consumer);
+      expect(consumerFacts.identities).toHaveLength(1);
+      expect(consumerFacts.signatures).toHaveLength(1);
+      const consumer = consumerFacts.identities[0];
+      const binding = own.resolver.consumerCalls(consumer, producer, "beta");
+      expect(binding.implementation.owner).toBe("beta");
+      expect(binding.bound).toBe(true);
+      expect(binding.calls).toHaveLength(1);
+      const call = binding.calls[0];
+      expect(readFileSync(join(own.root, call.path), "utf8").slice(call.start, call.end)).toBe(
+        "validate(input)",
+      );
+    },
+    15_000,
+  );
+
+  it("keeps the overload public signature distinct and rechecks source currentness", async () => {
+    const own = createConsumerSeamFixture("overload");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.transform).identities[0];
+    const consumer = own.resolver.resolveExport(own.record.consumer).identities[0];
+    const binding = own.resolver.consumerCalls(consumer, producer, "beta");
+    expect(binding.implementation.producer.start).not.toBe(consumer.producer.start);
+    expect(binding.implementation.producer.path).toBe(consumer.producer.path);
+    own.put("packages/beta/src/owner.ts", "export const changed = true;\n");
+    expect(() => own.resolver.consumerCalls(consumer, producer, "beta")).toThrow(
+      "symbol-subject-changed",
+    );
+  }, 15_000);
+
+  it("bounds the private sibling walk with the existing alias budget", async () => {
+    const own = createConsumerSeamFixture("two");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), { aliases: 1 });
+    const producer = own.resolver.resolveExport(own.record.transform).identities[0];
+    const consumer = own.resolver.resolveExport(own.record.consumer).identities[0];
+    expect(() => own.resolver.consumerCalls(consumer, producer, "beta")).toThrow(
+      "symbol-alias-budget",
+    );
+  }, 15_000);
+
   async function consumerFixture(body, options = {}) {
     const own = createSymbolFixture();
     fixtures.push(own);

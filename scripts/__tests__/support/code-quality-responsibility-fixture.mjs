@@ -145,6 +145,47 @@ export function createCrossOwnerEnforcementFixture(variant = "valid") {
   return own;
 }
 
+export function createConsumerSeamFixture(variant = "direct") {
+  const own = createCrossOwnerEnforcementFixture();
+  own.put("src/public-consumer.test.mjs", 'export { consume } from "beta/runtime";\n');
+  if (["alias", "callback"].includes(variant)) {
+    replaceConsumerCallFixture(own, variant);
+    return own;
+  }
+  const checked =
+    'const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value;';
+  const bodies = {
+    direct: `export function consume(input: number): number { ${checked} }`,
+    one: `function first(input: number): number { ${checked} } export function consume(input: number): number { return first(input); }`,
+    two: `function first(input: number): number { ${checked} } function second(input: number): number { return first(input); } export function consume(input: number): number { return second(input); }`,
+    overloadAlias: `function handle(input: number, evidence?: number): number; function handle(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; ${checked} } export const consume = handle;`,
+    siblingAlias: `function first(input: number): number { ${checked} } const call = first; export function consume(input: number): number { return call(input); }`,
+    exported: `export function first(input: number): number { ${checked} } export function consume(input: number): number { return first(input); }`,
+    exportAlias: `function first(input: number): number { ${checked} } export { first as guard }; export function consume(input: number): number { return first(input); }`,
+    escaped: `function first(input: number): number { ${checked} } export const holder = { first }; export function consume(input: number): number { return first(input); }`,
+    mutableSibling: `let first = (input: number): number => { ${checked} }; export function consume(input: number): number { return first(input); }`,
+    destructuredSibling: `function first(input: number): number { ${checked} } const { call } = { call: first }; export function consume(input: number): number { return call(input); }`,
+    computedSibling: `function first(input: number): number { ${checked} } const holder = { first }; export function consume(input: number): number { return holder["first"](input); }`,
+    unusedSibling: `function first(input: number): number { ${checked} } export function consume(input: number): number { void first; return input; }`,
+    nestedSibling: `export function consume(input: number): number { function first(input: number): number { ${checked} } return first(input); }`,
+    classSibling: `export function consume(input: number): number { class Deferred { result = validate(input); } void Deferred; return input; }`,
+    mixedOverload: `function first(input: number): number { if (input < 0) return consume(input); ${checked} } export function consume(input: number, evidence?: number): number; export function consume(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; return first(input); }`,
+    overloadSelf: `export function consume(input: number, evidence?: number): number; export function consume(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; if (input < 0) return consume(input); ${checked} }`,
+    mixedAlias: `function first(input: number): number { if (input < 0) return consume(input); ${checked} } function handle(input: number): number { return first(input); } export const consume = handle;`,
+    mixedCycle: `function first(input: number): number { if (input < 0) return consume(input); ${checked} } export function consume(input: number): number { return first(input); }`,
+    cycle: `function first(input: number): number { if (input < 0) return first(input); ${checked} } export function consume(input: number): number { return first(input); }`,
+    mutual: `function first(input: number): number { if (input < 0) return second(input); ${checked} } function second(input: number): number { return first(input); } export function consume(input: number): number { return first(input); }`,
+    ambiguous: `export function consume(input: number): number; export function consume(input: number, evidence: number): number; export function consume(input: number, evidence?: number): number { void evidence; ${checked} }`,
+    overload: `export function consume(input: number, evidence?: number): number; export function consume(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; ${checked} }`,
+  };
+  own.put(
+    "packages/beta/src/owner.ts",
+    `import { validate } from "alpha/runtime"; ${bodies[variant]}`,
+  );
+  emitSymbolFixture(own.root, "packages/beta");
+  return own;
+}
+
 export function replaceConsumerCallFixture(own, variant) {
   const imported = 'import { validate } from "alpha/runtime";';
   const checked =
@@ -162,6 +203,8 @@ export function replaceConsumerCallFixture(own, variant) {
       'import * as ns from "alpha/runtime"; const { validate } = ns; export function consume(input: number): number { validate(input); return input; }',
     computed:
       'import * as ns from "alpha/runtime"; let key: "validate" = "validate"; const selected = ns[key]; export function consume(input: number): number { selected(input); return input; }',
+    "computed-alias":
+      'import * as ns from "alpha/runtime"; let key: "validate" = "validate"; const selected = ns[key]; const forwarded = selected; export function consume(input: number): number { forwarded(input); return input; }',
     unused: `${imported} export function consume(input: number): number { const unused = () => validate(input); return input; }`,
     nested: `${imported} export function consume(input: number): number { function unused(): unknown { return validate(input); } return input; }`,
     class: `${imported} export function consume(input: number): number { class Deferred { result = validate(input); } return input; }`,
