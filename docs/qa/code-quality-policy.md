@@ -163,7 +163,10 @@ The intermediate evaluator reports structural `ready`, `incomplete` or `invalid`
 semantic `pending` or `rejected`. No runtime proof execution mechanism is authorized by this
 interface, so `qualified` remains zero. Even a present proof file and separately passing owning
 Vitest tests cannot qualify CLI semantics. The combined v2 `outcome` remains failed while any
-responsibility remains unqualified. The explicitly separate `enforcementOutcome` answers only
+responsibility remains unqualified, or no semantic subjects have been assessed. Valid empty v2
+records request no adaptations: static enforcement can pass with exit 0 while combined qualification
+remains failed, with qualified and pending counts both zero. Empty records do not certify migration
+completion or remove active raw diagnostics. The explicitly separate `enforcementOutcome` answers only
 active syntax and static obligations. Enforce-mode exit follows that static result; text and JSON
 disclose both results and semantic counts. Census returns its descriptive exit zero while retaining
 actual static failure and pending semantics in those fields; census never supplies an enforce verdict.

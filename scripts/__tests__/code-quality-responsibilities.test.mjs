@@ -58,6 +58,59 @@ function responsibilityOwnerCensus(report) {
 }
 
 describe("v2 static enforcement keeps combined semantic qualification pending (#3918)", () => {
+  it.each(["boundary-free", "inactive-raw"])(
+    "does not certify empty v2 semantic qualification for %s JSON/text reporting",
+    async (variant) => {
+      const own = createEnforcementFixture();
+      roots.push(own.root);
+      own.policy.responsibilities = [];
+      if (variant === "boundary-free") {
+        own.put(
+          "packages/alpha/src/owner.ts",
+          "export function validate(input: number): number { return input; }\nexport function consume(input: number): number { return validate(input); }\n",
+        );
+        emitSymbolFixture(own.root);
+      } else {
+        for (const rule of own.policy.rules)
+          rule.activeScopes = rule.activeScopes.filter((scope) => scope !== "package:alpha");
+      }
+      own.put("scripts/code-quality-policy.json", own.policy);
+      expect(validatePolicy(own.policy)).toEqual([]);
+      const runtime = await executeResponsibilityFixture(own);
+      expect(runtime.consume(1)).toBe(1);
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const jsonExit = await codeQualityPolicyMain(["--json"], own.root);
+      const report = JSON.parse(log.mock.calls[0][0]);
+      log.mockClear();
+      const textExit = await codeQualityPolicyMain([], own.root);
+      const text = log.mock.calls[0][0];
+      expect({ jsonExit, textExit }).toEqual({ jsonExit: 0, textExit: 0 });
+      expect(report.schemaVersion).toBe(2);
+      expect(report.counts.visited).toBe(report.counts.expected);
+      expect(report.enforcementOutcome).toBe("passed");
+      expect(report.violations).toEqual([]);
+      expect(report.adaptations).toEqual([]);
+      expect(report.responsibilities.assessments).toEqual([]);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.counts.pending).toBe(0);
+      const owner = responsibilityOwnerCensus(report);
+      if (variant === "boundary-free") expect(owner).toEqual([]);
+      else expect(owner.length).toBeGreaterThan(0);
+      expect(
+        { outcome: report.outcome, text },
+        JSON.stringify({
+          counts: report.counts,
+          owner,
+          responsibilityCounts: report.responsibilities.counts,
+        }),
+      ).toEqual({
+        outcome: "failed",
+        text: `code-quality-policy: enforcement=PASSED; combined=FAILED; semantic-qualified=0; semantic-pending=0 - ${report.counts.visited} files; 0 active findings; repository`,
+      });
+    },
+    60_000,
+  );
+
   it("adapts exact raw helper and informative predicate recheck sites without semantic trust", async () => {
     const own = createRawHelperEnforcementFixture();
     roots.push(own.root);

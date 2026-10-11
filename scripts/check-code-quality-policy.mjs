@@ -157,7 +157,9 @@ async function assertPolicySubjectCurrent(repositoryRoot, source, inventorySha25
 
 function policyOutcome(options, assessed, responsibilities) {
   const incomplete =
-    responsibilities && responsibilities.counts.qualified !== responsibilities.assessments.length;
+    responsibilities &&
+    (responsibilities.assessments.length === 0 ||
+      responsibilities.counts.qualified !== responsibilities.assessments.length);
   return incomplete || (options.mode === "enforce" && assessed.violations.length > 0)
     ? "failed"
     : "passed";
