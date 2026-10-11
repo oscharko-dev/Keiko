@@ -172,8 +172,11 @@ describe("persisted retrieval loss counters", () => {
     );
     expect(selection.excerptOrdinaryRangeCount).toBeGreaterThan(0);
     expect(selection.excerptOrdinaryServedRangeCount).toBeGreaterThan(0);
+    const ordinaryRangeCount = selection.excerptOrdinaryRangeCount;
+    if (typeof ordinaryRangeCount !== "number")
+      throw new TypeError("Expected a numeric persisted ordinary range count");
     expect(selection.excerptOrdinaryServedRangeCount).toBeLessThanOrEqual(
-      selection.excerptOrdinaryRangeCount,
+      ordinaryRangeCount,
     );
     expect(selection.excerptDeferredDefinitionRangeCount).toBeGreaterThan(0);
     expect(selection).not.toHaveProperty("_truncatedFieldCount");
