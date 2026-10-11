@@ -644,7 +644,11 @@ question and the effective retrieval intent. Manifest inventory routing requires
 enumeration request; mentioning manifests while asking about validation, loading, or combined
 inventory and behavior retains source-code search. Only an anaphoric follow-up with a previous targeted
 or diagnostic intent may inherit that intent; independently named targets and new traces classify
-on their own. Supplied reference paths, lines, origins, and inherited effective intent participate
+on their own. The closed `retrievalIntent` vocabulary is `project-metadata`, `repository-overview`,
+`targeted-code-search`, `diagnostic-search`, `conversational-follow-up` and `clarification-needed`.
+Completed and clarification operations retain the actual turn classification; an eligible
+`conversational-follow-up` can retain the previous targeted or diagnostic intent for planning.
+Supplied reference paths, lines, origins, and inherited effective intent participate
 in plan identity without changing the historical no-reference identity.
 The final six source-detail slots hold detected/in-scope/admitted-frame, test/source-pair,
 reference-channel, and closed metadata-injection observations. Total/external frame counts use the

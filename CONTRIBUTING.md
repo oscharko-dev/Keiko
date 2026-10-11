@@ -143,6 +143,24 @@ Existing query evidence orders endpoint intake; bounded delegation traversal kee
 workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
 Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
 
+The closed `retrievalIntent` vocabulary is `project-metadata`, `repository-overview`,
+`targeted-code-search`, `diagnostic-search`, `conversational-follow-up` and `clarification-needed`.
+An eligible `conversational-follow-up` retains the previous targeted or diagnostic intent for
+planning; concrete new targets and new traces classify independently. The registered completed
+and clarification operations retain the actual turn classification.
+
+`client.scope.notice` records scope narrowing, widening, folder pinning and adding missing evidence
+under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
+`narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
+`workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
+The existing timeline carries these dispositions and counts without scope paths or notice text.
+
+`client.evidence.inspected` records `summary-expanded`, `file-table-opened` or `manifest-fetch-failed`
+under the inspection's client correlation. Optional `readFileCount` and `omittedFileCount` describe
+manifest records and do not certify model-sent files. A manifest fetch failure emits WARN with the
+existing closed `errorKind` header and bounded `errorClass`, `frames` and `causeChain`; the other
+reasons emit INFO. Inspection evidence remains body-free.
+
 `search.connected-context.answer-details` records answer kind, observed citation behaviour,
 declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,
 outcome and configuration disposition. Technical failures retain the existing closed error header,

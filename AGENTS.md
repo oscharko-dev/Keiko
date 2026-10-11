@@ -514,6 +514,11 @@ system that exists, never beside it:
   actual cold or warm request work remains visible even when saving its snapshot fails.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  The closed `retrievalIntent` vocabulary is `project-metadata`, `repository-overview`,
+  `targeted-code-search`, `diagnostic-search`, `conversational-follow-up` and `clarification-needed`.
+  An eligible `conversational-follow-up` retains the previous targeted or diagnostic intent for
+  planning; concrete new targets and new traces classify independently. The registered completed
+  and clarification operations retain the actual turn classification.
   Leading `./` reference spellings are canonicalized before strict path admission; parent and
   interior dot segments remain subject to the existing validator and every sensitive-path denial.
   Complete document path references are data when classifying relationship/history requests;
@@ -583,6 +588,16 @@ system that exists, never beside it:
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
   and originating request retain the existing causal link. Candidate counts and model-authored
   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
+  `client.scope.notice` records scope narrowing, widening, folder pinning and adding missing
+  evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
+  `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
+  `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
+  The existing timeline carries these dispositions and counts without scope paths or notice text.
+  `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
+  `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
+  `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch
+  failure emits WARN with the existing closed `errorKind` header and bounded `errorClass`, `frames`
+  and `causeChain`; the other reasons emit INFO. Inspection evidence remains body-free.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
