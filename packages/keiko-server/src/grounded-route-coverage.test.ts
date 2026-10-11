@@ -711,6 +711,66 @@ function sharedRelevanceFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function sharedPrefixCoverageFiles(): Readonly<Record<string, string>> {
+  const files: Record<string, string> = {
+    "src/routes.ts": ['import { handleItem } from "./implementation.js";', REGISTRATION_FACT].join(
+      "\n",
+    ),
+    "src/z-processing.ts": [
+      "export function continueProcessing(root) {",
+      ...Array.from({ length: 24 }, () => "  // retain the current directory traversal detail"),
+      `  ${DESCENT_FACT}`,
+      "  return root;",
+      "}",
+    ].join("\n"),
+  };
+  const bodies = Array.from({ length: 6 }, (_value, index) =>
+    [
+      `function scopeAdmissionAndPromptFitting${String(index)}(value) {`,
+      "  const scopeAdmissionBudget = 1024;",
+      "  const promptFittingBudget = 2048;",
+      ...Array.from(
+        { length: 16 },
+        () => "  // preserve the current selected prompt fitting source body",
+      ),
+      "  return scopeAdmissionBudget + promptFittingBudget + value;",
+      "}",
+    ].join("\n"),
+  );
+  files["src/implementation.ts"] = [
+    'import { continueProcessing } from "./z-processing.js";',
+    ...Array.from(
+      { length: 9 },
+      (_value, index) =>
+        `import { retainRecord${String(index)} } from "./record-${String(index)}.js";`,
+    ),
+    "export function handleItem(value) { return prepareRecord(value); }",
+    "function prepareRecord(value) {",
+    ...Array.from({ length: 9 }, (_value, index) => `  retainRecord${String(index)}(value);`),
+    ...Array.from(
+      { length: 6 },
+      (_value, index) => `  scopeAdmissionAndPromptFitting${String(index)}(value);`,
+    ),
+    "  return continueProcessing(value);",
+    "}",
+    ...bodies.flatMap((body) => [
+      ...Array.from({ length: 30 }, () => "// separate the current callable declarations"),
+      body,
+    ]),
+  ].join("\n");
+  for (let index = 0; index < 9; index += 1)
+    files[`src/record-${String(index)}.ts`] = [
+      `export function retainRecord${String(index)}(value) {`,
+      ...Array.from(
+        { length: 30 },
+        () => "  // unrelated accounting detail for the existing ledger",
+      ),
+      "  return value;",
+      "}",
+    ].join("\n");
+  return files;
+}
+
 function crowdedInitialOpportunityFiles(): Readonly<Record<string, string>> {
   const files = { ...configuredCoverageFiles() };
   files["src/z-processing.ts"] = [
@@ -1077,6 +1137,95 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("retains the complete useful same-file prefix and a usable later file under shared competition", async () => {
+    const fixture = await coverageFixture(undefined, sharedPrefixCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const prefix = entries.filter((entry) =>
+      /^function scopeAdmissionAndPromptFitting\d+\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    const weak = entries.filter((entry) => entry.atom.scopePath.startsWith("src/record-"));
+    const later = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
+    expect(prefix).toHaveLength(6);
+    expect(weak).toHaveLength(9);
+    if (later === undefined) throw new TypeError("fixture requires the actual later file target");
+    expect(
+      prefix.every((target) => weak.every((entry) => entry.atom.score < target.atom.score)),
+    ).toBe(true);
+    const parent = entries.find((entry) => entry.definitionIdentity === later.parentIdentity);
+    if (parent === undefined) throw new TypeError("fixture requires the actual common caller");
+    const watched = [parent, ...prefix, later].map((entry) => {
+      const range = entry.atom.lineRange;
+      if (range === undefined)
+        throw new TypeError("fixture requires complete current target ranges");
+      const lines = (fixture.files[entry.atom.scopePath] ?? "")
+        .split("\n")
+        .slice(range.startLine - 1, range.endLine);
+      const body = lines.join("\n");
+      expect(fixture.trace.routeCoverage?.isCurrent(entry.atom)).toBe(true);
+      expect(entry.observedBytes).toBe(Buffer.byteLength(body));
+      expect(entry.observedBytes).toBeLessThan(4096);
+      if (entry !== parent) {
+        expect(entry.parentWitness?.parentIdentity).toBe(parent.definitionIdentity);
+        expect(entry.parentWitness?.targetIdentity).toBe(entry.definitionIdentity);
+      }
+      return { entry, range, lines, body };
+    });
+    const selected = new Set(coverageRanking(atoms).kept.map((candidate) => candidate.scopePath));
+    expect(watched.every(({ entry }) => selected.has(entry.atom.scopePath))).toBe(true);
+    expect(weak.every((entry) => selected.has(entry.atom.scopePath))).toBe(true);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    for (const paths of [
+      ["src/routes.ts", "src/implementation.ts", later.atom.scopePath],
+      undefined,
+    ]) {
+      const { reads, requests } = await observedCoverageRead(fixture, {
+        paths,
+        atoms,
+        inputs: { budget },
+      });
+      const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+      const messages = await sentPrompt(fixture, reads, atoms, budget);
+      expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      expect(requests.every((request) => request.maxBytes <= 8192)).toBe(true);
+      const metadata = JSON.stringify({
+        restricted: paths !== undefined,
+        watched: watched.map(({ entry, range, body }) => ({
+          path: entry.atom.scopePath,
+          range,
+          score: entry.atom.score,
+          bytes: Buffer.byteLength(body),
+          read: readContent(reads, entry.atom.scopePath).includes(body),
+        })),
+        weakScores: weak.map((entry) => entry.atom.score),
+        bytesReturned: readBytes(reads),
+        requests: requests.map((request) => ({
+          path: request.scopePath,
+          funded: request.ranges,
+          grant: request.maxTotalBytes,
+          first: request.firstRoundOnly,
+        })),
+      });
+      for (const { entry, range, lines, body } of watched) {
+        expect(readContent(reads, entry.atom.scopePath).includes(body), metadata).toBe(true);
+        expect(
+          pack.files
+            .find((file) => file.scopePath === entry.atom.scopePath)
+            ?.excerpts.some((view) => view.content.includes(body)),
+          metadata,
+        ).toBe(true);
+        for (const [index, line] of lines.entries())
+          expect(messages, metadata).toContain(`${String(range.startLine + index)} | ${line}`);
+      }
+    }
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+  });
+
   it("retains a usable first file branch when crowded higher-scoring targets consume shared bytes", async () => {
     const fixture = await coverageFixture(undefined, crowdedInitialOpportunityFiles());
     const atoms = await allocationAtoms(fixture);
