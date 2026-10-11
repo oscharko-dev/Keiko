@@ -124,6 +124,9 @@ order. Existing admission checks retain the longest prospective prefix that fits
 the nominated file turn. If no joint proposal fits, the feasible relevance proposal is retained.
 This bounded tradeoff applies to new targets; previously funded targets remain intact. Whole
 targets that fail admission remain separately retryable, including later targets in served files.
+A shared file turn advances only after a newly funded whole relevance prefix makes progress.
+A nomination that adds no prefix target cannot donate fresh fair-only bytes; deferred file turns
+remain eligible for a final guarded retry in their existing order.
 Aggregate same-file unions consume the connected share; each physical excerpt retains its existing
 per-window limit. Shared physical lines and separators are charged once;
 upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
