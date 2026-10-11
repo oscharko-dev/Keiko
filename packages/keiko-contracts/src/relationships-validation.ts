@@ -105,7 +105,7 @@ function validateEndpointShape(
   endpoint: unknown,
   field: string,
   errors: RelationshipValidationError[],
-): endpoint is Record<string, unknown> {
+): endpoint is EndpointShape {
   if (!isRecord(endpoint)) {
     errors.push(makeError("denied/invalid-structure", `${field} must be an object`, field));
     return false;
@@ -148,39 +148,75 @@ function validateEndpointShape(
 // parse as the right primitive shape AND the top-level fields are present). On structural
 // failure returns an errors array and the caller short-circuits — any further check
 // would be meaningless (denial-reasons.md §"Resolution order" preface).
+type EndpointShape = Pick<ObjectReference, "id" | "workspaceId"> & { readonly kind: string };
+type RequiredFields = Pick<Relationship, "id" | "workspaceId" | "createdAt" | "updatedAt" | "etag">;
+type StructuralRecord = Record<string, unknown> &
+  RequiredFields & {
+    readonly source: EndpointShape;
+    readonly target: EndpointShape;
+  };
+type KnownRecord = StructuralRecord & Omit<Relationship, "metadata">;
 interface StructuralInput {
-  readonly record: Record<string, unknown>;
-  readonly source: Record<string, unknown>;
-  readonly target: Record<string, unknown>;
+  readonly record: StructuralRecord;
+  readonly source: EndpointShape;
+  readonly target: EndpointShape;
+}
+interface KnownInput {
+  readonly record: KnownRecord;
+  readonly source: ObjectReference;
+  readonly target: ObjectReference;
+}
+
+function checkRequiredEtag(
+  input: Record<string, unknown>,
+  errors: RelationshipValidationError[],
+): boolean {
+  // Preserve the original finite-first and second-read negative comparison.
+  if (!isFiniteInteger(input.etag) || input.etag < 0) {
+    errors.push(
+      makeError("denied/invalid-structure", "etag must be a non-negative finite integer", "etag"),
+    );
+    return false;
+  }
+  return true;
 }
 
 // Per-field check for the top-level required fields (storage.md §3.1). Pushed into
-// `errors` as a side effect; caller checks `errors.length` to decide whether to proceed.
+// `errors` retains each failed check; the predicate owns its substantive field checks.
 function checkRequiredStringField(
   input: Record<string, unknown>,
   field: "id" | "workspaceId" | "createdAt" | "updatedAt",
   errors: RelationshipValidationError[],
-): void {
+): boolean {
   if (!isNonEmptyString(input[field])) {
     errors.push(
       makeError("denied/invalid-structure", `${field} must be a non-empty string`, field),
     );
+    return false;
   }
+  return true;
 }
 
 function checkRequiredTopLevelFields(
   input: Record<string, unknown>,
   errors: RelationshipValidationError[],
-): void {
-  checkRequiredStringField(input, "id", errors);
-  checkRequiredStringField(input, "workspaceId", errors);
-  checkRequiredStringField(input, "createdAt", errors);
-  checkRequiredStringField(input, "updatedAt", errors);
-  if (!isFiniteInteger(input.etag) || input.etag < 0) {
-    errors.push(
-      makeError("denied/invalid-structure", "etag must be a non-negative finite integer", "etag"),
-    );
-  }
+): input is Record<string, unknown> & RequiredFields {
+  const id = checkRequiredStringField(input, "id", errors);
+  const workspaceId = checkRequiredStringField(input, "workspaceId", errors);
+  const createdAt = checkRequiredStringField(input, "createdAt", errors);
+  const updatedAt = checkRequiredStringField(input, "updatedAt", errors);
+  const etag = checkRequiredEtag(input, errors);
+  return id && workspaceId && createdAt && updatedAt && etag;
+}
+
+function checkStructuralFields(
+  input: Record<string, unknown>,
+  errors: RelationshipValidationError[],
+): input is StructuralRecord {
+  const required = checkRequiredTopLevelFields(input, errors);
+  const source = validateEndpointShape(input.source, "source", errors);
+  const target = validateEndpointShape(input.target, "target", errors);
+  return required && source && target;
 }
 
 function structuralPrelude(input: unknown): {
@@ -193,11 +229,7 @@ function structuralPrelude(input: unknown): {
     };
   }
   const errors: RelationshipValidationError[] = [];
-  checkRequiredTopLevelFields(input, errors);
-  const sourceOk = validateEndpointShape(input.source, "source", errors);
-  const targetOk = validateEndpointShape(input.target, "target", errors);
-
-  if (errors.length > 0 || !sourceOk || !targetOk) {
+  if (!checkStructuralFields(input, errors)) {
     return { errors };
   }
 
@@ -205,70 +237,97 @@ function structuralPrelude(input: unknown): {
     errors: [],
     value: {
       record: input,
-      source: input.source as Record<string, unknown>,
-      target: input.target as Record<string, unknown>,
+      source: input.source,
+      target: input.target,
     },
   };
 }
 
 // ─── Schema-version check ─────────────────────────────────────────────────────
-function checkSchemaVersion(record: Record<string, unknown>): RelationshipValidationError | null {
+function checkSchemaVersion(
+  record: StructuralRecord,
+  errors: RelationshipValidationError[],
+): record is StructuralRecord & Pick<Relationship, "schemaVersion"> {
   if (record.schemaVersion !== RELATIONSHIP_SCHEMA_VERSION) {
-    return makeError(
-      "denied/schema-version-unsupported",
-      `schemaVersion must be the literal "${RELATIONSHIP_SCHEMA_VERSION}"`,
-      "schemaVersion",
+    errors.push(
+      makeError(
+        "denied/schema-version-unsupported",
+        `schemaVersion must be the literal "${RELATIONSHIP_SCHEMA_VERSION}"`,
+        "schemaVersion",
+      ),
     );
+    return false;
   }
-  return null;
+  return true;
 }
 
 // ─── Unknown enum checks ──────────────────────────────────────────────────────
 function checkKindIsKnown(
-  endpoint: Record<string, unknown>,
+  endpoint: EndpointShape,
   field: string,
-): RelationshipValidationError | null {
-  const kind = endpoint.kind as string;
-  if (!(RELATIONSHIP_OBJECT_KINDS as readonly string[]).includes(kind)) {
-    return makeError(
-      "denied/invalid-structure",
-      `${field}.kind is not a known object kind`,
-      `${field}.kind`,
+  errors: RelationshipValidationError[],
+): endpoint is ObjectReference {
+  const kind = endpoint.kind;
+  const knownKinds: readonly string[] = RELATIONSHIP_OBJECT_KINDS;
+  if (!knownKinds.includes(kind)) {
+    errors.push(
+      makeError(
+        "denied/invalid-structure",
+        `${field}.kind is not a known object kind`,
+        `${field}.kind`,
+      ),
     );
+    return false;
   }
-  return null;
+  return true;
 }
 
-function checkTypeIsKnown(record: Record<string, unknown>): RelationshipValidationError | null {
-  const type = record.type as string;
+function checkTypeIsKnown(
+  record: StructuralRecord,
+  errors: RelationshipValidationError[],
+): record is StructuralRecord & Pick<Relationship, "type"> {
+  const type = record.type;
   if (!isNonEmptyString(type)) {
-    return makeError("denied/invalid-structure", "type must be a non-empty string", "type");
+    errors.push(makeError("denied/invalid-structure", "type must be a non-empty string", "type"));
+    return false;
   }
-  if (!(RELATIONSHIP_TYPES as readonly string[]).includes(type)) {
-    return makeError("denied/invalid-structure", "type is not a known relationship type", "type");
+  const knownTypes: readonly string[] = RELATIONSHIP_TYPES;
+  if (!knownTypes.includes(type)) {
+    errors.push(
+      makeError("denied/invalid-structure", "type is not a known relationship type", "type"),
+    );
+    return false;
   }
-  return null;
+  return true;
 }
 
 function checkLifecycleIsKnown(
-  record: Record<string, unknown>,
-): RelationshipValidationError | null {
-  const state = record.lifecycleState as string;
+  record: StructuralRecord,
+  errors: RelationshipValidationError[],
+): record is StructuralRecord & Pick<Relationship, "lifecycleState"> {
+  const state = record.lifecycleState;
   if (!isNonEmptyString(state)) {
-    return makeError(
-      "denied/invalid-structure",
-      "lifecycleState must be a non-empty string",
-      "lifecycleState",
+    errors.push(
+      makeError(
+        "denied/invalid-structure",
+        "lifecycleState must be a non-empty string",
+        "lifecycleState",
+      ),
     );
+    return false;
   }
-  if (!(RELATIONSHIP_LIFECYCLE_STATES as readonly string[]).includes(state)) {
-    return makeError(
-      "denied/invalid-structure",
-      "lifecycleState is not a known lifecycle state",
-      "lifecycleState",
+  const knownStates: readonly string[] = RELATIONSHIP_LIFECYCLE_STATES;
+  if (!knownStates.includes(state)) {
+    errors.push(
+      makeError(
+        "denied/invalid-structure",
+        "lifecycleState is not a known lifecycle state",
+        "lifecycleState",
+      ),
     );
+    return false;
   }
-  return null;
+  return true;
 }
 
 // ─── Endpoint-liveness folding (resolver-supplied) ────────────────────────────
@@ -305,11 +364,12 @@ function appendResolverError(
 
 // ─── Forward-looking kind check ───────────────────────────────────────────────
 function checkObjectKindSupported(
-  endpoint: Record<string, unknown>,
+  endpoint: ObjectReference,
   field: string,
 ): RelationshipValidationError | null {
-  const kind = endpoint.kind as RelationshipObjectKind;
-  if (!(RELATIONSHIP_SUPPORTED_OBJECT_KINDS as readonly string[]).includes(kind)) {
+  const kind = endpoint.kind;
+  const supportedKinds: readonly string[] = RELATIONSHIP_SUPPORTED_OBJECT_KINDS;
+  if (!supportedKinds.includes(kind)) {
     return makeError(
       "denied/object-kind-not-yet-supported",
       `${field}.kind "${kind}" is reserved for a future release`,
@@ -440,11 +500,11 @@ function checkLifecycleTransition(
 
 // ─── Forbidden metadata keys ──────────────────────────────────────────────────
 function checkForbiddenMetadata(
-  record: Record<string, unknown>,
-): readonly RelationshipValidationError[] {
-  const errors: RelationshipValidationError[] = [];
+  record: KnownRecord,
+  errors: RelationshipValidationError[],
+): record is KnownRecord & Pick<Relationship, "metadata"> {
   if (record.metadata === undefined || record.metadata === null) {
-    return errors;
+    return true;
   }
   if (!isRecord(record.metadata)) {
     errors.push(
@@ -454,7 +514,7 @@ function checkForbiddenMetadata(
         "metadata",
       ),
     );
-    return errors;
+    return false;
   }
   for (const key of Object.keys(record.metadata)) {
     // Lowercase + strip non-alphanumerics so "API_KEY", "api-key", "apiKey", and
@@ -474,7 +534,7 @@ function checkForbiddenMetadata(
       }
     }
   }
-  return errors;
+  return true;
 }
 
 // ─── Driver ───────────────────────────────────────────────────────────────────
@@ -482,35 +542,22 @@ function checkForbiddenMetadata(
 // the resolution order is visible at the call site below; reordering the calls REORDERS
 // the resolution order, which is the explicit normative contract.
 // Short-circuit checks that must pass before the accumulating phase runs. Returns either
-// the first blocking error array (caller returns it) or `null` when the record is
+// false with the first blocking errors, or a substantive typed success when the record is
 // structurally usable for the kind compatibility / cardinality / lifecycle / metadata
 // checks. The order pins resolution-order steps 1–4 (schema, type, kind-known,
 // lifecycle-known) so subsequent helpers can safely index by `type` / `kind` /
 // `lifecycleState`.
 function runShortCircuitChecks(
-  record: Record<string, unknown>,
-  source: Record<string, unknown>,
-  target: Record<string, unknown>,
-): readonly RelationshipValidationError[] | null {
-  const versionError = checkSchemaVersion(record);
-  if (versionError) return [versionError];
-
-  const typeError = checkTypeIsKnown(record);
-  if (typeError) return [typeError];
-
-  const sourceKnown = checkKindIsKnown(source, "source");
-  const targetKnown = checkKindIsKnown(target, "target");
-  if (sourceKnown !== null || targetKnown !== null) {
-    const errs: RelationshipValidationError[] = [];
-    if (sourceKnown !== null) errs.push(sourceKnown);
-    if (targetKnown !== null) errs.push(targetKnown);
-    return errs;
-  }
-
-  const lifecycleKnown = checkLifecycleIsKnown(record);
-  if (lifecycleKnown) return [lifecycleKnown];
-
-  return null;
+  input: StructuralInput,
+  errors: RelationshipValidationError[],
+): input is KnownInput {
+  const { record, source, target } = input;
+  if (!checkSchemaVersion(record, errors)) return false;
+  if (!checkTypeIsKnown(record, errors)) return false;
+  const sourceKnown = checkKindIsKnown(source, "source", errors);
+  const targetKnown = checkKindIsKnown(target, "target", errors);
+  if (!sourceKnown || !targetKnown) return false;
+  return checkLifecycleIsKnown(record, errors);
 }
 
 // Accumulates kind-compatibility errors for the resolution-order 4 + 5 slots, AFTER
@@ -562,16 +609,16 @@ function appendCycleErrors(
 // the per-step pure helpers (cardinality / cycle / cross-workspace / lifecycle /
 // metadata).
 function runAccumulatingChecks(
-  record: Record<string, unknown>,
-  source: Record<string, unknown>,
-  target: Record<string, unknown>,
+  record: KnownRecord,
+  source: ObjectReference,
+  target: ObjectReference,
   ctx: RelationshipValidationContext | undefined,
-): readonly RelationshipValidationError[] {
-  const errors: RelationshipValidationError[] = [];
-  const type = record.type as RelationshipType;
-  const lifecycleState = record.lifecycleState as RelationshipLifecycleState;
-  const sourceRef = source as unknown as ObjectReference;
-  const targetRef = target as unknown as ObjectReference;
+  errors: RelationshipValidationError[],
+): record is KnownRecord & Pick<Relationship, "metadata"> {
+  const type = record.type;
+  const lifecycleState = record.lifecycleState;
+  const sourceRef = source;
+  const targetRef = target;
 
   // Resolution-order 3 — forward-looking kinds. Accumulates both sides.
   const sourceSupported = checkObjectKindSupported(source, "source");
@@ -593,7 +640,7 @@ function runAccumulatingChecks(
   appendCycleErrors(type, sourceRef, targetRef, ctx, errors);
 
   // Resolution-order 9 — body-free cross-workspace.
-  const cross = checkCrossWorkspace(record.workspaceId as string, sourceRef, targetRef);
+  const cross = checkCrossWorkspace(record.workspaceId, sourceRef, targetRef);
   if (cross) errors.push(cross);
 
   // Resolution-order 12 — lifecycle transition (context-gated).
@@ -605,10 +652,7 @@ function runAccumulatingChecks(
   appendDeferredResolverErrors(ctx, errors);
 
   // Resolution-order 16 — forbidden metadata keys.
-  for (const error of checkForbiddenMetadata(record)) {
-    errors.push(error);
-  }
-  return errors;
+  return checkForbiddenMetadata(record, errors);
 }
 
 // Resolver-supplied identity codes (resolution-order 1 + 2). Returns the errors when
@@ -650,12 +694,12 @@ export function validateRelationship(
   if (!prelude.value) {
     return { ok: false, errors: prelude.errors };
   }
-  const { record, source, target } = prelude.value;
-
-  const shortCircuit = runShortCircuitChecks(record, source, target);
-  if (shortCircuit) {
+  const checked = prelude.value;
+  const shortCircuit: RelationshipValidationError[] = [];
+  if (!runShortCircuitChecks(checked, shortCircuit)) {
     return { ok: false, errors: shortCircuit };
   }
+  const { record, source, target } = checked;
 
   // Resolver identity is the most-structural failure (denial-reasons.md "Resolution
   // order" 1 + 2). When the resolver reports any failure, short-circuit.
@@ -664,9 +708,10 @@ export function validateRelationship(
     return { ok: false, errors: resolverErrors };
   }
 
-  const errors = runAccumulatingChecks(record, source, target, ctx);
-  if (errors.length > 0) {
+  const errors: RelationshipValidationError[] = [];
+  const metadata = runAccumulatingChecks(record, source, target, ctx, errors);
+  if (!metadata || errors.length > 0) {
     return { ok: false, errors };
   }
-  return { ok: true, value: record as unknown as Relationship };
+  return { ok: true, value: record };
 }

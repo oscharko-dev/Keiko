@@ -10,6 +10,8 @@ const DEFAULT_LIMITS = Object.freeze({
   nodes: 5_000_000,
   aliases: 64,
   emitBytes: 16 * 1024 * 1024,
+  emissionTimeout: 10_000,
+  emissionOutputBytes: 1024 * 1024,
 });
 
 export function subjectPath(subject, absolute) {
@@ -86,6 +88,7 @@ export function createCompilerContext(subject, options = {}) {
     fingerprint: subjectFingerprint(subject),
     snapshots: new Map(),
     programs: new Map(),
+    emissions: new Map(),
     bytes: 0,
     nodes: 0,
     emittedBytes: 0,
@@ -100,6 +103,7 @@ export function createCompilerContext(subject, options = {}) {
     assertCurrent: () => assertCurrent(state),
     close: () => {
       state.programs.clear();
+      state.emissions.clear();
       state.snapshots.clear();
       state.closed = true;
     },
@@ -178,7 +182,6 @@ function programFor(state, path) {
     config,
     program,
     checker: program.getTypeChecker(),
-    emitted: new Map(),
     qualified: new Set(),
   };
   state.created += 1;

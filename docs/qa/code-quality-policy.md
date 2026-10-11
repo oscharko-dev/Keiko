@@ -103,15 +103,26 @@ different programs are never compared by object identity or name alone. Incoming
 untyped, unresolved and partial coverage explicitly. These facts grant no exemption or activation.
 
 Every compiler-loaded owned declaration, including public entrypoints and intermediate reexports,
-qualifies only when the same configured producer program emits byte-identical
-current declaration and declaration-map output. The builtin Node `SourceMap.findEntry` API maps
+qualifies only against the installed pinned native compiler using the actual owner build config.
+The API compiler retains checker and AST duties. Declaration bytes must match exactly; complete map
+payloads must match after canonicalizing only relocation-dependent source paths. Mappings, names,
+version, file and all other map fields remain authoritative. Qualification never relies solely on a
+selected map position. The builtin Node `SourceMap.findEntry` API maps
 zero-based generated positions back to the owning source; owning fixtures exercise real compiler
 emission, workspace symlink resolution, public main/subpath reexports and UTF-16 positions.
 Missing, stale, changed or escaping provenance fails. Matching names or spans alone is insufficient,
 including a same-length producer type change with an unchanged declaration name.
 
 The interface bounds retained programs (2), verified source bytes (64 MiB), visited nodes
-(5 million), alias traversal (64) and aggregate in-memory declaration emission (16 MiB).
+(5 million), alias traversal (64) and aggregate retained declaration emission and private build-info bytes (16 MiB). Native declaration-only
+emission uses a private output directory and build-info path, a direct platform executable, a
+10-second process bound and a 1-MiB diagnostic-output bound. Private output is measured before
+retention and cleaned on success or failure; live build outputs are never emission targets. Configured declaration directories are relocated into
+that private output; bundled `outFile` contexts fail closed before actuation. The output byte bound
+is checked after the bounded compiler process settles, before retention; it does not promise an
+operating-system disk quota during emission.
+Owner results and closed failures persist across program eviction only for the resolver lifetime,
+preventing repeated compiler execution; both are cleared on close.
 These are finite resource ceilings, not acceptance thresholds. It rechecks source, configuration,
 manifest, declaration and dependency snapshots plus package/file ownership and effective
 context/output ownership before returning facts. The existing bounded Git membership producer is shared by collection and
@@ -131,3 +142,91 @@ asserted opaque receiver cannot qualify through its type alone. Mutable, destruc
 callable indirection and unresolved computed members remain
 explicitly incomplete. These are compiler/source reference facts, not runtime function-object
 identity or higher-order responsibility proofs; they authorize no semantic exemption.
+
+### Responsibility checkpoint (inactive intermediate interface)
+
+Version 1 retains its exact policy/report keys, rule inventory, scopes and activation history.
+Version 2 adds closed responsibility records: stable id, owner, validator or structural-redactor
+kind, exact rule obligations, input/transform/output/consumer export selectors and repository proof
+paths. The input selector names an exact nonnegative canonical `parameterIndex`; its closed shape
+and historical identity reject removal or rebinding of that slot. Historical version 1 has no responsibility records; version 2 history rejects downgrade,
+removal or rebinding of an existing obligation. Unknown authorization fields remain rejected.
+
+Selectors resolve actual current compiler-owned declarations and emitted public entries. The
+relationship validator's root barrel exposes its type identity only; its executable public entry
+is `@oscharko-dev/keiko-contracts/runtime/relationships-validation`. Proof paths bind current source
+bytes, not test execution. A source-compatible validator signature does not prove its implementation
+or its consumer. Structural redaction truthfully returns unknown and preserves structure; it does
+not establish domain validity or persistence safety.
+
+The intermediate evaluator reports structural `ready`, `incomplete` or `invalid` separately from
+semantic `pending` or `rejected`. No runtime proof execution mechanism is authorized by this
+interface, so `qualified` remains zero. Even a present proof file and separately passing owning
+Vitest tests cannot qualify CLI semantics. The combined v2 `outcome` remains failed while any
+responsibility remains unqualified. The explicitly separate `enforcementOutcome` answers only
+active syntax and static obligations. Enforce-mode exit follows that static result; text and JSON
+disclose both results and semantic counts. Census returns its descriptive exit zero while retaining
+actual static failure and pending semantics in those fields; census never supplies an enforce verdict.
+This is a disclosed v2 command-contract refinement,
+not semantic or migration qualification. Version 1 report shape and command behavior are unchanged.
+
+Static enforcement fails on active applicable findings and incomplete or rejected required static
+facts, including missing/foreign owners, missing/noncallable or unbound consumers, missing proofs and unsafe
+unknown or open-dictionary validator outputs. Merely unexecuted runtime and consumer proofs remain
+pending without becoming static rejection. The evaluator adapts the assigned canonical raw
+parameter's exact annotation, and exact private same-source helper parameter annotations reached
+by bounded direct calls forwarding that parameter or its static property projection. Parentheses
+and immutable const aliases preserve this origin; assertions, non-null assertions, `satisfies`,
+explicit unknown/open-dictionary erasure, mutable or destructured bindings and computed dispatch do not.
+Every helper value reference must be accounted for by this closure or an immutable local callee alias.
+Unrelated trusted callers, exports/reexports, return/container/callback escapes, unused nested
+functions, deferred classes and self/mutual cycles withdraw the helper adaptation or leave facts
+incomplete. Extra unknown parameters and other APIs remain checked.
+
+Within this closure, `no-runtime-typeof` adapts only an exact operand whose checker type remains
+unknown and whose raw origin is retained. A partially narrowed or typed operand remains enforced.
+`no-known-value-widening` adapts only an exact informative argument recheck against an actual
+checker-bound type-predicate parameter in the same qualified closure, while retaining informative
+local types. It never adapts variable/property/assignment/return erasure or assertions. A structural
+redactor's truthful raw return annotation remains the sole `no-unknown-returns` adaptation.
+The raw census retains every finding, and each adaptation carries the responsibility id and exact
+checker-owned slot. Native diagnostic line/columns use UTF-8 bytes from the actual source; compiler
+start/end offsets and declaration-map ownership retain their UTF-16 contract. Guarded resolver facts
+are reused without an additional program or analyzer run; returned facts cannot mutate the cache,
+and current source/config/package membership guards still invalidate reuse.
+No body, consumer, package, assertion or typed domain output is exempted.
+Other rule obligations stay applicable and receive no adaptation from these slots. Existing version
+1 production policy and every activation/history guard remain unchanged.
+
+The existing bounded resolver supplies canonical callable slots, call references, flat index-signature
+facts and types before inert assertions. Recursive dictionary indexes are classified without walking
+an unbounded type graph. Missing or stale source facts grant no adaptation. These facts describe
+compiler/source contracts and cannot prove a predicate body truthful. The same ordinary runtime
+consumer safety assertions reject unchecked, always-true predicate, open-dictionary and generic
+assertion mutants; they do not promote the CLI's unexecuted semantic proofs through a cache,
+receipt, proof path, witness or authorization flag.
+
+Actual reference-validator/redactor preservation and counterfeit unknown-output controls live in
+the responsibility owning suite. They are useful runtime controls, not complete dataflow,
+validation-dominance, hostile-object or physical-sink proofs. Native sibling policy integration,
+versioned production records and shared real-parser fixture adaptation remain prerequisites for
+publishing the complete responsibility checkpoint.
+
+Consumer selectors require their own nonempty, bounded `owner` (at most 256 characters).
+Input, transform and output declarations remain bound to the producer record's `owner`; canonical
+consumer declarations are bound to `consumer.owner`. This permits existing cross-package consumers
+without relocating code or introducing a foreign-owner permission. Import-anchor paths do not establish
+exported declaration ownership. Consumer ownership is part of historical selector identity; missing,
+malformed, mismatched or rebound ownership fails closed. Producer selectors still reject extra owner
+fields. The resolver keeps that public identity separate from its actual callable implementation, following
+bounded immutable const aliases and current checker-bound imports/reexports. The implementation
+must retain `consumer.owner` and contain a canonical lexical call to the declared transform producer.
+A decoy call in another export cannot bind the named consumer. Direct inline call-argument callbacks
+participate lexically; named nested functions and unused locally assigned lambdas are separate
+implementations. Deferred class scopes also remain separate and cannot bind an enclosing consumer.
+Mutable, destructured or unresolved computed dispatch remains unbound. Missing
+or unsupported implementation facts remain incomplete and grant no raw-slot adaptation.
+
+These call facts establish bounded source participation, not callback execution, validation
+dominance, result flow or runtime safety. Semantic obligations remain pending, qualified counts
+remain zero, and no proof path or prior test result qualifies them.
