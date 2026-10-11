@@ -419,6 +419,9 @@ promotion. This does not establish callback invocation or an outer-owner call ed
 Precisely referenced definitions use their complete AST declaration ranges without appended
 context lines, preventing neighbouring definitions from consuming each other's excerpt grant.
 Existing own-return and direct-await annotations order certified calls with fair sibling traversal.
+Exact structural endpoint-registration ranges and their existing surrounding-context boundaries
+split broader ordinary windows. Uncovered surrounding evidence retains its relevance and priority;
+these spans do not certify handler invocation.
 Binding certification does not replace relevance with a constant score. Declaration promotion
 preserves its admitted score; a further definition reuses the original-query matcher on its actually
 read, redacted source, followed by the existing relationship attenuation. Explicit selected-file
@@ -433,8 +436,8 @@ certificate. Unobserved, anchored or partially clipped caller spans receive no c
 Independent route roots and their file queues receive bounded initial byte portions from the
 existing connected share. Existing certified traversal sets file order; existing query relevance
 orders targets within each file, with stable ties. Roots and their file queues take turns within
-those portions. After that bounded pass, unserved queues retry unused shared bytes before further
-expansion.
+those portions. After that bounded pass, existing relevance orders shared retries within each root,
+with stable ties and turns between roots. Later targets in an already served file remain eligible.
 Shared ancestors reserve bytes once; upgrades retain funded target windows, later
 same-file targets remain eligible, and oversized branches receive no partial reservation.
 Reservations must fit both the remaining connected share and actual per-file read capacity; they
