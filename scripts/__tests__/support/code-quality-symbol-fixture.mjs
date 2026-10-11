@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { nativeCompilerExecutable } from "../../lib/code-quality-provenance.mjs";
 import ts from "typescript";
 import { createPolicyFixtureRepository } from "./code-quality-fixture.mjs";
 
@@ -80,9 +81,12 @@ export function emitSymbolFixture(root, directory = "packages/alpha") {
   );
   const program = ts.createProgram({ rootNames: config.fileNames, options: config.options });
   if (ts.getPreEmitDiagnostics(program).length > 0) throw new TypeError("symbol-fixture-types");
-  const emitted = program.emit();
-  if (emitted.emitSkipped || emitted.diagnostics.length > 0)
-    throw new TypeError("symbol-fixture-emit");
+  execFileSync(nativeCompilerExecutable(), ["-p", join(root, directory, "tsconfig.json")], {
+    cwd: root,
+    timeout: 10_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
 }
 
 export function packSymbolFixture(root) {

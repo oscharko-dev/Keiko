@@ -1,6 +1,9 @@
-import { Buffer } from "node:buffer";
-import { dirname, join } from "node:path";
-import { SourceMap } from "node:module";
+import { dirname, join, relative, resolve } from "node:path";
+import { readFileSync, mkdtempSync, readdirSync, lstatSync, rmSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { createRequire, SourceMap } from "node:module";
+import { isDeepStrictEqual } from "node:util";
 import ts from "typescript";
 import { subjectPath, visitCompilerNodes } from "./code-quality-compiler.mjs";
 
@@ -27,40 +30,154 @@ function ownerOf(subject, path) {
   return file.scope;
 }
 
-function emitProducer(compiler, path) {
-  const context = compiler.program(path);
-  const cached = context.emitted.get(path);
-  if (cached) return cached;
-  if (context.config.options.noEmit) throw new TypeError("unqualified-declaration-emission");
-  const source = context.program.getSourceFile(join(compiler.state.subject.root, path));
-  if (!source || ts.getPreEmitDiagnostics(context.program).length > 0)
-    throw new TypeError("unqualified-declaration-emission");
-  const outputs = new Map();
-  const result = context.program.emit(
-    source,
-    (name, text) => {
-      compiler.state.emittedBytes += Buffer.byteLength(text);
-      if (compiler.state.emittedBytes > compiler.state.limits.emitBytes)
-        throw new TypeError("symbol-emission-budget");
-      outputs.set(subjectPath(compiler.state.subject, name), text);
-    },
-    undefined,
-    true,
+export function nativeCompilerExecutable() {
+  const require = createRequire(import.meta.url);
+  const native = JSON.parse(
+    readFileSync(require.resolve("@typescript/native/package.json"), "utf8"),
   );
-  if (result.emitSkipped || result.diagnostics.length > 0)
+  const platform = `@typescript/typescript-${process.platform}-${process.arch}`;
+  const packagePath = require.resolve(`${platform}/package.json`);
+  const installed = JSON.parse(readFileSync(packagePath, "utf8"));
+  if (native.version !== installed.version) throw new TypeError("unqualified-native-compiler");
+  return join(dirname(packagePath), "lib", process.platform === "win32" ? "tsc.exe" : "tsc");
+}
+
+function collectEmitted(compiler, directory, originalDirectory, outputs) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      collectEmitted(compiler, path, originalDirectory, outputs);
+      continue;
+    }
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new TypeError("unsafe-declaration-emission");
+    compiler.state.emittedBytes += stat.size;
+    if (compiler.state.emittedBytes > compiler.state.limits.emitBytes)
+      throw new TypeError("symbol-emission-budget");
+    outputs.set(
+      relative(originalDirectory, path).replaceAll("\\", "/"),
+      readFileSync(path, "utf8"),
+    );
+  }
+}
+
+function invokeNative(compiler, options, directory, scratch) {
+  try {
+    execFileSync(
+      nativeCompilerExecutable(),
+      [
+        "-p",
+        options.configFilePath,
+        "--emitDeclarationOnly",
+        "--outDir",
+        directory,
+        ...(options.declarationDir ? ["--declarationDir", directory] : []),
+        "--tsBuildInfoFile",
+        join(scratch, "private.tsbuildinfo"),
+      ],
+      {
+        cwd: compiler.state.subject.root,
+        timeout: compiler.state.limits.emissionTimeout,
+        killSignal: "SIGKILL",
+        maxBuffer: compiler.state.limits.emissionOutputBytes,
+        encoding: "utf8",
+      },
+    );
+  } catch (cause) {
+    throw new TypeError("unqualified-declaration-emission", { cause });
+  }
+}
+
+function nativeEmission(compiler, context) {
+  const options = context.config.options;
+  if (
+    !options.configFilePath ||
+    !options.outDir ||
+    !options.declaration ||
+    options.noEmit ||
+    options.outFile
+  )
     throw new TypeError("unqualified-declaration-emission");
-  context.emitted.set(path, outputs);
-  return outputs;
+  if (ts.getPreEmitDiagnostics(context.program).length > 0)
+    throw new TypeError("unqualified-declaration-emission");
+  compiler.assertCurrent();
+  const scratch = mkdtempSync(join(tmpdir(), "keiko-symbol-emission-"));
+  const directory = join(scratch, "dist");
+  try {
+    invokeNative(compiler, options, directory, scratch);
+    compiler.assertCurrent();
+    const outputs = new Map();
+    collectEmitted(compiler, directory, directory, outputs);
+    compiler.state.emittedBytes += lstatSync(join(scratch, "private.tsbuildinfo")).size;
+    if (compiler.state.emittedBytes > compiler.state.limits.emitBytes)
+      throw new TypeError("symbol-emission-budget");
+    return { outputs, directory, outDir: options.declarationDir ?? options.outDir };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function emitProducer(compiler, path) {
+  const { owner } = compiler.context(path);
+  const cached = compiler.state.emissions.get(owner);
+  if (cached?.error) throw cached.error;
+  if (cached) return cached;
+  try {
+    const emitted = nativeEmission(compiler, compiler.program(path));
+    compiler.state.emissions.set(owner, emitted);
+    return emitted;
+  } catch (error) {
+    compiler.state.emissions.set(owner, { error: new TypeError(error.message) });
+    throw error;
+  }
+}
+
+function normalizedMap(compiler, text, mapPath) {
+  const payload = JSON.parse(text);
+  if (
+    payload.version !== 3 ||
+    !Array.isArray(payload.sources) ||
+    payload.sources.some((source) => typeof source !== "string") ||
+    (payload.sourceRoot !== undefined && typeof payload.sourceRoot !== "string")
+  )
+    throw new TypeError("invalid-declaration-map");
+  const sources = payload.sources.map((source) =>
+    subjectPath(
+      compiler.state.subject,
+      realpathSync(resolve(dirname(mapPath), payload.sourceRoot ?? "", source)),
+    ),
+  );
+  return { ...payload, sourceRoot: "", sources };
+}
+
+function matchingMap(compiler, emitted, outputPath, freshMap, mapPath, mapText) {
+  try {
+    return isDeepStrictEqual(
+      normalizedMap(compiler, freshMap, join(emitted.directory, `${outputPath}.map`)),
+      normalizedMap(compiler, mapText, join(compiler.state.subject.root, mapPath)),
+    );
+  } catch (cause) {
+    throw new TypeError("stale-declaration-provenance", { cause });
+  }
 }
 
 function qualifiedDeclarationBytes(compiler, path) {
   const source = compiler.state.subject.outputs.get(path);
   if (!source) throw new TypeError("unqualified-declaration-owner");
-  const outputs = emitProducer(compiler, source);
+  const emitted = emitProducer(compiler, source);
+  const outputPath = relative(emitted.outDir, join(compiler.state.subject.root, path)).replaceAll(
+    "\\",
+    "/",
+  );
   const mapPath = `${path}.map`;
   const declarationText = compiler.read(path);
   const mapText = compiler.read(mapPath);
-  if (outputs.get(path) !== declarationText || outputs.get(mapPath) !== mapText)
+  const freshMap = emitted.outputs.get(`${outputPath}.map`);
+  if (
+    emitted.outputs.get(outputPath) !== declarationText ||
+    freshMap === undefined ||
+    !matchingMap(compiler, emitted, outputPath, freshMap, mapPath, mapText)
+  )
     throw new TypeError("stale-declaration-provenance");
   return { source, mapPath, mapText };
 }

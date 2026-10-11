@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync, rmSync, unlinkSync, writeFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { collectPolicyInventory, collectPolicySubject } from "../lib/code-quality-inventory.mjs";
@@ -13,8 +13,16 @@ import {
   packSymbolFixture,
 } from "./support/code-quality-symbol-fixture.mjs";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
+
+const { execFileSync: originalExecFileSync } = await vi.importActual("node:child_process");
 const fixtures = [];
 afterEach(() => {
+  vi.mocked(execFileSync).mockReset();
+  vi.mocked(execFileSync).mockImplementation(originalExecFileSync);
   for (const { root, resolver } of fixtures.splice(0)) {
     resolver?.close();
     rmSync(root, { recursive: true, force: true });
@@ -30,6 +38,189 @@ async function fixture(options = {}) {
 const reference = { consumerPath: "src/consumer.ts", specifier: "alpha", exportName: "parse" };
 
 describe("configured canonical symbol resolver interface (#3918)", () => {
+  it("qualifies actual native nested/generated owner declarations without API-emitter map equivalence", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const fields = Array.from(
+      { length: 32 },
+      (_, index) =>
+        `readonly item${index}: { readonly nested: readonly { readonly value: number }[] };`,
+    ).join("\n");
+    const values = Array.from(
+      { length: 16 },
+      (_, index) => `{ kind: 'kind${index}', values: [${index}, ${index + 1}] }`,
+    ).join(",");
+    own.put(
+      "packages/alpha/src/generated/catalog.ts",
+      `export interface GeneratedCatalog {\n${fields}\n}\nexport const generated = [${values}] as const;\n`,
+    );
+    own.put(
+      "packages/alpha/src/owner.ts",
+      "import { generated } from './generated/catalog.js';\nexport function validate(input: unknown): typeof generated { return generated; }\n",
+    );
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(own.resolver.resolveExport(reference).identities[0]).toMatchObject({
+      owner: "alpha",
+      producer: { path: "packages/alpha/src/owner.ts" },
+    });
+  });
+
+  it.each(["added", "existing"])("rejects %s nonselected native mapping changes", async (mode) => {
+    const own = await fixture();
+    const path = join(own.root, "packages/alpha/dist/owner.d.ts.map");
+    const payload = JSON.parse(readFileSync(path, "utf8"));
+    const changed = structuredClone(payload);
+    changed.mappings =
+      mode === "added"
+        ? `${payload.mappings};AAAA`
+        : payload.mappings.slice(0, -1) + (payload.mappings.at(-1) === "A" ? "C" : "A");
+    const declaration = ts.createSourceFile(
+      "owner.d.ts",
+      readFileSync(join(own.root, "packages/alpha/dist/owner.d.ts"), "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    ).statements[0];
+    expect(declarationMapPosition(declaration, JSON.stringify(changed)).mapped).toEqual(
+      declarationMapPosition(declaration, JSON.stringify(payload)).mapped,
+    );
+    own.put("packages/alpha/dist/owner.d.ts.map", JSON.stringify(changed));
+    expect(() => own.resolver.resolveExport(reference)).toThrow("stale-declaration-provenance");
+  });
+
+  it.each(["unavailable", "nonzero", "timeout", "output"])(
+    "settles actual %s compiler failures and cleans private output",
+    async (mode) => {
+      const own = await fixture({ emissionTimeout: 250, emissionOutputBytes: 32 });
+      let scratch;
+      let timedOutPid;
+      let failureCode;
+      vi.mocked(execFileSync).mockImplementation((_executable, args, options) => {
+        if (!args.includes("--emitDeclarationOnly"))
+          return originalExecFileSync(_executable, args, options);
+        scratch = dirname(args[args.indexOf("--outDir") + 1]);
+        if (mode === "unavailable")
+          return originalExecFileSync(join(scratch, "missing-compiler"), [], options);
+        const scripts = {
+          nonzero: "process.exit(7)",
+          timeout: "process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)",
+          output: "process.stdout.write('x'.repeat(4096))",
+        };
+        try {
+          return originalExecFileSync(process.execPath, ["-e", scripts[mode]], options);
+        } catch (error) {
+          failureCode = error.code ?? error.status;
+          if (mode === "timeout") timedOutPid = Number(error.stdout);
+          throw error;
+        }
+      });
+      expect(() => own.resolver.resolveExport(reference)).toThrow(
+        "unqualified-declaration-emission",
+      );
+      const calls = vi
+        .mocked(execFileSync)
+        .mock.calls.filter(([, args]) => args.includes("--emitDeclarationOnly")).length;
+      expect(() => own.resolver.resolveExport(reference)).toThrow(
+        "unqualified-declaration-emission",
+      );
+      expect(
+        vi
+          .mocked(execFileSync)
+          .mock.calls.filter(([, args]) => args.includes("--emitDeclarationOnly")),
+      ).toHaveLength(calls);
+      expect(calls).toBe(1);
+      if (mode === "timeout") {
+        expect(failureCode).toBe("ETIMEDOUT");
+        expect(timedOutPid).toBeGreaterThan(0);
+        expect(() => process.kill(timedOutPid, 0)).toThrow();
+      }
+      if (mode === "nonzero") expect(failureCode).toBe(7);
+      if (mode === "output") expect(failureCode).toBe("ENOBUFS");
+      expect(scratch).toBeTruthy();
+      expect(existsSync(scratch)).toBe(false);
+    },
+  );
+
+  it("reuses a real owner emission across program eviction without touching live build outputs", async () => {
+    const own = await fixture({ programs: 1 });
+    const path = join(own.root, "packages/alpha/tsconfig.tsbuildinfo");
+    const before = readFileSync(path);
+    vi.mocked(execFileSync).mockClear();
+    own.resolver.resolveExport(reference);
+    own.resolver.expressionFactsAt({
+      path: "src/consumer.ts",
+      offset: readFileSync(join(own.root, "src/consumer.ts"), "utf8").indexOf("1);"),
+    });
+    own.resolver.resolveExport(reference);
+    expect(
+      vi
+        .mocked(execFileSync)
+        .mock.calls.filter(([, args]) => args.includes("--emitDeclarationOnly")),
+    ).toHaveLength(1);
+    expect(readFileSync(path)).toEqual(before);
+    expect(own.resolver.stats().created).toBeGreaterThan(2);
+  });
+
+  it.each(["source", "config"])(
+    "rejects %s change during actual native emission and cleans scratch",
+    async (kind) => {
+      const own = await fixture();
+      let scratch;
+      vi.mocked(execFileSync).mockImplementation((executable, args, options) => {
+        const result = originalExecFileSync(executable, args, options);
+        if (args.includes("--emitDeclarationOnly")) {
+          scratch = dirname(args[args.indexOf("--outDir") + 1]);
+          const path =
+            kind === "source" ? "packages/alpha/src/owner.ts" : "packages/alpha/tsconfig.json";
+          own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+        }
+        return result;
+      });
+      expect(() => own.resolver.resolveExport(reference)).toThrow("symbol-subject-changed");
+      expect(existsSync(scratch)).toBe(false);
+    },
+  );
+
+  it("cleans bounded actual native output when the retained emission budget is exceeded", async () => {
+    const own = await fixture({ emitBytes: 1 });
+    let scratch;
+    vi.mocked(execFileSync).mockImplementation((executable, args, options) => {
+      if (args.includes("--emitDeclarationOnly"))
+        scratch = dirname(args[args.indexOf("--outDir") + 1]);
+      return originalExecFileSync(executable, args, options);
+    });
+    expect(() => own.resolver.resolveExport(reference)).toThrow("symbol-emission-budget");
+    expect(scratch).toBeTruthy();
+    expect(existsSync(scratch)).toBe(false);
+  });
+
+  it("routes a configured declaration directory to private output without rewriting live declarations", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+    config.compilerOptions.declarationDir = "types";
+    own.put("packages/alpha/tsconfig.json", config);
+    const manifest = JSON.parse(
+      readFileSync(join(own.root, "packages/alpha/package.json"), "utf8"),
+    );
+    manifest.exports["."].types = "./types/index.d.ts";
+    manifest.exports["./runtime"].types = "./types/owner.d.ts";
+    manifest.files.push("types");
+    own.put("packages/alpha/package.json", manifest);
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const live = readFileSync(join(own.root, "packages/alpha/types/owner.d.ts.map"));
+    vi.mocked(execFileSync).mockClear();
+    expect(own.resolver.resolveExport(reference).identities[0].owner).toBe("alpha");
+    const [, args] = vi
+      .mocked(execFileSync)
+      .mock.calls.find(([, command]) => command.includes("--emitDeclarationOnly"));
+    expect(args[args.indexOf("--declarationDir") + 1]).toBe(args[args.indexOf("--outDir") + 1]);
+    expect(readFileSync(join(own.root, "packages/alpha/types/owner.d.ts.map"))).toEqual(live);
+  });
+
   it("binds exact callable annotation slots through the same canonical alias and bounded programs", async () => {
     const own = await fixture();
     const identity = own.resolver.resolveExport(reference).identities[0];

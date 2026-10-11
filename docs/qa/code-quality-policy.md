@@ -103,15 +103,26 @@ different programs are never compared by object identity or name alone. Incoming
 untyped, unresolved and partial coverage explicitly. These facts grant no exemption or activation.
 
 Every compiler-loaded owned declaration, including public entrypoints and intermediate reexports,
-qualifies only when the same configured producer program emits byte-identical
-current declaration and declaration-map output. The builtin Node `SourceMap.findEntry` API maps
+qualifies only against the installed pinned native compiler using the actual owner build config.
+The API compiler retains checker and AST duties. Declaration bytes must match exactly; complete map
+payloads must match after canonicalizing only relocation-dependent source paths. Mappings, names,
+version, file and all other map fields remain authoritative. Qualification never relies solely on a
+selected map position. The builtin Node `SourceMap.findEntry` API maps
 zero-based generated positions back to the owning source; owning fixtures exercise real compiler
 emission, workspace symlink resolution, public main/subpath reexports and UTF-16 positions.
 Missing, stale, changed or escaping provenance fails. Matching names or spans alone is insufficient,
 including a same-length producer type change with an unchanged declaration name.
 
 The interface bounds retained programs (2), verified source bytes (64 MiB), visited nodes
-(5 million), alias traversal (64) and aggregate in-memory declaration emission (16 MiB).
+(5 million), alias traversal (64) and aggregate retained declaration emission and private build-info bytes (16 MiB). Native declaration-only
+emission uses a private output directory and build-info path, a direct platform executable, a
+10-second process bound and a 1-MiB diagnostic-output bound. Private output is measured before
+retention and cleaned on success or failure; live build outputs are never emission targets. Configured declaration directories are relocated into
+that private output; bundled `outFile` contexts fail closed before actuation. The output byte bound
+is checked after the bounded compiler process settles, before retention; it does not promise an
+operating-system disk quota during emission.
+Owner results and closed failures persist across program eviction only for the resolver lifetime,
+preventing repeated compiler execution; both are cleared on close.
 These are finite resource ceilings, not acceptance thresholds. It rechecks source, configuration,
 manifest, declaration and dependency snapshots plus package/file ownership and effective
 context/output ownership before returning facts. The existing bounded Git membership producer is shared by collection and
