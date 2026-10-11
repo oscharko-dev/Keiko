@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { URL } from "node:url";
 import { codeQualityPolicyMain, executeCodeQualityPolicy } from "../check-code-quality-policy.mjs";
 import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
@@ -20,6 +22,19 @@ import {
   replaceConsumerCallFixture,
   createRawHelperEnforcementFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
+
+function executeCensusChild(root, ci) {
+  const entry = new URL("../check-code-quality-policy.mjs", import.meta.url).href;
+  const source = `import { codeQualityPolicyMain } from ${JSON.stringify(entry)};
+    process.exitCode = await codeQualityPolicyMain(["--mode", "census"], ${JSON.stringify(root)});`;
+  return spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    env: { ...process.env, CI: ci },
+    encoding: "utf8",
+    timeout: 45_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
+}
 
 const roots = [];
 afterEach(() => {
@@ -519,9 +534,14 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
     expect(report.outcome).toBe("failed");
     expect(report.enforcementOutcome).toBe("failed");
     expect(report.responsibilities.counts.incomplete).toBe(1);
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    expect(await codeQualityPolicyMain(["--mode", "census"], own.root)).toBe(0);
-    expect(log.mock.calls[0][0]).toContain("enforcement=FAILED; combined=FAILED");
+    const census = executeCensusChild(own.root, "false");
+    expect(census.error).toBeUndefined();
+    expect(census.status).toBe(0);
+    expect(census.stdout).toContain("enforcement=FAILED; combined=FAILED");
+    const ci = executeCensusChild(own.root, "true");
+    expect(ci.error).toBeUndefined();
+    expect(ci.status).toBe(1);
+    expect(ci.stderr).toContain("partial-ci-verdict");
   }, 60_000);
 
   it.each(["extra-slot", "unknown-consumer", "open-dictionary", "missing-slot"])(

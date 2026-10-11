@@ -217,16 +217,26 @@ Epic #1852 set for its consent boundary. No constraint above is weakened.
   credential, or cookie. The manual pod's redacted origin/path summary and opaque `manualSourceFingerprint`
   are the only manual-derived values that reach a browser surface, reusing the #1852 redaction guards.
 
-The crawler consumes the pre-validated, redacted approval and never re-detects, re-summarises, or
-re-approves a target. The `keiko-server` egress route and any user-facing UI that drives the crawl remain
-the concern of later, separately governed work (chat-attach Epic #1854 and siblings).
+Documentation navigation, proposal and approval remain separate from job execution: neither opening
+a target nor producing a proposal or approval starts a crawl or index. The crawler executes only
+within its validated source scope and limits.
 
-**Deferred: server-side trigger route and HTTP fetcher.** `createHtmlManualPod` and
-`refreshHtmlManualPod` (Epic #1856) are fully implemented, locally verified domain functions, but
-neither has a live entry point in the running product today: no `keiko-server` route calls either,
-no UI action triggers them, and the `gatewayFetch`-backed HTTP `ManualCrawlFetcher` for
-`html-manual-http` sources described above has not been built. Wiring a governed BFF trigger route
-and the HTTP fetcher is tracked in Issue #2063.
+**Implemented live HTML-manual jobs (Issue #2063).** The Local Knowledge UI provides a separate create
+form and an explicitly confirmed refresh action. These invoke the BFF POST
+`/api/local-knowledge/manual-pods/create` and `/api/local-knowledge/manual-pods/refresh` routes, which
+validate bounded JSON requests before starting in-process background jobs through `createHtmlManualPod`
+and `refreshHtmlManualPod`. Creation derives and validates the HTTP source from the submitted origin
+and path prefix; refresh accepts capsule/source IDs only and reconstructs and revalidates the stored
+source scope and limits. The UI polls `/api/local-knowledge/manual-pods/jobs/:jobId` for the existing
+body-free job projection.
+
+The live create request exposes HTTP(S) manuals only; no local-root creation input is exposed. HTTP
+fetching is composed in `keiko-server` through the existing `gatewayFetch`-backed `ManualCrawlFetcher`,
+retaining crawl scope/budget checks and the gateway transport/egress boundary. Private-network reach
+is an independent manual-pod deployment opt-in (`KEIKO_MANUAL_POD_ALLOW_PRIVATE_NETWORK`), not
+inherited from the model-gateway private-network setting. The live create path does not consume a
+`DocumentationIndexingApproval` token; the earlier proposal/approval handoff is not an automatic job
+trigger.
 
 ## Extension: citation-driven navigation for HTML manual chat answers (Epic #1854)
 

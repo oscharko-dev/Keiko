@@ -124,15 +124,29 @@ function onlyKnownKeys(
   return extra === undefined ? [] : [`${field} must not include ${extra}`];
 }
 
+function isHtmlManualPodRefreshRequest(
+  input: unknown,
+  errors: string[],
+): input is HtmlManualPodRefreshRequest {
+  if (!isRecord(input)) {
+    errors.push("request must be an object");
+    return false;
+  }
+  const keyErrors = onlyKnownKeys(input, ["capsuleId", "sourceId"], "request");
+  errors.push(...keyErrors);
+  const capsuleIdValid = isSafeManualPodId(input.capsuleId);
+  if (!capsuleIdValid) errors.push("capsuleId must be a safe id token");
+  const sourceIdValid = isSafeManualPodId(input.sourceId);
+  if (!sourceIdValid) errors.push("sourceId must be a safe id token");
+  return keyErrors.length === 0 && capsuleIdValid && sourceIdValid;
+}
+
 export function validateHtmlManualPodRefreshRequest(
   input: unknown,
 ): LocalKnowledgeValidation<HtmlManualPodRefreshRequest> {
-  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
-  const errors = onlyKnownKeys(input, ["capsuleId", "sourceId"], "request");
-  if (!isSafeManualPodId(input.capsuleId)) errors.push("capsuleId must be a safe id token");
-  if (!isSafeManualPodId(input.sourceId)) errors.push("sourceId must be a safe id token");
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: input as unknown as HtmlManualPodRefreshRequest };
+  const errors: string[] = [];
+  if (!isHtmlManualPodRefreshRequest(input, errors)) return { ok: false, errors };
+  return { ok: true, value: input };
 }
 
 // Normalise + validate an optional path prefix: undefined/null -> null; a string is scope-checked;
