@@ -498,21 +498,30 @@ system that exists, never beside it:
   joint prefix with the same nominated file, including the original joint proposal as fallback.
   Funding the head only inside a provisional proposal does not enable this extension.
   A shared joint proposal may also fund one finite chain of selected definitions connected by
-  certified nearest-owned source calls. The existing exact parent/child witness carries this
-  ownership; a reference edge alone does not qualify. The first pending child must be at least as
-  relevant as the nominated physical file head and must itself own a selected child. This gives a
-  multi-body source continuation one bounded opportunity while standalone terminal leaves keep
-  their existing ranked and deferred turns. Already funded connectors can be traversed without
-  counting as progress; after the first new target, lower-relevance descendants and terminal leaves
-  may complete that chain. Existing source order selects one branch, and identity tracking bounds
-  recursive cycles. Every target still passes the existing currentness, whole-definition,
-  physical-window and connected-share checks; a failed extension retains the original feasible
-  joint proposal. A fully funded file is reopened only for an already fully funded parent whose
-  pending branch passes the same first-child predicate at that file's actual head score. Other
-  pending targets in that file do not acquire a new file turn. This conservative reopening check
-  is separate from extending a feasible joint proposal at its nominated file-head score. Assigned,
-  statement, returned and awaited calls qualify equally; return and await remain relevance hints,
-  and source ownership does not certify handler invocation.
+  certified nearest-owned source calls. The exact parent/child witness carries this ownership;
+  a reference edge alone does not qualify. The first new child must itself own a selected child.
+  It must meet the nominated physical file-head score unless a fully funded owned connector on
+  that same lineage has already met that comparison and owns a selected child. The starting
+  parent alone does not discharge the comparison, and other branches retain their own floors.
+  This gives a multi-body source continuation one bounded opportunity while standalone terminal
+  leaves keep their existing ranked and deferred turns. Already funded connectors can be
+  traversed without counting as progress; after the first new target, lower-relevance descendants
+  and terminal leaves may complete that chain. Existing source order selects one branch, and
+  identity tracking bounds recursive cycles. Every target still passes the existing currentness,
+  whole-definition, physical-window and connected-share checks; a failed extension retains the
+  original feasible joint proposal.
+  A file whose relevance-ordered head is fully funded is eligible for another file turn only
+  through an already fully funded parent with a pending owned multi-body continuation.
+  Availability uses the lowest score among pending unfunded physical file heads and the current
+  relevance file head to find possible nominations. Actual admission uses the current
+  nomination's physical file-head score. A feasible external joint
+  proposal may also extend individually fully funded parents in the relevance file at that
+  external file's actual head score. Those parents must have been fully funded in committed
+  state before the turn; funding them only inside the proposal does not enable this extension.
+  The admitted proposal retains the external file body and the original joint fallback. Other
+  pending targets in a funded file do not acquire a new file turn. Assigned, statement, returned
+  and awaited calls qualify equally; return and await remain relevance hints, and source
+  ownership does not certify handler invocation.
   Infeasible nominations remain eligible without blocking feasible nominations in other files.
   A weaker target or compact caller window does not complete that head's file opportunity.
   Higher and tied file heads retain their existing relevance turns and guarded deferred retries.
