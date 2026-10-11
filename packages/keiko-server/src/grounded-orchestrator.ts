@@ -3453,6 +3453,8 @@ async function discoverRequiredDefinitionsForRing(
 }
 
 export interface ExcerptInputs {
+  readonly firstExcerptRound?: boolean | undefined;
+  readonly previousExcerptResults?: ReadonlyMap<string, ReadPathExcerptWindowsResult> | undefined;
   readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly priorityPaths?: ReadonlySet<string> | undefined;
   readonly coveragePlan?: RouteCoverageReadPlan | undefined;
@@ -6190,10 +6192,13 @@ interface ExcerptWindowSelection {
   readonly coverageApplied?: boolean | undefined;
   readonly ordinaryWindows?: readonly LineWindow[] | undefined;
   readonly deferredDefinitionRangeCount?: number | undefined;
+  readonly fundedWindows?: readonly LineWindow[] | undefined;
+  readonly definitionWindows?: readonly LineWindow[] | undefined;
 }
 
 interface RouteCoverageReadPlan {
   readonly paths: readonly string[];
+  readonly eligiblePaths: ReadonlySet<string>;
   readonly entries: ReadonlyMap<string, readonly RouteCoverageReadWindow[]>;
   readonly reserves: ReadonlyMap<string, number>;
 }
@@ -6515,7 +6520,13 @@ function routeCoverageReadPlan(
   );
   const share = distributeByteBudget(remainingExcerptCapacity(inputs).bytes, 2)[1] ?? 0;
   const entries = fairCoverageEntries(selected, share, inputs);
-  if (entries.length === 0) return undefined;
+  const byIdentity = new Map(selected.map((entry) => [entry.definitionIdentity, entry]));
+  const eligiblePaths = new Set(
+    selected
+      .filter((entry) => connectedCoverageChain(entry, byIdentity).length > 0)
+      .map((entry) => entry.atom.scopePath),
+  );
+  if (eligiblePaths.size === 0) return undefined;
   const grouped = new Map<string, RouteCoverageReadWindow[]>();
   for (const entry of entries) {
     const path = entry.entry.atom.scopePath;
@@ -6532,6 +6543,7 @@ function routeCoverageReadPlan(
       ]),
     ],
     entries: grouped,
+    eligiblePaths,
     reserves: connectedCoverageReserves(entries, share),
   };
 }
@@ -6605,23 +6617,31 @@ function scheduledCoverageWindows(
     funded.length,
   );
   const protectedWindows = [...funded, ...ordinary];
-  const deferred = prioritizedExcerptWindows(
-    atomicCoverageWindows(selection.windows, ranges, atoms),
-    protectedWindows,
-  ).slice(protectedWindows.length);
   const definitions = atoms.filter(
     (atom) =>
       atom.provenance.tool === "discovered-symbol-definition" && atom.lineRange !== undefined,
   );
+  const definitionWindows = prioritizedExcerptWindows(
+    atomicCoverageWindows(selection.windows, ranges, atoms),
+    funded,
+  )
+    .slice(funded.length)
+    .filter((window) =>
+      definitions.some(
+        (atom) => atom.lineRange !== undefined && overlappingLineWindows(window, atom.lineRange),
+      ),
+    );
+  const deferred = prioritizedExcerptWindows(
+    atomicCoverageWindows(selection.windows, ranges, atoms),
+    protectedWindows,
+  ).slice(protectedWindows.length);
   return {
     ...selection,
     coverageApplied: true,
     ordinaryWindows: ordinary,
-    deferredDefinitionRangeCount: deferred.filter((window) =>
-      definitions.some(
-        (atom) => atom.lineRange !== undefined && overlappingLineWindows(window, atom.lineRange),
-      ),
-    ).length,
+    fundedWindows: funded,
+    definitionWindows,
+    deferredDefinitionRangeCount: definitionWindows.length,
     windows: [...protectedWindows, ...deferred],
   };
 }
@@ -6650,7 +6670,7 @@ function staleCoverageRead(
     result.windows === undefined
       ? Buffer.byteLength(result.content)
       : result.windows.reduce((bytes, window) => bytes + Buffer.byteLength(window.content), 0);
-  return { ...unreadExcerptWindows(selection, false), bytesConsumed };
+  return { ...unreadExcerptWindows(selection, false), bytesConsumed, invalidatesPrevious: true };
 }
 
 function excerptLineWindows(
@@ -6684,6 +6704,13 @@ interface ReadPathExcerptWindowsResult {
   readonly ordinaryRangeCount?: number | undefined;
   readonly ordinaryServedRangeCount?: number | undefined;
   readonly deferredDefinitionRangeCount?: number | undefined;
+  readonly processedRanges?: readonly LineWindow[] | undefined;
+  readonly completedRanges?: readonly LineWindow[] | undefined;
+  readonly sourceFingerprint?: string | undefined;
+  readonly ordinaryWindows?: readonly LineWindow[] | undefined;
+  readonly invalidatesPrevious?: boolean | undefined;
+  readonly coverageApplied?: boolean | undefined;
+  readonly unavailableRangeCount?: number | undefined;
 }
 
 type ExcerptSkippedReason = "too-large" | "unsupported" | "timeout";
@@ -6773,25 +6800,20 @@ async function readPathExcerptWindows(
   inputs: ExcerptInputs,
   remainingBytes: number,
 ): Promise<ReadPathExcerptWindowsResult> {
-  const windows: ExcerptWindow[] = [];
   const selection = coverageExcerptLineWindows(scopePath, inputs);
-  const containingRange = containingExcerptRange(selection.windows);
+  if (
+    inputs.previousExcerptResults?.get(scopePath)?.coverageApplied === true &&
+    selection.coverageApplied !== true
+  )
+    return { ...unreadExcerptWindows(selection, false), invalidatesPrevious: true };
   throwIfCancelled(inputs.signal);
   if (inputs.nowMs() >= inputs.deadlineAtMs || remainingBytes <= 0)
     return unreadExcerptWindows(selection, inputs.nowMs() >= inputs.deadlineAtMs);
+  const completed = completedPathExcerptRead(scopePath, inputs, selection);
+  if (completed !== undefined) return completed;
   const result = await readExplicitExcerpt(
     inputs.searchScope,
-    {
-      scopePath,
-      ...containingRange,
-      ranges: selection.windows,
-      maxBytes: remainingExcerptWindowBytes(scopePath, remainingBytes, inputs),
-      anchors: qualifiedWholeFileRanges(scopePath, selection.windows, inputs)
-        ? undefined
-        : inputs.anchors,
-      maxTotalBytes: remainingBytes,
-      maxWindows: Math.max(1, remainingBytes),
-    },
+    pathExcerptRequest(scopePath, inputs, remainingBytes, selection),
     {
       fs: inputs.fs,
       nowMs: inputs.nowMs,
@@ -6801,12 +6823,61 @@ async function readPathExcerptWindows(
     hasExplicitExcerptSelection(scopePath, inputs),
   );
   throwIfCancelled(inputs.signal);
-  if (inputs.nowMs() >= inputs.deadlineAtMs) return unreadExcerptWindows(selection, true);
+  if (inputs.nowMs() >= inputs.deadlineAtMs)
+    return {
+      ...unreadExcerptWindows(selection, true),
+      bytesConsumed: returnedExcerptBytes(result),
+      invalidatesPrevious: true,
+    };
   const stale = staleCoverageRead(scopePath, inputs, selection, result);
   if (stale !== undefined) return stale;
-  const appended = appendReadExcerptWindows(result, windows, selection.coverageApplied === true);
+  return readPathExcerptResult(scopePath, inputs, selection, result);
+}
+
+function pathExcerptRequest(
+  scopePath: string,
+  inputs: ExcerptInputs,
+  remainingBytes: number,
+  selection: ExcerptWindowSelection,
+): ReadExcerptRequest {
+  const previous = inputs.previousExcerptResults?.get(scopePath);
+  return {
+    scopePath,
+    ...containingExcerptRange(selection.windows),
+    ranges: selection.fundedWindows ?? [],
+    rangeQueues:
+      selection.coverageApplied === true
+        ? [selection.ordinaryWindows ?? [], selection.definitionWindows ?? []]
+        : [selection.windows],
+    firstRoundOnly: inputs.firstExcerptRound === true,
+    processedRanges: previous?.processedRanges,
+    completedRanges: previous?.completedRanges,
+    expectedSourceFingerprint: previous?.sourceFingerprint,
+    maxBytes: remainingExcerptWindowBytes(scopePath, remainingBytes, inputs),
+    anchors: qualifiedWholeFileRanges(scopePath, selection.windows, inputs)
+      ? undefined
+      : inputs.anchors,
+    maxTotalBytes: remainingBytes,
+    maxWindows: Math.max(1, remainingBytes),
+  };
+}
+
+function readPathExcerptResult(
+  scopePath: string,
+  inputs: ExcerptInputs,
+  selection: ExcerptWindowSelection,
+  result: ReadExcerptResult,
+): ReadPathExcerptWindowsResult {
+  const windows: ExcerptWindow[] = [];
+  const appended = appendReadExcerptWindows(result, windows, true);
   return {
     windows,
+    processedRanges: result.processedRanges,
+    completedRanges: result.completedRanges,
+    sourceFingerprint: result.sourceFingerprint,
+    unavailableRangeCount: result.unavailableRangeCount,
+    coverageApplied: selection.coverageApplied === true,
+    ordinaryWindows: selection.ordinaryWindows,
     ...excerptQueueObservation(selection, windows),
     bytesConsumed: appended.bytes,
     truncatedWindowCount: appended.truncated,
@@ -6817,6 +6888,40 @@ async function readPathExcerptWindows(
     deadlineReached: false,
     omittedWindowCount: selection.omittedWindowCount + (result.omittedRangeCount ?? 0),
   };
+}
+
+function completedPathExcerptRead(
+  path: string,
+  inputs: ExcerptInputs,
+  selection: ExcerptWindowSelection,
+): ReadPathExcerptWindowsResult | undefined {
+  const previous = inputs.previousExcerptResults?.get(path);
+  if (previous === undefined) return undefined;
+  const processed = new Set((previous.processedRanges ?? []).map((range) => JSON.stringify(range)));
+  const ranges =
+    selection.coverageApplied === true
+      ? [
+          ...(selection.fundedWindows ?? []),
+          ...(selection.ordinaryWindows ?? []),
+          ...(selection.definitionWindows ?? []),
+        ]
+      : selection.windows;
+  if (!ranges.every((range) => processed.has(JSON.stringify(range)))) return undefined;
+  return {
+    ...unreadExcerptWindows(selection, false),
+    omittedWindowCount: selection.omittedWindowCount,
+    completedRanges: previous.completedRanges,
+    sourceFingerprint: previous.sourceFingerprint,
+    coverageApplied: selection.coverageApplied === true,
+    ordinaryWindows: selection.ordinaryWindows,
+  };
+}
+
+function returnedExcerptBytes(result: ReadExcerptResult): number {
+  return (result.windows ?? [result]).reduce(
+    (bytes, view) => bytes + utf8ByteLength(view.content),
+    0,
+  );
 }
 
 async function readExplicitExcerpt(
@@ -6840,6 +6945,8 @@ async function readExplicitExcerpt(
         ...request,
         ...DEFAULT_EXCERPT_WINDOW,
         ranges: [DEFAULT_EXCERPT_WINDOW],
+        rangeQueues: request.rangeQueues === undefined ? undefined : [[]],
+        firstRoundOnly: undefined,
       },
       deps,
     );
@@ -6952,7 +7059,18 @@ async function readPathExcerptTask(
     // degrade to a skipped excerpt, never crash the whole grounded answer. Other kept files and
     // the rest of the pipeline continue; the file simply contributes no excerpt content.
     if (error instanceof FileTooLargeError) {
-      return { scopePath, skippedReason: "too-large", omissionReason: "size-exceeded" };
+      return {
+        scopePath,
+        skippedReason: "too-large",
+        omissionReason: "size-exceeded",
+        result:
+          inputs.previousExcerptResults?.has(scopePath) === true
+            ? {
+                ...unreadExcerptWindows(coverageExcerptLineWindows(scopePath, inputs), false),
+                invalidatesPrevious: true,
+              }
+            : undefined,
+      };
     }
     if (error instanceof RepoSearchUnsupportedFileError) {
       // Preserve the stop reason (#3347 P1): the excerpt facade reports an elapsed-budget stop as
@@ -6961,6 +7079,16 @@ async function readPathExcerptTask(
       // the completion status reported an unblocked elapsed budget.
       return {
         scopePath,
+        result:
+          inputs.previousExcerptResults?.has(scopePath) === true
+            ? {
+                ...unreadExcerptWindows(
+                  coverageExcerptLineWindows(scopePath, inputs),
+                  error.reason === "timeout",
+                ),
+                invalidatesPrevious: true,
+              }
+            : undefined,
         skippedReason: error.reason === "timeout" ? "timeout" : "unsupported",
         omissionReason: excerptOmissionReason(error.reason),
       };
@@ -7045,7 +7173,38 @@ async function readKeptExcerpts(
   if (readablePaths.length < keptPaths.length) {
     uncertainty.push(budgetClipped("budget-exhausted on filesRead", inputs.nowMs()));
   }
-  const state: ExcerptWaveState = {
+  const state = initialExcerptWaveState(
+    excerpts,
+    uncertainty,
+    remainingBytes,
+    readInputs,
+    readablePaths,
+  );
+  const initialPaths = initialExcerptOpportunityPaths(readablePaths, readInputs);
+  reserveInitialExcerptOpportunities(initialPaths, readInputs, state);
+  await readExcerptWaves(initialPaths, { ...readInputs, firstExcerptRound: true }, state);
+  state.coverageReserves.clear();
+  if (!state.elapsedBudgetBlocked && state.remainingBytes > 0)
+    await readExcerptWaves(
+      readablePaths,
+      { ...readInputs, previousExcerptResults: state.pathResults },
+      state,
+    );
+  uncertainty.push(...excerptReadLossSummary(state, inputs.nowMs));
+  if (state.elapsedBudgetBlocked) {
+    uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
+  }
+  return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
+}
+
+function initialExcerptWaveState(
+  excerpts: Map<string, readonly ExcerptWindow[]>,
+  uncertainty: UncertaintyMarker[],
+  remainingBytes: number,
+  inputs: ExcerptInputs,
+  readablePaths: readonly string[],
+): ExcerptWaveState {
+  return {
     excerpts,
     uncertainty,
     remainingBytes,
@@ -7055,16 +7214,11 @@ async function readKeptExcerpts(
     omitted: [],
     omittedWindowCount: 0,
     truncatedWindowCount: 0,
+    pathResults: new Map(),
     coverageReserves: new Map(
-      [...(coveragePlan?.reserves ?? [])].filter(([path]) => readablePaths.includes(path)),
+      [...(inputs.coveragePlan?.reserves ?? [])].filter(([path]) => readablePaths.includes(path)),
     ),
   };
-  await readExcerptWaves(readablePaths, readInputs, state);
-  uncertainty.push(...excerptReadLossSummary(state, inputs.nowMs));
-  if (state.elapsedBudgetBlocked) {
-    uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
-  }
-  return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
 }
 
 function excerptReadObservation(
@@ -7139,6 +7293,7 @@ function completedExcerptSummary(
 }
 
 interface ExcerptWaveState {
+  readonly pathResults: Map<string, ReadPathExcerptWindowsResult>;
   readonly coverageReserves: Map<string, number>;
   readonly omitted: OmittedContextEntry[];
   omittedWindowCount: number;
@@ -7188,20 +7343,99 @@ function appendExcerptWave(
   for (const task of results) {
     throwIfCancelled(inputs.signal);
     const { scopePath, result } = task;
-    appendExcerptQueueObservation(result, state);
+    const previous = state.pathResults.get(scopePath);
+    if (previous !== undefined) subtractExcerptResultObservation(previous, state);
     state.coverageReserves.delete(scopePath);
     state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
-    state.omittedWindowCount += result?.omittedWindowCount ?? 0;
     state.remainingBytes -= result?.bytesConsumed ?? 0;
+    if (result?.invalidatesPrevious === true) state.excerpts.delete(scopePath);
+    const merged = mergeExcerptResult(previous, result);
+    if (merged !== undefined) {
+      state.pathResults.set(scopePath, merged);
+      appendExcerptQueueObservation(merged, state);
+      state.omittedWindowCount += observedExcerptOmissionCount(merged);
+      state.truncatedWindowCount += merged.truncatedWindowCount;
+    }
     if (result === undefined || result.windows.length === 0) {
       if (task.omissionReason !== undefined)
         state.omitted.push({ scopePath, reason: task.omissionReason, omittedAtMs: inputs.nowMs() });
       continue;
     }
     state.anchoredWindowCount += result.anchoredWindowCount;
-    state.excerpts.set(scopePath, result.windows);
-    state.truncatedWindowCount += result.truncatedWindowCount;
+    state.excerpts.set(scopePath, merged?.windows ?? result.windows);
   }
+}
+
+function initialExcerptOpportunityPaths(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+): readonly string[] {
+  return paths.filter(
+    (path) =>
+      inputs.coveragePlan?.eligiblePaths.has(path) === true ||
+      (inputs.atomsByPath.get(path) ?? []).some(
+        (atom) => atom.provenance.tool !== "discovered-symbol-definition",
+      ),
+  );
+}
+
+function reserveInitialExcerptOpportunities(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): void {
+  const reserved = [...state.coverageReserves.values()].reduce((sum, bytes) => sum + bytes, 0);
+  const portions = excerptWaveGrants(paths, Math.max(0, state.remainingBytes - reserved), inputs);
+  for (const [index, path] of paths.entries())
+    state.coverageReserves.set(
+      path,
+      (state.coverageReserves.get(path) ?? 0) + (portions[index] ?? 0),
+    );
+}
+
+function subtractExcerptResultObservation(
+  result: ReadPathExcerptWindowsResult,
+  state: ExcerptWaveState,
+): void {
+  state.omittedWindowCount -= observedExcerptOmissionCount(result);
+  state.truncatedWindowCount -= result.truncatedWindowCount;
+  if (result.ordinaryRangeCount === undefined) return;
+  state.ordinaryRangeCount = (state.ordinaryRangeCount ?? 0) - result.ordinaryRangeCount;
+  state.ordinaryServedRangeCount =
+    (state.ordinaryServedRangeCount ?? 0) - (result.ordinaryServedRangeCount ?? 0);
+  state.deferredDefinitionRangeCount =
+    (state.deferredDefinitionRangeCount ?? 0) - (result.deferredDefinitionRangeCount ?? 0);
+}
+
+function observedExcerptOmissionCount(result: ReadPathExcerptWindowsResult): number {
+  return result.windows.length > 0
+    ? result.omittedWindowCount
+    : (result.unavailableRangeCount ?? 0);
+}
+
+function mergeExcerptResult(
+  previous: ReadPathExcerptWindowsResult | undefined,
+  result: ReadPathExcerptWindowsResult | undefined,
+): ReadPathExcerptWindowsResult | undefined {
+  if (previous === undefined || result?.invalidatesPrevious === true) return result;
+  if (result === undefined) return previous;
+  const unique = new Map(
+    [...previous.windows, ...result.windows].map((view) => [excerptWindowKey(view), view]),
+  );
+  const windows = [...unique.values()];
+  return {
+    ...result,
+    windows,
+    processedRanges: [...(previous.processedRanges ?? []), ...(result.processedRanges ?? [])],
+    completedRanges: result.completedRanges,
+    truncatedWindowCount: previous.truncatedWindowCount + result.truncatedWindowCount,
+    omittedWindowCount: result.omittedWindowCount + (previous.unavailableRangeCount ?? 0),
+    unavailableRangeCount:
+      (previous.unavailableRangeCount ?? 0) + (result.unavailableRangeCount ?? 0),
+    ordinaryServedRangeCount: result.ordinaryWindows?.filter((range) =>
+      windows.some((view) => view.content.length > 0 && overlappingLineWindows(range, view)),
+    ).length,
+  };
 }
 
 // The next wave depends on the bytes and deadline left after the preceding reads settle.

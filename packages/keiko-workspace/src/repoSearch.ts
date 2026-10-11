@@ -1,4 +1,5 @@
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { createHash } from "node:crypto";
 // Governed, deterministic, audit-friendly repository search facade (Epic #177, Issue #179).
 // Composes the existing workspace primitives — discovery, deny policy, realpath gate,
 // readWorkspaceFile, plus the new binaryDetect and stableId modules — into three public
@@ -186,6 +187,16 @@ export interface SearchResult {
 export interface ReadExcerptRequest {
   // Trusted batched ranges share one fresh, classified and redacted source snapshot.
   readonly ranges?: readonly { readonly startLine: number; readonly endLine: number }[] | undefined;
+  readonly rangeQueues?:
+    readonly (readonly { readonly startLine: number; readonly endLine: number }[])[] | undefined;
+  // Stop after whole-view initial portions and their unused-byte retry, before partial expansion.
+  readonly firstRoundOnly?: boolean | undefined;
+  readonly processedRanges?:
+    readonly { readonly startLine: number; readonly endLine: number }[] | undefined;
+  // Only nontruncated physical views may exclude shared complete lines from another range.
+  readonly completedRanges?:
+    readonly { readonly startLine: number; readonly endLine: number }[] | undefined;
+  readonly expectedSourceFingerprint?: string | undefined;
   // Trusted query anchors reposition a clipped view without widening the returned byte cap.
   readonly anchors?: readonly string[] | undefined;
   readonly maxWindows?: number | undefined;
@@ -206,6 +217,10 @@ interface ReadExcerptWindowResult {
 export interface ReadExcerptResult extends ReadExcerptWindowResult {
   readonly windows?: readonly ReadExcerptWindowResult[] | undefined;
   readonly omittedRangeCount?: number | undefined;
+  readonly unavailableRangeCount?: number | undefined;
+  readonly processedRanges?: ReadExcerptRequest["processedRanges"];
+  readonly completedRanges?: ReadExcerptRequest["completedRanges"];
+  readonly sourceFingerprint?: string | undefined;
 }
 
 interface FacadeDeps {
@@ -3794,6 +3809,10 @@ function assertExcerptRange(request: ReadExcerptRequest): void {
 }
 
 function assertExcerptBatchRanges(request: ReadExcerptRequest): void {
+  if (request.rangeQueues !== undefined) {
+    assertExcerptQueues(request);
+    return;
+  }
   if (request.ranges === undefined) return;
   if (!nonEmptyExcerptRanges(request.ranges))
     throw new RepoSearchInvalidRangeError("invalid excerpt ranges");
@@ -3801,6 +3820,44 @@ function assertExcerptBatchRanges(request: ReadExcerptRequest): void {
     if (!validExcerptBatchRange(range, request))
       throw new RepoSearchInvalidRangeError("invalid excerpt ranges");
   }
+}
+
+function assertExcerptQueues(request: ReadExcerptRequest): void {
+  if (
+    !Array.isArray(request.rangeQueues) ||
+    request.rangeQueues.length === 0 ||
+    !request.rangeQueues.every(Array.isArray)
+  )
+    throw new RepoSearchInvalidRangeError("invalid excerpt queues");
+  if (request.ranges !== undefined && !Array.isArray(request.ranges))
+    throw new RepoSearchInvalidRangeError("invalid excerpt queue prefix");
+  const ranges = [...(request.ranges ?? []), ...request.rangeQueues.flat()];
+  if (ranges.length === 0 || !ranges.every((range) => validExcerptBatchRange(range, request)))
+    throw new RepoSearchInvalidRangeError("invalid excerpt queue ranges");
+  if (request.firstRoundOnly !== undefined && typeof request.firstRoundOnly !== "boolean")
+    throw new RepoSearchInvalidRangeError("invalid excerpt queue round");
+  if (
+    request.expectedSourceFingerprint !== undefined &&
+    !/^[a-f0-9]{64}$/u.test(request.expectedSourceFingerprint)
+  )
+    throw new RepoSearchInvalidRangeError("invalid excerpt source fingerprint");
+  assertPreviousExcerptRanges(request);
+}
+
+function assertPreviousExcerptRanges(request: ReadExcerptRequest): void {
+  for (const previous of [request.processedRanges, request.completedRanges])
+    if (
+      previous !== undefined &&
+      (!Array.isArray(previous) ||
+        !previous.every((range) =>
+          validExcerptBatchRange(range, {
+            ...request,
+            startLine: 1,
+            endLine: Number.MAX_SAFE_INTEGER,
+          }),
+        ))
+    )
+      throw new RepoSearchInvalidRangeError("invalid previous excerpt ranges");
 }
 
 function validExcerptBatchRange(value: unknown, request: ReadExcerptRequest): boolean {
@@ -4066,6 +4123,9 @@ interface BatchedExcerptResults {
   readonly results: readonly ReadExcerptWindowResult[];
   readonly omittedRangeCount: number;
   readonly outsideRangeCount: number;
+  readonly unavailableRangeCount?: number;
+  readonly processedRanges?: ReadExcerptRequest["processedRanges"];
+  readonly completedRanges?: ReadExcerptRequest["completedRanges"];
 }
 
 function excerptBatchCapacity(
@@ -4136,23 +4196,16 @@ async function* excerptBatchRanges(
   }
 }
 
-async function batchedExcerptResults(
+function createExcerptBatch(
   scope: SearchScope,
   request: ReadExcerptRequest,
   lines: readonly string[],
   nowMs: () => number,
   control: StructuralExecutionControl,
-): Promise<BatchedExcerptResults> {
-  if (request.ranges === undefined)
-    return {
-      results: excerptWindows(request, lines).map((window) =>
-        excerptResultForWindow(scope, request, window, nowMs),
-      ),
-      omittedRangeCount: 0,
-      outsideRangeCount: 0,
-    };
-  const capacity = excerptBatchCapacity(request, request.ranges.length);
-  const batch: ExcerptBatchState = {
+  rangeCount: number,
+): ExcerptBatchState {
+  const capacity = excerptBatchCapacity(request, rangeCount);
+  return {
     scope,
     request,
     lines,
@@ -4165,12 +4218,217 @@ async function batchedExcerptResults(
     emptyRanges: 0,
     outsideRangeCount: 0,
   };
+}
+
+type ExcerptRange = NonNullable<ReadExcerptRequest["ranges"]>[number];
+
+interface ExcerptQueue {
+  readonly ranges: ExcerptRange[];
+  served: boolean;
+}
+
+interface QueuedExcerptBatch {
+  readonly batch: ExcerptBatchState;
+  readonly results: ReadExcerptWindowResult[];
+  readonly processed: ExcerptRange[];
+  readonly completed: ExcerptRange[];
+}
+
+function excerptRangeKey(range: ExcerptRange): string {
+  return `${String(range.startLine)}:${String(range.endLine)}`;
+}
+
+function uncoveredQueuedRanges(
+  state: QueuedExcerptBatch,
+  range: ExcerptRange,
+): readonly ExcerptRange[] {
+  const ranges: ExcerptRange[] = [];
+  let startLine = range.startLine;
+  for (const covered of [...state.completed].sort((a, b) => a.startLine - b.startLine)) {
+    if (covered.endLine < startLine) continue;
+    if (covered.startLine > range.endLine) break;
+    if (covered.startLine > startLine) ranges.push({ startLine, endLine: covered.startLine - 1 });
+    startLine = Math.max(startLine, covered.endLine + 1);
+  }
+  if (startLine <= range.endLine) ranges.push({ startLine, endLine: range.endLine });
+  return ranges;
+}
+
+function queuedRangeBytes(state: QueuedExcerptBatch, range: ExcerptRange): number {
+  return uncoveredQueuedRanges(state, range).reduce((bytes, segment) => {
+    const content = state.batch.lines.slice(segment.startLine - 1, segment.endLine).join("\n");
+    return bytes + state.batch.encoder.encode(content).byteLength;
+  }, 0);
+}
+
+function queuedRangeFits(state: QueuedExcerptBatch, range: ExcerptRange, bytes: number): boolean {
+  return (
+    queuedRangeBytes(state, range) <= bytes &&
+    uncoveredQueuedRanges(state, range).every(
+      (segment) =>
+        state.batch.encoder.encode(
+          state.batch.lines.slice(segment.startLine - 1, segment.endLine).join("\n"),
+        ).byteLength <= state.batch.request.maxBytes,
+    )
+  );
+}
+
+async function appendQueuedExcerptRange(
+  state: QueuedExcerptBatch,
+  range: ExcerptRange,
+  availableBytes: number,
+): Promise<number> {
+  if (state.processed.some((processed) => excerptRangeKey(processed) === excerptRangeKey(range)))
+    return 0;
+  const remaining = state.batch.remainingBytes;
+  state.batch.remainingBytes = Math.min(remaining, availableBytes);
+  const initial = state.batch.remainingBytes;
+  for (const segment of uncoveredQueuedRanges(state, range)) {
+    if (state.batch.remainingBytes <= 0 || state.batch.remainingWindows <= 0) break;
+    const results = await readBatchedExcerptRange(state.batch, segment);
+    state.results.push(...results);
+    for (const result of results)
+      if (!result.truncated && result.atom.lineRange !== undefined)
+        state.completed.push(result.atom.lineRange);
+  }
+  const bytes = initial - state.batch.remainingBytes;
+  state.batch.remainingBytes = remaining - bytes;
+  state.processed.push(range);
+  return bytes;
+}
+
+async function initialExcerptQueue(
+  state: QueuedExcerptBatch,
+  queue: ExcerptQueue,
+  grant: number,
+): Promise<void> {
+  let remaining = grant;
+  while (queue.ranges.length > 0 && remaining > 0 && state.batch.remainingWindows > 0) {
+    const range = queue.ranges[0];
+    if (range === undefined || !queuedRangeFits(state, range, remaining)) break;
+    remaining -= await appendQueuedExcerptRange(state, range, remaining);
+    queue.ranges.shift();
+    queue.served = true;
+  }
+}
+
+async function retryUnservedExcerptQueues(
+  state: QueuedExcerptBatch,
+  queues: readonly ExcerptQueue[],
+): Promise<void> {
+  for (const queue of queues) {
+    const range = queue.ranges[0];
+    if (queue.served || range === undefined || state.batch.remainingWindows <= 0) continue;
+    if (!queuedRangeFits(state, range, state.batch.remainingBytes)) continue;
+    await appendQueuedExcerptRange(state, range, state.batch.remainingBytes);
+    queue.ranges.shift();
+    queue.served = true;
+  }
+}
+
+async function expandExcerptQueues(
+  state: QueuedExcerptBatch,
+  queues: readonly ExcerptQueue[],
+): Promise<void> {
+  while (
+    queues.some((queue) => queue.ranges.length > 0) &&
+    state.batch.remainingBytes > 0 &&
+    state.batch.remainingWindows > 0
+  ) {
+    for (const queue of queues) {
+      const range = queue.ranges.shift();
+      if (
+        range === undefined ||
+        state.batch.remainingBytes <= 0 ||
+        state.batch.remainingWindows <= 0
+      )
+        continue;
+      await appendQueuedExcerptRange(state, range, state.batch.remainingBytes);
+    }
+  }
+}
+
+async function queuedExcerptResults(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  lines: readonly string[],
+  nowMs: () => number,
+  control: StructuralExecutionControl,
+): Promise<BatchedExcerptResults> {
+  const allRanges = [...(request.ranges ?? []), ...(request.rangeQueues ?? []).flat()];
+  const batch = createExcerptBatch(scope, request, lines, nowMs, control, allRanges.length);
+  const state: QueuedExcerptBatch = {
+    batch,
+    results: [],
+    processed: [],
+    completed: [...(request.completedRanges ?? [])],
+  };
+  const previous = new Set((request.processedRanges ?? []).map(excerptRangeKey));
+  for (const range of request.ranges ?? []) {
+    if (previous.has(excerptRangeKey(range))) continue;
+    if (batch.remainingBytes <= 0 || batch.remainingWindows <= 0) break;
+    await appendQueuedExcerptRange(state, range, batch.remainingBytes);
+  }
+  const queues = (request.rangeQueues ?? [])
+    .map((ranges) => ({
+      ranges: ranges.filter((range) => !previous.has(excerptRangeKey(range))),
+      served: false,
+    }))
+    .filter((queue) => queue.ranges.length > 0);
+  const share = Math.floor(batch.remainingBytes / Math.max(1, queues.length));
+  const remainder = batch.remainingBytes % Math.max(1, queues.length);
+  for (const [index, queue] of queues.entries())
+    await initialExcerptQueue(state, queue, share + Number(index < remainder));
+  await retryUnservedExcerptQueues(state, queues);
+  if (request.firstRoundOnly !== true) await expandExcerptQueues(state, queues);
+  return completedQueuedExcerptResults(state, allRanges, previous);
+}
+
+function completedQueuedExcerptResults(
+  state: QueuedExcerptBatch,
+  ranges: readonly ExcerptRange[],
+  previous: ReadonlySet<string>,
+): BatchedExcerptResults {
+  const requested = new Set(ranges.map(excerptRangeKey));
+  const { batch } = state;
+  return {
+    results: state.results,
+    processedRanges: state.processed,
+    completedRanges: state.completed,
+    outsideRangeCount: batch.outsideRangeCount,
+    unavailableRangeCount: batch.emptyRanges,
+    omittedRangeCount:
+      [...requested].filter((key) => !previous.has(key)).length -
+      state.processed.length +
+      batch.emptyRanges,
+  };
+}
+
+async function batchedExcerptResults(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  lines: readonly string[],
+  nowMs: () => number,
+  control: StructuralExecutionControl,
+): Promise<BatchedExcerptResults> {
+  if (request.ranges === undefined && request.rangeQueues === undefined)
+    return {
+      results: excerptWindows(request, lines).map((window) =>
+        excerptResultForWindow(scope, request, window, nowMs),
+      ),
+      omittedRangeCount: 0,
+      outsideRangeCount: 0,
+    };
+  if (request.rangeQueues !== undefined)
+    return queuedExcerptResults(scope, request, lines, nowMs, control);
+  const ranges = request.ranges ?? [];
+  const batch = createExcerptBatch(scope, request, lines, nowMs, control, ranges.length);
   const results: ReadExcerptWindowResult[] = [];
-  for await (const windows of excerptBatchRanges(batch, request.ranges))
+  for await (const windows of excerptBatchRanges(batch, ranges))
     for (const window of windows) results.push(window);
   return {
     results,
-    omittedRangeCount: request.ranges.length - batch.processed + batch.emptyRanges,
+    omittedRangeCount: ranges.length - batch.processed + batch.emptyRanges,
     outsideRangeCount: batch.outsideRangeCount,
   };
 }
@@ -4216,9 +4474,35 @@ async function readExcerptWithControl(
   }
   assertStructuralExecutionActive(control);
   assertExcerptStartWithinLines(request, allLines);
+  const sourceFingerprint = excerptSourceFingerprint(request, allLines);
   const batch = await batchedExcerptResults(scope, request, allLines, nowMs, control);
   assertStructuralExecutionActive(control);
-  return completedExcerptBatch(batch, request, fs, target.path, stat);
+  const result = completedExcerptBatch(batch, request, fs, target.path, stat, scope, nowMs);
+  return sourceFingerprint === undefined
+    ? result
+    : {
+        ...result,
+        sourceFingerprint,
+        processedRanges: batch.processedRanges,
+        completedRanges: batch.completedRanges,
+        unavailableRangeCount: batch.unavailableRangeCount,
+      };
+}
+
+function excerptSourceFingerprint(
+  request: ReadExcerptRequest,
+  lines: readonly string[],
+): string | undefined {
+  const fingerprint =
+    request.rangeQueues === undefined
+      ? undefined
+      : createHash("sha256").update(lines.join("\n")).digest("hex");
+  if (
+    request.expectedSourceFingerprint !== undefined &&
+    fingerprint !== request.expectedSourceFingerprint
+  )
+    throw new RepoSearchUnsupportedFileError("file changed between excerpt batches", "io-error");
+  return fingerprint;
 }
 
 function completedExcerptBatch(
@@ -4227,21 +4511,50 @@ function completedExcerptBatch(
   fs: WorkspaceFs,
   path: string,
   stat: WorkspaceStat,
+  scope: SearchScope,
+  nowMs: () => number,
 ): ReadExcerptResult {
-  if (request.ranges !== undefined && !isWorkspacePathSnapshotCurrent(fs, path, path, stat))
+  if (
+    (request.ranges !== undefined || request.rangeQueues !== undefined) &&
+    !isWorkspacePathSnapshotCurrent(fs, path, path, stat)
+  )
     throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
   const results = batch.results;
   const first = results[0];
-  if (first === undefined && batch.outsideRangeCount === request.ranges?.length)
+  const rangeCount = (request.ranges?.length ?? 0) + (request.rangeQueues?.flat().length ?? 0);
+  if (first === undefined && batch.outsideRangeCount > 0 && batch.outsideRangeCount === rangeCount)
     throw new RepoSearchUnsupportedFileError(
       "all requested excerpt ranges are outside the file",
       "outside-range",
     );
+  if (first === undefined && request.rangeQueues !== undefined) {
+    const empty = emptyQueuedExcerptResult(scope, request, nowMs);
+    return { ...empty, windows: [], omittedRangeCount: batch.omittedRangeCount };
+  }
   if (first === undefined) throw excerptUnreadable(request.scopePath);
   const result = results.length === 1 ? first : { ...first, windows: results };
-  return request.ranges === undefined
+  return request.ranges === undefined && request.rangeQueues === undefined
     ? result
     : { ...result, omittedRangeCount: batch.omittedRangeCount };
+}
+
+function emptyQueuedExcerptResult(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  nowMs: () => number,
+): ReadExcerptResult {
+  return excerptResultForWindow(
+    scope,
+    request,
+    {
+      startLine: request.startLine,
+      endLine: request.startLine,
+      content: "",
+      truncated: true,
+      anchoredWindowApplied: false,
+    },
+    nowMs,
+  );
 }
 
 export async function readExcerpt(

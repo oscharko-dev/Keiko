@@ -227,6 +227,22 @@ describe("persisted retrieval loss counters", () => {
     });
   });
 
+  it("persists an attempted unrepresentable range even when no content view is returned", async () => {
+    const { completed, output } = await loggedRetrieval(
+      { "glyph.txt": "中" },
+      'Inspect glyph.txt:1 and find the exact literal "中".',
+      { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 1 },
+    );
+    expect(completed.excerptReadWindowCount).toBe(0);
+    expect(completed.excerptUnreadFileCount).toBe(1);
+    expect(completed.excerptOmittedRangeCount).toBe(1);
+    expect(
+      output.pack.uncertainty.some((marker) =>
+        marker.claim.includes("excerpt read limits omitted 1 additional matching range"),
+      ),
+    ).toBe(true);
+  });
+
   it("counts unreturned ranges instead of inferring their loss from one uncertainty marker", async () => {
     const lines = Array.from({ length: 41 * 12 }, (_unused, index) =>
       index % 12 === 0 ? `WindowLossProbe ${"x".repeat(20_000)}` : "",

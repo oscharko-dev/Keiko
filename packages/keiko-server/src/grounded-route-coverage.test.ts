@@ -522,6 +522,69 @@ function ordinaryCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function crossWaveCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...bulkyConnectorFiles() };
+  for (let index = 0; index < 8; index += 1) {
+    files[`src/stage-${String(index)}.ts`] = [
+      `import { stage${String(index + 1)} } from "./stage-${String(index + 1)}.js";`,
+      `export function stage${String(index)}(selectedRoot) {`,
+      ...Array.from({ length: 65 }, () => "  // unrelated bookkeeping for the existing ledger"),
+      `  return stage${String(index + 1)}(selectedRoot);`,
+      "}",
+    ].join("\n");
+  }
+  files["src/ordinary.ts"] = ordinaryCoverageFiles()["src/ordinary.ts"] ?? "";
+  return files;
+}
+
+async function crossWaveOrdinaryRange(
+  fixture: CoverageFixture,
+): Promise<NonNullable<EvidenceAtom["lineRange"]>> {
+  const index = await fixture.requestContext.codeIntelligenceIndex();
+  const method = index.symbols.find(
+    (symbol) => symbol.scopePath === "src/ordinary.ts" && symbol.name === "candidateSet",
+  );
+  expect(method).toBeDefined();
+  if (method === undefined) throw new TypeError("fixture requires the current ordinary method");
+  expect(index.calls.some((call) => call.targetName === method.name)).toBe(false);
+  expect(
+    fixture.trace.routeCoverage?.entries.some((entry) => entry.atom.scopePath === method.scopePath),
+  ).toBe(false);
+  expect(fixture.ordinaryAtoms.some((atom) => atom.scopePath === method.scopePath)).toBe(true);
+  return method.lineRange;
+}
+
+function expectCrossWaveOrdinaryViews(
+  fixture: CoverageFixture,
+  reads: ExcerptReadSummary,
+  pack: ConnectedContextPack,
+  prompt: string,
+  range: NonNullable<EvidenceAtom["lineRange"]>,
+): void {
+  const path = "src/ordinary.ts";
+  const lines = (fixture.files[path] ?? "").split("\n").slice(range.startLine - 1, range.endLine);
+  const body = lines.join("\n");
+  expect(
+    readContent(reads, path).includes(body),
+    JSON.stringify({
+      range,
+      fullBodyBytes: Buffer.byteLength(body),
+      actualPathBytes: Buffer.byteLength(readContent(reads, path)),
+      actualReadBytes: readBytes(reads),
+      actualReadPaths: [...reads.excerpts.keys()],
+      observation: reads.observation,
+      actualOmissions: reads.omitted,
+    }),
+  ).toBe(true);
+  expect(
+    pack.files
+      .find((file) => file.scopePath === path)
+      ?.excerpts.some((item) => item.content.includes(body)),
+  ).toBe(true);
+  for (const [index, line] of lines.entries())
+    expect(prompt.includes(`${String(range.startLine + index)} | ${line}`)).toBe(true);
+}
+
 function busyOrdinaryMethodFiles(): Readonly<Record<string, string>> {
   const helpers = Array.from({ length: 18 }, (_value, index) =>
     [
@@ -737,6 +800,50 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it.each([false, true])(
+    "preserves the selected ordinary body across later reader waves (coverage=%s)",
+    async (coverage) => {
+      const fixture = await coverageFixture(
+        "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+        crossWaveCoverageFiles(),
+      );
+      const range = await crossWaveOrdinaryRange(fixture);
+      const atoms = await allocationAtoms(fixture);
+      expect(coverageRanking(atoms).kept.some((item) => item.scopePath === "src/ordinary.ts")).toBe(
+        true,
+      );
+      expect(
+        fixture.trace.routeCoverage?.entries.every((entry) =>
+          fixture.trace.routeCoverage?.isCurrent(entry.atom),
+        ),
+      ).toBe(true);
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+      const positive = await coverageRead(fixture, {
+        paths: ["src/routes.ts", "src/implementation.ts", "src/stage-8.ts", "src/ordinary.ts"],
+        atoms,
+        inputs: { routeCoverage: undefined, budget },
+      });
+      const positivePack = await assembledCoveragePack(fixture, positive, atoms, budget);
+      const positivePrompt = await sentPrompt(fixture, positive, atoms, budget);
+      expectCrossWaveOrdinaryViews(fixture, positive, positivePack, positivePrompt, range);
+      expectFullTerminalView(fixture, positive, positivePack, positivePrompt);
+      expect(positivePrompt).toContain(REGISTRATION_FACT);
+      expect(readBytes(positive)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      const reads = await coverageRead(fixture, {
+        atoms,
+        inputs: { routeCoverage: coverage ? fixture.trace.routeCoverage : undefined, budget },
+      });
+      const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+      const prompt = await sentPrompt(fixture, reads, atoms, budget);
+      expect(prompt).toContain(REGISTRATION_FACT);
+      expect(prompt).toContain(
+        "export function handleItem() { return () => stage0(selectedRoot); }",
+      );
+      expectFullTerminalView(fixture, reads, pack, prompt);
+      expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
+    },
+  );
   it("retains a useful unfunded definition beside the independent ordinary method", async () => {
     const fixture = await coverageFixture(
       "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
@@ -1209,7 +1316,13 @@ describe("current route trace excerpt coverage", () => {
     expect(readContent(reads, "src/z-processing.ts")).toContain(DESCENT_FACT);
     expect(await sentPrompt(fixture, reads)).toContain(DESCENT_FACT);
     expect(fixture.reads.size).toBeGreaterThan(0);
-    expect([...fixture.reads.values()].every((count) => count === singleReadCount)).toBe(true);
+    // Expansion uses at most one fresh, fingerprint-checked batch after the initial portions.
+    const readsPerBatch = singleReadCount ?? 0;
+    expect(
+      [...fixture.reads.values()].every(
+        (count) => count === readsPerBatch || count === 2 * readsPerBatch,
+      ),
+    ).toBe(true);
     expect(
       fixture.trace.uncertainty.some((marker) => marker.claim.includes("source-graph-incomplete")),
     ).toBe(true);
