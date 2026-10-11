@@ -75,17 +75,23 @@ async function shrinkNativeHeaderDeadline() {
   await globalThis.fetch("data:text/plain,warmup");
   // Node's native fetch reads this dispatcher; its function identity stays native so the
   // gateway's production DNS-pinned transport selection is exercised without a fetch fake.
-  const key = Symbol.for("undici.globalDispatcher.1");
-  const original = globalThis[key];
-  expect(original?.dispatch).toBeTypeOf("function");
-  globalThis[key] = {
-    dispatch(options, handler) {
-      return original.dispatch({ ...options, headersTimeout: 100 }, handler);
-    },
-  };
-  RESTORE_DISPATCHERS.push(() => {
-    globalThis[key] = original;
-  });
+  const keys = [
+    Symbol.for("undici.globalDispatcher.1"),
+    Symbol.for("undici.globalDispatcher.2"),
+  ].filter((key) => globalThis[key] !== undefined);
+  expect(keys.length).toBeGreaterThan(0);
+  for (const key of keys) {
+    const original = globalThis[key];
+    expect(original?.dispatch).toBeTypeOf("function");
+    globalThis[key] = {
+      dispatch(options, handler) {
+        return original.dispatch({ ...options, headersTimeout: 100 }, handler);
+      },
+    };
+    RESTORE_DISPATCHERS.push(() => {
+      globalThis[key] = original;
+    });
+  }
 }
 
 describe("connected-chat explicit transport deadline", () => {
