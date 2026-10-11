@@ -109,8 +109,9 @@ invocation; continuation retains that reference relationship and `source-graph-i
 Partially overlapping excerpt windows retain uncovered lines and their originating strength;
 deduplication removes only lines already covered by a higher-priority window.
 Physical excerpt allocation admits complete selected, current definition branches whose additional
-observed body bytes fit the connected share. Independent roots take turns; existing query relevance
-orders targets within each root. Shared ancestors reserve bytes once, later same-file targets remain
+observed body bytes fit the connected share. Independent roots and files within each root take
+turns; existing query relevance orders targets within each file and sets initial file order, with
+stable ties. Shared ancestors reserve bytes once, later same-file targets remain
 eligible, and an oversized branch spends no partial reservation. Explicit human selections remain
 first, and ordinary ranked evidence retains its share of the existing grant. Reserved definition
 windows precede ordinary extras; their actual returned physical-view identities prevent adjacent

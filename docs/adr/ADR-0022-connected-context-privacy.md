@@ -426,7 +426,8 @@ priority remains intact.
 Physical excerpt allocation preserves connected parent chains across already selected route files.
 Explicit human file selections remain first. The request-local traversal supplies only current,
 certified definition identities, observed parent relationships and actual body-byte requirements.
-Independent route roots take turns, with existing query relevance ordering targets within each root.
+Independent route roots take turns; files within each root take turns before a file's next target.
+Existing query relevance orders targets within each file and sets initial file order, with stable ties.
 Admission requires the additional observed body bytes of a complete selected, current parent chain
 to fit the connected share. Shared ancestors reserve bytes once; later same-file targets remain
 eligible, and oversized branches receive no partial reservation. Reservations stay inside the
