@@ -15,9 +15,10 @@ function resolveRoles(resolver, record) {
 
 function ownershipReasons(subject, record, roles) {
   const reasons = [];
-  for (const role of ["input", "transform", "output"]) {
+  for (const role of ["input", "transform", "output", "consumer"]) {
     const facts = roles[role];
-    if (facts.identities.some((identity) => identity.owner !== record.owner))
+    const expectedOwner = role === "consumer" ? record.consumer.owner : record.owner;
+    if (facts.identities.some((identity) => identity.owner !== expectedOwner))
       reasons.push("foreign-responsibility-owner");
     if (
       facts.identities.some(
@@ -25,7 +26,8 @@ function ownershipReasons(subject, record, roles) {
       )
     )
       reasons.push("nonproduction-responsibility-source");
-    if (facts.signatures.length !== 1) reasons.push("ambiguous-responsibility-signature");
+    if (role !== "consumer" && facts.signatures.length !== 1)
+      reasons.push("ambiguous-responsibility-signature");
   }
   return reasons;
 }
@@ -35,6 +37,13 @@ function signatureReasons(record, roles) {
   const output = roles.output.signatures[0]?.result.kind;
   if (record.kind === "validator" && ["unknown", "any"].includes(output))
     reasons.push("unchecked-validator-output");
+  if (
+    record.kind === "validator" &&
+    roles.output.signatures[0]?.result.indexes?.some((type) =>
+      ["unknown", "any"].includes(type.kind),
+    )
+  )
+    reasons.push("unchecked-validator-dictionary");
   if (
     record.rules.includes("anti-slop/no-unknown-returns") &&
     roles.consumer.signatures.some((signature) =>
@@ -64,6 +73,23 @@ function proofFacts(subject, resolver, record) {
   });
 }
 
+function responsibilitySlots(resolver, record, roles) {
+  if (roles.input.identities.length !== 1 || roles.output.identities.length !== 1)
+    throw new TypeError("ambiguous-responsibility-producer");
+  const input = resolver.callableSlots(roles.input.identities[0]);
+  const parameter = input.parameters[record.input.parameterIndex];
+  if (parameter?.type.kind !== "unknown")
+    throw new TypeError("unresolved-responsibility-raw-parameter");
+  const slots = [{ ...parameter, rule: "anti-slop/no-unknown-parameters" }];
+  if (record.kind === "structural-redactor") {
+    const output = resolver.callableSlots(roles.output.identities[0]);
+    if (output.result?.type.kind !== "unknown")
+      throw new TypeError("unresolved-structural-redactor-return");
+    slots.push({ ...output.result, rule: "anti-slop/no-unknown-returns" });
+  }
+  return slots.filter((slot) => record.rules.includes(slot.rule));
+}
+
 function assessRecord(subject, resolver, record, files) {
   const selected = new Set(files.map((file) => file.path));
   const paths = [record.input, record.transform, record.output, record.consumer].map(
@@ -79,6 +105,8 @@ function assessRecord(subject, resolver, record, files) {
     ];
     const consumerReason = consumerSignatureReason(roles.consumer);
     const proofs = proofFacts(subject, resolver, record);
+    const slots =
+      reasons.length || consumerReason ? [] : responsibilitySlots(resolver, record, roles);
     resolver.assertCurrent();
     return {
       ...pendingRecord(
@@ -88,10 +116,37 @@ function assessRecord(subject, resolver, record, files) {
       ),
       roles,
       proofs,
+      slots,
     };
   } catch {
     return pendingRecord(record, "incomplete", ["unresolved-responsibility-facts"]);
   }
+}
+
+function adaptedFinding(finding, assessments) {
+  for (const assessment of assessments) {
+    if (assessment.structural !== "ready") continue;
+    const slot = assessment.slots.find(
+      (candidate) =>
+        candidate.path === finding.path &&
+        candidate.rule === finding.rule &&
+        candidate.line === finding.line &&
+        candidate.column === finding.column,
+    );
+    if (slot) return { finding, responsibilityId: assessment.id, slot };
+  }
+  return null;
+}
+
+export function adaptResponsibilityDiagnostics(assessed, responsibilities) {
+  const adaptations = [];
+  const violations = assessed.violations.filter((finding) => {
+    const adaptation = adaptedFinding(finding, responsibilities.assessments);
+    if (!adaptation) return true;
+    adaptations.push(adaptation);
+    return false;
+  });
+  return { ...assessed, violations, adaptations };
 }
 
 function pendingRecord(record, structural, reasons) {

@@ -16,15 +16,34 @@ function typeFacts(type) {
   const flags = type.flags;
   if ((flags & ts.TypeFlags.Unknown) !== 0) return { kind: "unknown" };
   if ((flags & ts.TypeFlags.Any) !== 0) return { kind: "any" };
-  if (type.isUnion())
+  if (type.isUnion()) {
+    const indexes = type.types.flatMap(typeIndexes);
     return {
       kind: "union",
       members: type.types.length,
       containsUnknown: type.types.some((member) => (member.flags & ts.TypeFlags.Unknown) !== 0),
+      ...(indexes.length ? { indexes } : {}),
     };
-  if ((flags & ts.TypeFlags.Object) !== 0) return { kind: "object" };
+  }
+  if ((flags & ts.TypeFlags.Object) !== 0) {
+    const indexes = typeIndexes(type);
+    return {
+      kind: "object",
+      ...(indexes.length ? { indexes } : {}),
+    };
+  }
   if ((flags & ts.TypeFlags.Never) !== 0) return { kind: "never" };
   return { kind: "primitive" };
+}
+
+function typeIndexes(type) {
+  return [type.getStringIndexType(), type.getNumberIndexType()].filter(Boolean).map(indexTypeFacts);
+}
+
+function indexTypeFacts(type) {
+  if ((type.flags & ts.TypeFlags.Unknown) !== 0) return { kind: "unknown" };
+  if ((type.flags & ts.TypeFlags.Any) !== 0) return { kind: "any" };
+  return { kind: "typed" };
 }
 
 function signatureFacts(context, signature) {
@@ -318,12 +337,73 @@ function incomingUses(compiler, identity, paths) {
   };
 }
 
+function declarationCallable(compiler, identity) {
+  const { context, source } = ownedSource(compiler, identity.producer.path);
+  let node = compilerNodeAt(compiler, source, identity.producer.start);
+  while (node && ts.SyntaxKind[node.kind] !== identity.producer.kind) node = node.parent;
+  if (!node || !sameProducer(canonicalDeclaration(compiler, node, identity.entry), identity))
+    throw new TypeError("mismatched-responsibility-producer");
+  const callable = ts.isVariableDeclaration(node) ? node.initializer : node;
+  if (
+    !callable ||
+    !(
+      ts.isFunctionDeclaration(callable) ||
+      ts.isFunctionExpression(callable) ||
+      ts.isArrowFunction(callable)
+    )
+  )
+    throw new TypeError("unsupported-responsibility-callable");
+  return { context, source, callable };
+}
+
+function annotationSlot(context, source, annotation, identity, kind, index = null) {
+  if (!annotation) return null;
+  const position = source.getLineAndCharacterOfPosition(annotation.getStart(source));
+  return {
+    kind,
+    index,
+    path: identity.producer.path,
+    line: position.line + 1,
+    column: position.character + 1,
+    start: annotation.getStart(source),
+    end: annotation.end,
+    type: typeFacts(context.checker.getTypeAtLocation(annotation)),
+  };
+}
+
+function callableSlots(compiler, identity) {
+  const { context, source, callable } = declarationCallable(compiler, identity);
+  const facts = {
+    parameters: callable.parameters.map((parameter, index) =>
+      annotationSlot(context, source, parameter.type, identity, "parameter", index),
+    ),
+    result: annotationSlot(context, source, callable.type, identity, "return"),
+  };
+  compiler.assertCurrent();
+  return facts;
+}
+
+function expressionFactsAt(compiler, request) {
+  const { context, source } = ownedSource(compiler, request.path);
+  let node = compilerNodeAt(compiler, source, request.offset);
+  while (inertExpression(node.parent) && node.parent.expression === node) node = node.parent;
+  if (!ts.isExpressionNode(node)) throw new TypeError("unsupported-responsibility-expression");
+  const facts = {
+    type: typeFacts(context.checker.getTypeAtLocation(node)),
+    beforeAssertions: typeFacts(context.checker.getTypeAtLocation(unwrappedExpression(node))),
+  };
+  compiler.assertCurrent();
+  return facts;
+}
+
 export function createSymbolResolver(subject, options = {}) {
   const compiler = createCompilerContext(subject, options);
   return {
     resolveExport: (request) => resolveExport(compiler, request),
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
+    callableSlots: (identity) => callableSlots(compiler, identity),
+    expressionFactsAt: (request) => expressionFactsAt(compiler, request),
     sourceIdentity: (path) => {
       const sha256 = policyDigest(compiler.read(path));
       compiler.assertCurrent();

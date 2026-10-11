@@ -137,7 +137,8 @@ identity or higher-order responsibility proofs; they authorize no semantic exemp
 Version 1 retains its exact policy/report keys, rule inventory, scopes and activation history.
 Version 2 adds closed responsibility records: stable id, owner, validator or structural-redactor
 kind, exact rule obligations, input/transform/output/consumer export selectors and repository proof
-paths. Historical version 1 has no responsibility records; version 2 history rejects downgrade,
+paths. The input selector names an exact nonnegative canonical `parameterIndex`; its closed shape
+and historical identity reject removal or rebinding of that slot. Historical version 1 has no responsibility records; version 2 history rejects downgrade,
 removal or rebinding of an existing obligation. Unknown authorization fields remain rejected.
 
 Selectors resolve actual current compiler-owned declarations and emitted public entries. The
@@ -150,12 +151,44 @@ not establish domain validity or persistence safety.
 The intermediate evaluator reports structural `ready`, `incomplete` or `invalid` separately from
 semantic `pending` or `rejected`. No runtime proof execution mechanism is authorized by this
 interface, so `qualified` remains zero. Even a present proof file and separately passing owning
-Vitest tests cannot qualify CLI semantics. Version 2 enforcement fails while any responsibility
-remains unqualified; census still exposes pending facts. No responsibility suppresses upstream
-findings or changes active scopes. Existing version 1 production policy remains unchanged.
+Vitest tests cannot qualify CLI semantics. The combined v2 `outcome` remains failed while any
+responsibility remains unqualified. The explicitly separate `enforcementOutcome` answers only
+active syntax and static obligations. Enforce-mode exit follows that static result; text and JSON
+disclose both results and semantic counts. Census returns its descriptive exit zero while retaining
+actual static failure and pending semantics in those fields; census never supplies an enforce verdict.
+This is a disclosed v2 command-contract refinement,
+not semantic or migration qualification. Version 1 report shape and command behavior are unchanged.
+
+Static enforcement fails on active applicable findings and incomplete or rejected required static
+facts, including missing/foreign owners, missing/noncallable consumers, missing proofs and unsafe
+unknown or open-dictionary validator outputs. Merely unexecuted runtime and consumer proofs remain
+pending without becoming static rejection. The evaluator adapts only an assigned canonical raw
+parameter's exact annotation location for `no-unknown-parameters`, and a structural redactor's
+truthful raw return annotation for `no-unknown-returns`. The raw census retains every finding;
+each adaptation carries the responsibility id and exact checker-owned slot. No body, consumer,
+package, assertion or typed domain output is exempted. Additional unknown parameters remain active.
+Other rule obligations stay applicable and receive no adaptation from these slots. Existing version
+1 production policy and every activation/history guard remain unchanged.
+
+The existing bounded resolver supplies canonical callable slots, call references, flat index-signature
+facts and types before inert assertions. Recursive dictionary indexes are classified without walking
+an unbounded type graph. Missing or stale source facts grant no adaptation. These facts describe
+compiler/source contracts and cannot prove a predicate body truthful. The same ordinary runtime
+consumer safety assertions reject unchecked, always-true predicate, open-dictionary and generic
+assertion mutants; they do not promote the CLI's unexecuted semantic proofs through a cache,
+receipt, proof path, witness or authorization flag.
 
 Actual reference-validator/redactor preservation and counterfeit unknown-output controls live in
 the responsibility owning suite. They are useful runtime controls, not complete dataflow,
 validation-dominance, hostile-object or physical-sink proofs. Native sibling policy integration,
 versioned production records and shared real-parser fixture adaptation remain prerequisites for
 publishing the complete responsibility checkpoint.
+
+Consumer selectors require their own nonempty, bounded `owner` (at most 256 characters).
+Input, transform and output declarations remain bound to the producer record's `owner`; canonical
+consumer declarations are bound to `consumer.owner`. This permits existing cross-package consumers
+without relocating code or introducing a foreign-owner permission. Import-anchor paths do not establish
+exported declaration ownership. Consumer ownership is part of historical selector identity; missing,
+malformed, mismatched or rebound ownership fails closed. Producer selectors still reject extra owner
+fields. This static identity does not prove a real validation/call relationship or runtime safety;
+semantic obligations remain pending and no proof path or prior test result qualifies them.

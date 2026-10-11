@@ -30,6 +30,50 @@ async function fixture(options = {}) {
 const reference = { consumerPath: "src/consumer.ts", specifier: "alpha", exportName: "parse" };
 
 describe("configured canonical symbol resolver interface (#3918)", () => {
+  it("binds exact callable annotation slots through the same canonical alias and bounded programs", async () => {
+    const own = await fixture();
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const slots = own.resolver.callableSlots(identity);
+    expect(slots.parameters[0]).toMatchObject({
+      kind: "parameter",
+      index: 0,
+      path: "packages/alpha/src/owner.ts",
+      type: { kind: "unknown" },
+    });
+    const text = readFileSync(join(own.root, identity.producer.path), "utf8");
+    expect(text.slice(slots.parameters[0].start, slots.parameters[0].end)).toBe("unknown");
+    expect(slots.result.kind).toBe("return");
+    expect(() => own.resolver.callableSlots({ ...identity, owner: "foreign" })).toThrow(
+      "mismatched-responsibility-producer",
+    );
+    expect(own.resolver.stats().created).toBeLessThanOrEqual(2);
+    own.put(identity.producer.path, text.replace("unknown", "number "));
+    expect(() => own.resolver.callableSlots(identity)).toThrow("symbol-subject-changed");
+  });
+
+  it("reports checker-owned open indexes and pre-assertion types without trusting casts or recursive dictionaries", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const path = "packages/alpha/src/unsafe.ts";
+    const source =
+      "export function cast(input: unknown): number { return input as number; }\nexport function dictionary(input: Record<string, unknown>): Record<string, unknown> { return input; }\ninterface Recursive { [key: string]: Recursive }\nexport function recursive(input: Recursive): Recursive { return input; }\n";
+    own.put(path, source);
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(own.resolver.expressionFactsAt({ path, offset: source.indexOf("input as") })).toEqual({
+      type: { kind: "primitive" },
+      beforeAssertions: { kind: "unknown" },
+    });
+    const dictionary = own.resolver.expressionFactsAt({
+      path,
+      offset: source.indexOf("return input;") + "return ".length,
+    });
+    expect(dictionary.type).toEqual({ kind: "object", indexes: [{ kind: "unknown" }] });
+    expect(
+      own.resolver.expressionFactsAt({ path, offset: source.lastIndexOf("input;") }).type,
+    ).toEqual({ kind: "object", indexes: [{ kind: "typed" }] });
+  });
   it("keeps the public inventory identical while reusing internal parsed contexts and emissions", async () => {
     const own = await fixture();
     expect(await collectPolicyInventory(own.root)).toEqual(own.subject.inventory);
@@ -199,7 +243,10 @@ export function untyped(input: any): any { return input; }
     own.subject = await collectPolicySubject(own.root);
     own.resolver = createSymbolResolver(own.subject);
     const exported = (exportName) => own.resolver.resolveExport({ ...reference, exportName });
-    expect(exported("Dictionary").type).toEqual({ kind: "object" });
+    expect(exported("Dictionary").type).toEqual({
+      kind: "object",
+      indexes: [{ kind: "unknown" }],
+    });
     expect(exported("optional").signatures[0].parameters).toMatchObject([
       { optional: true, rest: false },
       { optional: false, rest: true },

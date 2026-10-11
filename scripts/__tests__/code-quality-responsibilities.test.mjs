@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { executeCodeQualityPolicy } from "../check-code-quality-policy.mjs";
+import { codeQualityPolicyMain, executeCodeQualityPolicy } from "../check-code-quality-policy.mjs";
 import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
 import { assessPolicyResponsibilities } from "../lib/code-quality-responsibilities.mjs";
@@ -14,11 +14,279 @@ import {
   responsibilityRecord,
   createResponsibilityFixture,
   executeResponsibilityFixture,
+  createEnforcementFixture,
+  createCrossOwnerEnforcementFixture,
+  replaceEnforcementOwner,
 } from "./support/code-quality-responsibility-fixture.mjs";
 
 const roots = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("v2 static enforcement keeps combined semantic qualification pending (#3918)", () => {
+  it.each(["validator", "structural-redactor"])(
+    "adapts only the canonical raw slots of a healthy %s and discloses both verdicts",
+    async (kind) => {
+      const own = createEnforcementFixture(kind);
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(report.outcome).toBe("failed");
+      expect(report.enforcementOutcome).toBe("passed");
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.counts.pending).toBe(1);
+      expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
+      expect(report.responsibilities.counts.ready).toBe(1);
+      expect(report.violations).toEqual([]);
+      expect(report.census.some((finding) => own.record.rules.includes(finding.rule))).toBe(true);
+      expect(report.adaptations).toHaveLength(kind === "validator" ? 1 : 2);
+      expect(report.adaptations[0]).toMatchObject({
+        responsibilityId: own.record.id,
+        slot: { kind: "parameter", index: 0 },
+      });
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(await codeQualityPolicyMain([], own.root)).toBe(0);
+      expect(log.mock.calls[0][0]).toContain("enforcement=PASSED; combined=FAILED");
+    },
+    60_000,
+  );
+
+  it.each(["unchecked", "foreign", "missing-consumer", "missing-proof", "unassigned"])(
+    "fails enforcement for %s obligations without borrowing a raw-slot adaptation",
+    async (variant) => {
+      const own = createEnforcementFixture("validator", variant);
+      roots.push(own.root);
+      if (variant === "foreign") own.record.owner = "beta";
+      if (variant === "missing-consumer") own.record.consumer.exportName = "missing";
+      if (variant === "missing-proof") own.record.proofs = ["packages/alpha/src/absent.test.ts"];
+      if (variant === "unassigned") own.policy.responsibilities = [];
+      own.put("scripts/code-quality-policy.json", own.policy);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.adaptations).toEqual([]);
+      expect(report.violations.length).toBeGreaterThan(0);
+      if (variant !== "unassigned") {
+        expect(report.responsibilities.counts.ready).toBe(0);
+        expect(report.responsibilities.assessments[0].reasons.length).toBeGreaterThan(0);
+      }
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(await codeQualityPolicyMain([], own.root)).toBe(1);
+    },
+    60_000,
+  );
+
+  it("rejects an open dictionary union through the actual CLI without borrowing a raw slot", async () => {
+    const own = createEnforcementFixture();
+    roots.push(own.root);
+    replaceEnforcementOwner(own, "union-dictionary");
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(await codeQualityPolicyMain([], own.root)).toBe(1);
+    expect(log.mock.calls[0][0]).toContain("enforcement=FAILED; combined=FAILED");
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "enforce" },
+      own.root,
+    );
+    expect(report.responsibilities.counts.qualified).toBe(0);
+    expect(report.responsibilities.counts.pending).toBe(0);
+    expect(report.responsibilities.assessments[0].semantic).toBe("rejected");
+    expect(report.responsibilities.counts.ready).toBe(0);
+    expect(report.responsibilities.assessments[0].reasons).toContain(
+      "unchecked-validator-dictionary",
+    );
+    expect(report.adaptations).toEqual([]);
+    expect(report.violations.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("accepts a genuinely imported built cross-owner consumer without qualifying semantics", async () => {
+    const own = createCrossOwnerEnforcementFixture();
+    roots.push(own.root);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const exit = await codeQualityPolicyMain([], own.root);
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "enforce" },
+      own.root,
+    );
+    expect(report.responsibilities.assessments[0].reasons).toEqual([]);
+    expect(exit).toBe(0);
+    expect(report.enforcementOutcome).toBe("passed");
+    expect(report.outcome).toBe("failed");
+    expect(report.responsibilities.counts.ready).toBe(1);
+    expect(report.responsibilities.counts.pending).toBe(1);
+    expect(report.responsibilities.counts.qualified).toBe(0);
+    expect(report.responsibilities.assessments[0].roles.consumer.identities[0].owner).toBe("beta");
+    expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
+  }, 60_000);
+
+  it.each([
+    ["wrong-producer", "foreign-responsibility-owner"],
+    ["wrong-consumer", "foreign-responsibility-owner"],
+    ["alias-producer", "foreign-responsibility-owner"],
+    ["missing", "unresolved-responsibility-facts"],
+    ["noncallable", "noncallable-responsibility-consumer"],
+  ])(
+    "rejects exact cross-owner %s binding without an owner waiver",
+    async (variant, reason) => {
+      const own = createCrossOwnerEnforcementFixture(variant);
+      roots.push(own.root);
+      if (variant === "wrong-producer") own.record.owner = "beta";
+      if (variant === "wrong-consumer") own.record.consumer.owner = "alpha";
+      if (variant === "missing") own.record.consumer.exportName = "missing";
+      own.put("scripts/code-quality-policy.json", own.policy);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.responsibilities.assessments[0].reasons).toContain(reason);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.adaptations).toEqual([]);
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(await codeQualityPolicyMain([], own.root)).toBe(1);
+    },
+    60_000,
+  );
+
+  it.each(["missing-producer", "missing-consumer", "malformed-consumer", "extra-authorization"])(
+    "rejects %s ownership at the real CLI policy boundary",
+    async (variant) => {
+      const own = createCrossOwnerEnforcementFixture();
+      roots.push(own.root);
+      if (variant === "missing-producer") delete own.record.owner;
+      if (variant === "missing-consumer") delete own.record.consumer.owner;
+      if (variant === "malformed-consumer") own.record.consumer.owner = null;
+      if (variant === "extra-authorization") own.record.consumer.exempt = true;
+      own.put("scripts/code-quality-policy.json", own.policy);
+      await expect(
+        executeCodeQualityPolicy({ scope: "repository", mode: "enforce" }, own.root),
+      ).rejects.toThrow("invalid-responsibilities");
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      expect(await codeQualityPolicyMain([], own.root)).toBe(1);
+      expect(error.mock.calls[0][0]).toContain("invalid-responsibilities");
+    },
+    60_000,
+  );
+
+  it.each([undefined, "", null, 7, {}, ["alpha"], "x".repeat(257)])(
+    "rejects missing or malformed exact consumer owner %j",
+    (owner) => {
+      const policy = responsibilityPolicy([responsibilityRecord()]);
+      policy.responsibilities[0].consumer.owner = owner;
+      expect(validatePolicy(policy)).toEqual(["invalid-responsibilities"]);
+    },
+  );
+  it.each(["inherited-owner", "array-selector"])(
+    "rejects malformed closed consumer shape %s",
+    (variant) => {
+      const policy = responsibilityPolicy([responsibilityRecord()]);
+      const selector = policy.responsibilities[0].consumer;
+      if (variant === "inherited-owner") {
+        delete selector.owner;
+        Object.setPrototypeOf(selector, { owner: "alpha" });
+      } else policy.responsibilities[0].consumer = Object.assign([], selector);
+      expect(validatePolicy(policy)).toEqual(["invalid-responsibilities"]);
+    },
+  );
+
+  it("binds historical consumer ownership and rejects extra authorization fields", () => {
+    const baseline = responsibilityPolicy([responsibilityRecord()]);
+    const current = structuredClone(baseline);
+    current.responsibilities[0].consumer.owner = "beta";
+    expect(validatePolicy(current, [baseline])).toEqual(["responsibility-shrank"]);
+    current.responsibilities[0].consumer.owner = "alpha";
+    current.responsibilities[0].consumer.exempt = true;
+    expect(validatePolicy(current)).toEqual(["invalid-responsibilities"]);
+    delete current.responsibilities[0].consumer.exempt;
+    for (const role of ["input", "transform", "output"]) {
+      current.responsibilities[0][role].owner = "alpha";
+      expect(validatePolicy(current)).toEqual(["invalid-responsibilities"]);
+      delete current.responsibilities[0][role].owner;
+    }
+  });
+
+  it("pins exact parameter index in validation and historical identity", () => {
+    const previous = responsibilityPolicy([responsibilityRecord()]);
+    const current = structuredClone(previous);
+    current.responsibilities[0].input.parameterIndex = 1;
+    expect(validatePolicy(current, [previous])).toEqual(["responsibility-shrank"]);
+    current.responsibilities[0].input.parameterIndex = -1;
+    expect(validatePolicy(current)).toEqual(["invalid-responsibilities"]);
+    delete current.responsibilities[0].input.parameterIndex;
+    expect(validatePolicy(current)).toEqual(["invalid-responsibilities"]);
+  });
+
+  it("discloses failed static and semantic obligations in census without treating its exit as enforcement", async () => {
+    const own = createEnforcementFixture();
+    roots.push(own.root);
+    own.record.consumer.exportName = "missing";
+    own.put("scripts/code-quality-policy.json", own.policy);
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "census" },
+      own.root,
+    );
+    expect(report.outcome).toBe("failed");
+    expect(report.enforcementOutcome).toBe("failed");
+    expect(report.responsibilities.counts.incomplete).toBe(1);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(await codeQualityPolicyMain(["--mode", "census"], own.root)).toBe(0);
+    expect(log.mock.calls[0][0]).toContain("enforcement=FAILED; combined=FAILED");
+  }, 60_000);
+
+  it.each(["extra-slot", "unknown-consumer", "open-dictionary", "missing-slot"])(
+    "keeps %s unsafe contracts active instead of adapting a body or consumer",
+    async (variant) => {
+      const own = createEnforcementFixture();
+      roots.push(own.root);
+      if (variant === "missing-slot") own.record.input.parameterIndex = 1;
+      else replaceEnforcementOwner(own, variant);
+      own.put("scripts/code-quality-policy.json", own.policy);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.violations.length).toBeGreaterThan(0);
+      expect(report.adaptations).toHaveLength(variant === "extra-slot" ? 1 : 0);
+      if (variant === "extra-slot") {
+        expect(report.violations.some((finding) => finding.rule === own.record.rules[0])).toBe(
+          true,
+        );
+      } else {
+        expect(report.responsibilities.counts.ready).toBe(0);
+        expect(report.responsibilities.assessments[0].reasons.length).toBeGreaterThan(0);
+      }
+    },
+    60_000,
+  );
+});
+
+function assertConsumerSafety(api) {
+  expect(api.consume(3)).toBe(3);
+  for (const input of ["unchecked", null, {}, []]) expect(() => api.consume(input)).toThrow();
+}
+
+describe("one ordinary runtime consumer contract rejects unchanged-signature mutants", () => {
+  it("accepts the actual healthy emitted producer and consumer", async () => {
+    const own = createEnforcementFixture();
+    roots.push(own.root);
+    assertConsumerSafety(await executeResponsibilityFixture(own));
+  });
+  it.each(["unchecked", "lying-predicate", "open-dictionary", "generic-assertion"])(
+    "rejects the %s mutant through the same consumer assertion contract",
+    async (variant) => {
+      const own = createEnforcementFixture("validator", variant);
+      roots.push(own.root);
+      if (variant !== "unchecked") replaceEnforcementOwner(own, variant);
+      const api = await executeResponsibilityFixture(own);
+      expect(() => assertConsumerSafety(api)).toThrow();
+    },
+  );
 });
 async function fixture(variant) {
   const own = createResponsibilityFixture(variant);
@@ -239,6 +507,8 @@ describe("actual policy entry reports responsibility incompleteness", () => {
     expect(legacy.schemaVersion).toBe(1);
     expect(legacy.outcome).toBe("passed");
     expect(Object.hasOwn(legacy, "responsibilities")).toBe(false);
+    expect(Object.hasOwn(legacy, "enforcementOutcome")).toBe(false);
+    expect(Object.hasOwn(legacy, "adaptations")).toBe(false);
     writeFileSync(path, JSON.stringify(v2));
     const report = await executeCodeQualityPolicy(
       { scope: "repository", mode: "enforce" },

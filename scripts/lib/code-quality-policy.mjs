@@ -89,13 +89,22 @@ function validRuleInventory(rules) {
   );
 }
 
-function validSelector(selector) {
+function validSelector(selector, input = false) {
+  const keys = ["consumerPath", "specifier", "exportName"];
+  if (input) keys.push("parameterIndex");
   return (
-    exactKeys(selector, ["consumerPath", "specifier", "exportName"]) &&
+    exactKeys(selector, keys) &&
+    (!input || (Number.isSafeInteger(selector.parameterIndex) && selector.parameterIndex >= 0)) &&
     validPath(selector.consumerPath) &&
     boundedText(selector.specifier, 256) &&
     boundedText(selector.exportName, 128)
   );
+}
+
+function validConsumerSelector(selector) {
+  if (!exactKeys(selector, ["consumerPath", "specifier", "exportName", "owner"])) return false;
+  const { owner, ...exportSelector } = selector;
+  return boundedText(owner, 256) && validSelector(exportSelector);
 }
 
 function boundedText(value, limit) {
@@ -129,7 +138,9 @@ function validResponsibility(record) {
     boundedText(record.owner, 256) &&
     ["validator", "structural-redactor"].includes(record.kind) &&
     validResponsibilityRules(record.rules) &&
-    [record.input, record.transform, record.output, record.consumer].every(validSelector) &&
+    validSelector(record.input, true) &&
+    [record.transform, record.output].every((selector) => validSelector(selector)) &&
+    validConsumerSelector(record.consumer) &&
     validProofs(record.proofs)
   );
 }
@@ -157,7 +168,13 @@ function validResponsibilities(records) {
 
 function canonicalIdentity(value) {
   if (typeof value === "string") return value;
-  return JSON.stringify([value.consumerPath, value.specifier, value.exportName]);
+  return JSON.stringify([
+    value.consumerPath,
+    value.specifier,
+    value.exportName,
+    value.parameterIndex ?? null,
+    value.owner ?? null,
+  ]);
 }
 
 function responsibilityShrank(policy, previous) {
