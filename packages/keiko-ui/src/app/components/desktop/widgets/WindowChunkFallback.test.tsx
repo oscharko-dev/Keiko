@@ -130,3 +130,62 @@ describe("createWindowChunkFallback", () => {
     }
   });
 });
+
+// These controls qualify the owning recovery callback; stale invocation is bounded fault injection,
+// not a claim that browser timers execute after the hook's normal cancellation cleanup.
+describe("window chunk recovery callback boundaries", () => {
+  it("uses the public factory default reload only after the human activates recovery", () => {
+    const reload = vi.fn();
+    const browser = window;
+    vi.stubGlobal(
+      "window",
+      new Proxy(browser, {
+        get(target, key): unknown {
+          return key === "location" ? { reload } : Reflect.get(target, key);
+        },
+      }),
+    );
+    vi.useFakeTimers();
+    try {
+      const Fallback = createWindowChunkFallback("window chunk");
+      const { unmount } = render(
+        <I18nProvider>
+          <Fallback />
+        </I18nProvider>,
+      );
+      expect(reload).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(WINDOW_STAGE_STALL_MS));
+      expect(reload).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Reload Keiko" }));
+      expect(reload).toHaveBeenCalledTimes(1);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not recreate recovery DOM or reload if a captured stall callback arrives after unmount", () => {
+    vi.useFakeTimers();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const reload = vi.fn();
+      const Fallback = createWindowChunkFallback("window chunk", reload);
+      const { unmount } = render(
+        <I18nProvider>
+          <Fallback />
+        </I18nProvider>,
+      );
+      const callback = timer.mock.calls.find((call) => call[1] === WINDOW_STAGE_STALL_MS)?.[0];
+      if (typeof callback !== "function")
+        throw new TypeError("Owning stall timer was not scheduled");
+      unmount();
+      expect(() => act(() => callback())).not.toThrow();
+      expect(screen.queryByRole("button", { name: "Reload Keiko" })).toBeNull();
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      timer.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
