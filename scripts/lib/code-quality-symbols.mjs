@@ -27,10 +27,10 @@ function typeFacts(type) {
       ...(indexes.length ? { indexes } : {}),
     };
   }
-  if ((flags & ts.TypeFlags.Object) !== 0) {
+  if (type.isIntersection() || (flags & ts.TypeFlags.Object) !== 0) {
     const indexes = typeIndexes(type);
     return {
-      kind: "object",
+      kind: type.isIntersection() ? "intersection" : "object",
       ...(indexes.length ? { indexes } : {}),
     };
   }
@@ -1062,6 +1062,71 @@ function rawPredicateSlots(state, states, qualified) {
   });
 }
 
+function standardDictionaryDeclaration(state, declaration) {
+  return (
+    state.context.program.isSourceFileDefaultLibrary(declaration.getSourceFile()) &&
+    ts.isTypeAliasDeclaration(declaration) &&
+    ts.isMappedTypeNode(declaration.type)
+  );
+}
+
+function rawDictionarySyntax(node) {
+  if (!node || !ts.isTypeReferenceNode(node) || node.typeArguments?.length !== 2) return false;
+  if (
+    node.typeArguments[0].kind !== ts.SyntaxKind.StringKeyword ||
+    node.typeArguments[1].kind !== ts.SyntaxKind.UnknownKeyword
+  )
+    return false;
+  return true;
+}
+
+function rawDictionaryMember(state, node) {
+  if (!rawDictionarySyntax(node)) return false;
+  const symbol = state.context.checker.getSymbolAtLocation(node.typeName);
+  if (
+    !symbol?.declarations?.some((declaration) => standardDictionaryDeclaration(state, declaration))
+  )
+    return false;
+  const type = state.context.checker.getTypeAtLocation(node);
+  return Boolean(type.getStringIndexType()?.flags & ts.TypeFlags.Unknown);
+}
+
+function rawDictionaryPredicates(state, signature) {
+  const predicate = state.callable.type;
+  const facts = state.context.checker.getTypePredicateOfSignature(signature);
+  if (
+    predicate &&
+    ts.isTypePredicateNode(predicate) &&
+    facts?.kind === ts.TypePredicateKind.Identifier &&
+    facts.parameterIndex === state.index &&
+    ts.isIdentifier(predicate.parameterName) &&
+    state.context.checker.getSymbolAtLocation(predicate.parameterName) === state.parameterSymbol
+  ) {
+    const members = ts.isIntersectionTypeNode(predicate.type)
+      ? predicate.type.types
+      : [predicate.type];
+    return members.map((node) => ({ node, kind: "predicate-member" }));
+  }
+  return [];
+}
+
+function rawDictionaryAnnotations(state) {
+  if (writtenSymbol(state.context, state.nodes, state.parameterSymbol)) return [];
+  const parameter = state.callable.parameters[state.index];
+  const signature = state.context.checker.getSignatureFromDeclaration(state.callable);
+  if (!signature) return [];
+  const result = state.context.checker.getReturnTypeOfSignature(signature);
+  if ((result.flags & ts.TypeFlags.BooleanLike) === 0) return [];
+  const annotations = [{ node: parameter.type, kind: "parameter" }];
+  annotations.push(...rawDictionaryPredicates(state, signature));
+  return annotations
+    .filter(({ node }) => rawDictionaryMember(state, node))
+    .map(({ node, kind }) => ({
+      ...annotationSlot(state.context, state.source, node, state.identity, kind, state.index),
+      rule: "anti-slop/no-unsafe-dictionary-type",
+    }));
+}
+
 function rawCheckingSlots(compiler, identity, index) {
   const owned = declarationCallable(compiler, identity);
   const nodes = sourceNodes(compiler, owned.source);
@@ -1093,7 +1158,11 @@ function rawCheckingSlots(compiler, identity, index) {
     );
     if (annotation?.type.kind === "unknown")
       slots.push({ ...annotation, rule: "anti-slop/no-unknown-parameters" });
-    slots.push(...rawTypeofSlots(state), ...rawPredicateSlots(state, states, qualified));
+    slots.push(
+      ...rawDictionaryAnnotations(state),
+      ...rawTypeofSlots(state),
+      ...rawPredicateSlots(state, states, qualified),
+    );
   }
   compiler.assertCurrent();
   return slots;

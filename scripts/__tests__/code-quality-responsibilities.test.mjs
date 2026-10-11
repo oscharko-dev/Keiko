@@ -13,6 +13,7 @@ import { deepRedactStrings, createAuditRedactor } from "@oscharko-dev/keiko-secu
 import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import {
   createDiagnosticFixture,
+  createDictionaryEnforcementFixture,
   createForeignDiagnosticFixture,
   responsibilityPolicy,
   responsibilityRecord,
@@ -1075,4 +1076,100 @@ describe("diagnostic raw slot exact Native positions (#3918)", () => {
     expect(report.responsibilities.counts.qualified).toBe(0);
     expect(report.outcome).toBe("failed");
   }, 60_000);
+});
+
+describe("dictionary Native exact-member before controls (#3918)", () => {
+  it.each(["direct", "unicode"])(
+    "adapts only exact %s Native dictionary coordinates",
+    async (variant) => {
+      const own = createDictionaryEnforcementFixture(variant);
+      roots.push(own.root);
+      const runtime = await executeResponsibilityFixture(own);
+      expect(runtime.consume(7)).toBe(7);
+      expect(runtime.validate(null).ok).toBe(false);
+      expect(runtime.validate({ value: Number.NaN }).ok).toBe(false);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      const raw = responsibilityOwnerCensus(report).filter(
+        ({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(raw).toHaveLength(5);
+      expect(report.responsibilities.counts.ready).toBe(1);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
+      const adapted = report.adaptations.filter(
+        ({ finding }) => finding.rule === "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(adapted).toHaveLength(3);
+      expect(
+        adapted.every(
+          ({ finding, slot }) =>
+            raw.some((item) => item.line === finding.line && item.column === finding.column) &&
+            slot.line === finding.line &&
+            slot.column === finding.column,
+        ),
+      ).toBe(true);
+      expect(
+        report.violations.filter(({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type"),
+      ).toHaveLength(2);
+    },
+    60_000,
+  );
+
+  it("rejects the actual open intersection output for its index facts", async () => {
+    const own = createDictionaryEnforcementFixture("intersection");
+    roots.push(own.root);
+    const report = await executeCodeQualityPolicy(
+      { scope: "repository", mode: "enforce" },
+      own.root,
+    );
+    expect(
+      responsibilityOwnerCensus(report).some(
+        ({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type",
+      ),
+    ).toBe(true);
+    expect(report.responsibilities.counts.qualified).toBe(0);
+    expect(report.responsibilities.assessments[0].reasons).toContain(
+      "unchecked-validator-dictionary",
+    );
+  }, 60_000);
+});
+
+describe("dictionary actual Native refusal controls (#3918)", () => {
+  it.each([
+    ["typed-index", 0],
+    ["any-index", 0],
+    ["counterfeit", 0],
+    ["alias-member", 0],
+    ["unused", 1],
+    ["parameter-intersection", 2],
+    ["other-predicate-parameter", 2],
+  ])(
+    "retains the actual unadapted Native partition for %s",
+    async (variant, count) => {
+      const own = createDictionaryEnforcementFixture(variant);
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(
+        { scope: "repository", mode: "enforce" },
+        own.root,
+      );
+      const raw = responsibilityOwnerCensus(report).filter(
+        ({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(report.census.length).toBeGreaterThan(0);
+      if (!["typed-index", "any-index"].includes(variant)) expect(raw.length).toBeGreaterThan(0);
+      const adapted = report.adaptations.filter(
+        ({ finding }) => finding.rule === "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(adapted).toHaveLength(count);
+      expect(
+        report.violations.filter(({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type"),
+      ).toHaveLength(raw.length - count);
+      expect(report.responsibilities.counts.qualified).toBe(0);
+      expect(report.responsibilities.assessments[0].proofs[0].executed).toBe(false);
+    },
+    60_000,
+  );
 });

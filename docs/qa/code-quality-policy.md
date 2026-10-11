@@ -192,6 +192,15 @@ unknown and whose raw origin is retained. A partially narrowed or typed operand 
 checker-bound type-predicate parameter in the same qualified closure, while retaining informative
 local types. It never adapts variable/property/assignment/return erasure or assertions. A structural
 redactor's truthful raw return annotation remains the sole `no-unknown-returns` adaptation.
+`no-unsafe-dictionary-type` adapts only concrete unknown-valued dictionary annotation members
+on an eligible boolean or identifier-predicate checking helper in that same raw-origin closure.
+The selected standard-library mapped type, string/unknown arguments and unknown index are
+checker-owned facts, not a permission based on the type's spelling. Predicate members must refine
+that helper's actual raw parameter. A predicate intersection selects only its dictionary member;
+the surrounding intersection, unrelated parameter, property, local or data-return annotation is
+not a slot. Aliases, local counterfeits, typed or any-valued indexes and mutated parameters receive
+no dictionary-member adaptation. Shallow intersection index facts still reject open validator
+outputs and explicit dictionary erasure; they do not recursively certify wrapped payloads.
 The raw census retains every finding, and each adaptation carries the responsibility id and exact
 checker-owned slot. Native diagnostic line/columns use UTF-8 bytes from the actual source; compiler
 start/end offsets and declaration-map ownership retain their UTF-16 contract. Guarded resolver facts

@@ -422,3 +422,109 @@ export function createForeignDiagnosticFixture() {
   own.record.proofs = [path];
   return own;
 }
+
+export function createDictionaryEnforcementFixture(variant = "direct") {
+  const own = createEnforcementFixture();
+  const source = dictionaryCheckingSource();
+  const sources = {
+    ...dictionarySignatureVariants(source),
+    ...dictionaryOwnershipVariants(source),
+    ...dictionaryDispatchVariants(source),
+  };
+  own.put("packages/alpha/src/owner.ts", sources[variant]);
+  own.record.rules.push("anti-slop/no-unsafe-dictionary-type", "anti-slop/no-known-value-widening");
+  activateResponsibilityFixtureRules(own.policy, own.record);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+function dictionaryCheckingSource() {
+  return [
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null && !Array.isArray(input); }',
+    'function fields(input: Record<string, unknown>): input is Record<string, unknown> & { value: number } { return typeof input.value === "number" && Number.isFinite(input.value); }',
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } { if (!record(input) || !fields(input)) return { ok: false }; return { ok: true, value: input.value }; }",
+    'export function consume(input: number): number { const result = validate({ value: input }); if (!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "export function unrelated(input: Record<string, unknown>): Record<string, unknown> { return input; }",
+    "",
+  ].join("\n");
+}
+
+function dictionarySignatureVariants(source) {
+  return {
+    direct: source,
+    unicode: source.replaceAll("input", "είσοδος"),
+    erasure: source
+      .replace(
+        "if (!record(input) || !fields(input)) return { ok: false };",
+        "if (!record(input)) return { ok: false }; const erased: Record<string, unknown> & { tag?: boolean } = input; if (!fields(erased)) return { ok: false };",
+      )
+      .replace("value: input.value", "value: erased.value"),
+    "typed-index": source.replaceAll("Record<string, unknown>", "Record<string, number>"),
+    "any-index": source.replaceAll("Record<string, unknown>", "Record<string, any>"),
+    counterfeit: "type Record<K extends string, V> = { [P in K]: V };\n" + source,
+    "alias-member":
+      "type Bag = Record<string, unknown>;\n" + source.replaceAll("Record<string, unknown>", "Bag"),
+  };
+}
+
+function dictionaryOwnershipVariants(source) {
+  return {
+    "export-helper": source.replace("function fields", "export function fields"),
+    "reexport-helper": source + "export { fields };\n",
+    "second-caller":
+      source +
+      "export function trusted(input: Record<string, unknown>): boolean { return fields(input); }\n",
+    callback: source + "const callbacks = [fields];\n",
+    "return-escape": source + "export function expose() { return fields; }\n",
+    "helper-write": source.replace(
+      "return typeof input.value",
+      "input = {}; return typeof input.value",
+    ),
+    "root-write": source.replace("if (!record(input)", "input = { value: 1 }; if (!record(input)"),
+  };
+}
+
+function dictionaryDispatchVariants(source) {
+  return {
+    unused: source.replace("!fields(input)", 'typeof input.value !== "number"'),
+    deferred: source
+      .replace("!fields(input)", 'typeof input.value !== "number"')
+      .replace(
+        "return { ok: true, value: input.value };",
+        "const later = () => fields(input); return { ok: true, value: input.value };",
+      ),
+    computed: source.replace("fields(input)", "({ check: fields }).check(input)"),
+    reflective: source.replace(
+      "!fields(input)",
+      '!Reflect.apply(fields, null, [input]) || typeof input.value !== "number"',
+    ),
+    destructured: source
+      .replace(
+        "export function validate",
+        "const { check } = { check: fields }; export function validate",
+      )
+      .replace("fields(input)", "check(input)"),
+    "mutable-alias": source
+      .replace("export function validate", "let check = fields; export function validate")
+      .replace("fields(input)", "check(input)"),
+    cycle: source.replace(
+      "return typeof input.value",
+      "if (!fields(input)) return false; return typeof input.value",
+    ),
+    "parameter-intersection": source.replace(
+      "fields(input: Record<string, unknown>)",
+      "fields(input: Record<string, unknown> & { tag?: boolean })",
+    ),
+    "other-predicate-parameter": source
+      .replace(
+        "fields(input: Record<string, unknown>): input is",
+        "fields(input: Record<string, unknown>, other: unknown = input): other is",
+      )
+      .replace("!fields(input)", '!fields(input) || typeof input.value !== "number"'),
+    intersection: [
+      "export function validate(input: unknown): Record<string, unknown> & { value: number } { return { value: 1 }; }",
+      "export function consume(input: number): number { return validate(input).value; }",
+    ].join("\n"),
+  };
+}

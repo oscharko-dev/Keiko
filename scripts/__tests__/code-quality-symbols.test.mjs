@@ -10,6 +10,7 @@ import { declarationMapPosition } from "../lib/code-quality-provenance.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
   createDiagnosticFixture,
+  createDictionaryEnforcementFixture,
   createRawHelperEnforcementFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 import {
@@ -1222,4 +1223,106 @@ describe("diagnostic proof guard challenges (#3918)", () => {
       compiler.close();
     }
   });
+});
+
+describe("dictionary exact-member before controls (#3918)", () => {
+  it.each(["direct", "unicode"])(
+    "binds only exact %s dictionary members",
+    async (variant) => {
+      const own = createDictionaryEnforcementFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const identity = own.resolver.resolveExport(own.record.input).identities[0];
+      const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+      const slots = own.resolver.rawCheckingSlots(identity, 0);
+      expect(own.resolver.callableSlots(identity).parameters[0].type.kind).toBe("unknown");
+      const dictionaries = slots.filter(
+        ({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(dictionaries).toHaveLength(3);
+      expect(dictionaries.map(({ start, end }) => source.slice(start, end))).toEqual([
+        "Record<string, unknown>",
+        "Record<string, unknown>",
+        "Record<string, unknown>",
+      ]);
+      expect(
+        dictionaries.every(({ start }) => start < source.indexOf("export function unrelated")),
+      ).toBe(true);
+    },
+    30_000,
+  );
+
+  it("exposes shallow intersection indexes without treating the output as primitive", async () => {
+    const own = createDictionaryEnforcementFixture("intersection");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.output).identities[0];
+    const facts = own.resolver.callableSlots(identity);
+    expect(facts.parameters[0].type.kind).toBe("unknown");
+    expect(facts.result.type.indexes).toEqual([{ kind: "unknown" }]);
+  }, 30_000);
+
+  it("withdraws predicate recheck after explicit intersection raw erasure", async () => {
+    const own = createDictionaryEnforcementFixture("erasure");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const offset = source.indexOf("fields(erased)") + "fields(".length;
+    expect(own.resolver.callableSlots(identity).parameters[0].type.kind).toBe("unknown");
+    const slots = own.resolver.rawCheckingSlots(identity, 0);
+    expect(
+      slots.filter(
+        ({ rule, start }) => rule === "anti-slop/no-known-value-widening" && start === offset,
+      ),
+    ).toEqual([]);
+  }, 30_000);
+});
+
+describe("dictionary bounded refusal controls (#3918)", () => {
+  it("keeps dictionary helper cycles rejected by the existing raw closure", async () => {
+    const own = createDictionaryEnforcementFixture("cycle");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(() => own.resolver.rawCheckingSlots(identity, 0)).toThrow(
+      "unsupported-raw-helper-cycle",
+    );
+  }, 30_000);
+
+  it.each([
+    ["typed-index", 0],
+    ["any-index", 0],
+    ["counterfeit", 0],
+    ["alias-member", 0],
+    ["export-helper", 1],
+    ["reexport-helper", 1],
+    ["second-caller", 1],
+    ["callback", 1],
+    ["return-escape", 1],
+    ["helper-write", 1],
+    ["root-write", 0],
+    ["unused", 1],
+    ["deferred", 1],
+    ["computed", 1],
+    ["reflective", 1],
+    ["destructured", 1],
+    ["mutable-alias", 1],
+    ["parameter-intersection", 2],
+    ["other-predicate-parameter", 2],
+  ])(
+    "retains dictionary enforcement for %s",
+    async (variant, count) => {
+      const own = createDictionaryEnforcementFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const identity = own.resolver.resolveExport(own.record.input).identities[0];
+      expect(own.resolver.callableSlots(identity).parameters[0].type.kind).toBe("unknown");
+      const slots = own.resolver.rawCheckingSlots(identity, 0);
+      expect(
+        slots.filter(({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type"),
+      ).toHaveLength(count);
+    },
+    30_000,
+  );
 });
