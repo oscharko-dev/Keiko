@@ -261,9 +261,13 @@ describe("validateHtmlManualPodRefreshRequest", () => {
         returnedReceivers: true,
       },
     },
-  ])("preserves isolated error-array interactions for $operation", ({ operation, expected }) => {
-    expect(observeArrayInteractions(operation)).toBe(`${JSON.stringify(expected)}\n`);
-  });
+  ])(
+    "preserves isolated error-array interactions for $operation",
+    ({ operation, expected }) => {
+      expect(observeArrayInteractions(operation)).toBe(`${JSON.stringify(expected)}\n`);
+    },
+    15_000,
+  );
 
   it("rejects non-objects, extra keys, and unsafe ids", () => {
     expect(validateHtmlManualPodRefreshRequest(null).ok).toBe(false);

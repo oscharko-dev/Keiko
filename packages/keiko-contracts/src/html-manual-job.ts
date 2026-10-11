@@ -97,6 +97,10 @@ export interface HtmlManualPodCreateRequest {
 
 const MAX_DISPLAY_NAME_LENGTH = 120;
 
+interface HtmlManualPodRefreshValidationState {
+  errors: string[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -126,7 +130,7 @@ function onlyKnownKeys(
 
 function isHtmlManualPodRefreshRequest(
   input: unknown,
-  state: { errors: string[] },
+  state: HtmlManualPodRefreshValidationState,
 ): input is HtmlManualPodRefreshRequest {
   if (!isRecord(input)) {
     state.errors = ["request must be an object"];
@@ -145,7 +149,7 @@ function isHtmlManualPodRefreshRequest(
 export function validateHtmlManualPodRefreshRequest(
   input: unknown,
 ): LocalKnowledgeValidation<HtmlManualPodRefreshRequest> {
-  const state: { errors: string[] } = { errors: [] };
+  const state: HtmlManualPodRefreshValidationState = { errors: [] };
   if (!isHtmlManualPodRefreshRequest(input, state)) return { ok: false, errors: state.errors };
   return { ok: true, value: input };
 }
