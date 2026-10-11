@@ -73,6 +73,7 @@ export interface CreateHtmlManualPodDeps {
   readonly idSource?: () => string;
   readonly auditSink?: AuditEventSink;
   readonly logSink?: KnowledgeLogSink | undefined;
+  readonly correlationId?: string | undefined;
   readonly onCrawlEvent?: (event: ManualCrawlEvent) => void;
   readonly onIndexEvent?: (event: IndexingEvent) => void;
 }
@@ -229,7 +230,10 @@ export async function createHtmlManualPod(
   if (capsule === undefined) {
     throw new KnowledgeStoreError("manual capsule vanished during indexing");
   }
-  const summary = buildKnowledgePodSummary(deps.store, capsule);
+  const summary = buildKnowledgePodSummary(deps.store, capsule, {
+    logSink: deps.logSink,
+    correlationId: deps.correlationId,
+  });
   return {
     capsuleId: deps.capsuleId,
     sourceId: deps.sourceId,

@@ -27,6 +27,10 @@ import type {
   AtlassianSyncFailureReason,
   ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
@@ -51,10 +55,47 @@ import {
   type ConnectorSourceMetadata,
 } from "./connector-source-metadata.js";
 import { KnowledgeStoreError } from "./errors.js";
+import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "./knowledge-log.js";
 import { readHtmlManualSourceMetadata } from "./manual-source-metadata.js";
 import { resolveScopeModelUsePolicy } from "./model-use-policy.js";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+
+interface ManualSummaryEvidence {
+  readonly logSink?: KnowledgeLogSink | undefined;
+  readonly correlationId?: string | undefined;
+}
+
+interface ManualSummaryRejections {
+  invalidJsonCount: number;
+  invalidSummaryCount: number;
+}
+
+const MANUAL_REFRESH_SUMMARY_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "knowledge.manual-refresh-summary.rejected",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "knowledge-pods.logManualRefreshSummaryRejection",
+  fields: {
+    invalidJsonCount: { type: "integer", dataClass: "count", required: true },
+    invalidSummaryCount: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["invalid-json", "invalid-summary", "mixed"],
+    },
+    summaryReturned: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["knowledge-manual-summary-validation"],
+  proofIds: ["knowledge.manual-refresh-summary.rejected.omission"],
+  releaseImpact: "patch",
+});
 
 interface CountRow {
   readonly n: number;
@@ -119,6 +160,7 @@ const MEMBER_READINESS_BUCKETS: Record<
 export function listKnowledgePodSummaries(
   store: KnowledgeStore,
   kind?: KnowledgePodSummaryKind,
+  evidence?: ManualSummaryEvidence,
 ): readonly KnowledgePodSummary[] {
   // Scope the projection to the requested kind before building. Building a summary can fail
   // closed on corrupt state, so materializing an unrelated collection here would let one
@@ -126,7 +168,7 @@ export function listKnowledgePodSummaries(
   const pods =
     kind === "pod-set"
       ? []
-      : listCapsules(store).map((capsule) => buildKnowledgePodSummary(store, capsule));
+      : listCapsules(store).map((capsule) => buildKnowledgePodSummary(store, capsule, evidence));
   const sets =
     kind === "pod"
       ? []
@@ -137,6 +179,7 @@ export function listKnowledgePodSummaries(
 export function buildKnowledgePodSummary(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
+  evidence?: ManualSummaryEvidence,
 ): KnowledgePodSummary {
   const sources = listCapsuleSources(store, capsule.id);
   const counts = capsuleCounts(store, capsule.id);
@@ -158,7 +201,7 @@ export function buildKnowledgePodSummary(
       ...connector.degradationReasons,
     ],
   });
-  const manualRefresh = readManualRefreshSummary(store, capsule.id, sources);
+  const manualRefresh = readManualRefreshSummary(store, capsule.id, sources, evidence);
   return assertValidSummary({
     ...projection,
     ...(manualRefresh !== undefined ? { manualRefresh } : {}),
@@ -258,28 +301,71 @@ function connectorPodProjection(
   };
 }
 
-// Surface the last explicit-refresh change summary (Epic #1856) for an HTML manual pod. It is read
-// from persisted approved-source metadata and re-validated as a defense-in-depth boundary; a corrupt
-// or absent record is silently omitted rather than failing the whole pod summary.
+// Retain first-valid projection and omission semantics, accounting only for records actually
+// examined. Rejections settle once through the owning port without exposing persisted content.
 function readManualRefreshSummary(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sources: readonly KnowledgeSource[],
+  evidence: ManualSummaryEvidence | undefined,
 ): ManualRefreshChangeSummary | undefined {
+  const rejections = { invalidJsonCount: 0, invalidSummaryCount: 0 };
+  let summary: ManualRefreshChangeSummary | undefined;
   for (const source of sources) {
     if (parseHtmlManualSourceTagMetadata(source.tags).sourceKind === undefined) continue;
     const json = readHtmlManualSourceMetadata(store, capsuleId, source.id)?.lastChangeSummaryJson;
     if (json === undefined) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(json);
-    } catch {
-      continue;
-    }
-    const validation = validateManualRefreshChangeSummary(parsed);
-    if (validation.ok) return validation.value;
+    summary = parseManualRefreshSummary(json, rejections);
+    if (summary !== undefined) break;
   }
+  logManualRefreshSummaryRejection(evidence, rejections, summary !== undefined);
+  return summary;
+}
+
+function parseManualRefreshSummary(
+  json: string,
+  rejections: ManualSummaryRejections,
+): ManualRefreshChangeSummary | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    recordManualSummaryRejection(rejections, "invalid-json");
+    return undefined;
+  }
+  const validation = validateManualRefreshChangeSummary(parsed);
+  if (validation.ok) return validation.value;
+  recordManualSummaryRejection(rejections, "invalid-summary");
   return undefined;
+}
+
+// Accumulate the closed failure facts for the one reader settlement event; never emit per record.
+function recordManualSummaryRejection(
+  rejections: ManualSummaryRejections,
+  reason: "invalid-json" | "invalid-summary",
+): void {
+  if (reason === "invalid-json") rejections.invalidJsonCount += 1;
+  else rejections.invalidSummaryCount += 1;
+}
+
+function logManualRefreshSummaryRejection(
+  evidence: ManualSummaryEvidence | undefined,
+  rejections: ManualSummaryRejections,
+  summaryReturned: boolean,
+): void {
+  const { invalidJsonCount, invalidSummaryCount } = rejections;
+  if (invalidJsonCount + invalidSummaryCount === 0) return;
+  let reason: "invalid-json" | "invalid-summary" | "mixed" = "mixed";
+  if (invalidJsonCount === 0) reason = "invalid-summary";
+  else if (invalidSummaryCount === 0) reason = "invalid-json";
+  emitKnowledgeLogEvent(
+    evidence?.logSink,
+    activityLogEvent(
+      MANUAL_REFRESH_SUMMARY_REJECTED_OPERATION,
+      { level: "warn", correlationId: evidence?.correlationId, errorKind: "validation-failed" },
+      { invalidJsonCount, invalidSummaryCount, reason, summaryReturned },
+    ),
+  );
 }
 
 export function buildKnowledgePodSetSummary(

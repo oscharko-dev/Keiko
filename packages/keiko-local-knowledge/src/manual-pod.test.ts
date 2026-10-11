@@ -15,6 +15,7 @@ import {
   readHtmlManualSourceMetadata,
   resolveHtmlManualCitationTarget,
 } from "./manual-source-metadata.js";
+import type { KnowledgeLogEvent } from "./knowledge-log.js";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import type { KnowledgeStore } from "./store.js";
@@ -276,5 +277,31 @@ describe("createHtmlManualPod", () => {
     expect(result.summary.readiness).not.toBe("ready");
     expect(result.summary.counts.vectorCount).toBe(0);
     expect(result.progress.phase).toBe("cancelled");
+  });
+});
+
+describe("manual creation summary evidence", () => {
+  it("forwards the actual job correlation to the final projection", async () => {
+    const events: KnowledgeLogEvent[] = [];
+    const result = await createHtmlManualPod(
+      {
+        ...podDeps(MANUAL_PAGES),
+        correlationId: "manual-create-job-proof",
+        logSink: { write: (event) => events.push(event) },
+        onIndexEvent: (event) => {
+          if (event.kind === "job-completed") {
+            // Historical corruption after the healthy source INSERT, before the final projection.
+            store._internal.db
+              .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
+              .run({ bytes: "{fixture-corrupt" });
+          }
+        },
+      },
+      httpManualSource(),
+    );
+    expect(result.summary.manualRefresh).toBeUndefined();
+    expect(
+      events.filter((event) => event.op === "knowledge.manual-refresh-summary.rejected"),
+    ).toEqual([expect.objectContaining({ correlationId: "manual-create-job-proof" })]);
   });
 });

@@ -1,3 +1,24 @@
+import {
+  supportIncidentPrivateProjection,
+  activityLogLossCounters,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  checkActivityLogReadiness,
+  persistActivityLogLossSummary,
+  recordUserReportedIncident,
+  supportIncidentSegmentFiles,
+} from "@oscharko-dev/keiko-activity-log";
+import {
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+  buildSupportReport,
+  serializeSupportReport,
+  analyzeSupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import { resolveSupportIncident } from "../../packages/keiko-cli/src/support-incident.js";
+import {
+  executeSupportQuery,
+  resolveSupportSelection,
+} from "../../packages/keiko-cli/src/support-query-cli.js";
 import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the memory/knowledge surface (keiko-local-knowledge's
 // indexing orchestrator, embedding batcher and discovery layer, plus the keiko-server
@@ -24,6 +45,11 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import {
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type {
   OpenAIEmbeddingAdapter,
@@ -31,6 +57,18 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 
+import { buildKnowledgePodSummary } from "../../packages/keiko-local-knowledge/src/knowledge-pods.js";
+import { computeManualRefreshChangeSummary } from "../../packages/keiko-local-knowledge/src/manual-refresh-change-summary.js";
+import {
+  persistHtmlManualSourceMetadata,
+  updateHtmlManualRefreshState,
+} from "../../packages/keiko-local-knowledge/src/manual-source-metadata.js";
+import {
+  expectActivityLogProof,
+  expectRegisteredActivityLogLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../support/activity-log-proof.js";
 import { createCapsule } from "../../packages/keiko-local-knowledge/src/capsule-lifecycle.js";
 import {
   folderScope,
@@ -333,6 +371,109 @@ async function runDependencyFailureFixture(
   }
 }
 
+function seedRejectedManualSummary(store: KnowledgeStore): ReturnType<typeof createCapsule> {
+  const capsule = createCapsule(store, {
+    id: "manual-summary-scenario" as KnowledgeCapsuleId,
+    displayName: "Fixture manual",
+    tags: [],
+    retrievalEffort: "default",
+    outputMode: "answers",
+    answerGroundingPolicy: "require-citations",
+    modelUsePolicy: standardPodModelUsePolicy(),
+    embeddingModelIdentity: SCENARIO_EMBEDDING_IDENTITY,
+    lifecycleState: "draft",
+    storageReference: "fixture/manual",
+  });
+  const sourceId = "manual-summary-source" as KnowledgeSourceId;
+  addSourceToCapsule(store, capsule.id, {
+    id: sourceId,
+    displayName: "Fixture source",
+    tags: [
+      htmlManualSourceKindTag("html-manual-http"),
+      htmlManualSourceFingerprintTag("fp-summary"),
+    ],
+    scope: folderScope("/fixture/manual", { recursive: true }),
+  });
+  persistHtmlManualSourceMetadata(store, capsule.id, sourceId, {
+    schemaVersion: "1",
+    scope: { kind: "html-manual-http", origin: "https://manual.example.invalid", pathPrefix: null },
+    limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+    sourceFingerprint: "fp-summary",
+    proposedPodName: "Fixture manual",
+  });
+  const healthy = computeManualRefreshChangeSummary({
+    priorFingerprints: new Map(),
+    newPages: [],
+    indexing: undefined,
+    crawl: {
+      status: "empty",
+      pages: [],
+      denied: [],
+      stats: { discovered: 0, fetched: 0, accepted: 0, deniedCount: 0, bytesFetched: 0 },
+    },
+    sourceKind: "html-manual-http",
+    applied: false,
+    refreshedAt: 4242,
+  });
+  updateHtmlManualRefreshState(store, capsule.id, sourceId, {
+    lastRefreshedAt: 4242,
+    lastCrawlRunId: "manual-summary-run",
+    changeSummaryJson: JSON.stringify(healthy),
+  });
+  // Explicit legacy corruption: current public writers refuse these bytes.
+  store._internal.db
+    .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
+    .run({ bytes: "{private-fixture-body" });
+  return capsule;
+}
+
+async function proveManualSummaryTransportLoss(stateDir: string): Promise<void> {
+  // A dropped primary has no retained registered-failure record. The human report uses the
+  // existing unattributed incident path and honestly retains loss and the missing primary.
+  const creation = recordUserReportedIncident(stateDir);
+  if (creation.status === "rejected" || creation.record === undefined)
+    throw new TypeError("Expected real selective-loss incident");
+  const selection = await resolveSupportSelection(
+    { incidentId: creation.incidentId, filter: {} },
+    stateDir,
+  );
+  const query = executeSupportQuery(stateDir, selection, DEFAULT_SUPPORT_QUERY_LIMITS, {
+    trigger: "query",
+  }).result;
+  const incident = supportIncidentPrivateProjection(
+    resolveSupportIncident(
+      creation.record,
+      supportIncidentSegmentFiles(stateDir, creation.record),
+      stateDir,
+    ),
+  );
+  const report = buildSupportReport(incident, query);
+  const analyzed = analyzeSupportReport(serializeSupportReport(report));
+  expect(report.evidence.recordCount).toBe(query.events.length);
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  expect(analyzed.analysis.sufficiency.status).toBe("degraded");
+  expect(analyzed.analysis.sufficiency.classes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        failureClass: "activity-log-sink",
+        status: "degraded",
+        reasons: ["activity-log-loss"],
+      }),
+    ]),
+  );
+  expect(query.diagnosticSufficiency).toMatchObject({
+    status: "insufficient",
+    reasons: ["no-registered-failure", "evidence-not-retained"],
+  });
+  expect(query.events.map((event) => event.parsed.view.op)).toEqual(
+    expect.arrayContaining([
+      "knowledge.log.sink-failed",
+      "activity-log.loss",
+      "activity-log.readiness",
+    ]),
+  );
+}
+
 describe("Activity Log scenario: memory-knowledge", () => {
   let stateDir: string;
 
@@ -396,5 +537,110 @@ describe("Activity Log scenario: memory-knowledge", () => {
     expect(trace.failureClasses).toEqual(
       expect.arrayContaining(["embedding-identity-mismatch", "embedding-identity-rejection"]),
     );
+  });
+  it("retains rejected persisted manual summaries through the physical writer and complete incident analysis", async () => {
+    const store = openScenarioStore(stateDir, "manual-summary-rejection");
+    try {
+      const capsule = seedRejectedManualSummary(store);
+      const startedAtMs = Date.now();
+      const summary = buildKnowledgePodSummary(store, capsule, {
+        logSink: processServerLogSink(),
+        correlationId: "manual-summary-rejection-request",
+      });
+      expect(summary.manualRefresh).toBeUndefined();
+      const trace = await expectActivityLogScenario("memory-knowledge.rejection", {
+        stateDir,
+        startedAtMs,
+        expectedOps: ["knowledge.manual-refresh-summary.rejected"],
+      });
+      expect(trace.failureClasses).toContain("knowledge-manual-summary-validation");
+      const selection = await resolveSupportSelection(
+        { correlationId: "manual-summary-rejection-request", filter: {} },
+        stateDir,
+      );
+      const queried = executeSupportQuery(
+        stateDir,
+        selection,
+        { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+        { trigger: "query" },
+      ).result;
+      expect(
+        queried.events.some(
+          (event) => event.parsed.view.op === "knowledge.manual-refresh-summary.rejected",
+        ),
+      ).toBe(true);
+      expect(queried.metrics.contextEventCount).toBe(0);
+      expect(queried.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+
+      const raw = readPersistedActivityLog(stateDir);
+      const lines = persistedActivityLogLines(raw, "knowledge.manual-refresh-summary.rejected");
+      expect(lines).toHaveLength(1);
+      expect(
+        expectActivityLogProof(
+          "knowledge.manual-refresh-summary.rejected.omission",
+          lines[0] ?? "",
+        ),
+      ).toMatchObject({
+        correlationId: "manual-summary-rejection-request",
+        errorKind: "validation-failed",
+        invalidJsonCount: 1,
+        invalidSummaryCount: 0,
+        reason: "invalid-json",
+        summaryReturned: false,
+      });
+      expect(raw).not.toContain("private-fixture-body");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("retains selective manual-summary transport loss through the physical fallback and incident analyzer", async () => {
+    const store = openScenarioStore(stateDir, "manual-summary-transport-loss");
+    try {
+      const capsule = seedRejectedManualSummary(store);
+      const before = activityLogLossCounters()["port-sink-failed"];
+      const summary = buildKnowledgePodSummary(store, capsule, {
+        correlationId: "manual-summary-loss-request",
+        logSink: {
+          write: (event) => {
+            if (event.op === "knowledge.manual-refresh-summary.rejected")
+              throw new TypeError("private-selective-transport-fixture");
+            processServerLogSink().write(event);
+          },
+        },
+      });
+      expect(summary.manualRefresh).toBeUndefined();
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+      expect(persistActivityLogLossSummary("heartbeat")).toBe("persisted");
+      expect(checkActivityLogReadiness({ stateDir })).toMatchObject({
+        readiness: "ready",
+        writer: "production-file",
+        reasons: [],
+      });
+      await proveManualSummaryTransportLoss(stateDir);
+      const raw = readPersistedActivityLog(stateDir);
+      expect(
+        persistedActivityLogLines(raw, "knowledge.manual-refresh-summary.rejected"),
+      ).toHaveLength(0);
+      const fallback = persistedActivityLogLines(raw, "knowledge.log.sink-failed");
+      expect(fallback).toHaveLength(1);
+      expect(
+        expectRegisteredActivityLogLine("knowledge.log.sink-failed", fallback[0] ?? ""),
+      ).toMatchObject({
+        errorKind: "unavailable",
+        failureKind: "TypeError",
+      });
+      const loss = persistedActivityLogLines(raw, "activity-log.loss");
+      expect(loss).toHaveLength(1);
+      expect(expectRegisteredActivityLogLine("activity-log.loss", loss[0] ?? "")).toMatchObject({
+        portSinkFailed: before + 1,
+        completeness: "partial",
+        loss: "event-dropped",
+      });
+      expect(raw).not.toContain("private-selective-transport-fixture");
+      expect(raw).not.toContain("private-fixture-body");
+    } finally {
+      store.close();
+    }
   });
 });
