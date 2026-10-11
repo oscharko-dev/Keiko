@@ -7217,17 +7217,31 @@ async function readKeptExcerpts(
   reserveInitialExcerptOpportunities(initialPaths, readInputs, state);
   await readExcerptWaves(initialPaths, { ...readInputs, firstExcerptRound: true }, state);
   state.coverageReserves.clear();
-  if (!state.elapsedBudgetBlocked && state.remainingBytes > 0)
-    await readExcerptWaves(
-      readablePaths,
-      { ...readInputs, previousExcerptResults: state.pathResults },
-      state,
-    );
+  await readExcerptExpansionWaves(readablePaths, readInputs, state);
   uncertainty.push(...excerptReadLossSummary(state, inputs.nowMs));
   if (state.elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
   }
   return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
+}
+
+async function readExcerptExpansionWaves(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): Promise<void> {
+  const servedPaths = new Set(
+    paths.filter((path) => state.excerpts.get(path)?.some((view) => view.content.length > 0)),
+  );
+  const expansionInputs = { ...inputs, previousExcerptResults: state.pathResults };
+  for (const alreadyServed of [false, true]) {
+    if (state.elapsedBudgetBlocked || state.remainingBytes <= 0) return;
+    await readExcerptWaves(
+      paths.filter((path) => servedPaths.has(path) === alreadyServed),
+      expansionInputs,
+      state,
+    );
+  }
 }
 
 function initialExcerptWaveState(

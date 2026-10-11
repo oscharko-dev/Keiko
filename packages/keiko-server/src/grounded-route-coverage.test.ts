@@ -673,6 +673,40 @@ function crossWaveCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function deferredCrossWaveFiles(): Readonly<Record<string, string>> {
+  const files = { ...crossWaveCoverageFiles() };
+  files["src/ordinary.ts"] = (files["src/ordinary.ts"] ?? "").replace(
+    "    return scopeAdmissionBudget + promptFittingBudget;",
+    [
+      ...Array.from(
+        { length: 16 },
+        () => `    // ${"retain the current ordinary source detail ".repeat(8)}`,
+      ),
+      "    return scopeAdmissionBudget + promptFittingBudget;",
+    ].join("\n"),
+  );
+  for (let index = 0; index < 8; index += 1)
+    files[`src/stage-${String(index)}.ts`] = [
+      `import { stage${String(index + 1)} } from "./stage-${String(index + 1)}.js";`,
+      `export function stage${String(index)}(selectedRoot) {`,
+      `  return stage${String(index + 1)}(selectedRoot);`,
+      "}",
+      ...Array.from({ length: 40 }, () => "// separate ordinary source detail"),
+      "export function scopeAdmissionBudgetAndPromptFittingBudget() {",
+      "  const scopeAdmissionBudget = 1024;",
+      "  const promptFittingBudget = 2048;",
+      ...Array.from(
+        { length: 16 },
+        () => `  // ${"retain the current ordinary source detail ".repeat(5)}`,
+      ),
+      "  return scopeAdmissionBudget + promptFittingBudget;",
+      "}",
+    ].join("\n");
+  files["src/spare-a.ts"] = ordinaryCoverageFiles()["src/ordinary.ts"] ?? "";
+  files["src/spare-b.ts"] = ordinaryCoverageFiles()["src/ordinary.ts"] ?? "";
+  return files;
+}
+
 function mixedAccountingFiles(): Readonly<Record<string, string>> {
   const files = { ...crossWaveCoverageFiles() };
   files["docs/manual.pdf"] = `%PDF-1.4
@@ -1054,6 +1088,89 @@ describe("current route trace excerpt coverage", () => {
       expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
     },
   );
+  it("retries a deferred selected ordinary body before served paths expand", async () => {
+    const fixture = await coverageFixture(
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      deferredCrossWaveFiles(),
+    );
+    const range = await crossWaveOrdinaryRange(fixture);
+    const atoms = await allocationAtoms(fixture);
+    expect(coverageRanking(atoms).kept.some((item) => item.scopePath === "src/ordinary.ts")).toBe(
+      true,
+    );
+    const body = (fixture.files["src/ordinary.ts"] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine)
+      .join("\n");
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    const positive = await coverageRead(fixture, {
+      paths: ["src/routes.ts", "src/implementation.ts", "src/stage-8.ts", "src/ordinary.ts"],
+      atoms,
+      inputs: { routeCoverage: undefined, budget },
+    });
+    const positivePack = await assembledCoveragePack(fixture, positive, atoms, budget);
+    const positivePrompt = await sentPrompt(fixture, positive, atoms, budget);
+    expectCrossWaveOrdinaryViews(fixture, positive, positivePack, positivePrompt, range);
+    expectFullTerminalView(fixture, positive, positivePack, positivePrompt);
+    const native = workspace.readExcerpt;
+    const observed: { request: ReadExcerptRequest; bytes: number }[] = [];
+    const spy = vi.spyOn(workspace, "readExcerpt").mockImplementation(async (...args) => {
+      const row = { request: args[1], bytes: 0 };
+      observed.push(row);
+      const result = await native(...args);
+      row.bytes = (result.windows ?? [result]).reduce(
+        (sum, view) => sum + Buffer.byteLength(view.content),
+        0,
+      );
+      return result;
+    });
+    let reads: ExcerptReadSummary;
+    try {
+      reads = await coverageRead(fixture, {
+        atoms,
+        inputs: { routeCoverage: fixture.trace.routeCoverage, budget },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const initial = observed.filter((row) => row.request.firstRoundOnly === true);
+    const target = initial.find((row) => row.request.scopePath === "src/ordinary.ts");
+    expect(target).toBeDefined();
+    expect(
+      target?.bytes,
+      JSON.stringify(
+        observed.map((row) => ({
+          path: row.request.scopePath,
+          first: row.request.firstRoundOnly,
+          grant: row.request.maxTotalBytes,
+          bytes: row.bytes,
+        })),
+      ),
+    ).toBe(0);
+    expect(Buffer.byteLength(body)).toBeGreaterThan(target?.request.maxTotalBytes ?? Infinity);
+    const initialBytes = initial.reduce((sum, row) => sum + row.bytes, 0);
+    expect(initialBytes).toBeGreaterThan(0);
+    expect(Buffer.byteLength(body)).toBeLessThanOrEqual(budget.excerptBytesMax - initialBytes);
+    const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+    const prompt = await sentPrompt(fixture, reads, atoms, budget);
+    expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expect(
+      readContent(reads, "src/ordinary.ts").includes(body),
+      JSON.stringify({
+        bodyBytes: Buffer.byteLength(body),
+        initialBytes,
+        requests: observed.map((row) => ({
+          path: row.request.scopePath,
+          firstRound: row.request.firstRoundOnly,
+          grant: row.request.maxTotalBytes,
+          bytes: row.bytes,
+        })),
+      }),
+    ).toBe(true);
+    expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
+    expectFullTerminalView(fixture, reads, pack, prompt);
+  });
+
   it("conserves invalidated returned code and retained document grants together", async () => {
     const fixture = await coverageFixture(
       "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget; inspect docs/manual.pdf",
