@@ -1138,6 +1138,54 @@ describe("bounded sibling delegation frontier", () => {
       ),
     ).toBe(true);
   });
+
+  it("binds compact connector observations to the actual multiline parent and target spans", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts": [
+        'import { actualDelegate } from "./actual.js";',
+        "export function handlePostItem() {",
+        "  return () => actualDelegate(",
+        '    "observed 🐱 source",',
+        "  );",
+        "}",
+      ].join("\n"),
+      "src/actual.ts": "export function actualDelegate(value) { return value; }",
+    });
+    const parent = result.routeCoverage?.entries.find(
+      (entry) => entry.atom.scopePath === "src/implementation.ts",
+    );
+    const target = result.routeCoverage?.entries.find(
+      (entry) => entry.atom.scopePath === "src/actual.ts",
+    );
+    expect(parent).toBeDefined();
+    expect(target).toBeDefined();
+    expect(target?.parentWitness?.parentIdentity).toBe(parent?.definitionIdentity);
+    expect(target?.parentWitness?.targetIdentity).toBe(target?.definitionIdentity);
+    expect(target?.parentWitness?.lineRange).toEqual({ startLine: 3, endLine: 5 });
+    expect(target?.parentWitness?.callerSpan.endLine).toBe(5);
+    expect(target?.atom.edge?.kind).toBe("reference");
+    expect(
+      result.uncertainty.some((marker) => marker.claim.includes("source-graph-incomplete")),
+    ).toBe(true);
+  });
+
+  it("does not compact an accepted call inside a physically clipped source line", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts":
+        'import { actualDelegate } from "./actual.js";\n' +
+        `export function handlePostItem() { return actualDelegate(); const ignored = "${"x".repeat(16000)}"; }`,
+      "src/actual.ts": "export function actualDelegate() { return true; }",
+    });
+    const target = result.routeCoverage?.entries.find(
+      (entry) => entry.atom.scopePath === "src/actual.ts",
+    );
+    expect(target).toBeDefined();
+    expect(target?.parentIdentity).toBeDefined();
+    expect(target?.parentWitness).toBeUndefined();
+    expect(result.uncertainty.some((marker) => marker.claim.includes("excerpt-clipped"))).toBe(
+      true,
+    );
+  });
 });
 
 describe("bounded awaited delegation frontier", () => {

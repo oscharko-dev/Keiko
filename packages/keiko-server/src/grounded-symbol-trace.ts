@@ -24,6 +24,7 @@ import {
   type SearchScope,
   type WorkspaceFs,
   type WorkspaceIndex,
+  type ReadExcerptResult,
 } from "@oscharko-dev/keiko-workspace";
 import {
   repositoryConfiguredRouteDeclarations,
@@ -57,8 +58,30 @@ interface DiscoveredSymbolTraceEvidenceInput extends FollowSymbolTraceEvidenceIn
   readonly atoms: readonly EvidenceAtom[];
   readonly workspaceIndex?: WorkspaceIndex | undefined;
   readonly definitionCertificates?: WeakMap<EvidenceAtom, CodeSymbol> | undefined;
-  readonly observedDefinitionBytes?: Map<string, number> | undefined;
-  readonly observedDefinitionParents?: Map<string, string> | undefined;
+  readonly observedDefinitionBytes?: Map<string, ObservedDefinitionBudget> | undefined;
+  readonly observedDefinitionParents?: Map<string, ObservedDefinitionParent> | undefined;
+}
+
+interface ObservedDefinitionBudget {
+  readonly bytes: number;
+  readonly lines: RouteTraceObservedLines | undefined;
+}
+
+interface ObservedDefinitionParent {
+  readonly identity: string;
+  readonly witness: RouteTraceParentWitness | undefined;
+}
+
+interface RouteTraceObservedLines {
+  readonly startLine: number;
+  readonly lineBytes: readonly number[];
+}
+
+interface RouteTraceParentWitness extends RouteTraceObservedLines {
+  readonly parentIdentity: string;
+  readonly targetIdentity: string;
+  readonly lineRange: NonNullable<EvidenceAtom["lineRange"]>;
+  readonly callerSpan: NonNullable<CodeCallEdge["callerSpan"]>;
 }
 
 export interface RouteTraceCoverageEntry {
@@ -66,6 +89,8 @@ export interface RouteTraceCoverageEntry {
   readonly definitionIdentity: string;
   readonly parentIdentity: string | undefined;
   readonly observedBytes: number;
+  readonly observedLines?: RouteTraceObservedLines | undefined;
+  readonly parentWitness?: RouteTraceParentWitness | undefined;
 }
 
 export interface RouteTraceCoverage {
@@ -236,6 +261,7 @@ interface DiscoveryExcerptObservation {
   readonly scopePath: string;
   readonly lineRange: EvidenceAtom["lineRange"];
   readonly truncated: boolean;
+  readonly anchoredWindowApplied?: boolean | undefined;
   readonly definition?: CodeSymbol | undefined;
   readonly sourceReference?: boolean | undefined;
 }
@@ -271,13 +297,14 @@ async function discoveryExcerptObservation(
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     },
   );
-  recordObservedDefinitionBytes(input, atom, result.content);
+  recordObservedDefinitionBytes(input, atom, result);
   return discoveredDefinitionCurrent(input, atom)
     ? {
         content: result.content,
         scopePath: atom.scopePath,
         lineRange: result.atom.lineRange,
         truncated: result.truncated,
+        anchoredWindowApplied: result.anchoredWindowApplied,
         definition: input.definitionCertificates?.get(atom),
         sourceReference: atom.edge?.kind === "reference",
       }
@@ -287,11 +314,26 @@ async function discoveryExcerptObservation(
 function recordObservedDefinitionBytes(
   input: DiscoveredSymbolTraceEvidenceInput,
   atom: EvidenceAtom,
-  content: string,
+  result: ReadExcerptResult,
 ): void {
   const definition = input.definitionCertificates?.get(atom);
   if (definition !== undefined && discoveredDefinitionCurrent(input, atom))
-    input.observedDefinitionBytes?.set(definitionIdentity(definition), Buffer.byteLength(content));
+    input.observedDefinitionBytes?.set(definitionIdentity(definition), {
+      bytes: Buffer.byteLength(result.content),
+      lines: observedLineBudget(result.content, result.atom.lineRange),
+    });
+}
+
+function observedLineBudget(
+  content: string,
+  range: EvidenceAtom["lineRange"],
+): RouteTraceObservedLines | undefined {
+  if (range === undefined) return undefined;
+  const lines = content.split("\n");
+  return {
+    startLine: range.startLine,
+    lineBytes: lines.map((line) => Buffer.byteLength(line)),
+  };
 }
 
 async function discoveryExcerpt(
@@ -695,6 +737,35 @@ interface ObservedBodyTarget {
   readonly call: CodeCallEdge;
   readonly sourceReference: boolean;
   readonly parentIdentity: string | undefined;
+  readonly parentWitness: RouteTraceParentWitness | undefined;
+}
+
+function observedParentWitness(
+  call: CodeCallEdge,
+  observation: DiscoveryExcerptObservation,
+): RouteTraceParentWitness | undefined {
+  const span = call.callerSpan;
+  const definition = observation.definition;
+  const budget = observedLineBudget(observation.content, observation.lineRange);
+  if (
+    span === undefined ||
+    definition === undefined ||
+    budget === undefined ||
+    observation.anchoredWindowApplied === true
+  )
+    return undefined;
+  const first = call.callerLine - budget.startLine;
+  const last = span.endLine - budget.startLine;
+  if (first < 0 || last >= budget.lineBytes.length - Number(observation.truncated))
+    return undefined;
+  return {
+    parentIdentity: definitionIdentity(definition),
+    targetIdentity: targetIdentity(call),
+    startLine: call.callerLine,
+    lineRange: { startLine: call.callerLine, endLine: span.endLine },
+    lineBytes: budget.lineBytes.slice(first, last + 1),
+    callerSpan: span,
+  };
 }
 
 function certifiedBodyCalls(
@@ -717,11 +788,19 @@ function certifiedBodyCalls(
   return current.flatMap((call) => {
     const parentIdentity =
       observation.definition === undefined ? undefined : definitionIdentity(observation.definition);
+    const parentWitness = observedParentWitness(call, observation);
     if (callOwnedByObservation(call, observation))
-      return [{ call, sourceReference: observation.sourceReference === true, parentIdentity }];
+      return [
+        {
+          call,
+          sourceReference: observation.sourceReference === true,
+          parentIdentity,
+          parentWitness,
+        },
+      ];
     return call.callerDefinition === undefined &&
       index.references.some((reference) => observedCallReference(call, reference))
-      ? [{ call, sourceReference: true, parentIdentity }]
+      ? [{ call, sourceReference: true, parentIdentity, parentWitness }]
       : [];
   });
 }
@@ -969,7 +1048,10 @@ function retainDefinitionFrontierAtom(
   if (atom === undefined) return;
   const definition = input.definitionCertificates?.get(atom);
   if (definition !== undefined && target.parentIdentity !== undefined)
-    input.observedDefinitionParents?.set(definitionIdentity(definition), target.parentIdentity);
+    input.observedDefinitionParents?.set(definitionIdentity(definition), {
+      identity: target.parentIdentity,
+      witness: target.parentWitness,
+    });
   frontier.push(atom);
 }
 
@@ -1149,8 +1231,8 @@ export async function collectDiscoveredSymbolTraceEvidence(
   const requestInput = {
     ...input,
     definitionCertificates: new WeakMap<EvidenceAtom, CodeSymbol>(),
-    observedDefinitionBytes: new Map<string, number>(),
-    observedDefinitionParents: new Map<string, string>(),
+    observedDefinitionBytes: new Map<string, ObservedDefinitionBudget>(),
+    observedDefinitionParents: new Map<string, ObservedDefinitionParent>(),
   };
   const symbols = await discoveredHandlerSymbols(requestInput);
   if (symbols.length === 0) return { atoms: [], uncertainty: [] };
@@ -1174,14 +1256,17 @@ function discoveredRouteCoverage(
     if (definition === undefined) return [];
     const identity = definitionIdentity(definition);
     const bytes = input.observedDefinitionBytes?.get(identity);
-    return bytes === undefined || bytes <= 0
+    const parent = input.observedDefinitionParents?.get(identity);
+    return bytes === undefined || bytes.bytes <= 0
       ? []
       : [
           {
             atom,
             definitionIdentity: identity,
-            parentIdentity: input.observedDefinitionParents?.get(identity),
-            observedBytes: Math.min(MAX_DISCOVERY_EXCERPT_BYTES, bytes),
+            parentIdentity: parent?.identity,
+            parentWitness: parent?.witness,
+            observedBytes: Math.min(MAX_DISCOVERY_EXCERPT_BYTES, bytes.bytes),
+            observedLines: bytes.lines,
           },
         ];
   });

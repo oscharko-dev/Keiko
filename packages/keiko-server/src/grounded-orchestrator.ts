@@ -6186,8 +6186,16 @@ interface ExcerptWindowSelection {
 
 interface RouteCoverageReadPlan {
   readonly paths: readonly string[];
-  readonly entries: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
+  readonly entries: ReadonlyMap<string, readonly RouteCoverageReadWindow[]>;
   readonly reserves: ReadonlyMap<string, number>;
+}
+
+interface RouteCoverageReadWindow {
+  readonly entry: RouteTraceCoverageEntry;
+  readonly lineRange: LineWindow;
+  readonly observedLines: RouteTraceCoverageEntry["observedLines"];
+  readonly observedBytes: number;
+  readonly fullBody: boolean;
 }
 
 function sameCoverageLocation(candidate: EvidenceAtom, certified: EvidenceAtom): boolean {
@@ -6230,29 +6238,159 @@ function connectedCoverageChain(
   return [];
 }
 
+interface CoverageAdmission {
+  windows: Map<string, readonly RouteCoverageReadWindow[]>;
+  bytes: number;
+  readonly targets: Set<string>;
+}
+
+interface CoverageQueueOpportunity {
+  remainingBytes: number;
+  funded: boolean;
+}
+
 function fairCoverageEntries(
   entries: readonly RouteTraceCoverageEntry[],
   totalBytes: number,
-): readonly RouteTraceCoverageEntry[] {
+  inputs: ExcerptInputs,
+): readonly RouteCoverageReadWindow[] {
   const byIdentity = new Map(entries.map((entry) => [entry.definitionIdentity, entry]));
-  const retained = new Map<string, RouteTraceCoverageEntry>();
   const targets = relevantCoverageTargets(entries, byIdentity);
-  let remaining = totalBytes;
+  const opportunities = coverageQueueOpportunities(entries, byIdentity, totalBytes);
+  const state: CoverageAdmission = { windows: new Map(), bytes: 0, targets: new Set() };
   for (const entry of targets) {
-    const chain = connectedCoverageChain(entry, byIdentity);
-    const additional = chain.filter((parent) => !retained.has(parent.definitionIdentity));
-    const bytes = additional.reduce((sum, parent) => sum + parent.observedBytes, 0);
-    if (chain.length === 0 || bytes > remaining) continue;
-    remaining -= bytes;
-    for (const parent of [...additional].reverse()) retained.set(parent.definitionIdentity, parent);
+    const opportunity = opportunities.get(entry.definitionIdentity);
+    if (opportunity === undefined) continue;
+    const previousBytes = state.bytes;
+    if (
+      admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs, opportunity.remainingBytes)
+    ) {
+      opportunity.remainingBytes -= state.bytes - previousBytes;
+      opportunity.funded = true;
+    }
   }
-  return [...retained.values()];
+  for (const entry of targets) {
+    const opportunity = opportunities.get(entry.definitionIdentity);
+    if (opportunity?.funded !== false) continue;
+    if (admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs))
+      opportunity.funded = true;
+  }
+  for (const entry of targets) admitCoverageTarget(entry, byIdentity, state, totalBytes, inputs);
+  return [...state.windows.values()].flat();
 }
 
-function relevantCoverageTargets(
+function admitCoverageTarget(
+  entry: RouteTraceCoverageEntry,
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+  state: CoverageAdmission,
+  totalBytes: number,
+  inputs: ExcerptInputs,
+  marginalBytes = totalBytes,
+): boolean {
+  if (state.targets.has(entry.definitionIdentity)) return true;
+  const chain = connectedCoverageChain(entry, byIdentity);
+  if (chain.length === 0) return false;
+  const candidate = proposedCoverageWindows(chain, state.windows);
+  const costs = coverageWindowCosts([...candidate.values()].flat());
+  const bytes = [...costs.values()].reduce((sum, cost) => sum + cost, 0);
+  if (bytes > totalBytes || bytes - state.bytes > marginalBytes) return false;
+  if (
+    [...costs].some(([path, cost]) => cost > remainingExcerptWindowBytes(path, totalBytes, inputs))
+  )
+    return false;
+  state.windows = candidate;
+  state.bytes = bytes;
+  state.targets.add(entry.definitionIdentity);
+  return true;
+}
+
+function coverageQueueOpportunities(
   entries: readonly RouteTraceCoverageEntry[],
   byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
-): readonly RouteTraceCoverageEntry[] {
+  totalBytes: number,
+): ReadonlyMap<string, CoverageQueueOpportunity> {
+  const roots = coverageRootTargets(entries, byIdentity);
+  const rootGrants = distributeByteBudget(totalBytes, roots.length);
+  const opportunities = new Map<string, CoverageQueueOpportunity>();
+  for (const [index, root] of roots.entries()) {
+    const files = coverageTargetsByPath(root);
+    const fileGrants = distributeByteBudget(rootGrants[index] ?? 0, files.length);
+    for (const [fileIndex, targets] of files.entries()) {
+      const opportunity = { remainingBytes: fileGrants[fileIndex] ?? 0, funded: false };
+      for (const target of targets) opportunities.set(target.definitionIdentity, opportunity);
+    }
+  }
+  return opportunities;
+}
+
+function proposedCoverageWindows(
+  chain: readonly RouteTraceCoverageEntry[],
+  retained: ReadonlyMap<string, readonly RouteCoverageReadWindow[]>,
+): Map<string, readonly RouteCoverageReadWindow[]> {
+  const candidate = new Map(retained);
+  for (let index = chain.length - 1; index >= 0; index -= 1) {
+    const entry = chain[index];
+    if (entry === undefined) continue;
+    const previous = candidate.get(entry.definitionIdentity) ?? [];
+    if (previous.some((window) => window.fullBody)) continue;
+    const window = coverageBranchWindow(entry, chain[index + 1]);
+    if (window === undefined) continue;
+    candidate.set(entry.definitionIdentity, window.fullBody ? [window] : [...previous, window]);
+  }
+  return candidate;
+}
+
+function coverageBranchWindow(
+  entry: RouteTraceCoverageEntry,
+  child: RouteTraceCoverageEntry | undefined,
+): RouteCoverageReadWindow | undefined {
+  const witness = child?.parentWitness;
+  const certified =
+    witness?.parentIdentity === entry.definitionIdentity &&
+    witness.targetIdentity === child?.definitionIdentity;
+  const compact = certified ? witness : undefined;
+  const lineRange = compact?.lineRange ?? entry.atom.lineRange;
+  if (lineRange === undefined) return undefined;
+  return {
+    entry,
+    lineRange,
+    fullBody: compact === undefined,
+    observedLines: compact ?? entry.observedLines,
+    observedBytes:
+      compact === undefined
+        ? entry.observedBytes
+        : compact.lineBytes.reduce((sum, bytes) => sum + bytes, compact.lineBytes.length - 1),
+  };
+}
+
+function coverageWindowCosts(
+  windows: readonly RouteCoverageReadWindow[],
+): ReadonlyMap<string, number> {
+  const paths = new Map<string, Map<string, number>>();
+  for (const window of windows) {
+    const costs = paths.get(window.entry.atom.scopePath) ?? new Map<string, number>();
+    const lines = window.observedLines;
+    if (lines === undefined) costs.set(window.entry.definitionIdentity, window.observedBytes);
+    else
+      for (const [index, bytes] of lines.lineBytes.entries()) {
+        const line = String(lines.startLine + index);
+        costs.set(line, Math.max(costs.get(line) ?? 0, bytes));
+        if (index < lines.lineBytes.length - 1) costs.set(`LF:${line}`, 1);
+      }
+    paths.set(window.entry.atom.scopePath, costs);
+  }
+  return new Map(
+    [...paths].map(([path, costs]) => [
+      path,
+      [...costs.values()].reduce((sum, bytes) => sum + bytes, 0),
+    ]),
+  );
+}
+
+function coverageRootTargets(
+  entries: readonly RouteTraceCoverageEntry[],
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+): readonly (readonly RouteTraceCoverageEntry[])[] {
   const roots = new Map<string, RouteTraceCoverageEntry[]>();
   for (const entry of connectedCoverageOrder(entries)) {
     const root = connectedCoverageChain(entry, byIdentity)[0];
@@ -6261,19 +6399,30 @@ function relevantCoverageTargets(
     branch.push(entry);
     roots.set(root.definitionIdentity, branch);
   }
-  return interleavedCoverageTargets([...roots.values()].map(fairCoverageTargetsByPath));
+  return [...roots.values()];
 }
 
-function fairCoverageTargetsByPath(
+function relevantCoverageTargets(
   entries: readonly RouteTraceCoverageEntry[],
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
 ): readonly RouteTraceCoverageEntry[] {
+  return interleavedCoverageTargets(
+    coverageRootTargets(entries, byIdentity).map((root) =>
+      interleavedCoverageTargets(coverageTargetsByPath(root)),
+    ),
+  );
+}
+
+function coverageTargetsByPath(
+  entries: readonly RouteTraceCoverageEntry[],
+): readonly (readonly RouteTraceCoverageEntry[])[] {
   const files = new Map<string, RouteTraceCoverageEntry[]>();
   for (const entry of [...entries].sort((a, b) => b.atom.score - a.atom.score)) {
     const queue = files.get(entry.atom.scopePath) ?? [];
     queue.push(entry);
     files.set(entry.atom.scopePath, queue);
   }
-  return interleavedCoverageTargets([...files.values()]);
+  return [...files.values()];
 }
 
 function interleavedCoverageTargets(
@@ -6334,15 +6483,15 @@ function interleavedReadPaths(
 }
 
 function connectedCoverageReserves(
-  entries: readonly RouteTraceCoverageEntry[],
+  entries: readonly RouteCoverageReadWindow[],
   totalBytes: number,
 ): ReadonlyMap<string, number> {
   const reserves = new Map<string, number>();
   let remaining = totalBytes;
-  for (const entry of entries) {
-    const reserve = Math.min(remaining, entry.observedBytes, MAX_EXCERPT_WINDOW_BYTES);
+  for (const [path, bytes] of coverageWindowCosts(entries)) {
+    const reserve = Math.min(remaining, bytes);
     if (reserve <= 0) break;
-    reserves.set(entry.atom.scopePath, (reserves.get(entry.atom.scopePath) ?? 0) + reserve);
+    reserves.set(path, reserve);
     remaining -= reserve;
   }
   return reserves;
@@ -6357,12 +6506,13 @@ function routeCoverageReadPlan(
     allowed.has(entry.atom.scopePath),
   );
   const share = distributeByteBudget(remainingExcerptCapacity(inputs).bytes, 2)[1] ?? 0;
-  const entries = fairCoverageEntries(selected, share);
+  const entries = fairCoverageEntries(selected, share, inputs);
   if (entries.length === 0) return undefined;
-  const grouped = new Map<string, RouteTraceCoverageEntry[]>();
+  const grouped = new Map<string, RouteCoverageReadWindow[]>();
   for (const entry of entries) {
-    const existing = grouped.get(entry.atom.scopePath) ?? [];
-    grouped.set(entry.atom.scopePath, [...existing, entry]);
+    const path = entry.entry.atom.scopePath;
+    const existing = grouped.get(path) ?? [];
+    grouped.set(path, [...existing, entry]);
   }
   const priorities = paths.filter((path) => inputs.priorityPaths?.has(path) === true);
   return {
@@ -6381,9 +6531,11 @@ function routeCoverageReadPlan(
 function currentCoverageEntries(
   path: string,
   inputs: ExcerptInputs,
-): readonly RouteTraceCoverageEntry[] | undefined {
+): readonly RouteCoverageReadWindow[] | undefined {
   const entries = inputs.coveragePlan?.entries.get(path);
-  if (entries?.every((entry) => inputs.routeCoverage?.isCurrent(entry.atom) === true) !== true)
+  if (
+    entries?.every((entry) => inputs.routeCoverage?.isCurrent(entry.entry.atom) === true) !== true
+  )
     return undefined;
   return entries;
 }
@@ -6429,9 +6581,7 @@ function coverageExcerptLineWindows(path: string, inputs: ExcerptInputs): Excerp
   const explicit = (inputs.atomsByPath.get(path) ?? []).filter(
     (atom) => atom.provenance.tool === "repo.selectedFile",
   );
-  const ranges = entries.flatMap((entry) =>
-    entry.atom.lineRange === undefined ? [] : [entry.atom.lineRange],
-  );
+  const ranges = entries.map((entry) => entry.lineRange);
   return {
     ...selection,
     coverageApplied: true,

@@ -3,6 +3,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  type ConnectedContextPack,
   type EvidenceAtom,
   type ExplorationUsage,
   type RetrievalQuery,
@@ -312,12 +313,12 @@ async function actualExplicitAtoms(fixture: CoverageFixture): Promise<readonly E
   );
 }
 
-async function sentPrompt(
+async function assembledCoveragePack(
   fixture: CoverageFixture,
   reads: ExcerptReadSummary,
   atoms: readonly EvidenceAtom[] = fixture.trace.atoms,
   budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
-): Promise<string> {
+): Promise<ConnectedContextPack> {
   const { pack } = await assembleContextPack(
     {
       scope: fixture.scope,
@@ -327,10 +328,21 @@ async function sentPrompt(
       ranked: coverageRanking(atoms).kept,
       omittedFromRanking: [],
       excerpts: reads.excerpts,
+      initialUncertainty: [...fixture.trace.uncertainty, ...reads.uncertainty],
     },
     { nowMs: () => NOW, includeSurroundingContext: true },
   );
   expect(pack.usage.excerptBytes).toBeLessThanOrEqual(pack.budget.excerptBytesMax);
+  return pack;
+}
+
+async function sentPrompt(
+  fixture: CoverageFixture,
+  reads: ExcerptReadSummary,
+  atoms: readonly EvidenceAtom[] = fixture.trace.atoms,
+  budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
+): Promise<string> {
+  const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
   return buildGroundedGatewayMessages(fixture.query.text, pack, (value) => value)
     .map((message) => message.content)
     .join("\n");
@@ -522,7 +534,53 @@ function bulkyConnectorFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function bulkySameFileConnectorFiles(): Readonly<Record<string, string>> {
+  const files = { ...bulkyConnectorFiles() };
+  const bodies = Object.entries(files)
+    .filter(([path]) => path.startsWith("src/stage-"))
+    .map(([_path, body]) => body.replace(/^import[^\n]*\n/u, ""));
+  files["src/implementation.ts"] = [
+    (files["src/implementation.ts"] ?? "").replace(/^import[^\n]*\n/u, ""),
+    ...bodies,
+  ].join("\n");
+  return {
+    "src/routes.ts": files["src/routes.ts"] ?? "",
+    "src/implementation.ts": files["src/implementation.ts"],
+  };
+}
+
 describe("current route trace excerpt coverage", () => {
+  it("keeps separately returned same-file connector views through Grounded assembly", async () => {
+    const fixture = await coverageFixture(undefined, bulkySameFileConnectorFiles());
+    const reads = await coverageRead(fixture);
+    const content = readContent(reads, "src/implementation.ts");
+    for (let index = 0; index < 8; index += 1)
+      expect(content).toContain(`return stage${String(index + 1)}(selectedRoot);`);
+    expect(content).toContain(DESCENT_FACT);
+    const prompt = await sentPrompt(fixture, reads);
+    for (let index = 0; index < 8; index += 1)
+      expect(prompt).toContain(`return stage${String(index + 1)}(selectedRoot);`);
+    expect(prompt).toContain(DESCENT_FACT);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
+    const pack = await assembledCoveragePack(fixture, reads);
+    const excerpts = pack.files.flatMap((file) => file.excerpts);
+    expect(excerpts.some((excerpt) => excerpt.atom.edge?.kind === "reference")).toBe(true);
+    expect(
+      excerpts.every((excerpt) => fixture.trace.routeCoverage?.isCurrent(excerpt.atom) !== true),
+    ).toBe(true);
+    expect(
+      pack.uncertainty.some((marker) => marker.claim.includes("cited ranges unavailable")),
+    ).toBe(true);
+    expect(
+      pack.uncertainty.some((marker) => marker.claim.includes("source-graph-incomplete")),
+    ).toBe(true);
+    expect(
+      fixture.trace.routeCoverage?.entries.every(
+        (entry) => fixture.trace.routeCoverage?.isCurrent(entry.atom) === true,
+      ),
+    ).toBe(true);
+  });
+
   it("sends the full relevant target and observed connectors without funding unrelated ancestor bodies", async () => {
     const fixture = await coverageFixture(undefined, bulkyConnectorFiles());
     const entries = fixture.trace.routeCoverage?.entries ?? [];
@@ -608,6 +666,45 @@ describe("current route trace excerpt coverage", () => {
     expect(readContent(reads, "src/ordinary.ts")).toContain(ordinaryFact);
     expect(await sentPrompt(fixture, reads, atoms, budget)).toContain(ordinaryFact);
     expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+  });
+
+  it("preserves an actually sent ordinary method body under a smaller unchanged byte grant", async () => {
+    const ordinaryFact = "return scopeAdmissionBudget + promptFittingBudget;";
+    const source = ordinaryCoverageFiles();
+    const connected = Object.fromEntries(
+      Object.entries(bulkyConnectorFiles()).map(([path, content]) => [
+        path,
+        content.replace(
+          Array.from(
+            { length: 28 },
+            () => "  // unrelated bookkeeping for the existing ledger",
+          ).join("\n"),
+          Array.from(
+            { length: 12 },
+            () => "  // unrelated bookkeeping for the existing ledger",
+          ).join("\n"),
+        ),
+      ]),
+    );
+    const fixture = await coverageFixture(undefined, {
+      ...connected,
+      "src/ordinary.ts": source["src/ordinary.ts"] ?? "",
+    });
+    const atoms = [...fixture.ordinaryAtoms, ...fixture.trace.atoms];
+    expect(coverageRanking(atoms).kept.some((entry) => entry.scopePath === "src/ordinary.ts")).toBe(
+      true,
+    );
+    expect(
+      fixture.trace.routeCoverage?.entries.some(
+        (entry) => entry.atom.scopePath === "src/ordinary.ts",
+      ),
+    ).toBe(false);
+    const normal = await coverageRead(fixture, { atoms, inputs: { routeCoverage: undefined } });
+    expect(await sentPrompt(fixture, normal, atoms)).toContain(ordinaryFact);
+    const reads = await coverageRead(fixture, { atoms });
+    expect(readContent(reads, "src/ordinary.ts")).toContain(ordinaryFact);
+    expect(await sentPrompt(fixture, reads, atoms)).toContain(ordinaryFact);
+    expect(readBytes(reads)).toBeLessThanOrEqual(8192);
   });
 
   it("sends a later relevant complete branch before called bookkeeping exhausts its share", async () => {

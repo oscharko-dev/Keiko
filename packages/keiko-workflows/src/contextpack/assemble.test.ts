@@ -257,6 +257,57 @@ describe("assembleContextPack", () => {
       "first legacy window",
     ]);
   });
+
+  it.each([false, true])(
+    "keeps separate identified partial read views without fabricating gap continuity (identified=%s)",
+    async (identified) => {
+      const original = atom("a.ts", "broad-definition", { startLine: 1, endLine: 20 });
+      const input: AssembleInput = {
+        ...baseInput(),
+        atoms: [original],
+        ranked: [candidate("a.ts", 1)],
+        excerpts: new Map([
+          [
+            "a.ts",
+            [
+              {
+                startLine: 3,
+                endLine: 3,
+                content: "delegateA();",
+                identity: identified ? "a" : undefined,
+              },
+              {
+                startLine: 17,
+                endLine: 17,
+                content: "delegateB();",
+                identity: identified ? "b" : undefined,
+              },
+            ],
+          ],
+        ]),
+      };
+      const { pack } = await assembleContextPack(input, {
+        nowMs: fixedNow,
+        includeSurroundingContext: true,
+      });
+      const excerpts = pack.files.flatMap((file) => file.excerpts);
+      expect(excerpts.map((excerpt) => excerpt.content)).toEqual(
+        identified ? ["delegateA();", "delegateB();"] : [],
+      );
+      expect(excerpts.map((excerpt) => excerpt.atom.lineRange)).toEqual(
+        identified
+          ? [
+              { startLine: 3, endLine: 3 },
+              { startLine: 17, endLine: 17 },
+            ]
+          : [],
+      );
+      expect(original.lineRange).toEqual({ startLine: 1, endLine: 20 });
+      expect(pack.usage.excerptBytes).toBe(
+        identified ? Buffer.byteLength("delegateA();") + Buffer.byteLength("delegateB();") : 0,
+      );
+    },
+  );
   it("produces a deterministic stable ID for the same input", async () => {
     const r1 = await assembleContextPack(baseInput(), { nowMs: fixedNow });
     const r2 = await assembleContextPack(baseInput(), { nowMs: fixedNow });
