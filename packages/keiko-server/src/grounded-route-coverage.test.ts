@@ -711,6 +711,21 @@ function sharedRelevanceFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function crowdedInitialOpportunityFiles(): Readonly<Record<string, string>> {
+  const files = { ...configuredCoverageFiles() };
+  files["src/z-processing.ts"] = [
+    "export function continueProcessing(root) {",
+    ...Array.from(
+      { length: 24 },
+      () => "  // retain the selected current directory traversal source detail",
+    ),
+    `  ${DESCENT_FACT}`,
+    "  return root;",
+    "}",
+  ].join("\n");
+  return files;
+}
+
 function multiWindowCoverageFiles(): Readonly<Record<string, string>> {
   const padding =
     "  // Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget";
@@ -1062,6 +1077,100 @@ function expectFullTerminalView(
 }
 
 describe("current route trace excerpt coverage", () => {
+  it("retains a usable first file branch when crowded higher-scoring targets consume shared bytes", async () => {
+    const fixture = await coverageFixture(undefined, crowdedInitialOpportunityFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const target = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
+    const range = target?.atom.lineRange;
+    if (target === undefined || range === undefined)
+      throw new TypeError("fixture requires the actual current directory target");
+    const competitors = entries.filter(
+      (entry) =>
+        entry.atom.scopePath.startsWith("src/helper-") ||
+        fixture.files[entry.atom.scopePath]
+          ?.split("\n")
+          [(entry.atom.lineRange?.startLine ?? 1) - 1]?.includes("function bookkeeping"),
+    );
+    expect(competitors.length).toBe(18);
+    expect(competitors.every((entry) => entry.atom.score > target.atom.score)).toBe(true);
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    expect(target.atom.edge?.kind).toBe("reference");
+    const parent = entries.find((entry) => entry.definitionIdentity === target.parentIdentity);
+    if (parent === undefined || parent.atom.lineRange === undefined)
+      throw new TypeError("fixture requires the observed caller body");
+    expect(fixture.trace.routeCoverage?.isCurrent(parent.atom)).toBe(true);
+    expect(target.parentWitness?.parentIdentity).toBe(parent.definitionIdentity);
+    expect(target.parentWitness?.targetIdentity).toBe(target.definitionIdentity);
+    expect(
+      coverageRanking(atoms).kept.some(
+        (candidate) => candidate.scopePath === target.atom.scopePath,
+      ),
+    ).toBe(true);
+    const lines = (fixture.files[target.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine);
+    const body = lines.join("\n");
+    expect(target.observedBytes).toBe(Buffer.byteLength(body));
+    expect(target.observedBytes).toBeLessThan(4096);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 };
+    for (const paths of [
+      ["src/routes.ts", "src/implementation.ts", target.atom.scopePath],
+      undefined,
+    ]) {
+      const { reads, requests } = await observedCoverageRead(fixture, {
+        paths,
+        atoms,
+        inputs: { budget },
+      });
+      const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+      const messages = await sentPrompt(fixture, reads, atoms, budget);
+      expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+      expect(requests.every((request) => request.maxBytes <= 8192)).toBe(true);
+      const parentRange = parent.atom.lineRange;
+      const parentBody = (fixture.files[parent.atom.scopePath] ?? "")
+        .split("\n")
+        .slice(parentRange.startLine - 1, parentRange.endLine)
+        .join("\n");
+      expect(readContent(reads, parent.atom.scopePath)).toContain(parentBody);
+      const retained = competitors[0];
+      if (retained?.atom.lineRange === undefined)
+        throw new TypeError("fixture requires the first higher-scoring current competitor");
+      const retainedBody = (fixture.files[retained.atom.scopePath] ?? "")
+        .split("\n")
+        .slice(retained.atom.lineRange.startLine - 1, retained.atom.lineRange.endLine)
+        .join("\n");
+      expect(readContent(reads, retained.atom.scopePath)).toContain(retainedBody);
+      expect(
+        readContent(reads, target.atom.scopePath).includes(body),
+        JSON.stringify({
+          restricted: paths !== undefined,
+          targetBytes: target.observedBytes,
+          targetScore: target.atom.score,
+          competitorScores: competitors.map((entry) => entry.atom.score),
+          bytesReturned: readBytes(reads),
+          nativeRequests: requests.map((request) => ({
+            path: request.scopePath,
+            funded: request.ranges,
+            grant: request.maxTotalBytes,
+            first: request.firstRoundOnly,
+          })),
+        }),
+      ).toBe(true);
+      if (paths === undefined)
+        expectTargetCoverageFunding(fixture, requests, target.atom.scopePath, true);
+      expect(
+        pack.files
+          .find((file) => file.scopePath === target.atom.scopePath)
+          ?.excerpts.some((view) => view.content === body),
+      ).toBe(true);
+      for (const [index, line] of lines.entries())
+        expect(messages).toContain(`${String(range.startLine + index)} | ${line}`);
+    }
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+  });
+
   it("retains multiple safe same-file target windows beyond one physical window's byte cap", async () => {
     const fixture = await coverageFixture(
       "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
