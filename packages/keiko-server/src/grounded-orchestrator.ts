@@ -6395,10 +6395,26 @@ function sharedCoverageFairTargets(
         : [];
     }),
   );
-  return fair.filter(
-    (entry) =>
-      entry.atom.scopePath !== ranked.atom.scopePath && !fundedPaths.has(entry.atom.scopePath),
-  );
+  const pending = fair
+    .filter(
+      (entry) =>
+        entry.atom.scopePath !== ranked.atom.scopePath && !fundedPaths.has(entry.atom.scopePath),
+    )
+    .sort(
+      (left, right) =>
+        coverageFileHeadScore(right, admission) - coverageFileHeadScore(left, admission),
+    );
+  return [
+    ...pending.filter((entry) => coverageFileHeadScore(entry, admission) < ranked.atom.score),
+    ...pending.filter((entry) => coverageFileHeadScore(entry, admission) >= ranked.atom.score),
+  ];
+}
+
+function coverageFileHeadScore(
+  entry: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+): number {
+  return admission.byPath.get(entry.atom.scopePath)?.[0]?.atom.score ?? entry.atom.score;
 }
 
 function admitSharedCoveragePrefix(
