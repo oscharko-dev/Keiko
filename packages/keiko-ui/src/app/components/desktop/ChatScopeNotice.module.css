@@ -1,0 +1,60 @@
+.cmpScopeHeader[data-grounded] {
+  gap: 4px 12px;
+  flex-wrap: wrap;
+}
+.cmpGrounding[data-connected] {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 100%;
+}
+@container (max-width: 480px) {
+  .cmpScopeHeader:has(> [data-scope-notice]) {
+    row-gap: 0;
+    padding-block: 3px 0;
+  }
+  .cmpScopeHeader:has(> [data-scope-notice]) .cmpGrounding {
+    row-gap: 0;
+  }
+  .cmpScopeHeader:has(> [data-scope-notice]) .cmpPillWrap {
+    row-gap: 2px;
+  }
+}
+.cmpNotice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.cmpNotice button {
+  background: var(--surface);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  min-height: 28px;
+  padding: 4px 8px;
+}
+.cmpNotice button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cmpNotice [role="status"] {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@container (max-width: 480px) {
+  .cmpNotice [role="status"] {
+    max-width: 260px;
+  }
+}
+.cmpHelp {
+  flex: 0 0 100%;
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}

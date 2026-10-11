@@ -638,6 +638,63 @@ guide](support-workspace.md) before sharing or giving an artifact to an agent.
 
 ### What a validated timeline shows
 
+Connected-folder retrieval also derives optional `retrieval-miss` findings in
+`analysis.findings`, each affected timeline's `findings`, and its reproduction seed. Finding
+schema version 1 names the correlation, available process/scope/query identities, the closed reason,
+and the actual triggering fields. The reader joins source, selection, completion, and answer
+siblings within the same process, correlation, and scope. Query-specific ranking and intent facts
+stay separate; an answered follow-up disposes the initial unread declaration even when its query
+or selection fingerprint changes.
+
+These facts are distributed across typed siblings to retain the contextual-field bound.
+`search.connected-context.source-details` carries admission and reference counts;
+`selection-details` carries calibrated floors, confidence, addressed-file demotion, reranker
+disposition, continuity, worktree and semantic freshness observations. `completion-details` and
+the completed operation retain their actual retrieval accounting. `answer-details` carries the
+final sent file count (`filesInPrompt`), answer kind, observed citation behaviour, declaration
+counts, repair disposition, and the actual follow-up trigger, pass/admission counts, outcome and
+configuration disposition. Each joins the original correlation and source/query digests;
+`followUpPass` distinguishes the first and second prompt. Changed selection fingerprints do not
+erase the first declaration. Assembled file reads remain audit and physical-usage facts and must
+not be presented as proof that every excerpt reached the model.
+
+Follow-up outcomes are `not-needed`, `answered`, `still-insufficient`, `budget-refused`,
+`elapsed-refused`, or `disabled`. A substantive second answer can be `answered` while retaining an
+uncited-answer warning; this never opens a third synthesis slot. Technical failures retain a closed
+error header with reduced frames and causes, without provider messages or declaration paths. The
+normal installation enables one follow-up; `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX=0` disables it,
+and invalid explicit values fail closed with an invalid configuration observation. Initial
+synthesis shares its one extra slot with either marker repair or follow-up, within the original
+remaining budgets. See [ADR-0180](../adr/ADR-0180-bounded-connected-folder-follow-up.md).
+
+| Reason                            | Triggering evidence                                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `declared-unread-in-scope`        | Positive `declaredUnreadInScopeCount` without a confirmed answered follow-up.                                    |
+| `explicit-path-rejected`          | Positive `explicitPathRejectedCount`, with observed closed `explicitPathRejectionReasons`.                       |
+| `low-confidence-selection`        | `keepOneFallbackApplied: true`.                                                                                  |
+| `basename-dedup-demoted-explicit` | Positive `addressedBasenameDedupDemotedCount`; ordinary basename diversity alone is valid.                       |
+| `follow-up-still-insufficient`    | Positive `followUpPassCount` with `followUpOutcome: still-insufficient`.                                         |
+| `semantic-unavailable-with-miss`  | Semantic provider unavailable/rejected together with an observed miss or an empty targeted/diagnostic selection. |
+| `intent-overview-on-follow-up`    | `retrievalIntent: repository-overview` with a non-`none` `continuityReferentSource` in the same query.           |
+
+Missing historical fields remain unknown. An unconfigured semantic provider with a successful
+lexical answer produces no finding. Positive general `basenameDedupDemotedCount` does not establish
+demotion of an addressed file. When all per-reason omission counters are present, findings carry
+`omissionGroups.ranking` and `.eligibility` from the same canonical grouping helper the chat uses.
+Partial counters never become a manufactured zero total. Seeds warn that file bodies and retrieval
+inputs were never logged; a replay needs a separately supplied allowed fixture. See
+[Restore connected-folder file grounding](../troubleshooting/chat-connected-folder-file-not-read.md).
+
+An intentional source-free assessment can dispose only incidental low-confidence selection or an
+empty semantic lookup. The actual `search.answer.assessed` observation must carry `policy: allowed`,
+`outcome: assessment-only`, zero `sourceBackedChars`, a nonempty assessment, and `phase: accepted-final`.
+The reader requires the same process, correlation, scope/query digests and witnessed request
+lifecycle. A candidate repair is not accepted-answer authority, and missing starts, overlapping
+requests or later partial records cannot inherit an earlier turn's assessment. Historical unbound
+fields remain unknown. Explicit source demand, rejected paths, unread declarations and an unresolved
+follow-up remain retrieval-miss evidence even when the delivered response also contains learned
+knowledge.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,

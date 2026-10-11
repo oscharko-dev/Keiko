@@ -10,6 +10,8 @@ import type {
   CostClass,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isPathWithinSelectedScope,
+  isValidScopePath,
   connectedContextOmittedCount,
   connectedContextOmittedCounts,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -31,9 +33,14 @@ import {
   type RetentionPolicy,
 } from "./types.js";
 
+import type { EvidenceConnectedContextFollowUp } from "@oscharko-dev/keiko-contracts/evidence";
+
 type Redactor = (input: string) => string;
 
 export interface ConnectedContextEvidenceInput {
+  readonly completedSynthesisCallCount?: number | undefined;
+  readonly followUp?: EvidenceConnectedContextFollowUp | undefined;
+  readonly sourceScopeFingerprint?: string | undefined;
   readonly runId: string;
   readonly modelId: string;
   readonly workspaceRoot: string;
@@ -175,6 +182,10 @@ function scopeOf(
   return {
     schemaVersion: input.pack.scope.schemaVersion,
     scopeIdHash: sha256Hex(redactString(redact, input.pack.scope.scopeId)),
+    ...(input.sourceScopeFingerprint !== undefined &&
+    /^[0-9a-f]{64}$/u.test(input.sourceScopeFingerprint)
+      ? { sourceScopeFingerprint: input.sourceScopeFingerprint }
+      : {}),
     scopeKind: input.pack.scope.kind,
     selectedPathCount: input.pack.scope.relativePaths.length,
     selectedPaths: input.pack.scope.relativePaths.map((path) => redactString(redact, path)),
@@ -257,12 +268,33 @@ function rankedCandidatesOf(
   }));
 }
 
+function followUpOf(
+  input: ConnectedContextEvidenceInput,
+  redact: Redactor,
+): EvidenceConnectedContextFollowUp | undefined {
+  if (input.followUp === undefined) return undefined;
+  const selected = new Set(input.pack.scope.relativePaths);
+  return {
+    ...input.followUp,
+    firstDeclarations: input.followUp.firstDeclarations
+      .filter(
+        (entry) =>
+          isValidScopePath(entry.scopePath, { mustBeRelative: true }) &&
+          isPathWithinSelectedScope(input.pack.scope, selected, entry.scopePath),
+      )
+      .slice(0, 3)
+      .map((entry) => ({ ...entry, scopePath: redactString(redact, entry.scopePath) })),
+  };
+}
+
 function connectedContextOf(
   input: ConnectedContextEvidenceInput,
   redact: Redactor,
 ): EvidenceConnectedContextAudit {
   const rankedCandidates = rankedCandidatesOf(input, redact);
+  const followUp = followUpOf(input, redact);
   return {
+    ...(followUp === undefined ? {} : { followUp }),
     packSchemaVersion: input.pack.schemaVersion,
     packStableIdHash: sha256Hex(redactString(redact, input.pack.stableId)),
     chatIdHash:
@@ -325,7 +357,7 @@ function buildConnectedContextEvidenceManifest(
     usageTotals: {
       promptTokens: input.pack.usage.modelInputTokens,
       completionTokens: input.pack.usage.modelOutputTokens,
-      requestCount: 1,
+      requestCount: input.completedSynthesisCallCount ?? 1,
       totalLatencyMs: input.elapsedMs,
     },
     context: contextOf(input, redact),

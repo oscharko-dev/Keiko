@@ -1,6 +1,9 @@
 import type { ContextCoverageTruncationReason } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { LineMatcher } from "./repoSearchMatchers.js";
-import { repositorySourceLines } from "./repoSearchSourceClassification.js";
+import {
+  repositorySourceLines,
+  type RepositorySourceLine,
+} from "./repoSearchSourceClassification.js";
 import { RetainedAtomHeap } from "./repoSearchRetention.js";
 
 const LINE_TIMEOUT_CHECK_INTERVAL = 256;
@@ -792,10 +795,14 @@ export function collectBestLines(
   text: string,
   state: LineSelectionState,
   scopePath?: string,
+  sourceLinesFor?: () => readonly RepositorySourceLine[],
 ): readonly ScoredLine[] {
   const best = new ScoredLineCollector(runner.limits.maxMatchesReturned, state);
   const lines = repositoryPhysicalLines(text);
-  const sourceLines = repositorySourceLines(text, scopePath);
+  const sourceLines =
+    runner.matcher.requiresSourceClassification === false
+      ? []
+      : (sourceLinesFor?.() ?? repositorySourceLines(text, scopePath));
   const braceScanCache = createBraceScanCache(lines);
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     if (lineSelectionStopped(runner, state, lineIndex)) {

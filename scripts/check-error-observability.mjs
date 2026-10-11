@@ -121,6 +121,34 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
+    "packages/keiko-server/src/grounded-preselection-reranker.ts:rerankGroundedCandidates",
+    "The catch preserves the original error in PreselectionRerankerResult.failure. The connected-context owner persists failureKind, frames and causeChain on selection-details; cancellation is rethrown.",
+  ],
+  [
+    "packages/keiko-server/src/grounded-repo-semantic-search.ts:fingerprintPreflight",
+    "A failed metadata or containment probe returns unavailable and admits no fingerprint read. The existing semantic freshness observer records the resulting unavailableFileCount on the connected-context source/selection evidence.",
+  ],
+  [
+    "packages/keiko-server/src/grounded-worktree-recency.ts:admittedPath",
+    "A failed fresh containment or safe-file metadata probe is the fail-closed false result of this path eligibility predicate; it cannot admit a recency path or source read.",
+  ],
+  [
+    "packages/keiko-workflows/src/bug-investigation/failure-parse.ts:sourceFile",
+    "Pure pasted file-URL parsing maps malformed, unsupported or hostile locations to no frame; it performs no filesystem operation or source admission.",
+  ],
+  [
+    "packages/keiko-workspace/src/structuralAdapterRequestContext.ts:currentCandidateContentSnapshot",
+    "A failed fresh file snapshot cannot certify retained source reuse; the existing live reader revalidates it. Path-denial, workspace-escape and request-stop errors are rethrown before this fail-closed metadata predicate returns absent.",
+  ],
+  [
+    "packages/keiko-workspace/src/workspaceIndexStreaming.ts:StreamingWorkspaceIndex.loadSnapshot",
+    "The observed index adapter owns durable load-failure evidence. The request marks acceleration unavailable, returns no cached result and retains fresh live traversal; an expired request remains fenced by structural execution control.",
+  ],
+  [
+    "packages/keiko-workspace/src/workspaceIndexStreaming.ts:StreamingWorkspaceIndex.finalize",
+    "The observed index adapter owns durable save-failure evidence. The request marks acceleration unavailable and stops publication; already collected live source evidence and request cancellation remain authoritative.",
+  ],
+  [
     "packages/keiko-activity-log/src/reader/support-analyze.ts:registeredRecordClassification",
     "The catch deterministically classifies hostile persisted evidence as incomplete or corrupt.",
   ],

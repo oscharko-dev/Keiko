@@ -29,7 +29,7 @@ Refs #<issue_number>
 - [ ] `Owner / Agent`, `Branch`, `Pull Request`, and `Human Review Required` are filled.
 - [ ] Issue label remains `status: in progress` until verified auto-merge, then becomes `status: done`.
 - [ ] Autonomous repair stayed on the PR branch; no direct `dev` push, force-push, finding dismissal, or required-gate bypass occurred.
-- [ ] Native auto-merge was armed only after the ADR-0135 direct required checks settled.
+- [ ] Integration into `dev`, including native auto-merge arming, is authorized and executed only by `oscharko` or an agent acting under that account within the owner's explicit authorization; the ADR-0135 direct required checks must also settle.
 
 ## Product Impact
 

@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { retrieveConnectedContextPack, type OrchestratorInput } from "./grounded-orchestrator.js";
+import { materializeConnectedFixture } from "./grounded-eval-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
@@ -12,24 +17,34 @@ import {
 const ROOT = "/private/customer/ring-decisions";
 const CORRELATION = "ring-decision-review-0001";
 type Log = ReturnType<typeof createBufferedServerLogSink>;
+const fixtureRoots: string[] = [];
+afterEach(() => {
+  for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 interface RetrievalResult {
   readonly output: Awaited<ReturnType<typeof retrieveConnectedContextPack>>;
   readonly log: Log;
   readonly completed: Log["events"][number] | undefined;
   readonly source: Log["events"][number] | undefined;
+  readonly details: Log["events"][number] | undefined;
 }
 interface ReadControl {
+  readonly git?: boolean;
   readonly fs?: (base: WorkspaceFs) => WorkspaceFs;
   readonly nowMs?: () => number;
 }
 
-function input(text: string, budget: NonNullable<OrchestratorInput["budget"]>): OrchestratorInput {
+function input(
+  text: string,
+  budget: NonNullable<OrchestratorInput["budget"]>,
+  root: string,
+): OrchestratorInput {
   return {
-    workspaceRoot: ROOT,
+    workspaceRoot: root,
     scope: {
       schemaVersion: "1",
       scopeId: "fixture",
-      workspaceRoot: ROOT,
+      workspaceRoot: root,
       kind: "workspace-root",
       relativePaths: [],
       conversationId: undefined,
@@ -41,22 +56,30 @@ function input(text: string, budget: NonNullable<OrchestratorInput["budget"]>): 
   };
 }
 
+async function gitFixtureRoot(files: Readonly<Record<string, string>>): Promise<string> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-ring-decision-git-")));
+  fixtureRoots.push(root);
+  await materializeConnectedFixture(root, { ...files, ".git/HEAD": "fixture" });
+  return root;
+}
+
 async function retrieve(
   text: string,
   files: Readonly<Record<string, string>>,
   budget = DEFAULT_EXPLORATION_BUDGET,
   control: ReadControl = {},
 ): Promise<RetrievalResult> {
+  const root = control.git === true ? await gitFixtureRoot(files) : ROOT;
   const log = createBufferedServerLogSink();
-  const base = memFs(ROOT, files);
-  const output = await retrieveConnectedContextPack(input(text, budget), {
+  const base = control.git === true ? nodeWorkspaceFs : memFs(root, files);
+  const output = await retrieveConnectedContextPack(input(text, budget, root), {
     correlationId: CORRELATION,
     activityLog: log,
     fs: control.fs?.(base) ?? base,
     nowMs: control.nowMs ?? ((): number => 0),
     detectWorkspace: () => ({
-      root: ROOT,
-      selectedRoot: ROOT,
+      root,
+      selectedRoot: root,
       name: "fixture",
       version: undefined,
       testFramework: "unknown",
@@ -69,7 +92,10 @@ async function retrieve(
   });
   const completed = log.events.find((event) => event.op === "search.connected-context.completed");
   const source = log.events.find((event) => event.op === "search.connected-context.source-details");
-  return { output, log, completed, source };
+  const details = log.events.find(
+    (event) => event.op === "search.connected-context.completion-details",
+  );
+  return { output, log, completed, source, details };
 }
 
 function assertPartition(result: Awaited<ReturnType<typeof retrieve>>): void {
@@ -88,12 +114,13 @@ function assertPartition(result: Awaited<ReturnType<typeof retrieve>>): void {
 function assertCanonical(result: Awaited<ReturnType<typeof retrieve>>, source = false): void {
   const event = source ? result.source : result.completed;
   const formatted = formatActivityLogProofLine(event ?? {});
+  expect(formatted).not.toContain("_truncatedFieldCount");
   const line = source
     ? expectActivityLogProof("search.connected-context.source-details.line", formatted)
     : expectActivityLogProof("search.connected-context.completed.line", formatted);
   expect(line).toHaveProperty("correlationId", CORRELATION);
   expect(line).toMatchObject(event?.extra ?? {});
-  expect(result.log.lines().join("\n")).not.toContain(ROOT);
+  expect(result.log.lines().join("\n")).not.toContain(result.output.pack.scope.workspaceRoot);
 }
 
 function onContentRead(base: WorkspaceFs, observe: (path: string) => void): WorkspaceFs {
@@ -115,27 +142,43 @@ describe("ring and listing decision evidence", () => {
       files: { "manual.html": "InvoiceReference appears here." },
       reason: "complete-exact-lookup",
       ringReason: "complete-exact-lookup",
+      git: true,
+    },
+    {
+      text: 'Find exact identifier "InvoiceReference".',
+      files: { "manual.html": "InvoiceReference appears here." },
+      reason: "complete-exact-lookup",
+      ringReason: "no-git-metadata",
+      git: false,
     },
     {
       text: "What value is documented for InvoiceReference?",
       files: { "manual.html": "InvoiceReference appears here." },
       reason: "ordinary-document",
       ringReason: "no-git-metadata",
+      git: false,
     },
     {
       text: 'Find exact identifier "ABSENT_PRIVATE_METRIC".',
       files: { "manual.html": "Unrelated handbook content." },
       reason: "literal-absence",
       ringReason: "no-git-metadata",
+      git: false,
     },
   ])("records actual $reason decisions", async (test) => {
-    const result = await retrieve(test.text, test.files);
+    const result = await retrieve(test.text, test.files, DEFAULT_EXPLORATION_BUDGET, {
+      git: test.git,
+    });
     assertPartition(result);
     expect(result.completed?.extra).toMatchObject({
       augmentationDisposition: "skipped",
       augmentationSkipped: true,
-      augmentationSkipReason: test.reason,
     });
+    expect(result.details?.extra?.augmentationSkipReason).toBe(test.reason);
+    expectActivityLogProof(
+      "search.connected-context.completion-details.line",
+      formatActivityLogProofLine(result.details ?? {}),
+    );
     expect(result.completed?.extra?.ringSkipReasons).toContain(test.ringReason);
     assertCanonical(result);
   });
@@ -150,8 +193,8 @@ describe("ring and listing decision evidence", () => {
     expect(result.completed?.extra).toMatchObject({
       executedRingKinds: ["lexical"],
       augmentationDisposition: "skipped",
-      augmentationSkipReason: "budget-exhausted",
     });
+    expect(result.details?.extra?.augmentationSkipReason).toBe("budget-exhausted");
     expect(result.completed?.extra?.stoppedRingKinds).not.toEqual([]);
     expect(result.output.pack.usage.searchCalls).toBe(1);
     assertCanonical(result);

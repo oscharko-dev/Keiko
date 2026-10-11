@@ -9,6 +9,18 @@ import { LEGACY_CONNECTED_SEARCH_ABSTENTION } from "@oscharko-dev/keiko-contract
 import { buildEvalContextPack, evalUncertainty } from "./grounded-eval-support.js";
 
 describe("grounded faithfulness eval (RB-4, GEN-AI-EVAL-003)", () => {
+  it("scores real answer-kind and citation-warning production rules", () => {
+    const scorecard = runGroundedFaithfulnessEval();
+    expect(scorecard.answerKindAccuracy).toBe(1);
+    expect(scorecard.missingCitationAccuracy).toBe(1);
+  });
+
+  it("fails the real floor for the treat-clarification-as-answer negative control", () => {
+    const scorecard = runGroundedFaithfulnessEval("treat-clarification-as-answer");
+    expect(scorecard.answerKindAccuracy).toBeLessThan(1);
+    expect(scorecard.missingCitationAccuracy).toBeLessThan(1);
+    expect(evaluateGroundedFaithfulnessBudget(scorecard)).toMatchObject({ ok: false });
+  });
   it("detects every fabricated citation, abstains on every empty-evidence answer, no false positives", () => {
     const scorecard = runGroundedFaithfulnessEval();
     const result = evaluateGroundedFaithfulnessBudget(scorecard);

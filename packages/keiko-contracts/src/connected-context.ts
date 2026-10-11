@@ -7,6 +7,7 @@
 // `@oscharko-dev/keiko-*` imports may appear in this module.
 
 import type { ContextBudget } from "./context-engineering.js";
+import type { GroundedRerankerDiagnostics } from "./bff-wire.js";
 import { validateContextBudget } from "./context-engineering-validation.js";
 import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
 
@@ -160,6 +161,8 @@ export interface EvidenceAtomMetrics {
 // Seven independently-exhausted dimensions; conflating any pair lets one dimension hide
 // overshoot in another.
 export interface ExplorationBudget {
+  /** A turn-local server-owned follow-up; omission preserves the accepted default. */
+  readonly followUpPassesMax?: 0 | 1 | undefined;
   readonly searchCallsMax: number;
   // Null selects evidence under byte/model bounds without an artificial file-count cutoff.
   readonly filesReadMax: number | null;
@@ -180,6 +183,7 @@ export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = Object.freeze({
   modelOutputTokensMax: 4_096,
   elapsedMsMax: null,
   rerankCallsMax: 1,
+  followUpPassesMax: 1,
 });
 
 export interface ExplorationUsage {
@@ -296,16 +300,21 @@ export type UncertaintyMarkerKind =
   | "budget-clipped"
   | "tool-unavailable"
   | "low-confidence"
+  // The best ordinary candidate was retained only by the keep-one floor fallback.
+  | "low-confidence-selection"
   // GEN-AI-GROUNDING-001/-008 (RB-4): the grounded answer's inline `[path:line]` reference names a
   // file/line that was NOT in the retrieved evidence pack sent to the model. Post-generation
   // citation reconciliation appends this marker so an ungrounded (fabricated) reference is surfaced
   // rather than displayed as a supported grounded claim.
   | "unsupported-citation"
   // The grounded answer makes source-backed claims but carries no supported inline marker at all
-  // (or received evidence-external context it does not cite). Distinct from `unsupported-citation`:
+  // Distinct from `unsupported-citation`:
   // nothing was fabricated or out of range, the answer simply does not say where it got its
   // claims from. A no-evidence refusal carries no claims and therefore never carries this marker.
   | "uncited-answer"
+  // Governed memory was supplied outside repository evidence; its claims remain uncited even
+  // when the answer has valid repository references.
+  | "uncited-memory-context"
   // GEN-AI-GATEWAY-001 (RB-4): the model completion was truncated (finishReason "length"); the
   // partial answer is surfaced with this marker instead of being consumed as a complete answer.
   | "incomplete-answer"
@@ -331,8 +340,10 @@ export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = Object
   "budget-clipped",
   "tool-unavailable",
   "low-confidence",
+  "low-confidence-selection",
   "unsupported-citation",
   "uncited-answer",
+  "uncited-memory-context",
   "incomplete-answer",
   "unsupported-claim",
   "entailment-unavailable",
@@ -358,6 +369,9 @@ export interface OmittedContextEntry {
   readonly reason: CandidateOmissionReason;
   readonly omittedAtMs: number;
 }
+
+// A robust ordinary reference supplies the relative cut; protected/selected paths never define it.
+export const CONNECTED_CONTEXT_RELATIVE_SELECTION_FLOOR_PERMILLE = 550;
 
 // ─── Connected context pack ───────────────────────────────────────────────────
 export interface ConnectedContextPack {
@@ -466,6 +480,34 @@ export interface ContextCoverageDiagnostics {
   readonly limits: ContextCoverageLimits;
 }
 
+export type ContextSelectionConfidence = "high" | "low";
+export type ContextSemanticProviderDisposition =
+  "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected";
+export type ContextScopeState = "applied" | "overflow" | "gate-refused" | "incomplete-traversal";
+export type ContextRerankerDisposition =
+  "unconfigured" | "applied" | "failed" | "skipped-budget" | "skipped-literal";
+
+/** Body-free origin of the request-local conversation retrieval hints. */
+export type ContinuityReferentSource =
+  | "none"
+  | "previous-user-question"
+  | "assistant-paths"
+  | "assistant-declaration"
+  | "assistant-paths-and-declaration";
+
+export interface ContextSelectionDiagnostics {
+  readonly selectionConfidence: ContextSelectionConfidence;
+  readonly keepOneFallbackApplied: boolean;
+  readonly floorReferenceKind: "ordinary-p75" | "no-ordinary" | "files-scope";
+  readonly relativeFloorPermille: number;
+  readonly strongestOrdinaryScorePermille: number;
+  readonly absoluteFloorPermille: number;
+  readonly rerankerDisposition: ContextRerankerDisposition;
+  readonly reranked: boolean;
+  readonly rerankFailedCalls: number;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
+}
+
 export interface ContextPackDiagnostics {
   readonly rankedCandidates: readonly RankedCandidateExplanation[];
   // Optional, additive deterministic context-budget plan (ADR-0052). Absent on legacy packs;
@@ -474,6 +516,9 @@ export interface ContextPackDiagnostics {
   // Optional, additive path-free coverage diagnostics. Absent on legacy/non-search packs; when
   // present it explains whether repository coverage was incomplete and why.
   readonly coverage?: ContextCoverageDiagnostics | undefined;
+  readonly selection?: ContextSelectionDiagnostics | undefined;
+  readonly semanticProviderDisposition?: ContextSemanticProviderDisposition | undefined;
+  readonly scopeContextState?: ContextScopeState | undefined;
 }
 
 // ─── Pack summary ─────────────────────────────────────────────────────────────
@@ -646,8 +691,13 @@ function isValidBudgetUsage(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function isValidFollowUpPassCap(value: unknown): boolean {
+  return value === undefined || value === 0 || value === 1;
+}
+
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
   if (!isRecord(usage) || !isRecord(budget)) return false;
+  if (!isValidFollowUpPassCap(budget.followUpPassesMax)) return false;
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
     const field = `${dimension}Max` as const;
     const cap = budget[field];
@@ -728,7 +778,7 @@ function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {
   }
 }
 
-function isPathWithinSelectedScope(
+export function isPathWithinSelectedScope(
   scope: SelectedScope,
   scopePaths: ReadonlySet<string>,
   candidatePath: unknown,
@@ -1334,6 +1384,11 @@ function validatePackBudget(
     reasons.push("pack.budget invalid");
     return;
   }
+  pushIf(
+    reasons,
+    !isValidFollowUpPassCap(pack.budget.followUpPassesMax),
+    "budget.followUpPassesMax invalid",
+  );
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
     checkBudgetDimension(pack.usage[dimension], pack.budget[`${dimension}Max`], dimension, reasons);
   }
@@ -1456,6 +1511,100 @@ function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: s
   // Additive, guarded: legacy diagnostics without contextBudget validate exactly as before.
   validateDiagnosticsContextBudget(diagnostics.contextBudget, reasons);
   validateDiagnosticsCoverage(diagnostics.coverage, reasons);
+  validateDiagnosticsSelection(diagnostics.selection, reasons);
+  validateDiagnosticSourceStates(diagnostics, reasons);
+}
+
+function validateDiagnosticSourceStates(
+  diagnostics: ContextPackDiagnostics,
+  reasons: string[],
+): void {
+  pushIf(
+    reasons,
+    diagnostics.semanticProviderDisposition !== undefined &&
+      !["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"].some(
+        (state) => state === diagnostics.semanticProviderDisposition,
+      ),
+    "pack.diagnostics.semanticProviderDisposition invalid",
+  );
+  pushIf(
+    reasons,
+    diagnostics.scopeContextState !== undefined &&
+      !["applied", "overflow", "gate-refused", "incomplete-traversal"].some(
+        (state) => state === diagnostics.scopeContextState,
+      ),
+    "pack.diagnostics.scopeContextState invalid",
+  );
+}
+
+function validateDiagnosticsSelection(value: unknown, reasons: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    reasons.push("pack.diagnostics.selection invalid");
+    return;
+  }
+  for (const [field, allowed] of [
+    ["selectionConfidence", ["high", "low"]],
+    ["floorReferenceKind", ["ordinary-p75", "no-ordinary", "files-scope"]],
+    [
+      "rerankerDisposition",
+      ["unconfigured", "applied", "failed", "skipped-budget", "skipped-literal"],
+    ],
+  ] as const)
+    pushIf(reasons, !allowed.some((entry) => entry === value[field]), `selection.${field} invalid`);
+  for (const field of ["relativeFloorPermille", "absoluteFloorPermille"])
+    pushIf(
+      reasons,
+      !isFiniteNonNegativeInteger(value[field]) || value[field] > 1000,
+      `selection.${field} invalid`,
+    );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(value.rerankFailedCalls),
+    "selection.rerankFailedCalls invalid",
+  );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(value.strongestOrdinaryScorePermille),
+    "selection.strongestOrdinaryScorePermille invalid",
+  );
+  pushIf(
+    reasons,
+    typeof value.keepOneFallbackApplied !== "boolean",
+    "selection.keepOneFallbackApplied invalid",
+  );
+  pushIf(
+    reasons,
+    value.reranked !== (value.rerankerDisposition === "applied"),
+    "selection.reranked invalid",
+  );
+  validateSelectionReranker(value.reranker, reasons);
+}
+
+function validateSelectionReranker(value: unknown, reasons: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    reasons.push("selection.reranker invalid");
+    return;
+  }
+  pushIf(
+    reasons,
+    !["disabled", "denied", "unavailable", "invalid-response", "applied"].some(
+      (state) => state === value.status,
+    ),
+    "selection.reranker.status invalid",
+  );
+  for (const field of ["candidateCount", "documentCount", "keptCount"])
+    pushIf(
+      reasons,
+      !isFiniteNonNegativeInteger(value[field]),
+      `selection.reranker.${field} invalid`,
+    );
+  pushIf(
+    reasons,
+    value.latencyMs !== undefined && !isFiniteNonNegativeInteger(value.latencyMs),
+    "selection.reranker.latencyMs invalid",
+  );
 }
 
 function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: string[]): void {

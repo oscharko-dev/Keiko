@@ -28,9 +28,11 @@ product.
 > A local human selects or accepts the task, autonomy mode, and Authority Envelope within the
 > server-owned deployment ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
 > when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
-> their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
-> after the app-bound required checks succeed on the exact current head and every review
-> conversation is resolved. Direct pushes to
+> their feature branch, and maintain the pull request. Only the repository owner account
+> `oscharko` may authorize and execute integration into `dev`, including enabling native auto-merge.
+> Agents acting under that account operate within the owner's explicit authorization. Integration
+> additionally requires the app-bound required checks to succeed on the exact current head and every
+> review conversation to be resolved. Direct pushes to
 > `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
@@ -56,7 +58,7 @@ monotonic semantics fixed by
   or delivery.
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
-  integrated automatically only once the auto-merge preconditions in the invariant above hold.
+  integrated only by `oscharko` once the preconditions in the invariant above hold.
   (A mode's `allowed` disposition is a policy ceiling — see ADR-0138 D4 for the same-day
   capability-availability clarification: a surface still needs an implemented execution path
   before a given mode's `allowed` verdict can act.)
@@ -76,8 +78,10 @@ restrictions fail closed.
 This shapes the product _and_ how you work on it:
 
 - For an accepted Keiko task or epic, agents may commit, push the assigned non-`dev` branch, open or
-  update its PR, repair deterministic findings, arm native auto-merge, and close the issue after
-  verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
+  update its PR, and repair deterministic findings. Only `oscharko` may merge into `dev` or arm native
+  auto-merge for that target; an agent acting under that account needs the owner's explicit
+  authorization. Acceptance of a contributor's task does not grant `dev` integration authority.
+  Close the issue only after verified merge. Never push directly to `dev`, force-push, bypass a
   required check, dismiss a finding to obtain green status, or merge outside the ADR-0135
   direct-check path.
 - Explicit Files/Editor folder selections use the existing `coding-repository` presentation
@@ -435,6 +439,143 @@ system that exists, never beside it:
   [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
   `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
   the catalog. Its legacy literal scan is migration input only and authorizes nothing.
+  Connected-context explicit path admission emits anchor/admitted/rejected/line-hint and bounded
+  basename discovery counts, a closed rejection-reason list, and selected atom counts on the existing
+  `search.connected-context.source-details` operation; the shared correlation joins its completed
+  read-window and budget evidence without exceeding the operation field cap. Diagnostic-reference
+  selection uses the final six available source-detail fields. Additional selection observations
+  use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
+  correlation; existing completed fields and the contextual-field cap remain unchanged.
+  The six-reference intake preserves the primary local trace frame and explicitly named question
+  paths before secondary frames or conversation referents. Prompt fitting preserves a complete
+  matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable
+  identities before citation reconciliation. Physical reads remain actual I/O counts: import
+  classification and parsing share one complete guarded source read rather than charging another
+  classification read. Existing final-prompt, range and read observations describe these decisions
+  without recording source text or paths.
+  Endpoint definition traversal binds a registration's observed handler reference to its current
+  lexical AST target. Further calls retain their exact callable owner and complete observed spans;
+  same-named declarations and uninvoked nested functions do not certify that relationship.
+  Imported targets retain exact runtime module-export identities. Explicit compiler output mappings
+  reuse already guarded metadata and can address only admitted sources in the owning package.
+  Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
+  ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
+  reservation and request-local current-source metadata capacity. Finite enrichment grants and
+  bounded complete-text reuse retain their separate limits.
+  Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
+  cannot certify a unique runtime target when a competing branch is unobserved.
+  A guarded current definition reached through an observed inline-callable reference retains its
+  definition evidence and a resolved reference edge. Declaration priority does not certify callback
+  invocation; continuation retains that reference relationship and `source-graph-incomplete`.
+  Partially overlapping excerpt windows retain uncovered lines and their originating strength;
+  deduplication removes only lines already covered by a higher-priority window.
+  Physical excerpt allocation funds selected, current target definition windows and their observed
+  parent caller spans inside the existing connected share and actual per-file read capacity. A
+  compact caller span remains bound to its original current parent, exact child and observed source
+  coordinates; it does not acquire a new definition certificate. Independent roots and files within
+  each root receive bounded initial byte portions. Existing certified traversal sets file order;
+  existing query relevance orders targets within each file, with stable ties. Roots and their file
+  queues take turns within those portions. After that bounded pass, unserved queues retry unused
+  shared bytes before further expansion.
+  Shared physical lines and separators are charged once;
+  upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
+  branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
+  evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
+  When current coverage windows apply, independent search windows receive ordinary extra bytes
+  before unfunded discovered-definition expansions. Those expansions remain a deduplicated fallback.
+  The existing selection-details operation records planned ordinary ranges on attempted reader paths,
+  ordinary ranges intersected by nonempty returned views, and deferred definition ranges. An
+  intersection count does not certify complete source content; truncation and omission counts remain
+  authoritative.
+  Separately identified returned partial views retain their actual ranges, contents and physical-view
+  identities through assembly, without inventing continuity or uncharged separators. Unidentified
+  multiple uncovered views remain fail-closed; conflicting views retain uncertainty. Bounded
+  observations do not establish that an arbitrarily large function was fully read. File and deadline
+  grants, current-source checks, invocation uncertainty and actual truncation/omission reporting
+  remain authoritative.
+  Existing query evidence orders endpoint intake; bounded delegation traversal keeps the original
+  workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
+  Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
+  Optional augmentation skip detail and metadata retention capacity use completion-details;
+  the completed and source-details emitters each retain at most 48 registered context fields.
+  Selection-details records calibrated absolute/ordinary relative floors, the low-confidence
+  keep-one state, and pre-cut reranker disposition/failed-call counts. Addressed-file demotion
+  remains separate from healthy unaddressed basename diversity; safe reranker failure frames and
+  causes use the existing failure-class contract. Pack, prompt, wire, and log share the same
+  high/low selection vocabulary and actual observed scope/semantic dispositions.
+  Workspace-index failures with no retained, indexed or reused records report live fallback;
+  actual cold or warm request work remains visible even when saving its snapshot fails.
+  Conversation continuity records only its closed referent source and source/admitted/rejected
+  counts on selection-details; assistant path text never enters activity evidence.
+  Leading `./` reference spellings are canonicalized before strict path admission; parent and
+  interior dot segments remain subject to the existing validator and every sensitive-path denial.
+  Complete document path references are data when classifying relationship/history requests;
+  directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
+  factual lookup focuses discovery on canonically admitted named documents with a scope-bound
+  request context only when every meaningful request clause stays bound to a named document.
+  Independent prose topics retain recursive discovery even without a strong planner target.
+  Its source/read/ring
+  observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
+  canonical web/text-document extension groups, alongside XML and bounded document extraction.
+  Quoted targets use the same canonical reference identity. When every complete factual document
+  target is rejected, `explicit-target-unavailable` records skipped rings and augmentation; other
+  same-basename files cannot substitute for the unavailable target.
+  Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
+  generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
+  Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
+  into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
+  observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
+  private status digest stay outside logs; observation cannot admit evidence or bypass a floor.
+  Directly connected deep Git subfolders check ancestor metadata until the filesystem root under
+  the original deadline and abort guard; this hint never expands the selected evidence root.
+  Optional semantic live refresh reuses the original exploration governor and gateway spend ledger.
+  Each new read reserves a file and its observed byte upper bound; each embedding attempt reserves
+  a UTF-8 input-token upper bound before dispatch. Selection-details distinguishes actual read/call
+  attempts from reserved byte/token bounds and counts only retained refreshed files. Baseline index
+  fingerprint verification remains part of the existing logical semantic lookup. Live document
+  refresh defaults off; `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX` explicitly enables at most eight
+  files, within the original remaining deadline and a five-second ceiling. Missing or denied
+  remaining grants perform no new refresh I/O, and stale vectors retain honest lexical fallback.
+  The typed `search.connected-context.answer-details` sibling joins the same scope/query digests
+  and correlation. It records actual final-prompt file counts, answer kind, observed citation
+  behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,
+  pass/admission counts, outcome, and configuration disposition.
+  Pass count records a completed follow-up retrieval even when fitting refuses its synthesis;
+  admission count records targets retained by follow-up retrieval, independently of physical
+  read/byte accounting and final sent membership.
+  Technical failures use the existing closed error header, body-free frames and causes;
+  declaration paths remain outside logs.
+  Connected synthesis buffers normalized output before publication so rejected declaration lines
+  cannot escape through streamed chunks. Initial synthesis plus either marker repair or an
+  insufficiency follow-up shares two physical synthesis attempt slots and the original remaining budgets, including gateway and context-window retries.
+  The separately bounded entailment stage cannot grant another synthesis attempt. The existing
+  context allocator's high/exceeded pressure refuses follow-up. `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX`
+  defaults to `1`; only explicit `1` enables and `0` disables it, and other explicit values fail
+  closed to zero passes with an invalid configuration observation. Final sent packs and ranges
+  authenticate citations; assembled reads remain separate physical-usage and audit evidence.
+  The same answer-details line optionally records `synthesisCallCount` and
+  `completedSynthesisCallCount`; the former counts physical attempts and the latter completed
+  responses. Grounded evidence reports use completed responses for `usageTotals.requestCount`,
+  including completed marker repairs and follow-up answers; failed retries do not become completed
+  requests. Legacy evidence callers retain their one-request default.
+  It also records
+  `synthesisReservedOutputTokens`. Synthesis input usage charges the greater of the canonical sent
+  prompt estimate and reported provider usage. Reported discarded output is retained; an interrupted
+  stream without output measurement retains its requested output reservation instead of granting an
+  unknown output amount as zero. These charges are conservative admission bounds, not claims of exact
+  provider consumption. The optional local gateway attempt hook preserves transient recovery within
+  the two-attempt allowance and does not change unrelated callers' retry policy.
+  OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
+  caller and durable spend admission for each actual POST; adapters without that transport hook
+  retain the existing gateway boundary. No nested compatibility path grants another attempt.
+  A terminal caller attempt/cap refusal remains a local fault even after an earlier compatibility
+  dispatch; it cannot open the shared provider breaker. Genuine provider failures retain the
+  existing breaker and retry classification.
+  Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
+  optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
+  `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
+  and originating request retain the existing causal link. Candidate counts and model-authored
+  marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
 - **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
   implementation-obligation categories and a failure-class matrix with product owners, lifecycle
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
@@ -646,9 +787,17 @@ prompts. `client.answer.copied` records each chat answer copy (`copied` or `fail
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
 removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
 for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
-`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
-assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
-(`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+`search.answer.assessed` records whether a connected answer carried Keiko's own, labelled
+assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under the existing operator
+policy (`allowed`, `disabled`), with character sizes only. This learned knowledge is available
+without Internet or matching evidence; source-specific claims still require actual sent evidence.
+Disabled assessment text is dropped, never promoted into source-backed claims. Source-linked
+observations carry the canonical scope/query digests and `phase` (`candidate`, `accepted-final`);
+only the final accepted phase can explain delivered source-warning eligibility. Candidate or legacy
+unbound observations cannot suppress retrieval-miss findings. The citation sibling records
+`assessment-only` with zero source-marker counts, and repair never changes the assessment block.
+A no-anchor general request can use the same validated empty pack and cumulative synthesis grants
+when the policy allows assessment; scope validation and disabled-policy clarification still apply.
 A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
 provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
 `reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,
@@ -805,11 +954,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
   commit signing is configured before you commit.
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
-  history and signed squash merges. Nobody — agent or human — clicks merge: the agent arms GitHub
-  native auto-merge on the PR, and the platform integrates automatically once the required checks
-  are green on the exact current head and every review conversation is resolved (ADR-0135). Green
-  gates plus settled review threads ARE the merge decision; there is no human review step and no
-  waiting for a person.
+  history and signed squash merges. Only the repository owner account `oscharko` may merge into
+  `dev` or enable native auto-merge for it. Agents acting under that account require the owner's
+  explicit authorization; contributors cannot authorize integration. Required checks must be green
+  on the exact current head and every review conversation must be resolved (ADR-0135). Green gates
+  and settled review threads are necessary; they do not grant a contributor merge authority.
 - **The integration run reuses the pull request's evidence, it does not repeat it.** `dev` takes
   signed squash merges of up-to-date heads, so the commit that lands carries the identical tree sha
   as the head the required matrix already proved. The `dev` run resolves that first and skips the
@@ -844,7 +993,10 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   which runs ahead of zizmor so a drifted line anchor names its own cause instead of surfacing as
   the finding it was accepted for (#3130).
 
-  No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
+  No additional approving review is required for `dev`, so owner-authored PRs remain possible.
+  The owner's merge or authorized auto-merge is the integration approval. Only `oscharko` may
+  dismiss blocking reviews; approvals become stale when the reviewed changes change. CodeRabbit
+  reviews every `dev` pull request and
   every subsequent push without auto-pause. Its status is not required because quota can omit a
   current-head review, but every emitted inline finding requests changes and blocks until repaired
   and its conversation is resolved. Qodo remains retired under ADR-0167, and Keiko for

@@ -49,12 +49,32 @@ function completedLine(raw: string): Readonly<Record<string, unknown>> {
   return joined;
 }
 
+function selectionDetailsLine(raw: string): Readonly<Record<string, unknown>> {
+  for (const line of raw.split("\n").filter(Boolean)) {
+    const value: unknown = JSON.parse(line);
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "op" in value &&
+      value.op === "search.connected-context.selection-details"
+    ) {
+      expect(value).toHaveProperty("correlationId", CORRELATION);
+      return value as Readonly<Record<string, unknown>>;
+    }
+  }
+  throw new Error("Expected persisted retrieval selection evidence");
+}
+
 async function loggedRetrieval(
   files: Readonly<Record<string, string>>,
   question: string,
   budget: ExplorationBudget,
   maxResults = 200,
-): Promise<{ output: RetrievalOnlyOutput; completed: Readonly<Record<string, unknown>> }> {
+): Promise<{
+  output: RetrievalOnlyOutput;
+  completed: Readonly<Record<string, unknown>>;
+  selection: Readonly<Record<string, unknown>>;
+}> {
   const stateDir = mkdtempSync(join(tmpdir(), "keiko-retrieval-loss-log-"));
   const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
   try {
@@ -103,14 +123,70 @@ async function loggedRetrieval(
     expect(raw).not.toContain("private-scope");
     const completed = completedLine(raw);
     expect(completed.correlationId).toBe(CORRELATION);
-    return { output, completed };
+    return { output, completed, selection: selectionDetailsLine(raw) };
   } finally {
     activityLog.close?.();
     rmSync(stateDir, { recursive: true, force: true });
   }
 }
 
+function loggedRouteFiles(): Readonly<Record<string, string>> {
+  const helpers = Array.from({ length: 18 }, (_unused, index) =>
+    [
+      `function helper${String(index)}() {`,
+      ...Array.from(
+        { length: 60 },
+        (_value, line) => `  const checkpoint${String(line)} = ${String(line)};`,
+      ),
+      "  return false;",
+      "}",
+    ].join("\n"),
+  );
+  return {
+    "src/routes.ts":
+      'import { handleItem } from "./implementation.js";\nconst routes = [{ method: "POST", path: "/api/items", handler: handleItem }];',
+    "src/implementation.ts": [
+      "export function handleItem() { return () => processItem(); }",
+      "function processItem() {",
+      ...helpers.map((_unused, index) => `  helper${String(index)}();`),
+      "  return true;",
+      "}",
+      ...helpers,
+      "export class ScopeAdmission {",
+      "  scopeAdmissionBudgetAndPromptFittingBudget() {",
+      "    const scopeAdmissionBudget = 1024;",
+      "    const promptFittingBudget = 2048;",
+      "    return scopeAdmissionBudget + promptFittingBudget;",
+      "  }",
+      "}",
+    ].join("\n"),
+  };
+}
+
 describe("persisted retrieval loss counters", () => {
+  it("persists actual ordinary service and deferred definitions on the existing selection event", async () => {
+    const { selection, completed, output } = await loggedRetrieval(
+      loggedRouteFiles(),
+      "Trace POST /api/items and explain scopeAdmissionBudget and promptFittingBudget",
+      { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 },
+    );
+    expect(selection.excerptOrdinaryRangeCount).toBeGreaterThan(0);
+    expect(selection.excerptOrdinaryServedRangeCount).toBeGreaterThan(0);
+    expect(selection.excerptOrdinaryServedRangeCount).toBeLessThanOrEqual(
+      selection.excerptOrdinaryRangeCount,
+    );
+    expect(selection.excerptDeferredDefinitionRangeCount).toBeGreaterThan(0);
+    expect(selection).not.toHaveProperty("_truncatedFieldCount");
+    expect(completed.excerptReadWindowCount).toBeGreaterThan(0);
+    expect(
+      output.pack.files
+        .flatMap((file) => file.excerpts)
+        .some((excerpt) =>
+          excerpt.content.includes("return scopeAdmissionBudget + promptFittingBudget;"),
+        ),
+    ).toBe(true);
+  });
+
   it("reports per-window clipping without claiming the ample byte grant is exhausted", async () => {
     const { completed } = await loggedRetrieval(
       {

@@ -1,4 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  hasControlCharacter,
+  stripUnsafeFormatChars,
+} from "@oscharko-dev/keiko-contracts/text-safety";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import {
   startFilesNavigationEvidence,
@@ -42,7 +54,19 @@ function appendTarget(history: FolderHistory, target: FolderTarget): FolderHisto
   return { entries, index: entries.length - 1 };
 }
 
-function reconcileRoot(history: FolderHistory, root: string, reset: boolean): FolderHistory {
+function reconcileRoot(
+  history: FolderHistory,
+  root: string,
+  reset: boolean,
+  previousRoot?: string,
+): FolderHistory {
+  if (previousRoot !== undefined)
+    return {
+      ...history,
+      entries: history.entries.map((entry) =>
+        entry.root === previousRoot ? { ...entry, root } : entry,
+      ),
+    };
   if (reset) return { entries: [{ root, path: null }], index: 0 };
   return history.entries[history.index]?.root === root
     ? history
@@ -102,33 +126,64 @@ function moveInHistory(
   if (target.root !== root) onRootChange?.(target.root);
 }
 
-export function useFilesNavigation(
+function restoredDirectory(root: string, path: string | undefined): string | null {
+  if (root.length === 0 || path === undefined) return null;
+  return isValidScopePath(path, { mustBeRelative: true }) &&
+    !hasControlCharacter(path) &&
+    stripUnsafeFormatChars(path) === path
+    ? path
+    : null;
+}
+
+function useFolderHistory(
   root: string,
-  onRootChange?: (root: string) => void,
-): FilesNavigation {
-  const [history, setHistory] = useState<FolderHistory>({
-    entries: [{ root, path: null }],
+  resetOnRootChange: boolean,
+  initialDirectoryPath: string | undefined,
+  resolvedRoot: string | null | undefined,
+): [FolderHistory, Dispatch<SetStateAction<FolderHistory>>] {
+  const [history, setHistory] = useState<FolderHistory>(() => ({
+    entries: [{ root, path: restoredDirectory(root, initialDirectoryPath) }],
     index: 0,
-  });
+  }));
   const [lastRoot, setLastRoot] = useState(root);
-  const { begin, takeRead } = usePendingNavigation(root);
   if (lastRoot !== root) {
     setLastRoot(root);
     setHistory((previous) =>
-      reconcileRoot(previous, root, onRootChange === undefined || lastRoot.length === 0),
+      reconcileRoot(
+        previous,
+        root,
+        resetOnRootChange || lastRoot.length === 0,
+        resolvedRoot === root && lastRoot.length > 0 ? lastRoot : undefined,
+      ),
     );
   }
+  return [history, setHistory];
+}
+
+export function useFilesNavigation(
+  root: string,
+  onRootChange?: (root: string) => void,
+  initialDirectoryPath?: string,
+  resolvedRoot?: string | null,
+): FilesNavigation {
+  const [history, setHistory] = useFolderHistory(
+    root,
+    onRootChange === undefined,
+    initialDirectoryPath,
+    resolvedRoot,
+  );
+  const { begin, takeRead } = usePendingNavigation(root);
   const visit = useCallback(
     (path: string | null): void => {
       if (currentPath(history, root) === path) return;
       begin({ root, path }, "files directory navigation");
       setHistory((previous) => appendTarget(previous, { root, path }));
     },
-    [begin, history, root],
+    [begin, history, root, setHistory],
   );
   const move = useCallback(
     (offset: number): void => moveInHistory(history, root, onRootChange, begin, setHistory, offset),
-    [begin, history, onRootChange, root],
+    [begin, history, onRootChange, root, setHistory],
   );
   const selectRoot = useCallback(
     (targetRoot: string): void => {

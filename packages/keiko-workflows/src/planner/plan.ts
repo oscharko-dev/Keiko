@@ -32,6 +32,13 @@ import {
   type RetrievalIntent,
   type RetrievalIntentClassification,
 } from "./intent.js";
+import {
+  extractRetrievalChannels,
+  extractPathReferences,
+  searchReferenceAnchors,
+  type SearchReference,
+} from "./references.js";
+import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -48,6 +55,8 @@ export interface RetrievalRing {
   readonly kind: RetrievalRingKind;
   readonly label: string;
   readonly anchorTerms: readonly string[];
+  readonly references?: readonly SearchReference[];
+  readonly effectiveIntent?: RetrievalIntent;
   readonly searchLimits: SearchLimits;
   readonly rationale: string;
 }
@@ -65,10 +74,12 @@ export interface ExplorationPlan {
   readonly planId: string;
   readonly state: ExplorationPlanState;
   readonly retrievalIntent: RetrievalIntent;
+  readonly effectiveRetrievalIntent?: RetrievalIntent;
   readonly directEvidenceLookup: boolean;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
+  readonly references?: readonly SearchReference[];
   readonly targetDecision?: QueryTargetDecision;
   readonly rings: readonly RetrievalRing[];
   readonly budget: ExplorationBudget;
@@ -81,6 +92,8 @@ export interface CreatePlanInput {
   readonly query: RetrievalQuery;
   readonly budget?: ExplorationBudget;
   readonly maxAnchors?: number;
+  readonly previousRetrievalIntent?: RetrievalIntent;
+  readonly references?: readonly SearchReference[];
 }
 
 export interface CreatePlanDeps {
@@ -203,8 +216,8 @@ function buildRing(
   };
 }
 
-const DIRECT_ROUTE_METHOD_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
-const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=.%+*{}/-]*[A-Za-z0-9_}/*-]/u;
+const DIRECT_ROUTE_LOOKUP_RE =
+  /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/[A-Za-z0-9:_?&=.%+*{}/-]{0,1024}[A-Za-z0-9_}/*-]/iu;
 const QUERY_TERM_RE = /[\p{L}\p{N}_]+/gu;
 const HISTORY_QUERY_TERMS: ReadonlySet<string> = new Set([
   "git",
@@ -273,11 +286,11 @@ function hasHistoryQuery(text: string): boolean {
 }
 
 function hasDefinitionLookup(text: string): boolean {
-  return hasQueryTerm(text, DEFINITION_LOOKUP_TERMS);
+  return hasQueryTerm(queryContextOutsideQuotes(text), DEFINITION_LOOKUP_TERMS);
 }
 
 function hasSymbolRelation(text: string): boolean {
-  return hasSymbolRelationshipQuery(text);
+  return hasSymbolRelationshipQuery(queryContextOutsideQuotes(text));
 }
 
 function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
@@ -293,8 +306,7 @@ function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
 
 function isDirectRouteLookup(query: RetrievalQuery): boolean {
   return (
-    DIRECT_ROUTE_METHOD_RE.test(query.text) &&
-    DIRECT_ROUTE_PATH_RE.test(query.text) &&
+    DIRECT_ROUTE_LOOKUP_RE.test(parseDiagnosticTraceText(query.text).questionText) &&
     !hasHistoryQuery(query.text) &&
     !hasSymbolRelation(query.text) &&
     !ROUTE_TRAVERSAL_RE.test(query.text)
@@ -302,10 +314,15 @@ function isDirectRouteLookup(query: RetrievalQuery): boolean {
 }
 
 export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
+  const prose = extractPathReferences(query.text).reduce(
+    (text, reference) => text.split(reference.path).join(" "),
+    query.text,
+  );
   return (
-    hasHistoryQuery(query.text) ||
-    hasSymbolRelation(query.text) ||
-    ROUTE_TRAVERSAL_RE.test(query.text)
+    hasHistoryQuery(prose) ||
+    hasSymbolRelation(prose) ||
+    REQUESTED_TEST_RELATION_RE.test(queryContextOutsideQuotes(prose)) ||
+    ROUTE_TRAVERSAL_RE.test(queryContextOutsideQuotes(prose))
   );
 }
 
@@ -317,6 +334,10 @@ export interface QueryTargetDecision {
   readonly targets: readonly SearchAnchor[];
   readonly definitionSymbol: string | undefined;
   readonly definitionRequested: boolean;
+  /** Every parsed source clause binds a query-named file; unknown continuations stay broad. */
+  readonly namedFileOnly?: true;
+  /** A completely parsed self-contained conversation or general-advice request, without source work. */
+  readonly conversationOnly?: true;
 }
 
 const SEARCH_COMMANDS = new Set(["find", "search", "locate", "suche", "finde", "lokalisiere"]);
@@ -362,6 +383,282 @@ const ENGLISH_VALUE_REQUEST_RE =
 const GERMAN_VALUE_REQUEST_RE = /^welche\s+werte\s+stehen\s+zu\s+\0$/iu;
 const GERMAN_INFORMATION_REQUEST_RE =
   /^welche\s+information\s+ist\s+(?:für\s+\0|dazu)\s+in\s+diesem\s+ordner\s+belegt$/iu;
+const NAMED_FILE_COMMAND_RE =
+  /^(?:please |bitte )?(?:read|show|open|explain|describe|summarize|inspect|lies|zeige|öffne|erkläre|beschreibe) (?:the |die |das |den )?\0(?: (?:and |und )?\0)*$/iu;
+const NAMED_FILE_RETURN_RE =
+  /^(?:please |bitte )?(?:return to \0|go back to \0|zurück zu \0|kehre zu \0 zurück)$/iu;
+const NAMED_FILE_FACT_CONTINUATION_RE =
+  /^(?:(?:which|what) (?:function|method|section|value)|welch(?:e|er|es|en) (?:funktion|methode|abschnitt|wert)) (.+)$/iu;
+const SOURCE_SCOPE_POSITION_RE =
+  /^(?:in|within|from|across|throughout|all|any|other|every|im|innerhalb|aus|über|alle[nmrs]?|andere[nmrs]?|jede[nmrs]?)$/iu;
+const SOURCE_SCOPE_NONLOCAL_RE =
+  /^(?:another|other|all|any|every|entire|whole|ander(?:e|en|em|er|es)|alle[nmrs]?|jede[nmrs]?|gesamt(?:e|en|em|er|es))$/iu;
+const SOURCE_SCOPE_ELSEWHERE_RE = /^(?:elsewhere|everywhere|anderswo|woanders|überall)$/iu;
+const SOURCE_SCOPE_NOUN_RE =
+  /^(?:repos?|workspaces?|projects?|scopes?|projekte?|arbeitsbereiche?)$/iu;
+const NAMED_FILE_CONTAINED_REQUEST_RE =
+  /^(?:please |bitte )?(?:explain|describe|summarize|erkläre|beschreibe) (.+) (?:in|within|from|aus) \0$/iu;
+const NAMED_FILE_SUBJECT_REQUEST_RE =
+  /^(?:please |bitte )?(?:explain|describe|erkläre|beschreibe) (?:how|wie) \0 (.+)$/iu;
+const INDEPENDENT_REQUEST_GRAMMAR_RE =
+  /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus|then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während|außerdem|zudem|zusätzlich|auch|dann|sowie|was|welche|wo|wie|warum)\b/iu;
+const REQUEST_COMMAND_RE =
+  /\b(?:read|show|open|explain|describe|summarize|inspect|find|search|locate)(?:s|ed|ing)?\b|\b(?:lies|zeige|öffne|erkläre|erklären|erklärst|beschreibe|beschreiben|suche|finde)\b/iu;
+
+function boundNamedFilePredicate(text: string): boolean {
+  return (
+    text.length > 0 &&
+    !text.includes("\0") &&
+    !INDEPENDENT_REQUEST_GRAMMAR_RE.test(text) &&
+    !REQUEST_COMMAND_RE.test(text)
+  );
+}
+
+function isNamedFileNavigation(clause: string): boolean {
+  return NAMED_FILE_COMMAND_RE.test(clause) || NAMED_FILE_RETURN_RE.test(clause);
+}
+
+function isNamedFileClause(words: readonly string[]): boolean {
+  if (!words.includes("\0")) return false;
+  if (words.length === 1) return true;
+  const clause = words.join(" ");
+  if (isNamedFileNavigation(clause) || isSearchClause(words) || isFactClause(words)) return true;
+  const contained = NAMED_FILE_CONTAINED_REQUEST_RE.exec(clause)?.[1];
+  const subject = NAMED_FILE_SUBJECT_REQUEST_RE.exec(clause)?.[1];
+  const predicate = contained ?? subject;
+  return predicate !== undefined && boundNamedFilePredicate(predicate);
+}
+
+function namedFileRequestShape(
+  query: RetrievalQuery,
+): { readonly text: string; readonly singleFile: boolean } | undefined {
+  const references = extractRetrievalChannels(query.text, query.text.length).references.filter(
+    (reference) => reference.origin === "query",
+  );
+  if (references.length === 0 || !references.every((reference) => reference.path.includes("/")))
+    return undefined;
+  const shape = references
+    .reduce(
+      (text, reference) => text.replaceAll(reference.path.toLowerCase(), "\0"),
+      query.text.toLowerCase(),
+    )
+    .replace(/\0(?::\d{1,9}){1,2}/gu, "\0");
+  if (extractPathReferences(shape).length > 0) return undefined;
+  return {
+    text: shape,
+    singleFile: new Set(references.map((reference) => reference.path)).size === 1,
+  };
+}
+
+function namedFileClauseDecision(clause: string): boolean | undefined {
+  const projected = queryShapeOutsideTargets(clause, [{ term: "\0", kind: "path", weight: 1 }]);
+  if (queryContextOutsideQuotes(projected) !== projected) return false;
+  const fragments = projected.includes("\0") ? projected.split(",") : [projected];
+  const decisions = fragments.map(namedFileWordsDecision);
+  if (decisions.includes(false)) return false;
+  return decisions.includes(true) ? true : undefined;
+}
+
+function namedFileWordsDecision(clause: string): boolean | undefined {
+  const context = queryContextOutsideQuotes(clause);
+  if (generalAdviceClause(context)) return undefined;
+  const words = shapeWords(context);
+  return words.length === 0 ? undefined : isNamedFileClause(words);
+}
+
+function independentSourceScope(predicate: string): boolean {
+  let locating = false;
+  for (const match of predicate.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
+    const token = match[0];
+    if (SOURCE_SCOPE_ELSEWHERE_RE.test(token)) return true;
+    if (
+      locating &&
+      (SOURCE_SCOPE_NOUN_RE.test(token) ||
+        SOURCE_ADVICE_NOUN_RE.test(token) ||
+        SOURCE_SCOPE_NONLOCAL_RE.test(token))
+    )
+      return true;
+    if (SOURCE_SCOPE_POSITION_RE.test(token)) locating = true;
+    else if (sourceAdviceBoundary(token)) locating = false;
+  }
+  return false;
+}
+
+function namedFileFactContinuation(clause: string): boolean {
+  const projected = queryContextOutsideQuotes(clause);
+  if (projected !== clause) return false;
+  const predicate = NAMED_FILE_FACT_CONTINUATION_RE.exec(
+    normalizedConversationClause(projected),
+  )?.[1];
+  return (
+    predicate !== undefined &&
+    boundNamedFilePredicate(predicate) &&
+    !hasSymbolRelation(predicate) &&
+    !hasHistoryQuery(predicate) &&
+    !sourceConstrainedAdvice(predicate) &&
+    !independentSourceScope(predicate)
+  );
+}
+
+function namedFileOnlyRequest(query: RetrievalQuery): boolean {
+  if (query.kind !== "natural-language") return false;
+  const shape = namedFileRequestShape(query);
+  if (shape === undefined) return false;
+  let bound = false;
+  for (const clause of shape.text.split(/[.!?;\n&]/u)) {
+    const decision = namedFileClauseDecision(clause);
+    if (decision === false && !(shape.singleFile && bound && namedFileFactContinuation(clause)))
+      return false;
+    bound = bound || decision === true;
+  }
+  return bound;
+}
+
+const ACKNOWLEDGEMENT_REQUEST_RE =
+  /^(?:(?:please|bitte)\s+)?(?:(?:briefly|kurz)\s+)?(?:acknowledge|confirm(?:\s+receipt\s+of)?|bestätige(?:\s+den\s+erhalt\s+von)?)\s+(?:these|this|my|our|the|diese|diesen|dieses|meine|unsere)\s+(?:working\s+)?(?:preferences?|notes?|context|message|information|präferenzen|notizen|nachricht|informationen)(?:\s+in\s+(?:no\s+more\s+than\s+)?[\p{L}\d-]+\s+words)?$/iu;
+const SUPPLIED_CONTEXT_RE =
+  /^(?:my|our|this|these|meine|unsere|dies|diese)\b[^.!?;\n]*\b(?:is|are|ist|sind)\b/iu;
+const ACKNOWLEDGEMENT_OUTPUT_RE =
+  /^(?:(?:please|bitte)\s+)?(?:do\s+not\s+repeat\s+(?:the|this|these)\s+(?:note|notes|message|context)|wiederhole\s+(?:die|diese)\s+(?:notiz|notizen|nachricht)\s+nicht)$/iu;
+const INDEPENDENT_CONTEXT_COMMAND_RE =
+  /\b(?:then|also|please|while|dann|außerdem|bitte|während)\s+(?:explain|read|show|find|search|describe|erkläre|lies|zeige|suche|beschreibe)\b/iu;
+const CONTEXT_REQUEST_SUBJECTS = new Set(["i", "we", "you", "ich", "wir", "du", "sie"]);
+const CONTEXT_REQUEST_HEADS = new Set([
+  "want",
+  "need",
+  "ask",
+  "request",
+  "would",
+  "should",
+  "can",
+  "could",
+  "must",
+  "will",
+  "möchte",
+  "möchten",
+  "wollen",
+  "soll",
+  "sollte",
+  "sollten",
+  "kann",
+  "könnte",
+  "muss",
+]);
+
+function independentContextRequest(clause: string): boolean {
+  if (INDEPENDENT_CONTEXT_COMMAND_RE.test(clause)) return true;
+  const words = shapeWords(clause);
+  return words.some((word, index) => {
+    const next = words[index + 1] ?? "";
+    return (
+      (CONTEXT_REQUEST_SUBJECTS.has(word) && CONTEXT_REQUEST_HEADS.has(next)) ||
+      (INDEPENDENT_REQUEST_GRAMMAR_RE.test(word) && REQUEST_COMMAND_RE.test(next))
+    );
+  });
+}
+
+function suppliedContextClause(clause: string, index: number): boolean {
+  if (independentContextRequest(clause)) return false;
+  if (SUPPLIED_CONTEXT_RE.test(clause)) return true;
+  // A supplied personal heading may be a fragment rather than an asserted source fact.
+  if (/^(?:my|our|meine|unsere) [\p{L}\d-]+(?: [\p{L}\d-]+)*$/iu.test(clause))
+    return !REQUEST_COMMAND_RE.test(clause) && !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause);
+  // A neutral initial heading supplies context; it cannot authorize an instruction or question.
+  return (
+    index === 0 &&
+    /^[\p{L}\d][\p{L}\d-]*(?: [\p{L}\d-]+)*$/u.test(clause) &&
+    !REQUEST_COMMAND_RE.test(clause) &&
+    !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause)
+  );
+}
+
+const GENERAL_ADVICE_REQUEST_RE =
+  /^(?:(?:please|bitte) )?(?:(?:then|dann) )?(?:(?:separately|independently|getrennt|separat|unabhängig) )?(?:(?:suggest|give|provide|recommend) (?:a )?(?:(?:short|brief|concise) )?general (?:process|method|approach|guidance|advice|principles|recommendation)|(?:gib|empfiehl|beschreibe) (?:(?:getrennt|separat|unabhängig) )?(?:(?:eine|einen) )?(?:kurze[nr]? )?allgemeine[nr]? (?:vorgehensweise|methode|ansatz|hinweise|empfehlung))(?: (?:for|about|on|zu|zum|zur|über) (.+?))?(?:, (?:under|below|within|unter) \d{1,6} (?:words|wörtern|worte))?$/iu;
+const GENERAL_ADVICE_QUESTION_RE =
+  /^(?:how (?:should|could|can) (?:a|an|one|we)|wie (?:sollte|könnte|kann) (?:man|wir|ein|eine)) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu;
+const SOURCE_ADVICE_ATTRIBUTION_RE =
+  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b/iu;
+const SOURCE_ADVICE_DETERMINER_RE =
+  /^(?:the|this|these|that|those|our|my|your|his|her|its|their|der|die|das|den|dem|des|dies(?:e|en|em|er|es)|(?:unser|mein|dein|sein|ihr)(?:e|en|em|er|es)?|euer(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu;
+const SOURCE_ADVICE_NOUN_RE =
+  /^(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence|codes?|implementations?|handbuch(?:s|es)?|handbüchern?|quellen?|datei(?:en)?|ordner(?:s|n)?|dokument(?:s|es|e|en)?|repositorys?|implementierung(?:en)?)$/iu;
+const SOURCE_ADVICE_TOKEN_RE =
+  /[\p{L}\p{M}\p{N}_-]+(?:['’][\p{L}\p{M}\p{N}_-]+)*|[^\p{L}\p{M}\p{N}\s_-]/gu;
+const SOURCE_ADVICE_BOUNDARY_RE =
+  /^(?:am|is|are|was|were|be|been|being|do|does|did|have|has|had|may|might|shall|to|for|from|with|without|before|after|during|on|in|at|into|over|under|by|about|against|between|through|bin|bist|ist|sind|war|waren|sein|habe|hat|haben|können|könnten|müssen|werden|würden|zu|für|von|mit|ohne|vor|nach|während|auf|an|über|unter|bei|gegen|zwischen|durch)$/iu;
+
+/** Source modifiers stay inside their noun phrase, never across a predicate or preposition. */
+function sourceConstrainedAdvice(clause: string): boolean {
+  if (SOURCE_ADVICE_ATTRIBUTION_RE.test(clause)) return true;
+  let determined = false;
+  for (const match of clause.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
+    const token = match[0];
+    if (determined && SOURCE_ADVICE_NOUN_RE.test(token)) return true;
+    if (SOURCE_ADVICE_DETERMINER_RE.test(token) || /['’]s$/u.test(token)) determined = true;
+    else if (sourceAdviceBoundary(token)) determined = false;
+  }
+  return false;
+}
+
+function sourceAdviceBoundary(token: string): boolean {
+  return (
+    SOURCE_ADVICE_BOUNDARY_RE.test(token) ||
+    CONTEXT_REQUEST_HEADS.has(token) ||
+    REQUEST_COMMAND_RE.test(token) ||
+    !/^[\p{L}\p{M}\p{N}_-]/u.test(token)
+  );
+}
+
+function generalAdviceClause(clause: string): boolean {
+  const normalized = normalizedConversationClause(clause);
+  const match = GENERAL_ADVICE_REQUEST_RE.exec(normalized);
+  return (
+    match !== null &&
+    !normalized.includes("\0") &&
+    !sourceConstrainedAdvice(normalized) &&
+    !independentContextRequest(match[1] ?? "")
+  );
+}
+
+function generalAdviceRequest(clauses: readonly string[]): boolean {
+  if (clauses.length !== 2 || !generalAdviceClause(clauses[1] ?? "")) return false;
+  const question = clauses[0] ?? "";
+  return (
+    GENERAL_ADVICE_QUESTION_RE.test(question) &&
+    !INDEPENDENT_CONTEXT_COMMAND_RE.test(question) &&
+    !sourceConstrainedAdvice(question)
+  );
+}
+
+function suppliedContextRequest(clauses: readonly string[]): boolean {
+  const acknowledgement = clauses.findIndex((clause) => ACKNOWLEDGEMENT_REQUEST_RE.test(clause));
+  if (acknowledgement < 0) return false;
+  return clauses.every((clause, index) =>
+    index < acknowledgement
+      ? suppliedContextClause(clause, index)
+      : index === acknowledgement || ACKNOWLEDGEMENT_OUTPUT_RE.test(clause),
+  );
+}
+
+function normalizedConversationClause(clause: string): string {
+  const normalized = clause.replace(/\s+/gu, " ").trim();
+  let end = normalized.length;
+  while (end > 0 && (normalized[end - 1] === "," || normalized[end - 1] === " ")) end -= 1;
+  return normalized.slice(0, end);
+}
+
+function conversationOnlyRequest(query: RetrievalQuery, anchors: readonly SearchAnchor[]): boolean {
+  if (query.kind !== "natural-language" || anchors.some((anchor) => anchor.kind !== "literal"))
+    return false;
+  if (parseDiagnosticTraceText(query.text).detected || /[`"']/u.test(query.text)) return false;
+  const clauses = queryContextOutsideQuotes(query.text)
+    .split(/[.!?;\n]+/u)
+    .map(normalizedConversationClause)
+    .filter(Boolean);
+  return (
+    generalAdviceRequest(clauses) || (!query.text.includes("?") && suppliedContextRequest(clauses))
+  );
+}
 
 function requestContentTargets(
   query: RetrievalQuery,
@@ -484,12 +781,14 @@ export function resolveQueryTargetDecision(
   else if (!requested.truncated && possibleTargets.length > 0)
     kind = positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
   const targets = kind === "literal-search" ? possibleTargets : strongTargets;
-  const definitionRequested = hasDefinitionLookup(queryContextOutsideQuotes(query.text));
+  const definitionRequested = hasDefinitionLookup(query.text);
   return {
     kind,
     targets,
     definitionSymbol: definitionTarget(query, kind, targets, definitionRequested),
     definitionRequested,
+    ...(namedFileOnlyRequest(query) ? { namedFileOnly: true } : {}),
+    ...(conversationOnlyRequest(query, requested.anchors) ? { conversationOnly: true } : {}),
   };
 }
 
@@ -501,12 +800,7 @@ export function isDirectEvidenceLookup(
   anchors: readonly SearchAnchor[],
   decision = resolveQueryTargetDecision(query, anchors),
 ): boolean {
-  if (
-    requiresRelationshipOrHistoryRings(query) ||
-    REQUESTED_TEST_RELATION_RE.test(query.text) ||
-    decision.kind === "contextual"
-  )
-    return false;
+  if (requiresRelationshipOrHistoryRings(query) || decision.kind === "contextual") return false;
   const targets = anchors.filter(
     (anchor) =>
       (anchor.kind === "identifier" || anchor.kind === "quoted") &&
@@ -617,6 +911,25 @@ function decideClarification(
   return { state: "ready", clarification: undefined };
 }
 
+function plannedRequestDecision(
+  target: QueryTargetDecision,
+  references: readonly SearchReference[],
+  classification: RetrievalIntentClassification,
+  anchors: readonly SearchAnchor[],
+  scope: SelectedScope,
+): { classification: RetrievalIntentClassification; decision: ClarificationDecision } {
+  if (target.conversationOnly === true && references.length === 0) {
+    return {
+      classification: { intent: "clarification-needed", normalizedTerms: [] },
+      decision: {
+        state: "clarification-needed",
+        clarification: buildClarification("too-generic", TOO_GENERIC_QUESTIONS, 1),
+      },
+    };
+  }
+  return { classification, decision: decideClarification(anchors, scope, classification.intent) };
+}
+
 // ─── Plan ID derivation ───────────────────────────────────────────────────────
 
 interface PlanSeed {
@@ -625,19 +938,30 @@ interface PlanSeed {
   readonly queryText: string;
   readonly retrievalIntent: RetrievalIntent;
   readonly anchorTerms: readonly string[];
+  readonly references?: readonly SearchReference[];
+  readonly effectiveIntent?: RetrievalIntent;
   readonly ringKinds: readonly string[];
 }
 
 function canonicalize(seed: PlanSeed): string {
   // JSON.stringify with sorted keys via explicit ordering — never relies on object key order.
-  return JSON.stringify([
+  const parts: unknown[] = [
     seed.scopeId,
     seed.queryKind,
     seed.queryText,
     seed.retrievalIntent,
     [...seed.anchorTerms].sort(compareStrings),
     [...seed.ringKinds].sort(compareStrings),
-  ]);
+  ];
+  if ((seed.references?.length ?? 0) > 0 || seed.effectiveIntent !== undefined) {
+    parts.push(
+      seed.effectiveIntent ?? seed.retrievalIntent,
+      seed.references
+        ?.map((reference) => [reference.path, reference.line ?? null, reference.origin])
+        .sort((a, b) => compareStrings(JSON.stringify(a), JSON.stringify(b))) ?? [],
+    );
+  }
+  return JSON.stringify(parts);
 }
 
 function derivePlanId(seed: PlanSeed): string {
@@ -691,47 +1015,86 @@ function buildScopeInvalidPlan(
   };
 }
 
+function readyPlanSeed(
+  input: CreatePlanInput,
+  classification: RetrievalIntentClassification,
+  anchors: readonly SearchAnchor[],
+  references: readonly SearchReference[],
+  rings: readonly RetrievalRing[],
+): PlanSeed {
+  return {
+    scopeId: input.scope.scopeId,
+    queryKind: input.query.kind,
+    queryText: input.query.text,
+    retrievalIntent: classification.intent,
+    anchorTerms: anchors.map((anchor) => anchor.term),
+    references,
+    ...(classification.effectiveIntent === undefined
+      ? {}
+      : { effectiveIntent: classification.effectiveIntent }),
+    ringKinds: rings.map((ring) => ring.kind),
+  };
+}
+
 export function createExplorationPlan(
   input: CreatePlanInput,
   deps?: CreatePlanDeps,
 ): ExplorationPlan {
   const resolved = resolveInputs(input, deps);
-  const classification = classifyRetrievalIntent(input.query.text, input.scope);
+  const classification = classifyRetrievalIntent(input.query.text, input.scope, {
+    previousIntent: input.previousRetrievalIntent,
+    referencePresent: (input.references?.length ?? 0) > 0,
+  });
   const scopeResult = validateSelectedScope(input.scope);
   if (!scopeResult.ok) {
     return buildScopeInvalidPlan(input, resolved, classification);
   }
-  const extraction = extractAnchors({
-    text: input.query.text,
-    maxAnchors: resolved.maxAnchors,
-  });
-  const targetDecision = resolveQueryTargetDecision(
-    input.query,
-    extraction.anchors,
-    input.maxAnchors,
+  return buildSelectedScopePlan(input, resolved, classification);
+}
+
+function buildSelectedScopePlan(
+  input: CreatePlanInput,
+  resolved: ResolvedInputs,
+  classification: RetrievalIntentClassification,
+): ExplorationPlan {
+  const extraction = extractRetrievalChannels(
+    input.query.text,
+    resolved.maxAnchors,
+    input.references,
   );
-  const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
+  const searchAnchors = [...extraction.anchors, ...searchReferenceAnchors(extraction.references)];
+  const targetDecision = resolveQueryTargetDecision(input.query, searchAnchors, input.maxAnchors);
+  const { classification: plannedClassification, decision } = plannedRequestDecision(
+    targetDecision,
+    extraction.references,
+    classification,
+    searchAnchors,
+    input.scope,
+  );
   const { rings, directEvidenceLookup } =
     decision.state === "ready"
-      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget, targetDecision)
+      ? composeRings(searchAnchors, input.scope, input.query, resolved.budget, targetDecision)
       : { rings: [], directEvidenceLookup: false };
-  const seed: PlanSeed = {
-    scopeId: input.scope.scopeId,
-    queryKind: input.query.kind,
-    queryText: input.query.text,
-    retrievalIntent: classification.intent,
-    anchorTerms: extraction.anchors.map((a) => a.term),
-    ringKinds: rings.map((r) => r.kind),
-  };
+  const seed = readyPlanSeed(
+    input,
+    plannedClassification,
+    searchAnchors,
+    extraction.references,
+    rings,
+  );
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     planId: derivePlanId(seed),
     state: decision.state,
-    retrievalIntent: classification.intent,
+    retrievalIntent: plannedClassification.intent,
+    ...(plannedClassification.effectiveIntent === undefined
+      ? {}
+      : { effectiveRetrievalIntent: plannedClassification.effectiveIntent }),
     directEvidenceLookup,
     scope: input.scope,
     query: input.query,
     anchors: extraction.anchors,
+    references: extraction.references,
     targetDecision,
     rings,
     budget: resolved.budget,

@@ -31,6 +31,7 @@ import {
   l2NormalizeVector,
   verifyEmbeddingCapability,
   type OpenAIEmbeddingAdapter,
+  type ModelGatewayLogContext,
 } from "@oscharko-dev/keiko-model-gateway";
 
 import { getCapsule } from "../capsule-lifecycle.js";
@@ -132,6 +133,7 @@ export interface RetrievalScopeInput {
 }
 
 export interface SearchOptions {
+  readonly logContext?: ModelGatewayLogContext;
   readonly topK: number;
   // Restricts every dense and lexical lane to an exact caller-owned candidate set. An empty
   // filter means "search nothing", never "all chunks". Repository freshness uses this to keep
@@ -144,6 +146,12 @@ export interface SearchOptions {
   readonly queryTransformTimeoutMs?: number;
   readonly maxExactVectorScanRows?: number;
   readonly vectorIndex?: VectorIndexOptions;
+  /** Request-private, validated query data; never persisted or emitted as activity evidence. */
+  readonly observeQueryEmbedding?: (observation: {
+    readonly identity: EmbeddingModelIdentity;
+    readonly query: string;
+    readonly vector: Float32Array;
+  }) => void;
 }
 
 interface QueryProfile {
@@ -727,6 +735,7 @@ async function embedQueryFor(
   identity: EmbeddingModelIdentity,
   text: string,
   signal: AbortSignal | undefined,
+  logContext: ModelGatewayLogContext | undefined,
 ): Promise<EmbeddedQuery | RetrievalError> {
   const outcome = await adapter.request({
     endpoint: adapter.endpoint,
@@ -736,6 +745,7 @@ async function embedQueryFor(
       : {}),
     modelId: identity.modelId,
     input: shapeEmbeddingQuery(identity, text),
+    ...(logContext !== undefined ? { logContext } : {}),
     ...(identity.dimensionsParam !== undefined ? { dimensions: identity.dimensionsParam } : {}),
     ...(adapter.egress !== undefined ? { egress: adapter.egress } : {}),
     ...(signal !== undefined ? { signal } : {}),
@@ -1822,6 +1832,7 @@ function ensureIdentityPreflight(
   identity: EmbeddingModelIdentity,
   signal: AbortSignal | undefined,
   inFlight: Map<string, Promise<IdentityPreflightResult>>,
+  logContext: ModelGatewayLogContext | undefined,
 ): Promise<IdentityPreflightResult> {
   if (!hasHardenedEmbeddingSpace(identity)) return Promise.resolve("incompatible");
   const key = identityKey(identity);
@@ -1832,7 +1843,7 @@ function ensureIdentityPreflight(
   }
   const pending = inFlight.get(key);
   if (pending !== undefined) return pending;
-  const started = runIdentityPreflight(adapter, identity, signal).then((result) => {
+  const started = runIdentityPreflight(adapter, identity, signal, logContext).then((result) => {
     if (result !== "failed") {
       if (ttlCache.size >= IDENTITY_PREFLIGHT_TTL_CACHE_MAX) {
         ttlCache.clear();
@@ -1852,6 +1863,7 @@ async function runIdentityPreflight(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
   signal: AbortSignal | undefined,
+  logContext: ModelGatewayLogContext | undefined,
 ): Promise<IdentityPreflightResult> {
   const checked = await verifyEmbeddingCapability(adapter, {
     modelId: identity.modelId,
@@ -1866,6 +1878,7 @@ async function runIdentityPreflight(
       ? { instructionVersion: identity.instructionVersion }
       : {}),
     includeSpaceFingerprint: true,
+    ...(logContext !== undefined ? { logContext } : {}),
     ...(signal !== undefined ? { signal } : {}),
   });
   if (!checked.ok) {
@@ -1892,6 +1905,7 @@ async function ensureCapsuleQueryEmbedding(
     capsule.embeddingModelIdentity,
     options.signal,
     preflightCache,
+    options.logContext,
   );
   if (preflight === "incompatible") return { kind: "identity-incompatible" };
   if (preflight === "failed") return { kind: "embedding-failed" };
@@ -1902,6 +1916,7 @@ async function ensureCapsuleQueryEmbedding(
     query,
     options.signal,
     cache,
+    options.logContext,
   );
   if (embedded instanceof RetrievalError) {
     return {
@@ -1914,6 +1929,12 @@ async function ensureCapsuleQueryEmbedding(
   if (embedded.dimensions !== capsule.embeddingModelIdentity.vectorDimensions) {
     return { kind: "identity-incompatible" };
   }
+  if (options.signal?.aborted !== true)
+    options.observeQueryEmbedding?.({
+      identity: { ...capsule.embeddingModelIdentity },
+      query,
+      vector: Float32Array.from(embedded.vector),
+    });
   return { kind: "ready", embedded };
 }
 
@@ -2155,6 +2176,7 @@ function ensureQueryEmbedded(
   query: string,
   signal: AbortSignal | undefined,
   inFlight: Map<string, Promise<EmbeddedQuery | RetrievalError>>,
+  logContext: ModelGatewayLogContext | undefined,
 ): Promise<EmbeddedQuery | RetrievalError> {
   const key = queryEmbeddingCacheKey(identity, query);
   const lru = queryEmbeddingCacheFor(adapter);
@@ -2165,7 +2187,7 @@ function ensureQueryEmbedded(
   }
   const pending = inFlight.get(key);
   if (pending !== undefined) return pending;
-  const started = embedQueryFor(adapter, identity, query, signal).then((result) => {
+  const started = embedQueryFor(adapter, identity, query, signal, logContext).then((result) => {
     if (!(result instanceof RetrievalError)) {
       lruTouchQueryEmbedding(lru, key, result);
     }
@@ -2209,6 +2231,7 @@ function prefetchQueryEmbeddings(inputs: {
         identity,
         inputs.options.signal,
         inputs.preflightCache,
+        inputs.options.logContext,
       ).then((preflight) =>
         preflight === "ok"
           ? ensureQueryEmbedded(
@@ -2217,6 +2240,7 @@ function prefetchQueryEmbeddings(inputs: {
               query,
               inputs.options.signal,
               inputs.cache,
+              inputs.options.logContext,
             )
           : undefined,
       );

@@ -1,5 +1,9 @@
 "use client";
 
+import { MissingEvidenceActions } from "./MissingEvidenceActions";
+import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
+import { ChatScopeNotice } from "./ChatScopeNotice";
+import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
 
 /**
@@ -57,6 +61,8 @@ import {
 } from "./context/ChatSessionContext";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
+import { useConnectedEvidenceReferences } from "./hooks/useConnectedEvidenceReferences";
+import type { RepositoryReferenceEvidence } from "./repositoryReferences";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
@@ -209,6 +215,7 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
@@ -781,6 +788,7 @@ function useRegisterPdfCitationPreviewTarget(
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
 type ChatBubbleMarkdownProps = {
+  readonly repositoryEvidence: RepositoryReferenceEvidence | undefined;
   readonly message: ChatMessage;
   readonly isUser: boolean;
   readonly streaming: boolean;
@@ -800,6 +808,7 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
         content={message.content}
         messageId={message.id}
         repositoryRoots={props.repositoryRoots}
+        repositoryEvidence={props.repositoryEvidence}
         openRepositoryReference={props.openRepositoryReference}
         citationPreview={props.citationPreview}
       />
@@ -811,6 +820,7 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
       literalUserInput={isUser}
       diagnosticCorrelationId={message.id}
       repositoryRoots={props.repositoryRoots}
+      repositoryEvidence={props.repositoryEvidence}
       openRepositoryReference={props.openRepositoryReference}
       citationPreview={props.citationPreview}
       streaming={streaming}
@@ -987,7 +997,9 @@ function ChatBubbleGroundedSection({
   openRepositoryReference,
   citationPreview,
   openDocumentationTarget,
+  onReadPaths,
 }: {
+  readonly onReadPaths: (runId: string, paths: readonly string[]) => void;
   readonly message: ChatMessage;
   readonly isUser: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
@@ -1000,6 +1012,7 @@ function ChatBubbleGroundedSection({
     <div className="chatw-grounded chatw-grounded-inline">
       <GroundedAnswer
         answer={message.groundedAnswer}
+        onReadPaths={onReadPaths}
         busy={false}
         repositoryRoots={repositoryRoots}
         openRepositoryReference={openRepositoryReference}
@@ -1059,6 +1072,7 @@ function ChatBubbleImpl({
       ? responseSelection.selectedVersion
       : undefined;
   const displayedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
+  const evidence = useConnectedEvidenceReferences(displayedMessage.groundedAnswer, repositoryRoots);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
   const citationPreview = usePdfCitationPreviewController({
@@ -1113,6 +1127,7 @@ function ChatBubbleImpl({
           </output>
         )}
         <ChatBubbleContentArea
+          repositoryEvidence={evidence.evidence}
           message={displayedMessage}
           isUser={isUser}
           streaming={streaming}
@@ -1162,6 +1177,7 @@ function ChatBubbleImpl({
           />
         </div>
         <ChatBubbleGroundedSection
+          onReadPaths={evidence.onReadPaths}
           message={displayedMessage}
           isUser={isUser}
           repositoryRoots={repositoryRoots}
@@ -1560,7 +1576,6 @@ export const ConversationQuestionMap = memo(ConversationQuestionMapImpl);
 const ConversationThread = memo(ConversationThreadImpl);
 
 const REPOSITORY_FILE_SEARCH_LIMIT = 24;
-const MAX_REPOSITORY_FOCUS_PATHS = 50;
 
 interface ComposerRepositoryReference {
   readonly id: string;
@@ -1697,57 +1712,6 @@ function replaceRepositoryMention(
     value: `${prefix}${inserted}${suffix}`,
     cursor: prefix.length + inserted.length,
   };
-}
-
-function mergeRepositoryFileScope(
-  chat: Chat,
-  root: string,
-  path: string,
-  now: () => number = Date.now,
-): { readonly scopes: readonly ChatConnectedScope[]; readonly changed: boolean } {
-  const filePath = normalizedRepositoryPath(path);
-  if (filePath.length === 0) {
-    throw new Error("EMPTY_REPOSITORY_FILE_SELECTION");
-  }
-  const currentScopes = effectiveConnectedScopes(chat);
-  const nextScopes: ChatConnectedScope[] = [];
-  let merged = false;
-  let changed = false;
-
-  for (const scope of currentScopes) {
-    const scopeRoot = scope.root ?? chat.projectPath;
-    if (scope.kind === "files" && scopeRoot === root) {
-      merged = true;
-      if (scope.relativePaths.includes(filePath)) {
-        nextScopes.push(scope);
-        continue;
-      }
-      if (scope.relativePaths.length >= MAX_REPOSITORY_FOCUS_PATHS) {
-        throw new Error("REPOSITORY_FILE_SCOPE_LIMIT");
-      }
-      nextScopes.push({
-        ...scope,
-        root,
-        relativePaths: [...scope.relativePaths, filePath],
-        connectedAtMs: now(),
-      });
-      changed = true;
-      continue;
-    }
-    nextScopes.push(scope);
-  }
-
-  if (!merged) {
-    nextScopes.push({
-      kind: "files",
-      root,
-      relativePaths: [filePath],
-      connectedAtMs: now(),
-    });
-    changed = true;
-  }
-
-  return { scopes: nextScopes, changed };
 }
 
 function resultDirectoryLabel(result: FilesSearchResult, t: I18nTranslate): string {
@@ -2076,7 +2040,9 @@ function RepositoryReferenceStrip({
             <FileIcon name={reference.name} />
           </span>
           <span className="repo-token-main">
-            <span className="repo-token-name">{reference.name}</span>
+            <span className="repo-token-name">
+              {t("scope.pill.file", { name: reference.name })}
+            </span>
             <span className="repo-token-path">
               {reference.directory.length === 0
                 ? repositoryRootLabel(reference.root)
@@ -4400,7 +4366,10 @@ function LocalKnowledgeScopeControl({
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
-    <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
+    <div
+      className={`scope-grounding ${scopeNoticeStyles.cmpGrounding}`}
+      data-connected={connected ? "true" : "false"}
+    >
       <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
       <GroundingModeSelect
         value={value}
@@ -4444,17 +4413,31 @@ function connectorScopeLabels(
   return labels;
 }
 
+function ChatGroundingHelp({ chat }: { readonly chat: Chat }): ReactNode {
+  const t = useTranslate();
+  if (effectiveConnectedScopes(chat).length === 0) return null;
+  return (
+    <p className={scopeNoticeStyles.cmpHelp} data-testid="grounding-help" tabIndex={-1}>
+      {t("chat.grounding.help")}
+    </p>
+  );
+}
+
+interface ChatScopeHeaderProps {
+  readonly chat: Chat;
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
+  readonly onChatChanged: (chat: Chat) => void;
+  readonly memoryControl?: ReactNode;
+  readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
+}
+
 function ChatScopeHeaderImpl({
   chat,
   onChatChanged,
   memoryControl,
   pendingGitChangeComparisons,
-}: {
-  readonly chat: Chat;
-  readonly onChatChanged: (chat: Chat) => void;
-  readonly memoryControl?: ReactNode;
-  readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
-}): ReactNode {
+  onKeepFolderChange,
+}: ChatScopeHeaderProps): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
   const t = useTranslate();
@@ -4464,12 +4447,24 @@ function ChatScopeHeaderImpl({
   const pendingGitChanges = pendingGitChangeComparisons ?? [];
   const connected = hasGroundingScope(chat) || pendingGitChanges.length > 0;
   return (
-    <div className="chat-scope-header" data-grounded={connected ? "true" : "false"}>
+    <div
+      className={`chat-scope-header ${scopeNoticeStyles.cmpScopeHeader}`}
+      data-grounded={connected ? "true" : "false"}
+    >
       <LocalKnowledgeScopeControl
         chat={chat}
         onChatChanged={onChatChanged}
         catalog={catalog}
         connected={connected}
+      />
+      {memoryControl !== undefined ? (
+        <div className="chat-scope-header-actions">{memoryControl}</div>
+      ) : null}
+      <ChatGroundingHelp chat={chat} />
+      <ChatScopeNotice
+        chat={chat}
+        onChatChanged={onChatChanged}
+        onKeepFolderChange={onKeepFolderChange}
       />
       <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
       <ConnectorScopePill
@@ -4488,9 +4483,6 @@ function ChatScopeHeaderImpl({
         onDisconnect={onChatChanged}
         onRefreshed={onChatChanged}
       />
-      {memoryControl !== undefined ? (
-        <div className="chat-scope-header-actions">{memoryControl}</div>
-      ) : null}
     </div>
   );
 }
@@ -5256,6 +5248,7 @@ function composerPlaceholder(visibleCount: number, loading: boolean, t: I18nTran
 // Extracted from ChatWindow (SonarCloud S3776) — the chat-scope header, memory panel, and
 // no-model/loading alerts that sit above the scrollable log.
 function ChatWindowStatusHeader({
+  onKeepFolderChange,
   activeChat,
   replaceChat,
   memoryControl,
@@ -5270,6 +5263,7 @@ function ChatWindowStatusHeader({
   noEligibleModels,
   loading,
 }: {
+  readonly onKeepFolderChange?: ((keep: boolean) => void) | undefined;
   readonly activeChat: Chat | undefined;
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
@@ -5290,6 +5284,7 @@ function ChatWindowStatusHeader({
         <ChatScopeHeader
           chat={activeChat}
           onChatChanged={replaceChat}
+          onKeepFolderChange={onKeepFolderChange}
           memoryControl={memoryControl}
           pendingGitChangeComparisons={pendingGitChangeComparisons}
         />
@@ -5635,6 +5630,7 @@ function ChatWindowComposerFooter({
 }
 
 export function ChatWindow({
+  onKeepFolderChange,
   windowId,
   suspended = false,
   mini = false,
@@ -5821,6 +5817,7 @@ export function ChatWindow({
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
       <ChatWindowStatusHeader
+        onKeepFolderChange={onKeepFolderChange}
         activeChat={activeChat}
         replaceChat={replaceChat}
         memoryControl={memoryControl}
@@ -5881,6 +5878,19 @@ export function ChatWindow({
           and its live dialogue session — across the empty→populated transition. The condition is the
           exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
           keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
+      <MissingEvidenceActions
+        chat={activeChat}
+        answer={
+          session.latestGrounded ??
+          messages.findLast(
+            (message) => message.role === "assistant" && message.groundedAnswer !== undefined,
+          )?.groundedAnswer
+        }
+        onChatChanged={replaceChat}
+        setDraft={session.setDraft}
+        draft={draft}
+        focusComposer={() => composerInputRef.current?.focus()}
+      />
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}

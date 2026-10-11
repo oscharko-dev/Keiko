@@ -100,12 +100,17 @@ const KEYWORDS = new Set([
   "while",
 ]);
 
-function lineNumberOf(text: string, charIndex: number): number {
+function physicalLineCursor(text: string): (charIndex: number) => number {
   let line = 1;
-  for (let index = 0; index < charIndex && index < text.length; index += 1) {
-    if (text.codePointAt(index) === 10) line += 1;
-  }
-  return line;
+  let newline = text.indexOf("\n");
+  return (charIndex): number => {
+    // Global regex matches advance monotonically; visit each physical newline at most once.
+    while (newline >= 0 && newline < charIndex) {
+      line += 1;
+      newline = text.indexOf("\n", newline + 1);
+    }
+    return line;
+  };
 }
 
 export function isSymbolSource(scopePath: string): boolean {
@@ -123,6 +128,7 @@ export function unsupportedLanguages(
 export function collectDefinitions(text: string): readonly DefinitionHit[] {
   const hits: DefinitionHit[] = [];
   for (const pattern of DEFINITION_PATTERNS) {
+    const lineNumberOf = physicalLineCursor(text);
     pattern.regex.lastIndex = 0;
     let match: RegExpExecArray | null = pattern.regex.exec(text);
     while (match !== null) {
@@ -130,7 +136,7 @@ export function collectDefinitions(text: string): readonly DefinitionHit[] {
       if (symbol !== undefined) {
         hits.push({
           symbol,
-          line: lineNumberOf(text, match.index),
+          line: lineNumberOf(match.index),
           ordinal: hits.length,
           definitionKind: pattern.definitionKind,
         });
@@ -143,12 +149,13 @@ export function collectDefinitions(text: string): readonly DefinitionHit[] {
 
 export function collectIdentifiers(text: string, regex: RegExp): readonly IdentifierHit[] {
   const hits: IdentifierHit[] = [];
+  const lineNumberOf = physicalLineCursor(text);
   regex.lastIndex = 0;
   let match: RegExpExecArray | null = regex.exec(text);
   while (match !== null) {
     const symbol = match[1];
     if (symbol !== undefined && !KEYWORDS.has(symbol)) {
-      hits.push({ symbol, line: lineNumberOf(text, match.index), ordinal: hits.length });
+      hits.push({ symbol, line: lineNumberOf(match.index), ordinal: hits.length });
     }
     match = regex.exec(text);
   }

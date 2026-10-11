@@ -14,6 +14,7 @@ import {
   runRegressionProbes,
 } from "@oscharko-dev/keiko-evaluations";
 import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText } from "@oscharko-dev/keiko-workspace";
+import { runConnectedRetrievalEval } from "../packages/keiko-server/dist/grounded-eval-support.js";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 
 const {
@@ -33,6 +34,164 @@ const DEFAULT_BUDGET_PATH = resolve(HERE, "check-retrieval-quality.budget.json")
 const MEM_ROOT = "/quality";
 const FIXED_NOW = () => 1_700_000_000_000;
 const EVAL_K = 5;
+export const INCIDENT_FEATURE_PATH = "src/form/busObj/feature/feature-conditions/validation.ts";
+export const INCIDENT_TEST_PATH = "src/form/busObj/feature/feature-conditions/validation.test.ts";
+const INCIDENT_ASSERTION_LINE = "    expect(validateFeature({ approved: false })).toBe(true);";
+const INCIDENT_TEST_CONTENT = [
+  'import { describe, expect, it } from "vitest";',
+  'import { validateFeature } from "./validation.js";',
+  "",
+  'describe("feature conditions", () => {',
+  '  it("accepts the required feature conditions", () => {',
+  ...Array.from({ length: 20 }, (_, index) => `    // Synthetic setup line ${String(index + 1)}.`),
+  INCIDENT_ASSERTION_LINE,
+  "  });",
+  "});",
+].join("\n");
+
+export const INCIDENT_RETRIEVAL_FILES = {
+  ".git/HEAD": "ref: refs/heads/fixture\n",
+  ".git/config": "[core]\nrepositoryformatversion = 0\nbare = false\n",
+  "README.md": "This repository contains form schema validation and required feature conditions.\n",
+  "package.json":
+    '{"name":"nested-feature-validation","scripts":{"test":"vitest"},"devDependencies":{"vitest":"1.0.0"}}\n',
+  "src/form/factories/field-date/validation.ts":
+    'export const dateSchema = { required: true, type: "date" };\n',
+  "src/form/factories/field-numeric/validation.ts":
+    'export const numericSchema = { required: true, type: "number" };\n',
+  "src/form/factories/field-binary-choice/validation.ts":
+    'export const binarySchema = { required: true, type: "boolean" };\n',
+  "src/form/busObj/feature/feature-conditions/schema.ts":
+    "export const schema = { featureCode: { required: true } };\n",
+  "src/form/busObj/feature/feature-conditions/config.ts":
+    'export const config = { feature: "conditions" };\n',
+  [INCIDENT_FEATURE_PATH]: [
+    'import { schema } from "./schema.js";',
+    'import { config } from "./config.js";',
+    'import { dateSchema } from "../../../factories/field-date/validation.js";',
+    'import { numericSchema } from "../../../factories/field-numeric/validation.js";',
+    'import { binarySchema } from "../../../factories/field-binary-choice/validation.js";',
+    "export function featureConditionsSchema() {",
+    "  return { ...schema, featureCode: { required: true }, approved: { required: true, ...binarySchema }, dateSchema, numericSchema, config };",
+    "}",
+    "export function validateFeature(value) { return value.approved === true; }",
+  ].join("\n"),
+  [INCIDENT_TEST_PATH]: INCIDENT_TEST_CONTENT,
+  "src/form/busObj/other/other-conditions/validation.ts":
+    'export function otherConditionsSchema() { return { required: true, schema: "other", validation: "other" }; }\n',
+  "docs/validation-guide.md":
+    "Validation requires required fields and schema checks. Feature conditions validation guide.\n" +
+    "Synthetic unrelated background material.\n".repeat(4000),
+  "node_modules/@vitest/runner/dist/chunk-hooks.js": "function runValidation() { return false; }\n",
+  "dist/validation.js": "function featureConditionsSchema() { return { required: true }; }\n",
+};
+
+const INCIDENT_HISTORY = [
+  {
+    role: "user",
+    content: "Explain the connected feature validation routine.",
+  },
+  {
+    role: "assistant",
+    content: `I need the content of ${INCIDENT_FEATURE_PATH} to check the required feature conditions.`,
+  },
+];
+
+function incidentCase(id, query, options = {}) {
+  return {
+    id,
+    category: "incident-retrieval-miss",
+    query,
+    files: INCIDENT_RETRIEVAL_FILES,
+    expectedTop: INCIDENT_FEATURE_PATH,
+    relevantPaths: [INCIDENT_FEATURE_PATH],
+    expectedLinePattern: /required:/u,
+    forbiddenPaths: ["node_modules/@vitest/runner/dist/chunk-hooks.js", "dist/validation.js"],
+    ...options,
+  };
+}
+
+function incidentTrace(prefix) {
+  return `${prefix}\nAssertionError: expected false to be true // Object.is equality\nExpected: true\nActual: false\n    at <anonymous> (${INCIDENT_TEST_PATH}:26:5)\n    at runTest (node_modules/@vitest/runner/dist/chunk-hooks.js:1729:8)\n    at runSuite (node_modules/@vitest/runner/dist/chunk-hooks.js:1800:5)`;
+}
+
+export const INCIDENT_RETRIEVAL_CASES = [
+  incidentCase(
+    "explicit-relative-path-en",
+    `Which fields are required in ${INCIDENT_FEATURE_PATH}?`,
+  ),
+  incidentCase(
+    "explicit-relative-path-de",
+    `Welche Felder sind in ${INCIDENT_FEATURE_PATH} erforderlich?`,
+  ),
+  incidentCase(
+    "bare-basename-collision-en",
+    "In validation.ts of the feature conditions, which fields are required?",
+  ),
+  incidentCase(
+    "bare-basename-collision-de",
+    "Welche Felder sind in validation.ts der feature conditions erforderlich?",
+  ),
+  incidentCase(
+    "vitest-stack-trace-node-modules-en",
+    incidentTrace("Why does this assertion fail?"),
+    {
+      expectedTop: INCIDENT_TEST_PATH,
+      relevantPaths: [INCIDENT_TEST_PATH, INCIDENT_FEATURE_PATH],
+      expectedLinePattern: /expect\(validateFeature.*toBe\(true\)/u,
+    },
+  ),
+  incidentCase(
+    "vitest-stack-trace-node-modules-de",
+    incidentTrace("Warum schlägt diese Assertion fehl?"),
+    {
+      expectedTop: INCIDENT_TEST_PATH,
+      relevantPaths: [INCIDENT_TEST_PATH, INCIDENT_FEATURE_PATH],
+      expectedLinePattern: /expect\(validateFeature.*toBe\(true\)/u,
+    },
+  ),
+  incidentCase("path-only-in-previous-assistant-answer-en", "can you see the file now?", {
+    history: INCIDENT_HISTORY,
+  }),
+  incidentCase("path-only-in-previous-assistant-answer-de", "siehst du die Datei jetzt?", {
+    history: INCIDENT_HISTORY,
+  }),
+  incidentCase(
+    "conversational-orientation-follow-up-en",
+    "What do you see as a knowledge source? You should see all the code and find the file yourself.",
+    { history: INCIDENT_HISTORY },
+  ),
+  incidentCase(
+    "conversational-orientation-follow-up-de",
+    "Was siehst du als Wissensquelle? Du solltest den gesamten Code sehen und dir die Datei selbst suchen können.",
+    { history: INCIDENT_HISTORY },
+  ),
+  incidentCase(
+    "floor-outlier-explicit-file-en",
+    `Where is required ValidationPolicy in ${INCIDENT_FEATURE_PATH}?`,
+    {
+      files: {
+        ...INCIDENT_RETRIEVAL_FILES,
+        "src/aaa/policy.ts": "export function ValidationPolicy() { return { required: true }; }\n",
+      },
+    },
+  ),
+  incidentCase(
+    "floor-outlier-explicit-file-de",
+    `Wo ist required ValidationPolicy in ${INCIDENT_FEATURE_PATH}?`,
+    {
+      files: {
+        ...INCIDENT_RETRIEVAL_FILES,
+        "src/aaa/policy.ts": "export function ValidationPolicy() { return { required: true }; }\n",
+      },
+    },
+  ),
+  incidentCase(
+    "generated-and-node-modules-ignored",
+    `Which required fields does ${INCIDENT_FEATURE_PATH} define?`,
+  ),
+];
+
 export const WORKSPACE_QUALITY_CASES = [
   {
     id: "java-maven-version-declaration",
@@ -274,6 +433,7 @@ export const WORKSPACE_QUALITY_CASES = [
     relevantPaths: ["codegen.yml"],
     expectedLinePattern: /^schema\s*:/imu,
   },
+  ...INCIDENT_RETRIEVAL_CASES,
 ];
 
 // ─── Pure metrics ─────────────────────────────────────────────────────────────
@@ -378,7 +538,8 @@ async function lineHitForCase(testCase, scope, fs, atoms) {
   return testCase.expectedLinePattern.test(excerpt.content);
 }
 
-async function evaluateCase(testCase) {
+export async function evaluateCase(testCase) {
+  if (testCase.category === "incident-retrieval-miss") return evaluateIncidentCase(testCase);
   const fs = buildFixtureFs(testCase.files);
   const scope = buildScope();
   const query = {
@@ -402,6 +563,48 @@ async function evaluateCase(testCase) {
     id: testCase.id,
     category: testCase.category,
     topHit,
+    lineHit,
+    generatedLeakCount: leaked.length,
+    recallAtK: recallAtK(paths, testCase.relevantPaths, EVAL_K),
+    mrr: reciprocalRank(paths, testCase.relevantPaths),
+    ndcgAtK: binaryNdcgAtK(paths, testCase.relevantPaths, EVAL_K),
+    observedTop: paths[0] ?? "",
+    expectedTop: testCase.expectedTop,
+    leaked,
+  };
+}
+
+async function evaluateIncidentCase(testCase, regression = "baseline") {
+  let pack;
+  try {
+    ({ pack } = await runConnectedRetrievalEval(testCase));
+  } catch (error) {
+    if (error.name !== "ClarificationNeededError") throw error;
+    return incidentResult(testCase, [], false);
+  }
+  const selected = pack.files.map((file) => file.scopePath);
+  const paths = regressedIncidentPaths(testCase, selected, regression);
+  const lineHit =
+    pack.files
+      .find((file) => file.scopePath === testCase.expectedTop)
+      ?.excerpts.some((excerpt) => testCase.expectedLinePattern?.test(excerpt.content) ?? true) ??
+    false;
+  return incidentResult(testCase, paths, lineHit);
+}
+
+function regressedIncidentPaths(testCase, selected, regression) {
+  if (regression === "omit-referenced-path")
+    return selected.filter((path) => !testCase.relevantPaths.includes(path));
+  if (regression === "generated-leak") return [...selected, ...testCase.forbiddenPaths];
+  return selected;
+}
+
+function incidentResult(testCase, paths, lineHit) {
+  const leaked = (testCase.forbiddenPaths ?? []).filter((path) => paths.includes(path));
+  return {
+    id: testCase.id,
+    category: testCase.category,
+    topHit: paths[0] === testCase.expectedTop,
     lineHit,
     generatedLeakCount: leaked.length,
     recallAtK: recallAtK(paths, testCase.relevantPaths, EVAL_K),
@@ -466,6 +669,26 @@ async function runWorkspaceQualityCheck(workspaceCases, budgetPath, log) {
     log(`retrieval-quality failure: ${formatCaseFailure(result)}`);
   }
   return { summary, results, budgetResult };
+}
+
+export async function runIncidentRegressionProbes(log, fixtures = INCIDENT_RETRIEVAL_CASES) {
+  return runRegressionProbes({
+    fixtures,
+    probeFixtureIds: fixtures.map((fixture) => fixture.id),
+    fixtureId: (fixture) => fixture.id,
+    regressFixture: (fixture) => fixture,
+    runFixture: async (fixture) => {
+      const regression =
+        fixture.id === "generated-and-node-modules-ignored"
+          ? "generated-leak"
+          : "omit-referenced-path";
+      const result = await evaluateIncidentCase(fixture, regression);
+      log(`incident-retrieval-regression: probe=${fixture.id} defect=${regression}`);
+      return result;
+    },
+    droppedBelowFloors: (result) =>
+      !result.topHit || !result.lineHit || result.generatedLeakCount > 0,
+  });
 }
 
 function localKnowledgeFailuresFor(scorecard) {
@@ -611,7 +834,7 @@ function regressionFailureMessage(regression) {
     : `local knowledge regression probes were tautological: ${regression.tautological.join(", ")}`;
 }
 
-function collectQualityFailures(localKnowledge, regression, budgetResult) {
+function collectQualityFailures(localKnowledge, regression, budgetResult, incidentRegression) {
   const messages = [];
   if (!localKnowledge.ok) {
     messages.push(
@@ -623,6 +846,8 @@ function collectQualityFailures(localKnowledge, regression, budgetResult) {
   if (!budgetResult.ok) {
     messages.push(`quality budget failed: ${budgetResult.failures.join(", ")}`);
   }
+  if (!incidentRegression.ok)
+    messages.push("incident retrieval regression probes were tautological");
   return messages;
 }
 
@@ -633,6 +858,7 @@ export async function runRetrievalQualityCheck({
   localKnowledgeQualityCheck = runLocalKnowledgeQualityCheck,
   regressionProbes = runLocalKnowledgeRegressionProbes,
   workspaceCases = WORKSPACE_QUALITY_CASES,
+  workspaceRegressionProbes = runIncidentRegressionProbes,
 } = {}) {
   const onLog = log ?? ((message) => console.log(message));
   const onFail =
@@ -648,11 +874,17 @@ export async function runRetrievalQualityCheck({
   );
   const localKnowledge = await localKnowledgeQualityCheck(onLog);
   const regression = await regressionProbes(onLog);
-  const failureMessages = collectQualityFailures(localKnowledge, regression, budgetResult);
+  const incidentRegression = await workspaceRegressionProbes(onLog);
+  const failureMessages = collectQualityFailures(
+    localKnowledge,
+    regression,
+    budgetResult,
+    incidentRegression,
+  );
   if (failureMessages.length > 0) {
     onFail(failureMessages.join("; "));
   }
-  return { summary, results, budgetResult, localKnowledge, regression };
+  return { summary, results, budgetResult, localKnowledge, regression, incidentRegression };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

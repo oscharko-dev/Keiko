@@ -1,5 +1,5 @@
 {
-  "$comment": "Grounded retrieval + entailment latency budget (audit KEIKO-0053). Enforced by scripts/check-grounded-retrieval-latency.mjs (`npm run check:grounded-retrieval-latency`), which times keiko-server's runGroundedRetrievalLatencyEval: the REAL semantic + RRF + model-rerank path over the quality gate's distractor-dense corpus, followed by the REAL citation-reconciliation and claim-entailment pass. Both provider ports and the entailment judge are deterministic stubs, so the gate measures CODE-PATH cost and never model-serving variance. The budgets are generous p50/p95 CEILINGS (roughly 11x and 21x the locally observed values below) so they catch algorithmic regressions without flaking on CI machine class; they are NOT a target, and they are deliberately unrelated to DEFAULT_ENTAILMENT_OPTIONS.maxTotalMs (20000), which is a per-request safety ceiling rather than a performance goal. Methodology: warmupIterations discarded, then `iterations` timed runs; both percentiles must stay <= their budget. regressionProbe then adds judgeDelayMs to every bounded-parallel judge call in one extra sample; the delay interval itself MUST breach p95BudgetMs because parallel delays do not add — a gate that cannot fail proves nothing.",
+  "$comment": "Grounded retrieval + entailment latency budget (audit KEIKO-0053). Enforced by scripts/check-grounded-retrieval-latency.mjs (`npm run check:grounded-retrieval-latency`), which times keiko-server's runGroundedRetrievalLatencyEval: the REAL semantic + RRF + model-rerank path over the quality gate's distractor-dense corpus, followed by the REAL citation-reconciliation and claim-entailment pass. Both provider ports and the entailment judge are deterministic stubs, so the gate measures CODE-PATH cost and never model-serving variance. The budgets are generous p50/p95 CEILINGS (roughly 11x and 21x the locally observed values below) so they catch algorithmic regressions without flaking on CI machine class; they are NOT a target, and they are deliberately unrelated to DEFAULT_ENTAILMENT_OPTIONS.maxTotalMs (20000), which is a per-request safety ceiling rather than a performance goal. Methodology: warmupIterations discarded, then `iterations` timed runs; both percentiles must stay <= their budget. regressionProbe then adds judgeDelayMs to every bounded-parallel judge call in one extra sample; the delay interval itself MUST breach p95BudgetMs because parallel delays do not add \u2014 a gate that cannot fail proves nothing. Epic #3881/#3887 moves the optional metadata-only reranker before absolute/relative selection and excerpt reads, with one existing call grant and a 64-document cap. The bounded pre-cut batch may contain more eligible candidates than the old post-cut batch; p50/p95 ceilings remain unchanged. Final closeout records measured stage cost rather than widening either ceiling.",
   "warmupIterations": 3,
   "iterations": 12,
   "p50BudgetMs": 400,
@@ -7,6 +7,17 @@
   "regressionProbe": {
     "judgeDelayMs": 1300,
     "$comment": "The eight cited claims run in bounded parallel. A 1300ms interval clears the 800ms p95 ceiling by more than 1.5x, so detection does not depend on machine speed or serial execution."
+  },
+  "boundedFollowUp": {
+    "$comment": "Epic #3881/#3889: independent end-to-end cost of the actual server-owned bounded follow-up, including safely materialized fixture Git metadata, first synthesis, unread in-scope admission, remaining-budget retrieval, second synthesis and citation reconciliation. Reuses runConnectedRetrievalEval and ordinary exploration ceilings; a first answer declares a file absent from its actual evidence, and the second actual pack must contain its current content. No entailment judge is configured for this scenario, so no judged claims are claimed. Deterministic synthesis ports remove model-serving variance. The separate probe delays only the actual second synthesis, and must breach this scenario's p95 ceiling. Historical semantic-entailment ceilings and methodology remain unchanged.",
+    "warmupIterations": 3,
+    "iterations": 12,
+    "p50BudgetMs": 400,
+    "p95BudgetMs": 800,
+    "regressionProbe": {
+      "followUpDelayMs": 1300,
+      "$comment": "The second actual synthesis is delayed by 1300ms, greater than 1.5x its 800ms p95 ceiling. An unexecuted follow-up or an absorbed delay fails the gate."
+    }
   },
   "observed": {
     "$comment": "Local darwin/arm64, 16 logical cores. Informational provenance only; the gate compares against the budgets above.",

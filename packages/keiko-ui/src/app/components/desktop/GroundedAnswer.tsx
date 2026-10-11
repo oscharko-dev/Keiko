@@ -7,8 +7,7 @@
 // UI's lib/types re-export. Citations are static evidence references until a future change wires
 // them to the Files-window preview at the cited line range.
 
-import { useMemo, useState } from "react";
-import type { ClientDiagnosticCitationActivation } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   citationFindingTotal,
@@ -16,7 +15,6 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-import { isConnectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/connected-search-abstention";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
@@ -27,6 +25,7 @@ import {
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 import {
   RepositoryReferenceInline,
+  citationRootOptions,
   repositoryReferencePathLabels,
   repositoryReferenceDisplayPath,
   type OpenRepositoryReference,
@@ -51,6 +50,16 @@ import type {
 } from "@/lib/types";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
+import {
+  ConnectedEvidenceInspection,
+  ConnectedRetrievalNotice,
+  reportEvidenceInspection,
+} from "./ConnectedEvidenceInspection";
+import {
+  connectedPromptEvidenceSummary,
+  connectedOmissionTooltip,
+  connectedOmissionLabel as omissionLabel,
+} from "./connectedEvidencePresentation";
 
 type I18nTranslate = OptionalWidgetTranslate & { readonly locale: Locale };
 
@@ -75,6 +84,9 @@ type OpenDocumentationTarget = (target: string) => boolean;
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
   readonly busy: boolean;
+  readonly onReadPaths?:
+    | ((runId: string, paths: readonly string[], sourceScopeFingerprint?: string) => void)
+    | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
@@ -221,8 +233,9 @@ const QUERY_KIND_LABELS: Readonly<
 function contextPackHeadline(
   contextPack: GroundedAnswerContextPackSummary,
   t: I18nTranslate,
+  scopeLabel?: string,
 ): string {
-  const scope = formatScopeLabel(contextPack, t);
+  const scope = scopeLabel ?? formatScopeLabel(contextPack, t);
   let key: MessageKey = "grounded.inspection.scope";
   if (contextPack.scopeKind === "files") {
     key =
@@ -390,13 +403,17 @@ function SearchCoverageDetail({ coverage }: { readonly coverage: SearchCoverage 
 
 function ContextPackSummary({
   contextPack,
+  scopeLabel,
 }: {
+  readonly scopeLabel?: string | undefined;
   readonly contextPack: GroundedAnswerContextPackSummary;
 }): ReactNode {
   const t = useTranslate();
   return (
     <section className="grounded-context-pack" aria-label={t("grounded.inspection.aria")}>
-      <div className="grounded-context-pack-headline">{contextPackHeadline(contextPack, t)}</div>
+      <div className="grounded-context-pack-headline">
+        {contextPackHeadline(contextPack, t, scopeLabel)}
+      </div>
       <dl className="grounded-context-pack-dl">
         {inspectionMetrics(contextPack, t).map(([label, value]) => (
           <MetricRow key={label} label={label} value={value} />
@@ -468,39 +485,6 @@ function citationRepositoryReference(citation: GroundedEvidenceCitation): Reposi
 
 function attributedCitationLabel(label: string, sourceLabel: string | undefined): string {
   return sourceLabel === undefined ? label : `${sourceLabel} · ${label}`;
-}
-
-function citationIdentityReason(
-  fingerprint: string | undefined,
-  matchCount: number,
-): ClientDiagnosticCitationActivation["reason"] {
-  if (fingerprint === undefined) return "absent";
-  if (!isConnectedScopeFingerprint(fingerprint)) return "malformed";
-  if (matchCount === 1) return "matched";
-  return matchCount === 0 ? "unmatched" : "ambiguous";
-}
-
-function citationRootOptions(
-  citation: GroundedEvidenceCitation,
-  roots: readonly RepositoryReferenceRoot[],
-): {
-  readonly roots: readonly RepositoryReferenceRoot[];
-  readonly requireRootChoice: boolean;
-  readonly citationActivation: Omit<ClientDiagnosticCitationActivation, "outcome">;
-} {
-  const fingerprint = citation.sourceScopeFingerprint;
-  const matching = isConnectedScopeFingerprint(fingerprint)
-    ? roots.filter((root) => root.scopeFingerprints?.includes(fingerprint) === true)
-    : [];
-  const reason = citationIdentityReason(fingerprint, matching.length);
-  const activation = { reason, rootCount: roots.length, matchCount: matching.length };
-  if (reason === "matched")
-    return { roots: matching, requireRootChoice: false, citationActivation: activation };
-  return {
-    roots,
-    requireRootChoice: reason !== "absent" || roots.length > 1,
-    citationActivation: activation,
-  };
 }
 
 function useCitationReference(
@@ -740,31 +724,7 @@ function citationCountLabel(
 
 function connectedEvidenceSummary(answer: ConnectedGroundedAnswer, t: I18nTranslate): string {
   const citationCount = uniqueCitationCount(answer.citations);
-  const omittedCount = answer.contextPack.omittedCount;
-  return citationCountLabel(
-    t,
-    citationCount,
-    answer.contextPack.budget.filesReadMax === null
-      ? {
-          one: "grounded.summary.connected.uncapped.one",
-          other: "grounded.summary.connected.uncapped.other",
-        }
-      : { one: "grounded.summary.connected.one", other: "grounded.summary.connected.other" },
-    {
-      read:
-        answer.contextPack.budget.filesReadMax === null
-          ? selectedReadCount(answer.contextPack, t)
-          : formatCount(answer.contextPack.usage.filesRead, t.locale),
-      max:
-        answer.contextPack.budget.filesReadMax === null
-          ? ""
-          : formatCap(answer.contextPack.budget.filesReadMax, t.locale),
-      omitted:
-        omittedCount > 0
-          ? t("grounded.summary.notUsed", { count: formatCount(omittedCount, t.locale) })
-          : "",
-    },
-  );
+  return connectedPromptEvidenceSummary(answer.contextPack, citationCount, t);
 }
 
 function knowledgeEvidenceSummary(answer: KnowledgeGroundedAnswer, t: I18nTranslate): string {
@@ -962,19 +922,31 @@ function GroundedEvidenceDisclosure({
   title,
   summary,
   hasCoverageWarning = false,
+  summaryTitle,
+  reportInspection = false,
   children,
 }: {
   readonly title: string;
   readonly summary: string;
+  readonly summaryTitle?: string | undefined;
+  readonly reportInspection?: boolean;
   readonly hasCoverageWarning?: boolean;
   readonly children: ReactNode;
 }): ReactNode {
   const t = useTranslate();
   return (
-    <details className="grounded-evidence-disclosure">
+    <details
+      className="grounded-evidence-disclosure"
+      onToggle={(event) => {
+        if (reportInspection && event.target === event.currentTarget && event.currentTarget.open)
+          reportEvidenceInspection({ reason: "summary-expanded" });
+      }}
+    >
       <summary className="grounded-evidence-summary">
         <span className="grounded-evidence-summary-title">{title}</span>
-        <span className="grounded-evidence-summary-meta">{summary}</span>
+        <span className="grounded-evidence-summary-meta" title={summaryTitle}>
+          {summary}
+        </span>
         {hasCoverageWarning ? (
           <span className="grounded-evidence-summary-badge">{t("grounded.partialCoverage")}</span>
         ) : null}
@@ -1268,6 +1240,7 @@ const UNCERTAINTY_KIND_LABEL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
   ["low-confidence", "grounded.uncertainty.kind.lowConfidence"],
   ["unsupported-citation", "grounded.uncertainty.kind.unsupportedCitation"],
   ["uncited-answer", "grounded.uncertainty.kind.uncitedAnswer"],
+  ["uncited-memory-context", "grounded.uncertainty.memoryKind"],
   ["incomplete-answer", "grounded.uncertainty.kind.incompleteAnswer"],
   ["unsupported-claim", "grounded.uncertainty.kind.unsupportedClaim"],
   ["entailment-unavailable", "grounded.uncertainty.kind.entailmentUnavailable"],
@@ -1287,7 +1260,8 @@ const RETRIEVAL_UNCERTAINTY_DETAIL_KEYS: ReadonlyMap<string, MessageKey> = new M
 const UNCERTAINTY_KIND_DETAIL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
   ...RETRIEVAL_UNCERTAINTY_DETAIL_KEYS,
   ["unsupported-citation", "grounded.detail.unsupportedCitation"],
-  ["uncited-answer", "grounded.detail.uncitedAnswer"],
+  ["uncited-answer", "grounded.uncertainty.warningReference"],
+  ["uncited-memory-context", "grounded.uncertainty.memoryContext"],
   ["incomplete-answer", "grounded.detail.incomplete"],
   ["unsupported-claim", "grounded.detail.unsupportedClaim"],
   ["entailment-unavailable", "grounded.detail.entailmentUnavailable"],
@@ -1427,28 +1401,6 @@ function compareOmittedReasonEntries(
   return compareStrings(reasonA, reasonB);
 }
 
-const OMISSION_LABEL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
-  ["outside-scope", "grounded.omission.outside-scope"],
-  ["binary", "grounded.omission.binary"],
-  ["generated", "grounded.omission.generated"],
-  ["ignored", "grounded.omission.ignored"],
-  ["size-exceeded", "grounded.omission.size-exceeded"],
-  ["near-duplicate", "grounded.omission.near-duplicate"],
-  ["low-relevance", "grounded.omission.low-relevance"],
-  ["redacted-only", "grounded.omission.redacted-only"],
-  ["budget-exhausted", "grounded.omission.budget-exhausted"],
-  ["tool-unavailable", "grounded.omission.tool-unavailable"],
-  ["unsupported-format", "grounded.omission.unsupported-format"],
-  ["no-text-layer", "grounded.omission.no-text-layer"],
-  ["malformed-document", "grounded.omission.malformed-document"],
-  ["encrypted-document", "grounded.omission.encrypted-document"],
-]);
-
-function omissionLabel(reason: string, t: I18nTranslate): string {
-  const key = OMISSION_LABEL_KEYS.get(reason);
-  return key === undefined ? humanizeToken(reason) : t(key);
-}
-
 function OmittedLine({
   omittedCount,
   omittedCounts,
@@ -1491,7 +1443,9 @@ const COVERAGE_GAP_REASONS: readonly (keyof GroundedAnswerContextPackSummary["om
 
 function CoverageNotice({
   omittedCounts,
+  singleFile = false,
 }: {
+  readonly singleFile?: boolean;
   readonly omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"];
 }): ReactNode {
   const t = useTranslate();
@@ -1511,9 +1465,11 @@ function CoverageNotice({
       <span className="grounded-coverage-notice-title">{t("grounded.partialCoverage")}</span>
       <span>
         {t(
-          recordedCount === 1
-            ? "grounded.inspection.coverageGap.one"
-            : "grounded.inspection.coverageGap.other",
+          singleFile
+            ? "grounded.coverage.file"
+            : recordedCount === 1
+              ? "grounded.inspection.coverageGap.one"
+              : "grounded.inspection.coverageGap.other",
           { count: formatCount(recordedCount, t.locale), detail },
         )}
       </span>
@@ -1624,7 +1580,9 @@ function LocalKnowledgeContextPackSummary({
 // Epic #189 Slice 3 M5 — hybrid context pack: folder + Knowledge Pod sources side-by-side.
 function HybridContextPackSummary({
   contextPack,
+  scopeLabel,
 }: {
+  readonly scopeLabel?: string | undefined;
   readonly contextPack: HybridGroundedAnswerContextSummary;
 }): ReactNode {
   const t = useTranslate();
@@ -1642,7 +1600,7 @@ function HybridContextPackSummary({
           }),
         })}
       </div>
-      <ContextPackSummary contextPack={contextPack.folder} />
+      <ContextPackSummary contextPack={contextPack.folder} scopeLabel={scopeLabel} />
       <LocalKnowledgeContextPackSummary contextPack={contextPack.knowledge} />
     </section>
   );
@@ -1868,6 +1826,75 @@ function GroundedAnswerWarnings({ answer }: { readonly answer: GroundedAnswer })
   );
 }
 
+type FolderAuditDetailsProps = Omit<GroundedAnswerProps, "answer" | "busy"> & {
+  readonly answer: ConnectedGroundedAnswer | HybridGroundedAnswer;
+};
+
+function useInspectedFolderScope({ answer, onReadPaths }: FolderAuditDetailsProps): {
+  readonly scopeLabel: string | undefined;
+  readonly onRead: (
+    runId: string,
+    paths: readonly string[],
+    selectedPaths: readonly string[],
+    sourceScopeFingerprint?: string,
+  ) => void;
+} {
+  const pack = answer.groundingKind === "hybrid" ? answer.contextPack.folder : answer.contextPack;
+  const primaryId = answer.evidenceRunId ?? answer.evidenceRunIds?.[0];
+  const key = JSON.stringify([answer.assistantMessageId, pack.scopeId, primaryId]);
+  const [selection, setSelection] = useState<{
+    readonly key: string;
+    readonly paths: readonly string[];
+  }>({ key: "", paths: [] });
+  const onRead = useCallback(
+    (
+      runId: string,
+      paths: readonly string[],
+      selectedPaths: readonly string[],
+      sourceScopeFingerprint?: string,
+    ): void => {
+      if (runId === primaryId) setSelection({ key, paths: selectedPaths });
+      onReadPaths?.(runId, paths, sourceScopeFingerprint);
+    },
+    [key, primaryId, onReadPaths],
+  );
+  return {
+    scopeLabel:
+      selection.key === key && selection.paths.length > 0 ? selection.paths.join(", ") : undefined,
+    onRead,
+  };
+}
+
+function FolderAuditDetails(props: FolderAuditDetailsProps): ReactNode {
+  const { answer } = props;
+  const pack = answer.groundingKind === "hybrid" ? answer.contextPack.folder : answer.contextPack;
+  const inspection = useInspectedFolderScope(props);
+  return (
+    <>
+      <ConnectedEvidenceInspection
+        key={answer.assistantMessageId}
+        contextPack={pack}
+        runIds={[
+          ...(answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]),
+          ...(answer.evidenceRunIds ?? []),
+        ]}
+        citationBehaviour={answer.citationBehaviour}
+        attachedCitationCount={answer.citations.length}
+        onReadPaths={inspection.onRead}
+      />
+      <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
+      {answer.groundingKind === "hybrid" ? (
+        <HybridContextPackSummary
+          contextPack={answer.contextPack}
+          scopeLabel={inspection.scopeLabel}
+        />
+      ) : (
+        <ContextPackSummary contextPack={pack} scopeLabel={inspection.scopeLabel} />
+      )}
+    </>
+  );
+}
+
 export function GroundedAnswer({
   answer,
   busy,
@@ -1875,6 +1902,7 @@ export function GroundedAnswer({
   openRepositoryReference,
   citationPreview,
   openDocumentationTarget,
+  onReadPaths,
 }: GroundedAnswerProps): ReactNode {
   const t = useTranslate();
   if (answer === undefined) {
@@ -1912,12 +1940,21 @@ export function GroundedAnswer({
     return (
       <div className="grounded-answer">
         <GroundedAnswerWarnings answer={answer} />
+        <ConnectedRetrievalNotice contextPack={answer.contextPack.folder} />
         <GroundedEvidenceDisclosure
+          reportInspection
+          summaryTitle={connectedOmissionTooltip(answer.contextPack.folder, t)}
           title={t("grounded.title.grounding")}
-          summary={hybridEvidenceSummary(answer, t)}
+          summary={`${connectedPromptEvidenceSummary(answer.contextPack.folder, uniqueCitationCount(answer.citations), t)} · ${hybridEvidenceSummary(answer, t)}`}
           hasCoverageWarning={hasCoverageWarning(answer.contextPack.folder)}
         >
-          <CoverageNotice omittedCounts={answer.contextPack.folder.omittedCounts} />
+          <CoverageNotice
+            omittedCounts={answer.contextPack.folder.omittedCounts}
+            singleFile={
+              answer.contextPack.folder.scopeKind === "files" &&
+              answer.contextPack.folder.fileCount === 1
+            }
+          />
           {/* Folder evidence (source-tagged) */}
           <CitationList
             citations={answer.citations}
@@ -1937,8 +1974,11 @@ export function GroundedAnswer({
             omittedCount={answer.omittedCount}
             omittedCounts={answer.contextPack.folder.omittedCounts}
           />
-          <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
-          <HybridContextPackSummary contextPack={answer.contextPack} />
+          <FolderAuditDetails
+            answer={answer}
+            repositoryRoots={repositoryRoots}
+            onReadPaths={onReadPaths}
+          />
         </GroundedEvidenceDisclosure>
       </div>
     );
@@ -1946,12 +1986,20 @@ export function GroundedAnswer({
   return (
     <div className="grounded-answer">
       <GroundedAnswerWarnings answer={answer} />
+      <ConnectedRetrievalNotice contextPack={answer.contextPack} />
       <GroundedEvidenceDisclosure
+        reportInspection
+        summaryTitle={connectedOmissionTooltip(answer.contextPack, t)}
         title={t("grounded.title.evidence")}
         summary={connectedEvidenceSummary(answer, t)}
         hasCoverageWarning={hasCoverageWarning(answer.contextPack)}
       >
-        <CoverageNotice omittedCounts={answer.contextPack.omittedCounts} />
+        <CoverageNotice
+          omittedCounts={answer.contextPack.omittedCounts}
+          singleFile={
+            answer.contextPack.scopeKind === "files" && answer.contextPack.fileCount === 1
+          }
+        />
         <CitationList
           citations={answer.citations}
           repositoryRoots={repositoryRoots}
@@ -1962,8 +2010,11 @@ export function GroundedAnswer({
           omittedCount={answer.contextPack.omittedCount}
           omittedCounts={answer.contextPack.omittedCounts}
         />
-        <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
-        <ContextPackSummary contextPack={answer.contextPack} />
+        <FolderAuditDetails
+          answer={answer}
+          repositoryRoots={repositoryRoots}
+          onReadPaths={onReadPaths}
+        />
       </GroundedEvidenceDisclosure>
     </div>
   );

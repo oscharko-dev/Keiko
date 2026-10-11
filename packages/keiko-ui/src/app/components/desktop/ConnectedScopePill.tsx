@@ -1,5 +1,6 @@
 "use client";
 
+import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 
 // Issue #184 / Epic #532 — chat-header connected-scope pills. A chat may bind 1+N sources
@@ -19,6 +20,12 @@ import { formatUserError } from "./format-error";
 import type { Chat, ChatConnectedScope, GroundedAnswerContextPackSummary } from "@/lib/types";
 import { useScopePillError, ScopePillError, emptyScopePill } from "./hooks/useScopePillError";
 import { effectiveScopes } from "./hooks/workspaceActions";
+import {
+  connectedScopeBoundary,
+  connectedScopeFullPath,
+  connectedScopeLabel,
+  connectedScopeSignature,
+} from "./connectedScopePresentation";
 
 export interface ConnectedScopePillProps {
   readonly chat: Chat;
@@ -88,59 +95,7 @@ export function buildLastGroundedBudgetStatus(
   return { pressure, totalTokens, filesRead: usage.filesRead };
 }
 
-// Strip trailing "/" characters with a bounded scan instead of the unanchored `/\/+$/`: without a
-// `^` anchor, that pattern retries the match at every position inside a long slash run whenever
-// the string doesn't end in "/", which is quadratic in input length (SonarCloud S8786).
-// Exported for the co-located regression test only.
-export function stripTrailingSlashes(path: string): string {
-  let end = path.length;
-  while (end > 0 && path.codePointAt(end - 1) === 0x2f /* "/" */) {
-    end -= 1;
-  }
-  return path.slice(0, end);
-}
-
-function lastSegment(path: string): string {
-  const trimmed = stripTrailingSlashes(path);
-  const slash = trimmed.lastIndexOf("/");
-  return slash === -1 ? trimmed : trimmed.slice(slash + 1);
-}
-
-// Epic #532 — when a source carries its own external root, label it by the folder name so several
-// connected folders stay distinguishable. Otherwise fall back to the Issue #184 kind-based label.
-function pillLabel(scope: ChatConnectedScope, t: I18nTranslate): string {
-  if (typeof scope.root === "string" && scope.root.length > 0) {
-    const segment = lastSegment(scope.root);
-    return segment.length === 0
-      ? t("scope.pill.connectedFolder")
-      : t("scope.pill.folder", { name: segment });
-  }
-  if (scope.kind === "workspace-root") return t("scope.pill.repositoryScope");
-  if (scope.kind === "directory") {
-    const segment = lastSegment(scope.relativePaths[0] ?? "");
-    return segment.length === 0
-      ? t("scope.pill.connectedFolder")
-      : t("scope.pill.folder", { name: segment });
-  }
-  if (scope.relativePaths.length === 1) {
-    const segment = lastSegment(scope.relativePaths[0] ?? "");
-    return segment.length === 0
-      ? t("scope.pill.connectedFile")
-      : t("scope.pill.file", { name: segment });
-  }
-  return t("scope.pill.filesConnected", { count: scope.relativePaths.length });
-}
-
-function scopeBoundaryNoun(kind: ChatConnectedScope["kind"], t: I18nTranslate): string {
-  if (kind === "workspace-root") return t("scope.boundary.noun.repository");
-  if (kind === "directory") return t("scope.boundary.noun.folder");
-  return t("scope.boundary.noun.fileScope");
-}
-
-function scopeBoundaryText(scope: ChatConnectedScope, t: I18nTranslate): string {
-  const noun = scopeBoundaryNoun(scope.kind, t);
-  return t("scope.boundary.description", { noun });
-}
+export { stripTrailingSlashes } from "./connectedScopePresentation";
 
 function formatErrorMessage(error: unknown, t: I18nTranslate): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
@@ -189,11 +144,11 @@ function ScopePillItem({
 }: ScopePillItemProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
-  const label = pillLabel(scope, t);
+  const label = connectedScopeLabel(scope, t);
   // uiux-fix F010 (C174): the basename label collides for same-named folders
   // (~/kunde-a/docs vs ~/kunde-b/docs) — surface the full path via title so it
   // stays reachable on both the label and the disconnect target.
-  const fullPath = scope.root ?? scope.relativePaths[0];
+  const fullPath = connectedScopeFullPath(scope);
   const accessibleLabel =
     fullPath === undefined ? label : t("scope.pill.accessibleWithPath", { label, path: fullPath });
 
@@ -229,7 +184,7 @@ function ScopePillItem({
   // which fires only when the connected-scope set actually changes. The aria-label still carries the
   // disambiguated accessible name and the title still carries the full path for the tooltip.
   return (
-    <span className="scope-pill-wrap">
+    <span className={`scope-pill-wrap ${scopeNoticeStyles.cmpPillWrap}`}>
       <span className="scope-pill">
         <span aria-hidden="true">●</span>
         <span aria-label={accessibleLabel} title={fullPath}>
@@ -256,16 +211,9 @@ function ScopePillItem({
           <span aria-hidden="true">×</span>
         </button>
       </span>
-      <span className="scope-pill-detail">{scopeBoundaryText(scope, t)}</span>
+      <span className="scope-pill-detail">{connectedScopeBoundary(scope, t)}</span>
     </span>
   );
-}
-
-// Content-free signature of the connected-scope set: the ordered visible pill labels. Two chats that
-// bind the same-shaped scopes produce the same signature, so switching between them is a routine
-// re-render and does not re-announce; a connect/disconnect changes the label set and does.
-function scopesSignature(scopes: readonly ChatConnectedScope[], t: I18nTranslate): string {
-  return scopes.map((scope) => pillLabel(scope, t)).join("\0");
 }
 
 function pressureLabel(pressure: GroundedBudgetPressure, t: I18nTranslate): string {
@@ -290,7 +238,7 @@ export function ConnectedScopePill({
   const t = useTranslate();
   const { error, setError } = useScopePillError(chat);
   const scopes = effectiveScopes(chat);
-  const signature = scopesSignature(scopes, t);
+  const signature = connectedScopeSignature(scopes);
 
   // GEN-UI-STATE-001 (WCAG 4.1.3): ONE always-mounted sr-only polite region announces a genuine
   // binding change (connect / disconnect). It stays empty until the scope signature actually changes
@@ -344,7 +292,7 @@ export function ConnectedScopePill({
         />
       ))}
       {lastGroundedBudgetStatus !== undefined ? (
-        <span className="scope-pill-wrap">
+        <span className={`scope-pill-wrap ${scopeNoticeStyles.cmpPillWrap}`}>
           <span
             className="scope-pill-detail"
             style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}

@@ -79,6 +79,36 @@ that window's full bounded verbatim tail from canonical messages before folding 
 The overflow-based restoration fallback applies only to legacy checkpoints without a window stamp.
 This also prevents one bounded grounded turn from permanently shrinking subsequent plain-chat turns.
 
+Connected repository retrieval keeps conversation reference text separate from source evidence.
+The existing bounded previous-user-question prefix retains its 4,096-character ceiling and its
+optional-assembly fallback. Independently, the last eligible assistant turn in the same chat can
+supply at most six case-preserving path hints: at most three closed missing-evidence declarations
+first, followed by citation order and other path tokens. Persisted folder citations retain their
+prior source fingerprint and line hint; Pod locators do not become folder references. The bounded
+structured-citation scan uses the existing hybrid candidate safety ceiling and retains at most six
+references after validation and deduplication by source fingerprint and path. Each selected folder
+accepts only hints matching its current source fingerprint; an absent prior fingerprint is never
+replaced with a current identity. Legacy prose hints remain path-deduplicated. Canonical store
+whole-turn eligibility remains authoritative; orphaned, failed, or cross-chat messages do not become
+retrieval history. These hints use the existing `assistant` reference origin and do not consume the
+user-term anchor cap or alter current query text. A newly named independent target suppresses them;
+bounded English/German anaphoric patterns also preserve previous effective diagnostic/targeted intent.
+All hints pass the same live explicit-path admission, containment, denial, ignore, format, size,
+and budget checks as query references before they become floor-protected evidence candidates.
+Cross-source selection prefers at most one actually read window containing each bound hint's
+line, when present. If that old location no longer exists, an explicitly selected path that was
+successfully freshly read survives as an unlocated navigation hint, and at most one actual current
+window is retained. Other nonoverlapping located atoms do not gain evidence authority. Citations
+still authenticate only the fresh returned range; no old line or content is restored.
+The original provisional candidate/byte ceilings remain binding; the reranker
+still receives every provisionally admitted document. Final top-N selection and model-window fitting
+retain those windows first without changing native relevance scores or authorizing omitted ranges.
+Plural folder byte fitting uses the same actual-window priority within each existing source share;
+its no-hint packing remains unchanged. Oversized or unfittable windows cannot bypass any ceiling.
+Admission telemetry distinguishes supplied referents from admitted referents, counting a basename
+fanout as one admitted referent. The existing correlated selection-details operation carries only
+closed origin and counts; no assistant prose or paths are logged.
+
 ### D3 — Resurfacing surfaces invalidation; it does not evaluate it
 
 This is the explicit boundary against ADR-0053.

@@ -1,8 +1,12 @@
 import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // Issue #185 AC3 — tests for the grounded-request cancel button in ChatWindow.
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import {
+  connectedInspectionAnswer,
+  connectedInspectionManifest,
+} from "./connectedEvidenceInspection.test-fixtures";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -56,7 +60,14 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { ApiError, fetchChats, fetchFilesSearch, updateChat } from "@/lib/api";
+import {
+  ApiError,
+  fetchChats,
+  fetchFilesSearch,
+  fetchEvidenceManifest,
+  updateChat,
+  updateChatConnectedScopes,
+} from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
@@ -68,8 +79,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     fetchFilesSearch: vi.fn(),
+    fetchEvidenceManifest: vi.fn(),
     fetchChats: vi.fn(),
     updateChat: vi.fn(),
+    updateChatConnectedScopes: vi.fn(),
   };
 });
 
@@ -4738,6 +4751,51 @@ describe("ChatWindow message copy", () => {
     });
   });
 
+  it("normalizes legacy prefixed paths after an explicit nested repository choice", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: [],
+              connectedAtMs: 2,
+            },
+          ],
+        }),
+        messages: [
+          makeMessage({
+            role: "assistant",
+            content: "Use Keiko/packages/keiko-editor/src/range.ts:10.",
+          }),
+        ],
+      }),
+      { linkedRoot: "/Users/dev/Projects", openEditorFile },
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Open Keiko\/packages\/keiko-editor\/src\/range.ts/ }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Select repository source: Keiko · Projects/Keiko" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
+  });
+
   it("normalizes legacy parent-prefixed repository references against nested roots", async () => {
     const user = userEvent.setup();
     const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
@@ -4784,6 +4842,9 @@ describe("ChatWindow message copy", () => {
     expect(referenceButton).toHaveTextContent("range.ts:10");
 
     await user.click(referenceButton);
+    await user.click(
+      screen.getByRole("button", { name: "Select repository source: Keiko · Projects/Keiko" }),
+    );
 
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/Users/dev/Projects/Keiko",
@@ -5139,3 +5200,240 @@ function copyTestGroundedAnswer(content: string, sentReferenceCount: number): Gr
     },
   };
 }
+
+it("explains repository grounding whenever a folder scope is connected", () => {
+  renderWindow(
+    makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+        ],
+      }),
+    }),
+  );
+  expect(screen.getByTestId("grounding-help")).toHaveTextContent(
+    "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment.",
+  );
+  expect(screen.getByTestId("grounding-help")).toHaveTextContent("The model has no file tools.");
+  expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
+});
+
+it("loads answer-bound read metadata before opening evidence and again after reload", async () => {
+  const answer = connectedInspectionAnswer();
+  vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: connectedInspectionManifest() });
+  const session = makeSession({
+    activeChat: makeChat({
+      connectedScopes: [
+        { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+      ],
+    }),
+    messages: [
+      makeMessage({
+        role: "assistant",
+        id: answer.assistantMessageId,
+        content: answer.content,
+        groundedAnswer: answer,
+      }),
+    ],
+  });
+  for (let reload = 0; reload < 2; reload += 1) {
+    const view = render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow openEditorFile={vi.fn(() => ({ ok: true as const, windowId: "file" }))} />
+      </ChatSessionProvider>,
+    );
+    expect(document.querySelector("details.grounded-evidence-disclosure")).not.toHaveAttribute(
+      "open",
+    );
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: /Open src\/feature\/read.ts.*Read, not cited/ });
+    expect(
+      screen.queryByRole("button", { name: /Open src\/feature\/read.ts.*Not read/ }),
+    ).not.toBeInTheDocument();
+    view.unmount();
+  }
+});
+
+it("does not assert an unread file while its manifest is unavailable", () => {
+  const answer = connectedInspectionAnswer();
+  vi.mocked(fetchEvidenceManifest).mockImplementation(() => new Promise(() => undefined));
+  renderWindow(
+    makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+        ],
+      }),
+      messages: [
+        makeMessage({ role: "assistant", content: answer.content, groundedAnswer: answer }),
+      ],
+    }),
+    { openEditorFile: vi.fn(() => ({ ok: true as const, windowId: "file" })) },
+  );
+  expect(
+    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Read status unknown/ }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Not read/ })).not.toBeInTheDocument();
+});
+
+it("updates an actual chat prose reference after its answer manifest is inspected", async () => {
+  const answer = connectedInspectionAnswer();
+  vi.mocked(fetchEvidenceManifest).mockResolvedValueOnce({
+    manifest: connectedInspectionManifest(),
+  });
+  const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "file" }));
+  renderWindow(
+    makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+        ],
+      }),
+      messages: [
+        makeMessage({
+          role: "assistant",
+          id: answer.assistantMessageId,
+          content: answer.content,
+          groundedAnswer: answer,
+        }),
+      ],
+    }),
+    { openEditorFile },
+  );
+  expect(
+    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Read status unknown/ }),
+  ).toBeInTheDocument();
+  const user = userEvent.setup();
+  const disclosure = document.querySelector("details.grounded-evidence-disclosure > summary");
+  if (disclosure === null) throw new TypeError("Missing evidence summary");
+  await user.click(disclosure);
+  await user.click(screen.getByText("Inspect files"));
+  const read = await screen.findByRole("button", {
+    name: /Open src\/feature\/read.ts.*Read, not cited/,
+  });
+  await user.click(read);
+  expect(openEditorFile).toHaveBeenCalledWith({ root: "/proj", path: "src/feature/read.ts" });
+});
+
+it("does not attribute an old manifest first expanded after switching repositories", async () => {
+  const originalScope = {
+    kind: "directory" as const,
+    root: "/repo-a",
+    relativePaths: ["src"],
+    connectedAtMs: 1,
+  };
+  const answer = connectedInspectionAnswer();
+  const manifest = connectedInspectionManifest();
+  const audit = manifest.connectedContext;
+  if (audit === undefined) throw new TypeError("Missing connected audit");
+  vi.mocked(fetchEvidenceManifest).mockResolvedValueOnce({
+    manifest: {
+      ...manifest,
+      connectedContext: {
+        ...audit,
+        scope: {
+          ...audit.scope,
+          sourceScopeFingerprint: connectedScopeFingerprint(originalScope),
+        },
+      },
+    },
+  });
+  const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "file" }));
+  let reconnect: (() => void) | undefined;
+  function ConnectedChat(): React.JSX.Element {
+    const [scope, setScope] = useState(originalScope);
+    reconnect = (): void => setScope({ ...originalScope, root: "/repo-b", connectedAtMs: 2 });
+    const session = makeSession({
+      activeChat: makeChat({ projectPath: scope.root, connectedScopes: [scope] }),
+      messages: [
+        makeMessage({
+          role: "assistant",
+          id: answer.assistantMessageId,
+          content: answer.content,
+          groundedAnswer: answer,
+        }),
+      ],
+    });
+    return (
+      <ChatSessionProvider value={session}>
+        <ChatWindow openEditorFile={openEditorFile} />
+      </ChatSessionProvider>
+    );
+  }
+  render(<ConnectedChat />);
+  act(() => reconnect?.());
+  const user = userEvent.setup();
+  const disclosure = document.querySelector("details.grounded-evidence-disclosure > summary");
+  if (disclosure === null) throw new TypeError("Missing evidence summary");
+  await user.click(disclosure);
+  await user.click(screen.getByText("Inspect files"));
+  await screen.findByRole("table", { name: /Files assembled/ });
+  expect(
+    screen.queryByRole("button", { name: /Open src\/feature\/read.ts.*Read, not cited/ }),
+  ).not.toBeInTheDocument();
+  await user.click(
+    screen.getByRole("button", { name: /Open src\/feature\/read.ts.*Read status unknown/ }),
+  );
+  expect(openEditorFile).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole("button", { name: "Select repository source: repo-b" }),
+  ).toBeInTheDocument();
+});
+
+it("acknowledges a missing-file scope before the user explicitly sends the focused follow-up", async () => {
+  const chat = makeChat({
+    connectedScopes: [
+      { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
+    ],
+  });
+  const latestGrounded: GroundedAnswer = {
+    groundingKind: "connected-context",
+    userMessageId: "u",
+    assistantMessageId: "a",
+    content: "Need this file.",
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 1,
+    contextPack: repositoryTestContextSummary(),
+    answerKind: "insufficiency",
+    insufficiencyDeclarations: [{ scopePath: "src/validation.ts", state: "unread-in-scope" }],
+  };
+  const acknowledged = {
+    ...chat,
+    connectedScopes: [
+      ...(chat.connectedScopes ?? []),
+      {
+        kind: "files" as const,
+        root: "/proj",
+        relativePaths: ["src/validation.ts"],
+        connectedAtMs: 2,
+      },
+    ],
+  };
+  vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: acknowledged });
+  const session = makeSession({ activeChat: chat, latestGrounded });
+  renderStatefulWindow(session);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Add file to scope" }));
+  await waitFor(() =>
+    expect(session.setDraft).toHaveBeenCalledWith(expect.stringContaining("@src/validation.ts")),
+  );
+  expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
+  expect(session.sendMessage).not.toHaveBeenCalled();
+  expect(session.replaceChat).toHaveBeenCalledWith(acknowledged);
+  expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+    "@src/validation.ts",
+  );
+  expect(vi.mocked(updateChatConnectedScopes).mock.calls[0]?.[1]).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "files",
+        root: "/proj",
+        relativePaths: ["src/validation.ts"],
+      }),
+    ]),
+  );
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  expect(session.sendMessage).toHaveBeenCalledTimes(1);
+});

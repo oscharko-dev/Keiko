@@ -18,6 +18,11 @@ export interface PorcelainV2Status {
   readonly dirty: boolean;
 }
 
+export interface PorcelainV2Change {
+  readonly path: string;
+  readonly status: "modified" | "added" | "renamed" | "untracked" | "deleted";
+}
+
 interface PorcelainCounts {
   staged: number;
   unstaged: number;
@@ -127,4 +132,51 @@ export function parsePorcelainV2Branch(stdout: string): PorcelainV2Status {
     conflictedCount: counts.conflicted,
     dirty: changeRecords > 0,
   };
+}
+
+function pathAfterFields(record: string, fieldCount: number): string | undefined {
+  let offset = 0;
+  for (let field = 0; field < fieldCount; field += 1) {
+    const separator = record.indexOf(" ", offset);
+    if (separator < offset) return undefined;
+    offset = separator + 1;
+  }
+  return offset < record.length ? record.slice(offset) : undefined;
+}
+
+function ordinaryStatus(xy: string, renamed: boolean): PorcelainV2Change["status"] {
+  if (xy.includes("D")) return "deleted";
+  if (renamed) return "renamed";
+  return xy.includes("A") ? "added" : "modified";
+}
+
+const CHANGE_FIELD_COUNTS: Readonly<Record<string, number>> = { "1": 8, "2": 9, u: 10 };
+
+function parsedChange(record: string): PorcelainV2Change | undefined {
+  if (record.startsWith("? ") && record.length > 2)
+    return { path: record.slice(2), status: "untracked" };
+  const fieldCount = CHANGE_FIELD_COUNTS[record[0] ?? ""];
+  if (fieldCount === undefined) return undefined;
+  const xy = record.slice(2, 4);
+  if (!/^[.MADRCUT]{2}$/u.test(xy) || xy === "..") return undefined;
+  const path = pathAfterFields(record, fieldCount);
+  return path === undefined ? undefined : { path, status: ordinaryStatus(xy, fieldCount === 9) };
+}
+
+// Only complete NUL-terminated records are eligible. A rename's second record is an old path,
+// never another change, even when that filename itself starts with a porcelain marker.
+export function parsePorcelainV2Changes(
+  stdout: string,
+  maxChanges = 512,
+): readonly PorcelainV2Change[] {
+  const cap = Number.isFinite(maxChanges) ? Math.max(0, Math.min(512, Math.floor(maxChanges))) : 0;
+  const changes: PorcelainV2Change[] = [];
+  const records = stdout.split("\0").slice(0, -1);
+  for (let index = 0; index < records.length && changes.length < cap; index += 1) {
+    const record = records[index] ?? "";
+    const change = parsedChange(record);
+    if (change !== undefined) changes.push(change);
+    if (isRenameRecord(record)) index += 1;
+  }
+  return changes;
 }

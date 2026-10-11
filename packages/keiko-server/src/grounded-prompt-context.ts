@@ -12,6 +12,9 @@ import type { GatewayPromptTokenInput } from "@oscharko-dev/keiko-model-gateway/
 import { knowledgePromptShare } from "./knowledge-prompt-window.js";
 
 export interface SentGroundedPrompt {
+  readonly sentEvidencePacks?:
+    | readonly import("@oscharko-dev/keiko-contracts/connected-context").ConnectedContextPack[]
+    | undefined;
   /** The messages exactly as the model received them. */
   readonly messages: GatewayPromptTokenInput["messages"];
   /** The same prompt rendered without any excerpt: the question, instructions and framing. */

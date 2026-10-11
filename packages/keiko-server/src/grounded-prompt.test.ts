@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import {
+  GROUNDED_SYSTEM_PROMPT,
+  GROUNDED_SYSTEM_PROMPT_VERSION,
+  groundedSystemPrompt,
+} from "./grounded-prompt.js";
 import {
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
 } from "./local-knowledge-grounded-qa.js";
 
 describe("grounded answer prompts", () => {
+  it("versions the shared bounded missing-file instruction without requesting pasted contents", () => {
+    expect(GROUNDED_SYSTEM_PROMPT_VERSION).toBe("connected-evidence-v3");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("Missing evidence: [src/example.ts]");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("at most three separate lines");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("selected scope");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("Never ask the user to paste file contents");
+  });
   it("describes read-only retrieval while respecting the repository's test framework", () => {
     expect(GROUNDED_SYSTEM_PROMPT).toContain("ordinary folders without Git");
     expect(GROUNDED_SYSTEM_PROMPT).toContain("server-owned retrieval");
@@ -55,4 +66,20 @@ describe("grounded answer prompts", () => {
     );
     expect(LOCAL_KNOWLEDGE_SYSTEM_PROMPT).not.toContain("reply exactly");
   });
+});
+
+describe("existing own-assessment prompt policy", () => {
+  it("preserves the source-only prompt when disabled", () => {
+    expect(groundedSystemPrompt("disabled")).toBe(GROUNDED_SYSTEM_PROMPT);
+  });
+  it.each(["file", "numeric"] as const)(
+    "allows general knowledge beside actual %s evidence",
+    (kind) => {
+      expect(groundedSystemPrompt("allowed", kind)).toContain("learned knowledge");
+      expect(groundedSystemPrompt("allowed", kind)).toContain("<assessment>");
+      expect(groundedSystemPrompt("allowed", kind)).toContain(
+        "Only supplied repository evidence grounds repository claims",
+      );
+    },
+  );
 });

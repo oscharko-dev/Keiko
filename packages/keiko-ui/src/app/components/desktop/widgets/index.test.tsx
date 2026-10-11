@@ -6,6 +6,12 @@ import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
 type UpdateCfg = (patch: AppWindow["cfg"]) => void;
 
+const boundRootModuleLoaded = vi.hoisted(() => vi.fn());
+vi.mock("./BoundRootTarget", async (importOriginal) => {
+  boundRootModuleLoaded();
+  return await importOriginal<typeof import("./BoundRootTarget")>();
+});
+
 const chatSessionMock = vi.hoisted(() => ({
   activeChat: {
     id: "chat-1",
@@ -706,6 +712,7 @@ vi.mock("../../../local-knowledge/connector-graph", () => ({
 }));
 
 import "./index";
+const boundRootModuleLoadsAtRegistryImport = boundRootModuleLoaded.mock.calls.length;
 import {
   assertWindowRenderRegistryComplete,
   missingWindowRenderTypes,
@@ -787,6 +794,14 @@ afterEach((): void => {
 });
 
 describe("workspace widget renderer registry", () => {
+  it("defers the real root picker until its window opens and keeps children unmounted while loading", async () => {
+    expect(boundRootModuleLoadsAtRegistryImport).toBe(0);
+    render(<>{WIN_TYPES.terminal.render({ projectPath: "/repo" }, makeCtx())}</>);
+    expect(screen.queryByTestId("terminal-widget")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("terminal-widget")).toHaveTextContent("/repo");
+    expect(boundRootModuleLoaded).toHaveBeenCalledTimes(1);
+  });
+
   it("registers a renderer for every declared window type", () => {
     expect(missingWindowRenderTypes()).toEqual([]);
     expect(() => {

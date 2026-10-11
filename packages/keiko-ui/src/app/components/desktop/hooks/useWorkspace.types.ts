@@ -35,6 +35,8 @@ export interface ChatBindingTarget {
   readonly isCurrent: () => boolean;
 }
 
+export type FilesScopeBindReply = boolean | ChatConnectedScope;
+
 export interface ChatUnbindTarget {
   readonly conversationId: string;
   readonly projectPath: string | undefined;

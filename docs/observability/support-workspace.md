@@ -199,6 +199,27 @@ report availability reason. Unknown facts are omitted rather than inferred from 
    by default; `--correlation-id` selects another known timeline, and with `--json` emits only that
    validated timeline (`keiko.support.report-timeline`) for `keiko investigate --from-timeline`.
    Each analysis records body-free `support.report.*` lines in the CLI control state.
+   For connected-folder answers, inspect optional `analysis.findings` and timeline `findings` for
+   `kind: retrieval-miss`. Each closed sub-reason carries its triggering fields and available
+   process/scope/query identities. Follow-up outcome `answered` disposes the first unread
+   declaration in that same logical turn and scope. General basename diversity and an unavailable
+   semantic provider do not establish a miss without the corresponding failure evidence. Older
+   records missing these fields cannot retroactively establish the finding. Use the
+   [connected-folder troubleshooting entry](../troubleshooting/chat-connected-folder-file-not-read.md)
+   to distinguish ranking, scope eligibility, and exhausted budgets.
+   The same timeline joins the typed `search.connected-context.source-details`,
+   `selection-details`, `completion-details`, and `answer-details` siblings. Inspect
+   `answer-details.filesInPrompt` for final sent evidence; assembled reads alone do not prove
+   delivery to synthesis. The first and second prompts retain the original source/query identities
+   and use `followUpPass` 0 and 1 even when the selection fingerprint changes. An `answered`
+   follow-up can still carry an uncited-answer warning; this warning does not grant another call.
+   For a deliberately source-free answer, only `search.answer.assessed` with `policy: allowed`,
+   `outcome: assessment-only`, zero `sourceBackedChars`, a nonempty assessment and
+   `phase: accepted-final` can dispose incidental selection or empty-semantic findings. It must
+   match the actual process, correlation, scope/query digests and witnessed request lifecycle.
+   Candidate repair output, missing starts, overlapping requests and later partial records do not
+   inherit accepted assessment authority. Source-required, explicit rejection, unread declaration
+   and unresolved follow-up findings remain meaningful even if learned knowledge was also returned.
    `--emit-fixture PATH` prepares
    an existing safe gateway replay fixture and never overwrites a target. Follow the
    [red/green reproduction recipe](reproduction-harness.md); no user-authored reproduction text

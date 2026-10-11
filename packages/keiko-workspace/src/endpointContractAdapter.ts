@@ -18,6 +18,8 @@ import type {
 } from "./endpointContractTypes.js";
 import { createStructuralExecutionControl } from "./structuralExecution.js";
 
+import { repositoryRouteQuery } from "./repoSearchRoutes.js";
+
 function queryFingerprint(query: RetrievalQuery): string {
   return createHash("sha256")
     .update(
@@ -50,7 +52,13 @@ function linkTypeTerms(link: EndpointContractLink): readonly string[] {
   );
 }
 
+function explicitRouteQuery(query: RetrievalQuery): ReturnType<typeof repositoryRouteQuery> {
+  return query.kind === "natural-language" ? repositoryRouteQuery(query.text) : undefined;
+}
+
 function linkMatchesQuery(link: EndpointContractLink, query: RetrievalQuery): boolean {
+  const endpoint = explicitRouteQuery(query);
+  if (endpoint !== undefined) return routeMatchesExplicitQuery(link.route, endpoint);
   const terms = queryTerms(query);
   if (query.kind === "exact-symbol") {
     return linkTypeTerms(link).some((term) => textMatchesQuery(term, [query.text]));
@@ -65,19 +73,27 @@ function linkMatchesQuery(link: EndpointContractLink, query: RetrievalQuery): bo
   );
 }
 
+function routeMatchesExplicitQuery(
+  route: EndpointRouteContract,
+  query: { readonly method: string; readonly path: string },
+): boolean {
+  return route.method.toLowerCase() === query.method && route.path.toLowerCase() === query.path;
+}
+
 function atomForRoute(
   scope: SearchScope,
   route: EndpointRouteContract,
   fingerprint: string,
   score: number,
   nowMs: () => number,
+  serverRegistration = false,
 ): EvidenceAtom {
   return buildAtom({
     scopeId: scope.scopeId,
     scopePath: route.scopePath,
     lineRange: { startLine: route.line, endLine: route.line },
     provenanceKind: "structural",
-    tool: "endpoint-contract-linker",
+    tool: serverRegistration ? "endpoint-contract-server-route" : "endpoint-contract-linker",
     queryFingerprint: fingerprint,
     score,
     emittedAtMs: nowMs(),
@@ -108,11 +124,27 @@ function linkAtoms(
   link: EndpointContractLink,
   fingerprint: string,
   nowMs: () => number,
+  serverRegistration = false,
 ): readonly EvidenceAtom[] {
   return [
-    atomForRoute(scope, link.route, fingerprint, link.confidence, nowMs),
+    atomForRoute(scope, link.route, fingerprint, link.confidence, nowMs, serverRegistration),
     atomForClient(scope, link.clientCall, fingerprint, link.confidence, nowMs),
   ];
+}
+
+async function standaloneGraphForRequest(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+): Promise<EndpointContractGraph> {
+  return buildEndpointContractGraph(
+    scope,
+    limits,
+    fs,
+    createStructuralExecutionControl(limits.elapsedMsMax, deps?.nowMs ?? Date.now, deps?.signal),
+    { preferredSourcePaths: deps?.endpointPreferredSourcePaths },
+  );
 }
 
 async function graphForRequest(
@@ -124,17 +156,8 @@ async function graphForRequest(
   deps?.requestContext?.assertGraphBinding(scope, limits, fs);
   const graph =
     deps?.requestContext === undefined
-      ? await buildEndpointContractGraph(
-          scope,
-          limits,
-          fs,
-          createStructuralExecutionControl(
-            limits.elapsedMsMax,
-            deps?.nowMs ?? Date.now,
-            deps?.signal,
-          ),
-        )
-      : await deps.requestContext.endpointContractGraph();
+      ? await standaloneGraphForRequest(scope, limits, fs, deps)
+      : await deps.requestContext.endpointContractGraph(deps.endpointPreferredSourcePaths);
   deps?.requestContext?.assertGraphBinding(scope, limits, fs);
   return graph;
 }
@@ -157,9 +180,19 @@ export const endpointContractAdapter: StructuralAdapter = {
     const nowMs = deps?.nowMs ?? Date.now;
     const fingerprint = queryFingerprint(query);
     const graph = await graphForRequest(scope, limits, fs, deps);
-    const atoms = graph.links
-      .filter((link) => linkMatchesQuery(link, query))
-      .flatMap((link) => linkAtoms(scope, link, fingerprint, nowMs));
+    const endpoint = explicitRouteQuery(query);
+    const routes =
+      endpoint === undefined
+        ? []
+        : graph.unmatchedRoutes
+            .filter((route) => routeMatchesExplicitQuery(route, endpoint))
+            .map((route) => atomForRoute(scope, route, fingerprint, route.confidence, nowMs, true));
+    const atoms = [
+      ...routes,
+      ...graph.links
+        .filter((link) => linkMatchesQuery(link, query))
+        .flatMap((link) => linkAtoms(scope, link, fingerprint, nowMs, endpoint !== undefined)),
+    ];
     return atoms.slice(0, Math.min(limits.maxMatchesReturned, query.maxResults));
   },
   coverage: async (scope, limits, fs, deps): Promise<StructuralCoverageDiagnostics> => {

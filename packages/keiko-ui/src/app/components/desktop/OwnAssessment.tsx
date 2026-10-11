@@ -8,7 +8,11 @@ import type { ReactNode } from "react";
 import { splitOwnAssessment } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
-import type { OpenRepositoryReference, RepositoryReferenceRoot } from "./repositoryReferences";
+import type {
+  OpenRepositoryReference,
+  RepositoryReferenceRoot,
+  RepositoryReferenceEvidence,
+} from "./repositoryReferences";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import styles from "./OwnAssessment.module.css";
 
@@ -16,6 +20,7 @@ export interface AssessedAnswerBodyProps {
   readonly content: string;
   readonly messageId: string;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly repositoryEvidence?: RepositoryReferenceEvidence | undefined;
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
 }
@@ -46,6 +51,7 @@ export function AssessedAnswerBody(props: AssessedAnswerBodyProps): ReactNode {
         <SafeMarkdownBoundary
           {...shared}
           source={grounded}
+          repositoryEvidence={props.repositoryEvidence}
           diagnosticCorrelationId={props.messageId}
           citationPreview={props.citationPreview}
         />
@@ -56,6 +62,11 @@ export function AssessedAnswerBody(props: AssessedAnswerBodyProps): ReactNode {
           <SafeMarkdownBoundary
             {...shared}
             source={assessment}
+            repositoryEvidence={
+              props.repositoryEvidence === undefined
+                ? undefined
+                : { ...props.repositoryEvidence, citations: [] }
+            }
             // The message's own correlation keeps its layout evidence joinable (a derived id with
             // a colon is no valid correlation); the part is named in the message identity instead.
             diagnosticCorrelationId={props.messageId}

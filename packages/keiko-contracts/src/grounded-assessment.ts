@@ -4,11 +4,13 @@
 // marker. A question that asks for Keiko's own view ("Which Java version do you suggest?") has no
 // source-backed answer, and a sources-only prompt can then only repeat that the documents say
 // nothing. When the operator allows it, the model adds its own assessment after the source-backed
-// part, inside one `<assessment>` block. A plain text tag is something every model family
-// reproduces reliably, open-weight models included, and it needs no structured-output support.
+// part, inside one `<assessment>` block. Tags need no structured-output support, but models may
+// omit them. For a positively parsed self-contained conversation/general request with no sent
+// evidence, software may label an untagged answer after excluding source references/declarations.
 //
-// Everything outside the block is held to the citation, entailment and refusal rules. The block is
-// never cited, never judged, and always shown as Keiko's assessment rather than the sources'.
+// Unclassified, source and mixed output outside the block is held to the citation, entailment
+// and refusal rules. The block is never cited, never judged, and always shown as Keiko's
+// assessment rather than the sources'.
 
 import { markdownCodeRanges } from "./citation-markers.js";
 
@@ -18,13 +20,20 @@ export type OwnAssessmentPolicy = (typeof OWN_ASSESSMENT_POLICIES)[number];
 /** A normal installation allows the labelled assessment; an operator may disable it. */
 export const DEFAULT_OWN_ASSESSMENT_POLICY: OwnAssessmentPolicy = "allowed";
 
-/** The system-prompt rule that allows the block. Short and plain, so small models follow it. */
-export const OWN_ASSESSMENT_PROMPT_RULE =
-  "Put everything the excerpts do not back (your own recommendation, opinion, general knowledge " +
-  "or small talk) into one <assessment></assessment> block at the end; outside it, every " +
-  "sentence needs its [n] marker. If the question needs no sources, answer inside the block " +
-  "alone. When the block gives a recommendation or view, begin it by saying that it is your own " +
-  "assessment, not a statement from the sources. Use no [n] markers inside it.";
+/** Shared authority rule, with the marker grammar actually supplied by the caller. */
+export function ownAssessmentPromptRule(markerKind: "file" | "numeric" = "numeric"): string {
+  const marker = markerKind === "file" ? "[path/to/file:line]" : "[n]";
+  return (
+    "Use learned knowledge for general explanations, recommendations and conversation, even without matching excerpts. " +
+    "Put it in one <assessment></assessment> block labelled as your own knowledge, not from the sources. " +
+    `Source-specific claims stay outside and need matching ${marker} citations from supplied evidence. ` +
+    "Refusals, clarifications and missing-evidence declarations need no citation. " +
+    "Use no citations or missing-evidence declarations inside the block. " +
+    "Do not claim current or live verification from learned knowledge; state freshness limits when relevant."
+  );
+}
+
+export const OWN_ASSESSMENT_PROMPT_RULE = ownAssessmentPromptRule();
 
 export interface OwnAssessmentSplit {
   /** The source-backed part: every text outside the assessment block, trimmed. */
@@ -63,6 +72,22 @@ function joined(parts: readonly string[]): string {
     .join("\n\n");
 }
 
+/** Retains source formatting so literal indentation cannot become an actionable declaration. */
+export function ownAssessmentSourceText(answer: string): string {
+  const tags = delimiterTags(answer);
+  if (tags.length === 0) return answer;
+  const parts: string[] = [];
+  let depth = 0;
+  let cursor = 0;
+  for (const tag of tags) {
+    if (depth === 0) parts.push(answer.slice(cursor, tag.start));
+    cursor = tag.end;
+    depth = tag.closing ? Math.max(0, depth - 1) : depth + 1;
+  }
+  if (depth === 0) parts.push(answer.slice(cursor));
+  return parts.join("\n\n");
+}
+
 /**
  * Splits an answer into its source-backed text and Keiko's assessment. Every `<assessment>` block
  * counts (tags matched case-insensitively, never inside Markdown code): a model that writes two
@@ -95,14 +120,37 @@ export function hasOwnAssessmentTag(answer: string): boolean {
 }
 
 /** The stored answer: the source-backed part, then the canonical assessment block. */
-export function composeOwnAssessment(grounded: string, assessment: string | undefined): string {
+export function composeOwnAssessment(
+  grounded: string,
+  assessment: string | undefined,
+  preserveSourceFormatting = false,
+): string {
   if (assessment === undefined) return grounded;
   const block = `<assessment>\n${assessment.trim()}\n</assessment>`;
-  return grounded.trim().length === 0 ? block : `${grounded.trim()}\n\n${block}`;
+  const source = preserveSourceFormatting ? grounded : grounded.trim();
+  return source.trim().length === 0 ? block : `${source}\n\n${block}`;
 }
 
 /** The answer as plain reading text, for copying or reading aloud: the tags go, the words stay. */
 export function ownAssessmentPlainText(answer: string): string {
   const split = splitOwnAssessment(answer);
   return joined([split.grounded, split.assessment ?? ""]);
+}
+
+export interface PolicyOwnAssessmentSplit extends OwnAssessmentSplit {
+  readonly neutralized: boolean;
+}
+
+/** A disabled block is dropped rather than promoted to source-backed text. */
+export function splitOwnAssessmentForPolicy(
+  answer: string,
+  policy: OwnAssessmentPolicy,
+): PolicyOwnAssessmentSplit {
+  const split = {
+    ...splitOwnAssessment(answer),
+    grounded: ownAssessmentSourceText(answer).trimEnd(),
+  };
+  if (policy === "disabled")
+    return { grounded: split.grounded, neutralized: hasOwnAssessmentTag(answer) };
+  return { ...split, neutralized: false };
 }

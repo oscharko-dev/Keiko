@@ -4,10 +4,15 @@
 // remain implementation detail.
 
 export type { ExtractedSignals, RankingHints, RankingInput } from "./signals.js";
-export { DEFAULT_GENERATED_PATTERNS, extractSignals } from "./signals.js";
+export { DEFAULT_GENERATED_PATTERNS, extractSignals, isGeneratedRankingPath } from "./signals.js";
 
 export type { ScoringWeights } from "./scoring.js";
-export { DEFAULT_SCORING_WEIGHTS, computeScore } from "./scoring.js";
+export {
+  DEFAULT_SCORING_WEIGHTS,
+  computeScore,
+  absoluteRelevanceFloor,
+  weightsForIntent,
+} from "./scoring.js";
 
 export type { AnnotatedCandidate, FilterOptions, FilterResult } from "./filter.js";
 export { DEFAULT_FILTER_OPTIONS, filterCandidates } from "./filter.js";

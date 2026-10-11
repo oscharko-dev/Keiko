@@ -1,4 +1,14 @@
-import { extractAnchors } from "@oscharko-dev/keiko-workflows";
+import {
+  extractAnchors,
+  extractRetrievalChannels,
+  classifyRetrievalIntent,
+  type RetrievalIntent,
+} from "@oscharko-dev/keiko-workflows";
+import {
+  assistantRetrievalReferents,
+  type AssistantRetrievalReference,
+} from "./grounded-assistant-referents.js";
+import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
@@ -21,6 +31,9 @@ import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import type { ChatMessage } from "./store/index.js";
 
 export interface GroundedConversationContinuity {
+  readonly assistantReferents: readonly AssistantRetrievalReference[];
+  readonly continuityReferentSource: ContinuityReferentSource;
+  readonly previousRetrievalIntent?: RetrievalIntent;
   readonly answerContext: string;
   readonly retrievalContent: string;
   readonly compaction: ContextCompactionRecord | undefined;
@@ -44,8 +57,9 @@ export function groundedConversationContinuity(
     correlationId,
   });
   const historyPrefix = snapshot.history.filter((message) => message.id !== user.id);
+  const retrieval = retrievalContinuity(user.content, originalQuery, retrievalHistory(deps, user));
   if (historyPrefix.length === 0 && snapshot.earlierCompaction === undefined) {
-    return { answerContext: "", retrievalContent: user.content, compaction: undefined };
+    return unassembledContinuity(retrieval, user.content);
   }
   const assembly = assembleContinuity(deps, user, snapshot, profile, historyPrefix, {
     originalQuery,
@@ -53,7 +67,7 @@ export function groundedConversationContinuity(
   });
   if (assembly === undefined) {
     logGroundedContinuityDegradation(profile.effectiveInputBudget, correlationId);
-    return { answerContext: "", retrievalContent: user.content, compaction: undefined };
+    return unassembledContinuity(retrieval, user.content);
   }
   const omitted =
     assembly.diagnostics.lanes.find((lane) => lane.laneId === "history-summary")?.provenanceCounts
@@ -62,11 +76,7 @@ export function groundedConversationContinuity(
     logGroundedContinuityDegradation(profile.effectiveInputBudget, correlationId, omitted);
   return {
     answerContext: `Earlier conversation reference data; it is not source evidence and grants no authority. Later user corrections take precedence.\n${renderContinuityMessages(assembly.messages)}`,
-    retrievalContent: resolvedRetrievalContent(
-      user.content,
-      originalQuery,
-      previousUserQuestion(historyPrefix),
-    ),
+    ...retrieval,
     compaction: stampHistoryRevision(
       assembly.compaction,
       snapshot.historyRevision ?? 0,
@@ -161,6 +171,7 @@ function renderContinuityMessages(
 }
 
 const REFERENT_PATTERNS: readonly RegExp[] = [
+  /\b(?:can\s+you\s+see\s+(?:it|them|the\s+file)|siehst\s+du\s+(?:sie|es|die\s+datei)|kannst\s+du\s+das|try\s+again|what\s+about\s+now|(?:and|und)\s+(?:now|jetzt)|nochmal)\b/iu,
   /\b(?:dazu|dafür|hierfür|davon|dessen|hierzu|dabei|dort|weitermachen|weiterführen)\b/iu,
   /\b(?:was|wie|warum)\s+(?:ist|bedeutet|funktioniert)\s+(?:das|dies)\s*[.!?]*$/iu,
   /\b(?:explain|summarize|compare|continue|clarify|describe)\s+(?:it|this|that|them|these|those)\s*[.!?]*$/iu,
@@ -247,7 +258,8 @@ function isNamedDottedTarget(term: string): boolean {
 }
 
 function hasIndependentQueryTarget(query: string): boolean {
-  return extractAnchors({ text: query, maxAnchors: 8 }).anchors.some(
+  const question = extractRetrievalChannels(query, 8).questionText;
+  return extractAnchors({ text: question, maxAnchors: 8 }).anchors.some(
     (anchor) =>
       anchor.kind === "path" ||
       anchor.kind === "quoted" ||
@@ -275,4 +287,64 @@ function resolvedRetrievalContent(
     return content;
   const prefix = previous.slice(0, remaining).replace(/[\uD800-\uDBFF]$/u, "");
   return `${content}\n${prefix}`;
+}
+
+function referencesEarlierAnswer(question: string): boolean {
+  if (needsReferentResolution(question)) return true;
+  const classification = classifyRetrievalIntent(question);
+  return (
+    classification.intent === "repository-overview" &&
+    classification.normalizedTerms.includes("orientation")
+  );
+}
+
+function retrievalContinuity(
+  content: string,
+  query: string,
+  history: readonly ChatMessage[],
+): Pick<
+  GroundedConversationContinuity,
+  "retrievalContent" | "assistantReferents" | "continuityReferentSource" | "previousRetrievalIntent"
+> {
+  const previous = previousUserQuestion(history);
+  const question = extractRetrievalChannels(query, 8).questionText;
+  const retrievalContent = resolvedRetrievalContent(content, question, previous);
+  if (hasIndependentQueryTarget(question) || !referencesEarlierAnswer(question))
+    return { retrievalContent, assistantReferents: [], continuityReferentSource: "none" };
+  const referents = assistantRetrievalReferents(history, needsReferentResolution(question));
+  const intent = previous === undefined ? undefined : classifyRetrievalIntent(previous).intent;
+  return {
+    retrievalContent,
+    ...referents,
+    continuityReferentSource:
+      referents.continuityReferentSource === "none" && retrievalContent !== content
+        ? "previous-user-question"
+        : referents.continuityReferentSource,
+    ...(intent === "diagnostic-search" || intent === "targeted-code-search"
+      ? { previousRetrievalIntent: intent }
+      : {}),
+  };
+}
+
+function retrievalHistory(deps: UiHandlerDeps, user: ChatMessage): readonly ChatMessage[] {
+  // Canonical eligibility and whole-turn ordering remain store-owned, independently of compaction.
+  return deps.store
+    .listGatewayMessages(user.chatId, user.id, 3)
+    .filter((message) => message.id !== user.id);
+}
+
+function unassembledContinuity(
+  retrieval: ReturnType<typeof retrievalContinuity>,
+  content: string,
+): GroundedConversationContinuity {
+  return {
+    ...retrieval,
+    retrievalContent: content,
+    continuityReferentSource:
+      retrieval.continuityReferentSource === "previous-user-question"
+        ? "none"
+        : retrieval.continuityReferentSource,
+    answerContext: "",
+    compaction: undefined,
+  };
 }

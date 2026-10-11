@@ -77,6 +77,88 @@ a stale identity returns 409 `GROUNDING_SCOPE_CHANGED`. Git-change description a
 checked separately, and ordinary regeneration refuses connected folder, knowledge and Git-change
 scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission boundaries.
 
+Connected-folder retrieval joins `search.connected-context.source-details`, `selection-details`,
+`completion-details`, and `answer-details` with the completed operation under the same request
+correlation, process, and source/query digests. These typed siblings retain the existing contextual
+field cap. Source details describe actual path/reference admission and eligibility; selection
+details describe calibrated floors, high/low confidence, addressed-file demotion, reranker
+disposition, continuity counts, and worktree/semantic freshness observations. Assembled reads and
+final sent evidence are distinct: `answer-details.filesInPrompt` describes what reached synthesis.
+Only counts, closed dispositions and digests enter the log, never paths, declarations or answers.
+The six-reference intake preserves the primary local trace frame and explicitly named question
+paths before secondary frames or conversation referents. Prompt fitting preserves a complete
+matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable
+identities before citation reconciliation. Physical reads remain actual I/O counts: import
+classification and parsing share one complete guarded source read rather than charging another
+classification read. Existing final-prompt, range and read observations describe these decisions
+without recording source text or paths.
+Endpoint definition traversal binds a registration's observed handler reference to its current
+lexical AST target. Further calls retain their exact callable owner and complete observed spans;
+same-named declarations and uninvoked nested functions do not certify that relationship.
+Imported targets retain exact runtime module-export identities. Explicit compiler output mappings
+reuse already guarded metadata and can address only admitted sources in the owning package.
+Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
+ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
+reservation and request-local current-source metadata capacity. Finite enrichment grants and
+bounded complete-text reuse retain their separate limits.
+Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
+cannot certify a unique runtime target when a competing branch is unobserved.
+A guarded current definition reached through an observed inline-callable reference retains its
+definition evidence and a resolved reference edge. Declaration priority does not certify callback
+invocation; continuation retains that reference relationship and `source-graph-incomplete`.
+Partially overlapping excerpt windows retain uncovered lines and their originating strength;
+deduplication removes only lines already covered by a higher-priority window.
+Physical excerpt allocation funds selected, current target definition windows and their observed
+parent caller spans inside the existing connected share and actual per-file read capacity. A
+compact caller span remains bound to its original current parent, exact child and observed source
+coordinates; it does not acquire a new definition certificate. Independent roots and files within
+each root receive bounded initial byte portions. Existing certified traversal sets file order;
+existing query relevance orders targets within each file, with stable ties. Roots and their file
+queues take turns within those portions. After that bounded pass, unserved queues retry unused
+shared bytes before further expansion.
+Shared physical lines and separators are charged once;
+upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
+branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
+evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
+When current coverage windows apply, independent search windows receive ordinary extra bytes
+before unfunded discovered-definition expansions. Those expansions remain a deduplicated fallback.
+The existing selection-details operation records planned ordinary ranges on attempted reader paths,
+ordinary ranges intersected by nonempty returned views, and deferred definition ranges. An
+intersection count does not certify complete source content; truncation and omission counts remain
+authoritative.
+Separately identified returned partial views retain their actual ranges, contents and physical-view
+identities through assembly, without inventing continuity or uncharged separators. Unidentified
+multiple uncovered views remain fail-closed; conflicting views retain uncertainty. Bounded
+observations do not establish that an arbitrarily large function was fully read. File and deadline
+grants, current-source checks, invocation uncertainty and actual truncation/omission reporting
+remain authoritative.
+Existing query evidence orders endpoint intake; bounded delegation traversal keeps the original
+workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
+Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
+
+`search.connected-context.answer-details` records answer kind, observed citation behaviour,
+declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,
+outcome and configuration disposition. Technical failures retain the existing closed error header,
+reduced frames and causes. Initial synthesis, marker repair, follow-up and their gateway transport or
+context-window retries share at most two physical adapter attempts and the original cumulative
+input/output and remaining elapsed grants. Admission occurs before each actual dispatch and spend
+reservation. Charged input retains the greater of the canonical sent prompt estimate and reported
+usage; measured partial output survives a discarded attempt, while uncertain failed stream output
+retains its requested cap. These conservative charges are distinct from provider-measured usage.
+Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
+contracts without supplying another synthesis attempt. Normalized output is buffered before
+publication; rejected declarations cannot escape through streamed chunks. The existing allocator's
+high/exceeded pressure refuses follow-up. `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` defaults to `1`;
+explicit `0` disables it, and other explicit values fail closed to zero passes with an invalid
+configuration observation. See [ADR-0180](docs/adr/ADR-0180-bounded-connected-folder-follow-up.md).
+
+Support analysis joins these siblings rather than assuming every metric appears on the completed
+line. An answered follow-up disposes the initial unread declaration for its original source and
+logical turn even if the selection fingerprint changes. Missing historical fields remain unknown.
+Healthy lexical answers do not become retrieval misses because semantic search is unconfigured.
+Optional live semantic refresh separately requires `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX`; its
+default is `0`, its enabled cap is eight safe fragments, and it never mutates a persisted pod.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
@@ -144,9 +226,12 @@ prompts. `client.answer.copied` records each chat answer copy (`copied` or `fail
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
 removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
 for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
-`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
+`search.answer.assessed` records whether a connected answer carried Keiko's own, labelled
 assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
 (`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+Source-linked observations carry canonical scope/query digests and `phase` (`candidate`,
+`accepted-final`); only accepted-final observations describe the delivered answer. Candidate or
+unbound historical observations cannot suppress retrieval-miss findings.
 A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
 provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
 `reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,
@@ -263,16 +348,22 @@ and the SonarCloud analysis are never reused on `dev`: they run on every push to
 SonarCloud's branch history stays current (ADR-0178 D1, amended 2026-09-25). Editing a workflow
 changes the tree, so CI changes always measure themselves.
 
-No human approving review or manual merge is required. GitHub native auto-merge integrates only
-after the required checks succeed on the exact current head and every review conversation is
-resolved. CodeRabbit reviews every pull request targeting `dev` and every subsequent push with no
+Only the repository owner account `oscharko` may authorize and execute a merge into `dev`, including
+enabling GitHub native auto-merge. Agents acting under that account operate within the owner's
+explicit authorization. Contributors may prepare PRs and repair findings, but accepting their task
+does not grant integration authority. No additional approving review is required, so owner-authored
+PRs remain possible. Required checks must succeed on the exact current head and every review
+conversation must be resolved before integration. Only `oscharko` may dismiss blocking reviews;
+approvals become stale when the reviewed changes change. These restrictions are scoped to `dev`.
+CodeRabbit reviews every pull request targeting `dev` and every subsequent push with no
 auto-pause. Its status is not required because quota can omit a current-head review. When CodeRabbit
 does emit an inline finding, GitHub's required conversation-resolution rule blocks merge until its
 conversation is resolved. Policy additionally requires the underlying defect to be repaired; the
 quota-tolerant interim topology cannot infer code repair merely from GitHub's resolved bit.
 
 `.github/CODEOWNERS` intentionally stays a single flat `* @oscharko` rule while Keiko has one
-maintainer; it has no merge-gating effect under this no-human-review auto-merge model. Revisit
+maintainer. Required code-owner reviews remain disabled to avoid blocking owner-authored PRs;
+the owner-only branch restriction controls who may integrate into `dev`. Revisit
 path-scoped rows if/when a second maintainer joins.
 
 The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are retired.

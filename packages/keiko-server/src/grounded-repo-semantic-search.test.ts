@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type KnowledgeCapsuleId, type KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 import {
   createDefaultParserRegistry,
@@ -7,6 +10,10 @@ import {
   listCapsules,
   openKnowledgeStore,
   refreshRepositoryPod,
+  readRepositoryFileFingerprints,
+  resolveKnowledgeStorePath,
+  scoreVector,
+  shapeEmbeddingQuery,
   updateCapsuleState,
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -19,9 +26,13 @@ import {
   type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
-import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   EMBEDDING_INSTRUCTION_VERSION,
+  l2NormalizeVector,
   verifyEmbeddingCapability,
   type GatewayConfig,
   type OpenAIEmbeddingAdapter,
@@ -29,15 +40,32 @@ import {
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  DEFAULT_EXPLORATION_BUDGET,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type ExplorationBudget,
+  type ExplorationUsage,
   type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  applyUsage,
+  canContinue,
+  createExplorationPlan,
+  createGovernor,
+} from "@oscharko-dev/keiko-workflows";
+import { processServerLogSink } from "./process-log-sink.js";
+import {
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
+  QUALIFICATION_SPEND_LEDGER_PATH_ENV,
+} from "./gateway-spend-budget.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
 import {
   configuredRepoSemanticSearchProviderFor,
+  configuredRepoSemanticSearchProviderLeaseFor,
   localizeMatchLine,
+  type ConfiguredRepoSemanticSearchOptions,
   type RepositoryPodRetrievalObservation,
   type RepositoryPodSemanticSearchContext,
 } from "./grounded-repo-semantic-search.js";
@@ -254,13 +282,46 @@ interface SeededRepositoryPod {
   readonly store: KnowledgeStore;
 }
 
+function refreshBudgetGrant(overrides: Partial<ExplorationBudget> = {}): {
+  readonly reserve: (delta: Readonly<Partial<ExplorationUsage>>) => boolean;
+  readonly usage: () => ExplorationUsage;
+} {
+  const plan = createExplorationPlan({
+    scope: {
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      scopeId: "semantic-refresh-budget",
+      workspaceRoot: ROOT,
+      kind: "workspace-root",
+      relativePaths: [],
+      conversationId: undefined,
+      connectedAtMs: 1,
+    },
+    query: { ...QUERY, text: "Explain src/auth.ts" },
+    budget: { ...DEFAULT_EXPLORATION_BUDGET, ...overrides },
+  });
+  const initial = createGovernor(plan);
+  let state = initial;
+  return {
+    reserve(delta): boolean {
+      if (!canContinue(state)) return false;
+      const next = applyUsage(state, { ...initial.usage, ...delta });
+      if (!canContinue(next)) return false;
+      state = next;
+      return true;
+    },
+    usage: (): ExplorationUsage => state.usage,
+  };
+}
+
 async function seedRepositoryPod(
   deps: UiHandlerDeps,
   fs: WorkspaceFs,
   paths: readonly string[],
   tracked = true,
+  dbPath = ":memory:",
+  repositoryRoot = ROOT,
 ): Promise<SeededRepositoryPod> {
-  const store = openKnowledgeStore({ dbPath: ":memory:" });
+  const store = openKnowledgeStore({ dbPath });
   const request = deps.localKnowledgeEmbeddingRequest;
   if (request === undefined) throw new Error("expected embedding request stub");
   const adapter: OpenAIEmbeddingAdapter = {
@@ -282,7 +343,7 @@ async function seedRepositoryPod(
     { store, capsuleId: POD_CAPSULE_ID, sourceId: POD_SOURCE_ID },
     {
       displayName: "Repository semantic test",
-      repositoryRoot: ROOT,
+      repositoryRoot,
       embeddingModelIdentity: verified.identity,
     },
   );
@@ -299,6 +360,283 @@ async function seedRepositoryPod(
     { runId: "repository-semantic-test-index" },
   );
   return { store };
+}
+
+async function staleFixture(
+  extra: ConfiguredRepoSemanticSearchOptions = {},
+  fileCount = 2,
+): Promise<{
+  readonly files: Record<string, string>;
+  readonly fs: WorkspaceFs;
+  readonly provider: SemanticSearchProvider;
+  readonly deps: UiHandlerDeps;
+  readonly store: KnowledgeStore;
+  readonly embedding: ReturnType<
+    typeof vi.fn<(request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>>
+  >;
+  readonly observed: ReturnType<
+    typeof vi.fn<NonNullable<ConfiguredRepoSemanticSearchOptions["observeSemanticFreshness"]>>
+  >;
+  readonly close: () => void;
+}> {
+  const files: Record<string, string> = {
+    "src/auth.ts": "export const sessionState = 'indexed';\n",
+    "src/peer.ts": "export const peer = 'indexed';\n",
+  };
+  for (let index = 2; index < fileCount; index += 1)
+    files[`src/changed-${String(index)}.ts`] = "export const initial = 'indexed';\n";
+  const embedding = vi.fn((request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+    Promise.resolve({
+      ok: true,
+      value: { vector: vectorFor(request.input), modelId: request.modelId },
+    }),
+  );
+  const deps = depsWith(config(true), embedding);
+  const fs = testFs(files);
+  const pod = await seedRepositoryPod(deps, fs, Object.keys(files));
+  files["src/auth.ts"] = "export const sessionState = 'session renewal changed';\n";
+  files["src/peer.ts"] = "export const peer = 'session renewal changed too';\n";
+  for (let index = 2; index < fileCount; index += 1)
+    files[`src/changed-${String(index)}.ts`] =
+      "export const changed = 'session renewal changed';\n";
+  const observed = vi.fn<
+    NonNullable<ConfiguredRepoSemanticSearchOptions["observeSemanticFreshness"]>
+  >((): void => undefined);
+  const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+    fs,
+    maxCandidates: 8,
+    repositoryPod: { store: pod.store, repositoryRoot: ROOT },
+    observeSemanticFreshness: observed,
+    tryReserveRefreshUsage: refreshBudgetGrant().reserve,
+    ...extra,
+  });
+  if (provider === undefined) throw new Error("expected semantic provider");
+  embedding.mockClear();
+  return {
+    files,
+    fs,
+    provider,
+    deps,
+    store: pod.store,
+    embedding,
+    observed,
+    close: (): void => {
+      pod.store.close();
+      deps.store.close();
+    },
+  };
+}
+
+type StaleFixture = Awaited<ReturnType<typeof staleFixture>>;
+
+function pricedRefreshFixture(fixture: StaleFixture): StaleFixture {
+  const configured = fixture.deps.config;
+  if (configured === undefined) throw new TypeError("Expected a configured refresh fixture");
+  return {
+    ...fixture,
+    deps: {
+      ...fixture.deps,
+      config: {
+        ...configured,
+        capabilities: (configured.capabilities ?? []).map((capability) => ({
+          ...capability,
+          pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 0 },
+        })),
+      },
+    },
+  };
+}
+
+function pausedRefreshEmbedding(fixture: StaleFixture): {
+  readonly entered: Promise<void>;
+  readonly finished: Promise<void>;
+  readonly finish: () => void;
+} {
+  let enter: () => void = () => undefined;
+  let finish: () => void = () => undefined;
+  let done: () => void = () => undefined;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const response = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const finished = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  fixture.embedding.mockImplementation(async (request) => {
+    enter();
+    await response;
+    done();
+    return { ok: true, value: { vector: vectorFor(request.input), modelId: request.modelId } };
+  });
+  return { entered, finished, finish };
+}
+
+function expectRefreshSpendRejection(
+  log: ReturnType<typeof createBufferedServerLogSink>,
+  required: boolean,
+): void {
+  if (!required) return;
+  const rejection = log.events.find((event) => event.op === "gateway.spend.rejected");
+  expect(rejection?.extra?.reason).toBe("spend-budget-exceeded");
+  expectActivityLogProof(
+    "gateway.spend.rejected.line",
+    formatActivityLogProofLine(rejection ?? {}),
+  );
+}
+
+function searchStaleFixture(
+  fixture: StaleFixture,
+  provider = fixture.provider,
+): Promise<readonly SemanticSearchMatch[]> {
+  return provider.search({
+    query: QUERY,
+    documents: Object.entries(fixture.files).map(([scopePath, text]) => ({ scopePath, text })),
+  });
+}
+
+function refreshProviderFor(
+  fixture: StaleFixture,
+  options: ConfiguredRepoSemanticSearchOptions,
+  env: Readonly<Record<string, string>> = {},
+): SemanticSearchProvider {
+  const provider = configuredRepoSemanticSearchProviderFor({ ...fixture.deps, env }, undefined, {
+    fs: fixture.fs,
+    repositoryPod: { store: fixture.store, repositoryRoot: ROOT },
+    deadlineAtMs: 1_001,
+    nowMs: (): number => 1,
+    observeSemanticFreshness: fixture.observed,
+    tryReserveRefreshUsage: refreshBudgetGrant().reserve,
+    ...options,
+  });
+  if (provider === undefined) throw new Error("expected configured refresh provider");
+  return provider;
+}
+
+function invalidRefreshVector(failure: string): Float32Array {
+  if (failure === "dimension") return new Float32Array([1]);
+  return failure === "nonfinite" ? new Float32Array([Number.NaN, 0]) : new Float32Array([1, 0]);
+}
+
+async function leaseFixture(): Promise<{
+  readonly fixture: StaleFixture;
+  readonly deps: UiHandlerDeps;
+  readonly close: () => void;
+}> {
+  const fixture = await staleFixture();
+  const runtimeDir = mkdtempSync(join(tmpdir(), "keiko-semantic-refresh-"));
+  const deps = {
+    ...fixture.deps,
+    uiDbPath: join(runtimeDir, "ui.db"),
+    env: { KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX: "8" },
+  };
+  fixture.files["src/auth.ts"] = "export const initial = 'indexed';\n";
+  const seeded = await seedRepositoryPod(
+    deps,
+    fixture.fs,
+    Object.keys(fixture.files),
+    true,
+    resolveKnowledgeStorePath({ runtimeStateDir: runtimeDir }),
+  );
+  seeded.store.close();
+  fixture.files["src/auth.ts"] = "export const changed = 'session renewal changed';\n";
+  fixture.embedding.mockClear();
+  return {
+    fixture,
+    deps,
+    close: (): void => {
+      fixture.close();
+      rmSync(runtimeDir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function realFingerprintFixture(fileCount = 8): Promise<{
+  readonly root: string;
+  readonly files: Record<string, string>;
+  readonly deps: UiHandlerDeps;
+  readonly pod: SeededRepositoryPod;
+  readonly close: () => void;
+}> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-semantic-cancellation-"));
+  const files = Object.fromEntries(
+    Array.from({ length: fileCount }, (_, index) => [
+      `src/file-${String(index)}.ts`,
+      `export const sessionRenewal${String(index)} = true;\n`,
+    ]),
+  );
+  mkdirSync(join(root, "src"));
+  for (const [path, text] of Object.entries(files)) writeFileSync(join(root, path), text);
+  const deps = depsWith(config(true), (request) =>
+    Promise.resolve({
+      ok: true,
+      value: { vector: vectorFor(request.input), modelId: request.modelId },
+    }),
+  );
+  const pod = await seedRepositoryPod(
+    deps,
+    nodeWorkspaceFs,
+    Object.keys(files),
+    true,
+    ":memory:",
+    root,
+  );
+  return {
+    root,
+    files,
+    deps,
+    pod,
+    close: (): void => {
+      pod.store.close();
+      deps.store.close();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function pausedFingerprintRead(
+  fixture: StaleFixture,
+  sameSize = true,
+): {
+  readonly fs: WorkspaceFs;
+  readonly entered: Promise<void>;
+  readonly finish: () => void;
+  readonly stat: ReturnType<typeof vi.fn<WorkspaceFs["stat"]>>;
+  readonly realPath: ReturnType<typeof vi.fn<WorkspaceFs["realPath"]>>;
+  readonly cleanup: ReturnType<typeof vi.fn>;
+} {
+  if (sameSize) fixture.files["src/auth.ts"] = "export const sessionState = 'changed';\n";
+  let enter: () => void = () => undefined;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let release: (bytes: Uint8Array) => void = () => undefined;
+  const read = new Promise<Uint8Array>((resolve) => {
+    release = resolve;
+  });
+  const cleanup = vi.fn();
+  const stat = vi.fn(fixture.fs.stat);
+  const realPath = vi.fn(fixture.fs.realPath);
+  const fs: WorkspaceFs = {
+    ...fixture.fs,
+    stat,
+    realPath,
+    readFileBytes: (): Promise<Uint8Array> => {
+      enter();
+      return read.finally(cleanup);
+    },
+  };
+  return {
+    fs,
+    entered,
+    cleanup,
+    stat,
+    realPath,
+    finish: (): void => {
+      release(new TextEncoder().encode(fixture.files["src/auth.ts"] ?? ""));
+    },
+  };
 }
 
 async function searchMissingCandidate(
@@ -703,6 +1041,884 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     expect(inputs).toEqual([]);
     pod.store.close();
     deps.store.close();
+  });
+
+  it("retains current lexical atoms and reports safe stale paths without reusing stale vectors", async () => {
+    const fixture = await staleFixture();
+    try {
+      const search = await searchText(
+        { scopeId: "stale-search", relativePaths: [], workspace: testWorkspace() },
+        QUERY,
+        undefined,
+        {
+          fs: fixture.fs,
+          semanticSearchProvider: fixture.provider,
+          nowMs: (): number => 1,
+        },
+      );
+      expect(
+        search.atoms.some(
+          (atom) => atom.scopePath === "src/auth.ts" && atom.provenance.kind === "lexical-search",
+        ),
+      ).toBe(true);
+      expect(search.atoms.some((atom) => atom.provenance.kind === "semantic-search")).toBe(false);
+      expect(fixture.observed).toHaveBeenLastCalledWith({
+        stalePaths: ["src/auth.ts", "src/peer.ts"],
+        refreshedPaths: [],
+        unavailableFileCount: 0,
+      });
+      expect(fixture.embedding).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("refuses optional refresh without a request-local usage grant", async () => {
+    const fixture = await staleFixture();
+    const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+    try {
+      const provider = refreshProviderFor(fixture, {
+        fs: { ...fixture.fs, readFileBytes },
+        semanticRefreshFilesMax: 1,
+        tryReserveRefreshUsage: undefined,
+      });
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(fixture.embedding).not.toHaveBeenCalled();
+      expect(readFileBytes).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it.each(["query-tokens", "file-count", "bytes", "document-tokens"])(
+    "refuses optional refresh before %s exceeds the actual governor",
+    async (dimension) => {
+      const fixture = await staleFixture();
+      const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+      const identity = listCapsules(fixture.store)[0]?.embeddingModelIdentity;
+      if (identity === undefined) throw new TypeError("Expected the indexed embedding identity");
+      const queryBytes = Buffer.byteLength(shapeEmbeddingQuery(identity, QUERY.text), "utf8");
+      const budgets: Readonly<Record<string, Partial<ExplorationBudget>>> = {
+        "query-tokens": { modelInputTokensMax: 0 },
+        "file-count": { filesReadMax: 0 },
+        bytes: { excerptBytesMax: 1 },
+        "document-tokens": { modelInputTokensMax: queryBytes },
+      };
+      const grant = refreshBudgetGrant(budgets[dimension]);
+      try {
+        const provider = refreshProviderFor(fixture, {
+          fs: { ...fixture.fs, readFileBytes },
+          semanticRefreshFilesMax: 1,
+          tryReserveRefreshUsage: grant.reserve,
+        });
+        expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+        expect(fixture.embedding).toHaveBeenCalledTimes(dimension === "query-tokens" ? 0 : 1);
+        expect(readFileBytes).toHaveBeenCalledTimes(dimension === "document-tokens" ? 1 : 0);
+        expect(grant.usage().modelInputTokens).toBe(dimension === "query-tokens" ? 0 : queryBytes);
+        expect(grant.usage().filesRead).toBe(dimension === "document-tokens" ? 1 : 0);
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it.each([
+    { ceiling: "0", embeddingCalls: 0, reads: 0, hits: 0 },
+    { ceiling: "0.01", embeddingCalls: 1, reads: 1, hits: 0 },
+    { ceiling: "1", embeddingCalls: 2, reads: 1, hits: 1 },
+  ])("uses the actual embedding spend ledger with ceiling $ceiling", async (expected) => {
+    const fixture = await staleFixture();
+    const root = mkdtempSync(join(tmpdir(), "keiko-semantic-refresh-spend-"));
+    const log = createBufferedServerLogSink();
+    const writer = vi.spyOn(processServerLogSink(), "write").mockImplementation(log.write);
+    const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+    const configured = pricedRefreshFixture(fixture);
+    try {
+      const provider = refreshProviderFor(
+        configured,
+        {
+          fs: { ...fixture.fs, readFileBytes },
+          semanticRefreshFilesMax: 1,
+          correlationId: "semantic-refresh-spend-control",
+        },
+        {
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: expected.ceiling,
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(root, "spend.db"),
+        },
+      );
+      expect(await searchStaleFixture(fixture, provider)).toHaveLength(expected.hits);
+      expect(fixture.embedding).toHaveBeenCalledTimes(expected.embeddingCalls);
+      expect(readFileBytes).toHaveBeenCalledTimes(expected.reads);
+      const reserved = log.events.filter((event) => event.op === "gateway.spend.reserved");
+      const settled = log.events.filter((event) => event.op === "gateway.spend.settled");
+      expect(reserved).toHaveLength(expected.embeddingCalls);
+      expect(settled).toHaveLength(expected.embeddingCalls);
+      for (const [index, event] of settled.entries()) {
+        expect(event.extra?.measured).toBe(false);
+        expect(event.extra?.chargedNanoUsd).toBeGreaterThan(0);
+        expect(event.extra?.chargedNanoUsd).toBe(reserved[index]?.extra?.reservedNanoUsd);
+        expectActivityLogProof("gateway.spend.settled.line", formatActivityLogProofLine(event));
+      }
+      expectRefreshSpendRejection(log, expected.hits === 0);
+      const logged = JSON.stringify(log.events);
+      expect(logged).not.toContain("session renewal");
+      expect(logged).not.toContain("Path: ");
+      expect(logged).not.toContain("https://embedding.example");
+      expect(logged).not.toContain("embedding-key");
+    } finally {
+      writer.mockRestore();
+      fixture.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("settles an aborted refresh embedding once without late reads or observation resurrection", async () => {
+    const fixture = await staleFixture();
+    const pending = pausedRefreshEmbedding(fixture);
+    const root = mkdtempSync(join(tmpdir(), "keiko-semantic-refresh-abort-"));
+    const log = createBufferedServerLogSink();
+    const writer = vi.spyOn(processServerLogSink(), "write").mockImplementation(log.write);
+    const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+    const controller = new AbortController();
+    try {
+      const provider = refreshProviderFor(
+        pricedRefreshFixture(fixture),
+        {
+          fs: { ...fixture.fs, readFileBytes },
+          semanticRefreshFilesMax: 1,
+        },
+        {
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "1",
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(root, "spend.db"),
+        },
+      );
+      const work = provider.search({
+        query: QUERY,
+        signal: controller.signal,
+        documents: Object.entries(fixture.files).map(([scopePath, text]) => ({ scopePath, text })),
+      });
+      await pending.entered;
+      controller.abort();
+      expect(await work).toEqual([]);
+      expect(log.events.filter((event) => event.op === "gateway.spend.settled")).toHaveLength(1);
+      expect(readFileBytes).not.toHaveBeenCalled();
+      const observation = structuredClone(fixture.observed.mock.lastCall?.[0]);
+      expect(observation).toMatchObject({
+        refreshUsage: { embeddingCallCount: 1, readFileCount: 0 },
+      });
+      pending.finish();
+      await pending.finished;
+      await Promise.resolve();
+      expect(fixture.observed).toHaveBeenCalledTimes(1);
+      expect(fixture.observed.mock.lastCall?.[0]).toEqual(observation);
+      expect(log.events.filter((event) => event.op === "gateway.spend.settled")).toHaveLength(1);
+      expect(readFileBytes).not.toHaveBeenCalled();
+    } finally {
+      pending.finish();
+      writer.mockRestore();
+      fixture.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes only explicitly enabled bounded live fragments", async () => {
+    const fixture = await staleFixture({
+      semanticRefreshFilesMax: 1,
+      deadlineAtMs: 1_001,
+      nowMs: (): number => 1,
+    });
+    try {
+      const hits = await fixture.provider.search({
+        query: QUERY,
+        documents: Object.entries(fixture.files).map(([scopePath, text]) => ({ scopePath, text })),
+      });
+      expect(hits.map((hit) => hit.scopePath)).toEqual(["src/auth.ts"]);
+      expect(fixture.observed).toHaveBeenLastCalledWith({
+        stalePaths: ["src/auth.ts", "src/peer.ts"],
+        refreshedPaths: ["src/auth.ts"],
+        unavailableFileCount: 0,
+        refreshUsage: {
+          embeddingCallCount: fixture.embedding.mock.calls.length,
+          readFileCount: 1,
+          readBytes: Buffer.byteLength(fixture.files["src/auth.ts"] ?? "", "utf8"),
+          inputTokens: fixture.embedding.mock.calls.reduce(
+            (total, [request]) => total + Buffer.byteLength(request.input, "utf8"),
+            0,
+          ),
+        },
+      });
+      const fragments = fixture.embedding.mock.calls.filter(([request]) =>
+        request.input.startsWith("Path: "),
+      );
+      expect(fragments).toHaveLength(1);
+      expect(fragments[0]?.[0].input).toContain("session renewal changed");
+      const identity = listCapsules(fixture.store)[0]?.embeddingModelIdentity;
+      if (identity === undefined) throw new Error("expected seeded embedding identity");
+      expect(hits[0]?.score).toBeCloseTo(
+        scoreVector(
+          identity.vectorMetric,
+          l2NormalizeVector(vectorFor(shapeEmbeddingQuery(identity, QUERY.text))),
+          l2NormalizeVector(vectorFor(fragments[0]?.[0].input ?? "")),
+        ),
+      );
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it.each([-1, Number.NaN, Infinity, 1.5])(
+    "does not embed documents for an invalid explicit refresh cap %s",
+    async (semanticRefreshFilesMax) => {
+      const fixture = await staleFixture({
+        semanticRefreshFilesMax,
+        deadlineAtMs: 1_001,
+        nowMs: (): number => 1,
+      });
+      try {
+        expect(await searchStaleFixture(fixture)).toEqual([]);
+        expect(fixture.embedding).not.toHaveBeenCalled();
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it.each(["-1", "1.5", "Infinity", "eight"])(
+    "keeps a malformed environment refresh opt-in %s disabled",
+    async (value) => {
+      const fixture = await staleFixture();
+      try {
+        const provider = refreshProviderFor(
+          fixture,
+          {},
+          {
+            KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX: value,
+          },
+        );
+        expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+        expect(fixture.embedding).not.toHaveBeenCalled();
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it("lets an explicit zero refresh cap override an environment opt-in", async () => {
+    const fixture = await staleFixture();
+    try {
+      const provider = refreshProviderFor(
+        fixture,
+        { semanticRefreshFilesMax: 0 },
+        {
+          KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX: "8",
+        },
+      );
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(fixture.embedding).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("caps enabled refreshes at eight files and leaves persisted fingerprints untouched", async () => {
+    const fixture = await staleFixture({ maxCandidates: 32 }, 10);
+    try {
+      const fingerprints = readRepositoryFileFingerprints(
+        fixture.store,
+        POD_CAPSULE_ID,
+        POD_SOURCE_ID,
+      );
+      const provider = refreshProviderFor(fixture, { semanticRefreshFilesMax: 100 });
+      const hits = await searchStaleFixture(fixture, provider);
+      expect(hits).toHaveLength(4);
+      expect(
+        fixture.embedding.mock.calls.filter(([request]) => request.input.startsWith("Path: ")),
+      ).toHaveLength(8);
+      expect(fixture.observed.mock.lastCall?.[0]).toMatchObject({
+        stalePaths: Object.keys(fixture.files),
+        refreshedPaths: Object.keys(fixture.files).slice(0, 8),
+      });
+      expect(readRepositoryFileFingerprints(fixture.store, POD_CAPSULE_ID, POD_SOURCE_ID)).toEqual(
+        fingerprints,
+      );
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("falls back if a refreshed file changes while document embedding is awaited", async () => {
+    const fixture = await staleFixture({
+      semanticRefreshFilesMax: 1,
+      deadlineAtMs: 1_001,
+      nowMs: (): number => 1,
+    });
+    try {
+      fixture.embedding.mockImplementation((request) => {
+        if (request.input.startsWith("Path: ")) fixture.files["src/auth.ts"] = "changed again";
+        return Promise.resolve({
+          ok: true,
+          value: { modelId: request.modelId, vector: vectorFor(request.input) },
+        });
+      });
+      expect(await searchStaleFixture(fixture)).toEqual([]);
+      expect(fixture.observed.mock.lastCall?.[0]).toMatchObject({ refreshedPaths: [] });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it.each(["model", "dimension", "nonfinite"])(
+    "rejects an incompatible %s document vector without a stale semantic hit",
+    async (failure) => {
+      const fixture = await staleFixture({
+        semanticRefreshFilesMax: 1,
+        deadlineAtMs: 1_001,
+        nowMs: (): number => 1,
+      });
+      try {
+        fixture.embedding.mockImplementation((request) =>
+          Promise.resolve({
+            ok: true,
+            value: {
+              modelId:
+                request.input.startsWith("Path: ") && failure === "model"
+                  ? "other-model"
+                  : request.modelId,
+              vector: request.input.startsWith("Path: ")
+                ? invalidRefreshVector(failure)
+                : vectorFor(request.input),
+            },
+          }),
+        );
+        expect(await searchStaleFixture(fixture)).toEqual([]);
+        expect(fixture.observed.mock.lastCall?.[0]).toMatchObject({ refreshedPaths: [] });
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it("does not send an oversized or binary changed file for embedding", async () => {
+    const fixture = await staleFixture();
+    try {
+      fixture.files["src/auth.ts"] = "x".repeat(16_385);
+      fixture.files["src/peer.ts"] = "session renewal\u0000binary";
+      const readFileBytes = fixture.fs.readFileBytes;
+      const fs = { ...fixture.fs, readFileBytes: vi.fn(readFileBytes) };
+      const provider = refreshProviderFor(fixture, { fs, semanticRefreshFilesMax: 8 });
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(
+        fixture.embedding.mock.calls.some(([request]) => request.input.startsWith("Path: ")),
+      ).toBe(false);
+      expect(
+        fs.readFileBytes.mock.calls.some(([path]) => path === absolutePath("src/auth.ts")),
+      ).toBe(false);
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("uses the real configured lease for explicit environment-enabled live refresh", async () => {
+    const { fixture, deps, close } = await leaseFixture();
+    const observePodIdentity = vi.fn();
+    const lease = configuredRepoSemanticSearchProviderLeaseFor(deps, undefined, ROOT, {
+      fs: fixture.fs,
+      nowMs: (): number => 1,
+      deadlineAtMs: 1_001,
+      observePodIdentity,
+      observeSemanticFreshness: fixture.observed,
+      tryReserveRefreshUsage: refreshBudgetGrant().reserve,
+    });
+    try {
+      if (lease.provider === undefined) throw new Error("expected configured lease provider");
+      const hits = await searchStaleFixture(fixture, lease.provider);
+      expect(hits.map((hit) => hit.scopePath)).toContain("src/auth.ts");
+      expect(lease.indexIdentityDigest).toMatch(/^[a-f\d]{64}$/u);
+      expect(observePodIdentity).toHaveBeenCalledWith({
+        capsuleId: POD_CAPSULE_ID,
+        sourceId: POD_SOURCE_ID,
+      });
+      expect(fixture.observed.mock.lastCall?.[0]).toMatchObject({
+        stalePaths: ["src/auth.ts"],
+        refreshedPaths: ["src/auth.ts"],
+      });
+      const calls = fixture.embedding.mock.calls.map(([request]) => request);
+      expect(calls.some((request) => request.input.startsWith("Path: src/auth.ts\n"))).toBe(true);
+      expect(calls.every((request) => request.apiKeyHeaderName === "x-api-key")).toBe(true);
+    } finally {
+      lease.close();
+      close();
+    }
+  });
+
+  it("reuses one validated request query for fresh pod hits and live refresh", async () => {
+    const { fixture, deps, close } = await leaseFixture();
+    const grant = vi.fn(refreshBudgetGrant().reserve);
+    const lease = configuredRepoSemanticSearchProviderLeaseFor(deps, undefined, ROOT, {
+      fs: fixture.fs,
+      semanticRefreshFilesMax: 1,
+      nowMs: (): number => 1,
+      deadlineAtMs: 1_001,
+      observeSemanticFreshness: fixture.observed,
+      tryReserveRefreshUsage: grant,
+    });
+    try {
+      if (lease.provider === undefined) throw new TypeError("Expected configured lease provider");
+      const hits = await searchStaleFixture(fixture, lease.provider);
+      expect(hits.map((hit) => hit.scopePath)).toContain("src/auth.ts");
+      const identity = listCapsules(fixture.store)[0]?.embeddingModelIdentity;
+      if (identity === undefined) throw new TypeError("Expected fixture pod identity");
+      const query = shapeEmbeddingQuery(identity, QUERY.text);
+      const calls = fixture.embedding.mock.calls.map(([request]) => request);
+      expect(calls.filter((request) => request.input === query)).toHaveLength(1);
+      const documents = calls.filter((request) => request.input.startsWith("Path: "));
+      expect(documents).toHaveLength(1);
+      expect(fixture.observed.mock.lastCall?.[0]).toMatchObject({
+        stalePaths: ["src/auth.ts"],
+        refreshedPaths: ["src/auth.ts"],
+        refreshUsage: {
+          embeddingCallCount: documents.length,
+          inputTokens: documents.reduce(
+            (sum, request) => sum + Buffer.byteLength(request.input),
+            0,
+          ),
+        },
+      });
+      expect(
+        grant.mock.calls.filter(([delta]) => delta.modelInputTokens !== undefined),
+      ).toHaveLength(documents.length);
+    } finally {
+      lease.close();
+      close();
+    }
+  });
+
+  it("does not reuse an incompatible query response for live refresh", async () => {
+    const { fixture, deps, close } = await leaseFixture();
+    const identity = listCapsules(fixture.store)[0]?.embeddingModelIdentity;
+    if (identity === undefined) throw new TypeError("Expected fixture pod identity");
+    const query = shapeEmbeddingQuery(identity, QUERY.text);
+    let queryCalls = 0;
+    fixture.embedding.mockImplementation((request) => {
+      if (request.input === query) queryCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        value: {
+          modelId: request.modelId,
+          vector:
+            request.input === query && queryCalls === 1
+              ? new Float32Array([1])
+              : vectorFor(request.input),
+        },
+      });
+    });
+    const lease = configuredRepoSemanticSearchProviderLeaseFor(deps, undefined, ROOT, {
+      fs: fixture.fs,
+      semanticRefreshFilesMax: 1,
+      nowMs: (): number => 1,
+      deadlineAtMs: 1_001,
+      observeSemanticFreshness: fixture.observed,
+      tryReserveRefreshUsage: refreshBudgetGrant().reserve,
+    });
+    try {
+      if (lease.provider === undefined) throw new TypeError("Expected configured lease provider");
+      const hits = await searchStaleFixture(fixture, lease.provider);
+      expect(queryCalls).toBe(2);
+      expect(hits.map((hit) => hit.scopePath)).toContain("src/auth.ts");
+      expect(fixture.observed.mock.lastCall?.[0]?.refreshUsage?.embeddingCallCount).toBe(2);
+    } finally {
+      lease.close();
+      close();
+    }
+  });
+
+  it("composes the actual request factory, configured lease, governor and durable spend", async () => {
+    const { fixture, deps, close } = await leaseFixture();
+    const root = mkdtempSync(join(tmpdir(), "keiko-semantic-request-spend-"));
+    const log = createBufferedServerLogSink();
+    const writer = vi.spyOn(processServerLogSink(), "write").mockImplementation(log.write);
+    const grant = refreshBudgetGrant();
+    const reserve = vi.fn(grant.reserve);
+    const runtime = configuredGroundedSemanticRequest(
+      {
+        ...deps,
+        config: pricedRefreshFixture(fixture).deps.config,
+        env: {
+          ...deps.env,
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "1",
+          [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(root, "spend.db"),
+        },
+      },
+      ROOT,
+    );
+    try {
+      const provider = runtime.providerFor?.({
+        fs: fixture.fs,
+        nowMs: (): number => 1,
+        deadlineAtMs: 1_001,
+        signal: undefined,
+        correlationId: "semantic-request-composition",
+        tryReserveRefreshUsage: reserve,
+        observeSemanticFreshness: fixture.observed,
+      });
+      if (provider === undefined) throw new TypeError("Expected the real request provider");
+      // Existing lease qualification is separate from the optional refresh attempts below.
+      fixture.embedding.mockClear();
+      const hits = await provider.search({
+        query: QUERY,
+        documents: [{ scopePath: "src/auth.ts", text: fixture.files["src/auth.ts"] ?? "" }],
+      });
+      expect(hits.map((hit) => hit.scopePath)).toContain("src/auth.ts");
+      const calls = fixture.embedding.mock.calls.map(([request]) => request);
+      expect(calls).toHaveLength(2);
+      expect(reserve).toHaveBeenCalledTimes(3);
+      expect(grant.usage().filesRead).toBe(1);
+      expect(grant.usage().excerptBytes).toBe(
+        Buffer.byteLength(fixture.files["src/auth.ts"] ?? ""),
+      );
+      expect(grant.usage().modelInputTokens).toBe(
+        calls.reduce((sum, request) => sum + Buffer.byteLength(request.input), 0),
+      );
+      expect(log.events.filter((event) => event.op === "gateway.spend.reserved")).toHaveLength(2);
+      expect(log.events.filter((event) => event.op === "gateway.spend.settled")).toHaveLength(2);
+      expect(fixture.observed.mock.lastCall?.[0]?.refreshUsage).toMatchObject({
+        embeddingCallCount: 2,
+        readFileCount: 1,
+        inputTokens: grant.usage().modelInputTokens,
+        readBytes: grant.usage().excerptBytes,
+      });
+    } finally {
+      runtime.close();
+      writer.mockRestore();
+      close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["/outside/auth.ts", `${ROOT}/.env`])(
+    "does not read or refresh an unsafe canonical alias %s",
+    async (alias) => {
+      const fixture = await staleFixture();
+      try {
+        const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+        const fs = {
+          ...fixture.fs,
+          readFileBytes,
+          realPath: (path: string): string => (path === absolutePath("src/auth.ts") ? alias : path),
+        };
+        const provider = refreshProviderFor(fixture, { fs, semanticRefreshFilesMax: 8 });
+        expect(
+          await provider.search({
+            query: QUERY,
+            documents: [{ scopePath: "src/auth.ts", text: fixture.files["src/auth.ts"] ?? "" }],
+          }),
+        ).toEqual([]);
+        expect(readFileBytes).not.toHaveBeenCalled();
+        expect(fixture.embedding).not.toHaveBeenCalled();
+        expect(fixture.observed.mock.lastCall?.[0]).toMatchObject({ unavailableFileCount: 1 });
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it("does not send invalid UTF-8 bytes for document embedding", async () => {
+    const fixture = await staleFixture();
+    try {
+      const fs = {
+        ...fixture.fs,
+        readFileBytes: (path: string): Promise<Uint8Array> =>
+          Promise.resolve(new Uint8Array(fixture.fs.stat(path).size).fill(255)),
+      };
+      const provider = refreshProviderFor(fixture, { fs, semanticRefreshFilesMax: 8 });
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(
+        fixture.embedding.mock.calls.some(([request]) => request.input.startsWith("Path: ")),
+      ).toBe(false);
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("records unreadable enabled refresh fragments as pod degradation", async () => {
+    const fixture = await staleFixture();
+    const observed = vi.fn<(observation: RepositoryPodRetrievalObservation) => void>();
+    try {
+      const provider = refreshProviderFor(fixture, {
+        fs: {
+          ...fixture.fs,
+          readFileBytes: (): Promise<Uint8Array> => Promise.reject(new Error("private-read-body")),
+        },
+        semanticRefreshFilesMax: 1,
+        observePodRetrieval: observed,
+      });
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(observed).toHaveBeenCalledWith({
+        mode: "pod-query-failed",
+        referenceCount: 0,
+        denseCandidateCount: 0,
+        lexicalCandidateCount: 0,
+        lexicalOrFallbackUsed: true,
+      });
+      expect(JSON.stringify(observed.mock.calls)).not.toContain("private-read-body");
+      expect(
+        fixture.embedding.mock.calls.some(([request]) => request.input.startsWith("Path: ")),
+      ).toBe(false);
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("redacts live document input through the configured dependency redactor", async () => {
+    const fixture = await staleFixture();
+    try {
+      fixture.files["src/auth.ts"] = "export const secret = 'embedding-key'; // session renewal\n";
+      const provider = refreshProviderFor(fixture, { semanticRefreshFilesMax: 1 });
+      expect(await searchStaleFixture(fixture, provider)).toHaveLength(1);
+      const fragment = fixture.embedding.mock.calls.find(([request]) =>
+        request.input.startsWith("Path: "),
+      );
+      expect(fragment?.[0].input).not.toContain("embedding-key");
+      expect(fragment?.[0].input).toContain("session renewal");
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("stops before live refresh reads when the query embedding consumes the remaining deadline", async () => {
+    const fixture = await staleFixture();
+    let now = 1;
+    try {
+      const readFileBytes = vi.fn(fixture.fs.readFileBytes);
+      const provider = refreshProviderFor(fixture, {
+        fs: { ...fixture.fs, readFileBytes },
+        semanticRefreshFilesMax: 8,
+        nowMs: (): number => now,
+        deadlineAtMs: 100,
+      });
+      fixture.embedding.mockImplementation((request) => {
+        now = 100;
+        return Promise.resolve({
+          ok: true,
+          value: {
+            vector: vectorFor(request.input),
+            modelId: request.modelId,
+          },
+        });
+      });
+      expect(await searchStaleFixture(fixture, provider)).toEqual([]);
+      expect(fixture.embedding).toHaveBeenCalledTimes(1);
+      expect(readFileBytes).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("reuses a validated freshness preflight with bounded pre/post-read metadata checks", async () => {
+    const fixture = await realFingerprintFixture(32);
+    const read = nodeWorkspaceFs.readFileBytes;
+    if (read === undefined) throw new TypeError("Expected the bounded node reader");
+    const readFileBytes = vi.fn(read);
+    const stat = vi.fn(nodeWorkspaceFs.stat);
+    const realPath = vi.fn(nodeWorkspaceFs.realPath);
+    try {
+      const provider = configuredRepoSemanticSearchProviderFor(fixture.deps, undefined, {
+        fs: { ...nodeWorkspaceFs, readFileBytes, stat, realPath },
+        repositoryPod: { store: fixture.pod.store, repositoryRoot: fixture.root },
+      });
+      if (provider === undefined) throw new TypeError("Expected the configured provider");
+      stat.mockClear();
+      realPath.mockClear();
+      const documents = Object.entries(fixture.files).map(([scopePath, text]) => ({
+        scopePath,
+        text,
+      }));
+      const result = await provider.search({ query: { ...QUERY, maxResults: 32 }, documents });
+      expect(result).toHaveLength(documents.length);
+      expect(readFileBytes).toHaveBeenCalledTimes(documents.length);
+      expect.soft(realPath.mock.calls.length).toBeLessThanOrEqual(128);
+      expect.soft(stat.mock.calls.length).toBeLessThanOrEqual(96);
+      for (const call of readFileBytes.mock.calls) {
+        expect(call[2]).toBe("reject");
+        expect(call[3].fileIdentity).toBeDefined();
+        expect(call[3].size).toBeGreaterThan(0);
+      }
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it.each(["healthy", "pre-aborted", "first-read-aborted"])(
+    "bounds real eight-file pod fingerprint reads when %s",
+    async (state) => {
+      const fixture = await realFingerprintFixture();
+      const controller = new AbortController();
+      let completedReads = 0;
+      const readFileBytes = vi.fn<NonNullable<WorkspaceFs["readFileBytes"]>>(async (...args) => {
+        const bytes = await nodeWorkspaceFs.readFileBytes?.(...args);
+        if (bytes === undefined) throw new Error("expected bounded node reader");
+        completedReads += 1;
+        if (state === "first-read-aborted" && completedReads === 1) controller.abort();
+        return bytes;
+      });
+      const provider = configuredRepoSemanticSearchProviderFor(fixture.deps, undefined, {
+        fs: { ...nodeWorkspaceFs, readFileBytes },
+        repositoryPod: { store: fixture.pod.store, repositoryRoot: fixture.root },
+      });
+      if (provider === undefined) throw new Error("expected configured provider");
+      try {
+        if (state === "pre-aborted") controller.abort();
+        const result = await provider.search({
+          query: QUERY,
+          signal: controller.signal,
+          documents: Object.entries(fixture.files).map(([scopePath, text]) => ({
+            scopePath,
+            text,
+          })),
+        });
+        expect(readFileBytes).toHaveBeenCalledTimes(
+          state === "healthy" ? 8 : state === "pre-aborted" ? 0 : 1,
+        );
+        if (state !== "healthy") expect(result).toEqual([]);
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it.each(["elapsed", "aborted"])(
+    "stops freshness I/O after a deferred fingerprint read is %s",
+    async (stop) => {
+      const fixture = await staleFixture();
+      const paused = pausedFingerprintRead(fixture);
+      const controller = new AbortController();
+      let now = 1;
+      const provider = refreshProviderFor(fixture, {
+        fs: paused.fs,
+        nowMs: (): number => now,
+        deadlineAtMs: 100,
+        semanticRefreshFilesMax: 8,
+      });
+      let settled = false;
+      const search = provider
+        .search({
+          query: QUERY,
+          signal: controller.signal,
+          documents: Object.entries(fixture.files).map(([scopePath, text]) => ({
+            scopePath,
+            text,
+          })),
+        })
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await paused.entered;
+        paused.stat.mockClear();
+        paused.realPath.mockClear();
+        if (stop === "elapsed") {
+          now = 100;
+          paused.finish();
+        } else controller.abort();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(true);
+        expect(await search).toEqual([]);
+        expect(paused.stat).not.toHaveBeenCalled();
+        expect(paused.realPath).not.toHaveBeenCalled();
+        expect(fixture.embedding).not.toHaveBeenCalled();
+        const observationCount = fixture.observed.mock.calls.length;
+        paused.finish();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(fixture.observed).toHaveBeenCalledTimes(observationCount);
+        expect(paused.stat).not.toHaveBeenCalled();
+        expect(paused.realPath).not.toHaveBeenCalled();
+        expect(fixture.embedding).not.toHaveBeenCalled();
+      } finally {
+        paused.finish();
+        await search;
+        expect(paused.cleanup).toHaveBeenCalledTimes(1);
+        fixture.close();
+      }
+    },
+  );
+
+  it("cancels a deferred live refresh read before document embedding or later metadata", async () => {
+    const fixture = await staleFixture();
+    const paused = pausedFingerprintRead(fixture, false);
+    const controller = new AbortController();
+    const provider = refreshProviderFor(fixture, {
+      fs: paused.fs,
+      nowMs: (): number => 1,
+      deadlineAtMs: 100,
+      semanticRefreshFilesMax: 8,
+    });
+    let settled = false;
+    const search = provider
+      .search({
+        query: QUERY,
+        signal: controller.signal,
+        documents: Object.entries(fixture.files).map(([scopePath, text]) => ({ scopePath, text })),
+      })
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      await paused.entered;
+      paused.stat.mockClear();
+      paused.realPath.mockClear();
+      controller.abort();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(true);
+      expect(await search).toEqual([]);
+      expect(fixture.embedding).toHaveBeenCalledTimes(1);
+      paused.finish();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(paused.stat).not.toHaveBeenCalled();
+      expect(paused.realPath).not.toHaveBeenCalled();
+      expect(fixture.embedding).toHaveBeenCalledTimes(1);
+    } finally {
+      paused.finish();
+      await search;
+      expect(paused.cleanup).toHaveBeenCalledTimes(1);
+      fixture.close();
+    }
+  });
+
+  it("keeps freshness unknown and performs no I/O after the explicit request deadline", async () => {
+    const fixture = await staleFixture({
+      semanticRefreshFilesMax: 8,
+      deadlineAtMs: 1,
+      nowMs: (): number => 1,
+    });
+    const stat = vi.spyOn(fixture.fs, "stat");
+    const realPath = vi.spyOn(fixture.fs, "realPath");
+    const read = vi.spyOn(fixture.fs, "readFileBytes");
+    try {
+      await expect(
+        fixture.provider.search({
+          query: QUERY,
+          documents: Object.entries(fixture.files).map(([scopePath, text]) => ({
+            scopePath,
+            text,
+          })),
+        }),
+      ).resolves.toEqual([]);
+      expect(fixture.embedding).not.toHaveBeenCalled();
+      expect(fixture.observed).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+      expect(realPath).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
   });
 
   it("hashes bounded live workspace bytes instead of trusting a stale candidate snapshot", async () => {

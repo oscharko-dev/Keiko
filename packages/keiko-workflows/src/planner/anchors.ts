@@ -166,15 +166,18 @@ const QUOTED_SINGLE_RE =
   /(?<!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])'([^'\n]+)'(?!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])/gu;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
-// Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
-// realistic repository path, but it caps the worst-case backtracking work a single scan position
-// can spend to a fixed constant instead of one growing with input length. The previous unbounded
-// `(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}` let the trailing `[\w.-]+` and the group's inner
-// `[\w.-]+` trade the same run of characters back and forth across an unbounded number of split
-// points, which is quadratic on adversarial input (measured empirically before this change).
-// Exported (module-internal, not re-exported from index.ts) solely so the co-located test can
-// exercise the pattern directly for the S8786 regression test.
-export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
+// Inspect complete whitespace-delimited tokens once. Depth/segment regex bounds used to
+// silently turn valid long or Unicode paths into suffixes; the existing total metadata budget
+// remains authoritative. No nested repetition or rescanning from every slash is necessary.
+const PATH_TOKEN_RE = /[^\s`"'<>,;!?]+/gu;
+const PRESENTATION_PATTERNS: readonly RegExp[] = [
+  /,\s*with\s+(?:(?:current|relevant|supporting)\s+)?(?:implementation|definition|code|source)\s+citations\s*(?=$|[.!?;\n])/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?cite(?:\s+(?:the|a|an|any|authoritative|current|relevant|supporting|source|sources|manual|manuals|file|files|and|line|lines|evidence|(?:implementation|definition|code)\s+lines?)){1,16}\b(?:,\s*(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b)?/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?keep\s+(?:(?:the|your)\s+answer|it)\s+(?:under|below|within)\s+\d{1,6}\s+(?:words|sentences|lines)\b/giu,
+  /(^|[.!?;\n])\s*(?:please\s+)?(?:answer|respond)\s+(?:briefly|concisely)\b/giu,
+  /(^|[.!?;\n])\s*(?:bitte\s+)?antworte\s+(?:kurz|knapp)(?:\s+mit\s+(?:quellenangabe|quellen|belegen))?\b/giu,
+  /(^|[.!?;\n])\s*(?:bitte\s+)?zitiere(?:\s+(?:die|relevanten|quellen|quellzeilen|implementierungszeilen|definitionszeilen|zeilen|und)){1,16}\b(?:,\s*(?:unter|innerhalb\s+von)\s+\d{1,6}\s+(?:wörtern|sätzen|zeilen)\b)?/giu,
+];
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
 const DEFINITION_TARGET_BEFORE_VERB_RE =
@@ -193,6 +196,10 @@ const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]{0,127}_[A-Za-z0-9_$]{1,12
 const FILENAME_RE =
   /(?<![\p{L}\p{M}\p{N}_$.-])([\p{L}\p{N}_$-][\p{L}\p{M}\p{N}_$-]{0,254}(?:\.[A-Za-z0-9]{1,16}){1,4})(?![\p{L}\p{M}\p{N}_$-]|\.[\p{L}\p{M}\p{N}_$-])/gu;
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
+// Bare "next" is ordinary grammar unless a framework spelling or technical noun/use binds it.
+// Intent classification consumes this same non-global pattern; it is not a public root export.
+export const NEXT_FRAMEWORK_TERM_RE =
+  /\bnext(?:\.?js)\b|\bnext(?=\s+(?:framework|version|configuration|config|router|app|application)\b)|\b(?:use|uses|using|with)\s+next(?=\s*[.!?]?\s*$)|^\s*next\s*$/iu;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
   readonly term: string;
@@ -200,7 +207,7 @@ const TECHNICAL_TERM_PATTERNS: readonly {
   { pattern: /\btype[\s_-]?script\b/gi, term: "typescript" },
   { pattern: /\bjava[\s_-]?script\b/gi, term: "javascript" },
   { pattern: /\bnode(?:\.js)?\b/gi, term: "node" },
-  { pattern: /\bnext(?:\.js)?\b/gi, term: "nextjs" },
+  { pattern: new RegExp(NEXT_FRAMEWORK_TERM_RE.source, "giu"), term: "nextjs" },
   { pattern: /\bpackage\.json\b/gi, term: "package.json" },
   { pattern: /\bpackage[\s_-]?manager\b/gi, term: "package-manager" },
   { pattern: /\btsconfig(?:\.[a-z0-9]+)?\b/gi, term: "tsconfig" },
@@ -219,6 +226,8 @@ export type SearchAnchorKind = "literal" | "identifier" | "path" | "quoted";
 
 export interface SearchAnchor {
   readonly term: string;
+  /** Original path spelling for filesystem resolution; `term` remains the lexical key. */
+  readonly sourceTerm?: string;
   readonly weight: number;
   readonly kind: SearchAnchorKind;
 }
@@ -373,6 +382,45 @@ function tokenizeRemaining(remaining: string, out: AnchorAccumulator): number {
   return considered;
 }
 
+function completePathToken(raw: string): string {
+  const term = raw.endsWith(".") ? raw.slice(0, -1) : raw;
+  if (term.startsWith("(") && term.endsWith(")")) return term.slice(1, -1);
+  return term.endsWith(")") ? term.slice(0, -1) : term;
+}
+
+function isFilePathToken(term: string): boolean {
+  const path = term.replace(/(?::\d{1,9}){1,2}$/u, "");
+  if (!path.includes("/") || path.includes("\\")) return false;
+  const localPath = path.startsWith("file://") ? path.slice(7) : path;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(localPath)) return false;
+  const name = localPath.slice(localPath.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && /^[A-Za-z0-9]{1,16}$/u.test(name.slice(dot + 1));
+}
+
+// The composer emits @path as a reference marker. Quotes have already been consumed here;
+// quoted literal @ paths and an explicit ./@ path therefore retain their filesystem spelling.
+export function normalizeUnquotedFilePathToken(term: string): string {
+  const withoutMention = term.startsWith("@") ? term.slice(1) : term;
+  return isFilePathToken(withoutMention) ? withoutMention : term;
+}
+
+function collectFilePathTokens(source: string, out: AnchorAccumulator): string {
+  return source.replace(PATH_TOKEN_RE, (raw: string) => {
+    const term = normalizeUnquotedFilePathToken(completePathToken(raw));
+    if (!isFilePathToken(term)) return raw;
+    pushAnchor(out, term, "path", 0.95);
+    return raw.endsWith(".") ? `${" ".repeat(raw.length - 1)}.` : " ".repeat(raw.length);
+  });
+}
+
+function withoutPresentationInstructions(source: string): string {
+  return PRESENTATION_PATTERNS.reduce(
+    (remaining, pattern) => remaining.replace(pattern, (match) => " ".repeat(match.length)),
+    source,
+  );
+}
+
 function dedup(anchors: readonly MutableAnchor[], caseSensitive: boolean): MutableAnchor[] {
   const best = new Map<string, MutableAnchor>();
   for (const anchor of anchors) {
@@ -400,6 +448,7 @@ function freeze(
 ): readonly SearchAnchor[] {
   return anchors.map((a) => ({
     term: caseSensitive ? a.sourceTerm : a.term,
+    ...(a.kind === "path" && a.sourceTerm !== a.term ? { sourceTerm: a.sourceTerm } : {}),
     weight: a.weight,
     kind: a.kind,
   }));
@@ -432,10 +481,12 @@ function collectQuotedTargets(
   return collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected, accept, replacement);
 }
 
-// Internal planner seam: quoted target contents are data, not instructions or diagnostic intent.
-// Extraction and contextual classification use the same contraction-safe quotation grammar.
+// Internal planner seam: quoted targets and output directives cannot create content intent.
+// Extraction and classification share the quotation and presentation grammar.
 export function queryContextOutsideQuotes(text: string): string {
-  return collectQuotedTargets(text, { anchors: [], truncated: false });
+  return withoutPresentationInstructions(
+    collectQuotedTargets(text, { anchors: [], truncated: false }),
+  );
 }
 
 // Same quote parser as extraction: the marker denotes accepted target data, never query prose.
@@ -444,7 +495,7 @@ export function queryShapeOutsideTargets(text: string, targets: readonly SearchA
   const shape = collectQuotedTargets(text, { anchors: [], truncated: false }, " \0 ", (value) =>
     terms.has(value.trim().toLowerCase()),
   );
-  return shape.replace(/[\p{L}\p{N}_$-]+/gu, (token) =>
+  return withoutPresentationInstructions(shape).replace(/[\p{L}\p{N}_$-]+/gu, (token) =>
     terms.has(token.toLowerCase()) ? " \0 " : token,
   );
 }
@@ -457,8 +508,11 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   const collected: AnchorAccumulator = { anchors: [], truncated: false };
   let remaining = collectQuotedTargets(text, collected);
   remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
+  remaining = collectFilePathTokens(remaining, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
-  remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
+  // Explicit target data has already been retained. Remove presentation prose before definition
+  // patterns can promote words such as "lines" into independently requested source symbols.
+  remaining = withoutPresentationInstructions(remaining);
   remaining = collectMatches(
     remaining,
     DEFINITION_TARGET_BEFORE_VERB_RE,

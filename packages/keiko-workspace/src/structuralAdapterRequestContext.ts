@@ -1,7 +1,13 @@
+import { Buffer } from "node:buffer";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  readWorkspaceFileTextForInternalUse,
+  type InternalWorkspaceTextRead,
+} from "./discovery.js";
 import type { CodeIntelligenceIndex } from "./codeIntelligence.js";
 import { buildCodeIntelligenceIndexFromCandidates } from "./codeIntelligence.js";
 import { buildEndpointContractGraphFromCandidates } from "./endpointContractGraph.js";
+import { endpointSourcePreferences } from "./endpointContractSource.js";
 import type { EndpointContractGraph } from "./endpointContractTypes.js";
 import { PathDeniedError, PathEscapeError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
@@ -39,6 +45,7 @@ import {
 } from "./workspaceIndex.js";
 import type { DiscoveredFile } from "./types.js";
 import {
+  assertStructuralExecutionActive,
   createStructuralExecutionControl,
   executionControlledWorkspaceFs,
   sameStructuralExecutionFs,
@@ -61,9 +68,12 @@ export interface StructuralAdapterRequestContext {
   readonly skippedSymbolicLinks: () => readonly string[];
   readonly candidateLimitReached: () => boolean;
   readonly codeIntelligenceIndex: () => Promise<CodeIntelligenceIndex>;
+  readonly isCodeIntelligenceSourceCurrent: (scopePath: string) => boolean;
   readonly symbolGraph: () => Promise<SymbolGraph>;
   readonly importGraph: () => Promise<ImportGraph>;
-  readonly endpointContractGraph: () => Promise<EndpointContractGraph>;
+  readonly endpointContractGraph: (
+    preferredSourcePaths?: readonly string[],
+  ) => Promise<EndpointContractGraph>;
   readonly findFiles: (
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -94,6 +104,7 @@ export interface StructuralAdapterRequestContextDeps {
   readonly nowMs?: (() => number) | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly deadlineAtMs?: number | undefined;
+  readonly isCandidateAllowed?: ((scopePath: string) => boolean) | undefined;
 }
 
 export interface StructuralRequestContextDiagnostics {
@@ -114,11 +125,27 @@ type CandidateInventoryState =
   | { readonly status: "failed"; readonly error: unknown };
 
 interface CachedCandidateContentPreview {
-  readonly content: string | null;
+  readonly content: string | null | undefined;
+  readonly completeEvidence?: CompleteStructuralSource | undefined;
   readonly file: DiscoveredFile;
   readonly metadata: WorkspaceIndexDiscoveredFile | undefined;
   readonly validatedFor: StructuralExecutionControl;
 }
+
+interface CandidateContentSnapshot {
+  readonly metadata: WorkspaceIndexDiscoveredFile;
+  readonly canonicalRoot: string;
+}
+
+interface CompleteStructuralSource extends CandidateContentSnapshot {
+  readonly content: string;
+  readonly sizeBytes: number;
+  readonly encodedBytes: number;
+}
+
+// These are new aggregate bounds, not a claim about the existing preview Map.
+const COMPLETE_STRUCTURAL_SOURCE_FILES_MAX = 512;
+const COMPLETE_STRUCTURAL_SOURCE_BYTES_MAX = 32 * 1_024 * 1_024;
 
 type CachedContentPreviewResolution =
   | { readonly status: "reused"; readonly content: string | undefined }
@@ -134,11 +161,11 @@ function rethrowPreviewValidationBoundary(error: unknown): void {
   }
 }
 
-function currentCandidateContentMetadata(
+function currentCandidateContentSnapshot(
   scope: SearchScope,
   file: DiscoveredFile,
   fs: WorkspaceFs,
-): WorkspaceIndexDiscoveredFile | undefined {
+): CandidateContentSnapshot | undefined {
   try {
     const absolutePath = resolveWithinWorkspace(scope.workspace.root, file.relativePath);
     const contained = containedRealPathInfo(fs, scope.workspace.root, absolutePath);
@@ -150,11 +177,22 @@ function currentCandidateContentMetadata(
     }
     const stat = fs.stat(contained.path);
     if (!stat.isFile || stat.isSymbolicLink || stat.hardLinkCount !== 1) return undefined;
-    return workspaceIndexFileMetadata(file.relativePath, stat);
+    return {
+      metadata: workspaceIndexFileMetadata(file.relativePath, stat),
+      canonicalRoot: contained.realBase,
+    };
   } catch (error) {
     rethrowPreviewValidationBoundary(error);
     return undefined;
   }
+}
+
+function currentCandidateContentMetadata(
+  scope: SearchScope,
+  file: DiscoveredFile,
+  fs: WorkspaceFs,
+): WorkspaceIndexDiscoveredFile | undefined {
+  return currentCandidateContentSnapshot(scope, file, fs)?.metadata;
 }
 
 function searchLimitsKey(limits: SearchLimits): string {
@@ -203,9 +241,11 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private readonly boundLimitsKey: string;
   private readonly executionControl: StructuralExecutionControl;
   private readonly executionFs: WorkspaceFs;
+  private readonly isCandidateAllowed: ((scopePath: string) => boolean) | undefined;
   private candidateState: CandidateInventoryState = { status: "empty" };
   private readonly queryCandidateStates = new Map<string, CandidateInventoryState>();
   private readonly contentPreviews = new Map<string, CachedCandidateContentPreview>();
+  private readonly retainedSourcePaths = new Set<string>();
   private readonly staleContentPreviewPaths = new Set<string>();
   private readonly searchTextSessions: RequestLocalSearchTextSessionPool =
     createRequestLocalSearchTextSessionPool();
@@ -213,9 +253,12 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private paths: readonly string[] | undefined;
   private symbolicLinks: readonly string[] | undefined;
   private codeIndexPromise: Promise<CodeIntelligenceIndex> | undefined;
+  private codeIndexSourceCapacity = 0;
+  private readonly codeIndexSourceSnapshots = new Map<string, CandidateContentSnapshot>();
   private symbolGraphPromise: Promise<SymbolGraph> | undefined;
   private importGraphPromise: Promise<ImportGraph> | undefined;
-  private endpointGraphPromise: Promise<EndpointContractGraph> | undefined;
+  private endpointGraphState:
+    { readonly key: string; readonly promise: Promise<EndpointContractGraph> } | undefined;
   private candidateInventoryBuildCount = 0;
   private candidateFileCount = 0;
   private candidateDirectoryCount = 0;
@@ -243,10 +286,12 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       deps.deadlineAtMs,
     );
     this.executionFs = executionControlledWorkspaceFs(this.fs, this.executionControl);
+    this.isCandidateAllowed = deps.isCandidateAllowed;
   }
 
   private candidateSet(): CandidateSet {
-    if (this.candidateState.status === "ready") return this.candidateState.candidates;
+    if (this.candidateState.status === "ready")
+      return this.allowedCandidates(this.candidateState.candidates);
     if (this.candidateState.status === "failed") throw this.candidateState.error;
     try {
       this.candidateInventoryBuildCount += 1;
@@ -258,11 +303,18 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       );
       this.recordCandidateInventory(candidates);
       this.candidateState = { status: "ready", candidates };
-      return candidates;
+      return this.allowedCandidates(candidates);
     } catch (error) {
       this.candidateState = { status: "failed", error };
       throw error;
     }
+  }
+
+  private allowedCandidates(candidates: CandidateSet): CandidateSet {
+    const isAllowed = this.isCandidateAllowed;
+    return isAllowed === undefined
+      ? candidates
+      : { ...candidates, files: candidates.files.filter((file) => isAllowed(file.relativePath)) };
   }
 
   private recordCandidateInventory(candidates: CandidateSet): void {
@@ -320,7 +372,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       limits,
       fs: this.executionFs,
       policy,
-      inventory,
+      inventory: this.allowedCandidates(inventory),
       candidatePathPredicate,
       contentPreviewFor: (file) => this.contentPreview(file, control),
       executionControl: control,
@@ -333,6 +385,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     control: StructuralExecutionControl,
   ): string | undefined {
     if (structuralExecutionStopped(control)) return undefined;
+    if (this.isCandidateAllowed?.(file.relativePath) === false) return undefined;
     const resolution = this.resolveCachedContentPreview(file, control);
     if (resolution.status === "reused") return resolution.content;
     const previewFile = resolution.file;
@@ -344,6 +397,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     const metadata = this.contentPreviewMetadata(previewFile, preview.metadata);
     if (preview.content === undefined && metadata === undefined) return undefined;
     this.contentPreviews.set(file.relativePath, {
+      completeEvidence: this.compatibleCompleteEvidence(file.relativePath, metadata),
       content: preview.content ?? null,
       file: previewFile,
       metadata,
@@ -357,7 +411,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     control: StructuralExecutionControl,
   ): CachedContentPreviewResolution {
     const cached = this.contentPreviews.get(file.relativePath);
-    if (cached === undefined) return { status: "read", file };
+    if (cached?.content === undefined) return { status: "read", file };
     if (cached.validatedFor === control) {
       return { status: "reused", content: cached.content ?? undefined };
     }
@@ -372,6 +426,184 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       status: "read",
       file: current === undefined ? file : { ...file, sizeBytes: current.sizeBytes },
     };
+  }
+
+  private compatibleCompleteEvidence(
+    scopePath: string,
+    metadata: WorkspaceIndexDiscoveredFile | undefined,
+  ): CompleteStructuralSource | undefined {
+    const complete = this.contentPreviews.get(scopePath)?.completeEvidence;
+    return metadata !== undefined &&
+      isWorkspaceIndexFileMetadataCurrent(complete?.metadata, metadata)
+      ? complete
+      : undefined;
+  }
+
+  private assertSourceAllowed(scopePath: string): void {
+    assertStructuralExecutionActive(this.executionControl);
+    if (this.isCandidateAllowed?.(scopePath) === false) {
+      throw new PathDeniedError("structural source is no longer eligible", scopePath);
+    }
+  }
+
+  private sourceSnapshot(scopePath: string): CandidateContentSnapshot | undefined {
+    this.assertSourceAllowed(scopePath);
+    const snapshot = currentCandidateContentSnapshot(
+      this.scope,
+      { relativePath: scopePath, sizeBytes: 0 },
+      this.executionFs,
+    );
+    this.assertSourceAllowed(scopePath);
+    return snapshot;
+  }
+
+  private cachedCompleteSource(scopePath: string, maxBytes: number): string | undefined {
+    const complete = this.contentPreviews.get(scopePath)?.completeEvidence;
+    if (complete === undefined || complete.sizeBytes > maxBytes) return undefined;
+    const before = this.sourceSnapshot(scopePath);
+    if (!this.sameCompleteSnapshot(complete, before)) return undefined;
+    const after = this.sourceSnapshot(scopePath);
+    return this.sameCompleteSnapshot(complete, after) ? complete.content : undefined;
+  }
+
+  private sameCompleteSnapshot(
+    complete: CompleteStructuralSource,
+    snapshot: CandidateContentSnapshot | undefined,
+  ): boolean {
+    return (
+      complete.canonicalRoot === snapshot?.canonicalRoot &&
+      isWorkspaceIndexFileMetadataCurrent(complete.metadata, snapshot.metadata)
+    );
+  }
+
+  private canRetainCompleteSource(scopePath: string, encodedBytes: number): boolean {
+    if (
+      !this.retainedSourcePaths.has(scopePath) &&
+      this.retainedSourcePaths.size >= COMPLETE_STRUCTURAL_SOURCE_FILES_MAX
+    )
+      return false;
+    let retainedBytes = 0;
+    for (const path of this.retainedSourcePaths) {
+      if (path !== scopePath)
+        retainedBytes += this.contentPreviews.get(path)?.completeEvidence?.encodedBytes ?? 0;
+    }
+    return retainedBytes + encodedBytes <= COMPLETE_STRUCTURAL_SOURCE_BYTES_MAX;
+  }
+
+  private retainCompleteSource(scopePath: string, read: InternalWorkspaceTextRead): void {
+    const snapshot = read.snapshot;
+    if (
+      snapshot === undefined ||
+      read.sizeBytes !== read.stat.size ||
+      read.sizeBytes > CONTENT_PRESCORE_MAX_BYTES
+    )
+      return;
+    const metadata = workspaceIndexFileMetadata(scopePath, read.stat);
+    if (
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.before),
+        metadata,
+      )
+    )
+      return;
+    if (
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.descriptor),
+        metadata,
+      )
+    )
+      return;
+    const encodedBytes = Buffer.byteLength(read.content, "utf8");
+    if (!this.canRetainCompleteSource(scopePath, encodedBytes)) return;
+    this.retainedSourcePaths.add(scopePath);
+    const previous = this.contentPreviews.get(scopePath);
+    this.contentPreviews.set(scopePath, {
+      ...previous,
+      content: isWorkspaceIndexFileMetadataCurrent(previous?.metadata, metadata)
+        ? previous?.content
+        : undefined,
+      file: { relativePath: scopePath, sizeBytes: read.sizeBytes },
+      metadata,
+      validatedFor: this.executionControl,
+      completeEvidence: {
+        canonicalRoot: snapshot.canonicalRoot,
+        metadata,
+        content: read.content,
+        sizeBytes: read.sizeBytes,
+        encodedBytes,
+      },
+    });
+  }
+
+  private readCompleteStructuralSource(
+    scopePath: string,
+    maxBytes: number,
+  ): InternalWorkspaceTextRead {
+    this.assertSourceAllowed(scopePath);
+    const read = readWorkspaceFileTextForInternalUse(
+      this.scope.workspace,
+      scopePath,
+      { maxBytes },
+      this.executionFs,
+      "evidence",
+      true,
+      () => {
+        this.assertSourceAllowed(scopePath);
+      },
+    );
+    this.assertSourceAllowed(scopePath);
+    return read;
+  }
+
+  private captureCodeIndexSource(scopePath: string, read: InternalWorkspaceTextRead): void {
+    const snapshot = read.snapshot;
+    const metadata = workspaceIndexFileMetadata(scopePath, read.stat);
+    if (
+      snapshot === undefined ||
+      read.sizeBytes !== read.stat.size ||
+      this.codeIndexSourceSnapshots.size >= this.codeIndexSourceCapacity
+    )
+      return;
+    if (
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.before),
+        metadata,
+      ) ||
+      !isWorkspaceIndexFileMetadataCurrent(
+        workspaceIndexFileMetadata(scopePath, snapshot.descriptor),
+        metadata,
+      )
+    )
+      return;
+    this.codeIndexSourceSnapshots.set(scopePath, {
+      canonicalRoot: snapshot.canonicalRoot,
+      metadata,
+    });
+  }
+
+  private codeIntelligenceSource(scopePath: string, maxBytes: number): string {
+    const read = this.readCompleteStructuralSource(scopePath, maxBytes);
+    this.captureCodeIndexSource(scopePath, read);
+    this.retainCompleteSource(scopePath, read);
+    return read.content;
+  }
+
+  public isCodeIntelligenceSourceCurrent(scopePath: string): boolean {
+    const indexed = this.codeIndexSourceSnapshots.get(scopePath);
+    if (indexed === undefined || this.isCandidateAllowed?.(scopePath) === false) return false;
+    const current = this.sourceSnapshot(scopePath);
+    return (
+      indexed.canonicalRoot === current?.canonicalRoot &&
+      isWorkspaceIndexFileMetadataCurrent(indexed.metadata, current.metadata)
+    );
+  }
+
+  private endpointSource(scopePath: string, maxBytes: number): string {
+    this.assertSourceAllowed(scopePath);
+    return (
+      this.cachedCompleteSource(scopePath, maxBytes) ??
+      this.readCompleteStructuralSource(scopePath, maxBytes).content
+    );
   }
 
   private contentPreviewMetadata(
@@ -393,6 +625,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     // would let a re-read entry shorten the budget the rest of the cache is validated under.
     const pending = [...this.contentPreviews.values()];
     for (const cached of pending) {
+      if (cached.content === undefined) continue;
       if (structuralExecutionStopped(control)) return;
       this.contentPreview(cached.file, control);
     }
@@ -412,6 +645,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   }
 
   private cachedCandidateContent(scopePath: string): string | undefined {
+    if (this.isCandidateAllowed?.(scopePath) === false) return undefined;
     return this.contentPreviews.get(scopePath)?.content ?? undefined;
   }
 
@@ -423,7 +657,8 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
 
   public candidatePaths(): readonly string[] {
     this.paths ??= this.candidateSet().files.map((file) => file.relativePath);
-    return this.paths;
+    const isAllowed = this.isCandidateAllowed;
+    return isAllowed === undefined ? this.paths : this.paths.filter(isAllowed);
   }
 
   public skippedSymbolicLinks(): readonly string[] {
@@ -438,12 +673,24 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   public codeIntelligenceIndex(): Promise<CodeIntelligenceIndex> {
     this.codeIndexPromise ??= Promise.resolve().then(() => {
       this.codeIndexBuildCount += 1;
+      const candidates = this.candidateSet();
+      this.codeIndexSourceCapacity = Math.max(
+        0,
+        this.limits.maxFilesScanned ?? candidates.files.length,
+      );
       return buildCodeIntelligenceIndexFromCandidates(
         this.scope,
         this.limits,
         this.executionFs,
-        this.candidateSet(),
-        { executionControl: this.executionControl, disableCache: true },
+        candidates,
+        {
+          executionControl: this.executionControl,
+          disableCache: true,
+          readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),
+          assertSourceAllowed: (path) => {
+            this.assertSourceAllowed(path);
+          },
+        },
       );
     });
     return this.codeIndexPromise;
@@ -478,18 +725,44 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     return this.importGraphPromise;
   }
 
-  public endpointContractGraph(): Promise<EndpointContractGraph> {
-    this.endpointGraphPromise ??= Promise.resolve().then(() => {
+  public endpointContractGraph(
+    preferredSourcePaths: readonly string[] = [],
+  ): Promise<EndpointContractGraph> {
+    let candidates: CandidateSet;
+    try {
+      candidates = this.candidateSet();
+    } catch (error) {
+      if (this.endpointGraphState?.key === "unavailable") return this.endpointGraphState.promise;
+      this.endpointGraphBuildCount += 1;
+      const promise = new Promise<EndpointContractGraph>(
+        (_resolve, reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1]) => {
+          if (error instanceof Error) reject(error);
+          else reject(new Error("structural inventory unavailable", { cause: error }));
+        },
+      );
+      this.endpointGraphState = { key: "unavailable", promise };
+      return promise;
+    }
+    const preferences = endpointSourcePreferences(candidates, this.limits, preferredSourcePaths);
+    const key = JSON.stringify(preferences);
+    if (this.endpointGraphState?.key === key) return this.endpointGraphState.promise;
+    const promise = Promise.resolve().then(() => {
       this.endpointGraphBuildCount += 1;
       return buildEndpointContractGraphFromCandidates(
         this.scope,
         this.limits,
         this.executionFs,
-        this.candidateSet(),
+        candidates,
         this.executionControl,
+        {
+          preferredSourcePaths: preferences,
+          readSource: (path, maxBytes) => this.endpointSource(path, maxBytes),
+          isCandidateAllowed: (path) => this.isCandidateAllowed?.(path) !== false,
+        },
       );
     });
-    return this.endpointGraphPromise;
+    this.endpointGraphState = { key, promise };
+    return promise;
   }
 
   private assertInventoryCovers(limits: SearchLimits): void {

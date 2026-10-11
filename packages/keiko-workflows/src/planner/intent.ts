@@ -1,7 +1,8 @@
 // Deterministic retrieval-intent classification for connected-context planning.
 // This module is intentionally pure: no IO, no clock, no model calls.
 
-import { extractAnchors } from "./anchors.js";
+import { extractAnchors, NEXT_FRAMEWORK_TERM_RE } from "./anchors.js";
+import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import {
@@ -14,12 +15,22 @@ export type RetrievalIntent =
   | "repository-overview"
   | "targeted-code-search"
   | "diagnostic-search"
+  | "conversational-follow-up"
   | "clarification-needed";
 
 export interface RetrievalIntentClassification {
   readonly intent: RetrievalIntent;
+  readonly effectiveIntent?: RetrievalIntent;
   readonly normalizedTerms: readonly string[];
 }
+
+export interface RetrievalIntentContext {
+  readonly previousIntent?: RetrievalIntent | undefined;
+  readonly referencePresent?: boolean | undefined;
+}
+
+const CONVERSATIONAL_FOLLOW_UP_RE =
+  /\b(?:can\s+you\s+see\s+(?:it|them|the\s+file)|siehst\s+du\s+(?:sie|es|die\s+datei)|kannst\s+du\s+das|try\s+again|what\s+about\s+now|and\s+(?:now|then)|that\s+(?:file|one)|this\s+file|in\s+the\s+file|und\s+(?:nun|jetzt)|in\s+der\s+datei|diese[rn]?\s+datei|darin|dazu|weiter)\b/iu;
 
 interface IntentPattern {
   readonly term: string;
@@ -85,6 +96,11 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "package-json", pattern: /\bpackage\.json\b/iu },
   { term: "package-manager", pattern: /\bpackage[\s_-]?manager\b/iu },
   { term: "package-manager", pattern: /\bpaket[\s_-]?manager\b/iu },
+  {
+    term: "manifest-inventory",
+    pattern:
+      /\b(?:(?:package|project|workspace)[\s_-]+manifests?|(?:paket|projekt|workspace)[\s_-]*manifeste?)\b/iu,
+  },
   { term: "tsconfig", pattern: /\btsconfig(?:\.[a-z0-9]+)?\b/iu },
   { term: "dependency", pattern: /\bdevdependencies\b|\bdependencies\b|\bdependency\b/iu },
   { term: "dependency", pattern: /\babhaengigkeit(?:en)?\b|\babhängigkeit(?:en)?\b/iu },
@@ -101,7 +117,7 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "jest", pattern: /\bjest\b/iu },
   { term: "playwright", pattern: /\bplaywright\b/iu },
   { term: "cypress", pattern: /\bcypress\b/iu },
-  { term: "nextjs", pattern: /\bnext(?:\.js)?\b/iu },
+  { term: "nextjs", pattern: NEXT_FRAMEWORK_TERM_RE },
   { term: "react", pattern: /\breact\b/iu },
   { term: "eslint", pattern: /\beslint\b/iu },
   // Polyglot ecosystem routing is sourced from the shared registry so questions like "Which Java
@@ -109,6 +125,13 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   // The established JS/TS terms above stay in place for compatibility; registry duplicates are
   // harmless because matched terms are de-duplicated before classification.
   ...ecosystemMetadataIntentPatterns,
+];
+
+// A manifest noun is also a source-domain term. Only a complete enumeration request selects
+// the metadata route; validation, loading and mixed inventory/behavior questions keep code search.
+const MANIFEST_INVENTORY_REQUESTS: readonly RegExp[] = [
+  /^(?:(?:please\s+)?(?:list|enumerate|show)\s+(?:(?:all|the)\s+)?|(?:which|what)\s+)(?:package|project|workspace)[\s_-]+manifests?(?:\s+(?:defines?\s+(?:this|the|our)\s+(?:workspace|project)|(?:in|for|of)\s+(?:this|the|our)\s+(?:workspace|project)))?[.!?\s]*$/iu,
+  /^(?:(?:bitte\s+)?(?:liste|zeige)\s+(?:(?:alle|die)\s+)?|welche\s+)(?:paket|projekt|workspace)[\s_-]*manifeste?(?:\s+(?:definier(?:en|t)\s+(?:dieses|das)\s+(?:workspace|projekt)|(?:in|f[üu]r)\s+(?:dieses|das)\s+(?:workspace|projekt)))?[.!?\s]*$/iu,
 ];
 
 const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [
@@ -224,17 +247,69 @@ function classifyShortTarget(text: string): RetrievalIntentClassification {
     : { intent: "clarification-needed", normalizedTerms: [] };
 }
 
+function hasConcreteSourceTarget(text: string): boolean {
+  return extractAnchors({ text, maxAnchors: text.length }).anchors.some(
+    (anchor) => anchor.kind === "path" || anchor.kind === "quoted" || anchor.kind === "identifier",
+  );
+}
+
+function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext): boolean {
+  if (
+    context.previousIntent !== "diagnostic-search" &&
+    context.previousIntent !== "targeted-code-search"
+  )
+    return false;
+  const orientation =
+    context.referencePresent === true &&
+    matchedTerms(text, normalizeQueryText(text), REPOSITORY_OVERVIEW_PATTERNS).includes(
+      "orientation",
+    );
+  if (!CONVERSATIONAL_FOLLOW_UP_RE.test(text) && !orientation) return false;
+  return !hasConcreteSourceTarget(text);
+}
+
+function classifyProjectMetadata(
+  text: string,
+  normalized: string,
+): RetrievalIntentClassification | undefined {
+  const matched = matchedTerms(text, normalized, PROJECT_METADATA_PATTERNS);
+  const terms =
+    matched.includes("manifest-inventory") &&
+    !MANIFEST_INVENTORY_REQUESTS.some((pattern) => pattern.test(text))
+      ? matched.filter((term) => term !== "manifest-inventory")
+      : matched;
+  return terms.length === 0 ? undefined : { intent: "project-metadata", normalizedTerms: terms };
+}
+
 export function classifyRetrievalIntent(
   queryText: string,
   _scope?: SelectedScope,
+  context: RetrievalIntentContext = {},
 ): RetrievalIntentClassification {
-  const trimmed = queryText.trim();
+  const trace = parseDiagnosticTraceText(queryText);
+  const trimmed = trace.questionText.trim();
   const normalized = normalizeQueryText(trimmed);
+  if (trace.detected) return { intent: "diagnostic-search", normalizedTerms: ["stacktrace"] };
+  if (canInheritRetrievalIntent(trimmed, context)) {
+    return {
+      intent: "conversational-follow-up",
+      effectiveIntent: context.previousIntent ?? "targeted-code-search",
+      normalizedTerms: searchableTokens(normalized).slice(0, 8),
+    };
+  }
+
   if (trimmed.length === 0) return { intent: "clarification-needed", normalizedTerms: [] };
   if (searchableTokens(normalized).length === 0) {
     return classifyShortTarget(trimmed);
   }
 
+  return classifyRequestedIntent(trimmed, normalized);
+}
+
+function classifyRequestedIntent(
+  trimmed: string,
+  normalized: string,
+): RetrievalIntentClassification {
   return (
     classifyByPatterns(trimmed, normalized, DIAGNOSTIC_PATTERNS, "diagnostic-search") ??
     (requestedSourceInspectionExtensions(trimmed).length > 0
@@ -243,7 +318,7 @@ export function classifyRetrievalIntent(
           normalizedTerms: searchableTokens(normalized).slice(0, 8),
         }
       : undefined) ??
-    classifyByPatterns(trimmed, normalized, PROJECT_METADATA_PATTERNS, "project-metadata") ??
+    classifyProjectMetadata(trimmed, normalized) ??
     classifyByPatterns(trimmed, normalized, TARGETED_CODE_PATTERNS, "targeted-code-search") ??
     classifyByPatterns(
       trimmed,

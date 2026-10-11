@@ -18,7 +18,11 @@ import type {
   ChatLocalKnowledgeScope,
   GroundingLimits,
 } from "@/lib/types";
-import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
+import type {
+  FilesScopeBindReply,
+  UseWorkspaceResult,
+  WorkspaceApi,
+} from "./hooks/useWorkspace.types";
 import { MAX_WORKSPACE_WINDOWS, sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import type { AppWindow, Connection } from "./windows/types";
@@ -37,7 +41,7 @@ interface WorkspaceHookOptions {
     chatWindowId: string,
     scope: ChatConnectedScope,
     target?: ChatBindingTarget,
-  ) => boolean | Promise<boolean>;
+  ) => FilesScopeBindReply | Promise<FilesScopeBindReply>;
   readonly onScopeUnbind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
@@ -109,6 +113,7 @@ const mocks = vi.hoisted(() => ({
   refreshActiveWorkspace: vi.fn(),
   mutateActiveWorkspace: vi.fn(),
   gatewaySetupDialogModuleLoaded: vi.fn(),
+  leftRailModuleLoaded: vi.fn(),
   newWindowDialogModuleLoaded: vi.fn(),
   paletteModuleLoaded: vi.fn(),
   updateStartupNoticeModuleLoaded: vi.fn(),
@@ -326,13 +331,16 @@ vi.mock("./Footer", () => ({
   ),
 }));
 
-vi.mock("./LeftRail", () => ({
-  LeftRail: ({ onNewChat }: { readonly onNewChat: () => void }): ReactNode => (
-    <button type="button" data-testid="left-rail" onClick={onNewChat}>
-      New chat
-    </button>
-  ),
-}));
+vi.mock("./LeftRail", () => {
+  mocks.leftRailModuleLoaded();
+  return {
+    LeftRail: ({ onNewChat }: { readonly onNewChat: () => void }): ReactNode => (
+      <button type="button" data-testid="left-rail" onClick={onNewChat}>
+        New chat
+      </button>
+    ),
+  };
+});
 
 vi.mock("./RightRail", () => ({
   RightRail: ({ onTool }: { readonly onTool: (id: string) => void }): ReactElement => {
@@ -413,6 +421,7 @@ const gestureOnlyShellModuleLoadsAtImport = {
   palette: mocks.paletteModuleLoaded.mock.calls.length,
   updateStartupNotice: mocks.updateStartupNoticeModuleLoaded.mock.calls.length,
 };
+const leftRailModuleLoadsAtImport = mocks.leftRailModuleLoaded.mock.calls.length;
 
 function chat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -728,6 +737,13 @@ async function renderMounted(): Promise<void> {
 }
 
 describe("AppShell grounding connections", () => {
+  it("defers navigation until the client shell mounts and preserves its new-chat action", async () => {
+    expect(leftRailModuleLoadsAtImport).toBe(0);
+    const user = userEvent.setup();
+    await renderMounted();
+    await user.click(await screen.findByTestId("left-rail"));
+    expect(await screen.findByRole("button", { name: "Confirm new chat" })).toBeVisible();
+  });
   beforeAll((): void => {
     originalDialogShowModal = installDialogMethod("showModal", mocks.dialogShowModal);
     originalDialogClose = installDialogMethod("close", mocks.dialogClose);
@@ -1217,7 +1233,7 @@ describe("AppShell grounding connections", () => {
     const user = userEvent.setup();
     await renderMounted();
 
-    await user.click(screen.getByTestId("left-rail"));
+    await user.click(await screen.findByTestId("left-rail"));
     // The dialog resolves through `next/dynamic(..., { ssr: false })` (first-load isolation), so it
     // arrives on the microtask after the gesture rather than in the same render.
     await user.click(await screen.findByRole("button", { name: "Confirm new chat" }));
@@ -1315,14 +1331,15 @@ describe("AppShell grounding connections", () => {
     mocks.updateChatConnectedScopes.mockResolvedValue({ chat: updated });
     await renderMounted();
 
-    let accepted = false;
+    let accepted: FilesScopeBindReply | undefined;
     await act(async () => {
-      accepted =
-        (await mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"))) ===
-        true;
+      accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+        "chat-window",
+        fileScope("/repo"),
+      );
     });
 
-    expect(accepted).toBe(true);
+    expect(accepted).toEqual(fileScope("/repo"));
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       "chat-1",
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -1438,7 +1455,7 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
     compensation.resolve({ chat: restored });
     await expect(binding).resolves.toBe(false);
-    await expect(concurrentBinding).resolves.toBe(true);
+    await expect(concurrentBinding).resolves.toEqual(fileScope("/other"));
     expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
       3,
       "chat-1",
@@ -1506,7 +1523,7 @@ describe("AppShell grounding connections", () => {
       fileScope("/repo"),
     );
 
-    expect(accepted).toBe(true);
+    expect(accepted).toEqual(fileScope("/repo"));
     expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       privateChat.id,
@@ -1542,7 +1559,7 @@ describe("AppShell grounding connections", () => {
         fileScope("/repo"),
       );
 
-      expect(accepted).toBe(true);
+      expect(accepted).toEqual(fileScope("/repo"));
       expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
@@ -1578,7 +1595,7 @@ describe("AppShell grounding connections", () => {
         fileScope("/repo"),
       );
 
-      expect(accepted).toBe(true);
+      expect(accepted).toEqual(fileScope("/repo"));
       expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
@@ -1702,8 +1719,8 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
     firstPersist.resolve({ chat: firstChat });
 
-    await expect(firstBinding).resolves.toBe(true);
-    await expect(secondBinding).resolves.toBe(true);
+    await expect(firstBinding).resolves.toEqual(firstScope);
+    await expect(secondBinding).resolves.toEqual(secondScope);
     expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
       2,
       "chat-1",
@@ -1748,7 +1765,7 @@ describe("AppShell grounding connections", () => {
         (record) => record.meta?.filesScopeDecision?.decision === "timeout-blocked",
       ),
     ).toBe(false);
-    await expect(binding).resolves.toBe(true);
+    await expect(binding).resolves.toEqual(nextScope);
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
   });
 
@@ -2033,7 +2050,9 @@ describe("AppShell grounding connections", () => {
       compensation.resolve({ chat: chat({ connectedScopes: [], updatedAt: 3 }) });
     });
     await act(async (): Promise<void> => {
-      expect(await bind?.("chat-window", fileScope("/after-recovery"))).toBe(true);
+      expect(await bind?.("chat-window", fileScope("/after-recovery"))).toEqual(
+        fileScope("/after-recovery"),
+      );
     });
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(3);
     expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([
@@ -3198,7 +3217,7 @@ describe("AppShell grounding connections", () => {
     view.rerender(<AppShell />);
     await act(async (): Promise<void> => {
       lookup.resolve({ chats: [initial] });
-      expect(await binding).toBe(true);
+      expect(await binding).toEqual(source);
     });
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();

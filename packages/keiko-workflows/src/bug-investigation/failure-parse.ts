@@ -10,6 +10,7 @@
 // `.*` alternation, so there is no super-linear backtracking surface. Line count and per-line work
 // are both capped. Pure: no IO, no clock, no RNG.
 
+import { fileURLToPath } from "node:url";
 import { toPosix } from "./path-utils.js";
 import type { BugReportInput, FailureEvidence, FailureFrame } from "./types.js";
 
@@ -21,6 +22,7 @@ const MAX_MESSAGE_LENGTH = 200;
 
 const ALL_DIGITS = /^\d+$/;
 const FILE_URL_PREFIX = "file://";
+const MAX_URL_LOCATION_CHARACTERS = 8_192;
 const MESSAGE_MARKERS: readonly string[] = [
   "assertionerror",
   "error:",
@@ -38,25 +40,37 @@ function toLine(token: string | undefined): number | undefined {
   if (token === undefined || token.length === 0 || !ALL_DIGITS.test(token)) {
     return undefined;
   }
-  return Number(token);
+  const number = Number(token);
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
-// Strips a leading `file://` URL prefix from a location token. `file:///repo/x.ts` -> `/repo/x.ts`.
-function stripFileUrl(location: string): string {
+// Runtime URLs retain their identity until their numeric suffix has been peeled. Ordinary
+// filesystem spellings, including literal percent characters, never acquire URL semantics.
+function sourceFile(location: string): string | undefined {
   if (!location.startsWith(FILE_URL_PREFIX)) {
-    return location;
+    return toPosix(location);
   }
-  const afterScheme = location.slice(FILE_URL_PREFIX.length);
-  // file:///path keeps the leading slash of the absolute path; file://host/path is not expected
-  // from runtimes here, so we keep everything after the scheme verbatim.
-  return afterScheme;
+  try {
+    if (location.length > MAX_URL_LOCATION_CHARACTERS) return undefined;
+    const url = new URL(location);
+    if (url.hostname !== "" || url.pathname.toLowerCase().includes("%5c")) return undefined;
+    const file = fileURLToPath(url, { windows: /^\/[A-Za-z]:\//u.test(url.pathname) });
+    return file.includes("\0") ? undefined : toPosix(file);
+  } catch {
+    return undefined;
+  }
+}
+
+function sourceFrame(location: string, line: number): FailureFrame | undefined {
+  const file = sourceFile(location);
+  return file === undefined || file.length === 0 ? undefined : { file, line };
 }
 
 // Peels `:line:col` off the END of a location token using a right-split, returning the file path
 // and the numeric line (when present). `src/x.ts:3:10` -> { file: "src/x.ts", line: 3 }. A token
 // with no numeric `:line` segment yields no frame.
 function peelLocation(rawLocation: string): FailureFrame | undefined {
-  const location = stripFileUrl(rawLocation.trim());
+  const location = rawLocation.trim();
   const lastColon = location.lastIndexOf(":");
   if (lastColon <= 0) {
     return undefined;
@@ -67,14 +81,12 @@ function peelLocation(rawLocation: string): FailureFrame | undefined {
   const lineToken = lineColon <= 0 ? undefined : beforeCol.slice(lineColon + 1);
   const line = toLine(lineToken);
   if (line !== undefined) {
-    const file = toPosix(beforeCol.slice(0, lineColon));
-    return file.length === 0 ? undefined : { file, line };
+    return sourceFrame(beforeCol.slice(0, lineColon), line);
   }
   // Case `file:line` (no col): the token after the last colon is the line.
   const lineOnly = toLine(location.slice(lastColon + 1));
   if (lineOnly !== undefined) {
-    const file = toPosix(beforeCol);
-    return file.length === 0 ? undefined : { file, line: lineOnly };
+    return sourceFrame(beforeCol, lineOnly);
   }
   return undefined;
 }
@@ -124,14 +136,89 @@ function pushMessage(acc: Accumulator, line: string): void {
 }
 
 function scanLine(acc: Accumulator, line: string): void {
-  const token = locationToken(line);
-  const frame = token === undefined ? undefined : peelLocation(token);
+  const frame = parseFailureFrame(line);
   if (frame !== undefined) {
     pushFrame(acc, frame);
   }
   if (isMessageLine(line.toLowerCase())) {
     pushMessage(acc, line);
   }
+}
+
+function pythonFrame(line: string): FailureFrame | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('File "')) return undefined;
+  const close = trimmed.indexOf('"', 6);
+  if (close === -1) return undefined;
+  const suffix = trimmed.slice(close + 1).trimStart();
+  if (!suffix.startsWith(", line ")) return undefined;
+  const token = suffix.slice(7).split(",", 1)[0]?.trim();
+  const number = toLine(token);
+  return number === undefined
+    ? undefined
+    : { file: toPosix(trimmed.slice(6, close)), line: number };
+}
+
+/** ADR-0009 D7: chat and bug investigation share the same bounded source-location parser. */
+export function parseFailureFrame(line: string): FailureFrame | undefined {
+  const python = pythonFrame(line);
+  if (python !== undefined) return python;
+  const token = locationToken(line.trimStart().startsWith("❯ ") ? line.trimStart().slice(2) : line);
+  return token === undefined ? undefined : peelLocation(token);
+}
+
+export interface DiagnosticTraceText {
+  readonly frames: readonly FailureFrame[];
+  readonly questionText: string;
+  readonly detected: boolean;
+}
+
+function hasTracePrefix(line: string): boolean {
+  return line.startsWith("at ") || line.startsWith('File "') || line.startsWith("❯ ");
+}
+
+function unparsedTraceLine(line: string): boolean {
+  return (
+    hasTracePrefix(line) ||
+    (!line.includes(" ") && line.includes(":") && ALL_DIGITS.test(line.slice(-1)))
+  );
+}
+
+function diagnosticTraceLine(
+  line: string,
+  frame: FailureFrame | undefined,
+  scanned: number,
+): boolean {
+  return (
+    (frame !== undefined && (hasTracePrefix(line) || !line.includes(" "))) ||
+    (scanned >= MAX_LINES_SCANNED && unparsedTraceLine(line))
+  );
+}
+
+/** Source locations and assertion output stay separate from the human's request terms. */
+export function parseDiagnosticTraceText(text: string): DiagnosticTraceText {
+  const acc: Accumulator = { frames: [], messages: [], seen: new Set() };
+  const question: string[] = [];
+  let start = 0;
+  let detected = false;
+  // Only source-location parsing is capped. Continue a linear pass over the admitted request
+  // to preserve human terms after a long trace or blank prefix, without admitting later frames.
+  for (let scanned = 0; start <= text.length; scanned += 1) {
+    const newline = text.indexOf("\n", start);
+    const end = newline === -1 ? text.length : newline;
+    const line = text.slice(start, end);
+    const trimmed = line.trim();
+    const frame = scanned < MAX_LINES_SCANNED ? parseFailureFrame(line) : undefined;
+    const traceLine = diagnosticTraceLine(trimmed, frame, scanned);
+    if (traceLine) {
+      detected = true;
+      if (frame !== undefined) pushFrame(acc, frame);
+    } else if (!trimmed.startsWith("AssertionError:") && !trimmed.startsWith("FAIL "))
+      question.push(line);
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  return { frames: acc.frames, questionText: question.join("\n"), detected };
 }
 
 function scanText(acc: Accumulator, text: string | undefined): void {

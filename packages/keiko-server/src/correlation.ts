@@ -4,12 +4,13 @@
 // request lifecycle: it is echoed back on the `X-Keiko-Correlation-Id` response header, folded into
 // the `error.correlationId` field of any error body, threaded onto the `RouteContext`, and included
 // in the SSE error frame and every server-side diagnostic record. A UI-supplied id (sent on the same
-// header) is honoured when it is well formed, so a single id ties UI -> server -> gateway together;
-// otherwise the server mints a fresh UUID. This is the shared plumbing the observability findings
-// require and MUST NOT be reverted to a per-call anonymous id.
+// header) is honoured when it is well formed and safe for the log, so a single id ties UI -> server
+// -> gateway together; otherwise the server mints a fresh UUID. This is the shared plumbing the
+// observability findings require and MUST NOT be reverted to a per-call anonymous id.
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { redactLogLabel } from "./observability/index.js";
 
 // Canonical header name (lower-case for `IncomingMessage.headers` lookups; the response header uses
 // the same characters with conventional casing via CORRELATION_RESPONSE_HEADER).
@@ -18,11 +19,13 @@ export const CORRELATION_RESPONSE_HEADER = "X-Keiko-Correlation-Id";
 
 // A UI-supplied correlation id is only trusted when it is short and drawn from an unambiguous,
 // header-safe alphabet. Anything else (empty, oversized, CR/LF, arbitrary punctuation) is rejected
-// so a client can neither inject response headers nor bloat the diagnostic log.
+// so a client can neither inject response headers nor bloat the diagnostic log. A shape-valid
+// value must also survive the existing label policy unchanged: otherwise later redaction would
+// replace a request/parent identity with a marker that the canonical reader cannot authenticate.
 const SAFE_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/;
 
 export function isValidCorrelationId(value: string): boolean {
-  return SAFE_CORRELATION_ID.test(value);
+  return SAFE_CORRELATION_ID.test(value) && redactLogLabel(value) === value;
 }
 
 export function newCorrelationId(): string {

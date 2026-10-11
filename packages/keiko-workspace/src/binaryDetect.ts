@@ -140,12 +140,12 @@ function htmlAttributeValue(cursor: HtmlAttributeCursor): string | undefined {
   return end === start ? undefined : cursor.tag.slice(start, end);
 }
 
-interface HtmlMetaTag {
+interface HtmlProbeAttributes {
   readonly end: number;
   readonly attributes: ReadonlyMap<string, string>;
 }
 
-function parseHtmlMetaTag(prefix: string, offset: number): HtmlMetaTag | undefined {
+function parseHtmlProbeAttributes(prefix: string, offset: number): HtmlProbeAttributes | undefined {
   const cursor = { tag: prefix, offset };
   const attributes = new Map<string, string>();
   while (cursor.offset < prefix.length) {
@@ -162,18 +162,83 @@ function parseHtmlMetaTag(prefix: string, offset: number): HtmlMetaTag | undefin
   return undefined;
 }
 
-function* htmlMetaTags(prefix: string): Generator<ReadonlyMap<string, string>> {
+const HTML_PROBE_RAW_TEXT = new Set([
+  "script",
+  "style",
+  "title",
+  "textarea",
+  "xmp",
+  "iframe",
+  "noembed",
+  "noframes",
+  "noscript",
+  "plaintext",
+]);
+
+function htmlProbeMarkerEnd(prefix: string, start: number): number | undefined {
+  const markers = [
+    ["<!--", "-->"],
+    ["<![CDATA[", "]]>"],
+    ["<?", "?>"],
+  ] as const;
+  for (const [open, close] of markers) {
+    if (!prefix.startsWith(open, start)) continue;
+    const end = prefix.indexOf(close, start + open.length);
+    return end < 0 ? prefix.length : end + close.length;
+  }
+  if (!prefix.startsWith("<!", start)) return undefined;
+  return parseHtmlProbeAttributes(prefix, start + 2)?.end ?? prefix.length;
+}
+
+function htmlProbeRawTextEnd(prefix: string, folded: string, name: string, offset: number): number {
+  if (name === "plaintext") return prefix.length;
+  const close = `</${name}`;
+  let start = folded.indexOf(close, offset);
+  while (start >= 0) {
+    const after = start + close.length;
+    if (/[\t\n\f\r />]/u.test(prefix.charAt(after)))
+      return parseHtmlProbeAttributes(prefix, after)?.end ?? prefix.length;
+    start = folded.indexOf(close, after);
+  }
+  return prefix.length;
+}
+
+interface HtmlProbeTag extends HtmlProbeAttributes {
+  readonly name: string;
+  readonly closing: boolean;
+}
+
+function htmlProbeTagAt(prefix: string, offset: number): HtmlProbeTag | undefined {
+  const head = /^\/?([a-z][a-z\d:-]*)(?=[\t\n\f\r />])/iu.exec(prefix.slice(offset));
+  if (head?.[1] === undefined) return undefined;
+  const tag = parseHtmlProbeAttributes(prefix, offset + head[0].length) ?? {
+    end: prefix.length,
+    attributes: new Map<string, string>(),
+  };
+  return { ...tag, name: head[1].toLowerCase(), closing: head[0].startsWith("/") };
+}
+
+function probeHasRawTextBody(prefix: string, tag: HtmlProbeTag, xhtml: boolean): boolean {
+  return HTML_PROBE_RAW_TEXT.has(tag.name) && !(xhtml && prefix.charAt(tag.end - 2) === "/");
+}
+
+// Consume every tag with the existing quote-aware attribute cursor. Looking for a literal
+// `<meta` substring would otherwise grant declaration authority to script or attribute examples.
+function* htmlMetaTags(prefix: string, xhtml: boolean): Generator<ReadonlyMap<string, string>> {
   const folded = prefix.toLowerCase();
   let offset = 0;
   while (offset < prefix.length) {
-    const start = folded.indexOf("<meta", offset);
+    const start = prefix.indexOf("<", offset);
     if (start < 0) return;
-    offset = start + 5;
-    if (!/[\t\n\f\r />]/u.test(prefix.charAt(offset))) continue;
-    const tag = parseHtmlMetaTag(prefix, offset);
-    if (tag === undefined) return;
+    offset = htmlProbeMarkerEnd(prefix, start) ?? start + 1;
+    if (offset !== start + 1) continue;
+    const tag = htmlProbeTagAt(prefix, offset);
+    if (tag === undefined) continue;
     offset = tag.end;
-    yield tag.attributes;
+    if (tag.closing) continue;
+    if (probeHasRawTextBody(prefix, tag, xhtml))
+      offset = htmlProbeRawTextEnd(prefix, folded, tag.name, offset);
+    if (tag.name === "meta") yield tag.attributes;
   }
 }
 
@@ -188,14 +253,32 @@ function htmlMetaCharset(attributes: ReadonlyMap<string, string>): string | unde
 }
 
 function supportedDeclaredHtmlEncoding(charset: string): TextByteEncoding | false {
+  const encoding = supportedDeclaredEncoding(charset);
+  // HTML metadata maps UTF-16 labels to UTF-8; an actual byte-order mark still takes precedence.
+  return encoding === "utf-16le" || encoding === "utf-16be" ? "utf-8" : encoding;
+}
+
+function supportedDeclaredEncoding(charset: string): TextByteEncoding | false {
   try {
-    const encoding = new TextDecoder(charset, { fatal: true }).encoding;
-    // HTML metadata maps UTF-16 labels to UTF-8; an actual byte-order mark still takes precedence.
-    return encoding === "utf-16le" || encoding === "utf-16be" ? "utf-8" : encoding;
+    return new TextDecoder(charset, { fatal: true }).encoding;
   } catch (error) {
     if (error instanceof RangeError) return false;
     throw error;
   }
+}
+
+function declaredXmlEncoding(
+  prefix: string,
+  scopePath: string,
+): TextByteEncoding | false | undefined {
+  if (!/\.xhtml$/iu.test(scopePath) || !/^<\?xml[\t\n\r ]/u.test(prefix)) return undefined;
+  const declaration = parseHtmlProbeAttributes(prefix, 5);
+  if (declaration === undefined || prefix.slice(declaration.end - 2, declaration.end) !== "?>")
+    return undefined;
+  const encoding = declaration.attributes.get("encoding")?.trim();
+  return encoding === undefined || encoding === ""
+    ? undefined
+    : supportedDeclaredEncoding(encoding);
 }
 
 function declaredHtmlEncoding(
@@ -203,10 +286,10 @@ function declaredHtmlEncoding(
   scopePath: string | undefined,
 ): TextByteEncoding | false | undefined {
   if (scopePath === undefined || !/\.(?:html?|xhtml)$/iu.test(scopePath)) return undefined;
-  const prefix = new TextDecoder("windows-1252")
-    .decode(bytes.subarray(0, 1024))
-    .replace(/<!--[\s\S]*?(?:-->|$)/gu, "");
-  for (const tag of htmlMetaTags(prefix)) {
+  const prefix = new TextDecoder("windows-1252").decode(bytes.subarray(0, 1024));
+  const xmlEncoding = declaredXmlEncoding(prefix, scopePath);
+  if (xmlEncoding !== undefined) return xmlEncoding;
+  for (const tag of htmlMetaTags(prefix, /\.xhtml$/iu.test(scopePath))) {
     const charset = htmlMetaCharset(tag)?.trim().toLowerCase();
     if (charset === undefined || charset === "") continue;
     return supportedDeclaredHtmlEncoding(charset);

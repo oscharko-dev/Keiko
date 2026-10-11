@@ -1,5 +1,5 @@
 export type EndpointHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-export type EndpointServerFramework = "spring";
+export type EndpointServerFramework = "spring" | "configured-node";
 export type EndpointClientKind = "fetch" | "axios";
 
 export interface EndpointDtoShape {

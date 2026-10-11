@@ -46,8 +46,10 @@ import {
   compileGlob,
   type CompiledFilenameGlob,
   fingerprintFor,
+  queryIdentityFor,
   type LiteralQueryInterpretation,
 } from "./repoSearchMatchers.js";
+import { StreamingWorkspaceIndex } from "./workspaceIndexStreaming.js";
 import {
   cachedLexicalRecordRequiresLiveMatch,
   prepareCachedLexicalQuery,
@@ -126,6 +128,7 @@ import {
   resolveContainedWorkspaceIndexDirectory,
   workspaceIndexCandidateSet,
   type PreparedWorkspaceIndexEntry,
+  type WorkspaceIndexCandidatePathPolicy,
   type PreparedWorkspaceIndexSnapshot,
   type WorkspaceIndexDirectoryDelta,
   type WorkspaceIndexDirectorySnapshot,
@@ -224,12 +227,7 @@ interface FacadeDeps {
   // Internal absolute request ceiling. Public callers normally use elapsedMsMax; the request-local
   // structural context supplies this so cache hits cannot reset the parent request clock.
   readonly deadlineAtMs?: number | undefined;
-  readonly candidatePathGlobs?:
-    | {
-        readonly include: readonly string[];
-        readonly exclude: readonly string[];
-      }
-    | undefined;
+  readonly candidatePathGlobs?: WorkspaceIndexCandidatePathPolicy | undefined;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
@@ -601,6 +599,8 @@ function buildSearchTextRunner(
 ): SearchTextRunner {
   const semanticBounds =
     limits.maxFilesScanned === null ? DEFAULT_STREAMED_SEMANTIC_BOUNDS : undefined;
+  const matcher = buildMatcher(query, deps.queryInterpretation);
+  const policy = resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints);
   return {
     scope,
     limits: {
@@ -612,12 +612,16 @@ function buildSearchTextRunner(
     startMs: deps.nowMs(),
     ...(deps.deadlineAtMs === undefined ? {} : { deadlineAtMs: deps.deadlineAtMs }),
     signal: deps.signal,
-    matcher: buildMatcher(query, deps.queryInterpretation),
+    matcher,
     ...(deps.queryInterpretation?.terms === undefined
       ? {}
       : { literalTerms: deps.queryInterpretation.terms }),
     fingerprint: fingerprintFor(query, deps.queryInterpretation),
-    policy: resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints),
+    queryIdentitySha256: queryIdentityFor(query, deps.queryInterpretation, {
+      effectiveMaxMatchesReturned: Math.min(limits.maxMatchesReturned, query.maxResults),
+      policyIntent: policy.intent,
+    }),
+    policy,
     query,
     ...sourceInspectionCandidateSelection(query, deps),
     contentLane: deps.contentLane ?? "evidence",
@@ -640,22 +644,30 @@ function buildSearchTextRunner(
   };
 }
 
+function hasCandidatePathFilters(globs: FacadeDeps["candidatePathGlobs"]): boolean {
+  return (
+    globs !== undefined &&
+    (globs.include.length > 0 ||
+      globs.exclude.length > 0 ||
+      (globs.excludeLiteralPaths?.length ?? 0) > 0)
+  );
+}
+
 function buildCandidatePathPredicate(
   globs: FacadeDeps["candidatePathGlobs"],
   sourceExtensions: readonly string[] = [],
 ): ((scopePath: string) => boolean) | undefined {
-  if (
-    sourceExtensions.length === 0 &&
-    (globs === undefined || (globs.include.length === 0 && globs.exclude.length === 0))
-  ) {
+  if (sourceExtensions.length === 0 && !hasCandidatePathFilters(globs)) {
     return undefined;
   }
   const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, true));
   const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, true));
+  const literalExcludes = new Set(globs?.excludeLiteralPaths ?? []);
   return (scopePath: string): boolean => {
     const included = includes.length === 0 || includes.some((pattern) => pattern.test(scopePath));
     return (
       included &&
+      !literalExcludes.has(scopePath) &&
       !excludes.some((pattern) => pattern.test(scopePath)) &&
       (sourceExtensions.length === 0 || sourceInspectionPathMatches(scopePath, sourceExtensions))
     );
@@ -2680,7 +2692,7 @@ async function executeSearchText(
   deps: FacadeDeps,
   runner: SearchTextRunner,
 ): Promise<SearchResult> {
-  if (runner.limits.maxFilesScanned === null) return executeStreamedSearchText(runner);
+  if (runner.limits.maxFilesScanned === null) return executeIndexedStreamedSearchText(runner, deps);
   const workspaceIndexSession =
     deps.workspaceIndex === undefined || !workspaceIndexCompatibleRun(runner)
       ? undefined
@@ -2693,6 +2705,54 @@ async function executeSearchText(
           deps.candidateSetFor,
         );
   return executeSearchTextWithSession(scope, query, limits, deps, runner, workspaceIndexSession);
+}
+
+async function executeIndexedStreamedSearchText(
+  runner: SearchTextRunner,
+  deps: FacadeDeps,
+): Promise<SearchResult> {
+  if (
+    deps.workspaceIndex === undefined ||
+    runner.contentLane !== "evidence" ||
+    runner.sourceInspection === true ||
+    runner.semantic !== undefined ||
+    runner.candidateContentFor !== undefined ||
+    runner.queryIdentitySha256 === undefined
+  )
+    return executeStreamedSearchText(runner);
+  const session = new StreamingWorkspaceIndex(
+    deps.workspaceIndex,
+    runner,
+    runner.queryIdentitySha256,
+    runnerExecutionControl(runner),
+  );
+  const result = await executeStreamedSearchText({ ...runner, streamingWorkspaceIndex: session });
+  await session.finalize();
+  return finalizedStreamedIndexResult(runner, result, session.report());
+}
+
+function finalizedStreamedIndexResult(
+  runner: SearchTextRunner,
+  result: SearchResult,
+  report: WorkspaceIndexPreparationReport,
+): SearchResult {
+  const elapsedMs = elapsed(runner);
+  const reason = runnerStopReason(runner);
+  const reasons = new Set(result.coverage.reasons);
+  if (reason !== undefined) reasons.add(reason);
+  return {
+    ...result,
+    elapsedMs,
+    truncated: result.truncated || reason !== undefined,
+    coverage: {
+      ...result.coverage,
+      elapsedMs,
+      incomplete: result.coverage.incomplete || reason !== undefined,
+      truncated: result.coverage.truncated || reason !== undefined,
+      reasons: coverageReasons(reasons),
+    },
+    workspaceIndex: report,
+  };
 }
 
 interface SerializedWorkspaceIndexSession {
@@ -3182,6 +3242,7 @@ interface FileListingRescueInputs {
   readonly startMs: number;
   readonly deadlineAtMs?: number | undefined;
   readonly candidateSetFor?: CandidateSetProvider | undefined;
+  readonly candidatePathPredicate?: SearchTextRunner["candidatePathPredicate"];
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -3213,16 +3274,24 @@ function gatherLowValueFileCandidates(
   policy: SearchPolicy,
 ): CandidateSet {
   if (inputs.candidateSetFor !== undefined) {
-    return inputs.candidateSetFor(inputs.query, limits, policy);
+    return inputs.candidateSetFor(inputs.query, limits, policy, inputs.candidatePathPredicate);
   }
-  return gatherCandidates(ctx.scope, inputs.query, limits, inputs.fs, policy, undefined, {
-    nowMs: ctx.nowMs,
-    deadlineAtMs: Math.min(
-      inputs.deadlineAtMs ?? inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
-      inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
-    ),
-    ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
-  });
+  return gatherCandidates(
+    ctx.scope,
+    inputs.query,
+    limits,
+    inputs.fs,
+    policy,
+    inputs.candidatePathPredicate,
+    {
+      nowMs: ctx.nowMs,
+      deadlineAtMs: Math.min(
+        inputs.deadlineAtMs ?? inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
+        inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
+      ),
+      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+    },
+  );
 }
 
 function rescueLowValueFileListings(
@@ -3309,6 +3378,7 @@ interface FindFilesExecutionInputs {
   readonly nowMs: () => number;
   readonly hints: SearchHints | undefined;
   readonly candidateSetFor: CandidateSetProvider | undefined;
+  readonly candidatePathPredicate: SearchTextRunner["candidatePathPredicate"];
   readonly deadlineAtMs: number | undefined;
   readonly signal: AbortSignal | undefined;
   readonly startMs: number;
@@ -3321,7 +3391,7 @@ function findFilesCandidateSet(
   const { scope, query, limits, fs, nowMs, startMs, deadlineAtMs, signal, candidateSetFor } =
     inputs;
   return candidateSetFor === undefined
-    ? gatherCandidates(scope, query, limits, fs, policy, undefined, {
+    ? gatherCandidates(scope, query, limits, fs, policy, inputs.candidatePathPredicate, {
         nowMs,
         deadlineAtMs: Math.min(
           deadlineAtMs ?? startMs + (limits.elapsedMsMax ?? Infinity),
@@ -3329,7 +3399,7 @@ function findFilesCandidateSet(
         ),
         ...(signal === undefined ? {} : { signal }),
       })
-    : candidateSetFor(query, limits, policy);
+    : candidateSetFor(query, limits, policy, inputs.candidatePathPredicate);
 }
 
 function effectiveFindFilesLimits(query: RetrievalQuery, limits: SearchLimits): SearchLimits {
@@ -3365,6 +3435,7 @@ function executeFindFilesSync(inputs: FindFilesExecutionInputs): SearchResult {
     startMs,
     deadlineAtMs,
     candidateSetFor: inputs.candidateSetFor,
+    candidatePathPredicate: inputs.candidatePathPredicate,
     signal,
   });
 }
@@ -3432,6 +3503,7 @@ interface CompleteFindFilesInputs {
   readonly startMs: number;
   readonly deadlineAtMs: number | undefined;
   readonly candidateSetFor: CandidateSetProvider | undefined;
+  readonly candidatePathPredicate: SearchTextRunner["candidatePathPredicate"];
   readonly signal: AbortSignal | undefined;
 }
 
@@ -3459,6 +3531,9 @@ function completeFindFilesSearch(
     startMs: inputs.startMs,
     ...(inputs.deadlineAtMs === undefined ? {} : { deadlineAtMs: inputs.deadlineAtMs }),
     ...(inputs.candidateSetFor === undefined ? {} : { candidateSetFor: inputs.candidateSetFor }),
+    ...(inputs.candidatePathPredicate === undefined
+      ? {}
+      : { candidatePathPredicate: inputs.candidatePathPredicate }),
     ...(inputs.signal !== undefined ? { signal: inputs.signal } : {}),
   });
   return fileListingResult(
@@ -3538,6 +3613,7 @@ export async function findFiles(
       nowMs,
       hints: deps.searchHints,
       candidateSetFor: deps.candidateSetFor,
+      candidatePathPredicate: buildCandidatePathPredicate(deps.candidatePathGlobs),
       deadlineAtMs: deps.deadlineAtMs,
       signal: deps.signal,
     }),
@@ -3989,6 +4065,7 @@ function excerptResultForWindow(
 interface BatchedExcerptResults {
   readonly results: readonly ReadExcerptWindowResult[];
   readonly omittedRangeCount: number;
+  readonly outsideRangeCount: number;
 }
 
 function excerptBatchCapacity(
@@ -4010,6 +4087,7 @@ interface ExcerptBatchState {
   remainingWindows: number;
   processed: number;
   emptyRanges: number;
+  outsideRangeCount: number;
 }
 
 async function readBatchedExcerptRange(
@@ -4027,7 +4105,12 @@ async function readBatchedExcerptRange(
     maxTotalBytes: batch.remainingBytes,
     maxWindows: Math.max(1, batch.remainingWindows),
   };
-  assertExcerptStartWithinLines(bounded, batch.lines);
+  if (bounded.startLine > batch.lines.length) {
+    batch.processed += 1;
+    batch.emptyRanges += 1;
+    batch.outsideRangeCount += 1;
+    return [];
+  }
   const windows = excerptWindows(bounded, batch.lines).filter(
     (window) => window.content.length > 0 || !window.truncated,
   );
@@ -4066,6 +4149,7 @@ async function batchedExcerptResults(
         excerptResultForWindow(scope, request, window, nowMs),
       ),
       omittedRangeCount: 0,
+      outsideRangeCount: 0,
     };
   const capacity = excerptBatchCapacity(request, request.ranges.length);
   const batch: ExcerptBatchState = {
@@ -4079,6 +4163,7 @@ async function batchedExcerptResults(
     remainingWindows: capacity.windows,
     processed: 0,
     emptyRanges: 0,
+    outsideRangeCount: 0,
   };
   const results: ReadExcerptWindowResult[] = [];
   for await (const windows of excerptBatchRanges(batch, request.ranges))
@@ -4086,6 +4171,7 @@ async function batchedExcerptResults(
   return {
     results,
     omittedRangeCount: request.ranges.length - batch.processed + batch.emptyRanges,
+    outsideRangeCount: batch.outsideRangeCount,
   };
 }
 
@@ -4146,6 +4232,11 @@ function completedExcerptBatch(
     throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
   const results = batch.results;
   const first = results[0];
+  if (first === undefined && batch.outsideRangeCount === request.ranges?.length)
+    throw new RepoSearchUnsupportedFileError(
+      "all requested excerpt ranges are outside the file",
+      "outside-range",
+    );
   if (first === undefined) throw excerptUnreadable(request.scopePath);
   const result = results.length === 1 ? first : { ...first, windows: results };
   return request.ranges === undefined

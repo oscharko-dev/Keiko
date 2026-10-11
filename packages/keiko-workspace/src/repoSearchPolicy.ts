@@ -24,12 +24,14 @@ import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSea
 import { isDenied } from "./ignore.js";
 import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
 import {
-  REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES,
   repositoryRouteDeclarationMarker,
-  repositoryRouteDeclarationMarkers,
+  repositoryRouteDeclarationWindowContains,
   repositoryRouteQuery,
 } from "./repoSearchRoutes.js";
-import { repositorySourceLines } from "./repoSearchSourceClassification.js";
+import {
+  repositorySourceLines,
+  type RepositorySourceLine,
+} from "./repoSearchSourceClassification.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -649,15 +651,9 @@ function routeDeclarationContentBonus(
   const route = routeQueryTermsForSearch(query);
   if (route === undefined) return 0;
   const expectedMarker = repositoryRouteDeclarationMarker(route.method, route.path);
-  for (let index = 0; index < sourceLines.length; index += 1) {
-    const window = sourceLines.slice(index, index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES);
-    const code = window.map((line) => line.code).join("\n");
-    const structural = window.map((line) => line.structural).join("\n");
-    if (repositoryRouteDeclarationMarkers(code, structural).includes(expectedMarker)) {
-      return ROUTE_DECLARATION_BONUS;
-    }
-  }
-  return 0;
+  return repositoryRouteDeclarationWindowContains(sourceLines, expectedMarker)
+    ? ROUTE_DECLARATION_BONUS
+    : 0;
 }
 
 export function scoreContentHitsForSearch(
@@ -687,6 +683,7 @@ export function scoreContentForSearch(
   text: string,
   policy: SearchPolicy,
   scopePath?: string,
+  sourceLinesFor?: () => readonly RepositorySourceLine[],
 ): number {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
     return 0;
@@ -700,7 +697,10 @@ export function scoreContentForSearch(
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
   const tokens = contentTokenSet(text, query.caseSensitive);
-  const sourceLines = repositorySourceLines(text, scopePath);
+  const sourceLines =
+    routeQueryTermsForSearch(query) === undefined && symbolDefinitionQueryTerms(query).length === 0
+      ? []
+      : (sourceLinesFor?.() ?? repositorySourceLines(text, scopePath));
   return scoreContentHitsForSearch(
     policy,
     groups.length,
@@ -907,6 +907,15 @@ interface ScoredCandidate {
 // computation drives both ordering and the explainable ranking diagnostics (a reviewer can see WHY
 // a file was selected: which bucket, the intent-specific bucket weight, the path-term bonus, the
 // depth penalty, and — for a manifest — which ecosystem classified it).
+function queryAwareBucket(scopePath: string, terms: readonly string[]): CandidateBucket {
+  const bucket = bucketByPath(scopePath);
+  if (bucket === "low-value") return bucket;
+  const path = normalizedPath(scopePath);
+  return terms.some((term) => term.includes("/") && (path === term || path.endsWith(`/${term}`)))
+    ? "exact-path"
+    : bucket;
+}
+
 function scoreCandidate(
   file: DiscoveredFile,
   terms: readonly string[],
@@ -915,7 +924,7 @@ function scoreCandidate(
   sourceOverProse: boolean,
 ): ScoredCandidate {
   const path = file.relativePath;
-  const bucket = bucketByPath(path);
+  const bucket = queryAwareBucket(path, terms);
   const lexical = lexicalPathSignals(path, terms);
   const depth = depthPenalty(path);
   const bucketTiebreak = bucketScore(bucket, policy.intent);

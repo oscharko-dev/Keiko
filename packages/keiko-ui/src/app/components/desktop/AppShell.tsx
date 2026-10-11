@@ -24,7 +24,6 @@ import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Header, type HeaderStatusTone } from "./Header";
-import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
@@ -47,6 +46,8 @@ import {
   removeConnectedScope,
   boundScopeOf,
   filesChatBindScope,
+  pinnedFilesScope,
+  KEEP_FILES_FOLDER_CFG_KEY,
   hasOtherFilesScopeOwner,
   restoredConnectionScope,
   totalSourceCap,
@@ -239,6 +240,18 @@ function FooterLoading(): ReactNode {
 const Footer = dynamic(() => import("./Footer").then((mod) => mod.Footer), {
   ssr: false,
   loading: FooterLoading,
+});
+
+export function LeftRailLoading({ error }: Readonly<DynamicOptionsLoadingProps>): ReactNode {
+  if (error !== null && error !== undefined) throw error;
+  return <div className="rail rail-left" aria-hidden="true" />;
+}
+
+// Preserve the navigation's layout slot while the client shell loads its existing controls.
+// A failed chunk reaches the shell's diagnostic/recovery boundary, like other shell failures.
+const LeftRail = dynamic(() => import("./LeftRail").then((mod) => mod.LeftRail), {
+  ssr: false,
+  loading: LeftRailLoading,
 });
 
 // Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture
@@ -883,6 +896,7 @@ interface FilesScopeUnbindInput {
 }
 
 interface FilesScopeRequest {
+  acknowledgement?: FilesPatchAcknowledgement;
   chatWindowId: string;
   nextScope: ChatConnectedScope;
   previousScope: ChatConnectedScope | null;
@@ -999,7 +1013,7 @@ function groundingMutationFailureKey(
     | "chat.grounding.connectSourceFailed"
     | "chat.grounding.connectKnowledgeFailed"
     | "chat.grounding.connectGitChangeFailed"
-    | "scope.disconnectError",
+    | "scope.disconnect.error",
   attemptCorrelationId?: string,
 ): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
   if (error instanceof ChatMutationFailure)
@@ -1842,6 +1856,9 @@ function AppShellInner(): ReactNode {
       reportFilesOwnershipDecision(attempt, connection, canonicalScopes);
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (filesScopeAlreadyCanonical(canonicalScopes, nextScope, ownedScope)) {
+        acknowledgement.chat = chat;
+        const acceptedScope = canonicalScopes.find((scope) => isScopeConnected([scope], nextScope));
+        if (acceptedScope !== undefined) acknowledgement.scope = acceptedScope;
         rememberGroundingChat(chat);
         publishRefreshedGroundingChat(chat);
         return true;
@@ -1920,7 +1937,7 @@ function AppShellInner(): ReactNode {
       const { nextScope, previousScope, attempt, connectionId, edgeKey, chatKey } = input;
       const confirmed =
         edgeKey === undefined ? undefined : acknowledgedFilesScopesRef.current.get(edgeKey);
-      const acknowledgement: FilesPatchAcknowledgement = {};
+      const acknowledgement = input.acknowledgement ?? {};
       const accepted = await retryGroundingScopeIntent(async (): Promise<boolean> => {
         if (filesRequestWasSuperseded(input, automaticFilesRequestsRef.current)) return false;
         return replaceFilesScopeNow(input, confirmed ?? previousScope, acknowledgement);
@@ -1950,6 +1967,7 @@ function AppShellInner(): ReactNode {
       target?: ChatBindingTarget,
       connectionId?: string,
       automatic = false,
+      acknowledgement?: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
       try {
         const chatKey = groundingMutationKey(chatWindowId, target);
@@ -1972,6 +1990,7 @@ function AppShellInner(): ReactNode {
               edgeKey,
               chatKey,
               request,
+              ...(acknowledgement === undefined ? {} : { acknowledgement }),
             }),
           "files",
         );
@@ -1988,7 +2007,19 @@ function AppShellInner(): ReactNode {
       chatWindowId: string,
       scope: ChatConnectedScope,
       target?: ChatBindingTarget,
-    ): Promise<boolean> => replaceFilesScope(chatWindowId, scope, null, target),
+    ): Promise<ChatConnectedScope | false> => {
+      const acknowledgement: FilesPatchAcknowledgement = {};
+      const accepted = await replaceFilesScope(
+        chatWindowId,
+        scope,
+        null,
+        target,
+        undefined,
+        false,
+        acknowledgement,
+      );
+      return accepted ? (acknowledgement.scope ?? scope) : false;
+    },
     [replaceFilesScope],
   );
   const unbindFilesScopeNow = useCallback(
@@ -1996,7 +2027,7 @@ function AppShellInner(): ReactNode {
       const { chatWindowId, scope, target, connectionId } = input;
       const chat = await resolveChatForWindow(chatWindowId, target, true, attempt.correlationId);
       if (chat === undefined) {
-        return rejectForConnectionFailure(t("scope.disconnectError"));
+        return rejectForConnectionFailure(t("scope.disconnect.error"));
       }
       const current = effectiveScopes(chat);
       const connection = wsConnectionsForBindingRef.current.find(
@@ -2073,7 +2104,7 @@ function AppShellInner(): ReactNode {
       } catch (error: unknown) {
         if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
         return rejectForConnectionFailure(
-          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+          t(groundingMutationFailureKey(error, "scope.disconnect.error")),
         );
       }
     },
@@ -2176,7 +2207,7 @@ function AppShellInner(): ReactNode {
             retryGroundingScopeIntent(async (): Promise<boolean> => {
               const chat = await resolveChatForWindow(chatWindowId, target);
               if (chat === undefined) {
-                return rejectForConnectionFailure(t("scope.disconnectError"));
+                return rejectForConnectionFailure(t("scope.disconnect.error"));
               }
               const key =
                 scope.kind === "capsule"
@@ -2207,7 +2238,7 @@ function AppShellInner(): ReactNode {
         );
       } catch (error: unknown) {
         return rejectForConnectionFailure(
-          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+          t(groundingMutationFailureKey(error, "scope.disconnect.error")),
         );
       }
     },
@@ -2331,7 +2362,7 @@ function AppShellInner(): ReactNode {
         );
       } catch (error: unknown) {
         return rejectForConnectionFailure(
-          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+          t(groundingMutationFailureKey(error, "scope.disconnect.error")),
         );
       }
     },
@@ -2419,11 +2450,18 @@ function AppShellInner(): ReactNode {
     if (a === undefined || b === undefined) return;
     const chatWindowId = chatWindowIdOf(conn, a, b);
     if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) return;
-    const nextScope = filesChatBindScope(a, b, Date.now());
+    const visibleScope = filesChatBindScope(a, b, Date.now());
+    if (visibleScope === null) return;
+    const chatWindow = a.type === "chat" ? a : b;
+    const runtime = chatWindowRuntimeTarget(chatWindowId);
+    const nextScope = pinnedFilesScope(
+      visibleScope,
+      runtime?.connectedScopes,
+      chatWindow.cfg[KEEP_FILES_FOLDER_CFG_KEY] === true,
+    );
     if (nextScope === null) return;
     const previousScope = boundScopeOf(conn);
     if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) return;
-    const chatWindow = a.type === "chat" ? a : b;
     const conversationId =
       chatIdFromWindow(chatWindow) ?? chatWindowRuntimeTarget(chatWindowId)?.conversationId;
     if (conversationId === undefined) return;

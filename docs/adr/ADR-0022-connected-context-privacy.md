@@ -59,6 +59,20 @@ file bytes). Persisting it to disk would create a second redaction surface co-eq
 with the evidence ledger, with no offsetting benefit. The evidence ledger records the
 audited subset as metadata and hashes, not as a full pack.
 
+Connected folder answers reuse ADR-0144's operator-owned assessment policy, including ordinary
+conversation and learned knowledge without Internet or matching excerpts. The policy instruction
+is included before prompt fitting. Assessment text never authenticates source citations, missing
+file declarations or entailment, and operator-disabled blocks are dropped. Source-only marker
+repair preserves the assessment verbatim. General requests with no runnable retrieval anchors may
+use the validated empty assembler under the same original token, spend, time and two-physical-
+attempt envelope; they do not invent repository facts or bypass scope validation. An assessment-only
+second pass does not resolve a source insufficiency, even when the declared file was sent; the
+substantive uncited source-answer case retains its separate successful retrieval outcome. Existing
+`search.answer.assessed` events distinguish early `candidate` from `accepted-final` observations
+and bind final source-warning decisions to canonical scope/query digests. Unknown or candidate
+observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
+observations even when a separate labelled assessment is allowed.
+
 ### D2 — Per-answer summary is wire-only
 
 The wire response carries `contextPack: GroundedAnswerContextPackSummary` on every
@@ -157,6 +171,20 @@ An explicitly connected repository or ordinary folder is sufficient scope for a 
 orientation or natural-language search request. A filename or symbol is useful for precision,
 but is not a prerequisite to inspect the user's accepted root. Empty and punctuation-only
 requests still require clarification, and implicit roots retain their narrowing guards.
+The canonical planner also recognizes fully parsed acknowledgement or receipt requests for
+supplied user context and normative questions that explicitly request a general method or advice.
+These use the existing empty evidence pack when own assessment is allowed,
+without recursive discovery or source reads; disabled own assessment retains clarification. An
+independent source instruction, diagnostic, quoted target or path keeps source retrieval eligible.
+The original user input and conversation history remain model context. On this positively parsed
+conversation lane only, an untagged answer with no actually sent evidence is labelled by software
+as own assessment before source validation. Existing citation, path, declaration and answer-kind
+parsers and a conservative source-attribution guard exclude source references, selected-source
+claims, missing-evidence statements and refusals from this fallback.
+Unclassified, source and mixed requests retain their source projection; explicit assessment tags
+keep their existing policy semantics. Ordinary "next steps"
+are literal prose; a Next.js spelling or a bound framework/version/use request retains its technical
+alias and metadata routing.
 Repository orientation retains the user's lexical terms and repository semantic provider. Recursive
 file discovery is a zero-evidence fallback after a complete term search, within the same search-call
 budget, alongside metadata and overview documents; a source-only folder must produce actual source
@@ -193,6 +221,11 @@ is identified by its canonical omission count, separately from unavailable tool 
 The current traversal's incomplete flag and closed reasons are also projected; these counts
 do not imply the contents or specific encoding of an unread file. The existing prompt fitter charges this serialized metadata
 and line-number overhead against the actual model input budget.
+When that budget requires shrinking a located excerpt, a complete matching line that fits the
+remaining UTF-8 byte grant takes priority over an unrelated leading prefix. Adjacent complete
+lines may fill the remaining grant. The fitted excerpt retains its physical source offsets and
+rebinds its line range and stable identity; only that final sent range can authorize citations.
+If no matching complete line fits, the existing UTF-8-safe prefix fallback remains bounded.
 Fresh reads reserve each qualified file's observed byte requirement within the aggregate source
 budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt window. The pack
 cache fingerprints these per-path limits. Once the collector overflows, later files perform no
@@ -230,16 +263,90 @@ still honor an explicit caller deadline or cancellation. Directory entries strea
 source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
 summaries survive the scan. These shared defaults also apply to manual Editor find-in-files, replace
 preview and symbol lookup, coding context lookups, and grounded symbol trace; explicit finite callers retain their
-bounds. An unlimited default lookup uses the live traversal rather than treating a finite workspace
-index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
-images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
-Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
-An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
+bounds.
+
+Structural AST, import, symbol, endpoint and source/test intake likewise honor the actual caller
+file-scan ceiling. A null ceiling uses all eligible entries in the finite admitted candidate
+inventory. Resolver metadata reservation follows that same ceiling. The request-local AST reader
+fixes its current-source metadata capacity once from the admitted inventory and caller ceiling;
+guarded reading, currentness, cancellation and partial-source uncertainty still apply. Complete-text
+reuse retains the independent bounds stated below, and optional enrichment retains its finite grants.
+
+An unlimited default lookup uses fresh live traversal rather than treating a finite workspace
+index as complete coverage. It may reuse completed matching metadata from that same bounded index
+after fresh canonical-path, hard-link, file-identity and high-resolution modification/change-time
+validation. Each file retains at most one full-query-identity record containing physical line ranges,
+scores and definition status; bodies and previews are absent. The full identity reuses the diagnostic
+fingerprint producer and includes matching interpretation, effective result/line limits and policy
+intent. Snapshot identity additionally binds scope, ignore/candidate policy, byte grant and algorithm
+version. Partial, cancelled, timed-out, corrupt or incompatible records require live matching.
+Changes to decoding or matching semantics invalidate the existing snapshot version, including
+completed negative records whose source bytes and file metadata have not changed. The markup
+declaration correction uses snapshot version 9; prior snapshots require fresh live matching.
+Sixteen lazily loaded query shards retain the existing encrypted store's snapshot and entry bounds,
+an 8 KiB record bound and a 64 MiB aggregate request-record bound. They are partial acceleration
+metadata, never discovery authority. Capacity refusals remain visible as dropped records; retained
+and reused counts describe actual guarded index records, independently of source coverage counts.
+An active request may evict unseen advisory records even when capacity refused every new record.
+This releases bounded reuse capacity without claiming source-file deletion or complete enumeration;
+the next uncached lookup still requires live matching under the existing guards.
+Positive evidence excerpts are still freshly read. Active known-fit observers, semantic/document
+inspection and Editor lanes retain their live content behavior; an observer may release this need
+only after it irrevocably stops. Thus a warm workspace search with no body reads does not imply that
+a grounded answer performs no known-fit or evidence reads. Text files up to and including 2 MiB are eligible regardless of extension;
+images, binary content, unsafe aliases, and larger files are excluded. Ordinary-folder recursive content searches do not inherit Git-oriented generated-directory
+exclusions merely from names such as `build` or `dist`. Query-named ordinary-folder documents use
+that same eligibility distinction; repository generated code remains excluded before unconditional
+read admission. Hard denials, containment, ignore, binary, size and budget checks still apply.
+Leading `./` in a query reference denotes the same scope-relative target and is removed before
+strict canonical validation. Parent traversal and interior dot segments are not normalized away;
+canonical sensitive names still pass through the existing hard-denial policy.
+Complete extracted file paths are target data, so their `reference`, `history` or `caller`
+directory segments cannot request relationship/history rings. Actual relationship/history words
+outside the path retain their routing; requested tests and integrations use the same canonical
+relationship guard. A factual lookup with freshly admitted query-named file paths, in Git or
+ordinary folders, focuses discovery on those paths only when every source request clause
+binds a named file and its canonical planner decision contains no independent non-path target.
+A separately requested, positively parsed general recommendation without a source constraint
+does not add source work; unknown or source-constrained independent clauses remain broad.
+The existing target decision supplies a positive, completely parsed `namedFileOnly` result;
+finding a path somewhere in an otherwise unknown clause is insufficient. Closed file-list,
+file-contained fact and file-subject explanation forms retain canonical quote and presentation
+projection. A positively parsed return/open/read orientation to one exact query-named path may
+bind subsequent local function, method, section or value questions in the same request. Those
+questions cannot precede the orientation or choose among multiple distinct paths. Actual quoted
+targets, nonlocal locations, other source constraints, relationship/history requests and unknown
+meaningful continuations remain broad; this does not infer a source from prior conversation.
+The existing structural request context binds to that narrower search scope; the human's source
+scope and budgets remain unchanged. Independent clauses after commas, additional paths omitted
+by the bounded reference projection, definitions, diagnostics, relationships and history retain
+their existing discovery flow. Mixed document/implementation lookups retain discovery of the
+independent target.
+Ordinary document eligibility reuses the shared web/text-document extension groups, including
+XHTML and Markdown, alongside XML and existing bounded document extraction. It does not enumerate
+navigation neighbours or widen the human's scope.
+Quoted file targets match their extracted reference identity rather than their anchor kind.
+If all complete file targets have closed admission rejections, the existing ring and
+augmentation decision events record `explicit-target-unavailable` and retain those rejection
+facts. They do not substitute another same-basename file or enumerate its contents. An independent
+source target or a requested relationship retains its existing retrieval flow.
+Existing correlated admission, skipped-ring, read and budget observations describe this path;
+non-Git folders cannot dispatch the Git-history ring, even when history was requested.
+An intentional index bypass is reported as `live-scan`, with its own count of completed
 text-search calls. It is not an index failure or evidence of index reuse. If no indexed result,
 snapshot load, or snapshot save was observed, both completion projections report the provider as
-`not-evaluated`, even when an index was injected. Actual finite indexed searches retain their
-cold, warm, reconciliation, and load/save-failure observations; the finite workspace-index tests
-own those guarantees. The bypass counter counts logical searches, not physical directory walks.
+`not-evaluated`, even when an index was injected. Both finite searches and compatible unlimited
+matching reuse retain their actual cold, warm, reconciliation and load/save-failure observations.
+Index failures preserve live source retrieval and its coverage; the observed adapter still records
+the failure. A failed load or save with zero retained, indexed and reused records reports
+`live-fallback`; a save failure after actual index work preserves its observed cold or warm mode.
+The bypass counter counts logical searches, not physical directory walks. Request
+abort/deadline controls race delayed index operations and fence every later snapshot chunk, write,
+sync and publication step. Owned descriptor closure and temporary-file cleanup remain permitted.
+Both server wrappers forward the request-active guard alongside the existing generation fence;
+late operations cannot publish or populate a reusable cache after request cancellation. Reported
+elapsed time includes finalization, and a deadline consumed there remains visible as incomplete
+coverage rather than disappearing from the request's time accounting.
 Raw directory entries must also satisfy the shared portable scope-path contract before resolution;
 unsupported names are never normalized into a different file or traversed. Unlike a sensitive-path
 policy denial, this exclusion means the requested tree could not be fully examined. Search reports
@@ -257,6 +364,106 @@ slices retain finite scan counts (currently 614 and 307 files respectively) and 
 matches; they do not cap the recursive lexical scan. An explicitly finite elapsed budget is sliced
 across rings, while the default `null` deadline remains uncapped. Retained lexical matches are
 bounded by accepted context capacity independently of corpus traversal.
+
+The existing structural request context can retain complete, physical-line-preserving evidence
+from its code-index reader for the endpoint graph only. This new retention is explicitly bounded
+by the first 512 eligible files, 64 KiB per complete source and 32 MiB of encoded text in aggregate;
+its existing ranking-preview Map is not claimed to have those aggregate bounds. Endpoint binary
+probes remain live. Every reuse rechecks current eligibility, canonical root/path, strong file
+identity, nanosecond modification/change times and single-link membership before and after lookup,
+plus the reader's byte grant and request abort/deadline. Changed, weak, unavailable, partial or
+unretained sources take the established live reader. Request-bound complete and oversized-prefix
+reads recheck active eligibility after their own fresh metadata resolution and before descriptor
+I/O; standalone builders without that optional guard retain their existing behavior. Scope,
+policy, filesystem and limits remain bound to the same request context; no text crosses requests
+or supplies final evidence reads.
+Physical Activity Log I/O counters continue to count the actual underlying calls rather than
+charging a second body read for reused text. This bounded work reduction does not establish an
+actual model-response latency improvement.
+Import discovery likewise classifies and parses one complete, size-admitted source buffer through
+the existing guarded text-inspection reader. It does not read the same file again solely for
+binary classification. Supported decoding and line-preserving secret redaction still precede
+parsing; incomplete, binary, unsupported, changed, unsafe or oversized sources cannot produce
+import edges. This buffer belongs to that read and does not add cross-request source retention.
+
+Explicit endpoint implementation questions reuse these existing graph and source readers.
+Current lexical source candidates may order endpoint intake before its existing structural file
+cap. A configured registration admits only a literal method and path with a direct handler in the
+same record; ambiguous, computed or spread declarations do not certify a handler. Handler
+admission retains the registration path and exact observed identifier span, then uses the
+existing lexical reference index to identify its current target. A global same-name lookup cannot
+certify that relationship. Definition traversal requires the existing TypeScript AST index, a
+current guarded source snapshot, an unambiguous lexical call binding and the complete call span
+inside an actually read excerpt. Calls belong to their nearest exact indexed callable declaration;
+uninvoked nested functions and unsupported anonymous owners cannot inherit the outer handler's
+identity. Known targets reuse their actual indexed definition spans and ranges rather than a
+name-only global lookup. Exact declaration identities distinguish same-line declarations.
+Imported targets retain the exact runtime module-export declaration through the existing
+re-export resolver; a same-named method or nested declaration cannot replace that identity.
+Runtime re-export declarations retain uncertainty when their source is unreadable, only partially
+observed or unresolved. A missing indexed export in such a branch is not proof of export absence
+and cannot certify a unique target from another branch. These checks retain existing read caps.
+Type-only imports and exports, ambiguous bindings and unavailable source projections do not
+certify runtime references. Package output-to-source mapping uses explicit `rootDir` and `outDir`
+from already guarded compiler metadata, an unambiguous configuration owned by the package, and
+only sources already admitted inside that package. It adds no read or candidate grant and does
+not admit generated output. Explicit unsupported package entries do not grant a root fallback.
+An unowned inline callable may supply a definition-location witness only when its fully observed
+lexical call and reference agree on the exact identifier and target declaration spans. Its target
+body uses the same guarded reader and finite target capacity. The existing definition evidence
+retains a resolved reference edge with the observed source and exact target coordinates, including
+that edge in its stable identity. Ranking and excerpt selection reuse declaration priority without
+changing lexical relevance, weights or floors. Continuation preserves the reference relationship
+and `source-graph-incomplete` uncertainty; generic structural targets receive no declaration
+promotion. This does not establish callback invocation or an outer-owner call edge.
+Precisely referenced definitions use their complete AST declaration ranges without appended
+context lines, preventing neighbouring definitions from consuming each other's excerpt grant.
+Existing own-return and direct-await annotations order certified calls with fair sibling traversal.
+Binding certification does not replace relevance with a constant score. Declaration promotion
+preserves its admitted score; a further definition reuses the original-query matcher on its actually
+read, redacted source, followed by the existing relationship attenuation. Explicit selected-file
+priority remains intact.
+Physical excerpt allocation preserves connected parent chains across already selected route files.
+Explicit human file selections remain first. The request-local traversal supplies only current,
+certified definition identities, observed parent relationships and actual body-byte requirements.
+Admission funds the selected target definition window and each current observed parent caller span,
+using their unique physical-line and separator costs. A compact span is bound to the original
+current parent, exact child and accepted source coordinates; it does not narrow or copy a definition
+certificate. Unobserved, anchored or partially clipped caller spans receive no compact priority.
+Independent route roots and their file queues receive bounded initial byte portions from the
+existing connected share. Existing certified traversal sets file order; existing query relevance
+orders targets within each file, with stable ties. Roots and their file queues take turns within
+those portions. After that bounded pass, unserved queues retry unused shared bytes before further
+expansion.
+Shared ancestors reserve bytes once; upgrades retain funded target windows, later
+same-file targets remain eligible, and oversized branches receive no partial reservation.
+Reservations must fit both the remaining connected share and actual per-file read capacity; they
+do not add selected paths or change relevance scores or invocation uncertainty. Ordinary ranked
+evidence retains its share of the remaining byte grant. Existing human and endpoint selection
+priorities survive path ordering. Reserved windows precede ordinary extras, with explicit human
+windows first. When current coverage windows apply, independent search windows receive ordinary
+extra bytes before unfunded discovered-definition expansions. Those expansions remain a deduplicated
+fallback. The existing selection-details operation records planned ordinary ranges on attempted
+reader paths, ordinary ranges intersected by nonempty returned views, and deferred definition ranges.
+An intersection count does not certify complete source content; truncation and omission counts
+remain authoritative. Separately identified actual returned partial views retain their own ranges,
+content and physical-view digests through assembly, without inferred continuity or uncharged separators.
+Multiple unidentified uncovered views remain fail-closed, and conflicting views retain uncertainty.
+Bounded observations do not establish that an arbitrarily large function was fully read; actual
+truncation and omissions remain authoritative.
+The existing guarded reader batches each file's ranges, charges
+actual returned bytes and reports omitted windows. A definition that loses currentness cannot
+retain its reserved priority; bytes already read from a subsequently stale definition are charged
+and its windows omitted.
+Certified targets, including certified seeds, consume a finite request capacity bounded by the
+validated query's metadata capacity and the actual admitted compiler-AST definition count.
+Unique target identities terminate cycles; continuation ends when that capacity or the reachable
+graph is exhausted. Observation frontiers retain the validated query's per-level capacity, while
+seed discovery and symbol-search bounds remain separate. These implementation bounds remain
+inside the original search, read, excerpt, token and caller deadline grants. Closed omission
+reasons remain explicit in pack uncertainty; the existing Activity Log records uncertainty counts
+and actual read/final-prompt counts. Fragment and polyglot discoveries without that AST certification
+remain uncertified. This is source attribution, not proof that a conditional branch executed.
 
 The inclusive file-byte ceiling is owned once by `MAX_RECURSIVE_TEXT_FILE_BYTES` in the pure
 workspace contract primitives. Recursive matching, planner limits, document input admission and
@@ -364,13 +571,140 @@ shared boundary never advances beyond the later anchor's source start; a tight g
 only part of either anchor, but midpoint clipping must not discard that later start. Unequal grants
 preserve complete anchors when their combined required bytes fit, and zero-byte grants emit no view.
 Selected files retain every distinct, already-admitted evidence range rather than independent
-per-file atom or window quotas. The existing safe excerpt reader batches those ranges from one
+per-file atom or window quotas. Priority-based overlap deduplication subtracts only already covered
+lines, preserving uncovered head, tail and bridge segments. Each remaining segment retains the
+strength of its overlapping evidence atoms; higher-priority anchor segments remain first under
+tight grants. The existing safe excerpt reader batches those ranges from one
 freshly classified, decoded and redacted file snapshot, preserves original line coordinates, and
-charges every returned fragment against the accepted cumulative byte grant. Remaining ranges are
+charges every returned fragment against the accepted cumulative byte grant. A stale location beyond
+physical EOF is an omitted range and cannot discard another valid requested window from that same
+snapshot. The ordinary default-window fallback applies only when every requested location is invalid.
+Remaining ranges are
 reported when that grant is spent; cancellation or a changed source prevents publication. Global
 retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
 boosts; vague, diagnostic, relational, and semantic evidence retains ordinary relevance filtering.
+Query-named paths (relative, contained absolute, or local file URLs) are case-preserving explicit
+selections. A single admission seam applies selected-scope membership, canonical containment, deny
+and ignore rules, safe regular-file checks, and the existing binary/size classifier before injection.
+Its closed rejection vocabulary is `outside-scope`, `denied`, `missing`, `ignored`, `generated`,
+`binary`, `size-exceeded`, and `unsupported-format`. Human Files selections retain their existing
+safe ignored-file exemption; pasted paths cannot acquire it. All primary references are classified
+before diagnostic pairing builds content graphs. The existing request-local structural context
+checks their rejected-path eligibility again when consuming a retained candidate inventory, so a
+rejected explicit source cannot be read through a helper graph or its prefix/probe lane. This does
+not disable bounded structural prefix reads for other eligible, unaddressed sources. Exact rejected
+paths also flow into the existing
+lexical and filename candidate policy before content reads, including finite discovery and rescue.
+Literal exclusions do not interpret filename metacharacters, and the existing persistent-index and
+request-local session identities bind that policy. Human Files exemptions do not create exclusions.
+Basename admission uses the existing path-only discovery with exact final-segment matching before
+bounded retention. This metadata-only enumeration observes ignored names so original admission can
+record their rejection before later search lanes; it grants no source authority. Canonically
+eligible code paths then use the existing single bounded classification batch under the original
+basename-search reservation. The discovery cap, safe Files exemption, and live content checks remain
+unchanged.
+Its match counter counts eligible discovery/classification results independently of later admission
+deduplication; raw ignored or binary metadata names do not become classified matches.
+Admitted paths reuse `repo.selectedFile`
+evidence, survive both relevance floors, and receive read-budget priority without widening byte or
+token grants. A valid line hint selects the existing located-source window; a hint beyond the file
+falls back to the default window and never claims an anchored read. Known dotted basenames use
+bounded shared filename discovery, retaining every eligible match independently.
+Admission counters and the closed reason list are projected on the existing
+`search.connected-context.source-details` sibling because the completed operation already occupies
+its bounded field contract. Its correlation joins the unchanged completion/read-budget evidence;
+the field cap and existing completed fields remain authoritative. Diagnostic traces reuse the
+bounded failure parser and an independent six-reference channel, leaving eight user-term anchors
+available. Within that unchanged cap, the primary local diagnostic frame precedes explicit
+question paths and supplied query references; secondary frames and conversation referents follow.
+A long trace therefore cannot consume every slot before the user's separately named file.
+External runtime/generated frames are removed before the reference cap. Original path
+casing and numeric source locations survive admission; the primary frame and its existing
+structural test/source pair receive the same eligibility and read-budget checks. Ordinary lexical
+search uses the independent question channel; the original trace remains model context and query
+identity, while external runtime frames cannot introduce ordinary search terms. Tool names inside
+trace bodies never request project metadata. A diagnostic paste without an independent question
+searches only its freshly admitted references; when none are admitted, its lexical ring performs no
+search rather than forwarding an invalid empty query or restoring raw frames. For a diagnostic question with admitted or discovered
+source candidates, optional Git history is restricted to those candidates and their discovered
+dependencies within the original selected scope. Advisory atoms cannot enlarge directory or file
+membership. Sharing a commit cannot independently nominate unrelated source or metadata files;
+explicit relationship/history requests retain their existing broader lane. Metadata injection follows the independent user
+question and the effective retrieval intent. Manifest inventory routing requires a complete
+enumeration request; mentioning manifests while asking about validation, loading, or combined
+inventory and behavior retains source-code search. Only an anaphoric follow-up with a previous targeted
+or diagnostic intent may inherit that intent; independently named targets and new traces classify
+on their own. Supplied reference paths, lines, origins, and inherited effective intent participate
+in plan identity without changing the historical no-reference identity.
+The final six source-detail slots hold detected/in-scope/admitted-frame, test/source-pair,
+reference-channel, and closed metadata-injection observations. Total/external frame counts use the
+registered `search.connected-context.selection-details` sibling on the same log port and
+correlation. This companion accommodates later selection observations without dropping existing
+fields or expanding the formatter's contextual-field cap.
+Optional augmentation skip reason and metadata retention capacity reside on completion-details.
+Completed and source-details each retain their full emitted observations within 48 context fields;
+the strict writer and reader caps remain unchanged, including metadata-evaluated follow-up cases.
+The registered `search.connected-context.answer-details` companion uses the same canonical
+scope/query digests and correlation to reconstruct answer kind, observed citation behaviour,
+actual final-prompt file count, bounded declared/unread counts, citation-repair disposition, and
+follow-up trigger, pass/admission counts, outcome, and configuration disposition. No declaration
+path or answer body enters this log. Technical failures retain the existing closed error header,
+body-free frames, and causes. Normalized synthesis output is buffered before publication; unsafe,
+unknown, or excess declaration lines are removed before client delivery and history persistence.
+Intentional request cancellation retains the existing cancelled chat-turn state across reloads.
+An aborted native selected-file reader is translated at admission into the existing cancellation
+error, preserving its cause. The registered retrieval line remains WARN/cancelled and does not
+create a registered-failure support incident; actual read failures and timeouts remain distinct.
+Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
+read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+An explicitly empty sent-pack inventory grants no source support; only absent legacy metadata may
+fall back to assembled evidence. Zero sent files retain physical read usage without producing a
+grounded source manifest.
+After governed memory attachment, final publication records optional memory observations on the
+existing `chat.response.message` operation: the actual structured
+`uncitedMemoryContextMarkerCount` and closed `memoryContextDisposition`
+(included/excluded/not-requested). Its assistant/request causal relationship remains unchanged.
+This distinguishes actual included memory from budget exclusion across single, multiple, and hybrid
+sources; neither retrieval candidate counts nor model-authored marker prose proves inclusion.
+The observation carries no memory content or answer text.
+Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
+maximum of two physical synthesis attempts and the original remaining search/read/token/spend/time grants.
+Declared unread targets receive priority during final prompt fitting;
+the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
+fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
+against their actual sent packs; an unusable attempted answer retains its charged synthesis usage.
+Follow-up pass count observes a completed retrieval pass even if its additional synthesis is refused;
+admitted-path count records targets retained by follow-up retrieval, independently of physical
+read/byte accounting and final sent membership.
+A file already physically read does not acquire another read through an unread-in-prompt declaration.
+The existing allocator's high/exceeded context pressure refuses follow-up; refusal, clarification,
+or assessment-only content from a second answer remains still-insufficient. Permitted learned
+knowledge may still be returned, but it cannot claim that the unresolved source question was answered.
+A substantive second source answer can resolve retrieval
+while retaining an honest uncited warning, and never obtains a third synthesis slot. Gateway and context-window retries consume the same physical attempt slots. Separately
+bounded entailment verification cannot grant another synthesis attempt.
+`KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` is default-enabled with one follow-up pass: absent means `1`,
+explicit `1` enables, explicit `0` disables, and every other explicit value fails closed to zero
+passes with a body-free invalid configuration observation (ADR-0180).
+Working-tree recency uses one scope-bound request-local snapshot from the existing observed Git
+runner, capped at 64 admitted paths and a shared 1.5-second ceiling further bounded by the remaining
+request deadline. A directly connected repository subfolder checks ancestor metadata through the
+filesystem root under the original request deadline and abort guard, without an arbitrary depth
+cutoff. This remains only the Git-discovery hint; hardened Git membership executes in that selected cwd, and
+the selected evidence root never expands to the repository parent. Ordinary folders spawn no process;
+exhausted grants and elapsed deadlines refuse
+observation. Allowed paths feed the existing recent-path search policy and a small targeted/diagnostic
+ranking signal without changing provenance, admission, or floor exemptions. Selection-details
+records only the closed status disposition, measured duration, observed/deleted counts and hint/hit
+counts. Private scope/status cache identity and path values never enter activity evidence. Status
+dependency failures retain the existing structured diagnostics and degrade to ordinary retrieval.
+Supported document basenames use the existing bounded path-only discovery port, then the same
+admission and document-extraction boundaries; ZIP containers never require text classification.
+Only extraction-owned files are removed from ordinary code evidence. An ordinary text file with
+a legacy document suffix remains text evidence unless explicitly selected for document handling.
+Expected file disappearance/access races record closed missing/denied rejections and preserve
+other candidates; cancellation and unexpected dependency failures remain observable failures.
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,
 not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
 continue to report incomplete scope coverage; omitted evidence never proves a fact absent.
@@ -378,7 +712,20 @@ Language source inspection is an explicit trusted grounded-caller hint, rather t
 reinterpretation inside shared lexical search. Coding tool and context-provider lexical requests
 retain content-match semantics and cannot receive synthetic nonmatching inspection windows.
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
-filename batches; they do not schedule unrelated graph or history traversal. Explicit relationship,
+filename batches; they do not schedule unrelated graph or history traversal. Named-file focus in
+Git and ordinary folders additionally requires every source request clause to stay bound to a
+named file. Canonical quotation parsing preserves possessives and contractions while retaining
+actual quoted search targets. Closed attached citation instructions, including current implementation
+lines, and word-limit instructions do not create
+source targets; separately parsed general advice does not authorize additional source discovery. The canonical anchor producer retains quoted/path targets before removing presentation-only
+prose, and removes that prose before definition patterns or ordinary symbols can treat citation
+instructions as requested source content. Target-shape, definition and relationship classification
+use the same presentation projection; the original question and model prompt remain unchanged.
+Canonical reference wrapping and raw file-token masking preserve sentence boundaries so a following
+output clause remains separate. An independent prose
+topic, even without a quoted or typed identifier, retains recursive discovery. A rejected named
+file cannot stop discovery for that independent topic. Sole named-file requests retain
+focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
@@ -403,9 +750,13 @@ violations and unexpected failures still propagate. The existing metadata-unavai
 scope-incomplete uncertainty remain visible.
 The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared
 legacy HTML charsets supported by the platform's fatal `TextDecoder`, including Shift-JIS, Big5,
-and ISO-2022-JP. HTML declarations are inspected within the first 1,024 bytes; `http-equiv` charset
-parameters are case-insensitive, and standard aliases such as `iso_8859-1` resolve through the platform
-decoder. Empty charset values are absent hints, allowing a later supported declaration; nonempty
+and ISO-2022-JP. Declarations are inspected within the first 1,024 bytes. An initial XHTML XML
+encoding declaration precedes HTML metadata; byte-order marks and recognizable UTF-16 patterns
+retain precedence over either declaration. The existing quote-aware attribute cursor consumes
+complete tags and skips comments and raw-text bodies, so script strings or quoted attribute
+examples cannot declare a codec. `http-equiv` charset parameters are case-insensitive, and standard
+aliases such as `iso_8859-1` resolve through the platform decoder. Empty charset values are absent
+hints, allowing a later supported declaration; nonempty
 unsupported declarations still refuse decoding. HTML metadata labels resolving to UTF-16LE/BE map
 to UTF-8, while actual BOM or recognizable-pattern detection retains precedence. A UTF-8 BOM does
 not bypass the bounded decoded NUL/control probe. No undeclared legacy encoding is guessed. Unknown or
@@ -481,7 +832,55 @@ existing broader retrieval behavior. Literal lookup prioritizes actual lexical
 content matches ahead of incidental natural-language path overlap. Files with the same basename
 remain independent evidence candidates: their names alone cannot establish duplicate content or
 facts. Explicit duplicate hints remain supported, and existing output/context budgets bound retained
-evidence. When distinct explicit anchors identify different candidate paths, bounded selection
+evidence. Exact and suffix path evidence and directory-segment affinity contribute named weighted
+composite signals; positive path evidence neutralizes the ordinary depth penalty. Scan ranking
+emits the existing exact-path bucket for explicit multi-segment exact/suffix query matches,
+while generated candidates retain their eligibility policy. Score ties compare exact-path and
+segment signals, depth, then codepoint path spelling. All addressed/selected same-basename
+candidates precede unaddressed alternatives; only unaddressed candidates use basename diversity.
+Their score ties use shared-parent proximity, segment affinity, then path spelling. Collision,
+diversity-demotion, signal, and proximity observations are count-only fields on the same
+correlated selection-details Activity Log operation.
+Request-local semantic leases open only for an admitted semantic lookup. Existing index fingerprint
+verification is part of that bounded logical search, while optional new live refresh consumes the
+same exploration governor's remaining file, excerpt-byte, and model-input grants. Each new read
+reserves the validated observed file size; each embedding reserves a conservative UTF-8-byte input
+token bound and uses the existing gateway spend reservation with exactly-once settlement. Rejected
+grants do not charge an attempt or start new refresh I/O. `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX`
+defaults to zero, invalid explicit values remain zero, and enabled integer values are capped at
+eight across the entire logical ask. One request-local document permit counter is shared by every
+root lease, semantic lookup and follow-up; failed or cancelled refresh attempts do not reopen it.
+Refresh shares the original request signal and remaining deadline, capped again at five
+seconds; it never mutates the persisted pod. Selection-details records actual embedding/read
+attempt counts separately from byte/input-token upper reservations. Refreshed-file counts include
+only usable files retained in the assembled pack; stale retained files receive the canonical
+`stale-evidence` marker with a `stale-semantic:` count-only claim and keep current lexical evidence.
+Mixed fresh and stale candidates reuse a successful query vector only within the current request,
+with the same adapter, query, and validated pod embedding identity. The existing scoped query cache
+and identity preflight remain authoritative; a copied request-private observation cannot mutate
+their cached vectors. Live document refresh still requires its own read, token, deadline, and spend
+admission. Reused query work is not charged as another embedding attempt, and query vectors are
+never persisted or logged.
+Addressed-file demotion is recorded separately from legitimate unaddressed basename diversity;
+an unaddressed collision cannot by itself diagnose a missed explicit target.
+The active-intent absolute floor derives from the scoring weight table: ninety percent of a
+normalized full lexical hit's provenance and lexical signal contribution. Depth contributes only
+above that baseline. The relative floor remains 550 permille of the interpolated 75th percentile
+of ordinary candidates, excluding selected/priority/protected paths and flat definition or
+canonical-metadata bonuses. Explicit Files scopes retain their no-floor behavior.
+Optional reranking receives at most 64 eligible pre-floor candidates and metadata only, before
+either relevance cut or excerpt reads. It shares the existing call/time budget and Activity Log;
+the assembler does not invoke it again. Provider failure preserves identity ordering and is
+recorded as failed, rather than applied. Attempted calls still consume the call grant. An elapsed
+deadline stops subsequent reads, including when a late reranker result would otherwise arrive;
+identity fallback is pinned on the preselection producer, and orchestration pins enforce no
+post-deadline work. Ordinary keep-one fallback records low selection confidence and the
+`low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,
+and log. Selection-details carries the calibrated floor, confidence, disposition, failed-call,
+and safe platform failure evidence. Wire semantic/scope dispositions are actual observations,
+including known-fit overflow, and absent observations remain absent. Existing latency ceilings
+are unchanged; the only new stage cost is a bounded metadata batch moved before the cut.
+When distinct explicit anchors identify different candidate paths, bounded selection
 prioritizes coverage of those paths before additional alternatives for an already covered anchor.
 Ordinary-folder factual
 HTML/text lookups and complete literal absences avoid unrelated code-graph augmentation;
@@ -521,9 +920,14 @@ Assembly compares requested ranges against the compacted bytes actually retained
 missing ranges, truncated windows and incompatible overlapping source views with aggregate counts,
 without one prompt marker per file. A clipped trailing newline does not authorize the next unsent
 line. Structural edges retain independent identities while a shared source body is compacted and
-charged once. The highest-scoring contributing atom carries that body, so downstream prompt ranking
-retains its actual relevance even when a weaker edge arrived first; metadata-only siblings keep
-their original scores. Different view identities merge only when their overlapping source lines agree;
+charged once. The highest-scoring contributing located atom carries that body, so downstream prompt
+ranking retains its actual relevance even when a weaker edge arrived first. Unlocated discovery
+metadata cannot lend its path score to a separately located source window. The excerpt reader also
+orders windows by their actual located owners before spending the accepted byte grant; an unlocated
+path score remains the fallback only for a window without a located owner. Definition trace
+priority, independently admitted ranges and sole-listing header fallback remain intact.
+Metadata-only siblings keep their original scores.
+Different view identities merge only when their overlapping source lines agree;
 non-overlapping partial views never establish continuity by themselves.
 
 Canonical omission order and cache identity are independent of caller ordering. A successful
@@ -614,3 +1018,33 @@ test will catch it.
 - `packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx` — `ContextPackSummary`
   presentation
 - `docs/connected-context-privacy.md` — user-facing privacy contract
+
+Synthesis accounting refines the two-call rule at the actual attempt boundary: initial answers,
+marker repair, follow-up, and context/provider retries share the same turn-owned allowance. The
+answer-details sibling records optional `synthesisCallCount`, `completedSynthesisCallCount` and
+`synthesisReservedOutputTokens`. Physical synthesis attempts remain separate from completed
+responses: overflow, transient and compatibility failures consume attempt and token/spend grants
+without incrementing completed-response count. A completed marker repair increments that count
+even when its content is rejected; a completed follow-up does likewise. The common grounded
+evidence producer receives the completed count for `usageTotals.requestCount` and the human report
+(ADR-0010 D7); unchanged callers retain the existing one-request default. The existing factory
+ledger owns the lifetime completed counter, per-result deltas and caught-repair recovery.
+Input charges use the canonical sent-prompt estimate as a floor and retain larger reported counts.
+Reported partial output is charged; an uncertain interrupted stream retains its requested output
+upper reservation. A definitive HTTP rejection before generation leaves the spare output grant
+available for bounded recovery. These admission charges do not claim exact measured consumption.
+
+OpenAI-compatible adapters invoke the same optional caller admission and durable spend lifecycle
+for each physical synthesis HTTP POST, including stream-shape and output-token-field compatibility
+fallbacks. This avoids double-reserving the first request at both gateway and adapter boundaries.
+Other adapters retain the gateway-owned attempt boundary. Each reservation settles once.
+Terminal caller attempt/cap refusals are classified independently of prior compatibility
+dispatches and cannot increment the shared provider breaker. Genuine provider errors retain
+their existing resilience classification. Early
+iterator close and aborted reads without terminal usage retain uncertain output exposure.
+An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
+before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token
+preflight rejects cyclic schemas before acquisition. Log-sink exceptions remain isolated by the
+existing observability port and do not interrupt healthy dispatch. Durable spend-settlement failure
+remains fatal, while a `finally` settles caller usage and output exposure exactly once and releases
+transport timers. A dispatched attempt never restores its grants merely because accounting failed.

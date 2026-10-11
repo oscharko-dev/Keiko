@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
@@ -106,6 +106,114 @@ test.afterEach(() => {
   for (const root of tempProjects.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+async function connectedReadMetadataChat(request: APIRequestContext): Promise<{
+  readonly chat: ChatResponse["chat"];
+  readonly projectPath: string;
+}> {
+  const projectPath = realpathSync(createProjectFixture());
+  mkdirSync(join(projectPath, "src"));
+  writeFileSync(
+    join(projectPath, "src/read.ts"),
+    'export const readMarker = "KEIKO_E2E_READ_METADATA";\n',
+  );
+  writeFileSync(join(projectPath, "src/cited.ts"), "export const citedMarker = true;\n");
+  writeFileSync(join(projectPath, "src/excluded.ts"), "x".repeat(4 * 1024 * 1024));
+  await ensureProject(request, projectPath);
+  const created = await request.post("/api/chats", {
+    headers: MUTATION_HEADERS,
+    data: { projectPath, title: "Read metadata", selectedModel: CHAT_MODEL_ID },
+  });
+  expect(created.status()).toBe(201);
+  const { chat } = (await created.json()) as ChatResponse;
+  const bound = await request.patch(`/api/chats?id=${encodeURIComponent(chat.id)}`, {
+    headers: MUTATION_HEADERS,
+    data: {
+      connectedScopes: [
+        {
+          kind: "files",
+          relativePaths: ["src/read.ts", "src/cited.ts", "src/excluded.ts"],
+          connectedAtMs: 1,
+        },
+      ],
+    },
+  });
+  expect(bound.ok()).toBe(true);
+  return { chat, projectPath };
+}
+
+async function askReadMetadata(
+  page: Page,
+  request: APIRequestContext,
+): Promise<ReturnType<Page["getByRole"]>> {
+  const { chat } = await connectedReadMetadataChat(request);
+  await seedChatWindow(page, chat);
+  await page.goto("/");
+  const window = page.getByRole("region", { name: "Chat — Read metadata" });
+  await window
+    .getByRole("textbox", { name: "Chat message" })
+    .fill(
+      "Which supplied files are src/read.ts and src/cited.ts? Include src/excluded.ts if available.",
+    );
+  const response = page.waitForResponse(
+    (reply) =>
+      reply.url().endsWith("/api/chats/messages/grounded") && reply.request().method() === "POST",
+  );
+  await window.getByRole("button", { name: "Send message" }).click();
+  const delivered = await response;
+  expect(delivered.status()).toBe(200);
+  const answer = (await delivered.json()) as { readonly evidenceRunId: string };
+  const manifest = await request.get(`/api/evidence/${encodeURIComponent(answer.evidenceRunId)}`);
+  expect(manifest.ok()).toBe(true);
+  const audit = (await manifest.json()) as {
+    readonly manifest: {
+      readonly connectedContext: {
+        readonly files: readonly { readonly scopePath: string }[];
+        readonly omitted: readonly { readonly scopePath: string; readonly reason: string }[];
+      };
+    };
+  };
+  expect(audit.manifest.connectedContext.files.map((file) => file.scopePath)).toEqual(
+    expect.arrayContaining(["src/read.ts", "src/cited.ts"]),
+  );
+  expect(audit.manifest.connectedContext.omitted).toContainEqual(
+    expect.objectContaining({ scopePath: "src/excluded.ts", reason: "size-exceeded" }),
+  );
+  return window;
+}
+
+test("shows native persisted uncited reads before opening evidence and after reload @smoke", async ({
+  page,
+  request,
+}) => {
+  const window = await askReadMetadata(page, request);
+  await expect(
+    window.getByRole("button", { name: /Open src\/read.ts.*Read, not cited/ }),
+  ).toBeVisible();
+  await expect(
+    window.locator("details.grounded-evidence-disclosure:not(.ctx-status)"),
+  ).not.toHaveAttribute("open");
+  await expect(window.getByRole("table")).toHaveCount(0);
+  await page.reload();
+  await expect(
+    window.getByRole("button", { name: /Open src\/read.ts.*Read, not cited/ }),
+  ).toBeVisible();
+  await expect(window.getByRole("table")).toHaveCount(0);
+});
+
+test("retains native cited and genuinely size-excluded read states @smoke", async ({
+  page,
+  request,
+}) => {
+  const window = await askReadMetadata(page, request);
+  await expect(
+    window.getByRole("button", { name: /Open src\/cited.ts.*Cited evidence/ }).first(),
+  ).toBeVisible();
+  await expect(
+    window.getByRole("button", { name: /Open src\/excluded.ts.*Not read/ }),
+  ).toBeVisible();
+  await expect(window.getByRole("table")).toHaveCount(0);
 });
 
 test("sends a chat message and streams a persisted assistant reply @smoke", async ({

@@ -1,3 +1,5 @@
+import { reliableCitationRuntime } from "../../../tests/support/reliable-citation-runtime.js";
+import { citationBehaviourFor } from "./grounded-citation-capability.js";
 // Tests for the multi-source (1+N) grounded path (Epic #532). Pure helpers are exercised directly;
 // the handler branch is driven through handleGroundedAsk with an injected MultiSourceSeam (a
 // deterministic retriever + answerer) so no real workspace is spun up. AC5 — a single connected
@@ -18,6 +20,7 @@ import type { ContextLaneId } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_LANE_IDS,
   DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
   maxUtf8BytesForTokenBudget,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
@@ -30,6 +33,7 @@ import {
 import type {
   ChatConnectedScope,
   GroundedAnswer,
+  GroundedAnswerContextPackSummary,
   GroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -38,6 +42,7 @@ import {
   buildSelectedScopeFrom,
   handleGroundedAsk,
   modelWindowAwareBudget,
+  modelInputPromptByteLimit,
   withPromptExcerptByteLimit,
   promptByteLength,
   type GroundedRunner,
@@ -63,7 +68,10 @@ import {
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
+import {
+  groundedSynthesisAttemptUsage,
+  normalizeGroundedAnswerPayload,
+} from "./grounded-answer.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
@@ -84,7 +92,12 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
-import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import type {
+  OrchestratorInput,
+  OrchestratorOutput,
+  RetrievalOnlyOutput,
+} from "./grounded-orchestrator.js";
+import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   PathDeniedError,
   RepoSearchUnsupportedFileError,
@@ -116,6 +129,8 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 interface PutCall {
   readonly runId: string;
   readonly workspaceRoot: string;
+  readonly sourceScopeFingerprint: string | undefined;
+  readonly citationCount: number | undefined;
 }
 
 function asConnectedAnswer(
@@ -152,8 +167,19 @@ function recordingDeps(puts: PutCall[], overrides: Partial<UiHandlerDeps> = {}):
     configPresent: false,
     evidenceStore: {
       put: (runId: string, json: string): string => {
-        const parsed = JSON.parse(json) as { context?: { workspaceRoot?: string } };
-        puts.push({ runId, workspaceRoot: parsed.context?.workspaceRoot ?? "" });
+        const parsed = JSON.parse(json) as {
+          context?: { workspaceRoot?: string };
+          connectedContext?: {
+            scope: { sourceScopeFingerprint?: string };
+            summary: { citationCount?: number };
+          };
+        };
+        puts.push({
+          runId,
+          workspaceRoot: parsed.context?.workspaceRoot ?? "",
+          sourceScopeFingerprint: parsed.connectedContext?.scope.sourceScopeFingerprint,
+          citationCount: parsed.connectedContext?.summary.citationCount,
+        });
         return runId;
       },
       list: () => [],
@@ -166,6 +192,20 @@ function recordingDeps(puts: PutCall[], overrides: Partial<UiHandlerDeps> = {}):
     modelPortFactory: () => undefined,
     store,
     ...overrides,
+  };
+}
+// These legacy pins deliberately exercise the existing source-only operator policy.
+function sourceOnlyDeps(deps: UiHandlerDeps): UiHandlerDeps {
+  const config: NonNullable<UiHandlerDeps["config"]> = deps.config ?? {
+    providers: [],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  };
+  return {
+    ...deps,
+    config: {
+      ...config,
+      groundedAnswers: { ...config.groundedAnswers, ownAssessment: "disabled" },
+    },
   };
 }
 
@@ -266,6 +306,16 @@ function coverageDiagnostics(
     },
     ...overrides,
   };
+}
+
+function projectedBudget(
+  budget: ConnectedContextPack["budget"],
+): GroundedAnswerContextPackSummary["budget"] {
+  return buildGroundedAnswerContextPackSummary(
+    { ...scopePack("src/fixture.ts", 1, "budget"), budget },
+    0,
+    0,
+  ).budget;
 }
 
 function budgetSum(
@@ -426,7 +476,7 @@ describe("splitExplorationBudget", () => {
     const budgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, scopes, query);
 
     expect(budgets).toHaveLength(3);
-    expect(budgetSum(budgets)).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
+    expect(budgetSum(budgets)).toStrictEqual(projectedBudget(DEFAULT_EXPLORATION_BUDGET));
     expect(budgets.every((budget) => budget.filesReadMax === null)).toBe(true);
     expect(budgets[0]?.excerptBytesMax).toBeGreaterThan(budgets[1]?.excerptBytesMax ?? 0);
     expect(budgets[1]?.excerptBytesMax).toBeGreaterThanOrEqual(budgets[2]?.excerptBytesMax ?? 0);
@@ -972,6 +1022,127 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  it("forwards validated assistant continuity hints to every source retriever", async () => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      root: tempRoot(name),
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("expected chat");
+    const continuity = {
+      assistantReferents: [{ path: "src/a.ts", line: 4, origin: "assistant" as const }],
+      previousRetrievalIntent: "targeted-code-search" as const,
+      continuityReferentSource: "assistant-paths" as const,
+    };
+    const retriever = vi.fn(
+      packPerScope(
+        new Map([
+          ["src/a.ts", scopePack("src/a.ts", 0.5, "a")],
+          ["src/b.ts", scopePack("src/b.ts", 0.5, "b")],
+        ]),
+      ),
+    );
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "What about now?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: new AbortController().signal,
+      retriever,
+      answerer: () => Promise.resolve("ok"),
+      ...continuity,
+    });
+    expect(result.status).toBe(200);
+    expect(retriever).toHaveBeenCalledTimes(2);
+    for (const [input] of retriever.mock.calls) expect(input).toMatchObject(continuity);
+  });
+
+  it.each([
+    ["please paste validation.ts", "clarification", false],
+    ["Missing evidence: [src/unread.ts]", "insufficiency", false],
+    ["No evidence found in the connected scope.", "refusal", false],
+    ["The service uses OAuth2. Which version do you mean?", "answer", true],
+  ] as const)("projects conservative multi-source kind %s", async (content, kind, warns) => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      root: tempRoot(name),
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("expected chat");
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Explain both files",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: new AbortController().signal,
+      insufficiencyScopeIndex: new Map([["src/unread.ts", "unread-in-scope"]]),
+      retriever: packPerScope(
+        new Map([
+          ["src/a.ts", scopePack("src/a.ts", 0.5, "a")],
+          ["src/b.ts", scopePack("src/b.ts", 0.5, "b")],
+        ]),
+      ),
+      answerer: () => Promise.resolve(content),
+    });
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.answerKind).toBe(kind);
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(warns);
+    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(false);
+    if (kind === "insufficiency")
+      expect(answer.insufficiencyDeclarations).toEqual([
+        { scopePath: "src/unread.ts", state: "unread-in-scope" },
+      ]);
+  });
+
+  it("removes unverified multi-source declaration text before wire and stored history", async () => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      root: tempRoot(name),
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("expected chat");
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Explain both files",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: new AbortController().signal,
+      retriever: packPerScope(
+        new Map([
+          ["src/a.ts", scopePack("src/a.ts", 0.5, "a")],
+          ["src/b.ts", scopePack("src/b.ts", 0.5, "b")],
+        ]),
+      ),
+      answerer: () =>
+        Promise.resolve({
+          content:
+            "I need the missing file to answer this question.\nMissing evidence: [private/outside.ts]",
+          usage: { promptTokens: 0, completionTokens: 0 },
+          insufficiencyDeclarations: [
+            { scopePath: "private/outside.ts", state: "unread-in-scope" },
+          ],
+        }),
+    });
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).not.toContain("private/outside.ts");
+    expect(answer.insufficiencyDeclarations).toBeUndefined();
+    expect(
+      store.listMessages(chat.id).find((message) => message.role === "assistant")?.content,
+    ).not.toContain("private/outside.ts");
+  });
   it.each(["workspace-root", "directory", "files"] as const)(
     "attributes %s citations to selected aliases while reads use the canonical root",
     async (kind): Promise<void> => {
@@ -1035,7 +1206,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       const chat = store.findChatById(makeChat(scopes));
       if (chat === undefined) throw new Error("Expected a fixture chat");
       const deps = modelBudgetDeps(configured);
-      const expected = modelWindowAwareBudget(deps, CHAT_MODEL);
+      const expected = projectedBudget(modelWindowAwareBudget(deps, CHAT_MODEL));
       const observed: ConnectedContextPack["budget"][] = [];
       const result = await runMultiSourceAsk({
         chat,
@@ -1165,7 +1336,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
         content,
         modelId: CHAT_MODEL,
         contextProfile: undefined,
-        deps: recordingDeps([]),
+        deps: sourceOnlyDeps(recordingDeps([])),
         retriever: packPerScope(packs),
         answerer: () => {
           throw new TypeError("empty search must not invoke the model");
@@ -1629,7 +1800,12 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("Second source [source:2|src/shared.ts:1-5].");
     expect(answer.citations).toMatchObject([
-      { source: "web", stableId: "shared-b", lineRange: { startLine: 1, endLine: 5 } },
+      {
+        source: "web",
+        sourceId: "2",
+        stableId: "shared-b",
+        lineRange: { startLine: 1, endLine: 5 },
+      },
     ]);
     expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(false);
   });
@@ -1739,7 +1915,9 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(budgetSum([...seenBudgets.values()])).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
+    expect(budgetSum([...seenBudgets.values()])).toStrictEqual(
+      projectedBudget(DEFAULT_EXPLORATION_BUDGET),
+    );
     expect(seenBudgets.get("services/payments-api")?.excerptBytesMax).toBeGreaterThan(
       seenBudgets.get("apps/web")?.excerptBytesMax ?? 0,
     );
@@ -1865,6 +2043,13 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       expect.stringMatching(/^connected-context-root-[0-9a-f]{16}$/),
     ]);
     expect(new Set(puts.map((p) => p.workspaceRoot)).size).toBe(2);
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("expected chat");
+    expect(puts.map((entry) => entry.sourceScopeFingerprint)).toEqual(
+      [scopeA, scopeB].map((scope) =>
+        groundedSourceScopeFingerprint(buildSelectedScopeFrom(chat, scope, "identity")),
+      ),
+    );
     expect(answer.evidenceRunId).toBe(puts[0]?.runId);
     expect(answer.evidenceRunIds).toEqual(puts.map((p) => p.runId));
   });
@@ -2463,11 +2648,580 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
   });
 });
 
+describe("multi-source bounded citation repair", () => {
+  afterEach(resetServerLogger);
+  interface RepairControls {
+    readonly failure?: Error;
+    readonly inputMax?: number;
+    readonly outputMax?: number;
+    readonly promptTokens?: number;
+    readonly completionTokens?: number;
+    readonly gatewayConfig?: UiHandlerDeps["gatewayConfig"];
+  }
+
+  interface RepairProof {
+    readonly calls: GatewayCallRequest[];
+    readonly puts: PutCall[];
+    readonly diagnostics: ServerDiagnosticRecord[];
+    readonly answer: ReturnType<typeof asConnectedAnswer>;
+    readonly logLines: readonly string[];
+  }
+
+  function repairModel(
+    calls: GatewayCallRequest[],
+    repaired: string,
+    original: string,
+    controls: RepairControls,
+  ): ModelPort {
+    return {
+      call: (request): Promise<NormalizedResponse> => {
+        calls.push(request);
+        if (calls.length > 1 && controls.failure !== undefined)
+          return Promise.reject(controls.failure);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content: calls.length === 1 ? original : repaired,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "bounded-repair",
+            promptTokens: controls.promptTokens ?? 10,
+            completionTokens: controls.completionTokens ?? 4,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+  }
+
+  function repairSources(controls: RepairControls): {
+    readonly scopes: readonly ChatConnectedScope[];
+    readonly retriever: GroundedRetriever;
+  } {
+    const packs = ["alpha", "beta"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.8, name);
+      return {
+        ...pack,
+        omitted: [],
+        usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 },
+      };
+    });
+    const scopes = packs.map((pack, index) => ({
+      kind: "files" as const,
+      relativePaths: [pack.files[0]?.scopePath ?? ""],
+      connectedAtMs: NOW,
+      root: tempRoot(`repair-${String(index)}`),
+    }));
+    const first = packs[0];
+    if (first === undefined) throw new TypeError("Missing repair source");
+    const allocations = splitExplorationBudgets(
+      {
+        ...DEFAULT_EXPLORATION_BUDGET,
+        modelInputTokensMax: controls.inputMax ?? DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+        modelOutputTokensMax: controls.outputMax ?? DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
+      },
+      scopes,
+      first.query,
+    );
+    const allocatedPacks = packs.map((pack, index) => {
+      const budget = allocations[index];
+      if (budget === undefined) throw new TypeError("Missing repair allocation");
+      return { ...pack, budget };
+    });
+    return {
+      scopes,
+      retriever: async (input): Promise<RetrievalOnlyOutput> => {
+        const retrieved = await packPerScope(
+          new Map(allocatedPacks.map((pack) => [pack.files[0]?.scopePath ?? "", pack])),
+        )(input);
+        return { ...retrieved, pack: { ...retrieved.pack, scope: input.scope } };
+      },
+    };
+  }
+
+  async function repairAsk(
+    repaired: string,
+    original = "The implementation works.",
+    controls: RepairControls = {},
+  ): Promise<RepairProof> {
+    const calls: GatewayCallRequest[] = [];
+    const puts: PutCall[] = [];
+    const { scopes, retriever } = repairSources(controls);
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("Missing repair chat");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const deps = recordingDeps(puts, {
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      ...(controls.gatewayConfig === undefined ? {} : { gatewayConfig: controls.gatewayConfig }),
+    });
+    const signal = new AbortController().signal;
+    const model = repairModel(calls, repaired, original, controls);
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "How does the implementation work?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps,
+      signal,
+      correlationId: "corr-multi-repair",
+      retriever,
+      answerer: createMultiSourceAnswerer(deps, model, CHAT_MODEL, signal, "corr-multi-repair"),
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return {
+      calls,
+      puts,
+      diagnostics,
+      answer: asConnectedAnswer(result.body as GroundedAnswer),
+      logLines: sink.events.map(formatActivityLogProofLine),
+    };
+  }
+
+  function chargedRepairInput(calls: readonly GatewayCallRequest[]): number {
+    return calls.reduce(
+      (sum, call) =>
+        sum +
+        groundedSynthesisAttemptUsage(countGatewayPromptTokens(call), { promptTokens: 10 })
+          .promptTokens,
+      0,
+    );
+  }
+
+  it("adds only supported source-two markers in one remaining-budget call", async () => {
+    const repaired = "The implementation works [source:2|src/beta.ts:1-5].";
+    const { calls, puts, answer, logLines } = await repairAsk(repaired);
+    expect(calls).toHaveLength(2);
+    const promptLines = logLines.filter((line) => line.includes('"op":"chat.context.selected"'));
+    expect(promptLines).toHaveLength(2);
+    const prompts = promptLines.map((line) =>
+      expectActivityLogProof("chat.context.selected.budget", line),
+    );
+    expect(prompts[1]).toMatchObject({
+      correlationId: "corr-multi-repair",
+      inputBudget:
+        DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax -
+        groundedSynthesisAttemptUsage(countGatewayPromptTokens(calls[0] ?? { messages: [] }), {
+          promptTokens: 10,
+        }).promptTokens,
+    });
+    expect(prompts[1]?.promptTokens).toBe(
+      countGatewayPromptTokens({ messages: calls[1]?.messages ?? [] }),
+    );
+    const repairPrompt = calls[1]?.messages.map((message) => message.content).join("\n");
+    expect(repairPrompt).toContain("body of src/alpha.ts");
+    expect(repairPrompt).toContain("body of src/beta.ts");
+    expect(calls[1]?.maxOutputTokens).toBe(DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax - 4);
+    expect(answer.content).toBe(repaired);
+    expect(answer.citationBehaviour).toBe("cites-after-repair");
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
+    expect(answer.contextPack.usage.modelInputTokens).toBe(chargedRepairInput(calls));
+    expect(answer.contextPack.usage.modelOutputTokens).toBe(8);
+    const details = logLines.filter((line) =>
+      line.includes('"op":"search.connected-context.answer-details"'),
+    );
+    expect(
+      details.map(
+        (line) =>
+          expectActivityLogProof("search.connected-context.answer-details.line", line)
+            .filesInPrompt,
+      ),
+    ).toEqual([1, 1]);
+  });
+
+  it("attributes verified declaration counts only to their actual folder identity", async () => {
+    const { calls, logLines } = await repairAsk("unused", "Missing evidence: [src/beta.ts]");
+    expect(calls).toHaveLength(1);
+    const details = logLines.filter((line) =>
+      line.includes('"op":"search.connected-context.answer-details"'),
+    );
+    const observations = details.map((line) =>
+      expectActivityLogProof("search.connected-context.answer-details.line", line),
+    );
+    expect(observations.map((observation) => observation.insufficiencyDeclaredCount)).toEqual([
+      0, 1,
+    ]);
+    expect(observations.map((observation) => observation.declaredUnreadInScopeCount)).toEqual([
+      0, 0,
+    ]);
+    expect(details.join("\n")).not.toContain("src/beta.ts");
+  });
+
+  it("retains original prose after a repair changes its claim and never attempts a third call", async () => {
+    const { calls, answer } = await repairAsk(
+      "The implementation fails [source:2|src/beta.ts:1-5].",
+    );
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    expect(answer.citationBehaviour).toBe("never");
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
+    expect(answer.contextPack.usage.modelInputTokens).toBe(chargedRepairInput(calls));
+  });
+
+  it.each(["Which file should I inspect?", "No evidence found."])(
+    "does not repair a non-claim answer: %s",
+    async (original) => {
+      const { calls, answer } = await repairAsk("Changed content.", original);
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe(original);
+      expect(answer.citationBehaviour).toBeUndefined();
+    },
+  );
+  it.each([
+    { inputMax: 1600, promptTokens: 1500 },
+    { outputMax: 10, completionTokens: 10 },
+  ])(
+    "retains the original response when the shared remaining budget is exhausted: %j",
+    async (controls) => {
+      const { calls, answer } = await repairAsk(
+        "The implementation works [source:2|src/beta.ts:1-5].",
+        "The implementation works.",
+        controls,
+      );
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe("The implementation works.");
+      expect(answer.citationBehaviour).toBe("never");
+      expect(answer.citations).toEqual([]);
+    },
+  );
+  it("skips repair only for three current reliable citation observations", async () => {
+    const configured = reliableCitationRuntime(tmp, CHAT_MODEL);
+    try {
+      expect(citationBehaviourFor(configured, CHAT_MODEL)).toBe("cites");
+      const { calls, answer } = await repairAsk(
+        "The implementation works [source:2|src/beta.ts:1-5].",
+        "The implementation works.",
+        { gatewayConfig: configured.gatewayConfig },
+      );
+      expect(calls).toHaveLength(1);
+      expect(answer.content).toBe("The implementation works.");
+      expect(answer.citationBehaviour).toBe("never");
+      expect(citationBehaviourFor(configured, CHAT_MODEL)).toBeUndefined();
+    } finally {
+      await configured.dispose?.();
+    }
+  });
+
+  it("preserves a failed repair's body-free error frames and cause chain", async () => {
+    const failure = new TypeError("private-model-response", {
+      cause: new Error("private-provider-detail"),
+    });
+    const { calls, answer, logLines } = await repairAsk("", "The implementation works.", {
+      failure,
+    });
+    expect(calls).toHaveLength(2);
+    expect(answer.content).toBe("The implementation works.");
+    const failures = logLines.filter((line) =>
+      line.includes('"op":"search.connected-context.answer-details"'),
+    );
+    expect(failures).toHaveLength(2);
+    for (const line of failures) {
+      const proof = expectActivityLogProof("search.connected-context.answer-details.line", line);
+      expect(proof).toMatchObject({
+        correlationId: "corr-multi-repair",
+        level: "warn",
+        errorKind: "internal",
+        failureKind: "TypeError",
+      });
+      expect(proof.frames).toEqual(expect.arrayContaining([expect.any(String)]));
+      expect(proof.causeChain).toEqual(["Error"]);
+    }
+    expect(logLines.join("\n")).not.toContain("private-model-response");
+    expect(logLines.join("\n")).not.toContain("private-provider-detail");
+  });
+});
+
+describe("multi-source final fitted citation authority", () => {
+  function sourcePacks(): readonly ConnectedContextPack[] {
+    return ["alpha", "beta"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.8, name);
+      const content = "first line\nsecond line\nthird line\nfourth line\nfifth line";
+      return {
+        ...pack,
+        usage: { ...pack.usage, excerptBytes: Buffer.byteLength(content) },
+        files: pack.files.map((file) => ({
+          ...file,
+          excerpts: file.excerpts.map((excerpt) => ({
+            ...excerpt,
+            content,
+            contentBytes: Buffer.byteLength(content),
+          })),
+        })),
+      };
+    });
+  }
+
+  async function fittedAsk(
+    packs: readonly ConnectedContextPack[],
+    sent: readonly ConnectedContextPack[],
+    content: string,
+    invocation: { readonly modelInvoked?: boolean; readonly noEvidence?: boolean } = {},
+  ): Promise<{
+    readonly answer: Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>;
+    readonly puts: readonly PutCall[];
+    readonly judged: readonly (readonly ConnectedContextPack[])[];
+  }> {
+    const puts: PutCall[] = [];
+    const judged: (readonly ConnectedContextPack[])[] = [];
+    const scopes = packs.map((pack, index) => ({
+      kind: "files" as const,
+      relativePaths: [pack.files[0]?.scopePath ?? ""],
+      connectedAtMs: NOW,
+      root: tempRoot(`fitted-${String(index)}`),
+    }));
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: makeChat(scopes), content: "Explain both files" })),
+      recordingDeps(puts),
+      undefined,
+      {
+        retriever: packPerScope(
+          new Map(packs.map((pack) => [pack.files[0]?.scopePath ?? "", pack])),
+        ),
+        answerer: () =>
+          Promise.resolve({
+            content,
+            ...invocation,
+            usage: { promptTokens: 0, completionTokens: 0 },
+            sentEvidencePacks: sent,
+            filesInPrompt: sent.reduce((count, pack) => count + pack.files.length, 0),
+          }),
+        entailmentStageFactory: () => ({
+          evaluate: (_answer, evidence): ReturnType<EntailmentStage["evaluate"]> => {
+            judged.push(evidence);
+            return Promise.resolve([]);
+          },
+          evaluateNumeric: (): ReturnType<EntailmentStage["evaluateNumeric"]> =>
+            Promise.resolve([]),
+        }),
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return { answer: asConnectedAnswer(result.body as GroundedAnswer), puts, judged };
+  }
+
+  it("does not authenticate an assembled source when the final prompt sent zero excerpts", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack) => withPromptExcerptByteLimit(pack, 0));
+    const { answer, puts, judged } = await fittedAsk(
+      packs,
+      sent,
+      "The implementation works [source:1|src/alpha.ts:1-5].",
+    );
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("unsupported-citation");
+    expect(answer.contextPack.filesInPrompt).toBe(0);
+    expect(answer.contextPack.fileCount).toBe(2);
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 0]);
+    expect(judged).toEqual([sent]);
+  });
+
+  it("rejects a trimmed-away line while retaining the second source ordinal and actual judge evidence", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack, index) =>
+      withPromptExcerptByteLimit(pack, index === 0 ? 11 : 100),
+    );
+    expect(sent[0]?.files[0]?.excerpts[0]?.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    const { answer, puts, judged } = await fittedAsk(
+      packs,
+      sent,
+      "First [source:1|src/alpha.ts:5]. Second [source:2|src/beta.ts:1-5].",
+    );
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("unsupported-citation");
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
+    expect(answer.contextPack.filesInPrompt).toBe(2);
+    expect(judged).toEqual([sent]);
+  });
+
+  it("retains physical reads but attaches no manifest or entailment after final-fit abstention", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack) => withPromptExcerptByteLimit(pack, 0));
+    const { answer, puts, judged } = await fittedAsk(packs, sent, "No evidence found.", {
+      modelInvoked: false,
+      noEvidence: true,
+    });
+    expect(puts).toEqual([]);
+    expect(judged).toEqual([]);
+    expect(answer.citations).toEqual([]);
+    expect(answer.evidenceRunIds).toEqual([]);
+    expect(answer.contextPack.usage.filesRead).toBe(2);
+    expect(answer.contextPack.filesInPrompt).toBe(0);
+  });
+
+  it("keeps source two attributable when source one has no sent file", async () => {
+    const packs = sourcePacks();
+    const sent = packs.map((pack, index) =>
+      withPromptExcerptByteLimit(pack, index === 0 ? 0 : 100),
+    );
+    const { answer, puts } = await fittedAsk(packs, sent, "Second [source:2|src/beta.ts:1-5].");
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/beta.ts"]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("unsupported-citation");
+    expect(answer.contextPack.filesInPrompt).toBe(1);
+    expect(puts.map((put) => put.citationCount)).toEqual([0, 1]);
+  });
+});
+
 // ─── Correlation threading (ADR-0173 D5) ──────────────────────────────────────
 //
 // createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
 // MultiSourceSeam.answerer; unit-test it directly against a fake ModelPort that records the request.
+function zeroModelUsagePack(pack: ConnectedContextPack): ConnectedContextPack {
+  // This fixture derives its exact empty-prompt grant below. Prior model usage is deliberately
+  // zero here; nonzero retrieval usage is covered by the configured semantic-refresh handler proof.
+  return { ...pack, usage: { ...pack.usage, modelInputTokens: 0, modelOutputTokens: 0 } };
+}
+
+function assertFinalMultiSourceProjection(
+  result: ReturnType<typeof normalizeGroundedAnswerPayload>,
+  sentBody: string | undefined,
+): void {
+  expect(result.filesInPrompt).toBe(
+    result.sentEvidencePacks?.filter((pack) => pack.files.length > 0).length,
+  );
+  for (const pack of result.sentEvidencePacks ?? []) {
+    for (const file of pack.files) {
+      for (const excerpt of file.excerpts) expect(sentBody).toContain(excerpt.content);
+    }
+  }
+  for (const name of ["a", "b"]) {
+    expect(result.evidenceScopeIndex?.get(`src/${name}.ts`) === "read-in-this-turn").toBe(
+      sentBody?.includes(`${name} evidence`),
+    );
+  }
+}
+
 describe("createMultiSourceAnswerer correlation threading", () => {
+  it("refuses a repair deadline that expires between timeout setup and actual dispatch", async () => {
+    const call = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve({
+        modelId: CHAT_MODEL,
+        content: "The implementation works.",
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "deadline-race",
+          promptTokens: 10,
+          completionTokens: 4,
+          latencyMs: 1,
+          costClass: "medium",
+        },
+      }),
+    );
+    const packs = ["alpha", "beta"].map((name) => ({
+      label: name,
+      pack: scopePack(`src/${name}.ts`, 1, name),
+    }));
+    const answerer = createMultiSourceAnswerer(
+      recordingDeps([]),
+      { call },
+      CHAT_MODEL,
+      new AbortController().signal,
+      "multi-repair-deadline",
+    );
+    const main = normalizeGroundedAnswerPayload(
+      await answerer("Explain the implementation", packs),
+    );
+    const repair = answerer.repair;
+    const first = packs[0]?.pack;
+    if (repair === undefined || first === undefined) throw new TypeError("Missing repair callback");
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(99).mockReturnValue(100);
+    try {
+      const result = normalizeGroundedAnswerPayload(
+        await repair("Explain the implementation", first, main.content, {
+          modelInputTokensMax: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+          modelOutputTokensMax: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
+          deadlineAtMs: 100,
+        }),
+      );
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(result.modelInvoked).toBe(false);
+      expect(result.usage).toEqual({ promptTokens: 0, completionTokens: 0 });
+    } finally {
+      now.mockRestore();
+    }
+  });
+  it.each([false, true])(
+    "avoids an empty fitted model call unless memory context is available (%s)",
+    async (memory) => {
+      const redactor = buildRedactor({});
+      const labeled = ["alpha", "beta"].map((name) => ({
+        label: name,
+        pack: zeroModelUsagePack(scopePack(`src/${name}.ts`, 0.8, name)),
+      }));
+      const question = "What does the repository do?";
+      const empty = labeled.map((entry) => ({
+        ...entry,
+        pack: withPromptExcerptByteLimit(entry.pack, 0),
+      }));
+      const emptyMessages = buildMultiSourceGatewayMessages(question, empty, redactor);
+      let budget = countGatewayPromptTokens({ messages: emptyMessages });
+      while (modelInputPromptByteLimit(budget) < promptByteLength(emptyMessages)) budget += 1;
+      const first = labeled[0]?.pack;
+      if (first === undefined) throw new TypeError("Missing source fixture");
+      const allocations = splitExplorationBudgets(
+        { ...first.budget, modelInputTokensMax: budget },
+        labeled.map((entry) => ({
+          root: entry.pack.scope.workspaceRoot,
+          kind: "directory",
+          relativePaths: ["src"],
+          connectedAtMs: NOW,
+        })),
+        first.query,
+      );
+      const budgeted = labeled.map((entry, index) => {
+        const allocation = allocations[index];
+        if (allocation === undefined) throw new TypeError("Missing source allocation");
+        return { ...entry, pack: { ...entry.pack, budget: allocation } };
+      });
+      const fitted = fittedMultiSourcePrompt(question, budgeted, redactor, {
+        modelInputTokensMax: budget,
+      });
+      expect(fitted.sentReferenceCount).toBe(0);
+      const profile = deriveContextProfile({
+        maxInputTokens: budget + 512 + 64,
+        reservedOutputTokens: 512,
+        safetyMarginTokens: 64,
+      });
+      const call = vi.fn((request: GatewayCallRequest): Promise<NormalizedResponse> =>
+        Promise.resolve({
+          modelId: request.modelId,
+          content: "Personal preference.",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "zero-source",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        }),
+      );
+      const answerer = createMultiSourceAnswerer(
+        sourceOnlyDeps(recordingDeps([], { redactor, contextProfileForModel: () => profile })),
+        { call },
+        CHAT_MODEL,
+        new AbortController().signal,
+        "zero-source",
+        { currentQuestion: question, answerOnlyContextAvailable: memory },
+      );
+      const result = normalizeGroundedAnswerPayload(await answerer(question, budgeted));
+      expect(call).toHaveBeenCalledTimes(memory ? 1 : 0);
+      expect(result.modelInvoked).toBe(memory);
+      expect(result.noEvidence).toBe(true);
+      expect(result.filesInPrompt).toBe(0);
+      if (memory) expect(result.content).toBe("Personal preference.");
+    },
+  );
+
   it("stamps the caller's correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
     const seenRequests: GatewayCallRequest[] = [];
     const recordingModel: ModelPort = {
@@ -2496,6 +3250,7 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       "example-chat-model",
       new AbortController().signal,
       "cid-multi-source-answerer-000001",
+      { answerOnlyContextAvailable: true },
     );
     // `MultiSourceAnswerer`'s declared return type is `Promise<GroundedAnswerPayload>` (a
     // `string | GroundedAnswerResult` union), even though `createMultiSourceAnswerer`'s own
@@ -2508,8 +3263,11 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     );
 
     expect(result.content).toBe("multi-source answer");
+    expect(result.evidenceScopeIndex?.size).toBe(0);
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-multi-source-answerer-000001");
+    expect(result.sentEvidencePacks).toEqual([empty]);
+    expect(result.filesInPrompt).toBe(0);
     // PR #3678 review: the answer reports the share of the prompt it actually sent.
     expect(result.promptContext).toMatchObject({
       promptTokens: 3,
@@ -2567,9 +3325,11 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       };
     });
     const sentTokens: number[] = [];
+    const sentSourceBodies: string[] = [];
     const model: ModelPort = {
       call: (request) => {
         sentTokens.push(countGatewayPromptTokens({ messages: request.messages }));
+        sentSourceBodies.push(request.messages.map((message) => message.content).join("\n"));
         if (sentTokens.length === 1) {
           adoptReportedContextWindow(
             built,
@@ -2612,6 +3372,9 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       expect(sentTokens[1]).toBeLessThan(sentTokens[0] ?? 0);
       expect(sentTokens[1]).toBeLessThanOrEqual(8_192);
       expect(result.promptContext?.contextWindowTokens).toBe(8_192);
+      expect(result.evidenceScopeIndex).toBeDefined();
+      expect(result.sentEvidencePacks).toBeDefined();
+      assertFinalMultiSourceProjection(result, sentSourceBodies.at(-1));
     } finally {
       await built.dispose?.();
     }

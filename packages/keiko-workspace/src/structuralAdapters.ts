@@ -12,6 +12,7 @@ import { testSourcePairingAdapter } from "./testSourcePairing.js";
 import { symbolGraphAdapter } from "./symbolGraph.js";
 import { importGraphAdapter } from "./importGraph.js";
 import { endpointContractAdapter } from "./endpointContractAdapter.js";
+import { repositoryRouteQuery } from "./repoSearchRoutes.js";
 import { gitHistoryAdapter } from "./gitHistory.js";
 import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
 import {
@@ -28,6 +29,7 @@ import {
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface StructuralAdapterDeps {
+  readonly endpointPreferredSourcePaths?: readonly string[] | undefined;
   readonly nowMs?: () => number;
   readonly deadlineAtMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
@@ -350,20 +352,31 @@ async function runOne(
   }
 }
 
-function mergeAtoms(outcomes: readonly LookupOutcome[], cap: number): readonly EvidenceAtom[] {
+function orderedMergeAtoms(
+  outcomes: readonly LookupOutcome[],
+  query: RetrievalQuery,
+): readonly EvidenceAtom[] {
+  const atoms = outcomes.flatMap((outcome) => outcome.atoms);
+  if (repositoryRouteQuery(query.text) === undefined) return atoms;
+  return atoms.sort(
+    (a, b) =>
+      Number(b.provenance.tool === "endpoint-contract-server-route") -
+      Number(a.provenance.tool === "endpoint-contract-server-route"),
+  );
+}
+
+function mergeAtoms(
+  outcomes: readonly LookupOutcome[],
+  cap: number,
+  query: RetrievalQuery,
+): readonly EvidenceAtom[] {
   const seen = new Set<string>();
   const merged: EvidenceAtom[] = [];
-  for (const outcome of outcomes) {
-    for (const atom of outcome.atoms) {
-      if (merged.length >= cap) {
-        return merged;
-      }
-      if (seen.has(atom.stableId)) {
-        continue;
-      }
-      seen.add(atom.stableId);
-      merged.push(atom);
-    }
+  for (const atom of orderedMergeAtoms(outcomes, query)) {
+    if (merged.length >= cap) return merged;
+    if (seen.has(atom.stableId)) continue;
+    seen.add(atom.stableId);
+    merged.push(atom);
   }
   return merged;
 }
@@ -455,7 +468,7 @@ export async function runStructuralAdapters(
     effectiveDeps.requestContext?.assertGraphBinding(scope, limits, controlledFs);
     const cap = Math.min(limits.maxMatchesReturned, query.maxResults);
     return {
-      atoms: mergeAtoms(outcomes, cap),
+      atoms: mergeAtoms(outcomes, cap, query),
       unavailable: partitioned.unavailable,
       errored: outcomeErrors(outcomes),
       coverage: outcomeCoverage(outcomes),
