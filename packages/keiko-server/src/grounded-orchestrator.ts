@@ -6421,19 +6421,37 @@ function coverageAdmissionWithCompetingCoverageTarget(
     if (entry.atom.score < minimumScore || state.targets.has(entry.definitionIdentity)) continue;
     const candidate = coverageAdmissionWithTarget(state, entry, admission);
     if (candidate === undefined) continue;
-    const head = admission.byPath.get(entry.atom.scopePath)?.[0];
-    if (head !== undefined && admission.state.targets.has(head.definitionIdentity)) {
-      const pending = coverageAdmissionWithPendingFairTarget(
-        state,
-        ranked,
-        admission,
-        minimumScore,
-      );
-      if (pending !== undefined) return pending;
-    }
-    return coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
+    return coverageAdmissionWithCompetingTargetOpportunity(
+      state,
+      candidate,
+      entry,
+      ranked,
+      admission,
+      minimumScore,
+    );
   }
   return undefined;
+}
+
+function coverageAdmissionWithCompetingTargetOpportunity(
+  state: CoverageAdmission,
+  candidate: CoverageAdmission,
+  entry: RouteTraceCoverageEntry,
+  ranked: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+  minimumScore: number,
+): CoverageAdmission {
+  const canonical = coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
+  const joint =
+    coverageAdmissionWithPendingFairTarget(canonical, ranked, admission, entry.atom.score, entry) ??
+    coverageAdmissionWithPendingFairTarget(canonical, ranked, admission, minimumScore, entry);
+  if (joint !== undefined) return joint;
+  const head = admission.byPath.get(entry.atom.scopePath)?.[0];
+  if (head !== undefined && admission.state.targets.has(head.definitionIdentity)) {
+    const pending = coverageAdmissionWithPendingFairTarget(state, ranked, admission, minimumScore);
+    if (pending !== undefined) return pending;
+  }
+  return canonical;
 }
 
 function coverageAdmissionWithPendingFairTarget(
@@ -6441,9 +6459,17 @@ function coverageAdmissionWithPendingFairTarget(
   ranked: RouteTraceCoverageEntry,
   admission: SharedCoverageAdmission,
   minimumScore: number,
+  canonical?: RouteTraceCoverageEntry,
 ): CoverageAdmission | undefined {
   for (const entry of sharedCoverageFairTargets(ranked, admission.fairTargets, admission)) {
     if (entry.atom.score < minimumScore || state.targets.has(entry.definitionIdentity)) continue;
+    const head = admission.byPath.get(entry.atom.scopePath)?.[0];
+    if (
+      canonical !== undefined &&
+      (entry.atom.scopePath === canonical.atom.scopePath ||
+        (head !== undefined && state.targets.has(head.definitionIdentity)))
+    )
+      continue;
     const candidate = coverageAdmissionWithTarget(state, entry, admission);
     if (candidate !== undefined)
       return coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);

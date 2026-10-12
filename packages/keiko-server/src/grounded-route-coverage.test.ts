@@ -1197,6 +1197,40 @@ function canonicalCompetingCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function provisionalHeadPendingCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...canonicalCompetingCoverageFiles() };
+  for (let number = 0; number < 3; number += 1) {
+    const path = `src/useful-${String(number)}.ts`;
+    files[path] = (files[path] ?? "")
+      .replaceAll(
+        Array.from(
+          { length: 16 },
+          () => "  // preserve the current selected prompt fitting source body",
+        ).join("\n"),
+        Array.from(
+          { length: 8 },
+          () => "  // preserve the current selected prompt fitting source body",
+        ).join("\n"),
+      )
+      .replace(
+        Array.from(
+          { length: 8 },
+          () => "  // preserve the current selected prompt fitting source body",
+        ).join("\n"),
+        Array.from(
+          { length: 12 },
+          () => "  // preserve the current selected prompt fitting source body",
+        ).join("\n"),
+      );
+  }
+  for (const path of ["src/implementation.ts", "src/scope-admission.ts"])
+    files[path] = (files[path] ?? "").replaceAll(
+      "admitScope",
+      "scopeAdmissionAndPromptFittingTarget",
+    );
+  return files;
+}
+
 function pendingFairCompetingCoverageFiles(): Readonly<Record<string, string>> {
   const files = { ...canonicalCompetingCoverageFiles() };
   let caller = files["src/implementation.ts"] ?? "";
@@ -1802,6 +1836,66 @@ describe("current route trace excerpt coverage", () => {
     const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
     for (const restricted of [paths, undefined])
       await expectFiniteOwnedContinuationRead(fixture, atoms, budget, watched, restricted);
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+  });
+
+  it("retains a newly guarded canonical head and prefix while admitting a pending physical file", async () => {
+    const fixture = await coverageFixture(undefined, provisionalHeadPendingCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const index = await fixture.requestContext.codeIntelligenceIndex();
+    const prefix = entries.filter((entry) =>
+      /^export function scopeAdmissionAndPromptFitting\d+\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    const branch = ["retainRecord0", "walkLedger", "finishLedger"].map((name) =>
+      finiteOwnedContinuationEntry(fixture, entries, index, name),
+    );
+    const seed = requirePendingBodyFixtureEntry(branch[0], "the actual external borrowed head");
+    const target = requirePendingBodyFixtureEntry(
+      entries.find((entry) => entry.atom.scopePath === "src/scope-admission.ts"),
+      "the actual pending physical file",
+    );
+    expect(target.atom.score).toBeGreaterThanOrEqual(seed.atom.score);
+    expect(prefix.every((entry) => entry.atom.score >= target.atom.score)).toBe(true);
+    expect(prefix.every((entry) => entry.observedBytes > 200)).toBe(true);
+    const watched = [...finiteOwnedContinuationViews(fixture, entries, prefix, branch)];
+    const range = requirePendingBodyFixtureEntry(target.atom.lineRange, "the pending whole body");
+    const lines = (fixture.files[target.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine);
+    const body = lines.join("\n");
+    expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
+    expect(target.observedBytes).toBe(Buffer.byteLength(body));
+    watched.push({ entry: target, range, lines, body });
+    const paths = [
+      ...new Set(["src/routes.ts", ...watched.map(({ entry }) => entry.atom.scopePath)]),
+    ];
+    const requiredFunding = new Set(
+      [...prefix, ...branch.slice(0, 2), target].map((entry) => entry.definitionIdentity),
+    );
+    const wholeConsumers = new Set(
+      watched
+        .filter(
+          ({ entry }) => entry !== branch[2] && entry.atom.scopePath !== "src/z-processing.ts",
+        )
+        .map(({ entry }) => entry.definitionIdentity),
+    );
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    for (const restricted of [paths, undefined])
+      await expectPendingFairCompetingRead(
+        fixture,
+        atoms,
+        budget,
+        watched,
+        requiredFunding,
+        wholeConsumers,
+        restricted,
+      );
     expect(JSON.stringify(atoms)).toBe(originalAtoms);
   });
 
