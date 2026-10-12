@@ -449,8 +449,10 @@ nomination's score. Nominations from files with higher or tied heads remain fall
 when no target from the first group fits jointly.
 Each group uses its existing relevance-ordered queue head's score, highest first. At equal head
 scores, an unfunded physical file precedes continuation in a file whose head is already fully
-funded in committed state. Existing ties within each class and within-file nomination order
-remain stable. The first jointly feasible target in a different
+funded in committed state. Among unfunded files, a selected definition that reaches its actual
+physical head score and owns a certified selected child precedes terminal-only nominees. This
+uses the existing owned-continuation eligibility check; a weaker descendant cannot become an
+independent head-level source seed. Remaining ties retain their existing stable order. The first jointly feasible target in a different
 physical file whose queue head is not fully funded receives the shared file turn.
 When the relevance file's head was already fully funded in committed state before the turn,
 its pending whole targets at or above the first nominated file's queue-head score also
@@ -505,14 +507,12 @@ Outside a retained source turn, a continuation below the nominated head yields w
 selected body at or above that head still fits the existing whole-target guards from the same
 pre-child state. The canonical nominee follows the already-computed shared target order:
 relevance and stable ties within each source root, interleaved between roots. Its complete body
-must pass the existing guards first. Before growing its same-file prefix, the existing pending
-fair-file order may admit a distinct physical file whose head is not FULL in the proposal or
-resume its committed FULL parent. This joint addition first uses the canonical nominee's score,
-then the borrowed floor if no such addition fits. Pending same-file targets at or above the
-nominee's score may then join in stable file order through the same guards, preserving the
-complete joint. If no early joint addition fits, the canonical same-file prefix grows first and
-the same two-floor joint addition is retried against that guarded proposal. If neither joint
-addition fits and the canonical physical file head
+must pass the existing guards first. Pending same-file targets at or above the nominee's score
+may then join in stable file order through the same guards. While retaining this guarded
+canonical proposal, the existing pending fair-file order may admit a distinct physical file
+whose head is not FULL in the proposal or resume its committed FULL parent. This joint addition
+first uses the canonical nominee's score, then the borrowed floor if no such addition fits; it retains the canonical body
+and its guarded same-file prefix. If no joint addition fits and the canonical physical file head
 is already FULL in committed state, the existing pending fair-file order may instead nominate
 an alternative from the original pre-child state. That alternative must meet the borrowed floor
 and pass the same whole-target guards. Each selected nominee's pending same-file targets at or

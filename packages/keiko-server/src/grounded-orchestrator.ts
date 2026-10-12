@@ -6456,11 +6456,6 @@ function coverageAdmissionWithCompetingTargetOpportunity(
   admission: SharedCoverageAdmission,
   minimumScore: number,
 ): CoverageAdmission {
-  const earlyJoint =
-    coverageAdmissionWithPendingFairTarget(candidate, ranked, admission, entry.atom.score, entry) ??
-    coverageAdmissionWithPendingFairTarget(candidate, ranked, admission, minimumScore, entry);
-  if (earlyJoint !== undefined)
-    return coverageAdmissionWithCompetingCoveragePrefix(earlyJoint, entry, admission);
   const canonical = coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
   const joint =
     coverageAdmissionWithPendingFairTarget(canonical, ranked, admission, entry.atom.score, entry) ??
@@ -7022,12 +7017,25 @@ function sharedCoverageFairTargets(
       (left, right) =>
         coverageFileHeadScore(right, admission) - coverageFileHeadScore(left, admission) ||
         Number(fundedPaths.has(left.atom.scopePath)) -
-          Number(fundedPaths.has(right.atom.scopePath)),
+          Number(fundedPaths.has(right.atom.scopePath)) ||
+        pendingCoverageSourcePriority(right, fundedPaths, admission) -
+          pendingCoverageSourcePriority(left, fundedPaths, admission),
     );
   return [
     ...pending.filter((entry) => coverageFileHeadScore(entry, admission) < ranked.atom.score),
     ...pending.filter((entry) => coverageFileHeadScore(entry, admission) >= ranked.atom.score),
   ];
+}
+
+function pendingCoverageSourcePriority(
+  entry: RouteTraceCoverageEntry,
+  fundedPaths: ReadonlySet<string>,
+  admission: SharedCoverageAdmission,
+): number {
+  return Number(
+    !fundedPaths.has(entry.atom.scopePath) &&
+      canStartOwnedCoverageContinuation(entry, coverageFileHeadScore(entry, admission), admission),
+  );
 }
 
 function isPendingCoverageFairTarget(
