@@ -469,12 +469,15 @@ traversed without counting as progress; after the first new target, lower-releva
 and terminal leaves may complete that chain.
 During a ranked shared turn, a continuation below the nominated head yields when an unfunded
 selected body at or above that head still fits the existing whole-target guards from the same
-pre-child state. The nominee follows the already-computed shared target order: relevance and
-stable ties within each source root, interleaved between roots. Its complete body must pass the
-existing guards first. Its pending same-file targets at or above its own score may then join
-that same proposal in stable file order, each through the same guards; a failed extension keeps
-the previously feasible proposal. Failed proposals are neither reserved nor read. Deferred
-final retries retain their existing admission rules.
+pre-child state. The canonical nominee follows the already-computed shared target order:
+relevance and stable ties within each source root, interleaved between roots. Its complete body
+must pass the existing guards first. When its physical file head is already FULL in committed
+state, the existing pending fair-file order may nominate an alternative from the same pre-child
+state. That alternative must meet the borrowed floor and pass the same whole-target guards;
+the guarded canonical nominee remains the fallback. The selected nominee's pending same-file
+targets at or above its own score may then join that proposal in stable file order, each through
+the same guards; a failed extension keeps the previously feasible proposal. Failed proposals
+are neither reserved nor read. Deferred final retries retain their existing admission rules.
 Existing source order selects one branch, and
 identity tracking bounds recursive cycles. Every target still passes the existing currentness,
 whole-definition, physical-window and connected-share checks; a failed extension retains the

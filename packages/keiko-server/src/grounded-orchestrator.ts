@@ -6307,6 +6307,7 @@ interface SharedCoverageAdmission {
   readonly byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>;
   readonly byPath: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
   readonly rankedTargets: readonly RouteTraceCoverageEntry[];
+  readonly fairTargets: readonly RouteTraceCoverageEntry[];
   readonly ownedChildren: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
   readonly state: CoverageAdmission;
   readonly totalBytes: number;
@@ -6333,6 +6334,7 @@ function admitSharedCoverageEntries(
     byIdentity,
     byPath,
     rankedTargets: ranked,
+    fairTargets: targets,
     ownedChildren,
     state,
     totalBytes,
@@ -6416,6 +6418,31 @@ function coverageAdmissionWithCompetingCoverageTarget(
 ): CoverageAdmission | undefined {
   if (ranked === undefined) return undefined;
   for (const entry of admission.rankedTargets) {
+    if (entry.atom.score < minimumScore || state.targets.has(entry.definitionIdentity)) continue;
+    const candidate = coverageAdmissionWithTarget(state, entry, admission);
+    if (candidate === undefined) continue;
+    const head = admission.byPath.get(entry.atom.scopePath)?.[0];
+    if (head !== undefined && admission.state.targets.has(head.definitionIdentity)) {
+      const pending = coverageAdmissionWithPendingFairTarget(
+        state,
+        ranked,
+        admission,
+        minimumScore,
+      );
+      if (pending !== undefined) return pending;
+    }
+    return coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
+  }
+  return undefined;
+}
+
+function coverageAdmissionWithPendingFairTarget(
+  state: CoverageAdmission,
+  ranked: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+  minimumScore: number,
+): CoverageAdmission | undefined {
+  for (const entry of sharedCoverageFairTargets(ranked, admission.fairTargets, admission)) {
     if (entry.atom.score < minimumScore || state.targets.has(entry.definitionIdentity)) continue;
     const candidate = coverageAdmissionWithTarget(state, entry, admission);
     if (candidate !== undefined)

@@ -893,6 +893,36 @@ async function expectBorrowedHeadContinuationRead(
   }
 }
 
+async function expectPendingFairCompetingRead(
+  fixture: CoverageFixture,
+  atoms: readonly EvidenceAtom[],
+  budget: typeof DEFAULT_EXPLORATION_BUDGET,
+  watched: readonly FiniteOwnedContinuationView[],
+  requiredFunding: ReadonlySet<string>,
+  wholeConsumers: ReadonlySet<string>,
+  restricted: readonly string[] | undefined,
+): Promise<void> {
+  const { reads, requests } = await observedCoverageRead(fixture, {
+    paths: restricted,
+    atoms,
+    inputs: { budget },
+  });
+  const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
+  const prompt = await sentPrompt(fixture, reads, atoms, budget);
+  expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+  expect(requests.every((request) => request.maxBytes <= 8192)).toBe(true);
+  const metadata = finiteOwnedContinuationMetadata(reads, requests, watched, restricted);
+  const consumers =
+    restricted === undefined
+      ? watched.filter((view) => wholeConsumers.has(view.entry.definitionIdentity))
+      : watched;
+  for (const view of consumers) {
+    expectBorrowedHeadContinuationBody(reads, pack, prompt, view, metadata);
+    if (requiredFunding.has(view.entry.definitionIdentity))
+      expectFiniteOwnedContinuationBody(reads, pack, prompt, requests, view, metadata);
+  }
+}
+
 function returnedContinuationFiles(): Readonly<Record<string, string>> {
   const files = { ...configuredCoverageFiles() };
   files["src/implementation.ts"] = (files["src/implementation.ts"] ?? "").replace(
@@ -1164,6 +1194,79 @@ function canonicalCompetingCoverageFiles(): Readonly<Record<string, string>> {
     "  return value;",
     "}",
   ].join("\n");
+  return files;
+}
+
+function pendingFairCompetingCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...canonicalCompetingCoverageFiles() };
+  let caller = files["src/implementation.ts"] ?? "";
+  const inline: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const path = `src/useful-${String(index)}.ts`;
+    inline.push(
+      (files[path] ?? "").replaceAll(
+        Array.from(
+          { length: 16 },
+          () => "  // preserve the current selected prompt fitting source body",
+        ).join("\n"),
+        Array.from(
+          { length: 8 },
+          () => "  // preserve the current selected prompt fitting source body",
+        ).join("\n"),
+      ),
+    );
+    Reflect.deleteProperty(files, path);
+  }
+  caller = caller.replace(
+    /^import \{ scopeAdmissionAndPromptFitting\d+ \} from "\.\/useful-\d+\.js";\n/gmu,
+    "",
+  );
+  for (let index = 0; index < 3; index += 1) {
+    const name = `scopeAdmissionAndPromptFittingQuota${String(index)}`;
+    caller = `import { ${name} } from "./quota-${String(index)}.js";\n${caller}`;
+    caller = caller.replace("  admitScope(value);", `  ${name}(value);\n  admitScope(value);`);
+    files[`src/quota-${String(index)}.ts`] = [
+      `export function ${name}(value) {`,
+      `  const result = retainQuota${String(index)}(value);`,
+      "  return result;",
+      "}",
+      ...Array.from({ length: 24 }, () => "// Separate selected declarations."),
+      `function retainQuota${String(index)}(value) {`,
+      "  const scopeAdmissionBudget = 1024;",
+      "  const promptFittingBudget = 2048;",
+      ...Array.from({ length: 24 }, () => "  // Retain the complete current accounting detail."),
+      "  return scopeAdmissionBudget + promptFittingBudget + value;",
+      "}",
+    ].join("\n");
+  }
+  files["src/implementation.ts"] = [caller, ...inline].join("\n");
+  files["src/record-0.ts"] = (files["src/record-0.ts"] ?? "").replaceAll(
+    "  const scopeAdmissionBudget = 1024;",
+    "  const scopeAdmissionBudget = 1024;\n  const promptFittingBudget = 2048;",
+  );
+  files["src/scope-admission.ts"] = (files["src/scope-admission.ts"] ?? "")
+    .replace(
+      "  const scopeAdmissionBudget = 1024;",
+      "  const scopeAdmissionBudget = 1024;\n  const promptFittingBudget = 2048;",
+    )
+    .replace(
+      Array.from(
+        { length: 48 },
+        () => "  // retain the complete selected scope admission body",
+      ).join("\n"),
+      Array.from(
+        { length: 16 },
+        () => "  // retain the complete selected scope admission body",
+      ).join("\n"),
+    );
+  for (const [before, after] of [
+    ["retainRecord0", "scopeAdmissionAndPromptFittingLedger"],
+    ["walkLedger", "scopeAdmissionAndPromptFittingWalk"],
+    ["admitScope", "scopeAdmissionAndPromptFittingTarget"],
+  ] as const) {
+    for (const path of ["src/implementation.ts", "src/record-0.ts", "src/scope-admission.ts"])
+      files[path] = (files[path] ?? "").replaceAll(before, after);
+  }
   return files;
 }
 
@@ -1699,6 +1802,118 @@ describe("current route trace excerpt coverage", () => {
     const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
     for (const restricted of [paths, undefined])
       await expectFiniteOwnedContinuationRead(fixture, atoms, budget, watched, restricted);
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+  });
+
+  it("gives an unfunded physical file its pending turn before a canonical body in a paid file", async () => {
+    const fixture = await coverageFixture(undefined, pendingFairCompetingCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const index = await fixture.requestContext.codeIntelligenceIndex();
+    const prefix = entries.filter((entry) =>
+      /^export function scopeAdmissionAndPromptFitting\d+\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    expect(prefix).toHaveLength(6);
+    const branch = [
+      "scopeAdmissionAndPromptFittingLedger",
+      "scopeAdmissionAndPromptFittingWalk",
+      "finishLedger",
+    ].map((name) => finiteOwnedContinuationEntry(fixture, entries, index, name));
+    const seed = requirePendingBodyFixtureEntry(branch[0], "the actual borrowed file head");
+    const terminal = requirePendingBodyFixtureEntry(
+      branch[2],
+      "the actual lower-score owned child",
+    );
+    const target = requirePendingBodyFixtureEntry(
+      entries.find((entry) => entry.atom.scopePath === "src/scope-admission.ts"),
+      "the pending physical file",
+    );
+    const caller = requirePendingBodyFixtureEntry(
+      entries.find((entry) => entry.definitionIdentity === seed.parentIdentity),
+      "the actual common caller",
+    );
+    const head = requirePendingBodyFixtureEntry(
+      entries.find(
+        (entry) =>
+          entry.atom.scopePath === "src/implementation.ts" && entry.atom.score > caller.atom.score,
+      ),
+      "the physical caller-file head",
+    );
+    const later = requirePendingBodyFixtureEntry(
+      entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts"),
+      "the usable later body",
+    );
+    expect(target.atom.score).toBeGreaterThanOrEqual(seed.atom.score);
+    expect(
+      prefix.every(
+        (entry) =>
+          entry.atom.scopePath === caller.atom.scopePath && entry.atom.score >= seed.atom.score,
+      ),
+    ).toBe(true);
+    expect(terminal.atom.score).toBeLessThan(seed.atom.score);
+    expect(terminal.parentWitness?.ownedSourceCall).toBe(true);
+    for (let number = 0; number < 3; number += 1) {
+      const quota = finiteOwnedContinuationEntry(
+        fixture,
+        entries,
+        index,
+        `retainQuota${String(number)}`,
+      );
+      expect(quota.atom.score).toBeGreaterThanOrEqual(seed.atom.score);
+      const quotaHead = finiteOwnedContinuationEntry(
+        fixture,
+        entries,
+        index,
+        `scopeAdmissionAndPromptFittingQuota${String(number)}`,
+      );
+      expect(quotaHead.parentIdentity).toBe(target.parentIdentity);
+      expect(quotaHead.parentWitness?.lineRange.startLine).toBeLessThan(
+        target.parentWitness?.lineRange.startLine ?? 0,
+      );
+    }
+    const watched = [head, caller, ...prefix, ...branch.slice(0, 2), target, later, terminal].map(
+      (entry) => {
+        const range = requirePendingBodyFixtureEntry(
+          entry.atom.lineRange,
+          "the actual complete body range",
+        );
+        const lines = (fixture.files[entry.atom.scopePath] ?? "")
+          .split("\n")
+          .slice(range.startLine - 1, range.endLine);
+        const body = lines.join("\n");
+        expect(fixture.trace.routeCoverage?.isCurrent(entry.atom)).toBe(true);
+        expect(entry.observedBytes).toBe(Buffer.byteLength(body));
+        return { entry, range, lines, body };
+      },
+    );
+    const paths = [
+      ...new Set(["src/routes.ts", ...watched.map(({ entry }) => entry.atom.scopePath)]),
+    ];
+    const requiredFunding = new Set(
+      [head, target, ...branch.slice(0, 2)].map((entry) => entry.definitionIdentity),
+    );
+    const wholeConsumers = new Set(
+      [head, caller, ...prefix, ...branch.slice(0, 2), target].map(
+        (entry) => entry.definitionIdentity,
+      ),
+    );
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    for (const restricted of [paths, undefined]) {
+      await expectPendingFairCompetingRead(
+        fixture,
+        atoms,
+        budget,
+        watched,
+        requiredFunding,
+        wholeConsumers,
+        restricted,
+      );
+    }
     expect(JSON.stringify(atoms)).toBe(originalAtoms);
   });
 
