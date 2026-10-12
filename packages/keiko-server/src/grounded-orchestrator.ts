@@ -6303,6 +6303,11 @@ function fairCoverageEntries(
   return [...state.windows.values()].flat();
 }
 
+interface CoverageOwnedAdmission {
+  readonly state: CoverageAdmission;
+  readonly ownedProgress: boolean;
+}
+
 interface CoverageFairAdmission {
   readonly state: CoverageAdmission;
   readonly pendingFileRetained: boolean;
@@ -6385,9 +6390,10 @@ function coverageAdmissionWithOwnedContinuation(
   admission: SharedCoverageAdmission,
   minimumScore: number,
   ranked?: RouteTraceCoverageEntry,
-): CoverageAdmission {
+): CoverageOwnedAdmission {
   let selected = state;
   let parent = entry;
+  let ownedProgress = false;
   const seen = new Set([entry.definitionIdentity]);
   let threshold = ownedCoverageInitialThreshold(entry, admission, minimumScore);
   let requireBranch = true;
@@ -6400,7 +6406,7 @@ function coverageAdmissionWithOwnedContinuation(
       threshold,
       requireBranch,
     );
-    if (next === undefined) return selected;
+    if (next === undefined) return { state: selected, ownedProgress };
     if (next.entry.atom.score < minimumScore) {
       const competing = coverageAdmissionWithCompetingCoverageTarget(
         selected,
@@ -6408,9 +6414,10 @@ function coverageAdmissionWithOwnedContinuation(
         admission,
         minimumScore,
       );
-      if (competing !== undefined) return competing;
+      if (competing !== undefined) return { state: competing, ownedProgress };
     }
     selected = next.state;
+    ownedProgress = true;
     parent = next.entry;
     threshold = undefined;
     requireBranch = false;
@@ -6606,8 +6613,12 @@ function coverageAdmissionWithFairTarget(
         coverageFileHeadScore(ranked ?? entry, admission),
         ranked,
       );
-      if (continuation.targets.size > state.targets.size)
-        return { state: continuation, pendingFileRetained: false, pendingFileEligible: false };
+      if (continuation.state.targets.size > state.targets.size)
+        return {
+          state: continuation.state,
+          pendingFileRetained: false,
+          pendingFileEligible: pendingFileEligible && !continuation.ownedProgress,
+        };
       continue;
     }
     const candidate = coverageAdmissionWithCompetingFairTarget(
@@ -6629,10 +6640,10 @@ function coverageAdmissionWithOwnedOpportunity(
   targets: readonly RouteTraceCoverageEntry[],
   admission: SharedCoverageAdmission,
   ranked: RouteTraceCoverageEntry | undefined,
-): CoverageAdmission {
+): CoverageOwnedAdmission {
   const threshold = coverageFileHeadScore(fair, admission);
   const own = coverageAdmissionWithOwnedContinuation(state, fair, admission, threshold, ranked);
-  if (own.targets.size > state.targets.size) return own;
+  if (own.state.targets.size > state.targets.size) return own;
   const parents =
     ranked === undefined
       ? targets
@@ -6655,9 +6666,9 @@ function coverageAdmissionWithOwnedOpportunity(
       threshold,
       ranked,
     );
-    if (candidate.targets.size > state.targets.size) return candidate;
+    if (candidate.state.targets.size > state.targets.size) return candidate;
   }
-  return state;
+  return { state, ownedProgress: false };
 }
 
 function coverageAdmissionWithCompetingFairTarget(
@@ -6698,7 +6709,7 @@ function coverageAdmissionWithGuardedFairTarget(
   const joint = coverageAdmissionWithTarget(state, fair, admission);
   return joint === undefined
     ? undefined
-    : coverageAdmissionWithOwnedOpportunity(joint, fair, targets, admission, ranked);
+    : coverageAdmissionWithOwnedOpportunity(joint, fair, targets, admission, ranked).state;
 }
 
 function coverageAdmissionWithPaidFairCheckpoint(
@@ -6713,10 +6724,10 @@ function coverageAdmissionWithPaidFairCheckpoint(
     return { state: joint, pendingFileRetained: false, pendingFileEligible: false };
   const threshold = coverageFileHeadScore(fair, admission);
   const owned = coverageAdmissionWithOwnedOpportunity(joint, fair, targets, admission, ranked);
-  const tied = coverageAdmissionWithTiedFairPrefix(owned, ranked, admission, threshold);
-  if (tied !== joint)
+  const tied = coverageAdmissionWithTiedFairPrefix(owned.state, ranked, admission, threshold);
+  if (owned.ownedProgress || tied !== owned.state)
     return {
-      state: owned,
+      state: owned.state,
       pendingFileRetained: false,
       pendingFileEligible: false,
       firstFairJoint: joint,
@@ -6736,12 +6747,32 @@ function coverageAdmissionWithTiedFairPrefix(
   minimumScore: number,
 ): CoverageAdmission {
   let selected = state;
+  const family = ownedCoverageFamily(ranked, admission);
   for (const entry of admission.byPath.get(ranked.atom.scopePath) ?? []) {
-    if (entry.atom.score !== minimumScore || selected.targets.has(entry.definitionIdentity))
+    if (
+      entry.atom.score !== minimumScore ||
+      !family.has(entry.definitionIdentity) ||
+      selected.targets.has(entry.definitionIdentity)
+    )
       continue;
     selected = coverageAdmissionWithTarget(selected, entry, admission) ?? selected;
   }
   return selected;
+}
+
+function ownedCoverageFamily(
+  ranked: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+): ReadonlySet<string> {
+  const children = admission.ownedChildren.get(ranked.definitionIdentity) ?? [];
+  const siblings =
+    ranked.parentIdentity === undefined
+      ? []
+      : (admission.ownedChildren.get(ranked.parentIdentity) ?? []);
+  const family = siblings.some((entry) => entry.definitionIdentity === ranked.definitionIdentity)
+    ? [...children, ...siblings]
+    : children;
+  return new Set(family.map((entry) => entry.definitionIdentity));
 }
 
 function coverageAdmissionWithTwoPendingFairTargets(
@@ -6833,7 +6864,7 @@ function completedFairCheckpoint(
     const selected =
       joint === checkpoint.firstFairJoint
         ? checkpoint.state
-        : coverageAdmissionWithOwnedOpportunity(joint, fair, targets, admission, ranked);
+        : coverageAdmissionWithOwnedOpportunity(joint, fair, targets, admission, ranked).state;
     return coverageFairAdmission(selected, false, false);
   }
   return checkpoint?.pendingFileRetained === true ? checkpoint : coverageFairAdmission(joint);

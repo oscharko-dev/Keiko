@@ -133,14 +133,19 @@ existing ties and within-file nomination order. The first jointly feasible targe
 physical file whose queue head is not fully funded receives the shared file turn.
 When the relevance file's head was already fully funded in committed state before the turn,
 its pending whole targets at or above the first nominated file's queue-head score also
-participate in the joint proposal. While the extra opportunity remains eligible, at each guarded
-relevance-file and first-file checkpoint, the existing owned opportunity and then same-file
-targets tied to that actual head score are probed through the unchanged whole-target guards,
-in existing stable order. Actual new whole
-target progress in either probe closes the extra second-file opportunity for the entire outer
-shared turn and clears any earlier uncommitted second-file checkpoint. Later callbacks cannot
-reopen it. These eligibility probes may remain unpublished; a refused tie is not guaranteed
-funding. Zero-score ties participate under the same rule.
+participate in the joint proposal. While the extra opportunity remains eligible, each guarded
+relevance-file and first-file checkpoint probes the existing owned opportunity, then same-file
+targets tied to that actual head score within the ranked entry's certified owned-call family.
+The family includes its selected owned children and its selected parent's owned children only
+when the ranked entry is itself a certified owned child of that parent. Existing stable order
+and whole-target guards apply. Only an actually selected guarded owned continuation establishes
+owned progress. A global competing return retains its guarded state and any prior owned-progress
+fact; it does not establish that fact merely by returning a different state. Mere file equality
+also does not establish family membership.
+Actual owned progress or a newly guarded tied family target closes the extra second-file
+opportunity for the entire outer shared turn and clears any earlier uncommitted second-file
+checkpoint. Later callbacks cannot reopen it. These eligibility probes may remain unpublished;
+a refused tie is not guaranteed funding. Zero-score ties participate under the same rule.
 While eligible, the existing fair order may guard a second body in a physical file distinct
 from both, whose head is not fully funded in the joint proposal and whose nominee meets the
 same first-file head score. Every retained joint preserves committed whole targets, the guarded
