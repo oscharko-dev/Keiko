@@ -49,6 +49,13 @@ const CITATION_DIRECTIVE_TERMS: ReadonlySet<string> = new Set([
   "zeilennummern",
   "implementierungsdateien",
 ]);
+const CITATION_TRAILING_PUNCTUATION: ReadonlySet<string> = new Set([".", "!", "?", ";"]);
+
+function withoutTrailingCitationPunctuation(word: string): string {
+  let end = word.length;
+  while (end > 0 && CITATION_TRAILING_PUNCTUATION.has(word.charAt(end - 1))) end -= 1;
+  return word.slice(0, end);
+}
 
 function isCitationOnlyDirective(clause: string): boolean {
   if (!/^\s*\p{L}/u.test(clause) || /["'`“”‘’«»]/u.test(clause)) return false;
@@ -62,7 +69,7 @@ function isCitationOnlyDirective(clause: string): boolean {
     words.every(
       (word) =>
         (german || word === word.toLowerCase()) &&
-        CITATION_DIRECTIVE_TERMS.has(word.toLowerCase().replace(/[.!?;]+$/u, "")),
+        CITATION_DIRECTIVE_TERMS.has(withoutTrailingCitationPunctuation(word.toLowerCase())),
     )
   );
 }
