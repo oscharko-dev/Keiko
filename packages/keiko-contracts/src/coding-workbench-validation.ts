@@ -53,12 +53,18 @@ const CODING_WORKBENCH_PERMISSION_REQUEST_KIND_TO_ACTION_CLASS: Readonly<
   "delivery-substrate": "delivery-substrate",
 } as const);
 
+function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
+  errors.push(...issues);
+  return issues.length === 0;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 function isPositiveSafeInteger(value: unknown): value is number {
@@ -72,7 +78,7 @@ function isSafeIntegerOrZero(value: unknown): value is number {
 function isIsoInstant(value: unknown): value is string {
   const errors: string[] = [];
   validateStrictUtcInstant(value, "instant", errors);
-  return errors.length === 0;
+  return typeof value === "string" && errors.length === 0;
 }
 
 function validateAllowedKeys(
@@ -80,10 +86,18 @@ function validateAllowedKeys(
   allowed: readonly string[],
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   Object.keys(record)
     .filter((key) => !allowed.includes(key))
-    .forEach((key) => errors.push(`${path}.${key} is not allowed`));
+    .forEach(
+      (key) =>
+        (valid = [appendValidationIssues(errors, `${path}.${key} is not allowed`), valid].every(
+          Boolean,
+        )),
+    );
+
+  return valid;
 }
 
 function validateStringArray(
@@ -92,23 +106,35 @@ function validateStringArray(
   path: string,
   errors: string[],
   requireNonEmpty: boolean,
-): void {
+): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
-    errors.push(`${path} must be an array`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an array`), valid].every(Boolean);
+    return valid;
   }
   if (requireNonEmpty && value.length === 0) {
-    errors.push(`${path} must not be empty`);
+    valid = [appendValidationIssues(errors, `${path} must not be empty`), valid].every(Boolean);
   }
-  value.forEach((entry, index) => {
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value))
+      return appendValidationIssues(errors, `${path}[${String(index)}] must be a non-empty string`);
+    const entry: unknown = value[index];
     if (typeof entry !== "string" || entry.length === 0) {
-      errors.push(`${path}[${String(index)}] must be a non-empty string`);
-      return;
+      valid = [
+        appendValidationIssues(errors, `${path}[${String(index)}] must be a non-empty string`),
+        valid,
+      ].every(Boolean);
+      continue;
     }
     if (allowed !== undefined && !allowed.includes(entry)) {
-      errors.push(`${path}[${String(index)}] is invalid`);
+      valid = [appendValidationIssues(errors, `${path}[${String(index)}] is invalid`), valid].every(
+        Boolean,
+      );
     }
-  });
+  }
+
+  return valid;
 }
 
 function validateSafeEvidenceTextArray(
@@ -116,25 +142,47 @@ function validateSafeEvidenceTextArray(
   path: string,
   errors: string[],
   requireNonEmpty: boolean,
-): void {
+): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
-    errors.push(`${path} must be an array`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an array`), valid].every(Boolean);
+    return valid;
   }
   if (requireNonEmpty && value.length === 0) {
-    errors.push(`${path} must not be empty`);
+    valid = [appendValidationIssues(errors, `${path} must not be empty`), valid].every(Boolean);
   }
-  value.forEach((entry, index) => {
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value))
+      return appendValidationIssues(
+        errors,
+        `${path}[${String(index)}] must be content-free evidence-safe text`,
+      );
+    const entry: unknown = value[index];
     if (!isCodingWorkbenchEvidenceSafeText(entry)) {
-      errors.push(`${path}[${String(index)}] must be content-free evidence-safe text`);
+      valid = [
+        appendValidationIssues(
+          errors,
+          `${path}[${String(index)}] must be content-free evidence-safe text`,
+        ),
+        valid,
+      ].every(Boolean);
     }
-  });
+  }
+
+  return valid;
 }
 
-function validateSafeEvidenceText(value: unknown, path: string, errors: string[]): void {
+function validateSafeEvidenceText(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (!isCodingWorkbenchEvidenceSafeText(value)) {
-    errors.push(`${path} must be content-free evidence-safe text`);
+    valid = [
+      appendValidationIssues(errors, `${path} must be content-free evidence-safe text`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateRequiredSafeEvidenceTextField(
@@ -142,12 +190,15 @@ function validateRequiredSafeEvidenceTextField(
   key: string,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (record[key] === undefined) {
-    errors.push(`${path}.${key} is required`);
-    return;
+    valid = [appendValidationIssues(errors, `${path}.${key} is required`), valid].every(Boolean);
+    return valid;
   }
-  validateSafeEvidenceText(record[key], `${path}.${key}`, errors);
+  valid = [validateSafeEvidenceText(record[key], `${path}.${key}`, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function validateRequiredEnumField(
@@ -156,14 +207,17 @@ function validateRequiredEnumField(
   allowed: readonly string[],
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (record[key] === undefined) {
-    errors.push(`${path}.${key} is required`);
-    return;
+    valid = [appendValidationIssues(errors, `${path}.${key} is required`), valid].every(Boolean);
+    return valid;
   }
   if (!isOneOf(record[key], allowed)) {
-    errors.push(`${path}.${key} is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.${key} is invalid`), valid].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateRequiredSafeIntegerField(
@@ -171,14 +225,20 @@ function validateRequiredSafeIntegerField(
   key: string,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (record[key] === undefined) {
-    errors.push(`${path}.${key} is required`);
-    return;
+    valid = [appendValidationIssues(errors, `${path}.${key} is required`), valid].every(Boolean);
+    return valid;
   }
   if (!isSafeIntegerOrZero(record[key])) {
-    errors.push(`${path}.${key} must be a non-negative safe integer`);
+    valid = [
+      appendValidationIssues(errors, `${path}.${key} must be a non-negative safe integer`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateRequiredBooleanField(
@@ -186,14 +246,19 @@ function validateRequiredBooleanField(
   key: string,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (record[key] === undefined) {
-    errors.push(`${path}.${key} is required`);
-    return;
+    valid = [appendValidationIssues(errors, `${path}.${key} is required`), valid].every(Boolean);
+    return valid;
   }
   if (typeof record[key] !== "boolean") {
-    errors.push(`${path}.${key} must be a boolean`);
+    valid = [appendValidationIssues(errors, `${path}.${key} must be a boolean`), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
 function validateRequiredDigestField(
@@ -201,146 +266,240 @@ function validateRequiredDigestField(
   key: string,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (record[key] === undefined) {
-    errors.push(`${path}.${key} is required`);
-    return;
+    valid = [appendValidationIssues(errors, `${path}.${key} is required`), valid].every(Boolean);
+    return valid;
   }
-  validateDigest(record[key], `${path}.${key}`, errors);
+  valid = [validateDigest(record[key], `${path}.${key}`, errors), valid].every(Boolean);
+
+  return valid;
 }
 
-function validateDigest(value: unknown, path: string, errors: string[]): void {
+function validateDigest(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (typeof value !== "string" || !HEX_64_PATTERN.test(value)) {
-    errors.push(`${path} must be a 64-character lowercase hex digest`);
+    valid = [
+      appendValidationIssues(errors, `${path} must be a 64-character lowercase hex digest`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateWorkspaceIdentity(value: unknown, path: string, errors: string[]): void {
+function validateWorkspaceIdentity(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push(`${path} must be an object`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an object`), valid].every(Boolean);
+    return valid;
   }
-  validateAllowedKeys(value, ["workspaceId", "rootLabel", "rootDigest"], path, errors);
-  validateRequiredSafeEvidenceTextField(value, "workspaceId", path, errors);
-  validateSafeEvidenceText(value.rootLabel, `${path}.rootLabel`, errors);
-  validateDigest(value.rootDigest, `${path}.rootDigest`, errors);
-}
-
-function validateBranchConstraints(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) {
-    errors.push(`${path} must be an object`);
-    return;
-  }
-  validateAllowedKeys(
-    value,
-    ["baseRef", "headRef", "allowDetachedHead", "allowedPrefixes"],
-    path,
-    errors,
+  valid = [
+    validateAllowedKeys(value, ["workspaceId", "rootLabel", "rootDigest"], path, errors),
+    valid,
+  ].every(Boolean);
+  valid = [validateRequiredSafeEvidenceTextField(value, "workspaceId", path, errors), valid].every(
+    Boolean,
   );
-  validateSafeEvidenceText(value.baseRef, `${path}.baseRef`, errors);
-  validateSafeEvidenceText(value.headRef, `${path}.headRef`, errors);
+  valid = [validateSafeEvidenceText(value.rootLabel, `${path}.rootLabel`, errors), valid].every(
+    Boolean,
+  );
+  valid = [validateDigest(value.rootDigest, `${path}.rootDigest`, errors), valid].every(Boolean);
+
+  return valid;
+}
+
+function validateBranchConstraints(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
+  if (!isRecord(value)) {
+    valid = [appendValidationIssues(errors, `${path} must be an object`), valid].every(Boolean);
+    return valid;
+  }
+  valid = [
+    validateAllowedKeys(
+      value,
+      ["baseRef", "headRef", "allowDetachedHead", "allowedPrefixes"],
+      path,
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [validateSafeEvidenceText(value.baseRef, `${path}.baseRef`, errors), valid].every(
+    Boolean,
+  );
+  valid = [validateSafeEvidenceText(value.headRef, `${path}.headRef`, errors), valid].every(
+    Boolean,
+  );
   if (typeof value.allowDetachedHead !== "boolean") {
-    errors.push(`${path}.allowDetachedHead must be a boolean`);
+    valid = [
+      appendValidationIssues(errors, `${path}.allowDetachedHead must be a boolean`),
+      valid,
+    ].every(Boolean);
   }
-  validateSafeEvidenceTextArray(value.allowedPrefixes, `${path}.allowedPrefixes`, errors, true);
+  valid = [
+    validateSafeEvidenceTextArray(value.allowedPrefixes, `${path}.allowedPrefixes`, errors, true),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateModelProfile(value: unknown, path: string, errors: string[]): void {
+function validateModelProfile(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push(`${path} must be an object`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an object`), valid].every(Boolean);
+    return valid;
   }
-  validateAllowedKeys(
-    value,
-    ["profileId", "source", "supportsStreaming", "supportsToolCalling", "reasoningEffort"],
-    path,
-    errors,
+  valid = [
+    validateAllowedKeys(
+      value,
+      ["profileId", "source", "supportsStreaming", "supportsToolCalling", "reasoningEffort"],
+      path,
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [validateSafeEvidenceText(value.profileId, `${path}.profileId`, errors), valid].every(
+    Boolean,
   );
-  validateSafeEvidenceText(value.profileId, `${path}.profileId`, errors);
   if (!isOneOf(value.source, CODING_WORKBENCH_MODEL_SOURCES)) {
-    errors.push(`${path}.source is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.source is invalid`), valid].every(Boolean);
   }
   if (typeof value.supportsStreaming !== "boolean") {
-    errors.push(`${path}.supportsStreaming must be a boolean`);
+    valid = [
+      appendValidationIssues(errors, `${path}.supportsStreaming must be a boolean`),
+      valid,
+    ].every(Boolean);
   }
   if (typeof value.supportsToolCalling !== "boolean") {
-    errors.push(`${path}.supportsToolCalling must be a boolean`);
+    valid = [
+      appendValidationIssues(errors, `${path}.supportsToolCalling must be a boolean`),
+      valid,
+    ].every(Boolean);
   }
   if (
     value.reasoningEffort !== undefined &&
     !isOneOf(value.reasoningEffort, MODEL_REASONING_EFFORTS)
   ) {
-    errors.push(`${path}.reasoningEffort is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.reasoningEffort is invalid`), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
-function validateCommandPolicy(value: unknown, path: string, errors: string[]): void {
+function validateCommandPolicy(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push(`${path} must be an object`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an object`), valid].every(Boolean);
+    return valid;
   }
-  validateAllowedKeys(
-    value,
-    ["mode", "allow", "deny", "maxCommandTimeoutMs", "requirePerCommandApproval"],
-    path,
-    errors,
-  );
+  valid = [
+    validateAllowedKeys(
+      value,
+      ["mode", "allow", "deny", "maxCommandTimeoutMs", "requirePerCommandApproval"],
+      path,
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
   if (!isOneOf(value.mode, CODING_WORKBENCH_COMMAND_POLICY_MODES)) {
-    errors.push(`${path}.mode is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.mode is invalid`), valid].every(Boolean);
   }
-  validateSafeEvidenceTextArray(value.allow, `${path}.allow`, errors, false);
+  valid = [validateSafeEvidenceTextArray(value.allow, `${path}.allow`, errors, false), valid].every(
+    Boolean,
+  );
   if (value.mode === "deny" && Array.isArray(value.allow) && value.allow.length > 0) {
-    errors.push(`${path}.allow must be empty when mode is deny`);
+    valid = [
+      appendValidationIssues(errors, `${path}.allow must be empty when mode is deny`),
+      valid,
+    ].every(Boolean);
   }
-  validateSafeEvidenceTextArray(value.deny, `${path}.deny`, errors, false);
+  valid = [validateSafeEvidenceTextArray(value.deny, `${path}.deny`, errors, false), valid].every(
+    Boolean,
+  );
   if (!isPositiveSafeInteger(value.maxCommandTimeoutMs)) {
-    errors.push(`${path}.maxCommandTimeoutMs must be a positive safe integer`);
+    valid = [
+      appendValidationIssues(errors, `${path}.maxCommandTimeoutMs must be a positive safe integer`),
+      valid,
+    ].every(Boolean);
   }
   if (typeof value.requirePerCommandApproval !== "boolean") {
-    errors.push(`${path}.requirePerCommandApproval must be a boolean`);
+    valid = [
+      appendValidationIssues(errors, `${path}.requirePerCommandApproval must be a boolean`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateNetworkPolicy(value: unknown, path: string, errors: string[]): void {
+function validateNetworkPolicy(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push(`${path} must be an object`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an object`), valid].every(Boolean);
+    return valid;
   }
-  validateAllowedKeys(value, ["mode", "allowLoopback", "connectorScopes"], path, errors);
+  valid = [
+    validateAllowedKeys(value, ["mode", "allowLoopback", "connectorScopes"], path, errors),
+    valid,
+  ].every(Boolean);
   if (!isOneOf(value.mode, CODING_WORKBENCH_NETWORK_MODES)) {
-    errors.push(`${path}.mode is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.mode is invalid`), valid].every(Boolean);
   }
   if (typeof value.allowLoopback !== "boolean") {
-    errors.push(`${path}.allowLoopback must be a boolean`);
+    valid = [
+      appendValidationIssues(errors, `${path}.allowLoopback must be a boolean`),
+      valid,
+    ].every(Boolean);
   }
   if (value.mode === "deny-all" && value.allowLoopback === true) {
-    errors.push(`${path}.allowLoopback must be false when mode is deny-all`);
+    valid = [
+      appendValidationIssues(errors, `${path}.allowLoopback must be false when mode is deny-all`),
+      valid,
+    ].every(Boolean);
   }
-  validateStringArray(
-    value.connectorScopes,
-    CODING_WORKBENCH_CONNECTOR_SCOPES,
-    `${path}.connectorScopes`,
-    errors,
-    false,
-  );
+  valid = [
+    validateStringArray(
+      value.connectorScopes,
+      CODING_WORKBENCH_CONNECTOR_SCOPES,
+      `${path}.connectorScopes`,
+      errors,
+      false,
+    ),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateBudget(value: unknown, path: string, errors: string[]): void {
+function validateBudget(value: unknown, path: string, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push(`${path} must be an object`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an object`), valid].every(Boolean);
+    return valid;
   }
-  validateAllowedKeys(
-    value,
-    ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"],
-    path,
-    errors,
-  );
+  valid = [
+    validateAllowedKeys(
+      value,
+      ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"],
+      path,
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
   ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"].forEach((key) => {
     if (!isPositiveSafeInteger(value[key])) {
-      errors.push(`${path}.${key} must be a positive safe integer`);
+      valid = [
+        appendValidationIssues(errors, `${path}.${key} must be a positive safe integer`),
+        valid,
+      ].every(Boolean);
     }
   });
+
+  return valid;
 }
 
 function validateModePolicyConsistency(
@@ -348,68 +507,98 @@ function validateModePolicyConsistency(
   actionClasses: unknown,
   path: string,
   errors: string[],
-): void {
-  if (effectiveMode === undefined || !Array.isArray(actionClasses)) return;
-  const allowed = CODING_WORKBENCH_MODE_POLICIES[effectiveMode].allowedActionClasses;
+): boolean {
+  let valid = true;
+  if (effectiveMode === undefined || !Array.isArray(actionClasses)) return valid;
+  const allowed: readonly string[] =
+    CODING_WORKBENCH_MODE_POLICIES[effectiveMode].allowedActionClasses;
   actionClasses.forEach((entry, index) => {
-    if (
-      typeof entry === "string" &&
-      !allowed.includes(entry as unknown as (typeof allowed)[number])
-    ) {
-      errors.push(`${path}[${String(index)}] exceeds the effective mode`);
+    if (typeof entry === "string" && !allowed.includes(entry)) {
+      valid = [
+        appendValidationIssues(errors, `${path}[${String(index)}] exceeds the effective mode`),
+        valid,
+      ].every(Boolean);
     }
   });
+
+  return valid;
 }
 
 function validateNetworkPolicyActionClassConsistency(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  if (!Array.isArray(value.actionClasses) || !isRecord(value.networkPolicy)) return;
+): boolean {
+  let valid = true;
+  if (!Array.isArray(value.actionClasses) || !isRecord(value.networkPolicy)) return valid;
   const hasNetworkEgress = value.actionClasses.includes("network-egress");
   const networkPolicyMode = value.networkPolicy.mode;
   if (networkPolicyMode !== "deny-all" && !hasNetworkEgress) {
-    errors.push(
-      "authorityEnvelope.actionClasses must include network-egress when authorityEnvelope.networkPolicy.mode is not deny-all",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.actionClasses must include network-egress when authorityEnvelope.networkPolicy.mode is not deny-all",
+      ),
+      valid,
+    ].every(Boolean);
   }
-  if (hasNetworkEgress) return;
+  if (hasNetworkEgress) return valid;
   if (networkPolicyMode !== "deny-all") {
-    errors.push(
-      "authorityEnvelope.networkPolicy.mode must be deny-all when authorityEnvelope.actionClasses omits network-egress",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.networkPolicy.mode must be deny-all when authorityEnvelope.actionClasses omits network-egress",
+      ),
+      valid,
+    ].every(Boolean);
   }
   if (value.networkPolicy.allowLoopback !== false) {
-    errors.push(
-      "authorityEnvelope.networkPolicy.allowLoopback must be false when authorityEnvelope.actionClasses omits network-egress",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.networkPolicy.allowLoopback must be false when authorityEnvelope.actionClasses omits network-egress",
+      ),
+      valid,
+    ].every(Boolean);
   }
   if (
     Array.isArray(value.networkPolicy.connectorScopes) &&
     value.networkPolicy.connectorScopes.length > 0
   ) {
-    errors.push(
-      "authorityEnvelope.networkPolicy.connectorScopes must be empty when authorityEnvelope.actionClasses omits network-egress",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when authorityEnvelope.actionClasses omits network-egress",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateConnectorScopeActionClassConsistency(
   value: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     !Array.isArray(value.connectorScopes) ||
     value.connectorScopes.length === 0 ||
     !Array.isArray(value.actionClasses)
   ) {
-    return;
+    return valid;
   }
   if (!value.actionClasses.includes("connector-access")) {
-    errors.push(
-      "authorityEnvelope.connectorScopes must be empty when authorityEnvelope.actionClasses omits connector-access",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.connectorScopes must be empty when authorityEnvelope.actionClasses omits connector-access",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function hasWriteCapableConnectorScope(value: unknown): boolean {
@@ -421,7 +610,7 @@ function hasWriteCapableConnectorScope(value: unknown): boolean {
 
 function hasHumanApprovalRequiredActionClass(value: unknown): boolean {
   if (!Array.isArray(value)) return false;
-  const actionClasses = value as readonly string[];
+  const actionClasses: readonly unknown[] = value;
   return (
     actionClasses.includes("workspace-write") ||
     actionClasses.includes("command-execution") ||
@@ -439,204 +628,314 @@ function hasHumanApprovalRequiredConnectorScope(value: Record<string, unknown>):
   );
 }
 
-function validateHumanApprovalGateBinding(value: Record<string, unknown>, errors: string[]): void {
-  if (!Array.isArray(value.gates) || !Array.isArray(value.actionClasses)) return;
+function validateHumanApprovalGateBinding(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  if (!Array.isArray(value.gates) || !Array.isArray(value.actionClasses)) return valid;
   const requiresHumanApproval =
     hasHumanApprovalRequiredActionClass(value.actionClasses) ||
     hasHumanApprovalRequiredConnectorScope(value);
   if (requiresHumanApproval && !value.gates.includes("human-approval")) {
-    errors.push(
-      "authorityEnvelope.gates must include human-approval when authorityEnvelope.actionClasses or connector scopes grant elevated authority",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.gates must include human-approval when authorityEnvelope.actionClasses or connector scopes grant elevated authority",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateCommandPolicyActionClassConsistency(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  if (!Array.isArray(value.actionClasses) || !isRecord(value.commandPolicy)) return;
-  if (value.actionClasses.includes("command-execution")) return;
+): boolean {
+  let valid = true;
+  if (!Array.isArray(value.actionClasses) || !isRecord(value.commandPolicy)) return valid;
+  if (value.actionClasses.includes("command-execution")) return valid;
   if (value.commandPolicy.mode !== "deny") {
-    errors.push(
-      "authorityEnvelope.commandPolicy.mode must be deny when authorityEnvelope.actionClasses omits command-execution",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.commandPolicy.mode must be deny when authorityEnvelope.actionClasses omits command-execution",
+      ),
+      valid,
+    ].every(Boolean);
   }
   if (Array.isArray(value.commandPolicy.allow) && value.commandPolicy.allow.length > 0) {
-    errors.push(
-      "authorityEnvelope.commandPolicy.allow must be empty when authorityEnvelope.actionClasses omits command-execution",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.commandPolicy.allow must be empty when authorityEnvelope.actionClasses omits command-execution",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validatePermissionRequestKindActionClassConsistency(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     isOneOf(value.kind, CODING_WORKBENCH_PERMISSION_REQUEST_KINDS) &&
     isOneOf(value.actionClass, CODING_WORKBENCH_ACTION_CLASSES) &&
     CODING_WORKBENCH_PERMISSION_REQUEST_KIND_TO_ACTION_CLASS[value.kind] !== value.actionClass
   ) {
-    errors.push(`${path}.kind must match ${path}.actionClass for the shared action classes`);
+    valid = [
+      appendValidationIssues(
+        errors,
+        `${path}.kind must match ${path}.actionClass for the shared action classes`,
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validatePermissionRequestSupervisedConsistency(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
-  if (!isOneOf(value.actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS)) return;
+): boolean {
+  let valid = true;
+  if (!isOneOf(value.actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS)) return valid;
   const expected = permissionKindForSupervisedCodingAction(value.actionKind);
   if (value.kind !== expected || value.actionClass !== expected) {
-    errors.push(`${path}.actionKind must match ${path}.kind and ${path}.actionClass`);
+    valid = [
+      appendValidationIssues(
+        errors,
+        `${path}.actionKind must match ${path}.kind and ${path}.actionClass`,
+      ),
+      valid,
+    ].every(Boolean);
   }
-  validatePermissionRequestSupervisedConnectorScopes(value, path, errors);
+  valid = [validatePermissionRequestSupervisedConnectorScopes(value, path, errors), valid].every(
+    Boolean,
+  );
+
+  return valid;
 }
 
 function validatePermissionRequestSupervisedConnectorScopes(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   const connectorAction =
     value.actionKind === "connector-write" || value.actionKind === "external-write";
-  if (!connectorAction) return;
+  if (!connectorAction) return valid;
   if (!Array.isArray(value.connectorScopes) || value.connectorScopes.length === 0) {
-    errors.push(`${path}.connectorScopes is required for ${String(value.actionKind)}`);
-    return;
+    valid = [
+      appendValidationIssues(
+        errors,
+        `${path}.connectorScopes is required for ${String(value.actionKind)}`,
+      ),
+      valid,
+    ].every(Boolean);
+    return valid;
   }
   value.connectorScopes.forEach((scope, index) => {
     if (typeof scope === "string" && !scope.endsWith(".write")) {
-      errors.push(
-        `${path}.connectorScopes[${String(index)}] must be write-capable for ${String(value.actionKind)}`,
-      );
+      valid = [
+        appendValidationIssues(
+          errors,
+          `${path}.connectorScopes[${String(index)}] must be write-capable for ${String(value.actionKind)}`,
+        ),
+        valid,
+      ].every(Boolean);
     }
   });
+
+  return valid;
 }
 
 function validatePermissionRequestConnectorScopes(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     isOneOf(value.kind, CODING_WORKBENCH_PERMISSION_REQUEST_KINDS) &&
     value.kind === "connector-access"
   ) {
     if (value.connectorScopes === undefined) {
-      errors.push(`${path}.connectorScopes is required`);
-      return;
+      valid = [appendValidationIssues(errors, `${path}.connectorScopes is required`), valid].every(
+        Boolean,
+      );
+      return valid;
     }
-    validateStringArray(
-      value.connectorScopes,
-      CODING_WORKBENCH_CONNECTOR_SCOPES,
-      `${path}.connectorScopes`,
-      errors,
-      true,
-    );
-    return;
+    valid = [
+      validateStringArray(
+        value.connectorScopes,
+        CODING_WORKBENCH_CONNECTOR_SCOPES,
+        `${path}.connectorScopes`,
+        errors,
+        true,
+      ),
+      valid,
+    ].every(Boolean);
+    return valid;
   }
   if (value.connectorScopes !== undefined) {
-    errors.push(`${path}.connectorScopes is only allowed for connector-access requests`);
+    valid = [
+      appendValidationIssues(
+        errors,
+        `${path}.connectorScopes is only allowed for connector-access requests`,
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validatePermissionRequestOptionalFields(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
-  validateSafeEvidenceText(value.reasonCode, `${path}.reasonCode`, errors);
-  validatePermissionRequestSupervisedFields(value, path, errors);
-  validatePermissionRequestConnectorScopes(value, path, errors);
+): boolean {
+  let valid = true;
+  valid = [validateSafeEvidenceText(value.reasonCode, `${path}.reasonCode`, errors), valid].every(
+    Boolean,
+  );
+  valid = [validatePermissionRequestSupervisedFields(value, path, errors), valid].every(Boolean);
+  valid = [validatePermissionRequestConnectorScopes(value, path, errors), valid].every(Boolean);
   const exactVerifier =
     value.actionKind === "verification-command" && isVerificationKind(value.commandLabel);
   if (value.commandLabel !== undefined && !exactVerifier) {
-    validateSafeEvidenceText(value.commandLabel, `${path}.commandLabel`, errors);
+    valid = [
+      validateSafeEvidenceText(value.commandLabel, `${path}.commandLabel`, errors),
+      valid,
+    ].every(Boolean);
   }
   if (!isIsoInstant(value.expiresAt)) {
-    errors.push(`${path}.expiresAt must be an ISO-8601 UTC instant`);
+    valid = [
+      appendValidationIssues(errors, `${path}.expiresAt must be an ISO-8601 UTC instant`),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validatePermissionRequestSupervisedFields(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     value.actionKind !== undefined &&
     !isOneOf(value.actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS)
   ) {
-    errors.push(`${path}.actionKind is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.actionKind is invalid`), valid].every(Boolean);
   }
   if (value.scopeLabel !== undefined) {
-    validateSafeEvidenceText(value.scopeLabel, `${path}.scopeLabel`, errors);
+    valid = [validateSafeEvidenceText(value.scopeLabel, `${path}.scopeLabel`, errors), valid].every(
+      Boolean,
+    );
   }
   if (value.risk !== undefined && !isOneOf(value.risk, CODING_WORKBENCH_APPROVAL_RISKS)) {
-    errors.push(`${path}.risk is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.risk is invalid`), valid].every(Boolean);
   }
   if (
     value.policyReason !== undefined &&
     !isOneOf(value.policyReason, CODING_WORKBENCH_SUPERVISED_POLICY_REASONS)
   ) {
-    errors.push(`${path}.policyReason is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.policyReason is invalid`), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
-function validatePermissionRequestInternal(value: unknown, path: string, errors: string[]): void {
+const PERMISSION_REQUEST_KEYS = [
+  "requestId",
+  "kind",
+  "actionClass",
+  "reasonCode",
+  "actionKind",
+  "scopeLabel",
+  "risk",
+  "policyReason",
+  "connectorScopes",
+  "commandLabel",
+  "expiresAt",
+];
+
+function validatePermissionRequestInternal(
+  value: unknown,
+  path: string,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push(`${path} must be an object`);
-    return;
+    valid = [appendValidationIssues(errors, `${path} must be an object`), valid].every(Boolean);
+    return valid;
   }
-  validateAllowedKeys(
-    value,
-    [
-      "requestId",
-      "kind",
-      "actionClass",
-      "reasonCode",
-      "actionKind",
-      "scopeLabel",
-      "risk",
-      "policyReason",
-      "connectorScopes",
-      "commandLabel",
-      "expiresAt",
-    ],
-    path,
-    errors,
+  valid = [validateAllowedKeys(value, PERMISSION_REQUEST_KEYS, path, errors), valid].every(Boolean);
+  valid = [validateRequiredSafeEvidenceTextField(value, "requestId", path, errors), valid].every(
+    Boolean,
   );
-  validateRequiredSafeEvidenceTextField(value, "requestId", path, errors);
   if (!isOneOf(value.kind, CODING_WORKBENCH_PERMISSION_REQUEST_KINDS)) {
-    errors.push(`${path}.kind is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.kind is invalid`), valid].every(Boolean);
   }
   if (!isOneOf(value.actionClass, CODING_WORKBENCH_ACTION_CLASSES)) {
-    errors.push(`${path}.actionClass is invalid`);
+    valid = [appendValidationIssues(errors, `${path}.actionClass is invalid`), valid].every(
+      Boolean,
+    );
   }
-  validatePermissionRequestOptionalFields(value, path, errors);
+  valid = [validatePermissionRequestOptionalFields(value, path, errors), valid].every(Boolean);
   if (value.kind === "command-execution" && value.commandLabel === undefined) {
-    errors.push(`${path}.commandLabel is required`);
+    valid = [appendValidationIssues(errors, `${path}.commandLabel is required`), valid].every(
+      Boolean,
+    );
   }
-  validatePermissionRequestKindActionClassConsistency(value, path, errors);
-  validatePermissionRequestSupervisedConsistency(value, path, errors);
+  valid = [validatePermissionRequestKindActionClassConsistency(value, path, errors), valid].every(
+    Boolean,
+  );
+  valid = [validatePermissionRequestSupervisedConsistency(value, path, errors), valid].every(
+    Boolean,
+  );
+
+  return valid;
 }
 
-function validateEventCommon(record: Record<string, unknown>, errors: string[]): void {
+function validateEventCommon(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (record.schemaVersion !== CODING_WORKBENCH_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
   }
-  validateRequiredSafeEvidenceTextField(record, "eventId", "event", errors);
-  validateRequiredSafeEvidenceTextField(record, "runId", "event", errors);
+  valid = [validateRequiredSafeEvidenceTextField(record, "eventId", "event", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateRequiredSafeEvidenceTextField(record, "runId", "event", errors), valid].every(
+    Boolean,
+  );
   if (!isIsoInstant(record.occurredAt)) {
-    errors.push("event.occurredAt must be an ISO-8601 UTC instant");
+    valid = [
+      appendValidationIssues(errors, "event.occurredAt must be an ISO-8601 UTC instant"),
+      valid,
+    ].every(Boolean);
   }
   if (!isOneOf(record.kind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)) {
-    errors.push("event.kind is invalid");
+    valid = [appendValidationIssues(errors, "event.kind is invalid"), valid].every(Boolean);
   }
+
+  return valid;
 }
 
 const CODING_WORKBENCH_RUNTIME_EVENT_COMMON_KEYS: readonly string[] = Object.freeze([
@@ -719,261 +1018,413 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
   "failure-redacted": runtimeEventAllowedKeys("failureCode", "failureSummary", "retryable"),
 } as const satisfies Readonly<Record<CodingWorkbenchRuntimeEventKind, readonly string[]>>);
 
-function validateAuthorityKnownFields(value: Record<string, unknown>, errors: string[]): void {
-  validateAllowedKeys(
-    value,
-    [
-      "schemaVersion",
-      "runId",
-      "localUser",
-      "taskRefs",
-      "workspace",
-      "branch",
-      "requestedMode",
-      "deploymentCeiling",
-      "effectiveMode",
-      "runtimeSource",
-      "actionClasses",
-      "connectorScopes",
-      "modelProfile",
-      "commandPolicy",
-      "networkPolicy",
-      "gates",
-      "budget",
-      "expiresAt",
-      "approvalProofDigest",
-    ],
-    "authorityEnvelope",
-    errors,
-  );
+function validateAuthorityKnownFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [
+    validateAllowedKeys(
+      value,
+      [
+        "schemaVersion",
+        "runId",
+        "localUser",
+        "taskRefs",
+        "workspace",
+        "branch",
+        "requestedMode",
+        "deploymentCeiling",
+        "effectiveMode",
+        "runtimeSource",
+        "actionClasses",
+        "connectorScopes",
+        "modelProfile",
+        "commandPolicy",
+        "networkPolicy",
+        "gates",
+        "budget",
+        "expiresAt",
+        "approvalProofDigest",
+      ],
+      "authorityEnvelope",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
   if (value.schemaVersion !== CODING_WORKBENCH_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
   }
-  validateRequiredSafeEvidenceTextField(value, "runId", "authorityEnvelope", errors);
-  validateSafeEvidenceText(value.localUser, "authorityEnvelope.localUser", errors);
-  validateSafeEvidenceTextArray(value.taskRefs, "authorityEnvelope.taskRefs", errors, true);
+  valid = [
+    validateRequiredSafeEvidenceTextField(value, "runId", "authorityEnvelope", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateSafeEvidenceText(value.localUser, "authorityEnvelope.localUser", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateSafeEvidenceTextArray(value.taskRefs, "authorityEnvelope.taskRefs", errors, true),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateRuntimeEventAllowedKeys(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeEventAllowedKeys(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   const allowedKeys = isOneOf(value.kind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)
     ? CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND[value.kind]
     : CODING_WORKBENCH_RUNTIME_EVENT_COMMON_KEYS;
-  validateAllowedKeys(value, allowedKeys, "event", errors);
+  valid = [validateAllowedKeys(value, allowedKeys, "event", errors), valid].every(Boolean);
+
+  return valid;
 }
 
-function validateRuntimeEventModeFields(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeEventModeFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (
     value.runtimeSource !== undefined &&
     !isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES)
   ) {
-    errors.push("event.runtimeSource is invalid");
+    valid = [appendValidationIssues(errors, "event.runtimeSource is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (
     value.modelSource !== undefined &&
     !isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES)
   ) {
-    errors.push("event.modelSource is invalid");
+    valid = [appendValidationIssues(errors, "event.modelSource is invalid"), valid].every(Boolean);
   }
   if (value.requestedMode !== undefined && !isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
-    errors.push("event.requestedMode is invalid");
+    valid = [appendValidationIssues(errors, "event.requestedMode is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (value.effectiveMode !== undefined && !isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES)) {
-    errors.push("event.effectiveMode is invalid");
+    valid = [appendValidationIssues(errors, "event.effectiveMode is invalid"), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
-function validateRuntimeEventStatusFields(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeEventStatusFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (
     value.health !== undefined &&
     !isOneOf(value.health, CODING_WORKBENCH_RUNTIME_HEALTH_STATES)
   ) {
-    errors.push("event.health is invalid");
+    valid = [appendValidationIssues(errors, "event.health is invalid"), valid].every(Boolean);
   }
   if (
     value.channel !== undefined &&
     !isOneOf(value.channel, CODING_WORKBENCH_OBSERVATION_CHANNELS)
   ) {
-    errors.push("event.channel is invalid");
+    valid = [appendValidationIssues(errors, "event.channel is invalid"), valid].every(Boolean);
   }
   if (
     value.verificationStatus !== undefined &&
     !isOneOf(value.verificationStatus, ["passed", "failed", "partial"] as const)
   ) {
-    errors.push("event.verificationStatus is invalid");
+    valid = [appendValidationIssues(errors, "event.verificationStatus is invalid"), valid].every(
+      Boolean,
+    );
   }
-  validateRuntimeEventAuxiliaryFields(value, errors);
+  valid = [validateRuntimeEventAuxiliaryFields(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function validateRuntimeEventAuxiliaryFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     value.auxiliaryOutcome !== undefined &&
     !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
   ) {
-    errors.push("event.auxiliaryOutcome is invalid");
+    valid = [appendValidationIssues(errors, "event.auxiliaryOutcome is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (
     value.skillInvocation !== undefined &&
     !isOneOf(value.skillInvocation, ["explicit", "implicit"] as const)
   ) {
-    errors.push("event.skillInvocation is invalid");
+    valid = [appendValidationIssues(errors, "event.skillInvocation is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (
     value.contentTrust !== undefined &&
     !isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES)
   ) {
-    errors.push("event.contentTrust is invalid");
+    valid = [appendValidationIssues(errors, "event.contentTrust is invalid"), valid].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateRuntimeEventEvidenceFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (value.taskRef !== undefined) {
-    validateSafeEvidenceText(value.taskRef, "event.taskRef", errors);
+    valid = [validateSafeEvidenceText(value.taskRef, "event.taskRef", errors), valid].every(
+      Boolean,
+    );
   }
   if (value.permissionRequest !== undefined) {
-    validatePermissionRequestInternal(value.permissionRequest, "event.permissionRequest", errors);
+    valid = [
+      validatePermissionRequestInternal(value.permissionRequest, "event.permissionRequest", errors),
+      valid,
+    ].every(Boolean);
   }
   if (value.verificationKind !== undefined) {
-    validateSafeEvidenceText(value.verificationKind, "event.verificationKind", errors);
+    valid = [
+      validateSafeEvidenceText(value.verificationKind, "event.verificationKind", errors),
+      valid,
+    ].every(Boolean);
   }
   if (value.artifactKind !== undefined) {
-    validateSafeEvidenceText(value.artifactKind, "event.artifactKind", errors);
+    valid = [
+      validateSafeEvidenceText(value.artifactKind, "event.artifactKind", errors),
+      valid,
+    ].every(Boolean);
   }
   if (value.artifactLabel !== undefined) {
-    validateSafeEvidenceText(value.artifactLabel, "event.artifactLabel", errors);
+    valid = [
+      validateSafeEvidenceText(value.artifactLabel, "event.artifactLabel", errors),
+      valid,
+    ].every(Boolean);
   }
   if (value.failureCode !== undefined) {
-    validateSafeEvidenceText(value.failureCode, "event.failureCode", errors);
+    valid = [validateSafeEvidenceText(value.failureCode, "event.failureCode", errors), valid].every(
+      Boolean,
+    );
   }
-  validateRuntimeEventAuxiliaryIdFields(value, errors);
+  valid = [validateRuntimeEventAuxiliaryIdFields(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function validateRuntimeEventAuxiliaryIdFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (value.skillId !== undefined && !isCodeTaskSkillId(value.skillId)) {
-    errors.push("event.skillId is invalid");
+    valid = [appendValidationIssues(errors, "event.skillId is invalid"), valid].every(Boolean);
   }
   if (value.childRunId !== undefined && !isCodeTaskChildRunId(value.childRunId)) {
-    errors.push("event.childRunId is invalid");
+    valid = [appendValidationIssues(errors, "event.childRunId is invalid"), valid].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateAuthorityPolicyFields(value: Record<string, unknown>, errors: string[]): void {
-  validateWorkspaceIdentity(value.workspace, "authorityEnvelope.workspace", errors);
-  validateBranchConstraints(value.branch, "authorityEnvelope.branch", errors);
-  validateModelProfile(value.modelProfile, "authorityEnvelope.modelProfile", errors);
-  validateCommandPolicy(value.commandPolicy, "authorityEnvelope.commandPolicy", errors);
-  validateNetworkPolicy(value.networkPolicy, "authorityEnvelope.networkPolicy", errors);
-  validateBudget(value.budget, "authorityEnvelope.budget", errors);
-  validateStringArray(value.gates, CODING_WORKBENCH_GATES, "authorityEnvelope.gates", errors, true);
+function validateAuthorityPolicyFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [
+    validateWorkspaceIdentity(value.workspace, "authorityEnvelope.workspace", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateBranchConstraints(value.branch, "authorityEnvelope.branch", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateModelProfile(value.modelProfile, "authorityEnvelope.modelProfile", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateCommandPolicy(value.commandPolicy, "authorityEnvelope.commandPolicy", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateNetworkPolicy(value.networkPolicy, "authorityEnvelope.networkPolicy", errors),
+    valid,
+  ].every(Boolean);
+  valid = [validateBudget(value.budget, "authorityEnvelope.budget", errors), valid].every(Boolean);
+  valid = [
+    validateStringArray(
+      value.gates,
+      CODING_WORKBENCH_GATES,
+      "authorityEnvelope.gates",
+      errors,
+      true,
+    ),
+    valid,
+  ].every(Boolean);
   if (!isIsoInstant(value.expiresAt)) {
-    errors.push("authorityEnvelope.expiresAt must be an ISO-8601 UTC instant");
+    valid = [
+      appendValidationIssues(errors, "authorityEnvelope.expiresAt must be an ISO-8601 UTC instant"),
+      valid,
+    ].every(Boolean);
   }
-  validateDigest(value.approvalProofDigest, "authorityEnvelope.approvalProofDigest", errors);
-  validateNetworkPolicyConnectorScopesConsistency(value, errors);
-  validateNetworkPolicyActionClassConsistency(value, errors);
-  validateConnectorScopeActionClassConsistency(value, errors);
-  validateHumanApprovalGateBinding(value, errors);
+  valid = [
+    validateDigest(value.approvalProofDigest, "authorityEnvelope.approvalProofDigest", errors),
+    valid,
+  ].every(Boolean);
+  valid = [validateNetworkPolicyConnectorScopesConsistency(value, errors), valid].every(Boolean);
+  valid = [validateNetworkPolicyActionClassConsistency(value, errors), valid].every(Boolean);
+  valid = [validateConnectorScopeActionClassConsistency(value, errors), valid].every(Boolean);
+  valid = [validateHumanApprovalGateBinding(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
-function validateAuthorityModeFields(value: Record<string, unknown>, errors: string[]): void {
+function validateAuthorityModeFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
-    errors.push("authorityEnvelope.requestedMode is invalid");
+    valid = [
+      appendValidationIssues(errors, "authorityEnvelope.requestedMode is invalid"),
+      valid,
+    ].every(Boolean);
   }
   if (!isOneOf(value.deploymentCeiling, CODING_WORKBENCH_MODES)) {
-    errors.push("authorityEnvelope.deploymentCeiling is invalid");
+    valid = [
+      appendValidationIssues(errors, "authorityEnvelope.deploymentCeiling is invalid"),
+      valid,
+    ].every(Boolean);
   }
   if (!isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES)) {
-    errors.push("authorityEnvelope.effectiveMode is invalid");
+    valid = [
+      appendValidationIssues(errors, "authorityEnvelope.effectiveMode is invalid"),
+      valid,
+    ].every(Boolean);
   }
   if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES)) {
-    errors.push("authorityEnvelope.runtimeSource is invalid");
+    valid = [
+      appendValidationIssues(errors, "authorityEnvelope.runtimeSource is invalid"),
+      valid,
+    ].every(Boolean);
   }
-  validateStringArray(
-    value.actionClasses,
-    CODING_WORKBENCH_ACTION_CLASSES,
-    "authorityEnvelope.actionClasses",
-    errors,
-    true,
-  );
-  validateStringArray(
-    value.connectorScopes,
-    CODING_WORKBENCH_CONNECTOR_SCOPES,
-    "authorityEnvelope.connectorScopes",
-    errors,
-    false,
-  );
+  valid = [
+    validateStringArray(
+      value.actionClasses,
+      CODING_WORKBENCH_ACTION_CLASSES,
+      "authorityEnvelope.actionClasses",
+      errors,
+      true,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateStringArray(
+      value.connectorScopes,
+      CODING_WORKBENCH_CONNECTOR_SCOPES,
+      "authorityEnvelope.connectorScopes",
+      errors,
+      false,
+    ),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateAuthorityEffectiveMode(value: Record<string, unknown>, errors: string[]): void {
-  validateModePolicyConsistency(
-    isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES) ? value.effectiveMode : undefined,
-    value.actionClasses,
-    "authorityEnvelope.actionClasses",
-    errors,
-  );
+function validateAuthorityEffectiveMode(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [
+    validateModePolicyConsistency(
+      isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES) ? value.effectiveMode : undefined,
+      value.actionClasses,
+      "authorityEnvelope.actionClasses",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
   if (
     isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES) &&
     value.effectiveMode !==
       resolveEffectiveCodingWorkbenchMode(value.requestedMode, value.deploymentCeiling)
   ) {
-    errors.push(
-      "authorityEnvelope.effectiveMode must be the fail-closed minimum of requestedMode and deploymentCeiling",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.effectiveMode must be the fail-closed minimum of requestedMode and deploymentCeiling",
+      ),
+      valid,
+    ].every(Boolean);
   }
-  validateCommandPolicyActionClassConsistency(value, errors);
+  valid = [validateCommandPolicyActionClassConsistency(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function validateNetworkPolicyConnectorScopesConsistency(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  if (!isRecord(value.networkPolicy) || !Array.isArray(value.connectorScopes)) return;
-  const networkConnectorScopes: readonly string[] | undefined = Array.isArray(
+): boolean {
+  let valid = true;
+  if (!isRecord(value.networkPolicy) || !Array.isArray(value.connectorScopes)) return valid;
+  const networkConnectorScopes: readonly unknown[] | undefined = Array.isArray(
     value.networkPolicy.connectorScopes,
   )
-    ? (value.networkPolicy.connectorScopes as readonly string[])
+    ? value.networkPolicy.connectorScopes
     : undefined;
-  if (networkConnectorScopes === undefined) return;
+  if (networkConnectorScopes === undefined) return valid;
   if (value.networkPolicy.mode === "deny-all" && networkConnectorScopes.length > 0) {
-    errors.push(
-      "authorityEnvelope.networkPolicy.connectorScopes must be empty when mode is deny-all",
-    );
+    valid = [
+      appendValidationIssues(
+        errors,
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when mode is deny-all",
+      ),
+      valid,
+    ].every(Boolean);
   }
-  const allowedScopes = new Set(
+  const allowedScopes = new Set<unknown>(
     value.connectorScopes.filter((entry): entry is string => typeof entry === "string"),
   );
   networkConnectorScopes.forEach((scope, index) => {
     if (!allowedScopes.has(scope)) {
-      errors.push(
-        `authorityEnvelope.networkPolicy.connectorScopes[${String(index)}] must be listed in authorityEnvelope.connectorScopes`,
-      );
+      valid = [
+        appendValidationIssues(
+          errors,
+          `authorityEnvelope.networkPolicy.connectorScopes[${String(index)}] must be listed in authorityEnvelope.connectorScopes`,
+        ),
+        valid,
+      ].every(Boolean);
     }
   });
+
+  return valid;
 }
 
-function validateRuntimeEventFields(value: Record<string, unknown>, errors: string[]): void {
-  validateRuntimeEventAllowedKeys(value, errors);
-  validateRuntimeEventModeFields(value, errors);
-  validateRuntimeEventStatusFields(value, errors);
-  validateRuntimeEventEvidenceFields(value, errors);
-  validateRuntimeEventModeOrdering(value, errors);
-  validateRuntimeEventRequiredFields(value, errors);
+function validateRuntimeEventFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [validateRuntimeEventAllowedKeys(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventModeFields(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventStatusFields(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventEvidenceFields(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventModeOrdering(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventRequiredFields(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
-function validateRuntimeEventCounts(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeEventCounts(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (value.sequence !== undefined && !isSafeIntegerOrZero(value.sequence)) {
-    errors.push("event.sequence must be a non-negative safe integer");
+    valid = [
+      appendValidationIssues(errors, "event.sequence must be a non-negative safe integer"),
+      valid,
+    ].every(Boolean);
   }
   if (value.byteCount !== undefined && !isSafeIntegerOrZero(value.byteCount)) {
-    errors.push("event.byteCount must be a non-negative safe integer");
+    valid = [
+      appendValidationIssues(errors, "event.byteCount must be a non-negative safe integer"),
+      valid,
+    ].every(Boolean);
   }
   [
     "fileCount",
@@ -987,176 +1438,351 @@ function validateRuntimeEventCounts(value: Record<string, unknown>, errors: stri
     "childResultCount",
   ].forEach((key) => {
     if (value[key] !== undefined && !isSafeIntegerOrZero(value[key])) {
-      errors.push(`event.${key} must be a non-negative safe integer`);
+      valid = [
+        appendValidationIssues(errors, `event.${key} must be a non-negative safe integer`),
+        valid,
+      ].every(Boolean);
     }
   });
   if (value.truncated !== undefined && typeof value.truncated !== "boolean") {
-    errors.push("event.truncated must be a boolean");
+    valid = [appendValidationIssues(errors, "event.truncated must be a boolean"), valid].every(
+      Boolean,
+    );
   }
   if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
-    errors.push("event.retryable must be a boolean");
+    valid = [appendValidationIssues(errors, "event.retryable must be a boolean"), valid].every(
+      Boolean,
+    );
   }
-  validateOptionalFailureLocationEvidence(value, errors);
+  valid = [validateOptionalFailureLocationEvidence(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function validateOptionalFailureLocationEvidence(
   value: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     value.failureLocationCount !== undefined &&
     !isSafeIntegerOrZero(value.failureLocationCount)
   ) {
-    errors.push("event.failureLocationCount must be a non-negative safe integer");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "event.failureLocationCount must be a non-negative safe integer",
+      ),
+      valid,
+    ].every(Boolean);
   }
   if (
     value.failureLocationsTruncated !== undefined &&
     typeof value.failureLocationsTruncated !== "boolean"
   ) {
-    errors.push("event.failureLocationsTruncated must be a boolean");
+    valid = [
+      appendValidationIssues(errors, "event.failureLocationsTruncated must be a boolean"),
+      valid,
+    ].every(Boolean);
   }
   if (value.verificationTargetDigest !== undefined) {
-    validateDigest(value.verificationTargetDigest, "event.verificationTargetDigest", errors);
+    valid = [
+      validateDigest(value.verificationTargetDigest, "event.verificationTargetDigest", errors),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateRuntimeEventSafeText(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeEventSafeText(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (value.artifactDigest !== undefined) {
-    validateDigest(value.artifactDigest, "event.artifactDigest", errors);
+    valid = [validateDigest(value.artifactDigest, "event.artifactDigest", errors), valid].every(
+      Boolean,
+    );
   }
   if (value.failureSummary !== undefined) {
-    validateSafeEvidenceText(value.failureSummary, "event.failureSummary", errors);
+    valid = [
+      validateSafeEvidenceText(value.failureSummary, "event.failureSummary", errors),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateRuntimeEventModeOrdering(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeEventModeOrdering(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (
     !isOneOf(value.requestedMode, CODING_WORKBENCH_MODES) ||
     !isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES)
   ) {
-    return;
+    return valid;
   }
   // Authority ordering is decided by the package's own comparator, not by array position. Reading
   // the order off CODING_WORKBENCH_MODES.indexOf forked the single source of truth the package
   // declares for mode authority: reordering that array — a change that looks purely cosmetic —
   // would silently invert this check while every other authority decision stayed correct.
   if (isCodingWorkbenchModeWidening(value.requestedMode, value.effectiveMode)) {
-    errors.push("event.effectiveMode must be no higher than event.requestedMode");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "event.effectiveMode must be no higher than event.requestedMode",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateRuntimeStartedEventFields(value: Record<string, unknown>, errors: string[]): void {
-  validateRequiredEnumField(
-    value,
-    "runtimeSource",
-    CODING_WORKBENCH_RUNTIME_SOURCES,
-    "event",
-    errors,
-  );
-  validateRequiredEnumField(value, "modelSource", CODING_WORKBENCH_MODEL_SOURCES, "event", errors);
-  validateRequiredEnumField(value, "requestedMode", CODING_WORKBENCH_MODES, "event", errors);
-  validateRequiredEnumField(value, "effectiveMode", CODING_WORKBENCH_MODES, "event", errors);
+function validateRuntimeStartedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "runtimeSource",
+      CODING_WORKBENCH_RUNTIME_SOURCES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "modelSource",
+      CODING_WORKBENCH_MODEL_SOURCES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(value, "requestedMode", CODING_WORKBENCH_MODES, "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(value, "effectiveMode", CODING_WORKBENCH_MODES, "event", errors),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateRuntimeStoppedEventFields(value: Record<string, unknown>, errors: string[]): void {
-  validateRequiredEnumField(
-    value,
-    "runtimeSource",
-    CODING_WORKBENCH_RUNTIME_SOURCES,
-    "event",
-    errors,
-  );
-  validateRequiredEnumField(value, "modelSource", CODING_WORKBENCH_MODEL_SOURCES, "event", errors);
-  validateRequiredEnumField(
-    value,
-    "health",
-    CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
-    "event",
-    errors,
-  );
-  validateRequiredEnumField(value, "effectiveMode", CODING_WORKBENCH_MODES, "event", errors);
+function validateRuntimeStoppedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "runtimeSource",
+      CODING_WORKBENCH_RUNTIME_SOURCES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "modelSource",
+      CODING_WORKBENCH_MODEL_SOURCES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "health",
+      CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(value, "effectiveMode", CODING_WORKBENCH_MODES, "event", errors),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateRuntimeHealthEventFields(value: Record<string, unknown>, errors: string[]): void {
-  validateRequiredEnumField(
-    value,
-    "runtimeSource",
-    CODING_WORKBENCH_RUNTIME_SOURCES,
-    "event",
-    errors,
-  );
-  validateRequiredEnumField(value, "modelSource", CODING_WORKBENCH_MODEL_SOURCES, "event", errors);
-  validateRequiredEnumField(
-    value,
-    "health",
-    CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
-    "event",
-    errors,
-  );
+function validateRuntimeHealthEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "runtimeSource",
+      CODING_WORKBENCH_RUNTIME_SOURCES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "modelSource",
+      CODING_WORKBENCH_MODEL_SOURCES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "health",
+      CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateTaskSubmittedEventFields(value: Record<string, unknown>, errors: string[]): void {
-  validateRequiredSafeEvidenceTextField(value, "taskRef", "event", errors);
-  validateRequiredEnumField(value, "requestedMode", CODING_WORKBENCH_MODES, "event", errors);
-  validateRequiredEnumField(value, "effectiveMode", CODING_WORKBENCH_MODES, "event", errors);
+function validateTaskSubmittedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid = [validateRequiredSafeEvidenceTextField(value, "taskRef", "event", errors), valid].every(
+    Boolean,
+  );
+  valid = [
+    validateRequiredEnumField(value, "requestedMode", CODING_WORKBENCH_MODES, "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(value, "effectiveMode", CODING_WORKBENCH_MODES, "event", errors),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateObservationEventFields(value: Record<string, unknown>, errors: string[]): void {
-  validateRequiredEnumField(
-    value,
-    "channel",
-    CODING_WORKBENCH_OBSERVATION_CHANNELS,
-    "event",
-    errors,
+function validateObservationEventFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "channel",
+      CODING_WORKBENCH_OBSERVATION_CHANNELS,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [validateRequiredSafeIntegerField(value, "sequence", "event", errors), valid].every(
+    Boolean,
   );
-  validateRequiredSafeIntegerField(value, "sequence", "event", errors);
-  validateRequiredSafeIntegerField(value, "byteCount", "event", errors);
+  valid = [validateRequiredSafeIntegerField(value, "byteCount", "event", errors), valid].every(
+    Boolean,
+  );
+
+  return valid;
 }
 
 function validatePermissionRequestedEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (value.permissionRequest === undefined) {
-    errors.push("event.permissionRequest is required");
-    return;
+    valid = [appendValidationIssues(errors, "event.permissionRequest is required"), valid].every(
+      Boolean,
+    );
+    return valid;
   }
-  validatePermissionRequestInternal(value.permissionRequest, "event.permissionRequest", errors);
+  valid = [
+    validatePermissionRequestInternal(value.permissionRequest, "event.permissionRequest", errors),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateDiffSummarizedEventFields(value: Record<string, unknown>, errors: string[]): void {
-  validateRequiredSafeIntegerField(value, "fileCount", "event", errors);
-  validateRequiredSafeIntegerField(value, "addedLines", "event", errors);
-  validateRequiredSafeIntegerField(value, "deletedLines", "event", errors);
+function validateDiffSummarizedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid = [validateRequiredSafeIntegerField(value, "fileCount", "event", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateRequiredSafeIntegerField(value, "addedLines", "event", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateRequiredSafeIntegerField(value, "deletedLines", "event", errors), valid].every(
+    Boolean,
+  );
+
+  return valid;
 }
 
 function validateVerificationSummarizedEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  validateRequiredSafeEvidenceTextField(value, "verificationKind", "event", errors);
-  validateRequiredEnumField(
-    value,
-    "verificationStatus",
-    ["passed", "failed", "partial"],
-    "event",
-    errors,
+): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredSafeEvidenceTextField(value, "verificationKind", "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "verificationStatus",
+      ["passed", "failed", "partial"],
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+  valid = [validateRequiredSafeIntegerField(value, "passedCount", "event", errors), valid].every(
+    Boolean,
   );
-  validateRequiredSafeIntegerField(value, "passedCount", "event", errors);
-  validateRequiredSafeIntegerField(value, "failedCount", "event", errors);
-  validateRequiredSafeIntegerField(value, "skippedCount", "event", errors);
-  validateVerificationSummaryAgreement(value, errors);
+  valid = [validateRequiredSafeIntegerField(value, "failedCount", "event", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateRequiredSafeIntegerField(value, "skippedCount", "event", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateVerificationSummaryAgreement(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function validateVerificationSummaryAgreement(
   value: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   const summary = value.verificationSummary;
-  if (summary === undefined) return;
+  if (summary === undefined) return valid;
   if (!isCodingWorkbenchVerificationSummary(summary)) {
-    errors.push("event.verificationSummary is invalid");
-    return;
+    valid = [appendValidationIssues(errors, "event.verificationSummary is invalid"), valid].every(
+      Boolean,
+    );
+    return valid;
   }
   if (
     summary.status !== value.verificationStatus ||
@@ -1164,45 +1790,84 @@ function validateVerificationSummaryAgreement(
     summary.failedCount !== value.failedCount ||
     summary.skippedCount !== value.skippedCount
   ) {
-    errors.push("event.verificationSummary disagrees with the canonical check counts or status");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "event.verificationSummary disagrees with the canonical check counts or status",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateArtifactProducedEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  validateRequiredSafeEvidenceTextField(value, "artifactKind", "event", errors);
-  validateRequiredSafeEvidenceTextField(value, "artifactLabel", "event", errors);
-  validateRequiredDigestField(value, "artifactDigest", "event", errors);
-  validateRequiredSafeIntegerField(value, "artifactBytes", "event", errors);
+): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredSafeEvidenceTextField(value, "artifactKind", "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredSafeEvidenceTextField(value, "artifactLabel", "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [validateRequiredDigestField(value, "artifactDigest", "event", errors), valid].every(
+    Boolean,
+  );
+  valid = [validateRequiredSafeIntegerField(value, "artifactBytes", "event", errors), valid].every(
+    Boolean,
+  );
+
+  return valid;
 }
 
 function validateFailureRedactedEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  validateRequiredSafeEvidenceTextField(value, "failureCode", "event", errors);
-  validateRequiredSafeEvidenceTextField(value, "failureSummary", "event", errors);
-  validateRequiredBooleanField(value, "retryable", "event", errors);
+): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredSafeEvidenceTextField(value, "failureCode", "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [
+    validateRequiredSafeEvidenceTextField(value, "failureSummary", "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [validateRequiredBooleanField(value, "retryable", "event", errors), valid].every(Boolean);
+
+  return valid;
 }
 
-function requireAuxiliaryOutcome(value: Record<string, unknown>, errors: string[]): void {
-  validateRequiredEnumField(
-    value,
-    "auxiliaryOutcome",
-    CODING_WORKBENCH_AUXILIARY_STATUSES,
-    "event",
-    errors,
-  );
+function requireAuxiliaryOutcome(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "auxiliaryOutcome",
+      CODING_WORKBENCH_AUXILIARY_STATUSES,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function requireChildRunId(value: Record<string, unknown>, errors: string[]): void {
+function requireChildRunId(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (value.childRunId === undefined) {
-    errors.push("event.childRunId is required");
+    valid = [appendValidationIssues(errors, "event.childRunId is required"), valid].every(Boolean);
   } else if (!isCodeTaskChildRunId(value.childRunId)) {
-    errors.push("event.childRunId is invalid");
+    valid = [appendValidationIssues(errors, "event.childRunId is invalid"), valid].every(Boolean);
   }
+
+  return valid;
 }
 
 // #2637: an ACCEPTED research fetch handed page text to the model, so the event MUST declare that
@@ -1213,31 +1878,52 @@ function requireChildRunId(value: Record<string, unknown>, errors: string[]): vo
 function validateResearchPerformedEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  requireAuxiliaryOutcome(value, errors);
+): boolean {
+  let valid = true;
+  valid = [requireAuxiliaryOutcome(value, errors), valid].every(Boolean);
   if (value.auxiliaryOutcome === "accepted") {
-    validateRequiredEnumField(
-      value,
-      "contentTrust",
-      CODING_WORKBENCH_CONTENT_TRUST_VALUES,
-      "event",
-      errors,
-    );
-    return;
+    valid = [
+      validateRequiredEnumField(
+        value,
+        "contentTrust",
+        CODING_WORKBENCH_CONTENT_TRUST_VALUES,
+        "event",
+        errors,
+      ),
+      valid,
+    ].every(Boolean);
+    return valid;
   }
   if (value.contentTrust !== undefined) {
-    errors.push("event.contentTrust is only admissible on an accepted research read");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "event.contentTrust is only admissible on an accepted research read",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateSkillInvokedEventFields(value: Record<string, unknown>, errors: string[]): void {
+function validateSkillInvokedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (value.skillId === undefined) {
-    errors.push("event.skillId is required");
+    valid = [appendValidationIssues(errors, "event.skillId is required"), valid].every(Boolean);
   } else if (!isCodeTaskSkillId(value.skillId)) {
-    errors.push("event.skillId is invalid");
+    valid = [appendValidationIssues(errors, "event.skillId is invalid"), valid].every(Boolean);
   }
-  validateRequiredEnumField(value, "skillInvocation", ["explicit", "implicit"], "event", errors);
-  requireAuxiliaryOutcome(value, errors);
+  valid = [
+    validateRequiredEnumField(value, "skillInvocation", ["explicit", "implicit"], "event", errors),
+    valid,
+  ].every(Boolean);
+  valid = [requireAuxiliaryOutcome(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 // The decision being asked of the human is REQUIRED: an event that cannot name it would pause a run
@@ -1247,48 +1933,74 @@ function validateSkillInvokedEventFields(value: Record<string, unknown>, errors:
 function validateOperatorDecisionEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  validateRequiredEnumField(
-    value,
-    "operatorDecision",
-    CODING_WORKBENCH_OPERATOR_DECISIONS,
-    "event",
-    errors,
-  );
+): boolean {
+  let valid = true;
+  valid = [
+    validateRequiredEnumField(
+      value,
+      "operatorDecision",
+      CODING_WORKBENCH_OPERATOR_DECISIONS,
+      "event",
+      errors,
+    ),
+    valid,
+  ].every(Boolean);
   if (
     value.auxiliaryOutcome !== undefined &&
     !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
   ) {
-    errors.push("event.auxiliaryOutcome is invalid");
+    valid = [appendValidationIssues(errors, "event.auxiliaryOutcome is invalid"), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
 function validateChildRunStartedEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  requireChildRunId(value, errors);
+): boolean {
+  let valid = true;
+  valid = [requireChildRunId(value, errors), valid].every(Boolean);
+
+  return valid;
 }
 
 function validateChildRunCompletedEventFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  requireChildRunId(value, errors);
-  requireAuxiliaryOutcome(value, errors);
-  validateRequiredSafeIntegerField(value, "childResultCount", "event", errors);
+): boolean {
+  let valid = true;
+  valid = [requireChildRunId(value, errors), valid].every(Boolean);
+  valid = [requireAuxiliaryOutcome(value, errors), valid].every(Boolean);
+  valid = [
+    validateRequiredSafeIntegerField(value, "childResultCount", "event", errors),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateNativeRetryEventFields(value: Record<string, unknown>, errors: string[]): void {
+function validateNativeRetryEventFields(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (value.nativeRetry !== null && !isCodingWorkbenchNativeRetry(value.nativeRetry)) {
-    errors.push("event.nativeRetry must be canonical native retry facts or null");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "event.nativeRetry must be canonical native retry facts or null",
+      ),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   Record<
     CodingWorkbenchRuntimeEventKind,
-    (value: Record<string, unknown>, errors: string[]) => void
+    (value: Record<string, unknown>, errors: string[]) => boolean
   >
 > = Object.freeze({
   "runtime-started": validateRuntimeStartedEventFields,
@@ -1312,52 +2024,87 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
 function validateRuntimeEventRequiredFields(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  if (!isOneOf(value.kind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)) return;
-  CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS[value.kind](value, errors);
+): boolean {
+  let valid = true;
+  if (!isOneOf(value.kind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)) return valid;
+  valid = [
+    CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS[value.kind](value, errors),
+    valid,
+  ].every(Boolean);
+
+  return valid;
+}
+
+function admitCodingWorkbenchAuthorityEnvelope(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchAuthorityEnvelope {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "authority envelope must be an object");
+    return false;
+  }
+  valid = [validateAuthorityKnownFields(value, errors), valid].every(Boolean);
+  valid = [validateAuthorityModeFields(value, errors), valid].every(Boolean);
+  valid = [validateAuthorityPolicyFields(value, errors), valid].every(Boolean);
+  valid = [validateAuthorityEffectiveMode(value, errors), valid].every(Boolean);
+  return valid;
 }
 
 export function validateCodingWorkbenchAuthorityEnvelope(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchAuthorityEnvelope> {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["authority envelope must be an object"] };
-  }
   const errors: string[] = [];
-  validateAuthorityKnownFields(value, errors);
-  validateAuthorityModeFields(value, errors);
-  validateAuthorityPolicyFields(value, errors);
-  validateAuthorityEffectiveMode(value, errors);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodingWorkbenchAuthorityEnvelope };
+  return admitCodingWorkbenchAuthorityEnvelope(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
+}
+
+function admitCodingWorkbenchPermissionRequest(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchPermissionRequest {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "permission request must be an object");
+    return false;
+  }
+  valid = [validatePermissionRequestInternal(value, "permissionRequest", errors), valid].every(
+    Boolean,
+  );
+  return valid;
 }
 
 export function validateCodingWorkbenchPermissionRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchPermissionRequest> {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["permission request must be an object"] };
-  }
   const errors: string[] = [];
-  validatePermissionRequestInternal(value, "permissionRequest", errors);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodingWorkbenchPermissionRequest };
+  return admitCodingWorkbenchPermissionRequest(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
+}
+
+function admitCodingWorkbenchRuntimeEvent(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeEvent {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "runtime event must be an object");
+    return false;
+  }
+  valid = [validateEventCommon(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventFields(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventCounts(value, errors), valid].every(Boolean);
+  valid = [validateRuntimeEventSafeText(value, errors), valid].every(Boolean);
+  return valid;
 }
 
 export function validateCodingWorkbenchRuntimeEvent(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeEvent> {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["runtime event must be an object"] };
-  }
   const errors: string[] = [];
-  validateEventCommon(value, errors);
-  validateRuntimeEventFields(value, errors);
-  validateRuntimeEventCounts(value, errors);
-  validateRuntimeEventSafeText(value, errors);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodingWorkbenchRuntimeEvent };
+  return admitCodingWorkbenchRuntimeEvent(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }

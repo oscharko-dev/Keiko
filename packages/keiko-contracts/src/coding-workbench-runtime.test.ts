@@ -618,3 +618,408 @@ describe("coding workbench runtime module structure (KEIKO-0532)", () => {
     expect(forbiddenLocalDeclaration.test(source)).toBe(false);
   });
 });
+
+// PRIVATE C1B source/public hypothesis controls: UNEXECUTED, no regression claimed.
+function c1bAuthorityFacts(): Record<string, unknown> {
+  return {
+    binding: runtimeAuthority().binding,
+    actionClasses: authority().actionClasses,
+    connectorScopes: [],
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    budgetDigest: DIGEST,
+    commandPolicyDigest: DIGEST,
+    networkPolicyDigest: DIGEST,
+    gatesDigest: DIGEST,
+    branchConstraintsDigest: DIGEST,
+    modelProfileDigest: DIGEST,
+  };
+}
+describe("C1B runtime physical scope admission", () => {
+  it.each(["source", "public"])(
+    "retains actual healthy facts and binding identity through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeAuthorityFacts
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeAuthorityFacts;
+      const input = c1bAuthorityFacts();
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.binding).toBe(input.binding);
+      expect(result.value.actionClasses).toBe(input.actionClasses);
+    },
+  );
+  it.each([
+    { field: "actionClasses", seam: "source" },
+    { field: "actionClasses", seam: "public" },
+    { field: "connectorScopes", seam: "source" },
+    { field: "connectorScopes", seam: "public" },
+  ])("refuses skipped $field through $seam", async ({ field, seam }) => {
+    const validate =
+      seam === "source"
+        ? validateCodingWorkbenchRuntimeAuthorityFacts
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+            .validateCodingWorkbenchRuntimeAuthorityFacts;
+    const entries = ["invalid-member"];
+    Object.defineProperty(entries, "every", { value: (): boolean => true });
+    expect(validate({ ...c1bAuthorityFacts(), [field]: entries }).ok).toBe(false);
+  });
+  it.each([
+    { field: "actionClasses", seam: "source" },
+    { field: "actionClasses", seam: "public" },
+    { field: "connectorScopes", seam: "source" },
+    { field: "connectorScopes", seam: "public" },
+  ])("refuses missing $field through $seam", async ({ field, seam }) => {
+    const validate =
+      seam === "source"
+        ? validateCodingWorkbenchRuntimeAuthorityFacts
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+            .validateCodingWorkbenchRuntimeAuthorityFacts;
+    expect(validate({ ...c1bAuthorityFacts(), [field]: Array<unknown>(1) }).ok).toBe(false);
+  });
+});
+
+function c1bPreview(): Record<string, unknown> {
+  return {
+    untrusted: true,
+    title: "fixture",
+    bodyExcerpt: "fixture",
+    bodyExcerptTruncated: false,
+    commentCount: 0,
+    comments: [],
+    commentsTruncated: false,
+    state: "open",
+    provenance: {
+      ownerAndRepo: "owner/repo",
+      issueNumber: 1,
+      url: "https://github.com/owner/repo/issues/1",
+    },
+  };
+}
+describe("C1B additional original runtime observations", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy preview reference through %s",
+    async (seam) => {
+      const input = c1bPreview();
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy preview refusal");
+      expect(result.value).toBe(input);
+      expect(result.value.provenance).toBe(input.provenance);
+      expect(result.value.comments).toBe(input.comments);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects hidden malformed preview comment through %s",
+    async (seam) => {
+      const entries: unknown[] = [7];
+      Object.defineProperty(entries, "some", { value: () => false });
+      const input = { ...c1bPreview(), comments: entries };
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects sparse preview comment through %s",
+    async (seam) => {
+      const input = { ...c1bPreview(), comments: new Array<unknown>(1) };
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects numeric second revision observation through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" };
+      Object.defineProperty(input, "revision", {
+        enumerable: true,
+        get: () => (++reads === 1 ? 0 : "0"),
+      });
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeState
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeState;
+      expect(validator(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves healthy numeric revision reads through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" };
+      Object.defineProperty(input, "revision", {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return 0;
+        },
+      });
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeState
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeState;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(2);
+      if (!result.ok) throw new Error("healthy state refusal");
+      expect(result.value).toBe(input);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects a later invalid intent discriminator through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = {
+        schemaVersion: "1",
+        requestId: "req-1",
+        taskIntent: "fixture",
+        requestedMode: "supervised-coding",
+        modelSource: "keiko-model-gateway",
+      };
+      Object.defineProperty(input, "command", {
+        enumerable: true,
+        get: () => (++reads <= 2 ? "start" : "invalid"),
+      });
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeIntent
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeIntent;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects a later non-string preview title through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = c1bPreview();
+      Object.defineProperty(input, "title", {
+        enumerable: true,
+        get: () => (++reads === 1 ? "fixture" : { length: 0 }),
+      });
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+});
+
+function c1bInvalidCapturedNumber(invalidKind: string, field: string): number {
+  return invalidKind === "NaN"
+    ? Number.NaN
+    : invalidKind === "fraction"
+      ? field === "issueNumber"
+        ? 1.5
+        : 0.5
+      : invalidKind === "infinity"
+        ? Number.POSITIVE_INFINITY
+        : Number.MAX_SAFE_INTEGER + 1;
+}
+
+describe("C1B numeric captured observation wave", () => {
+  const fields = ["revision", "commentCount", "issueNumber"] as const;
+  const invalid = ["NaN", "fraction", "infinity", "unsafe"] as const;
+  const invalidCases = fields.flatMap((field) =>
+    invalid.flatMap((invalidKind) =>
+      ["source", "public"].map((seam) => ({ field, invalidKind, seam })),
+    ),
+  );
+  it.each(invalidCases)(
+    "rejects second $invalidKind $field through $seam",
+    async ({ field, invalidKind, seam }) => {
+      let reads = 0;
+      const input: Record<string, unknown> =
+        field === "revision"
+          ? { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" }
+          : c1bPreview();
+      const target: unknown = field === "issueNumber" ? input.provenance : input;
+      if (typeof target !== "object" || target === null)
+        throw new Error("invalid numeric fixture target");
+      const bad = c1bInvalidCapturedNumber(invalidKind, field);
+      Object.defineProperty(target, field, {
+        enumerable: true,
+        get: () => (++reads === 1 ? (field === "issueNumber" ? 1 : 0) : bad),
+      });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      const result =
+        field === "revision"
+          ? module.validateCodingWorkbenchRuntimeState(input)
+          : module.validateCodingWorkbenchIssuePreview(input);
+      expect(result.ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+  const healthyCases = fields.flatMap((field) =>
+    ["same", "changed"].flatMap((schedule) =>
+      ["source", "public"].map((seam) => ({ field, schedule, seam })),
+    ),
+  );
+  it.each(healthyCases)(
+    "preserves $schedule integer $field through $seam",
+    async ({ field, schedule, seam }) => {
+      let reads = 0;
+      const input: Record<string, unknown> =
+        field === "revision"
+          ? { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" }
+          : c1bPreview();
+      const target: unknown = field === "issueNumber" ? input.provenance : input;
+      if (typeof target !== "object" || target === null)
+        throw new Error("invalid numeric fixture target");
+      const first = field === "issueNumber" ? 1 : 0;
+      Object.defineProperty(target, field, {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return schedule === "same" || reads === 1 ? first : first + 1;
+        },
+      });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      const result =
+        field === "revision"
+          ? module.validateCodingWorkbenchRuntimeState(input)
+          : module.validateCodingWorkbenchIssuePreview(input);
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(2);
+      if (!result.ok) throw new Error("healthy numeric refusal");
+      expect(result.value).toBe(input);
+    },
+  );
+});
+
+describe("C1B fourth command observation wave", () => {
+  it.each(["source", "public"] as const)(
+    "rejects invalid fourth command through %s",
+    async (seam) => {
+      let reads = 0;
+      const commands = ["start", "start", "stop", "invalid"];
+      const input = {
+        schemaVersion: "1",
+        requestId: "req-1",
+        taskIntent: "fixture",
+        requestedMode: "supervised-coding",
+        modelSource: "keiko-model-gateway",
+      };
+      Object.defineProperty(input, "command", { enumerable: true, get: () => commands[reads++] });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      expect(module.validateCodingWorkbenchRuntimeIntent(input)).toEqual({
+        ok: false,
+        errors: ["command is invalid"],
+      });
+      expect(reads).toBe(4);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves finite healthy command schedules through %s",
+    async (seam) => {
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      for (const commands of [
+        ["start", "start", "start"],
+        ["stop", "stop", "stop", "stop"],
+        ["stop", "stop", "stop", "recover"],
+      ]) {
+        let reads = 0;
+        const input =
+          commands[0] === "start"
+            ? {
+                schemaVersion: "1",
+                requestId: "req-1",
+                taskIntent: "fixture",
+                requestedMode: "supervised-coding",
+                modelSource: "keiko-model-gateway",
+              }
+            : { schemaVersion: "1", requestId: "req-1", runId: "run-1" };
+        Object.defineProperty(input, "command", { enumerable: true, get: () => commands[reads++] });
+        const result = module.validateCodingWorkbenchRuntimeIntent(input);
+        expect(result.ok).toBe(true);
+        expect(reads).toBe(commands.length);
+        if (!result.ok) throw new Error("healthy command refused");
+        expect(result.value).toBe(input);
+      }
+    },
+  );
+});
+
+describe("C1B command diagnostic preservation wave", () => {
+  it.each(["source", "public"] as const)(
+    "retains one command diagnostic through %s",
+    async (seam) => {
+      let reads = 0;
+      const commands = ["stop", "invalid", "invalid", "stop"];
+      const input = { schemaVersion: "1", requestId: "req-1", runId: "run-1" };
+      Object.defineProperty(input, "command", { enumerable: true, get: () => commands[reads++] });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      expect(module.validateCodingWorkbenchRuntimeIntent(input)).toEqual({
+        ok: false,
+        errors: ["command is invalid"],
+      });
+      expect(reads).toBe(4);
+    },
+  );
+});
+
+describe("C1B runtime closed ingress branches", () => {
+  it.each([
+    "validateCodingWorkbenchRuntimeIntent",
+    "validateCodingWorkbenchRuntimeAuthorityEnvelope",
+    "validateCodingWorkbenchRuntimeState",
+    "validateCodingWorkbenchRuntimeMintConfirmation",
+    "validateCodingWorkbenchRuntimeAuthorityFacts",
+    "validateCodingWorkbenchRuntimeAdapterStartRequest",
+    "validateCodingWorkbenchIssuePreview",
+  ] as const)("refuses non-object through source and public %s", async (name) => {
+    const source = await import("./coding-workbench-runtime.js");
+    const publicModule =
+      await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+    expect(source[name](null).ok).toBe(false);
+    expect(publicModule[name](null).ok).toBe(false);
+  });
+  it("preserves missing request and run identity diagnostics before success", () => {
+    expect(
+      validateCodingWorkbenchRuntimeIntent({ schemaVersion: "1", requestId: "", command: "stop" }),
+    ).toEqual({
+      ok: false,
+      errors: ["requestId must be a non-empty string", "runId must be a non-empty string"],
+    });
+    const input = { ...runtimeAuthority(), authority: null };
+    expect(validateCodingWorkbenchRuntimeAuthorityEnvelope(input).ok).toBe(false);
+  });
+});

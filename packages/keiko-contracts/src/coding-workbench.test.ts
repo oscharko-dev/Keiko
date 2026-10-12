@@ -2165,3 +2165,232 @@ describe("native OpenCode retry runtime facts", () => {
     expect(validateCodingWorkbenchRuntimeEvent(event(retry)).ok).toBe(false);
   });
 });
+
+// Private C1B preparation: source/public preservation; execution and original-red disposition owed.
+describe("C1B actual output boundary preservation", () => {
+  it.each(["source", "public"] as const)(
+    "retains envelope fields and nested references through %s",
+    async (seam) => {
+      const input = baseAuthorityEnvelope();
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchAuthorityEnvelope
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+              .validateCodingWorkbenchAuthorityEnvelope;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy authority refusal");
+      const taskRefs: readonly string[] = result.value.taskRefs;
+      expect(result.value).toBe(input);
+      expect(result.value.workspace).toBe(input.workspace);
+      expect(taskRefs).toBe(input.taskRefs);
+      expect(result.value.effectiveMode).toBe(input.effectiveMode);
+    },
+  );
+  it.each(["source", "public"] as const)("retains event primitives through %s", async (seam) => {
+    const input = baseRuntimeEvent();
+    const validator =
+      seam === "source"
+        ? validateCodingWorkbenchRuntimeEvent
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+            .validateCodingWorkbenchRuntimeEvent;
+    const result = validator(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("healthy event refusal");
+    const eventId: string = result.value.eventId;
+    expect(result.value).toBe(input);
+    expect(eventId).toBe(input.eventId);
+    expect(result.value.kind).toBe(input.kind);
+  });
+  it.each(["source", "public"] as const)("retains permission output through %s", async (seam) => {
+    const input = validPermissionRequest();
+    const validator =
+      seam === "source"
+        ? validateCodingWorkbenchPermissionRequest
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+            .validateCodingWorkbenchPermissionRequest;
+    const result = validator(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("healthy permission refusal");
+    expect(result.value).toBe(input);
+    expect(result.value.requestId).toBe(input.requestId);
+    expect(result.value.actionClass).toBe(input.actionClass);
+  });
+  it.each(["source", "public"] as const)("retains evidence output through %s", async (seam) => {
+    const input = baseEvidenceRecord();
+    const validator =
+      seam === "source"
+        ? validateCodingWorkbenchEvidenceRecord
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence"))
+            .validateCodingWorkbenchEvidenceRecord;
+    const result = validator(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("healthy evidence refusal");
+    const occurredAt: string = result.value.occurredAt;
+    expect(result.value).toBe(input);
+    expect(occurredAt).toBe(input.occurredAt);
+    expect(result.value.kind).toBe(input.kind);
+  });
+  it.each(["source", "public"] as const)(
+    "retains Codex producer method row through %s",
+    async (seam) => {
+      const input = codexSetupPlan();
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchCodexAuthSetupPlan
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth"))
+              .validateCodingWorkbenchCodexAuthSetupPlan;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy setup refusal");
+      const row = codingWorkbenchCodexAuthMethodRowFor(input.method);
+      expect(result.value).toBe(input);
+      expect(result.value.commandLabel).toBe(row.commandLabel);
+      expect(result.value.requiresSecretInput).toBe(row.requiresSecretInput);
+      expect(result.value.credentialTransport).toBe(row.credentialTransport);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "retains profile binary reference through %s",
+    async (seam) => {
+      const input = codexSubscriptionProfile();
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchCodexSubscriptionProfile
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth"))
+              .validateCodingWorkbenchCodexSubscriptionProfile;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy profile refusal");
+      expect(result.value).toBe(input);
+      expect(result.value.runtimeBinarySources).toBe(input.runtimeBinarySources);
+      expect(result.value.usesGlobalCodexHome).toBe(false);
+    },
+  );
+});
+
+describe("C1B additional original physical admissions", () => {
+  it.each(["source", "public"] as const)(
+    "rejects hidden malformed taskRefs through %s",
+    async (seam) => {
+      const entries: unknown[] = [7];
+      Object.defineProperty(entries, "forEach", { value: () => undefined });
+      const input = { ...baseAuthorityEnvelope(), taskRefs: entries };
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchAuthorityEnvelope
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+              .validateCodingWorkbenchAuthorityEnvelope;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)("rejects sparse taskRefs through %s", async (seam) => {
+    const input = { ...baseAuthorityEnvelope(), taskRefs: new Array<unknown>(1) };
+    const validator =
+      seam === "source"
+        ? validateCodingWorkbenchAuthorityEnvelope
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+            .validateCodingWorkbenchAuthorityEnvelope;
+    expect(validator(input).ok).toBe(false);
+  });
+  it.each(["source", "public"] as const)(
+    "rejects hidden malformed binary through %s",
+    async (seam) => {
+      const entries: unknown[] = [7];
+      Object.defineProperty(entries, "forEach", { value: () => undefined });
+      const input = { ...codexSubscriptionProfile(), runtimeBinarySources: entries };
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchCodexSubscriptionProfile
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth"))
+              .validateCodingWorkbenchCodexSubscriptionProfile;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)("rejects sparse binary through %s", async (seam) => {
+    const input = { ...codexSubscriptionProfile(), runtimeBinarySources: new Array<unknown>(1) };
+    const validator =
+      seam === "source"
+        ? validateCodingWorkbenchCodexSubscriptionProfile
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth"))
+            .validateCodingWorkbenchCodexSubscriptionProfile;
+    expect(validator(input).ok).toBe(false);
+  });
+});
+
+describe("C1B sparse diagnostic wave", () => {
+  it.each(["taskRefs", "connectorScopes", "runtimeBinarySources"] as const)(
+    "bounds first-hole diagnostics for %s source",
+    (field) => {
+      const input =
+        field === "runtimeBinarySources"
+          ? { ...codexSubscriptionProfile(), [field]: new Array<unknown>(100_000) }
+          : { ...baseAuthorityEnvelope(), [field]: new Array<unknown>(100_000) };
+      const result =
+        field === "runtimeBinarySources"
+          ? validateCodingWorkbenchCodexSubscriptionProfile(input)
+          : validateCodingWorkbenchAuthorityEnvelope(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("sparse fixture admitted");
+      expect(result.errors).toHaveLength(1);
+    },
+  );
+  it.each(["taskRefs", "connectorScopes", "runtimeBinarySources"] as const)(
+    "bounds first-hole diagnostics for %s public",
+    async (field) => {
+      const input =
+        field === "runtimeBinarySources"
+          ? { ...codexSubscriptionProfile(), [field]: new Array<unknown>(100_000) }
+          : { ...baseAuthorityEnvelope(), [field]: new Array<unknown>(100_000) };
+      const result =
+        field === "runtimeBinarySources"
+          ? (
+              await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth")
+            ).validateCodingWorkbenchCodexSubscriptionProfile(input)
+          : (
+              await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation")
+            ).validateCodingWorkbenchAuthorityEnvelope(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("sparse fixture admitted");
+      expect(result.errors).toHaveLength(1);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves dense eager taskRef diagnostics through %s",
+    async (seam) => {
+      const input = { ...baseAuthorityEnvelope(), taskRefs: [7, 8], runtimeSource: "invalid" };
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchAuthorityEnvelope
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+              .validateCodingWorkbenchAuthorityEnvelope;
+      const result = validator(input);
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          "authorityEnvelope.taskRefs[0] must be content-free evidence-safe text",
+          "authorityEnvelope.taskRefs[1] must be content-free evidence-safe text",
+          "authorityEnvelope.runtimeSource is invalid",
+        ],
+      });
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves inherited-present taskRef and original reference through %s",
+    async (seam) => {
+      const entries: unknown[] = new Array<unknown>(1);
+      Object.setPrototypeOf(entries, ["issue-1986"]);
+      const input = { ...baseAuthorityEnvelope(), taskRefs: entries };
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchAuthorityEnvelope
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+              .validateCodingWorkbenchAuthorityEnvelope;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy inherited taskRef refusal");
+      expect(result.value).toBe(input);
+      expect(result.value.taskRefs).toBe(entries);
+    },
+  );
+});

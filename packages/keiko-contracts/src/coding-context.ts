@@ -163,7 +163,12 @@ export function isCostClass(value: unknown): value is CostClass {
 }
 
 export function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (typeof value[index] !== "string") return false;
+  }
+  return true;
 }
 
 // Identical invariant message across all three completion contracts; factored here so the wording
@@ -223,9 +228,8 @@ export function buildContextSelectors(context: Record<string, unknown>): CodingC
 }
 
 export function isCodingContextPurpose(value: unknown): value is CodingContextPurpose {
-  return (
-    typeof value === "string" && CODING_CONTEXT_PURPOSES.includes(value as CodingContextPurpose)
-  );
+  const values: readonly string[] = CODING_CONTEXT_PURPOSES;
+  return typeof value === "string" && values.includes(value);
 }
 
 export function tierForCodingContextSource(kind: CodingContextSourceKind): CodingContextSourceTier {
