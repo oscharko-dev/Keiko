@@ -1240,7 +1240,11 @@ dispatches and cannot increment the shared provider breaker. Genuine provider er
 their existing resilience classification. Caller attempt/cap refusals use the nonretryable
 `GATEWAY_ATTEMPT_ADMISSION_DENIED` code and HTTP 403, also preserved in streamed error notices.
 The localized request-limit notice does not diagnose context-window overflow or claim exact
-unknown output consumption; genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`. Early
+unknown output consumption; genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`.
+Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
+fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
+the model retains context-overflow handling. Best-effort citation repair keeps the completed
+answer when its remaining input allowance cannot fund the repair. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token

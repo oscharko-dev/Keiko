@@ -6,7 +6,10 @@ import {
   type EvidenceAtom,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { assembleContextPack, type AssembleInput } from "@oscharko-dev/keiko-workflows";
-import { ContextOverflowError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  CallerAttemptAdmissionError,
+  ContextOverflowError,
+} from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor } from "./deps.js";
 import { fittedGroundedGatewayPrompt } from "./grounded-qa.js";
 
@@ -103,6 +106,28 @@ function smallestStrongInputBudget(pack: ConnectedContextPack): number {
 }
 
 describe("located source window priority beside path-only discovery", () => {
+  it("fails closed for an explicit zero caller input grant", async () => {
+    const pack = await packFor([located(301, 0.9)]);
+    expect(() =>
+      fittedGroundedGatewayPrompt(QUESTION, pack, buildRedactor({}), {
+        callerInputTokensMax: 0,
+      }),
+    ).toThrow(CallerAttemptAdmissionError);
+  });
+
+  it.each([undefined, 0])(
+    "keeps genuine model overhead overflow distinct with caller grant %s",
+    async (callerInputTokensMax) => {
+      const pack = await packFor([located(301, 0.9)]);
+      expect(() =>
+        fittedGroundedGatewayPrompt(QUESTION, pack, buildRedactor({}), {
+          modelInputTokensMax: 1,
+          callerInputTokensMax,
+        }),
+      ).toThrow(ContextOverflowError);
+    },
+  );
+
   it.each([false, true])(
     "does not lend a path-only score to independently located bodies: reverse=%s",
     async (reverse) => {

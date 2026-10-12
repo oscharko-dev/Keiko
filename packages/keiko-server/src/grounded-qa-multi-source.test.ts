@@ -111,6 +111,7 @@ import {
 import {
   assumedChatCapability,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   parseGatewayConfig,
   type GatewayCallRequest,
   type NormalizedResponse,
@@ -904,6 +905,51 @@ function omissionHeavySources(): readonly LabeledPack[] {
 
 describe("multi-source minimal prompt admission", () => {
   afterEach(resetServerLogger);
+
+  it.each([undefined, DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax])(
+    "preserves aggregate input-cap attribution with caller provenance %s",
+    (callerInputTokensMax) => {
+      const original = ["alpha", "beta"].map((label) => ({
+        label,
+        pack: scopePack(`src/${label}.ts`, 0.7, label),
+      }));
+      const modelInputTokensMax = DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax;
+      const calibrated = fittedMultiSourcePrompt("Explain", original, buildRedactor({}), {
+        modelInputTokensMax,
+        callerInputTokensMax,
+      });
+      expect(countGatewayPromptTokens({ messages: calibrated.messages })).toBeLessThanOrEqual(
+        modelInputTokensMax,
+      );
+      const packs = original.map((entry) => ({
+        ...entry,
+        pack: {
+          ...entry.pack,
+          budget: {
+            ...entry.pack.budget,
+            modelInputTokensMax: entry.pack.usage.modelInputTokens + 8,
+          },
+        },
+      }));
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      expect(() =>
+        fittedMultiSourcePrompt(
+          "Explain",
+          packs,
+          buildRedactor({}),
+          { modelInputTokensMax, callerInputTokensMax },
+          "aggregate-refusal",
+        ),
+      ).toThrow(
+        callerInputTokensMax === undefined ? ContextOverflowError : CallerAttemptAdmissionError,
+      );
+      expect(sink.events.at(-1)).toMatchObject({
+        correlationId: "aggregate-refusal",
+        extra: { state: "refused", inputBudget: 16 },
+      });
+    },
+  );
 
   it.each([0, 16])("refuses zero-excerpt overhead above a %i token window", (budget) => {
     const packs = omissionHeavySources().map((entry) => ({

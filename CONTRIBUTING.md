@@ -357,6 +357,10 @@ retains its requested cap. These conservative charges are distinct from provider
 Caller attempt/cap refusals use nonretryable `GATEWAY_ATTEMPT_ADMISSION_DENIED` and HTTP 403;
 streamed notices retain the same code. The localized request-limit notice distinguishes those
 refusals from `GATEWAY_CONTEXT_OVERFLOW` without asserting exact unknown output consumption.
+Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
+fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
+the model retains context-overflow handling. Best-effort citation repair keeps the completed
+answer when its remaining input allowance cannot fund the repair.
 Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
 contracts without supplying another synthesis attempt. Normalized output is buffered before
 publication; rejected declarations cannot escape through streamed chunks. The existing allocator's

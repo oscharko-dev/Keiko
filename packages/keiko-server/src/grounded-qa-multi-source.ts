@@ -29,6 +29,7 @@ import { createHash } from "node:crypto";
 import {
   CancelledError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
   type NormalizedResponse,
@@ -127,6 +128,7 @@ import {
 } from "./grounded-citation-projection.js";
 import {
   appendGroundedAnswerEntailment,
+  assertGroundedPromptOverheadFits,
   buildQuery,
   buildSelectedScopeFrom,
   clarificationRequest,
@@ -609,7 +611,11 @@ function multiSourceInputTokens(
       sum + Math.max(0, entry.pack.budget.modelInputTokensMax - entry.pack.usage.modelInputTokens),
     0,
   );
-  return Math.min(packTokens, options.modelInputTokensMax ?? packTokens);
+  return Math.min(
+    packTokens,
+    options.modelInputTokensMax ?? packTokens,
+    options.callerInputTokensMax ?? packTokens,
+  );
 }
 
 function multiSourcePromptFit(
@@ -659,11 +665,11 @@ function budgetedMultiSourceGatewayMessages(
   if (metadataFit !== undefined) return { ...metadataFit, packs: labeledPacks };
   // Dropping a subject adds uncertainty text. Find the source window with stable metadata,
   // then admit only its truthful form; the empty prompt is not an absolute lower cost bound.
-  const optimistic = fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, true);
+  const optimistic = fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, options, true);
   const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, optimistic.totalExcerptBytes);
   const messages = render(packs, 0);
   if (fits(messages)) return { messages, packs, omissionPathBytes: 0 };
-  return fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, false);
+  return fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, options, false);
 }
 
 function fitMultiSourceExcerptWindow(
@@ -671,6 +677,7 @@ function fitMultiSourceExcerptWindow(
   render: ReturnType<typeof multiSourcePromptRenderer>,
   fits: (messages: readonly GatewayChatMessage[]) => boolean,
   limit: number,
+  options: GroundedGatewayPromptOptions,
   preserveSelectionMetadata: boolean,
 ): FittedMultiSourcePrompt & { readonly totalExcerptBytes: number } {
   const trim = (bytes: number): readonly LabeledPack[] =>
@@ -678,11 +685,19 @@ function fitMultiSourceExcerptWindow(
   const emptyPacks = trim(0);
   const overhead = render(emptyPacks, 0);
   const overheadBytes = promptByteLength(overhead);
-  if (!fits(overhead)) {
-    throw new ContextOverflowError(
-      `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
-    );
-  }
+  const aggregateLimit = multiSourceInputTokens(labeledPacks, {
+    ...options,
+    callerInputTokensMax: undefined,
+  });
+  const callerLimit = options.callerInputTokensMax;
+  assertGroundedPromptOverheadFits(
+    {
+      bytes: overheadBytes,
+      tokens: countGatewayPromptTokens({ messages: overhead }, options.tokenAccounting),
+    },
+    callerLimit === undefined ? aggregateLimit : (options.modelInputTokensMax ?? aggregateLimit),
+    callerLimit === undefined ? undefined : Math.min(aggregateLimit, callerLimit),
+  );
   let low = 1;
   let high = Math.max(0, limit - overheadBytes);
   let best = { messages: overhead, packs: emptyPacks, omissionPathBytes: 0, totalExcerptBytes: 0 };
@@ -716,7 +731,7 @@ function loggedMultiSourceFit(
   try {
     fitted = budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor, options);
   } catch (error) {
-    if (error instanceof ContextOverflowError) {
+    if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError) {
       const empty = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
       const promptTokens = tokens(
         buildRawMultiSourceGatewayMessages(
@@ -1004,8 +1019,8 @@ function multiSourceRemainingPromptOptions(
   return {
     ...options,
     ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
-    modelInputTokensMax: Math.min(
-      options.modelInputTokensMax ?? Number.MAX_SAFE_INTEGER,
+    callerInputTokensMax: Math.max(
+      0,
       multiSourceSynthesisGrants(ctx, packs).inputTokensMax -
         ctx.synthesisBudget.pendingUsage().promptTokens,
     ),
@@ -1030,16 +1045,14 @@ function multiSourceRepairPrompt(
       {
         ...promptOptions,
         ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
-        modelInputTokensMax: Math.min(
-          promptOptions.modelInputTokensMax ?? Number.MAX_SAFE_INTEGER,
-          options.modelInputTokensMax ?? 0,
-        ),
+        callerInputTokensMax: options.modelInputTokensMax ?? 0,
       },
       ctx.correlationId,
     );
     return fitted.packs === packs ? fitted : undefined;
   } catch (error) {
-    if (error instanceof ContextOverflowError) return undefined;
+    if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError)
+      return undefined;
     throw error;
   }
 }

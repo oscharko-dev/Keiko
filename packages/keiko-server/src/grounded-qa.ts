@@ -900,6 +900,7 @@ export function groundedPromptInputTokensForCapability(
 export interface GroundedGatewayPromptOptions {
   readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
   readonly modelInputTokensMax?: number | undefined;
+  readonly callerInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
   readonly requiredEvidencePaths?: readonly string[] | undefined;
   readonly requiredEvidenceAtomIds?: readonly string[] | undefined;
@@ -913,6 +914,38 @@ function withPromptModelInputBudget(
     modelInputTokensMax === undefined ? undefined : positiveInteger(modelInputTokensMax);
   if (effective === undefined || effective === pack.budget.modelInputTokensMax) return pack;
   return { ...pack, budget: { ...pack.budget, modelInputTokensMax: effective } };
+}
+
+function withCallerPromptInputBudget(
+  pack: ConnectedContextPack,
+  callerInputTokensMax: number | undefined,
+): ConnectedContextPack {
+  if (callerInputTokensMax === undefined) return pack;
+  const modelInputTokensMax = Math.min(
+    pack.budget.modelInputTokensMax,
+    Math.max(0, Math.floor(callerInputTokensMax)),
+  );
+  return { ...pack, budget: { ...pack.budget, modelInputTokensMax } };
+}
+
+export function assertGroundedPromptOverheadFits(
+  overhead: { readonly bytes: number; readonly tokens: number },
+  modelInputTokensMax: number,
+  callerInputTokensMax: number | undefined,
+): void {
+  const limit = modelInputPromptByteLimit(modelInputTokensMax);
+  if (overhead.bytes > limit || overhead.tokens > modelInputTokensMax)
+    throw new ContextOverflowError(
+      `Grounded prompt overhead (${String(overhead.bytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
+    );
+  if (
+    callerInputTokensMax !== undefined &&
+    (overhead.bytes > modelInputPromptByteLimit(callerInputTokensMax) ||
+      overhead.tokens > callerInputTokensMax)
+  )
+    throw new CallerAttemptAdmissionError(
+      `Grounded prompt overhead (${String(overhead.bytes)} bytes) exceeds remaining caller input allowance (${String(modelInputPromptByteLimit(callerInputTokensMax))} bytes).`,
+    );
 }
 
 function packExcerptCount(pack: ConnectedContextPack): number {
@@ -1223,7 +1256,9 @@ function fitGroundedPrompt(
   build: GroundedPromptBuilder,
   options: GroundedGatewayPromptOptions = {},
 ): FittedPromptPack {
-  const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
+  const modelPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
+  const budgetedPack = withCallerPromptInputBudget(modelPack, options.callerInputTokensMax);
+  const fitOptions = { ...options, modelInputTokensMax: modelPack.budget.modelInputTokensMax };
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
   const fits = (candidate: readonly GatewayChatMessage[]): boolean =>
     promptByteLength(candidate) <= limit &&
@@ -1247,7 +1282,7 @@ function fitGroundedPrompt(
     render,
     fits,
     limit,
-    options,
+    fitOptions,
     trimPromptExcerptTotalByteBudget,
   );
   const observedPack = refreshedPromptSelectionConfidence(optimistic.pack);
@@ -1259,7 +1294,7 @@ function fitGroundedPrompt(
     render,
     fits,
     limit,
-    options,
+    fitOptions,
     withPromptExcerptBudget,
   );
 }
@@ -1275,11 +1310,14 @@ function fitExcerptPromptWindow(
   const emptyPack = trim(pack, 0);
   const emptyMessages = build(emptyPack);
   const overheadBytes = promptByteLength(emptyMessages);
-  if (!fits(emptyMessages)) {
-    throw new ContextOverflowError(
-      `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
-    );
-  }
+  assertGroundedPromptOverheadFits(
+    {
+      bytes: overheadBytes,
+      tokens: countGatewayPromptTokens({ messages: emptyMessages }, options.tokenAccounting),
+    },
+    options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    options.callerInputTokensMax,
+  );
   let low = 0;
   let high = Math.max(0, limit - overheadBytes);
   let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack, omissionPathBytes: 0 };
@@ -1732,10 +1770,7 @@ async function groundedGatewayAttempt(
     ...promptOptions,
     requiredEvidencePaths: options.requiredEvidencePaths,
     requiredEvidenceAtomIds: assistantReferenceExcerptIds(pack, ctx.assistantReferences),
-    modelInputTokensMax: Math.min(
-      promptOptions.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
-      remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
-    ),
+    callerInputTokensMax: remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
   });
   if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
   if (

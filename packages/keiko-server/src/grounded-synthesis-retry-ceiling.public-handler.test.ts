@@ -20,9 +20,15 @@ import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/k
 import {
   createGroundedSynthesisAttemptAdmission,
   createGroundedSynthesisCallBudget,
+  type GroundedSynthesisCallBudget,
 } from "./grounded-answer.js";
+import * as groundedSynthesis from "./grounded-answer.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
-import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
+import {
+  handleGroundedAsk,
+  modelWindowAwareBudget,
+  modelInputPromptByteLimit,
+} from "./grounded-qa.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
@@ -348,6 +354,84 @@ function installProvider(answers: readonly string[], allSynthesis = false): stri
   return requests;
 }
 
+function callerInputQuestion(): string {
+  return (
+    "Explain src/Feature.ts and lib/Companion.ts.\n" +
+    "Include the source-bound behavior and its caller. ".repeat(250)
+  );
+}
+
+function observeActualSynthesisBudgets(): GroundedSynthesisCallBudget[] {
+  const budgets: GroundedSynthesisCallBudget[] = [];
+  const create = groundedSynthesis.createGroundedSynthesisCallBudget;
+  vi.spyOn(groundedSynthesis, "createGroundedSynthesisCallBudget").mockImplementation(() => {
+    const budget = create();
+    vi.spyOn(budget, "recordUsage");
+    budgets.push(budget);
+    return budget;
+  });
+  return budgets;
+}
+
+function connectPluralFolders(deps: UiHandlerDeps, chatId: string): void {
+  deps.store.updateChat(chatId, {
+    connectedScopes: ["src", "lib"].map((path) => ({
+      kind: "directory",
+      relativePaths: [path],
+      connectedAtMs: 0,
+    })),
+  });
+}
+
+function assertActualCallerInputPremise(
+  deps: UiHandlerDeps,
+  budget: GroundedSynthesisCallBudget,
+  requestBody: string,
+  inputGrant: number,
+  question: string,
+): void {
+  expect(budget.remaining()).toBe(1);
+  const charged = vi.mocked(budget.recordUsage).mock.calls[0]?.[0];
+  if (charged === undefined) throw new TypeError("Expected the actual dispatched input charge");
+  const first = JSON.parse(requestBody) as GatewayPromptTokenInput;
+  expect(charged.promptTokens).toBe(countGatewayPromptTokens(first));
+  expect(charged.completionTokens).toBe(0);
+  const modelCap = modelWindowAwareBudget(deps, MODEL).modelInputTokensMax;
+  expect(countGatewayPromptTokens(first)).toBeLessThanOrEqual(modelCap);
+  expect(
+    Buffer.byteLength(first.messages.map((message) => message.content).join("\n")),
+  ).toBeLessThanOrEqual(modelInputPromptByteLimit(modelCap));
+  expect(inputGrant - charged.promptTokens).toBeLessThan(
+    countGatewayPromptTokens({ messages: [{ role: "user", content: question }] }),
+  );
+}
+
+function evaluatedOverheadBytes(result: RouteResult): number {
+  const body = result.body as { readonly error?: { readonly message?: unknown } };
+  const message = body.error?.message;
+  const match =
+    typeof message === "string" ? /prompt overhead \((\d+) bytes\)/iu.exec(message) : null;
+  if (match?.[1] === undefined) throw new TypeError("Expected the actual prompt overhead refusal");
+  return Number(match[1]);
+}
+
+function assertEvaluatedOverheadFitsModel(
+  result: RouteResult,
+  deps: UiHandlerDeps,
+  budget: GroundedSynthesisCallBudget,
+  inputGrant: number,
+): void {
+  const charged = vi.mocked(budget.recordUsage).mock.calls[0]?.[0];
+  if (charged === undefined) throw new TypeError("Expected the actual dispatched input charge");
+  const overheadBytes = evaluatedOverheadBytes(result);
+  expect(overheadBytes).toBeLessThanOrEqual(
+    modelInputPromptByteLimit(modelWindowAwareBudget(deps, MODEL).modelInputTokensMax),
+  );
+  expect(overheadBytes).toBeGreaterThan(
+    modelInputPromptByteLimit(inputGrant - charged.promptTokens),
+  );
+}
+
 async function scriptedProviderTurn(
   answers: readonly string[],
   maxRetries = 0,
@@ -405,6 +489,47 @@ async function configuredProviderTurn(
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
+  it.each(["single", "plural"])(
+    "keeps %s caller input refusal distinct after one charged adopted-window attempt",
+    async (sourceMode) => {
+      const requests = installProvider([OVERFLOW, CITED]);
+      const { deps, chatId } = configuredRuntime(0, undefined, undefined, 1024, 8193);
+      if (sourceMode === "plural") connectPluralFolders(deps, chatId);
+      const inputGrant = modelWindowAwareBudget(deps, MODEL).modelInputTokensMax;
+      const budgets = observeActualSynthesisBudgets();
+      const spend = deps.gatewayConfig?.spendBudget;
+      if (spend === undefined) throw new TypeError("Expected the real durable spend budget");
+      const reserve = vi.spyOn(spend, "reserve");
+      const question = callerInputQuestion();
+      const result = await handleGroundedAsk(route(chatId, question), deps);
+      expect(requests).toHaveLength(1);
+      expect(reserve).toHaveBeenCalledTimes(1);
+      expect(budgets).toHaveLength(1);
+      const budget = budgets[0];
+      if (budget === undefined) throw new TypeError("Expected the actual synthesis budget");
+      assertActualCallerInputPremise(deps, budget, requests[0] ?? "", inputGrant, question);
+      assertEvaluatedOverheadFitsModel(result, deps, budget, inputGrant);
+      const records = readPersistedActivityLog(stateDir);
+      expect(records).toContain('"op":"gateway.context-window.retry"');
+      expect(records).toContain('"state":"adopted"');
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } });
+      expect(records).toContain('"diagnosticErrorClass":"CallerAttemptAdmissionError"');
+    },
+  );
+
+  it("retains a completed plural answer when its caller input grant cannot fund marker repair", async () => {
+    const requests = installProvider([UNCITED, CITED]);
+    const { deps, chatId } = configuredRuntime(0, undefined, undefined, 1024, 8193);
+    connectPluralFolders(deps, chatId);
+    const result = await handleGroundedAsk(route(chatId, callerInputQuestion()), deps);
+    expect(requests).toHaveLength(1);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ content: UNCITED });
+    const answer = result.body as GroundedAnswer;
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(true);
+  });
+
   it("keeps the single-source answerer allowance refusal distinct after actual window adoption", async () => {
     const turn = await configuredProviderTurn([UNSUPPORTED_USAGE, OVERFLOW, CITED]);
     expect(turn.requests).toHaveLength(2);
