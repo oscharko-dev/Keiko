@@ -16,6 +16,7 @@ import {
 } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
+  candidateBucketForPath,
   evidenceAtomStableId,
   followSymbolTrace,
   readExcerpt,
@@ -1239,6 +1240,7 @@ async function appendReferencedValueFrontier(
   const references = observations.flatMap((observation) =>
     certifiedValueReferences(input, observation, index, clipping),
   );
+  const retainedNames = new Set<string>();
   for (const target of references) {
     const identity = definitionIdentity(target.definition);
     if (seen.has(identity)) continue;
@@ -1249,6 +1251,7 @@ async function appendReferencedValueFrontier(
       continue;
     }
     const atom = await certifiedValueReferenceAtom(input, target);
+    if (atom !== undefined) retainedNames.add(target.definition.name);
     retainDefinitionFrontierAtom(
       input,
       {
@@ -1261,6 +1264,91 @@ async function appendReferencedValueFrontier(
       atom,
       frontier,
     );
+  }
+  return appendComparisonDeclarations(
+    input,
+    index,
+    retainedNames,
+    seen,
+    clipping,
+    capacity,
+    frontier,
+  );
+}
+
+function requestsTestDeclarationComparison(query: RetrievalQuery): boolean {
+  if (query.kind !== "natural-language") return false;
+  const subject = query.text.replace(/"[^"\n]*"|'[^'\n]*'|`[^`\n]*`/gu, " ");
+  return (
+    /\b(?:tests?|fixtures?|testdaten|testwerte|testfälle)\b/iu.test(subject) &&
+    /\b(?:compar(?:e[ds]?|ing|isons?)|contrast|versus|differ(?:ent|ences?)|whether|similarly|vergleich(?:e|en|t)?|verglichen|unterschied(?:e|en)?|ob|ähnlich(?:e|en)?)\b/iu.test(
+      subject,
+    )
+  );
+}
+
+function comparisonDeclarations(
+  index: CodeIntelligenceIndex,
+  names: ReadonlySet<string>,
+): readonly CodeSymbol[] {
+  const candidates = index.symbols.filter(
+    (definition) =>
+      definition.parser === "typescript-compiler-ast" &&
+      definition.kind === "constant" &&
+      definition.declarationSpan !== undefined &&
+      definition.topLevelExport === true &&
+      names.has(definition.name) &&
+      candidateBucketForPath(definition.scopePath) === "test",
+  );
+  const counts = new Map<string, number>();
+  const key = (definition: CodeSymbol): string =>
+    JSON.stringify([definition.scopePath, definition.name]);
+  for (const definition of candidates)
+    counts.set(key(definition), (counts.get(key(definition)) ?? 0) + 1);
+  return candidates.filter((definition) => counts.get(key(definition)) === 1);
+}
+
+async function observedComparisonDeclaration(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  definition: CodeSymbol,
+): Promise<EvidenceAtom | undefined> {
+  if (input.requestContext?.isCodeIntelligenceSourceCurrent(definition.scopePath) !== true)
+    return undefined;
+  const atom = certifiedDefinitionTargetAtom(input, definition, definitionIdentity(definition));
+  const observation = await discoveryExcerptObservation(input, atom);
+  if (observation.content.length === 0) return undefined;
+  return certifyDefinitionAtom(
+    input,
+    { ...atom, score: observedDefinitionScore(input.query, observation) },
+    definition,
+  );
+}
+
+async function appendComparisonDeclarations(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  index: CodeIntelligenceIndex,
+  names: ReadonlySet<string>,
+  seen: Set<string>,
+  clipping: DiscoveredTraceClipping,
+  capacity: number,
+  frontier: EvidenceAtom[],
+): Promise<readonly EvidenceAtom[]> {
+  if (names.size === 0 || !requestsTestDeclarationComparison(input.query)) return frontier;
+  for (const definition of comparisonDeclarations(index, names)) {
+    const identity = definitionIdentity(definition);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    if (frontier.length >= capacity) {
+      clipping.frontierOmitted += 1;
+      clipping.reasons.add("frontier-width");
+      continue;
+    }
+    const atom = await observedComparisonDeclaration(input, definition);
+    if (atom !== undefined) frontier.push(atom);
+    else {
+      clipping.frontierOmitted += 1;
+      clipping.reasons.add("source-graph-incomplete");
+    }
   }
   return frontier;
 }

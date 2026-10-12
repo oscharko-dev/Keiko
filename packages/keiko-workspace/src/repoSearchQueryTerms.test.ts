@@ -1,7 +1,36 @@
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 
-import { expandedQueryTerms, naturalLanguageSubjectText } from "./repoSearchQueryTerms.js";
+import {
+  containsNumberedCompoundQueryTerm,
+  expandedQueryTerms,
+  naturalLanguageSubjectText,
+} from "./repoSearchQueryTerms.js";
+
+describe("complete numbered compound spelling", () => {
+  it.each(["A", "λ", "𐐀", "\u0301", "7", "٣", "_", "-"])(
+    "rejects the compound continuation %s on either side",
+    (continuation) => {
+      expect(containsNumberedCompoundQueryTerm(`${continuation}Unit-G42`, "Unit-G42")).toBe(false);
+      expect(containsNumberedCompoundQueryTerm(`Unit-G42${continuation}`, "Unit-G42")).toBe(false);
+    },
+  );
+
+  it.each(["Unit-G42", "(Unit-G42)", "Unit-G42,", "docs/Unit-G42.md", "Unit-G42: approved"])(
+    "accepts the complete spelling at punctuation and filename boundaries: %s",
+    (content) => {
+      expect(containsNumberedCompoundQueryTerm(content, "Unit-G42")).toBe(true);
+    },
+  );
+
+  it("finds a later complete occurrence and preserves case sensitivity", () => {
+    expect(containsNumberedCompoundQueryTerm("Unit-G420, then Unit-G42.", "Unit-G42")).toBe(true);
+    expect(containsNumberedCompoundQueryTerm("unit-g42", "Unit-G42")).toBe(true);
+    expect(containsNumberedCompoundQueryTerm("unit-g42", "Unit-G42", true)).toBe(false);
+    expect(containsNumberedCompoundQueryTerm("Unit-G42", "Unit-G42", true)).toBe(true);
+    expect(containsNumberedCompoundQueryTerm("Unit-G42", "Unit-G42|Other")).toBe(false);
+  });
+});
 
 describe("expandedQueryTerms", () => {
   it("derives source identifiers from test-style names", () => {

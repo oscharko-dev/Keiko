@@ -201,6 +201,10 @@ import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
 import { logGroundedPromptSelection } from "./chat-activity.js";
 import { repairGroundedAnswer } from "./grounded-answer-repair.js";
 import {
+  withSentEvidenceInventory,
+  withSentSelectionDiagnostics,
+} from "./grounded-answer-evidence.js";
+import {
   citationBehaviourFor,
   citationBehaviourObserverFor,
 } from "./grounded-citation-capability.js";
@@ -1054,15 +1058,6 @@ async function hybridGatewayAnswer(
   const grants = hybridSynthesisGrants(ctx.deps, ctx.modelId, options, ctx.signal);
   const profile =
     ctx.deps === undefined ? undefined : currentContextProfileForModel(ctx.deps, ctx.modelId);
-  logGroundedPromptSelection(
-    ctx.correlationId,
-    { messages: ctx.lastPrompt },
-    Math.min(
-      profile?.effectiveInputBudget ?? grants.inputTokensMax,
-      grants.inputTokensMax - ctx.synthesisBudget.pendingUsage().promptTokens,
-    ),
-    profile?.tokenAccounting,
-  );
   const response = await callPluralGroundedSynthesis({
     model: ctx.model,
     signal: ctx.signal,
@@ -1535,14 +1530,29 @@ function sentFolderPacks(
   const sent = new Set(
     selected.filter(isFolderCandidate).map((candidate) => candidate.payload.stableId),
   );
-  return folders.map(({ pack }) => ({
-    ...pack,
-    files: pack.files
-      .map((file) => ({
-        ...file,
-        excerpts: file.excerpts.filter((excerpt) => sent.has(excerpt.atom.stableId)),
-      }))
-      .filter((file) => file.excerpts.length > 0),
+  return folders.map(({ pack }) => {
+    const inventory = {
+      ...pack,
+      files: pack.files
+        .map((file) => ({
+          ...file,
+          excerpts: file.excerpts.filter((excerpt) => sent.has(excerpt.atom.stableId)),
+        }))
+        .filter((file) => file.excerpts.length > 0),
+    };
+    return withSentSelectionDiagnostics(inventory, [inventory], Date.now());
+  });
+}
+
+function fittedFolderDiagnostics(
+  folders: readonly RetrievedFolder[],
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly RetrievedFolder[] {
+  const sentPacks = sentFolderPacks(folders, selected);
+  const nowMs = Date.now();
+  return folders.map((source) => ({
+    ...source,
+    pack: withSentSelectionDiagnostics(source.pack, sentPacks, nowMs),
   }));
 }
 
@@ -1718,10 +1728,12 @@ function persistFolderEvidence(
   folders: readonly RetrievedFolder[],
   cited: readonly SelectedCandidate<HybridPayload>[],
   completedSynthesisCallCount: number | undefined,
+  sentPacks: readonly ConnectedContextPack[],
 ): { readonly firstRunId: string | undefined; readonly runIds: readonly string[] } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
   for (const [ordinal, src] of folders.entries()) {
+    const pack = withSentEvidenceInventory(src.pack, sentPacks);
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
     const runId = groundedEvidenceRunId({
@@ -1739,13 +1751,14 @@ function persistFolderEvidence(
         sourceScopeFingerprint: src.sourceScopeFingerprint,
         chatId: ctx.chat.id,
         plan: src.plan,
-        pack: src.pack,
-        citationCount: folderCitationCount(src.pack, cited),
+        pack,
+        retrievedFileCount: src.pack.files.length,
+        citationCount: folderCitationCount(pack, cited),
         completedSynthesisCallCount,
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
-        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, src.pack),
+        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, pack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -1895,7 +1908,13 @@ function persistHybridEvidence(
   cited: readonly SelectedCandidate<HybridPayload>[],
   completedSynthesisCallCount: number | undefined,
 ): Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds"> {
-  const folder = persistFolderEvidence(ctx, sources.folders, cited, completedSynthesisCallCount);
+  const folder = persistFolderEvidence(
+    ctx,
+    sources.folders,
+    cited,
+    completedSynthesisCallCount,
+    sentFolderPacks(sources.folders, selected),
+  );
   persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   return { evidenceRunId: folder.firstRunId, evidenceRunIds: folder.runIds };
 }
@@ -2901,8 +2920,10 @@ async function hybridAnswerAttempt(
     ctx.deps.redactor,
     promptCtx.folderOmissionMetadata,
   );
+  const system = hybridSystemPrompt(ctx.deps);
+  logFittedHybridSelection(promptCtx, sent, system, user);
   const assistant = normalizeGroundedAnswerPayload(
-    await answerer.answer(hybridSystemPrompt(ctx.deps), user, {
+    await answerer.answer(system, user, {
       modelInputTokensMax: budget.modelInputTokensMax - usage.promptTokens,
       modelOutputTokensMax: budget.modelOutputTokensMax - usage.completionTokens,
       ...(budget.elapsedMsMax === null
@@ -2911,6 +2932,27 @@ async function hybridAnswerAttempt(
     }),
   );
   return { assistant, sent, promptCtx };
+}
+
+function logFittedHybridSelection(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  system: string,
+  user: string,
+): void {
+  const profile = hybridSynthesisProfile(ctx);
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    {
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      sentEvidencePacks: sentFolderPacks(ctx.folderOmissionPacks ?? [], selected),
+    },
+    profile?.effectiveInputBudget ?? 0,
+    profile?.tokenAccounting,
+  );
 }
 
 function hybridRetrievalUsage(ctx: HybridGroundedAskCtx): GroundedAnswerResult["usage"] {
@@ -3066,7 +3108,7 @@ async function finalizeHybridAnswer(
   input: HybridFinalizeInput,
 ): Promise<RouteResult> {
   const { selected, availableReferenceCount, limits, assistant, reranker, ids } = input;
-  const folders = meta.folderResult.retrieved;
+  const folders = fittedFolderDiagnostics(meta.folderResult.retrieved, selected);
   const answer = assembleHybridAnswer({
     ctx,
     sources: {

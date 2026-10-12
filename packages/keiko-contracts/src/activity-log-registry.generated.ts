@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e93ef39a83fbcc9e1f8dc0e789af246bda410bd3a132ae11cd1bd46a79530926" as const;
+  "a68ed114ddc0f23af6d74214d8ae5a407fd6958b85d11440b90dc5390db34091" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -2374,6 +2374,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "sourceSelectionConfidence",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "state",

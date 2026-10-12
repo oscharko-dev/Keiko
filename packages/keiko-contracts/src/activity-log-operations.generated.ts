@@ -1167,6 +1167,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      sourceSelectionConfidence: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["high", "low"],
+      },
       imageCount: {
         type: "integer",
         dataClass: "count",

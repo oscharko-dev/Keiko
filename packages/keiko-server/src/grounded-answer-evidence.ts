@@ -6,6 +6,41 @@ import {
 } from "./grounded-faithfulness.js";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { sentGroundedFileCount } from "./grounded-prompt.js";
+import { extractAnchors } from "@oscharko-dev/keiko-workflows";
+import { withContextualHintConfidence } from "./grounded-selection-quality.js";
+
+/** Manifest source hashes describe the actual dispatch; usage still records all retrieval work. */
+export function withSentEvidenceInventory(
+  pack: ConnectedContextPack,
+  sentPacks: readonly ConnectedContextPack[] | undefined,
+): ConnectedContextPack {
+  if (sentPacks === undefined) return pack;
+  const sent = sentPacks.find(
+    (entry) =>
+      entry.scope.scopeId === pack.scope.scopeId &&
+      entry.scope.workspaceRoot === pack.scope.workspaceRoot,
+  );
+  return { ...pack, files: sent?.files ?? [] };
+}
+
+/** Keep retrieval accounting while projecting confidence from the sources actually dispatched. */
+export function withSentSelectionDiagnostics(
+  pack: ConnectedContextPack,
+  sentPacks: readonly ConnectedContextPack[] | undefined,
+  nowMs: number,
+): ConnectedContextPack {
+  if (sentPacks === undefined) return pack;
+  const observed = withContextualHintConfidence(
+    withSentEvidenceInventory(pack, sentPacks),
+    extractAnchors({
+      text: pack.query.text,
+      maxAnchors: 8,
+      caseSensitive: pack.query.caseSensitive,
+    }).anchors,
+    nowMs,
+  );
+  return { ...observed, files: pack.files };
+}
 
 /** Absent legacy metadata may use assembly; an authoritative empty inventory grants no support. */
 export function singleSentEvidencePack(

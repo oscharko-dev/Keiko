@@ -10,8 +10,9 @@ import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-cont
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setImmediate } from "node:timers/promises";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -26,6 +27,7 @@ import {
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   connectedContextOmittedCounts,
+  connectedContextOmittedCount,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
@@ -43,6 +45,7 @@ import {
   handleGroundedAsk,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
+  withPromptExcerptBudget,
   withPromptExcerptByteLimit,
   promptByteLength,
   type GroundedRunner,
@@ -91,12 +94,14 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
+import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext } from "./routes.js";
 import type {
   OrchestratorInput,
   OrchestratorOutput,
   RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
+import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   PathDeniedError,
@@ -580,7 +585,107 @@ describe("buildConnectedScopes", () => {
   });
 });
 
+const FITTED_SUBJECT_QUESTION = "What is the rule for Unit-G42?";
+const FITTED_SUBJECT_PREFIX = `${"x ".repeat(25)}Unit-G42 `;
+
+async function retrievedFittingSubjectSources(): Promise<readonly LabeledPack[]> {
+  const sources: LabeledPack[] = [];
+  for (const index of [0, 1]) {
+    const root = tempRoot(`fitting-subject-${String(index)}`);
+    const content =
+      index === 0 ? `${FITTED_SUBJECT_PREFIX}${"details ".repeat(300)}` : FITTED_SUBJECT_PREFIX;
+    writeFileSync(join(root, "procedure.txt"), content);
+    const { pack } = await retrieveConnectedContextPack(
+      {
+        workspaceRoot: root,
+        scope: {
+          schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+          scopeId: `multi-fit-${String(index)}`,
+          workspaceRoot: root,
+          kind: "files",
+          relativePaths: ["procedure.txt"],
+          explicitConnection: true,
+          conversationId: undefined,
+          connectedAtMs: 1,
+        },
+        query: {
+          kind: "natural-language",
+          text: FITTED_SUBJECT_QUESTION,
+          caseSensitive: false,
+          maxResults: 4096,
+          emittedAtMs: 1,
+        },
+      },
+      {
+        correlationId: undefined,
+        nowMs: () => 1000,
+        answerer: {
+          answer: (): Promise<never> => Promise.reject(new TypeError("Retrieval only")),
+        },
+      },
+    );
+    sources.push({ label: `source-${String(index)}`, pack });
+  }
+  return sources;
+}
+
+function expectFittedSubjectSources(
+  sent: ReturnType<typeof fittedMultiSourcePrompt>,
+  present: boolean,
+): void {
+  expect(
+    sent.packs.map(({ pack }) =>
+      pack.files
+        .flatMap((file) => file.excerpts)
+        .some((excerpt) => excerpt.content.includes("Unit-G42")),
+    ),
+  ).toEqual([present, present]);
+  expect(sent.packs.map(({ pack }) => pack.diagnostics?.selection?.selectionConfidence)).toEqual([
+    present ? "high" : "low",
+    present ? "high" : "low",
+  ]);
+}
+
 describe("buildMultiSourceGatewayMessages", () => {
+  it.each([
+    { name: "tight", grant: 1099 },
+    { name: "wide", grant: 8000 },
+    { name: "empty", grant: 1099 },
+  ])(
+    "retains fitting subject evidence with $name two-source inventory",
+    async ({ name, grant }) => {
+      const assembled = await retrievedFittingSubjectSources();
+      expect(new Set(assembled.map(({ pack }) => pack.scope.workspaceRoot)).size).toBe(2);
+      expect(assembled.map(({ pack }) => pack.diagnostics?.selection?.selectionConfidence)).toEqual(
+        ["high", "high"],
+      );
+      const redactor = buildRedactor({});
+      const options = { modelInputTokensMax: grant };
+      const short = assembled.map((entry) => ({
+        ...entry,
+        pack: withPromptExcerptBudget(entry.pack, Buffer.byteLength(FITTED_SUBJECT_PREFIX)),
+      }));
+      const positive = fittedMultiSourcePrompt(FITTED_SUBJECT_QUESTION, short, redactor, options);
+      expectFittedSubjectSources(positive, true);
+      const inventory =
+        name === "empty"
+          ? assembled.map((entry) => ({
+              ...entry,
+              pack: withPromptExcerptByteLimit(entry.pack, 0),
+            }))
+          : assembled;
+      const sent = fittedMultiSourcePrompt(FITTED_SUBJECT_QUESTION, inventory, redactor, options);
+      expectFittedSubjectSources(sent, name !== "empty");
+      expect(sent.sentReferenceCount).toBe(name === "empty" ? 0 : 2);
+      for (const fitted of [positive, sent]) {
+        expect(countGatewayPromptTokens({ messages: fitted.messages })).toBeLessThanOrEqual(grant);
+        expect(promptByteLength(fitted.messages)).toBeLessThanOrEqual(
+          modelInputPromptByteLimit(grant),
+        );
+      }
+    },
+  );
+
   it("attributes unavailable counts and original line offsets to the correct source", () => {
     const base = scopePack("handbook/service.html", 1, "first");
     const first: ConnectedContextPack = {
@@ -882,6 +987,27 @@ describe("multi-source minimal prompt admission", () => {
 });
 
 describe("mergeContextPackSummaries", () => {
+  it.each([
+    ["high", undefined, undefined],
+    ["low", undefined, "low"],
+    [undefined, undefined, undefined],
+  ] as const)(
+    "merges explicit confidence %s and %s without inventing %s",
+    (first, second, expected) => {
+      const summaries = [first, second].map((confidence, index) => ({
+        ...buildGroundedAnswerContextPackSummary(
+          scopePack("src/fixture.ts", 0.8, String(index)),
+          0,
+          0,
+        ),
+        ...(confidence === undefined ? {} : { selectionConfidence: confidence }),
+      }));
+      const merged = mergeContextPackSummaries(summaries);
+      expect(merged.selectionConfidence).toBe(expected);
+      if (expected === undefined) expect(merged).not.toHaveProperty("selectionConfidence");
+    },
+  );
+
   function laneCounts(
     overrides: Partial<Record<ContextLaneId, number>> = {},
   ): Record<ContextLaneId, number> {
@@ -2938,6 +3064,164 @@ describe("multi-source bounded citation repair", () => {
 });
 
 describe("multi-source final fitted citation authority", () => {
+  function confidenceChat(): string {
+    const scopes = ["first", "second"].map((name, index) => {
+      const root = tempRoot(`confidence-${name}`);
+      writeFileSync(
+        join(root, "procedure.md"),
+        index === 0
+          ? `${"The shipment policy is documented here. ".repeat(160)}Unit-G42 ceiling: 29 containers.\n`
+          : "Unit-G42 independent procedure: 17 containers.\n",
+      );
+      return { kind: "files" as const, relativePaths: ["procedure.md"], connectedAtMs: NOW, root };
+    });
+    return makeChat(scopes);
+  }
+
+  function confidenceSeam(
+    tight: boolean,
+    assembled: ConnectedContextPack[],
+    sent: ConnectedContextPack[],
+  ): MultiSourceSeam {
+    return {
+      retriever: (input) =>
+        retrieveConnectedContextPack(input, {
+          correlationId: undefined,
+          nowMs: () => NOW,
+          answerer: {
+            answer: (): Promise<never> => Promise.reject(new TypeError("Retrieval only")),
+          },
+        }),
+      answerer: (question, packs): ReturnType<MultiSourceAnswerer> => {
+        assembled.push(...packs.map((source) => source.pack));
+        const fitted = fittedMultiSourcePrompt(
+          question,
+          packs,
+          buildRedactor({}),
+          tight ? { modelInputTokensMax: 1200 } : {},
+        );
+        const actual = fitted.packs.map((source) => source.pack);
+        sent.push(...actual);
+        return Promise.resolve({
+          content: "The second procedure records 17 containers [source:2|procedure.md:1].",
+          modelInvoked: true,
+          usage: { promptTokens: 0, completionTokens: 0 },
+          sentEvidencePacks: actual,
+          filesInPrompt: actual.reduce((count, pack) => count + pack.files.length, 0),
+        });
+      },
+    };
+  }
+
+  function expectSentSubjectSources(
+    assembled: readonly ConnectedContextPack[],
+    sent: readonly ConnectedContextPack[],
+    tight: boolean,
+  ): void {
+    expect(new Set(assembled.map((pack) => pack.scope.workspaceRoot)).size).toBe(2);
+    expect(sent.map((pack) => pack.scope)).toEqual(assembled.map((pack) => pack.scope));
+    const containsSubject = (pack: ConnectedContextPack | undefined): boolean =>
+      pack?.files.some((file) =>
+        file.excerpts.some((excerpt) => excerpt.content.includes("Unit-G42")),
+      ) ?? false;
+    expect(containsSubject(sent[0])).toBe(!tight);
+    expect(containsSubject(sent[1])).toBe(true);
+  }
+
+  function expectSourceManifests(
+    evidenceStore: ReturnType<typeof createInMemoryEvidenceStore>,
+    sent: readonly ConnectedContextPack[],
+    original: readonly ConnectedContextPack[],
+  ): void {
+    expect(evidenceStore.list()).toHaveLength(2);
+    const roots = new Set(
+      evidenceStore
+        .list()
+        .map((runId) => loadEvidence(evidenceStore, runId)?.context?.workspaceRoot),
+    );
+    expect(roots.size).toBe(2);
+    expect(roots.has(undefined)).toBe(false);
+    for (const runId of evidenceStore.list()) {
+      const manifest = loadEvidence(evidenceStore, runId);
+      const audit = manifest?.connectedContext;
+      expect(audit?.modelRequest.sentToModel).toBe(true);
+      const retrieved = original.find(
+        (source) =>
+          createHash("sha256").update(source.scope.scopeId).digest("hex") ===
+          audit?.scope.scopeIdHash,
+      );
+      if (retrieved === undefined) throw new TypeError("Missing actual retrieved source");
+      expect(manifest?.context?.totalCandidates).toBe(
+        retrieved.files.length + connectedContextOmittedCount(retrieved),
+      );
+      const pack = sent.find(
+        (source) =>
+          createHash("sha256").update(source.scope.scopeId).digest("hex") ===
+          audit?.scope.scopeIdHash,
+      );
+      expect(pack).toBeDefined();
+      expect(
+        audit?.files.flatMap((file) =>
+          file.excerpts.map((excerpt) => ({
+            path: file.scopePath,
+            range: excerpt.lineRange,
+            bytes: excerpt.contentBytes,
+            hash: excerpt.contentSha256,
+          })),
+        ),
+      ).toEqual(
+        pack?.files.flatMap((file) =>
+          file.excerpts.map((excerpt) => ({
+            path: file.scopePath,
+            range: excerpt.atom.lineRange,
+            bytes: excerpt.contentBytes,
+            hash: createHash("sha256").update(excerpt.content).digest("hex"),
+          })),
+        ),
+      );
+    }
+  }
+
+  it.each([false, true])(
+    "persists fitted confidence without borrowing another scope (%s)",
+    async (tight) => {
+      const chatId = confidenceChat();
+      const assembled: ConnectedContextPack[] = [];
+      const sent: ConnectedContextPack[] = [];
+      const evidenceStore = createInMemoryEvidenceStore();
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "What is the shipment ceiling for Unit-G42?" })),
+        recordingDeps([], { evidenceStore }),
+        undefined,
+        confidenceSeam(tight, assembled, sent),
+      );
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(assembled.map((pack) => pack.diagnostics?.selection?.selectionConfidence)).toEqual([
+        "high",
+        "high",
+      ]);
+      expect(sent.map((pack) => pack.diagnostics?.selection?.selectionConfidence)).toEqual([
+        tight ? "low" : "high",
+        "high",
+      ]);
+      expect(
+        sent.every((pack) => pack.diagnostics?.selection?.keepOneFallbackApplied === false),
+      ).toBe(true);
+      expectSentSubjectSources(assembled, sent, tight);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.contextPack.selectionConfidence).toBe(tight ? "low" : "high");
+      expect(
+        answer.uncertainty.filter((marker) => marker.kind === "low-confidence-selection"),
+      ).toHaveLength(tight ? 1 : 0);
+      const persisted = store
+        .listMessages(chatId)
+        .find((message) => message.id === answer.assistantMessageId);
+      expect(persisted?.groundedAnswer?.contextPack).toEqual(answer.contextPack);
+      expect(persisted?.groundedAnswer?.uncertainty).toEqual(answer.uncertainty);
+      expectSourceManifests(evidenceStore, sent, assembled);
+    },
+  );
+
   function sourcePacks(): readonly ConnectedContextPack[] {
     return ["alpha", "beta"].map((name) => {
       const pack = scopePack(`src/${name}.ts`, 0.8, name);

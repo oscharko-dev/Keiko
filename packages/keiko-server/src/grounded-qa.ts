@@ -1,11 +1,16 @@
 import { connectedFollowUpConfiguration } from "./grounded-answer-activity.js";
+import { withContextualHintConfidence } from "./grounded-selection-quality.js";
 import { logGroundedPromptSelection } from "./chat-activity.js";
 import {
   citationBehaviourFor,
   citationBehaviourObserverFor,
 } from "./grounded-citation-capability.js";
 import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
-import { evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
+import {
+  containsNumberedCompoundQueryTerm,
+  evidenceAtomStableId,
+  isNumberedCompoundQueryTerm,
+} from "@oscharko-dev/keiko-workspace";
 import type { GroundedAnswerOptions } from "./grounded-orchestrator.js";
 import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RetrievalIntent } from "@oscharko-dev/keiko-workflows";
@@ -164,7 +169,7 @@ import {
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT, groundedSystemPrompt } from "./grounded-prompt.js";
 import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
-import { singleSentEvidencePack } from "./grounded-answer-evidence.js";
+import { singleSentEvidencePack, withSentEvidenceInventory } from "./grounded-answer-evidence.js";
 import {
   isExpectedWorkspaceRootFailure,
   recordWorkspaceRootDenial,
@@ -1006,19 +1011,33 @@ function excerptWithContent(
   return { ...excerpt, atom, content, contentBytes: Buffer.byteLength(content, "utf8") };
 }
 
+function fittingAnchorMatchesLine(
+  line: string,
+  anchor: SearchAnchor,
+  caseSensitive: boolean,
+): boolean {
+  const term = caseSensitive ? (anchor.sourceTerm ?? anchor.term) : anchor.term;
+  if (anchor.kind === "literal" && isNumberedCompoundQueryTerm(term))
+    return containsNumberedCompoundQueryTerm(line, term, caseSensitive);
+  return (caseSensitive ? line : line.toLowerCase()).includes(
+    caseSensitive ? term : term.toLowerCase(),
+  );
+}
+
 function fittingMatchedLine(
   lines: readonly string[],
   anchors: readonly SearchAnchor[],
   maxBytes: number,
+  caseSensitive: boolean,
 ): number | undefined {
   let best: number | undefined;
   let bestScore = 0;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
     if (Buffer.byteLength(line, "utf8") > maxBytes) continue;
-    const lower = line.toLowerCase();
     const score = anchors.reduce(
-      (sum, anchor) => sum + (lower.includes(anchor.term.toLowerCase()) ? anchor.weight : 0),
+      (sum, anchor) =>
+        sum + (fittingAnchorMatchesLine(line, anchor, caseSensitive) ? anchor.weight : 0),
       0,
     );
     if (score <= bestScore) continue;
@@ -1032,10 +1051,13 @@ function fittingExcerptContent(
   excerpt: ContextExcerpt,
   maxBytes: number,
   anchors: readonly SearchAnchor[],
+  caseSensitive: boolean,
 ): { readonly content: string; readonly lineOffset: number } {
   const lines = excerpt.content.split("\n");
   const matched =
-    excerpt.atom.lineRange === undefined ? undefined : fittingMatchedLine(lines, anchors, maxBytes);
+    excerpt.atom.lineRange === undefined
+      ? undefined
+      : fittingMatchedLine(lines, anchors, maxBytes, caseSensitive);
   if (matched === undefined)
     return { content: clampUtf8Bytes(excerpt.content, maxBytes), lineOffset: 0 };
   const sizes = lines.map((line) => Buffer.byteLength(line, "utf8"));
@@ -1060,7 +1082,15 @@ function adjacentLineBytes(sizes: readonly number[], index: number): number {
   return (sizes[index] ?? 0) + 1;
 }
 
-function withPromptExcerptTotalByteBudget(
+function fittingQueryAnchors(query: RetrievalQuery): readonly SearchAnchor[] {
+  return extractAnchors({
+    text: query.text,
+    maxAnchors: 8,
+    caseSensitive: query.caseSensitive,
+  }).anchors.filter((anchor) => anchor.kind !== "path");
+}
+
+function trimPromptExcerptTotalByteBudget(
   pack: ConnectedContextPack,
   maxExcerptBytes: number,
   requiredEvidencePaths: readonly string[] = [],
@@ -1068,9 +1098,7 @@ function withPromptExcerptTotalByteBudget(
 ): ConnectedContextPack {
   if (maxExcerptBytes <= 0) return { ...pack, files: [] };
   const byFile = new Map<number, ContextExcerpt[]>();
-  const anchors = extractAnchors({ text: pack.query.text, maxAnchors: 8 }).anchors.filter(
-    (anchor) => anchor.kind !== "path",
-  );
+  const anchors = fittingQueryAnchors(pack.query);
   let remaining = Math.floor(maxExcerptBytes);
   for (const ranked of rankedPromptExcerpts(pack, requiredEvidencePaths, requiredEvidenceAtomIds)) {
     if (remaining <= 0) break;
@@ -1079,7 +1107,7 @@ function withPromptExcerptTotalByteBudget(
     const fitted =
       fullBytes <= remaining
         ? { content: ranked.excerpt.content, lineOffset: 0 }
-        : fittingExcerptContent(ranked.excerpt, remaining, anchors);
+        : fittingExcerptContent(ranked.excerpt, remaining, anchors, pack.query.caseSensitive);
     const { content, lineOffset } = fitted;
     if (content.length === 0) break;
     const bucket = byFile.get(ranked.fileIndex) ?? [];
@@ -1120,6 +1148,33 @@ export function withPromptExcerptBudget(
     totalExcerptBytes,
     requiredEvidencePaths,
     requiredEvidenceAtomIds,
+  );
+}
+
+function withPromptExcerptTotalByteBudget(
+  pack: ConnectedContextPack,
+  totalExcerptBytes: number,
+  requiredEvidencePaths?: readonly string[],
+  requiredEvidenceAtomIds?: readonly string[],
+): ConnectedContextPack {
+  const trimmed = trimPromptExcerptTotalByteBudget(
+    pack,
+    totalExcerptBytes,
+    requiredEvidencePaths,
+    requiredEvidenceAtomIds,
+  );
+  return refreshedPromptSelectionConfidence(trimmed);
+}
+
+function refreshedPromptSelectionConfidence(pack: ConnectedContextPack): ConnectedContextPack {
+  return withContextualHintConfidence(
+    pack,
+    extractAnchors({
+      text: pack.query.text,
+      maxAnchors: 8,
+      caseSensitive: pack.query.caseSensitive,
+    }).anchors,
+    Date.now(),
   );
 }
 
@@ -1181,12 +1236,43 @@ function fitGroundedPrompt(
   );
   if (metadataFit !== undefined) return { ...metadataFit, pack: budgetedPack };
 
-  const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
-  const emptyMessages = build(question, emptyPack, redactor, 0);
+  const render = (candidate: ConnectedContextPack): readonly GatewayChatMessage[] =>
+    build(question, candidate, redactor, 0);
+  // Adding uncertainty when a hint is clipped can make prompt cost nonmonotonic. Find the
+  // source window with stable metadata first, then admit only its truthful, re-rendered form.
+  const optimistic = fitExcerptPromptWindow(
+    budgetedPack,
+    render,
+    fits,
+    limit,
+    options,
+    trimPromptExcerptTotalByteBudget,
+  );
+  const observedPack = refreshedPromptSelectionConfidence(optimistic.pack);
+  const observedMessages = render(observedPack);
+  if (fits(observedMessages))
+    return { messages: observedMessages, pack: observedPack, omissionPathBytes: 0 };
+  return fitExcerptPromptWindow(
+    budgetedPack,
+    render,
+    fits,
+    limit,
+    options,
+    withPromptExcerptBudget,
+  );
+}
+
+function fitExcerptPromptWindow(
+  pack: ConnectedContextPack,
+  build: (candidate: ConnectedContextPack) => readonly GatewayChatMessage[],
+  fits: (messages: readonly GatewayChatMessage[]) => boolean,
+  limit: number,
+  options: GroundedGatewayPromptOptions,
+  trim: typeof withPromptExcerptBudget,
+): FittedPromptPack {
+  const emptyPack = trim(pack, 0);
+  const emptyMessages = build(emptyPack);
   const overheadBytes = promptByteLength(emptyMessages);
-  // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
-  // excerpt trimming can bring the prompt within budget. Throw instead of sending an over-limit
-  // prompt to the provider which would result in an opaque 400 context-window error.
   if (!fits(emptyMessages)) {
     throw new ContextOverflowError(
       `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
@@ -1197,13 +1283,13 @@ function fitGroundedPrompt(
   let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack, omissionPathBytes: 0 };
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
-    const candidatePack = withPromptExcerptBudget(
-      budgetedPack,
+    const candidatePack = trim(
+      pack,
       totalExcerptBytes,
       options.requiredEvidencePaths,
       options.requiredEvidenceAtomIds,
     );
-    const candidate = build(question, candidatePack, redactor, 0);
+    const candidate = build(candidatePack);
     if (fits(candidate)) {
       best = { messages: candidate, pack: candidatePack, omissionPathBytes: 0 };
       low = totalExcerptBytes + 1;
@@ -1261,7 +1347,7 @@ export function fittedGroundedGatewayPrompt(
     sentEvidencePacks: [fitted.pack],
     withoutSources: buildRawGroundedGatewayMessages(
       question,
-      withPromptExcerptBudget(fitted.pack, 0),
+      { ...fitted.pack, files: [] },
       redactor,
       -1,
       options?.ownAssessmentPolicy,
@@ -2182,6 +2268,7 @@ function persistGroundedAuditEvidence(
   output: OrchestratorOutput,
   citationCount: number,
 ): string {
+  const pack = withSentEvidenceInventory(output.pack, output.sentEvidencePacks);
   const finishedAt = Date.now();
   const startedAt = Math.max(0, finishedAt - output.elapsedMs);
   const runId = groundedEvidenceRunId({
@@ -2204,12 +2291,13 @@ function persistGroundedAuditEvidence(
       followUp: output.followUp,
       completedSynthesisCallCount: output.completedSynthesisCallCount,
       plan: output.plan,
-      pack: output.pack,
+      pack,
+      retrievedFileCount: output.pack.files.length,
       citationCount,
       elapsedMs: output.elapsedMs,
       startedAt,
       finishedAt,
-      ...groundedContextAssemblyInput({ contextProfile: workerCtx.contextProfile }, output.pack),
+      ...groundedContextAssemblyInput({ contextProfile: workerCtx.contextProfile }, pack),
     },
     {
       store: workerCtx.deps.evidenceStore,

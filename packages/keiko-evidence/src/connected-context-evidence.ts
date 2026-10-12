@@ -38,6 +38,7 @@ import type { EvidenceConnectedContextFollowUp } from "@oscharko-dev/keiko-contr
 type Redactor = (input: string) => string;
 
 export interface ConnectedContextEvidenceInput {
+  readonly retrievedFileCount?: number | undefined;
   readonly completedSynthesisCallCount?: number | undefined;
   readonly followUp?: EvidenceConnectedContextFollowUp | undefined;
   readonly sourceScopeFingerprint?: string | undefined;
@@ -123,7 +124,9 @@ function workspaceRootAuditId(workspaceRoot: string, redact: Redactor): string {
 function contextOf(input: ConnectedContextEvidenceInput, redact: Redactor): AuditSummary {
   return {
     workspaceRoot: workspaceRootAuditId(input.workspaceRoot, redact),
-    totalCandidates: input.pack.files.length + connectedContextOmittedCount(input.pack),
+    totalCandidates:
+      (input.retrievedFileCount ?? input.pack.files.length) +
+      connectedContextOmittedCount(input.pack),
     usedBytes: input.pack.usage.excerptBytes,
     budgetBytes: input.pack.budget.excerptBytesMax,
     droppedForBudget: connectedContextOmittedCounts(input.pack)["budget-exhausted"],

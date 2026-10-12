@@ -1,5 +1,9 @@
 import { assistantReferenceExcerptIds } from "./grounded-assistant-referents.js";
 import {
+  withSentEvidenceInventory,
+  withSentSelectionDiagnostics,
+} from "./grounded-answer-evidence.js";
+import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
   recordGroundedPackValidation,
@@ -417,6 +421,13 @@ function mergeCoverageSummaries(
   };
 }
 
+function mergedSelectionConfidence(
+  summaries: readonly GroundedAnswerContextPackSummary[],
+): GroundedAnswerContextPackSummary["selectionConfidence"] {
+  if (summaries.some((summary) => summary.selectionConfidence === "low")) return "low";
+  return summaries.every((summary) => summary.selectionConfidence === "high") ? "high" : undefined;
+}
+
 export function mergeContextPackSummaries(
   summaries: readonly GroundedAnswerContextPackSummary[],
 ): GroundedAnswerContextPackSummary {
@@ -428,6 +439,7 @@ export function mergeContextPackSummaries(
   // structurally path-free: fixed lane-id keys, numeric counts/tokens, a pressure enum, and a boolean.
   const mergedContextSummary = mergeContextSummaries(summaries);
   const mergedCoverage = mergeCoverageSummaries(summaries);
+  const selectionConfidence = mergedSelectionConfidence(summaries);
   return {
     schemaVersion: first.schemaVersion,
     scopeId: `scope-${createHash("sha256")
@@ -444,6 +456,7 @@ export function mergeContextPackSummaries(
     omittedCounts: mergeOmittedCounts(summaries),
     uncertaintyCount: summaries.reduce((acc, s) => acc + s.uncertaintyCount, 0),
     elapsedMs: summaries.reduce((acc, s) => acc + s.elapsedMs, 0),
+    ...(selectionConfidence === undefined ? {} : { selectionConfidence }),
     ...(mergedCoverage !== undefined ? { coverage: mergedCoverage } : {}),
     ...(mergedContextSummary !== undefined ? { contextSummary: mergedContextSummary } : {}),
   };
@@ -551,27 +564,28 @@ function sourceBudgetBytes(totalBytes: number, index: number, weights: readonly 
 function withMultiSourcePromptExcerptTotalBudget(
   labeledPacks: readonly LabeledPack[],
   totalExcerptBytes: number,
+  preserveSelectionMetadata = false,
 ): readonly LabeledPack[] {
-  if (totalExcerptBytes <= 0 || labeledPacks.length === 0) {
-    return withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-  }
   const weights = labeledPacks.map((entry) => bestPackScore(entry.pack));
   return labeledPacks.map((entry, index) => {
     const excerptCount = packExcerptCount(entry.pack);
     const perExcerpt =
       excerptCount === 0
         ? 0
-        : Math.floor(sourceBudgetBytes(totalExcerptBytes, index, weights) / excerptCount);
+        : Math.floor(
+            sourceBudgetBytes(Math.max(0, totalExcerptBytes), index, weights) / excerptCount,
+          );
+    const pack = entry.requiredEvidenceAtomIds?.length
+      ? withPromptExcerptBudget(
+          entry.pack,
+          perExcerpt * excerptCount,
+          undefined,
+          entry.requiredEvidenceAtomIds,
+        )
+      : withPromptExcerptByteLimit(entry.pack, perExcerpt);
     return {
       ...entry,
-      pack: entry.requiredEvidenceAtomIds?.length
-        ? withPromptExcerptBudget(
-            entry.pack,
-            perExcerpt * excerptCount,
-            undefined,
-            entry.requiredEvidenceAtomIds,
-          )
-        : withPromptExcerptByteLimit(entry.pack, perExcerpt),
+      pack: preserveSelectionMetadata ? { ...entry.pack, files: pack.files } : pack,
     };
   });
 }
@@ -643,7 +657,25 @@ function budgetedMultiSourceGatewayMessages(
     limit,
   );
   if (metadataFit !== undefined) return { ...metadataFit, packs: labeledPacks };
-  const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
+  // Dropping a subject adds uncertainty text. Find the source window with stable metadata,
+  // then admit only its truthful form; the empty prompt is not an absolute lower cost bound.
+  const optimistic = fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, true);
+  const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, optimistic.totalExcerptBytes);
+  const messages = render(packs, 0);
+  if (fits(messages)) return { messages, packs, omissionPathBytes: 0 };
+  return fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, false);
+}
+
+function fitMultiSourceExcerptWindow(
+  labeledPacks: readonly LabeledPack[],
+  render: ReturnType<typeof multiSourcePromptRenderer>,
+  fits: (messages: readonly GatewayChatMessage[]) => boolean,
+  limit: number,
+  preserveSelectionMetadata: boolean,
+): FittedMultiSourcePrompt & { readonly totalExcerptBytes: number } {
+  const trim = (bytes: number): readonly LabeledPack[] =>
+    withMultiSourcePromptExcerptTotalBudget(labeledPacks, bytes, preserveSelectionMetadata);
+  const emptyPacks = trim(0);
   const overhead = render(emptyPacks, 0);
   const overheadBytes = promptByteLength(overhead);
   if (!fits(overhead)) {
@@ -651,14 +683,19 @@ function budgetedMultiSourceGatewayMessages(
       `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
-  let totalExcerptBytes = Math.max(0, limit - overheadBytes);
-  while (totalExcerptBytes >= 0) {
-    const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes);
+  let low = 1;
+  let high = Math.max(0, limit - overheadBytes);
+  let best = { messages: overhead, packs: emptyPacks, omissionPathBytes: 0, totalExcerptBytes: 0 };
+  while (low <= high) {
+    const totalExcerptBytes = Math.floor((low + high) / 2);
+    const packs = trim(totalExcerptBytes);
     const messages = render(packs, 0);
-    if (fits(messages) || totalExcerptBytes === 0) return { messages, packs, omissionPathBytes: 0 };
-    totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
+    if (fits(messages)) {
+      best = { messages, packs, omissionPathBytes: 0, totalExcerptBytes };
+      low = totalExcerptBytes + 1;
+    } else high = totalExcerptBytes - 1;
   }
-  return { messages: overhead, packs: emptyPacks, omissionPathBytes: 0 };
+  return best;
 }
 
 // The fit decision on the existing `search.prompt.window-fitted` port, like the Knowledge Pod and
@@ -721,7 +758,7 @@ export function fittedMultiSourcePrompt(
     messages: fitted.messages,
     withoutSources: buildRawMultiSourceGatewayMessages(
       question,
-      withMultiSourcePromptExcerptByteLimit(labeledPacks, 0),
+      fitted.packs.map((entry) => ({ ...entry, pack: { ...entry.pack, files: [] } })),
       redactor,
       -1,
       options.ownAssessmentPolicy,
@@ -895,7 +932,7 @@ async function multiSourceGatewayAttempt(
     return undefined;
   logGroundedPromptSelection(
     ctx.correlationId,
-    sent,
+    { ...sent, sentEvidencePacks: sent.packs.map((entry) => entry.pack) },
     multiSourceInputTokens(packs, options),
     accounting,
   );
@@ -1062,7 +1099,7 @@ function logMultiSourceRepairPrompt(
 ): void {
   logGroundedPromptSelection(
     ctx.correlationId,
-    sent,
+    { ...sent, sentEvidencePacks: sent.packs.map((entry) => entry.pack) },
     Math.min(
       options.modelInputTokensMax ?? 0,
       multiSourceInputTokens(sent.packs, groundedPromptOptions(ctx.deps, ctx.modelId, undefined)),
@@ -1364,6 +1401,7 @@ async function retrieveAllSources(
 
 interface SourceCitationBundle {
   readonly source: RetrievedSource;
+  readonly sentPack: ConnectedContextPack;
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly labeledCitations: readonly GroundedEvidenceCitation[];
 }
@@ -1431,8 +1469,13 @@ function sourceCitationBundles(
     const citations = projected
       .filter((entry) => entry.sourceId === sourceId)
       .map((entry) => entry.citation);
+    const observed = withSentSelectionDiagnostics(source.pack, sentPacks, Date.now());
     return {
-      source,
+      source: {
+        ...source,
+        pack: observed,
+      },
+      sentPack: withSentEvidenceInventory(observed, sentPacks),
       citations,
       labeledCitations: labelAnswerCitations(
         citations,
@@ -1485,7 +1528,7 @@ function persistPerSourceEvidence(
 } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
-  for (const [ordinal, { source: src, citations }] of bundles.entries()) {
+  for (const [ordinal, { source: src, sentPack, citations }] of bundles.entries()) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
     const runId = groundedEvidenceRunId({
@@ -1503,13 +1546,14 @@ function persistPerSourceEvidence(
         sourceScopeFingerprint: src.sourceScopeFingerprint,
         chatId: ctx.chat.id,
         plan: src.plan,
-        pack: src.pack,
+        pack: sentPack,
+        retrievedFileCount: src.pack.files.length,
         citationCount: citations.length,
         completedSynthesisCallCount,
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
-        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, src.pack),
+        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, sentPack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -1547,6 +1591,10 @@ function multiSourceAnswerSummaries(
       groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
     ),
   );
+}
+
+function bundleSources(bundles: readonly SourceCitationBundle[]): readonly RetrievedSource[] {
+  return bundles.map((bundle) => bundle.source);
 }
 
 function assembleMultiSourceAnswer(
@@ -1591,7 +1639,7 @@ function assembleMultiSourceAnswer(
     ...groundedAnswerEvidenceFields(assistant),
     citations,
     uncertainty: assessmentAwareUncertainty(assistant.content, [
-      ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
+      ...mergedUncertainty(bundleSources(citationBundles), skipped, ctx.preSkipped ?? [], redactor),
       ...reconciliationUncertainty,
       ...noSourceAnswerMarkers(assistant, redactor),
     ]),

@@ -50,6 +50,7 @@ import type {
 import {
   singleSentEvidencePack,
   validateSingleAnswerEvidence,
+  withSentSelectionDiagnostics,
 } from "./grounded-answer-evidence.js";
 import {
   rerankGroundedCandidates,
@@ -12335,9 +12336,10 @@ function answeredContextPack(
   markers: readonly UncertaintyMarker[],
   nowMs: number,
 ): ConnectedContextPack {
+  const observed = withSentSelectionDiagnostics(pack, answer.sentEvidencePacks, nowMs);
   const exhausted = exhaustedAnswerBudgetDimensions(answer, pack, elapsedMs);
   return {
-    ...pack,
+    ...observed,
     usage: {
       ...pack.usage,
       modelInputTokens: Math.min(
@@ -12354,7 +12356,7 @@ function answeredContextPack(
       ),
     },
     uncertainty: [
-      ...answerApplicableUncertainty(pack.uncertainty, answer),
+      ...answerApplicableUncertainty(observed.uncertainty, answer),
       ...(answer.noEvidence === true && !isGroundedAssessmentOnly(answer.content)
         ? [noEvidenceMarker(nowMs)]
         : []),

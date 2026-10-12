@@ -12,6 +12,7 @@ import {
 } from "./ecosystems.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import {
+  containsNumberedCompoundQueryTerm,
   expandedQueryTermGroups,
   expandedQueryTerms,
   isNumberedCompoundQueryTerm,
@@ -91,7 +92,7 @@ export function queryIdentityFor(
           matchingSettings: {
             ...matchingSettings,
             ...(query.kind === "natural-language" && interpretation === undefined
-              ? { subjectNormalizationRevision: 2 }
+              ? { subjectNormalizationRevision: 3 }
               : {}),
           },
         }),
@@ -750,7 +751,12 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
       const haystack = query.caseSensitive ? line : line.toLowerCase();
       // A whole compound actually present in the source is strong lexical evidence.
       // An absent spelling leaves full-question matching intact (e.g. SHA-256 versus sha256).
-      if (wholeCompoundTerms.some((term) => haystack.includes(term))) return 1;
+      if (
+        wholeCompoundTerms.some((term) =>
+          containsNumberedCompoundQueryTerm(line, term, query.caseSensitive),
+        )
+      )
+        return 1;
       let hits = 0;
       for (const group of tokenGroups) {
         if (group.some((token) => haystack.includes(token))) {

@@ -1,4 +1,7 @@
-import { isNumberedCompoundQueryTerm } from "@oscharko-dev/keiko-workspace";
+import {
+  containsNumberedCompoundQueryTerm,
+  isNumberedCompoundQueryTerm,
+} from "@oscharko-dev/keiko-workspace";
 import type { SearchAnchor } from "@oscharko-dev/keiko-workflows";
 import type {
   CandidateFile,
@@ -65,10 +68,19 @@ export function withContextualHintConfidence(
     (anchor) => anchor.kind === "literal" && isNumberedCompoundQueryTerm(anchor.term),
   );
   if (hints.length === 0) return pack;
-  const bodies = pack.files
-    .flatMap((file) => file.excerpts)
-    .map((excerpt) => (pack.query.caseSensitive ? excerpt.content : excerpt.content.toLowerCase()));
-  if (hints.every((hint) => bodies.some((body) => body.includes(hint.term)))) return pack;
+  const bodies = pack.files.flatMap((file) => file.excerpts).map((excerpt) => excerpt.content);
+  if (
+    hints.every((hint) =>
+      bodies.some((body) =>
+        containsNumberedCompoundQueryTerm(
+          body,
+          pack.query.caseSensitive ? (hint.sourceTerm ?? hint.term) : hint.term,
+          pack.query.caseSensitive,
+        ),
+      ),
+    )
+  )
+    return pack;
   return {
     ...pack,
     diagnostics: {

@@ -24,6 +24,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { PassThrough, Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -50,6 +51,7 @@ import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gatewa
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   connectedContextOmittedCounts,
+  connectedContextOmittedCount,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -77,6 +79,7 @@ import {
 import { buildMultiSourceGatewayMessages } from "./grounded-qa-multi-source.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
+import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { currentConversationReady, type RuntimeGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
@@ -664,6 +667,157 @@ function withMinimumFittedInputGrant(ports: OrchestratorDeps): OrchestratorDeps 
     },
   };
 }
+
+async function fittedSubjectChat(partial = false): Promise<string> {
+  const { chatId } = await setupChatWithScope();
+  mkdirSync(join(tmp, "src"), { recursive: true });
+  writeFileSync(
+    join(tmp, "src/procedure.md"),
+    partial
+      ? `${"The shipment policy is documented here.\n".repeat(80)}Unit-G42 ceiling: 29 containers.\n`
+      : "# Unit-G42 shipment policy\nThe shipment ceiling is 29 containers.\n",
+  );
+  store.updateChat(chatId, {
+    connectedScope: { kind: "files", relativePaths: ["src/procedure.md"], connectedAtMs: NOW },
+  });
+  return chatId;
+}
+
+function observedSelectionPorts(
+  ports: OrchestratorDeps,
+  tight: boolean | "partial",
+  assembled: ConnectedContextPack[],
+  sent: ConnectedContextPack[],
+): OrchestratorDeps {
+  const selected = tight === true ? withMinimumFittedInputGrant(ports) : ports;
+  return {
+    ...selected,
+    answerer: {
+      ...selected.answerer,
+      answer: async (
+        question,
+        pack,
+        options,
+      ): ReturnType<OrchestratorDeps["answerer"]["answer"]> => {
+        assembled.push(pack);
+        const fittedOptions =
+          tight === "partial"
+            ? { ...options, modelInputTokensMax: minimumFittedPromptBudget(question, pack) + 256 }
+            : options;
+        const answer = await selected.answerer.answer(question, pack, fittedOptions);
+        sent.push(...(normalizeGroundedAnswerPayload(answer).sentEvidencePacks ?? []));
+        return answer;
+      },
+    },
+  };
+}
+
+function expectPersistedSelection(
+  chatId: string,
+  answer: ConnectedAnswer,
+  confidence: "high" | "low",
+): void {
+  expect(answer.contextPack.selectionConfidence).toBe(confidence);
+  expect(
+    answer.uncertainty.filter((marker) => marker.kind === "low-confidence-selection"),
+  ).toHaveLength(confidence === "low" ? 1 : 0);
+  const persisted = store
+    .listMessages(chatId)
+    .find((message) => message.id === answer.assistantMessageId);
+  expect(persisted?.groundedAnswer?.contextPack).toEqual(answer.contextPack);
+  expect(persisted?.groundedAnswer?.uncertainty).toEqual(answer.uncertainty);
+}
+
+function expectSentManifest(
+  evidenceStore: TestEvidenceStore,
+  answer: ConnectedAnswer,
+  sent: ConnectedContextPack | undefined,
+  original: ConnectedContextPack | undefined,
+): void {
+  if (answer.evidenceRunId === undefined) {
+    expect(sent?.files).toEqual([]);
+    expect(evidenceStore.list()).toEqual([]);
+    return;
+  }
+  if (original === undefined) throw new TypeError("Missing actual retrieved pack");
+  const manifest = requireEvidenceManifest(evidenceStore, answer.evidenceRunId);
+  const audit = requireConnectedContextAudit(manifest);
+  expect(manifest.context?.totalCandidates).toBe(
+    original.files.length + connectedContextOmittedCount(original),
+  );
+  expect(audit.modelRequest.sentToModel).toBe(true);
+  expect(
+    audit.files.flatMap((file) =>
+      file.excerpts.map((excerpt) => ({
+        path: file.scopePath,
+        range: excerpt.lineRange,
+        bytes: excerpt.contentBytes,
+        hash: excerpt.contentSha256,
+      })),
+    ),
+  ).toEqual(
+    sent?.files.flatMap((file) =>
+      file.excerpts.map((excerpt) => ({
+        path: file.scopePath,
+        range: excerpt.atom.lineRange,
+        bytes: excerpt.contentBytes,
+        hash: createHash("sha256").update(excerpt.content).digest("hex"),
+      })),
+    ),
+  );
+}
+
+describe("public grounded answer fitted selection confidence", () => {
+  it.each([false, true, "partial"] as const)(
+    "persists actual sent confidence with minimum grant %s",
+    async (tight) => {
+      const confidence = tight === true ? "low" : "high";
+      const sentCount = tight === true ? 0 : 1;
+      const chatId = await fittedSubjectChat(tight === "partial");
+      const requests: GatewayRequest[] = [];
+      const execute = groundedOrchestrator.runGroundedExploration;
+      const assembled: ConnectedContextPack[] = [];
+      const sent: ConnectedContextPack[] = [];
+      const evidenceStore = createInMemoryEvidenceStore();
+      const runnerSpy = vi
+        .spyOn(groundedOrchestrator, "runGroundedExploration")
+        .mockImplementation((input, ports) =>
+          execute(input, observedSelectionPorts(ports, tight, assembled, sent)),
+        );
+      try {
+        const result = await handleGroundedAsk(
+          ctx(JSON.stringify({ chatId, content: "What is the shipment ceiling for Unit-G42?" })),
+          deps(
+            fakeModel("The document describes shipment policy [src/procedure.md:1].", requests),
+            {},
+            {
+              config: {
+                ...customModelConfig(CHAT_MODEL),
+                groundedAnswers: { ownAssessment: "disabled" },
+              },
+              evidenceStore,
+            },
+          ),
+        );
+        expect(result.status, JSON.stringify(result.body)).toBe(200);
+        const answer = asConnectedAnswer(result.body as GroundedAnswer);
+        expect(assembled[0]?.diagnostics?.selection?.selectionConfidence).toBe("high");
+        expect(sent).toHaveLength(1);
+        expect(sent[0]?.diagnostics?.selection).toMatchObject({
+          selectionConfidence: confidence,
+          keepOneFallbackApplied: false,
+        });
+        expectPersistedSelection(chatId, answer, confidence);
+        expect(answer.contextPack.usage.filesRead).toBe(assembled[0]?.usage.filesRead);
+        expect(answer.contextPack.filesInPrompt).toBe(sentCount);
+        expect(requests).toHaveLength(sentCount);
+        expectSentManifest(evidenceStore, answer, sent[0], assembled[0]);
+      } finally {
+        runnerSpy.mockRestore();
+      }
+    },
+  );
+});
 
 function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
   return (_input: OrchestratorInput): Promise<OrchestratorOutput> => {

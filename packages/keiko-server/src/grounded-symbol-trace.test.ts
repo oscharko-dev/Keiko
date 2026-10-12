@@ -22,7 +22,11 @@ import {
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { endpointContractAdapter, evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
-import { _readKeptExcerptsForTests } from "./grounded-orchestrator.js";
+import {
+  _readKeptExcerptsForTests,
+  retrieveConnectedContextPack,
+} from "./grounded-orchestrator.js";
+import { buildGroundedGatewayMessages } from "./grounded-qa.js";
 
 import {
   collectDiscoveredSymbolTraceEvidence,
@@ -1702,3 +1706,219 @@ describe("certified imported source values", () => {
     expect(result.atoms.some((atom) => atom.scopePath === "src/capacity.ts")).toBe(false);
   });
 });
+
+function fixtureComparisonQuery(): RetrievalQuery {
+  return {
+    ...routeQuery(),
+    text: "Which sample counts does POST /api/items accept, and which imported setting bounds it? Compare the current setting with the test fixtures.",
+  };
+}
+
+function fixtureComparisonFiles(): Record<string, string> {
+  return {
+    "src/routes.ts": ROUTE_CONTENT,
+    "src/implementation.ts": [
+      'import { packetThreshold as boundary } from "./operatingLimit.js";',
+      "export function handlePostItem(samples) {",
+      "  return Number.isInteger(samples) && samples >= 0 && samples <= boundary;",
+      "}",
+    ].join("\n"),
+    "src/operatingLimit.ts": "export const packetThreshold = 29;",
+    "tests/scenarios/overflowValues.ts": "export const packetThreshold = 193;",
+    ...Object.fromEntries(
+      Array.from({ length: 24 }, (_, ordinal) => [
+        `src/samplePolicy${String(ordinal)}.ts`,
+        `export function sampleCounts${String(ordinal)}(samples) { return Number.isInteger(samples) && samples >= 0; }`,
+      ]),
+    ),
+  };
+}
+
+async function publicFixtureComparison(
+  query: RetrievalQuery,
+): ReturnType<typeof retrieveConnectedContextPack> {
+  return retrieveConnectedContextPack(
+    {
+      scope: selectedScope(),
+      query,
+      workspaceRoot: WORKSPACE_ROOT,
+      budget: DEFAULT_EXPLORATION_BUDGET,
+    },
+    {
+      correlationId: undefined,
+      fs: memFs(WORKSPACE_ROOT, fixtureComparisonFiles()),
+      nowMs: () => NOW,
+      detectWorkspace: workspaceInfo,
+      answerer: { answer: () => Promise.resolve("observed source") },
+    },
+  );
+}
+
+function expectFixtureComparisonConsumers(
+  result: Awaited<ReturnType<typeof retrieveConnectedContextPack>>,
+  query: RetrievalQuery,
+): void {
+  expect(
+    result.pack.files
+      .filter((file) => file.scopePath === "src/operatingLimit.ts")
+      .flatMap((file) => file.excerpts)
+      .map((excerpt) => excerpt.content)
+      .join("\n"),
+  ).toContain("export const packetThreshold = 29;");
+  const expected = "export const packetThreshold = 193;";
+  const excerpts = result.pack.files
+    .filter((file) => file.scopePath === "tests/scenarios/overflowValues.ts")
+    .flatMap((file) => file.excerpts);
+  expect(excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(expected);
+  const prompt = buildGroundedGatewayMessages(query.text, result.pack, (value) => value)
+    .map((message) => message.content)
+    .join("\n");
+  expect(prompt).toContain(`1 | ${expected}`);
+}
+
+describe("requested imported-value fixture comparisons", () => {
+  it("includes the independently exported test declaration in the public pack and numbered prompt", async () => {
+    const query = fixtureComparisonQuery();
+    expectFixtureComparisonConsumers(await publicFixtureComparison(query), query);
+  });
+
+  it("includes independently exported comparison evidence for a German test-data request", async () => {
+    const query = {
+      ...routeQuery(),
+      text: "Welche Stichprobenzahlen lässt POST /api/items zu? Vergleiche die aktuelle importierte Grenze mit den Testdaten.",
+    };
+    expectFixtureComparisonConsumers(await publicFixtureComparison(query), query);
+  });
+
+  it("keeps the comparison declaration independent of the current handler's binding and cycles", async () => {
+    const result = await traceFixture(
+      fixtureComparisonFiles(),
+      () => true,
+      true,
+      fixtureComparisonQuery(),
+    );
+    const entry = result.routeCoverage?.entries.find(
+      (candidate) => candidate.atom.scopePath === "tests/scenarios/overflowValues.ts",
+    );
+    expect(entry).toBeDefined();
+    if (entry === undefined)
+      throw new TypeError("The observed comparison declaration is required.");
+    expect(entry.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(entry.observedBytes).toBe(Buffer.byteLength("export const packetThreshold = 193;"));
+    expect(result.routeCoverage?.isCurrent(entry.atom)).toBe(true);
+    expect(entry.atom.edge).toBeUndefined();
+    expect(entry.parentIdentity).toBeUndefined();
+    expect(entry.parentWitness).toBeUndefined();
+    expect(result.routeCoverage?.ownedCycles?.flat()).not.toContain(entry.definitionIdentity);
+  });
+
+  it.each([
+    "export const unrelatedThreshold = 193;",
+    "const packetThreshold = 193;",
+    "export function makeThreshold() { const packetThreshold = 193; return packetThreshold; }",
+    "const localThreshold = 193; export { localThreshold as packetThreshold };",
+    "export const packetThreshold = 193; export const packetThreshold = 197;",
+  ])(
+    "refuses unrelated, local, nested, aliased or ambiguous test declarations: %s",
+    async (declaration) => {
+      const files = fixtureComparisonFiles();
+      files["tests/scenarios/overflowValues.ts"] = declaration;
+      const result = await traceFixture(files, () => true, true, fixtureComparisonQuery());
+      expect(certifiedPaths(result)).not.toContain("tests/scenarios/overflowValues.ts");
+      expect(certifiedPaths(result)).toContain("src/operatingLimit.ts");
+    },
+  );
+
+  it.each([
+    routeQuery(),
+    { ...fixtureComparisonQuery(), kind: "regex" as const },
+    { ...fixtureComparisonQuery(), kind: "exact-symbol" as const, text: "packetThreshold" },
+    {
+      ...fixtureComparisonQuery(),
+      text: 'Trace POST /api/items and find "compare test fixtures".',
+    },
+    {
+      ...fixtureComparisonQuery(),
+      text: 'Trace POST /api/items und finde "Vergleiche Testdaten".',
+    },
+  ])(
+    "does not broaden retrieval without unquoted natural-language comparison intent: $text",
+    async (query) => {
+      const result = await traceFixture(fixtureComparisonFiles(), () => true, true, query);
+      expect(certifiedPaths(result)).not.toContain("tests/scenarios/overflowValues.ts");
+    },
+  );
+
+  it("does not infer a comparison seed from an unresolved imported setting", async () => {
+    const files = fixtureComparisonFiles();
+    files["src/operatingLimit.ts"] = 'export * from "./east.js";\nexport * from "./west.js";';
+    files["src/east.ts"] = "export const packetThreshold = 29;";
+    files["src/west.ts"] = "export const packetThreshold = 31;";
+    const result = await traceFixture(files, () => true, true, fixtureComparisonQuery());
+    expect(certifiedPaths(result)).not.toContain("tests/scenarios/overflowValues.ts");
+  });
+
+  it("does not broaden a source comparison to an equal-named unrelated production declaration", async () => {
+    const files = fixtureComparisonFiles();
+    files["src/unrelatedPolicy.ts"] = "export const packetThreshold = 197;";
+    const result = await traceFixture(files, () => true, true, fixtureComparisonQuery());
+    expect(certifiedPaths(result)).toContain("tests/scenarios/overflowValues.ts");
+    expect(certifiedPaths(result)).not.toContain("src/unrelatedPolicy.ts");
+  });
+
+  it("keeps the current imported setting ahead of comparison evidence inside the finite frontier", async () => {
+    const result = await traceFixture(fixtureComparisonFiles(), () => true, true, {
+      ...fixtureComparisonQuery(),
+      maxResults: 2,
+    });
+    expect(certifiedPaths(result)).toContain("src/operatingLimit.ts");
+    expect(certifiedPaths(result)).not.toContain("tests/scenarios/overflowValues.ts");
+    expect(result.uncertainty.some((marker) => marker.claim.includes("frontier-width"))).toBe(true);
+  });
+
+  it("keeps comparison declarations inside the actual selected search scope", async () => {
+    const result = await scopedComparisonTrace(fixtureComparisonFiles(), ["src"]);
+    expect(certifiedPaths(result)).toContain("src/operatingLimit.ts");
+    expect(certifiedPaths(result)).not.toContain("tests/scenarios/overflowValues.ts");
+  });
+
+  it("refuses a comparison declaration when its indexed source changes", async () => {
+    const files = fixtureComparisonFiles();
+    const result = await scopedComparisonTrace(files, [], () => {
+      files["tests/scenarios/overflowValues.ts"] = "export const changedThreshold = 199;";
+    });
+    expect(certifiedPaths(result)).toContain("src/operatingLimit.ts");
+    expect(certifiedPaths(result)).not.toContain("tests/scenarios/overflowValues.ts");
+    expect(
+      result.uncertainty.some((marker) => marker.claim.includes("source-graph-incomplete")),
+    ).toBe(true);
+  });
+});
+
+async function scopedComparisonTrace(
+  files: Record<string, string>,
+  relativePaths: readonly string[],
+  mutateIndexed?: () => void,
+): Promise<Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>> {
+  const fs = memFs(WORKSPACE_ROOT, files);
+  const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths };
+  const requestContext = createStructuralAdapterRequestContext(
+    searchScope,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    fs,
+    { nowMs: () => NOW },
+  );
+  await requestContext.codeIntelligenceIndex();
+  mutateIndexed?.();
+  return collectDiscoveredSymbolTraceEvidence({
+    scope: selectedScope(),
+    query: fixtureComparisonQuery(),
+    anchors: [],
+    retrievalIntent: "targeted-code-search",
+    searchScope,
+    fs,
+    nowMs: () => NOW,
+    atoms: [routeAtom()],
+    requestContext,
+  });
+}

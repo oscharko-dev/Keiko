@@ -132,7 +132,10 @@ export {
   hasRecursiveTraversalQuery,
   SYMBOL_RELATION_TERMS,
 } from "./repoSearchPolicy.js";
-export { isNumberedCompoundQueryTerm } from "./repoSearchQueryTerms.js";
+export {
+  containsNumberedCompoundQueryTerm,
+  isNumberedCompoundQueryTerm,
+} from "./repoSearchQueryTerms.js";
 export { requestedSourceInspectionExtensions } from "./repoSearchSourceInspection.js";
 export type {
   SemanticFusionSignals,

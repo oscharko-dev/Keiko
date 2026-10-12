@@ -480,12 +480,21 @@ system that exists, never beside it:
   removed-clause count across actual searches; literal, regex and exact-symbol matching retain their existing semantics.
   Numbered, letter-led compounds retain their full spelling as contextual lexical hints before
   camel-case fragments are extracted. Their shape alone never grants exact-target or code-symbol
-  authority: an observed complete spelling receives literal lexical relevance, while an absent
-  spelling preserves full-question matching, including technical aliases and ordinary context.
+  authority: a complete spelling receives literal lexical relevance only at a lexical boundary.
+  Unicode letters, combining marks, numbers, underscores and hyphens continue the same compound;
+  punctuation and filename separators can delimit it. Matching and excerpt confidence use the same
+  case-sensitive or case-insensitive rule. An absent complete spelling preserves full-question
+  matching, including technical aliases and ordinary context.
   The existing persistent natural-language matching revision invalidates older scores. After actual
-  excerpt assembly, an unobserved compound hint lowers selection confidence without removing evidence
-  or claiming a keep-one fallback; fresh and cached packs share this rule. Existing completion events
-  record the target decision/count, selection confidence and actual read counts without source bodies.
+  excerpt assembly and final prompt fitting, an unobserved compound hint lowers selection confidence
+  without removing evidence or claiming a keep-one fallback; fresh and cached packs share this rule.
+  Returned and persisted answers use the confidence of their actual sent source; another source cannot
+  supply its missing spelling. Existing completion events record the target decision/count, selection
+  confidence and actual read counts. The existing `chat.context.selected` event records available
+  fitted selection confidence without source bodies.
+  Evidence manifest hashes and ranges enumerate final sent excerpts; retrieval candidate counts, usage and omissions
+  retain the actual earlier work. Existing prompt sent/available counts distinguish fitting removals
+  without inventing retrieval omissions.
   Lexical relevance establishes neither an answer fact nor precedence between conflicting sources.
   An observed admitted callable may retain an imported constant declaration only when its current
   TypeScript lexical binding, nearest callable owner, declaration identity and physical identifier

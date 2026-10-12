@@ -228,7 +228,7 @@ export type SearchAnchorKind = "literal" | "identifier" | "path" | "quoted";
 
 export interface SearchAnchor {
   readonly term: string;
-  /** Original path spelling for filesystem resolution; `term` remains the lexical key. */
+  /** Original spelling for case-sensitive hints or filesystem resolution; `term` is the lexical key. */
   readonly sourceTerm?: string;
   readonly weight: number;
   readonly kind: SearchAnchorKind;
@@ -342,7 +342,7 @@ function collectNumberedCompoundHints(source: string, out: AnchorAccumulator): s
     // Shape alone cannot distinguish a named subject from a technical alias or an adjective.
     // Keep the whole spelling as a hint without granting exact-target or symbol authority.
     if (!isNumberedCompoundQueryTerm(term)) return raw;
-    pushAnchor(out, term, "literal", 0.85);
+    pushAnchor(out, term, "literal", 0.85, term);
     return " ".repeat(raw.length);
   });
 }
@@ -461,7 +461,10 @@ function freeze(
 ): readonly SearchAnchor[] {
   return anchors.map((a) => ({
     term: caseSensitive ? a.sourceTerm : a.term,
-    ...(a.kind === "path" && a.sourceTerm !== a.term ? { sourceTerm: a.sourceTerm } : {}),
+    ...((a.kind === "path" || (a.kind === "literal" && isNumberedCompoundQueryTerm(a.term))) &&
+    a.sourceTerm !== a.term
+      ? { sourceTerm: a.sourceTerm }
+      : {}),
     weight: a.weight,
     kind: a.kind,
   }));

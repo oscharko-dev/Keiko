@@ -35,7 +35,7 @@ function scope(): SearchScope {
   };
 }
 
-function priorSubjectRevision(index: WorkspaceIndex): WorkspaceIndex {
+function priorSubjectRevision(index: WorkspaceIndex, identity: string): WorkspaceIndex {
   return {
     saveSnapshot: index.saveSnapshot,
     loadSnapshot: async (key, isActive): Promise<WorkspaceIndexSnapshot | undefined> => {
@@ -50,8 +50,7 @@ function priorSubjectRevision(index: WorkspaceIndex): WorkspaceIndex {
             : {
                 // Simulated prior-revision negative with unchanged file metadata.
                 queryMatch: {
-                  queryIdentitySha256:
-                    "f13a70e9a38505674a22501f377a141fac774f6c5cad5f654ff48ae60e898991",
+                  queryIdentitySha256: identity,
                   best: [],
                   maxScore: 0,
                 },
@@ -89,7 +88,10 @@ describe("repository query subject diagnostics", () => {
     expect(result.diagnostics?.citationDirectiveClauseCount).toBeUndefined();
   });
 
-  it("rereads a prior-revision negative before reusing the corrected persistent match", async () => {
+  it.each([
+    "f13a70e9a38505674a22501f377a141fac774f6c5cad5f654ff48ae60e898991",
+    "6c408728cf6c55b4505d5e2543fef89859b66ab410a3655b8257302e80dcaff2",
+  ])("rereads prior-revision %s before reusing the corrected match", async (identity) => {
     const fs = memFs("/ws", {
       "src/authorization.ts":
         "export function authorizeRequest(policy) { return policy.allowed; }\n",
@@ -107,7 +109,7 @@ describe("repository query subject diagnostics", () => {
     reads.mockClear();
     const migrated = await searchText(scope(), query, limits, {
       fs,
-      workspaceIndex: priorSubjectRevision(index),
+      workspaceIndex: priorSubjectRevision(index, identity),
       nowMs: () => 0,
     });
     expect(migrated.atoms).toEqual(cold.atoms);
@@ -134,6 +136,10 @@ describe("repository query subject diagnostics", () => {
     // Revision 1 compiled producer: compound hints did not receive observed whole-term scoring.
     expect(queryIdentityFor(query, undefined, settings)).not.toBe(
       "f13a70e9a38505674a22501f377a141fac774f6c5cad5f654ff48ae60e898991",
+    );
+    // Revision 2 compiled producer rewarded substring compound spellings.
+    expect(queryIdentityFor(query, undefined, settings)).not.toBe(
+      "6c408728cf6c55b4505d5e2543fef89859b66ab410a3655b8257302e80dcaff2",
     );
     expect(fingerprintFor(query)).toBe("4db3fdc61744f46d");
     expect(

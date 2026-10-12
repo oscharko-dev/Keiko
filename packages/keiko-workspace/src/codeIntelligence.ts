@@ -113,6 +113,7 @@ export interface CodeSymbol {
   readonly language: CodeLanguage;
   readonly lineRange: LineRange;
   readonly declarationSpan?: CodeCallEdge["callerSpan"];
+  readonly topLevelExport?: true | undefined;
   readonly fields: readonly string[];
   readonly parser: CodeParserKind;
 }
@@ -1828,6 +1829,28 @@ function topLevelSymbolDeclarations(statement: ts.Statement): readonly ts.Node[]
   return [statement];
 }
 
+function declarationGeometryKey(
+  range: LineRange,
+  span: CodeSymbol["declarationSpan"],
+): string | undefined {
+  if (span === undefined) return undefined;
+  return [range.startLine, range.endLine, span.startColumn, span.endLine, span.endColumn].join(":");
+}
+
+function symbolsByDeclarationGeometry(
+  symbols: readonly CodeSymbol[],
+): ReadonlyMap<string, readonly CodeSymbol[]> {
+  const byGeometry = new Map<string, CodeSymbol[]>();
+  for (const symbol of symbols) {
+    const key = declarationGeometryKey(symbol.lineRange, symbol.declarationSpan);
+    if (key === undefined) continue;
+    const bucket = byGeometry.get(key);
+    if (bucket === undefined) byGeometry.set(key, [symbol]);
+    else bucket.push(symbol);
+  }
+  return byGeometry;
+}
+
 function topLevelDeclaredSymbols(
   file: SourceFile,
   symbols: readonly CodeSymbol[],
@@ -1835,17 +1858,21 @@ function topLevelDeclaredSymbols(
   const source = file.syntaxTree;
   const byName = new Map<string, CodeSymbol[]>();
   if (source === undefined) return byName;
+  const byGeometry = symbolsByDeclarationGeometry(symbols);
   for (const statement of source.statements) {
     for (const declaration of topLevelSymbolDeclarations(statement)) {
       const span = nodeSourceSpan(source, declaration);
       const range = nodeLineRange(source, declaration);
-      for (const symbol of symbols) {
+      const key = declarationGeometryKey(range, span);
+      for (const symbol of byGeometry.get(key ?? "") ?? []) {
         if (
           !sameLineRange(symbol.lineRange, range) ||
           !sameSourceSpan(symbol.declarationSpan, span)
         )
           continue;
-        byName.set(symbol.name, [...(byName.get(symbol.name) ?? []), symbol]);
+        const bucket = byName.get(symbol.name);
+        if (bucket === undefined) byName.set(symbol.name, [symbol]);
+        else bucket.push(symbol);
       }
     }
   }
@@ -1959,7 +1986,9 @@ function buildTypescriptReExportResolverContext(
   }
   const symbolsByFile = new Map<string, CodeSymbol[]>();
   for (const symbol of symbols) {
-    symbolsByFile.set(symbol.scopePath, [...(symbolsByFile.get(symbol.scopePath) ?? []), symbol]);
+    const bucket = symbolsByFile.get(symbol.scopePath);
+    if (bucket === undefined) symbolsByFile.set(symbol.scopePath, [symbol]);
+    else bucket.push(symbol);
   }
   return {
     reExportsByFile,
@@ -2788,6 +2817,20 @@ function collectTypescriptFields(node: ts.Node): readonly string[] {
   return [...new Set(fields)];
 }
 
+function isTopLevelExportedConstant(node: ts.Node): boolean {
+  const compiler = typeScriptCompiler();
+  if (!compiler.isVariableDeclaration(node)) return false;
+  const declarations = node.parent;
+  const statement = declarations.parent;
+  return (
+    compiler.isVariableDeclarationList(declarations) &&
+    (declarations.flags & compiler.NodeFlags.Const) !== 0 &&
+    compiler.isVariableStatement(statement) &&
+    compiler.isSourceFile(statement.parent) &&
+    hasExportModifier(statement)
+  );
+}
+
 function collectTypescriptSymbols(file: SourceFile): readonly CodeSymbol[] {
   const sourceFile = file.syntaxTree;
   if (sourceFile === undefined) {
@@ -2810,6 +2853,7 @@ function collectTypescriptSymbols(file: SourceFile): readonly CodeSymbol[] {
       language: file.language,
       lineRange: nodeLineRange(sourceFile, node),
       declarationSpan: nodeSourceSpan(sourceFile, node),
+      ...(isTopLevelExportedConstant(node) ? { topLevelExport: true } : {}),
       fields,
       parser: "typescript-compiler-ast",
     });

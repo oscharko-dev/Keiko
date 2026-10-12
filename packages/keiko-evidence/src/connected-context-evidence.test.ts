@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCount,
   connectedContextOmittedCounts,
   MAX_OMITTED_CONTEXT_ENTRIES,
   type ConnectedContextPack,
@@ -250,6 +251,42 @@ describe("connected-context evidence", () => {
       });
       expect(budget.limits.filesReadMax).toBe(filesReadMax ?? undefined);
       expect(budget.limits.elapsedMsMax).toBe(elapsedMsMax ?? undefined);
+    },
+  );
+
+  it.each([true, false])(
+    "retains retrieval candidate counts when sent files are trimmed (%s)",
+    (trim) => {
+      const original = pack();
+      const sent = trim ? { ...original, files: [] } : original;
+      const store = createInMemoryEvidenceStore();
+      persistConnectedContextEvidence(
+        {
+          runId: "sent-inventory-count",
+          modelId: "example-chat-model",
+          workspaceRoot: original.scope.workspaceRoot,
+          pack: sent,
+          ...(trim ? { retrievedFileCount: original.files.length } : {}),
+          citationCount: 0,
+          elapsedMs: 42,
+          startedAt: NOW,
+          finishedAt: NOW + 42,
+        },
+        { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+      );
+      const manifest = requireManifest(loadEvidence(store, "sent-inventory-count"));
+      const audit = requireConnectedContext(manifest);
+      expect(manifest.context?.totalCandidates).toBe(
+        original.files.length + connectedContextOmittedCount(original),
+      );
+      expect(manifest.context?.usedBytes).toBe(original.usage.excerptBytes);
+      expect(audit.files).toHaveLength(sent.files.length);
+      expect(audit.budget.usage.filesRead).toBe(original.usage.filesRead);
+      expect(audit.budget.usage.excerptBytes).toBe(original.usage.excerptBytes);
+      expect(audit.summary.omittedCount).toBe(connectedContextOmittedCount(original));
+      expect(audit.omitted).toHaveLength(original.omitted.length);
+      expect(audit.modelRequest.sentToModel).toBe(true);
+      assertNoSensitiveText(manifest);
     },
   );
 

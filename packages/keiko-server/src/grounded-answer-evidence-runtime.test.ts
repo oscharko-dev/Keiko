@@ -1,10 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { runConnectedRetrievalEval } from "./grounded-eval-support.js";
 import type { GroundedAnswerPayload } from "./grounded-answer.js";
+import { withPromptExcerptBudget } from "./grounded-qa.js";
 
 const files = { "src/Feature.ts": "export function feature() { return true; }\n" };
 
 describe("single-source validated declaration delivery", () => {
+  it("projects the sent source confidence without rewriting the assembled read accounting", async () => {
+    const result = await runConnectedRetrievalEval({
+      files: { "manual.md": "Unit-G42 has a shipment ceiling of 17 containers.\n" },
+      query: "What is the shipment ceiling for Unit-G42?",
+      answerer: {
+        answer: (_question, pack): Promise<GroundedAnswerPayload> => {
+          expect(pack.diagnostics?.selection?.selectionConfidence).toBe("high");
+          const sent = withPromptExcerptBudget(pack, 0);
+          return Promise.resolve({
+            content: "The supplied evidence is insufficient to establish the shipment ceiling.",
+            sentEvidencePacks: [sent],
+            usage: { promptTokens: 0, completionTokens: 0 },
+            modelInvoked: false,
+          });
+        },
+      },
+    });
+    expect(result.pack.files.length).toBeGreaterThan(0);
+    expect(result.pack.usage.filesRead).toBeGreaterThan(0);
+    expect(result.pack.diagnostics?.selection).toMatchObject({
+      selectionConfidence: "low",
+      keepOneFallbackApplied: false,
+    });
+    expect(
+      result.pack.uncertainty.filter((entry) => entry.kind === "low-confidence-selection"),
+    ).toHaveLength(1);
+    expect(result.answer?.filesInPrompt).toBe(0);
+  });
+
   it("sanitizes unknown model-declared paths before returning the final answer", async () => {
     const result = await runConnectedRetrievalEval({
       files,

@@ -148,6 +148,22 @@ describe("contextual compound subject scoring", () => {
     expect(matcher.match("A shipment may wait.")).toBeGreaterThan(0);
   });
 
+  it.each(["A", "λ", "𐐀", "\u0301", "7", "٣", "_", "-"])(
+    "does not reward a compound joined to the prefix or suffix %s",
+    (continuation) => {
+      const matcher = buildMatcher(nlq(question));
+      expect(matcher.match(`# ${continuation}Unit-G42 shipment policy`)).toBeLessThan(1);
+      expect(matcher.match(`# Unit-G42${continuation} shipment policy`)).toBeLessThan(1);
+    },
+  );
+
+  it.each(["(Unit-G42)", "Unit-G42,", "docs/Unit-G42.md", "Unit-G42: approved"])(
+    "rewards a complete spelling separated by punctuation or filename boundaries: %s",
+    (spelling) => {
+      expect(buildMatcher(nlq(question)).match(spelling)).toBe(1);
+    },
+  );
+
   it.each(["SHA-256", "UTF-8", "production-ready-24-7"])(
     "does not turn the absent hint %s into a literal-only search",
     (hint) => {

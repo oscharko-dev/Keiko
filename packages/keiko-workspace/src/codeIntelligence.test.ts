@@ -65,6 +65,28 @@ function sorted<T>(values: readonly T[]): readonly T[] {
   return [...values].sort();
 }
 
+describe("top-level exported value declarations", () => {
+  it("certifies direct AST exports without treating local or nested values as exports", () => {
+    const { scope, fs } = makeScope({
+      "tests/scenarios/limits.ts": [
+        "export const packetThreshold = 193;",
+        "const localThreshold = 71;",
+        "export { localThreshold as otherThreshold };",
+        "export function makeThreshold() { const packetThreshold = 11; return packetThreshold; }",
+        "namespace examples { export const packetThreshold = 13; }",
+      ].join("\n"),
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const constants = index.symbols.filter((symbol) => symbol.kind === "constant");
+    expect(constants.map((symbol) => [symbol.lineRange.startLine, symbol.topLevelExport])).toEqual([
+      [1, true],
+      [2, undefined],
+      [4, undefined],
+      [5, undefined],
+    ]);
+  });
+});
+
 // A WorkspaceFs that CAN persist, so a regressed index writer would leave a visible artifact in
 // `files`. The index must stay in process only (issue #2670, AC6).
 interface PersistenceCapableTestFs extends WorkspaceFs {
@@ -2599,6 +2621,30 @@ describe("compiler-owned identifier reference binding", () => {
     expect(certified).toHaveLength(1);
     expect(certified[0]?.targetLineRange.startLine).toBe(2);
   });
+
+  it.each([false, true])(
+    "keeps exact declaration columns and ambiguous duplicate exports on one line (duplicate=%s)",
+    (duplicate) => {
+      const target =
+        "function container() { function handler() { return false; } } export function handler() { return true; }" +
+        (duplicate ? " export function handler() { return false; }" : "");
+      const { scope, fs } = makeScope({
+        "src/entry.ts": 'import { handler } from "./target.js"; router.post("/items", handler);',
+        "src/target.ts": target,
+      });
+      const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        disableCache: true,
+      });
+      const certified = index.references.filter((edge) => edge.binding === "lexical");
+      expect(certified).toHaveLength(duplicate ? 0 : 1);
+      if (!duplicate) {
+        expect(certified[0]?.targetLineRange).toEqual({ startLine: 1, endLine: 1 });
+        expect(certified[0]?.targetDeclarationSpan?.startColumn).toBe(
+          target.indexOf("export function handler"),
+        );
+      }
+    },
+  );
 
   it.each([
     {

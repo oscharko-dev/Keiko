@@ -9,6 +9,7 @@ import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-cont
 // missing `.source` tag, a dropped skip-uncertainty — must make at least one assertion fail.
 
 import { setImmediate } from "node:timers/promises";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +36,9 @@ import type {
   KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   RetrievalReference,
+  EvidenceManifest,
+  EvidenceStore,
+  UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
@@ -690,6 +694,155 @@ function asLocalKnowledge(answer: GroundedAnswer): LocalKnowledgeGroundedAnswer 
 // ─── Window fit: a folder path the prompt left out supports nothing ───────────
 
 describe("hybrid grounded ask — folder evidence the window fit left out", () => {
+  function expectSentHybridManifest(
+    answer: HybridGroundedAnswer,
+    evidenceStore: EvidenceStore,
+    sentPacks: readonly ConnectedContextPack[],
+    retrieved: ConnectedContextPack,
+  ): void {
+    const manifest = JSON.parse(
+      evidenceStore.get(answer.evidenceRunId ?? "") ?? "{}",
+    ) as EvidenceManifest;
+    const files = sentPacks.flatMap((pack) => pack.files);
+    expect(manifest.connectedContext?.modelRequest.sentToModel).toBe(true);
+    expect(manifest.connectedContext?.files.map((file) => file.scopePath)).toEqual(
+      files.map((file) => file.scopePath),
+    );
+    expect(
+      manifest.connectedContext?.files
+        .flatMap((file) => file.excerpts)
+        .map((excerpt) => [excerpt.lineRange, excerpt.contentSha256]),
+    ).toEqual(
+      files
+        .flatMap((file) => file.excerpts)
+        .map((excerpt) => [
+          excerpt.atom.lineRange,
+          createHash("sha256").update(excerpt.content).digest("hex"),
+        ]),
+    );
+    expect(manifest.connectedContext?.budget.usage.filesRead).toBe(retrieved.usage.filesRead);
+    expect(manifest.connectedContext?.budget.usage.excerptBytes).toBe(retrieved.usage.excerptBytes);
+    expect(retrieved.files).toHaveLength(2);
+    expect(manifest.context?.totalCandidates).toBe(2);
+  }
+
+  function compoundHintPack(): ConnectedContextPack {
+    const background = folderPack("src/background.ts", 0.9, "hint-background");
+    const subject = folderPack("src/subject.ts", 0.8, "hint-subject");
+    const files = [...background.files, ...subject.files].map((file) => ({
+      ...file,
+      excerpts: file.excerpts.map((excerpt) => {
+        const content =
+          file.scopePath === "src/subject.ts"
+            ? "Unit-G42 allows 17 containers.\nRecords are retained.\nReview the shipment.\nRecord the event.\nComplete the check."
+            : "The general procedure records a shipment.\nCheck the event.\nReview the log.\nRetain the record.\nComplete the workflow.";
+        return { ...excerpt, content, contentBytes: Buffer.byteLength(content) };
+      }),
+    }));
+    return {
+      ...background,
+      query: { ...background.query, text: "Explain the policy for Unit-G42." },
+      files,
+      usage: {
+        ...background.usage,
+        filesRead: files.length,
+        excerptBytes: files
+          .flatMap((file) => file.excerpts)
+          .reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
+      },
+      diagnostics: {
+        rankedCandidates: [],
+        selection: {
+          selectionConfidence: "high",
+          keepOneFallbackApplied: false,
+          floorReferenceKind: "ordinary-p75",
+          relativeFloorPermille: 100,
+          strongestOrdinaryScorePermille: 900,
+          absoluteFloorPermille: 100,
+          rerankerDisposition: "unconfigured",
+          reranked: false,
+          rerankFailedCalls: 0,
+        },
+      },
+    };
+  }
+
+  it.each([false, true])(
+    "projects actual fitted hybrid compound-hint confidence to returned and persisted evidence (tight=%s)",
+    async (tight) => {
+      const ctx = await hybridReviewContext();
+      const pack = compoundHintPack();
+      const evidenceStore = createInMemoryEvidenceStore();
+      expect(validateConnectedContextPack(pack).ok).toBe(true);
+      let sentPacks: readonly ConnectedContextPack[] = [];
+      let prompt = "";
+      let fullTokens = 0;
+      const ask = (deps: UiHandlerDeps): ReturnType<typeof runHybridGroundedAsk> =>
+        runHybridGroundedAsk({
+          ...ctx,
+          deps: { ...deps, evidenceStore },
+          content: pack.query.text,
+          folderRetriever: folderRetrieverFor(new Map([["", pack]])),
+          answer: (system, user) => {
+            prompt = user;
+            fullTokens = countGatewayPromptTokens({
+              messages: [
+                { role: "system", content: system },
+                { role: "user", content: user },
+              ],
+            });
+            return Promise.resolve("The supplied source is available [1].");
+          },
+          entailmentStageFactory: () => ({
+            evaluate: () => Promise.resolve([]),
+            evaluateNumeric: () => Promise.resolve([]),
+            evaluateHybrid: (
+              _answer: string,
+              packs: readonly ConnectedContextPack[],
+            ): Promise<readonly UncertaintyMarker[]> => {
+              sentPacks = packs;
+              return Promise.resolve([]);
+            },
+          }),
+        });
+      expect((await ask(ctx.deps)).status).toBe(200);
+      expect(sentPacks.flatMap((entry) => entry.files).map((file) => file.scopePath)).toEqual([
+        "src/background.ts",
+        "src/subject.ts",
+      ]);
+      expect(prompt).toContain("Unit-G42 allows 17 containers.");
+      const profile = deriveContextProfile({
+        maxInputTokens: fullTokens - (tight ? 1 : 0) + 512 + 64,
+        reservedOutputTokens: 512,
+        safetyMarginTokens: 64,
+      });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const result = await ask(
+        tight ? hybridDeps({ contextProfileForModel: () => profile }) : ctx.deps,
+      );
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(prompt.includes("Unit-G42 allows 17 containers.")).toBe(!tight);
+      expect(sentPacks.flatMap((entry) => entry.files).map((file) => file.scopePath)).toEqual(
+        tight ? ["src/background.ts"] : ["src/background.ts", "src/subject.ts"],
+      );
+      const confidence = tight ? "low" : "high";
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expectSentHybridManifest(answer, evidenceStore, sentPacks, pack);
+      expect(sentPacks[0]).toMatchObject({
+        diagnostics: { selection: { selectionConfidence: confidence } },
+      });
+      expect(answer.contextPack.folder.selectionConfidence).toBe(confidence);
+      expect(answer.contextPack.folder.usage.filesRead).toBe(pack.usage.filesRead);
+      const selections = sink.events.filter((event) => event.op === "chat.context.selected");
+      expect(selections).toHaveLength(1);
+      expect(selections[0]?.extra).toMatchObject({ sourceSelectionConfidence: confidence });
+      expect(sink.lines().join("\n")).not.toContain("Unit-G42");
+      expect(store.findMessageById(answer.assistantMessageId)?.groundedAnswer).toEqual(answer);
+      expect(pack).toMatchObject({ diagnostics: { selection: { selectionConfidence: "high" } } });
+    },
+  );
+
   function boundaryAsk(
     capsuleId: KnowledgeCapsuleId,
     pack: ConnectedContextPack,

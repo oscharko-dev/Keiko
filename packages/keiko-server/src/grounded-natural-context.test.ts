@@ -5,12 +5,25 @@ import { join } from "node:path";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { ContextOverflowError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { detectWorkspaceAt, searchText } from "@oscharko-dev/keiko-workspace";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import { fittedGroundedGatewayPrompt } from "./grounded-qa.js";
+import {
+  fittedGroundedGatewayPrompt,
+  modelInputPromptByteLimit,
+  promptByteLength,
+  withPromptExcerptBudget,
+  withPromptExcerptByteLimit,
+} from "./grounded-qa.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { logGroundedPromptSelection } from "./chat-activity.js";
+import type { SentGroundedPrompt } from "./grounded-prompt-context.js";
+import { withSentSelectionDiagnostics } from "./grounded-answer-evidence.js";
 import {
   retrieveConnectedContextPack,
   type OrchestratorDeps,
@@ -21,6 +34,7 @@ import {
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  resetServerLogger();
 });
 
 function ordinaryApp(): string {
@@ -59,6 +73,7 @@ function retrieve(
   text = QUESTION,
   deps: Partial<OrchestratorDeps> = {},
   budget?: OrchestratorInput["budget"],
+  caseSensitive = false,
 ): Promise<RetrievalOnlyOutput> {
   return retrieveConnectedContextPack(
     {
@@ -77,7 +92,7 @@ function retrieve(
       query: {
         kind: "natural-language",
         text,
-        caseSensitive: false,
+        caseSensitive,
         maxResults: 4096,
         emittedAtMs: 1,
       },
@@ -128,7 +143,174 @@ function compoundDocumentCorpus(): string {
   return root;
 }
 
+function minimumFittedBudget(question: string, pack: ConnectedContextPack): number {
+  let low = 1;
+  let high = pack.budget.modelInputTokensMax;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    try {
+      fittedGroundedGatewayPrompt(question, pack, (value: unknown): unknown => value, {
+        modelInputTokensMax: middle,
+      });
+      high = middle;
+    } catch (error) {
+      if (!(error instanceof ContextOverflowError)) throw error;
+      low = middle + 1;
+    }
+  }
+  return low;
+}
+
+function assertFittedConfidenceLog(sent: SentGroundedPrompt, inputBudget: number): void {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  logGroundedPromptSelection("fitted-confidence-proof", sent, inputBudget);
+  const event = sink.events.find((entry) => entry.op === "chat.context.selected");
+  expect(event?.extra).toMatchObject({ sourceSelectionConfidence: "low", inputBudget });
+  expect(sink.lines().join("\n")).not.toContain("Unit-G42");
+}
+
+function assertRetainedSubjectEvidence(sent: SentGroundedPrompt): void {
+  expect(sent.sentEvidencePacks?.[0]?.diagnostics?.selection?.selectionConfidence).toBe("high");
+  expect(
+    sent.sentEvidencePacks?.[0]?.files
+      .flatMap((file) => file.excerpts)
+      .some((excerpt) => excerpt.content.includes("Unit-G42")),
+  ).toBe(true);
+}
+
 describe("named documents beyond whole-folder context", () => {
+  it.each(["unit-g42 wrong.", "Unit-G42x bad.", "Unit-G42-extra x", "nearUnit-G42 x"])(
+    "fits the actual case-sensitive whole compound before an earlier decoy: %s",
+    async (decoy) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-fitting-compound-"));
+      roots.push(root);
+      const subject = "Unit-G42 correct.";
+      writeFileSync(join(root, "procedure.md"), `${decoy}\n${subject}`);
+      const { pack } = await retrieve(root, "Unit-G42", {}, undefined, true);
+      const original = pack.files.flatMap((file) => file.excerpts);
+      expect(original.some((excerpt) => excerpt.content.includes(`${decoy}\n${subject}`))).toBe(
+        true,
+      );
+      expect(pack.diagnostics?.selection?.selectionConfidence).toBe("high");
+      const sent = withPromptExcerptBudget(pack, Buffer.byteLength(subject, "utf8"));
+      const excerpts = sent.files.flatMap((file) => file.excerpts);
+      expect(excerpts.map((excerpt) => excerpt.content)).toEqual([subject]);
+      expect(excerpts[0]?.atom.lineRange).toEqual({ startLine: 2, endLine: 2 });
+      expect(sent.diagnostics?.selection?.selectionConfidence).toBe("high");
+      expect(
+        excerpts.reduce((bytes, excerpt) => bytes + excerpt.contentBytes, 0),
+      ).toBeLessThanOrEqual(Buffer.byteLength(subject, "utf8"));
+    },
+  );
+
+  it.each([923, 934, 944])(
+    "retains fitting subject evidence when uncertainty changes overhead at %i tokens",
+    async (modelInputTokensMax) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-fitting-transition-"));
+      roots.push(root);
+      const question = "What is the rule for Unit-G42?";
+      const observedPrefix = `${"x ".repeat(25)}Unit-G42 `;
+      writeFileSync(join(root, "a.txt"), `${observedPrefix}${"details ".repeat(300)}`);
+      const { pack } = await retrieve(root, question);
+      const redactor = (value: unknown): unknown => value;
+      const minimal = withPromptExcerptBudget(pack, Buffer.byteLength(observedPrefix, "utf8"));
+      const options = { modelInputTokensMax };
+      const positive = fittedGroundedGatewayPrompt(question, minimal, redactor, options);
+      expect(positive.sentEvidencePacks?.[0]?.diagnostics?.selection?.selectionConfidence).toBe(
+        "high",
+      );
+      const actual = fittedGroundedGatewayPrompt(question, pack, redactor, options);
+      assertRetainedSubjectEvidence(actual);
+      expect(countGatewayPromptTokens({ messages: actual.messages })).toBeLessThanOrEqual(
+        modelInputTokensMax,
+      );
+      expect(promptByteLength(actual.messages)).toBeLessThanOrEqual(
+        modelInputPromptByteLimit(modelInputTokensMax),
+      );
+    },
+  );
+
+  it.each([
+    ["total byte budget", withPromptExcerptBudget],
+    ["per-excerpt byte limit", withPromptExcerptByteLimit],
+  ] as const)(
+    "rechecks contextual confidence after %s removes the subject",
+    async (_name, trim) => {
+      const question = "What is the shipment ceiling for Unit-G42?";
+      const { pack } = await retrieve(compoundDocumentCorpus(), question);
+      expect(pack.diagnostics?.selection?.selectionConfidence).toBe("high");
+      const trimmed = trim(pack, 0);
+      expect(trimmed.files).toEqual([]);
+      expect(trimmed.diagnostics?.selection?.selectionConfidence).toBe("low");
+      expect(trimmed.diagnostics?.selection?.keepOneFallbackApplied).toBe(false);
+      expect(
+        trimmed.uncertainty.filter((entry) => entry.kind === "low-confidence-selection"),
+      ).toHaveLength(1);
+      expect(
+        trim(pack, pack.budget.excerptBytesMax).diagnostics?.selection?.selectionConfidence,
+      ).toBe("high");
+    },
+  );
+
+  it("binds fitted prompt confidence to its actual retained subject evidence", async () => {
+    const question = "What is the shipment ceiling for Unit-G42?";
+    const { pack } = await retrieve(compoundDocumentCorpus(), question);
+    const redactor = (value: unknown): unknown => value;
+    const complete = fittedGroundedGatewayPrompt(question, pack, redactor);
+    expect(complete.withoutSources.map((message) => message.content).join("\n")).not.toContain(
+      "The supplied evidence may be unrelated to the question.",
+    );
+    const modelInputTokensMax = minimumFittedBudget(question, pack);
+    const sent = fittedGroundedGatewayPrompt(question, pack, redactor, { modelInputTokensMax });
+    const actual = sent.sentEvidencePacks?.[0];
+    expect(actual).toBeDefined();
+    expect(
+      actual?.files
+        .flatMap((file) => file.excerpts)
+        .some((excerpt) => excerpt.content.includes("Unit-G42")),
+    ).toBe(false);
+    expect(actual?.diagnostics?.selection?.selectionConfidence).toBe("low");
+    expect(
+      actual?.uncertainty.filter((entry) => entry.kind === "low-confidence-selection"),
+    ).toHaveLength(1);
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(
+      modelInputTokensMax,
+    );
+    assertFittedConfidenceLog(sent, modelInputTokensMax);
+    expect(pack.diagnostics?.selection?.selectionConfidence).toBe("high");
+  });
+
+  it("preserves the requested case in trimming and actual-sent confidence", async () => {
+    const question = "What is the shipment ceiling for Unit-G42?";
+    const { pack } = await retrieve(compoundDocumentCorpus(), question);
+    const sensitive = { ...pack, query: { ...pack.query, caseSensitive: true } };
+    const retained = withPromptExcerptBudget(sensitive, sensitive.budget.excerptBytesMax);
+    const removed = withPromptExcerptBudget(sensitive, 0);
+    for (const [sent, confidence] of [
+      [retained, "high"],
+      [removed, "low"],
+    ] as const) {
+      expect(sent.diagnostics?.selection?.selectionConfidence).toBe(confidence);
+      expect(
+        withSentSelectionDiagnostics(sensitive, [sent], 1).diagnostics?.selection
+          ?.selectionConfidence,
+      ).toBe(confidence);
+    }
+    const wrongCase = {
+      ...sensitive,
+      query: { ...sensitive.query, text: question.replace("Unit-G42", "unit-g42") },
+    };
+    expect(
+      withPromptExcerptBudget(wrongCase, wrongCase.budget.excerptBytesMax).diagnostics?.selection
+        ?.selectionConfidence,
+    ).toBe("low");
+    expect(
+      withSentSelectionDiagnostics(wrongCase, [retained], 1).diagnostics?.selection
+        ?.selectionConfidence,
+    ).toBe("low");
+  });
+
   it.each([
     "How does this app compute SHA-256 digests? Cite the implementation.",
     "How does this app handle UTF-8 input? Cite the implementation.",

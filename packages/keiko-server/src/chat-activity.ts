@@ -1,6 +1,7 @@
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import type { SentGroundedPrompt } from "./grounded-prompt-context.js";
+import type { ContextSelectionConfidence } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ModelKind } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
@@ -203,6 +204,12 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
     tokensSaved: { type: "integer", dataClass: "count", required: true },
     promptTokens: { type: "integer", dataClass: "count", required: true },
     inputBudget: { type: "integer", dataClass: "count", required: true },
+    sourceSelectionConfidence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["high", "low"],
+    },
     imageCount: { type: "integer", dataClass: "count", required: true },
     imageReserveTokens: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -442,11 +449,12 @@ export function logChatContextSelection(
 /** Grounded prompts have no history-message or image lane; log the actual fitted dispatch. */
 export function logGroundedPromptSelection(
   correlationId: string | undefined,
-  prompt: Pick<SentGroundedPrompt, "messages">,
+  prompt: Pick<SentGroundedPrompt, "messages" | "sentEvidencePacks">,
   inputBudget: number,
   accounting?: ContextProfile["tokenAccounting"],
 ): void {
   const tokens = countGatewayPromptTokens({ messages: prompt.messages }, accounting);
+  const confidence = sentSourceConfidence(prompt);
   getServerLogger().info(
     activityLogEvent(
       CHAT_CONTEXT_SELECTED_OPERATION,
@@ -461,6 +469,7 @@ export function logGroundedPromptSelection(
         tokensSaved: 0,
         promptTokens: tokens,
         inputBudget,
+        ...(confidence === undefined ? {} : { sourceSelectionConfidence: confidence }),
         imageCount: 0,
         imageReserveTokens: 0,
         completeness: "complete",
@@ -468,6 +477,20 @@ export function logGroundedPromptSelection(
       },
     ),
   );
+}
+
+function sentSourceConfidence(
+  prompt: Pick<SentGroundedPrompt, "sentEvidencePacks">,
+): ContextSelectionConfidence | undefined {
+  const confidence = prompt.sentEvidencePacks?.map(
+    (pack) => pack.diagnostics?.selection?.selectionConfidence,
+  );
+  if (confidence?.includes("low")) return "low";
+  return confidence !== undefined &&
+    confidence.length > 0 &&
+    confidence.every((value) => value === "high")
+    ? "high"
+    : undefined;
 }
 
 function contextHistoryMetrics(assembly: GatewayPromptAssembly): {

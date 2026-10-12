@@ -14,6 +14,21 @@ export function isNumberedCompoundQueryTerm(term: string): boolean {
   return /\p{N}/u.test(term) && NUMBERED_COMPOUND_TERM_RE.test(term);
 }
 
+/** Whole lexical spelling; Unicode word characters and compound continuations are not boundaries. */
+export function containsNumberedCompoundQueryTerm(
+  content: string,
+  term: string,
+  caseSensitive = false,
+): boolean {
+  if (!isNumberedCompoundQueryTerm(term)) return false;
+  const spelling = caseSensitive ? term : term.toLowerCase();
+  const haystack = caseSensitive ? content : content.toLowerCase();
+  // The validated shape contains only letters, marks, numbers and hyphens, so it is regex-literal.
+  return new RegExp(`(?:^|[^\\p{L}\\p{M}\\p{N}_-])${spelling}(?![\\p{L}\\p{M}\\p{N}_-])`, "u").test(
+    haystack,
+  );
+}
+
 const MAX_EXPANDED_QUERY_TERMS = 48;
 
 const CITATION_DIRECTIVE_VERBS: ReadonlySet<string> = new Set([

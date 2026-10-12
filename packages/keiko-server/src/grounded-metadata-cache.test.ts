@@ -78,24 +78,31 @@ function manifestCorpus(root: string, count: number): void {
 
 describe("metadata retention and pre-read cache identity", () => {
   it.each([
-    ["Missing-8Z", "low"],
-    ["Unit-G42", "high"],
+    ["Missing-8Z", "low", "Unit-G42", false],
+    ["Unit-G42", "high", "Unit-G42", false],
+    ["Unit-G42", "low", "Unit-G420", false],
+    ["Unit-G42", "low", "Unit-G42-Extra", false],
+    ["Unit-G42", "low", "λUnit-G42", false],
+    ["Unit-G42", "low", "Unit-G42\u0301", false],
+    ["Unit-G42", "high", "Unit-G42", true],
+    ["Unit-G42", "low", "unit-g42", true],
   ] as const)(
-    "preserves %s subject confidence through an actual pack-cache hit",
-    async (term, confidence) => {
+    "preserves %s subject confidence %s with observed %s and case-sensitive %s through a cache hit",
+    async (term, confidence, observed, caseSensitive) => {
       const root = physicalRoot();
       writeFileSync(
         join(root, "procedure.md"),
-        "# Unit-G42 shipment policy\nThe current owner-approved operational policy admits 29 containers.\n",
+        `# ${observed} shipment policy\nThe current owner-approved operational policy admits 29 containers.\n`,
       );
       const microIndex = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: () => 0 });
       const get = vi.spyOn(microIndex, "get");
       const log = createBufferedServerLogSink();
       const deps = dependencies(root, { microIndex, activityLog: log });
-      const input = request(
+      const base = request(
         root,
         `For ${term}, how many containers are admitted by the current operational policy?`,
       );
+      const input = { ...base, query: { ...base.query, caseSensitive } };
       const cold = await retrieveConnectedContextPack(input, deps);
       expect(cold.pack.diagnostics?.selection).toMatchObject({
         selectionConfidence: confidence,
