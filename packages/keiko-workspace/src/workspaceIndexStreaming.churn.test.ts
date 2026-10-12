@@ -200,16 +200,21 @@ describe("bounded matching-index capacity under ordinary-folder churn", () => {
           return bytes;
         },
       );
-      const result = await searchText(scope, QUERY, LIMITS, {
-        fs: { ...fs, readFileBytes },
-        workspaceIndex: reopen(),
-        nowMs: () => now,
-        deadlineAtMs: 10,
-        signal: controller.signal,
-      });
-      expect(result.coverage.reasons).toContain(reason);
-      expect(readFileBytes).toHaveBeenCalledOnce();
-      expect(await reopen().loadSnapshot(key)).toEqual(before);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const result = await searchText(scope, QUERY, LIMITS, {
+          fs: { ...fs, readFileBytes },
+          workspaceIndex: reopen(),
+          nowMs: () => now,
+          deadlineAtMs: 10,
+          signal: controller.signal,
+        });
+        expect(result.coverage.reasons).toContain(reason);
+        expect(readFileBytes).toHaveBeenCalledOnce();
+        expect(await reopen().loadSnapshot(key)).toEqual(before);
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 
