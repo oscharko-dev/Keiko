@@ -6456,6 +6456,11 @@ function coverageAdmissionWithCompetingTargetOpportunity(
   admission: SharedCoverageAdmission,
   minimumScore: number,
 ): CoverageAdmission {
+  const earlyJoint =
+    coverageAdmissionWithPendingFairTarget(candidate, ranked, admission, entry.atom.score, entry) ??
+    coverageAdmissionWithPendingFairTarget(candidate, ranked, admission, minimumScore, entry);
+  if (earlyJoint !== undefined)
+    return coverageAdmissionWithCompetingCoveragePrefix(earlyJoint, entry, admission);
   const canonical = coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
   const joint =
     coverageAdmissionWithPendingFairTarget(canonical, ranked, admission, entry.atom.score, entry) ??

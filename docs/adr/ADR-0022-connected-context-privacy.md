@@ -505,12 +505,14 @@ Outside a retained source turn, a continuation below the nominated head yields w
 selected body at or above that head still fits the existing whole-target guards from the same
 pre-child state. The canonical nominee follows the already-computed shared target order:
 relevance and stable ties within each source root, interleaved between roots. Its complete body
-must pass the existing guards first. Pending same-file targets at or above the nominee's score
-may then join in stable file order through the same guards. While retaining this guarded
-canonical proposal, the existing pending fair-file order may admit a distinct physical file
-whose head is not FULL in the proposal or resume its committed FULL parent. This joint addition
-first uses the canonical nominee's score, then the borrowed floor if no such addition fits; it retains the canonical body
-and its guarded same-file prefix. If no joint addition fits and the canonical physical file head
+must pass the existing guards first. Before growing its same-file prefix, the existing pending
+fair-file order may admit a distinct physical file whose head is not FULL in the proposal or
+resume its committed FULL parent. This joint addition first uses the canonical nominee's score,
+then the borrowed floor if no such addition fits. Pending same-file targets at or above the
+nominee's score may then join in stable file order through the same guards, preserving the
+complete joint. If no early joint addition fits, the canonical same-file prefix grows first and
+the same two-floor joint addition is retried against that guarded proposal. If neither joint
+addition fits and the canonical physical file head
 is already FULL in committed state, the existing pending fair-file order may instead nominate
 an alternative from the original pre-child state. That alternative must meet the borrowed floor
 and pass the same whole-target guards. Each selected nominee's pending same-file targets at or
