@@ -2165,7 +2165,8 @@ export class Gateway {
       if (!received) throw new TransportError("provider stream ended without an answer");
       admission.settle("success");
     } catch (error) {
-      if (error instanceof ContextOverflowError) logRepair("denied");
+      if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError)
+        logRepair("denied");
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       settleFailedCallerAttempt(callerReservation, error, admitted);
       recordProviderFailure(admission, error, observedProviderDispatch(dispatchObserved, admitted));
@@ -2333,7 +2334,8 @@ export class Gateway {
       admission.settle("success");
       return response;
     } catch (error) {
-      if (error instanceof ContextOverflowError) this.logAttemptRepair(attempt, "denied");
+      if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError)
+        this.logAttemptRepair(attempt, "denied");
       usage = measuredCatalogFailureUsage(error, capability, correlationId);
       settleFailedCallerAttempt(callerReservation, error, admitted);
       // A client-initiated cancel is not a provider fault — skip the breaker.

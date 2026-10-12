@@ -443,6 +443,7 @@ export function redactErrorMessage(message: string, deps: UiHandlerDeps): string
 
 function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  if (error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return 403;
   // KEIKO-0353: a circuit-open failure IS "temporarily unavailable" from the caller's
   // point of view — the same 503 the transport-error branch below already emits. The
   // breaker's own retryable=false signals internal auto-recovery, not that the client

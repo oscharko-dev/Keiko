@@ -5,6 +5,7 @@ import {
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   ERROR_CODES,
   GatewayEgressError,
   GatewayError,
@@ -25,6 +26,7 @@ describe("error code constants", () => {
     expect(ERROR_CODES.MODEL_REFUSAL).toBe("GATEWAY_MODEL_REFUSAL");
     expect(ERROR_CODES.MALFORMED_TOOL_CALL).toBe("GATEWAY_MALFORMED_TOOL_CALL");
     expect(ERROR_CODES.CONTEXT_OVERFLOW).toBe("GATEWAY_CONTEXT_OVERFLOW");
+    expect(ERROR_CODES.ATTEMPT_ADMISSION_DENIED).toBe("GATEWAY_ATTEMPT_ADMISSION_DENIED");
     expect(ERROR_CODES.RATE_LIMIT).toBe("GATEWAY_RATE_LIMIT");
     expect(ERROR_CODES.TIMEOUT).toBe("GATEWAY_TIMEOUT");
     expect(ERROR_CODES.CANCELLED).toBe("GATEWAY_CANCELLED");
@@ -47,6 +49,7 @@ describe("error subclasses", () => {
     [new ModelRefusalError("a"), ERROR_CODES.MODEL_REFUSAL, false],
     [new MalformedToolCallError("a"), ERROR_CODES.MALFORMED_TOOL_CALL, false],
     [new ContextOverflowError("a"), ERROR_CODES.CONTEXT_OVERFLOW, false],
+    [new CallerAttemptAdmissionError("a"), ERROR_CODES.ATTEMPT_ADMISSION_DENIED, false],
     [new RateLimitError("a"), ERROR_CODES.RATE_LIMIT, true],
     [new TimeoutError("a"), ERROR_CODES.TIMEOUT, true],
     [new CancelledError("a"), ERROR_CODES.CANCELLED, false],

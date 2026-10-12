@@ -1,7 +1,7 @@
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
-  ContextOverflowError,
+  CallerAttemptAdmissionError,
   CancelledError,
   TimeoutError,
   type GatewayCallRequest,
@@ -118,7 +118,7 @@ export async function callPluralGroundedSynthesis(
   input: PluralSynthesisCall,
 ): Promise<NormalizedResponse> {
   if (input.budget.remaining() <= 0)
-    throw new ContextOverflowError("Grounded synthesis attempt grant is exhausted");
+    throw new CallerAttemptAdmissionError("Grounded synthesis attempt grant is exhausted");
   const tracker = createGroundedSynthesisAttemptAdmission(input.budget, input.grants);
   const promptTokens = countGatewayPromptTokens(input.request, input.accounting);
   const pending = input.budget.pendingUsage();
@@ -126,7 +126,7 @@ export async function callPluralGroundedSynthesis(
     promptTokens > input.grants.inputTokensMax - pending.promptTokens ||
     (input.request.maxOutputTokens ?? 0) <= 0
   )
-    throw new ContextOverflowError("Grounded synthesis token grant is exhausted");
+    throw new CallerAttemptAdmissionError("Grounded synthesis token grant is exhausted");
   if (input.signal.aborted) throw new CancelledError("Grounded synthesis cancelled");
   if (input.grants.deadlineAtMs !== undefined && Date.now() >= input.grants.deadlineAtMs)
     throw new TimeoutError("Grounded synthesis deadline exhausted");

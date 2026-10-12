@@ -51,6 +51,7 @@ import {
   CancelledError,
   TimeoutError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   GatewayError,
   ProviderError,
   findCapability,
@@ -325,6 +326,7 @@ export function mappedContextPackValidationError(
 // added through PATCH /api/gateway/config after process start (Epic #177).
 export function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  if (error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return 403;
   if (error.retryable) return 503;
   return 502;
 }
@@ -1723,7 +1725,7 @@ async function groundedGatewayAttempt(
   options: GroundedAnswerOptions,
 ): Promise<{ readonly sent: SentGroundedPrompt; readonly response?: NormalizedResponse }> {
   if (ctx.synthesis.remaining() <= 0)
-    throw new ContextOverflowError("Grounded synthesis attempt allowance exhausted");
+    throw new CallerAttemptAdmissionError("Grounded synthesis attempt allowance exhausted");
   const remaining = groundedRemainingOptions(ctx, pack, options);
   const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
   const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {

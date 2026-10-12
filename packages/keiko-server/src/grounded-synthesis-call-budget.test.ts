@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CallerAttemptAdmissionError } from "@oscharko-dev/keiko-model-gateway";
 import {
   createGroundedSynthesisCallBudget,
   createGroundedSynthesisAttemptAdmission,
@@ -7,6 +8,17 @@ import {
 } from "./grounded-answer.js";
 
 describe("factory-owned physical synthesis allowance", () => {
+  it("keeps dispatched injected caller failures conservatively unknown", () => {
+    const budget = createGroundedSynthesisCallBudget();
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 220,
+      outputTokensMax: 80,
+    });
+    tracker.settleFallbackFailure(100, new CallerAttemptAdmissionError("Injected caller refusal"));
+    expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 80 });
+    expect(budget.reservedOutputTokens()).toBe(80);
+    expect(budget.remaining()).toBe(1);
+  });
   it("retains unreported failed output exposure rather than granting a retry from measured zero", () => {
     const budget = createGroundedSynthesisCallBudget();
     const tracker = createGroundedSynthesisAttemptAdmission(budget, {

@@ -3,6 +3,12 @@ import { Gateway, type GatewayCallRequest } from "./gateway.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import { parseGatewayConfig } from "./config.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
+import { CallerAttemptAdmissionError as CanonicalCallerError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { CallerAttemptAdmissionError as PublicCallerError } from "./index.js";
+import {
+  CallerAttemptAdmissionError,
+  settleFailedCallerAttempt,
+} from "./gateway-attempt-admission.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { ModelProviderConfig, NormalizedResponse, ProviderAdapter } from "./types.js";
 
@@ -107,6 +113,17 @@ function partialStream(): { readonly response: Response; readonly cancelled: () 
 }
 
 describe("physical admission settlement before fetch and despite spend failure", () => {
+  it("shares one canonical nonretryable caller class without refunding dispatched unknown output", () => {
+    expect(CallerAttemptAdmissionError).toBe(CanonicalCallerError);
+    expect(PublicCallerError).toBe(CanonicalCallerError);
+    const settle = vi.fn<Reservation["settle"]>();
+    const error = new CallerAttemptAdmissionError("Caller grant exhausted");
+    settleFailedCallerAttempt({ settle }, error, true);
+    expect(settle).toHaveBeenCalledExactlyOnceWith(undefined, true, "unknown");
+    settle.mockClear();
+    settleFailedCallerAttempt({ settle }, error, false);
+    expect(settle).toHaveBeenCalledExactlyOnceWith(undefined, false, "none");
+  });
   it("preserves buffered dispatch when the isolated log sink throws", async () => {
     const proof = fixture({ logFailure: true });
     const answer = await proof.gateway.chat({ ...REQUEST, attemptAdmission: proof.admission });

@@ -323,10 +323,10 @@ describe("actual configured plural synthesis dispatches", () => {
   it.each([false, true])(
     "refuses retry after unknown output exhausted the original grant (hybrid=%s)",
     async (hybrid) => {
-      const turn = await scriptedTurn(hybrid, "unknown-output", 502);
+      const turn = await scriptedTurn(hybrid, "unknown-output", 403);
       expect(turn.calls).toHaveLength(1);
       expect(turn.reservations).toBe(1);
-      expect(turn.body).toMatchObject({ error: { code: "GATEWAY_CONTEXT_OVERFLOW" } });
+      expect(turn.body).toMatchObject({ error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } });
     },
   );
 

@@ -1,13 +1,13 @@
 import {
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   GatewayError,
   ProviderError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayCallRequest } from "./gateway.js";
 import type { UsageMetadata } from "./types.js";
 
-/** Caller authority refusal, even when an earlier compatibility request reached the provider. */
-export class CallerAttemptAdmissionError extends ContextOverflowError {}
+export { CallerAttemptAdmissionError } from "@oscharko-dev/keiko-security/errors/gateway";
 
 export function settleCallerAttempt(
   reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
@@ -27,7 +27,7 @@ export function settleFailedCallerAttempt(
     reservation,
     failedCallerAttemptUsage(failure),
     dispatched,
-    failedCallerOutputState(failure),
+    dispatched ? failedCallerOutputState(failure) : "none",
   );
 }
 

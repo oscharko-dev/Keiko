@@ -759,7 +759,10 @@ system that exists, never beside it:
   retain the existing gateway boundary. No nested compatibility path grants another attempt.
   A terminal caller attempt/cap refusal remains a local fault even after an earlier compatibility
   dispatch; it cannot open the shared provider breaker. Genuine provider failures retain the
-  existing breaker and retry classification.
+  existing breaker and retry classification. Caller attempt/cap refusals use the nonretryable
+  `GATEWAY_ATTEMPT_ADMISSION_DENIED` code and HTTP 403; streamed notices retain that same code.
+  Their localized request-limit notice does not claim a model context overflow or exact unknown
+  output consumption. Genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`.
   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity

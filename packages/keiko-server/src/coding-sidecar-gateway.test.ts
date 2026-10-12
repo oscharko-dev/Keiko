@@ -37,6 +37,7 @@ import {
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   ERROR_CODES,
   GatewayEgressError,
   MalformedToolCallError,
@@ -4735,6 +4736,7 @@ describe("coding sidecar gateway turn failure projection", () => {
     [new ResponseRedactionError("synthetic redaction depth"), "turn-rejected"],
     [new TimeoutError("synthetic timeout"), "stream-incomplete"],
     [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
+    [new CallerAttemptAdmissionError("synthetic caller grant"), "turn-rejected"],
   ] as const)("projects %s as %s without exposing provider text", async (error, code) => {
     const sink = captureServerLog("warn");
     const eventHub = new CodingRuntimeEventHub();

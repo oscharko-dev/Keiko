@@ -354,6 +354,9 @@ input/output and remaining elapsed grants. Admission occurs before each actual d
 reservation. Charged input retains the greater of the canonical sent prompt estimate and reported
 usage; measured partial output survives a discarded attempt, while uncertain failed stream output
 retains its requested cap. These conservative charges are distinct from provider-measured usage.
+Caller attempt/cap refusals use nonretryable `GATEWAY_ATTEMPT_ADMISSION_DENIED` and HTTP 403;
+streamed notices retain the same code. The localized request-limit notice distinguishes those
+refusals from `GATEWAY_CONTEXT_OVERFLOW` without asserting exact unknown output consumption.
 Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
 contracts without supplying another synthesis attempt. Normalized output is buffered before
 publication; rejected declarations cannot escape through streamed chunks. The existing allocator's

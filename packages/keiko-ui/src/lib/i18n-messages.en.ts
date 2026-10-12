@@ -526,6 +526,11 @@ export const EN_MESSAGES = {
     "The request exceeds the model's context window. If the provider reports its window, Keiko adopts it.",
   "chat.error.contextOverflow.remediation":
     "Shorten the message or choose a model with a larger context window.",
+  "chat.error.attemptAdmission.title": "Request attempt limit reached",
+  "chat.error.attemptAdmission.message":
+    "Keiko stopped further model attempts to stay within this request's limits. An earlier attempt may have used tokens even though no answer was received.",
+  "chat.error.attemptAdmission.remediation":
+    "Check the model gateway before sending a new request.",
   "chat.error.attachmentOversized.message": "Attached content is too large. Shorten or remove it.",
 
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the

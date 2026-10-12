@@ -3127,6 +3127,27 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     );
   });
 
+  it("keeps caller admission refusal out of the context-window consumer", async () => {
+    const error = new ApiError(
+      "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+      "Caller max_tokens grant exhausted before dispatch",
+      403,
+    );
+    error.correlationId = "caller-admission-support";
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(error);
+    const { result } = await setupUngroundedSession();
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the retained conversation" });
+    });
+    const notice = toUserErrorNotice(result.current.error, "fallback");
+    expect(notice.code).toBe("GATEWAY_ATTEMPT_ADMISSION_DENIED");
+    expect(notice.title).toBe("Request attempt limit reached");
+    expect(notice.correlationId).toBe("caller-admission-support");
+    expect(notice.message).not.toContain(CONTEXT_OVERSIZED_USER_MESSAGE);
+    expect(notice.remediation).not.toContain("context window");
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+  });
+
   // PR #3678 review: an oversized attachment is not a context-window overflow. The overflow notice
   // told the user to resend a request that fails the same way.
   it("keeps an oversized-attachment error apart from the context-window notice", async () => {

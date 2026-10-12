@@ -8,6 +8,7 @@ import type { InsufficiencyDeclarationResult } from "./grounded-faithfulness.js"
 import {
   CancelledError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   TimeoutError,
   GatewayError,
   ProviderError,
@@ -133,7 +134,7 @@ export function createGroundedSynthesisAttemptAdmission(
     if (gatewayOwned) return;
     const reservation = admission({ promptTokens, maxOutputTokens: options.outputTokensMax });
     if (reservation === undefined)
-      throw new ContextOverflowError("Synthesis attempt grant exhausted before dispatch");
+      throw new CallerAttemptAdmissionError("Synthesis attempt grant exhausted before dispatch");
     reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
   };
   return {

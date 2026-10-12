@@ -1237,7 +1237,10 @@ fallbacks. This avoids double-reserving the first request at both gateway and ad
 Other adapters retain the gateway-owned attempt boundary. Each reservation settles once.
 Terminal caller attempt/cap refusals are classified independently of prior compatibility
 dispatches and cannot increment the shared provider breaker. Genuine provider errors retain
-their existing resilience classification. Early
+their existing resilience classification. Caller attempt/cap refusals use the nonretryable
+`GATEWAY_ATTEMPT_ADMISSION_DENIED` code and HTTP 403, also preserved in streamed error notices.
+The localized request-limit notice does not diagnose context-window overflow or claim exact
+unknown output consumption; genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token

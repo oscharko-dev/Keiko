@@ -540,6 +540,11 @@ export const DE_MESSAGES = {
     "Die Anfrage überschreitet das Kontextfenster des Modells. Meldet der Anbieter sein Fenster, übernimmt Keiko es.",
   "chat.error.contextOverflow.remediation":
     "Kürze die Nachricht oder wähle ein Modell mit größerem Kontextfenster.",
+  "chat.error.attemptAdmission.title": "Versuchsgrenze der Anfrage erreicht",
+  "chat.error.attemptAdmission.message":
+    "Keiko hat weitere Modellversuche gestoppt, um die Grenzen dieser Anfrage einzuhalten. Ein früherer Versuch kann Tokens verwendet haben, obwohl keine Antwort empfangen wurde.",
+  "chat.error.attemptAdmission.remediation":
+    "Prüfe das Modell-Gateway, bevor du eine neue Anfrage sendest.",
   "chat.error.attachmentOversized.message":
     "Angehängte Inhalte sind zu groß. Kürze oder entferne sie.",
 

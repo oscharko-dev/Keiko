@@ -17,6 +17,10 @@ import {
   type GatewayPromptTokenInput,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createGroundedSynthesisAttemptAdmission,
+  createGroundedSynthesisCallBudget,
+} from "./grounded-answer.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -38,6 +42,7 @@ const PARTIAL_USAGE_FAULT = "transport-after-reported-usage";
 const UNMEASURED_PARTIAL_FAULT = "transport-after-unmeasured-output";
 const UNSUPPORTED_USAGE = "unsupported-stream-options";
 const UNSUPPORTED_OUTPUT = "unsupported-max-tokens";
+const DISPATCHED_TIMEOUT = "dispatched-timeout";
 let root = "";
 let stateDir = "";
 const disposals: UiHandlerDeps[] = [];
@@ -159,6 +164,8 @@ function configuredRuntime(
   maxRetries = 0,
   baseUrl = "https://synthesis.example.invalid/v1",
   ownAssessment?: OwnAssessmentPolicy,
+  maxOutputTokens = 1024,
+  contextWindow = 32768,
 ): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
@@ -189,8 +196,8 @@ function configuredRuntime(
       capabilities: [
         {
           ...createDefaultChatCapability(MODEL),
-          contextWindow: 32768,
-          maxOutputTokens: 1024,
+          contextWindow,
+          maxOutputTokens,
           pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
         },
       ],
@@ -333,6 +340,8 @@ function installProvider(answers: readonly string[], allSynthesis = false): stri
       if (!allSynthesis && !body.includes("File: src/Feature.ts"))
         return Promise.resolve(providerResponse(CITED));
       requests.push(body);
+      if (answers[requests.length - 1] === DISPATCHED_TIMEOUT)
+        return Promise.reject(new DOMException("Synthetic transport timeout", "TimeoutError"));
       return Promise.resolve(providerResponse(answers[requests.length - 1] ?? CITED));
     }),
   );
@@ -396,6 +405,87 @@ async function configuredProviderTurn(
 }
 
 describe("the shared two-call ceiling across actual configured gateway synthesis attempts", () => {
+  it("keeps the single-source answerer allowance refusal distinct after actual window adoption", async () => {
+    const turn = await configuredProviderTurn([UNSUPPORTED_USAGE, OVERFLOW, CITED]);
+    expect(turn.requests).toHaveLength(2);
+    expect(turn.spendReservations).toBe(2);
+    expect(turn.records).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        state: "adopted",
+        contextWindow: 8192,
+      }),
+    );
+    expect(turn.records.some((record) => record.op === "gateway.context-window.retry")).toBe(true);
+    expect(turn.result.body).toMatchObject({
+      error: { message: "Grounded synthesis attempt allowance exhausted" },
+    });
+    expect(turn.result.status).toBe(403);
+    expect(turn.result.body).toMatchObject({ error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } });
+  });
+
+  it("keeps the unknown timeout charge while distinguishing caller admission from overflow", async () => {
+    const requests = installProvider([DISPATCHED_TIMEOUT, CITED], true);
+    const { deps } = configuredRuntime(1, undefined, undefined, 8192, 131072);
+    const port = deps.modelPortFactory(MODEL);
+    if (port === undefined) throw new TypeError("Expected configured gateway");
+    const budget = createGroundedSynthesisCallBudget();
+    const grants = modelWindowAwareBudget(deps, MODEL);
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: grants.modelInputTokensMax,
+      outputTokensMax: grants.modelOutputTokensMax,
+    });
+    const failure: unknown = await port
+      .call(
+        {
+          modelId: MODEL,
+          messages: [{ role: "user", content: "Explain src/Feature.ts" }],
+          maxOutputTokens: grants.modelOutputTokensMax,
+          attemptAdmission: tracker.admission,
+        },
+        new AbortController().signal,
+      )
+      .catch((error: unknown) => error);
+    expect(grants.modelOutputTokensMax).toBe(8192);
+    expect(requests).toHaveLength(1);
+    expect(requestedOutputTokens(requests[0] ?? "")).toBe(8192);
+    expect(budget.reservedOutputTokens()).toBe(8192);
+    expect(budget.pendingUsage().completionTokens).toBe(8192);
+    expect(budget.remaining()).toBe(1);
+    expect(budget.completed()).toBe(0);
+    expect(failure).toMatchObject({ code: "GATEWAY_ATTEMPT_ADMISSION_DENIED", retryable: false });
+  });
+
+  it("exports the refused unknown-output retry as a caller-limit HTTP refusal", async () => {
+    const requests = installProvider([DISPATCHED_TIMEOUT, CITED]);
+    const { deps, chatId } = configuredRuntime(1, undefined, undefined, 8192, 131072);
+    const result = await handleGroundedAsk(route(chatId), deps);
+    expect(requests).toHaveLength(1);
+    expect(requestedOutputTokens(requests[0] ?? "")).toBe(8192);
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } });
+    const records = readPersistedActivityLog(stateDir)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.chat.failed",
+        errorKind: "authority-denied",
+      }),
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "server.diagnostic.failure",
+        diagnosticErrorClass: "CallerAttemptAdmissionError",
+        correlationId: "physical-synthesis-public-handler",
+        errorKind: "authority-denied",
+        code: "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+      }),
+    );
+    expect(JSON.stringify(records)).not.toContain("Synthetic transport timeout");
+  });
+
   it("allows a labelled general explanation with no matching folder evidence under default authority", async () => {
     rmSync(join(root, "src"), { recursive: true });
     rmSync(join(root, "lib"), { recursive: true });
@@ -546,11 +636,11 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
       const { deps, chatId } = configuredRuntime(0, provider.baseUrl);
       for (let index = 0; index < 5; index += 1) {
         const result = await handleGroundedAsk(route(chatId), deps);
-        expect(result.status).toBe(502);
+        expect(result.status).toBe(403);
       }
       expect(provider.requests).toHaveLength(10);
       const failedRecords = readPersistedActivityLog(stateDir);
-      expect(failedRecords).toContain("GATEWAY_CONTEXT_OVERFLOW");
+      expect(failedRecords).toContain("GATEWAY_ATTEMPT_ADMISSION_DENIED");
       provider.enableHealthy();
       const chat = deps.store.createChat(root, "Healthy after local refusal", MODEL);
       deps.store.updateChat(chat.id, {
@@ -727,8 +817,10 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(turn.requests.length).toBeLessThanOrEqual(2);
     expect(turn.spendReservations).toBe(turn.requests.length);
     if (turn.result.status !== 200) {
-      expect(turn.result.status).toBe(502);
-      expect(turn.result.body).toMatchObject({ error: { code: "GATEWAY_CONTEXT_OVERFLOW" } });
+      expect(turn.result.status).toBe(403);
+      expect(turn.result.body).toMatchObject({
+        error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" },
+      });
     }
   });
 

@@ -455,6 +455,7 @@ const EMPTY_MODEL_RESPONSE_PHRASES = [
 ] as const;
 
 function isContextOversizedError(error: unknown): boolean {
+  if (error instanceof ApiError && error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return false;
   if (error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code)) return true;
   const text = error instanceof Error ? error.message.toLowerCase() : "";
   if (text.length === 0) return false;
