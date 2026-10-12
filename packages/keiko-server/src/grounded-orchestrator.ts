@@ -6313,6 +6313,7 @@ interface CoverageFairAdmission {
   readonly pendingFileRetained: boolean;
   readonly pendingFileEligible: boolean;
   readonly firstFairJoint?: CoverageAdmission;
+  readonly sourceTurnRetained?: boolean;
 }
 
 interface SharedCoverageAdmission {
@@ -6395,7 +6396,7 @@ function coverageAdmissionWithOwnedContinuation(
   let parent = entry;
   let ownedProgress = false;
   const seen = new Set([entry.definitionIdentity]);
-  let threshold = ownedCoverageInitialThreshold(entry, admission, minimumScore);
+  let threshold = ownedCoverageInitialThreshold(entry, admission, minimumScore, state);
   let requireBranch = true;
   for (;;) {
     const next = nextOwnedCoverageContinuation(
@@ -6546,8 +6547,9 @@ function ownedCoverageInitialThreshold(
   entry: RouteTraceCoverageEntry,
   admission: SharedCoverageAdmission,
   minimumScore: number,
+  state: CoverageAdmission = admission.state,
 ): number | undefined {
-  return admission.state.targets.has(entry.definitionIdentity) &&
+  return state.targets.has(entry.definitionIdentity) &&
     canStartOwnedCoverageContinuation(entry, minimumScore, admission)
     ? undefined
     : minimumScore;
@@ -6648,14 +6650,15 @@ function coverageAdmissionWithFairTarget(
         state,
         entry,
         admission,
-        coverageFileHeadScore(ranked ?? entry, admission),
-        ranked,
+        coverageFileHeadScore(entry, admission),
+        undefined,
       );
       if (continuation.state.targets.size > state.targets.size)
         return {
           state: continuation.state,
           pendingFileRetained: false,
           pendingFileEligible: pendingFileEligible && !continuation.ownedProgress,
+          sourceTurnRetained: continuation.ownedProgress,
         };
       continue;
     }
@@ -6822,9 +6825,9 @@ function coverageAdmissionWithTwoPendingFairTargets(
   pendingFileEligible: boolean,
 ): CoverageFairAdmission | undefined {
   const threshold = coverageFileHeadScore(fair, admission);
-  const proposal = copyCoverageAdmission(state);
+  let proposal = copyCoverageAdmission(state);
   let joint = coverageAdmissionWithTarget(proposal, fair, admission);
-  let checkpoint = optionalPaidFairCheckpoint(
+  let checkpoint = initialFairCheckpoint(
     joint,
     ranked,
     fair,
@@ -6832,19 +6835,16 @@ function coverageAdmissionWithTwoPendingFairTargets(
     admission,
     pendingFileEligible,
   );
+  proposal = sourceCoverageProposal(checkpoint, proposal);
   for (const entry of admission.byPath.get(ranked.atom.scopePath) ?? []) {
     if (entry.atom.score < threshold) break;
     if (proposal.targets.has(entry.definitionIdentity)) continue;
-    if (
-      !admitCoverageTarget(
-        entry,
-        admission.byIdentity,
-        proposal,
-        admission.totalBytes,
-        admission.inputs,
-      )
-    )
+    if (!admitSharedCoverageTarget(entry, proposal, admission)) continue;
+    const source = grownSourceFairCheckpoint(checkpoint, proposal);
+    if (source !== undefined) {
+      checkpoint = source;
       continue;
+    }
     const nextJoint = coverageAdmissionWithTarget(proposal, fair, admission);
     if (nextJoint === undefined) continue;
     joint = nextJoint;
@@ -6860,6 +6860,78 @@ function coverageAdmissionWithTwoPendingFairTargets(
     checkpoint = retainedFairCheckpoint(checkpoint, next);
   }
   return completedFairCheckpoint(joint, checkpoint, ranked, fair, fairTargets, admission);
+}
+
+function admitSharedCoverageTarget(
+  entry: RouteTraceCoverageEntry,
+  proposal: CoverageAdmission,
+  admission: SharedCoverageAdmission,
+): boolean {
+  return admitCoverageTarget(
+    entry,
+    admission.byIdentity,
+    proposal,
+    admission.totalBytes,
+    admission.inputs,
+  );
+}
+
+function initialFairCheckpoint(
+  joint: CoverageAdmission | undefined,
+  ranked: RouteTraceCoverageEntry,
+  fair: RouteTraceCoverageEntry,
+  targets: readonly RouteTraceCoverageEntry[],
+  admission: SharedCoverageAdmission,
+  pendingFileEligible: boolean,
+): CoverageFairAdmission | undefined {
+  return (
+    guardedSourceFairCheckpoint(joint, fair, admission) ??
+    optionalPaidFairCheckpoint(joint, ranked, fair, targets, admission, pendingFileEligible)
+  );
+}
+
+function grownSourceFairCheckpoint(
+  checkpoint: CoverageFairAdmission | undefined,
+  proposal: CoverageAdmission,
+): CoverageFairAdmission | undefined {
+  return checkpoint?.sourceTurnRetained === true
+    ? { ...checkpoint, state: copyCoverageAdmission(proposal) }
+    : undefined;
+}
+
+function sourceCoverageProposal(
+  checkpoint: CoverageFairAdmission | undefined,
+  proposal: CoverageAdmission,
+): CoverageAdmission {
+  return checkpoint?.sourceTurnRetained === true
+    ? copyCoverageAdmission(checkpoint.state)
+    : proposal;
+}
+
+function guardedSourceFairCheckpoint(
+  joint: CoverageAdmission | undefined,
+  fair: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+): CoverageFairAdmission | undefined {
+  if (
+    joint === undefined ||
+    admission.state.targets.has(fair.definitionIdentity) ||
+    (admission.ownedChildren.get(fair.definitionIdentity)?.length ?? 0) === 0
+  )
+    return undefined;
+  const continuation = coverageAdmissionWithOwnedContinuation(
+    joint,
+    fair,
+    admission,
+    coverageFileHeadScore(fair, admission),
+    undefined,
+  );
+  return {
+    state: continuation.state,
+    pendingFileRetained: false,
+    pendingFileEligible: true,
+    sourceTurnRetained: true,
+  };
 }
 
 function optionalPaidFairCheckpoint(
@@ -6897,6 +6969,7 @@ function completedFairCheckpoint(
   targets: readonly RouteTraceCoverageEntry[],
   admission: SharedCoverageAdmission,
 ): CoverageFairAdmission | undefined {
+  if (checkpoint?.sourceTurnRetained === true) return checkpoint;
   if (joint === undefined) return undefined;
   if (checkpoint?.pendingFileEligible === false) {
     const selected =
@@ -7004,7 +7077,7 @@ function admitSharedCoveragePrefix(
 ): void {
   const prefix = sharedCoveragePrefix(ranked, admission);
   let fairTargets: readonly RouteTraceCoverageEntry[] | undefined;
-  const proposal = copyCoverageAdmission(admission.state);
+  let proposal = copyCoverageAdmission(admission.state);
   let joint: CoverageFairAdmission | undefined;
   let pendingJoint: CoverageAdmission | undefined;
   let pendingFileEligible = true;
@@ -7022,6 +7095,11 @@ function admitSharedCoveragePrefix(
     )
       continue;
     admitted = true;
+    const source = grownSourceFairCheckpoint(joint, proposal);
+    if (source !== undefined) {
+      joint = source;
+      continue;
+    }
     fairTargets ??= sharedCoverageFairTargets(ranked, fair, admission);
     joint =
       coverageAdmissionWithFairTarget(
@@ -7033,6 +7111,7 @@ function admitSharedCoveragePrefix(
       ) ?? joint;
     pendingFileEligible = eligiblePendingCoverageTurn(pendingFileEligible, joint);
     pendingJoint = retainedPendingCoverageState(joint, pendingJoint);
+    proposal = sourceCoverageProposal(joint, proposal);
   }
   if (!admitted && ranked !== undefined) return;
   if (!admitted) joint = coverageAdmissionWithFairTarget(proposal, fair, admission);
@@ -7050,7 +7129,7 @@ function retainedPendingCoverageState(
   joint: CoverageFairAdmission | undefined,
   previous: CoverageAdmission | undefined,
 ): CoverageAdmission | undefined {
-  if (joint?.pendingFileEligible === false) return undefined;
+  if (joint?.sourceTurnRetained === true || joint?.pendingFileEligible === false) return undefined;
   return joint?.pendingFileRetained === true ? joint.state : previous;
 }
 

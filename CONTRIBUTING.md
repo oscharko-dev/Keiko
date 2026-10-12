@@ -167,14 +167,20 @@ certified nearest-owned source calls. The exact parent/child witness carries thi
 a reference edge alone does not qualify. The first new child must itself own a selected child.
 It must meet the nominated physical file-head score unless a fully funded owned connector on
 that same lineage has already met that comparison and owns a selected child. A starting parent
-can discharge the comparison only when it is already fully funded in committed state, meets
-that comparison and owns a selected child. Funding it only inside a provisional proposal does
-not discharge the comparison; other branches retain their own floors.
+can discharge the comparison when it is fully funded in the continuation's actual input state,
+meets that comparison and owns a selected child. That input may be committed state or an
+already guarded joint proposal; other branches retain their own floors.
 This gives a multi-body source continuation one bounded opportunity while standalone terminal
 leaves keep their existing ranked and deferred turns. Already funded connectors can be
 traversed without counting as progress; after the first new target, lower-relevance descendants
 and terminal leaves may complete that chain.
-During a ranked shared turn, a continuation below the nominated head yields when an unfunded
+A newly guarded first-file definition that owns selected children retains its finite source
+continuation at that physical file's own head score. An already FULL first-file parent resumes
+at the same own-head comparison. This source turn retains its guarded joint through both
+ranked-prefix loops, growing compatible whole targets from that same state. It does not add
+terminal fair-file loans or reopen global competing nomination. Failed descendants retain the
+feasible source joint; their complete bodies still require the existing admission guards.
+Outside a retained source turn, a continuation below the nominated head yields when an unfunded
 selected body at or above that head still fits the existing whole-target guards from the same
 pre-child state. The canonical nominee follows the already-computed shared target order:
 relevance and stable ties within each source root, interleaved between roots. Its complete body
@@ -190,8 +196,8 @@ and pass the same whole-target guards. Each selected nominee's pending same-file
 above its own score may join through the same guards. A failed extension retains the previously
 feasible proposal, and the guarded canonical proposal remains the fallback. Failed proposals
 are neither reserved nor read. Deferred final retries retain their existing admission rules.
-An offered FULL parent can resume its pending owned continuation. It must have been FULL in
-committed state, lie outside the canonical file, and meet the existing
+In global competing nomination, an offered FULL parent can resume its pending owned continuation.
+It must have been FULL in committed state, lie outside the canonical file, and meet the existing
 nomination score floor. Its finite certified owned continuation uses its actual physical
 file-head score and adds at least one newly guarded whole target before it can be retained.
 This resumed branch preserves the input joint and does not reopen global competing nomination;

@@ -638,6 +638,83 @@ function finiteOwnedContinuationFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function referenceConnectedInventoryFiles(detailLines: number): Readonly<Record<string, string>> {
+  const files = { ...finiteOwnedContinuationFiles() };
+  let caller = (files["src/implementation.ts"] ?? "").replace(
+    "  const inventory = collectInventory(value);\n  return continueProcessing(inventory);",
+    "  return () => selectInventory(value);",
+  );
+  const prefixes = [
+    ...caller.matchAll(/function scopeAdmissionAndPromptFitting\d+\([\s\S]*?\n\}/gu),
+  ];
+  for (const [index, match] of prefixes.entries()) {
+    const name = `scopeAdmissionAndPromptFitting${String(index + 6)}`;
+    caller = caller.replace(
+      "  return () => selectInventory(value);",
+      `  ${name}(value);\n  return () => selectInventory(value);`,
+    );
+    caller += `\n${match[0].replace(/scopeAdmissionAndPromptFitting\d+/u, name)}`;
+  }
+  files["src/implementation.ts"] = [
+    caller,
+    "function selectInventory(root) { return () => readInventory(root); }",
+    "function readInventory(root) {",
+    "  const inventory = collectInventory(root);",
+    "  return continueProcessing(inventory);",
+    "}",
+  ].join("\n");
+  files["src/inventory-scan.ts"] = (files["src/inventory-scan.ts"] ?? "").replace(
+    "  const inventory = discoverEntries(root);",
+    [
+      ...Array.from(
+        { length: detailLines - 8 },
+        () => "  // Keep the complete selected inventory source body.",
+      ),
+      "  const scopeAdmissionBudget = 1024;",
+      "  const inventory = discoverEntries(root);",
+    ].join("\n"),
+  );
+  for (const [path, body] of Object.entries(delayedStrongFileCoverageFiles()))
+    if (path.startsWith("src/ordinary-")) files[path] = body;
+  return files;
+}
+
+async function referenceConnectedInventoryViews(
+  fixture: CoverageFixture,
+): Promise<readonly FiniteOwnedContinuationView[]> {
+  const entries = fixture.trace.routeCoverage?.entries ?? [];
+  const index = await fixture.requestContext.codeIntelligenceIndex();
+  const branch = ["collectInventory", "discoverEntries", "descend", "handleEntry"].map((name) =>
+    finiteOwnedContinuationEntry(fixture, entries, index, name),
+  );
+  const scan = requirePendingBodyFixtureEntry(branch[0], "the current selected inventory source");
+  const reference = requirePendingBodyFixtureEntry(
+    entries.find((entry) => entry.definitionIdentity === scan.parentIdentity),
+    "the actual reference-connected caller",
+  );
+  const witness = requirePendingBodyFixtureEntry(
+    reference.parentWitness,
+    "the upstream reference witness",
+  );
+  expect(witness.parentIdentity).toBe(reference.parentIdentity);
+  expect(witness.targetIdentity).toBe(reference.definitionIdentity);
+  expect(witness.ownedSourceCall).toBeUndefined();
+  expect(reference.atom.edge?.kind).toBe("reference");
+  expect(fixture.trace.routeCoverage?.isCurrent(reference.atom)).toBe(true);
+  expect(branch.slice(1).every((entry) => entry.parentWitness?.ownedSourceCall === true)).toBe(
+    true,
+  );
+  const prefix = entries.filter((entry) =>
+    /^function scopeAdmissionAndPromptFitting[0-5]\(/u.test(
+      fixture.files[entry.atom.scopePath]?.split("\n")[
+        (entry.atom.lineRange?.startLine ?? 1) - 1
+      ] ?? "",
+    ),
+  );
+  const watched = finiteOwnedContinuationViews(fixture, entries, prefix, branch);
+  return [...watched.slice(-branch.length), ...watched.slice(0, -branch.length)];
+}
+
 function fundedHeadContinuationFiles(): Readonly<Record<string, string>> {
   const files = { ...finiteOwnedContinuationFiles() };
   const scan = (files["src/inventory-scan.ts"] ?? "").replace(
@@ -3619,6 +3696,47 @@ describe("current route trace excerpt coverage", () => {
     expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
     expectOrdinaryMethodViews(fixture, reads, pack, prompt, range);
   });
+
+  it.each([8, 17])(
+    "retains a reference-connected inventory branch before crowded served-file prefixes (%i detail lines)",
+    async (detailLines) => {
+      const fixture = await coverageFixture(
+        undefined,
+        referenceConnectedInventoryFiles(detailLines),
+      );
+      const atoms = await allocationAtoms(fixture);
+      const originalAtoms = JSON.stringify(atoms);
+      const originalUncertainty = JSON.stringify(fixture.trace.uncertainty);
+      const watched = await referenceConnectedInventoryViews(fixture);
+      const selected = new Set(coverageRanking(atoms).kept.map((candidate) => candidate.scopePath));
+      expect(watched.every(({ entry }) => selected.has(entry.atom.scopePath))).toBe(true);
+      expect(
+        fixture.trace.uncertainty.some((marker) =>
+          marker.claim.includes("source-graph-incomplete"),
+        ),
+      ).toBe(true);
+      const paths = [
+        ...new Set(["src/routes.ts", ...watched.map(({ entry }) => entry.atom.scopePath)]),
+      ];
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+      const requiredFunding = new Set(
+        watched
+          .filter(({ entry }) => entry.atom.scopePath !== "src/z-processing.ts")
+          .map(({ entry }) => entry.definitionIdentity),
+      );
+      for (const restricted of [paths, undefined])
+        await expectBorrowedHeadContinuationRead(
+          fixture,
+          atoms,
+          budget,
+          watched,
+          requiredFunding,
+          restricted,
+        );
+      expect(JSON.stringify(atoms)).toBe(originalAtoms);
+      expect(JSON.stringify(fixture.trace.uncertainty)).toBe(originalUncertainty);
+    },
+  );
 
   it("retains complete assigned and statement-call traversal bodies beside useful file opportunities", async () => {
     const fixture = await coverageFixture(undefined, finiteOwnedContinuationFiles());
