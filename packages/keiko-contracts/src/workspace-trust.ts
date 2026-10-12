@@ -155,11 +155,13 @@ function trustReasonMatchesLevel(
 }
 
 function isWorkspaceTrustLevel(value: unknown): value is WorkspaceTrustLevel {
-  return WORKSPACE_TRUST_LEVELS.includes(value as WorkspaceTrustLevel);
+  const levels: readonly unknown[] = WORKSPACE_TRUST_LEVELS;
+  return levels.includes(value);
 }
 
 function isWorkspaceTrustReason(value: unknown): value is WorkspaceTrustReason {
-  return WORKSPACE_TRUST_REASONS.includes(value as WorkspaceTrustReason);
+  const reasons: readonly unknown[] = WORKSPACE_TRUST_REASONS;
+  return reasons.includes(value);
 }
 
 /**
