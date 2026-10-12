@@ -28,6 +28,7 @@ import {
   isWorkspaceManifestDigest,
   isWorkspaceManifestRef,
   isWorkspaceRecord,
+  isWorkspaceRevision,
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
   workspaceCanonicalRootsDoNotOverlap,
@@ -114,13 +115,12 @@ export const TASK_WORKSPACE_LIFECYCLE_STATES: readonly TaskWorkspaceLifecycleSta
   "cleanup-pending",
 ] as const;
 
+const TASK_WORKSPACE_LIFECYCLE_STATES_VALUES: readonly string[] = TASK_WORKSPACE_LIFECYCLE_STATES;
+
 export function isTaskWorkspaceLifecycleState(
   value: unknown,
 ): value is TaskWorkspaceLifecycleState {
-  return (
-    typeof value === "string" &&
-    TASK_WORKSPACE_LIFECYCLE_STATES.includes(value as TaskWorkspaceLifecycleState)
-  );
+  return typeof value === "string" && TASK_WORKSPACE_LIFECYCLE_STATES_VALUES.includes(value);
 }
 
 // ─── Legal transition matrix (AC2) ────────────────────────────────────────────────
@@ -195,12 +195,14 @@ export const TASK_WORKSPACE_TRANSITION_PRECONDITIONS: readonly TaskWorkspaceTran
     "operator-approval",
   ] as const;
 
+const TASK_WORKSPACE_TRANSITION_PRECONDITIONS_VALUES: readonly string[] =
+  TASK_WORKSPACE_TRANSITION_PRECONDITIONS;
+
 export function isTaskWorkspaceTransitionPrecondition(
   value: unknown,
 ): value is TaskWorkspaceTransitionPrecondition {
   return (
-    typeof value === "string" &&
-    TASK_WORKSPACE_TRANSITION_PRECONDITIONS.includes(value as TaskWorkspaceTransitionPrecondition)
+    typeof value === "string" && TASK_WORKSPACE_TRANSITION_PRECONDITIONS_VALUES.includes(value)
   );
 }
 
@@ -313,10 +315,10 @@ export const TASK_WORKSPACE_HEALTH_STATES: readonly TaskWorkspaceHealth[] = [
   "unknown",
 ] as const;
 
+const TASK_WORKSPACE_HEALTH_STATES_VALUES: readonly string[] = TASK_WORKSPACE_HEALTH_STATES;
+
 export function isTaskWorkspaceHealth(value: unknown): value is TaskWorkspaceHealth {
-  return (
-    typeof value === "string" && TASK_WORKSPACE_HEALTH_STATES.includes(value as TaskWorkspaceHealth)
-  );
+  return typeof value === "string" && TASK_WORKSPACE_HEALTH_STATES_VALUES.includes(value);
 }
 
 // ─── Drift markers ──────────────────────────────────────────────────────────────
@@ -354,11 +356,10 @@ export const TASK_WORKSPACE_DRIFT_MARKERS: readonly TaskWorkspaceDriftMarker[] =
   "identity-unsupported",
 ] as const;
 
+const TASK_WORKSPACE_DRIFT_MARKERS_VALUES: readonly string[] = TASK_WORKSPACE_DRIFT_MARKERS;
+
 export function isTaskWorkspaceDriftMarker(value: unknown): value is TaskWorkspaceDriftMarker {
-  return (
-    typeof value === "string" &&
-    TASK_WORKSPACE_DRIFT_MARKERS.includes(value as TaskWorkspaceDriftMarker)
-  );
+  return typeof value === "string" && TASK_WORKSPACE_DRIFT_MARKERS_VALUES.includes(value);
 }
 
 // ─── Lock ───────────────────────────────────────────────────────────────────────
@@ -373,8 +374,10 @@ export const WORKSPACE_LOCK_REASONS: readonly WorkspaceLockReason[] = [
   "cleanup",
 ] as const;
 
+const WORKSPACE_LOCK_REASONS_VALUES: readonly string[] = WORKSPACE_LOCK_REASONS;
+
 export function isWorkspaceLockReason(value: unknown): value is WorkspaceLockReason {
-  return typeof value === "string" && WORKSPACE_LOCK_REASONS.includes(value as WorkspaceLockReason);
+  return typeof value === "string" && WORKSPACE_LOCK_REASONS_VALUES.includes(value);
 }
 
 export interface WorkspaceLock {
@@ -410,10 +413,10 @@ export const WORKSPACE_FAILURE_CLASSES: readonly WorkspaceFailureClass[] = [
   "terminal",
 ] as const;
 
+const WORKSPACE_FAILURE_CLASSES_VALUES: readonly string[] = WORKSPACE_FAILURE_CLASSES;
+
 export function isWorkspaceFailureClass(value: unknown): value is WorkspaceFailureClass {
-  return (
-    typeof value === "string" && WORKSPACE_FAILURE_CLASSES.includes(value as WorkspaceFailureClass)
-  );
+  return typeof value === "string" && WORKSPACE_FAILURE_CLASSES_VALUES.includes(value);
 }
 
 // ─── Recovery hint ────────────────────────────────────────────────────────────────
@@ -444,20 +447,19 @@ export const WORKSPACE_RECOVERY_STRATEGIES: readonly WorkspaceRecoveryStrategy[]
   "abandon-and-cleanup",
 ] as const;
 
+const WORKSPACE_RECOVERY_STRATEGIES_VALUES: readonly string[] = WORKSPACE_RECOVERY_STRATEGIES;
+
 export function isWorkspaceRecoveryStrategy(value: unknown): value is WorkspaceRecoveryStrategy {
-  return (
-    typeof value === "string" &&
-    WORKSPACE_RECOVERY_STRATEGIES.includes(value as WorkspaceRecoveryStrategy)
-  );
+  return typeof value === "string" && WORKSPACE_RECOVERY_STRATEGIES_VALUES.includes(value);
 }
 
 export const WORKSPACE_CLEANUP_MODES = ["request", "complete"] as const;
 export type WorkspaceCleanupMode = (typeof WORKSPACE_CLEANUP_MODES)[number];
 
+const WORKSPACE_CLEANUP_MODES_VALUES: readonly string[] = WORKSPACE_CLEANUP_MODES;
+
 export function isWorkspaceCleanupMode(value: unknown): value is WorkspaceCleanupMode {
-  return (
-    typeof value === "string" && WORKSPACE_CLEANUP_MODES.includes(value as WorkspaceCleanupMode)
-  );
+  return typeof value === "string" && WORKSPACE_CLEANUP_MODES_VALUES.includes(value);
 }
 
 export interface WorkspaceRecoveryHint {
@@ -482,8 +484,10 @@ export const TASK_WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
   "review",
 ] as const;
 
+const TASK_WORKSPACE_SURFACES_VALUES: readonly string[] = TASK_WORKSPACE_SURFACES;
+
 export function isWorkspaceSurface(value: unknown): value is WorkspaceSurface {
-  return typeof value === "string" && TASK_WORKSPACE_SURFACES.includes(value as WorkspaceSurface);
+  return typeof value === "string" && TASK_WORKSPACE_SURFACES_VALUES.includes(value);
 }
 
 // ─── Content-free audit event (SC3) ──────────────────────────────────────────────
@@ -527,8 +531,10 @@ export const WORKSPACE_EVENT_TYPES: readonly WorkspaceEventType[] = [
   "transition-rejected",
 ] as const;
 
+const WORKSPACE_EVENT_TYPES_VALUES: readonly string[] = WORKSPACE_EVENT_TYPES;
+
 export function isWorkspaceEventType(value: unknown): value is WorkspaceEventType {
-  return typeof value === "string" && WORKSPACE_EVENT_TYPES.includes(value as WorkspaceEventType);
+  return typeof value === "string" && WORKSPACE_EVENT_TYPES_VALUES.includes(value);
 }
 
 export interface WorkspaceEvent {
@@ -908,9 +914,9 @@ function bindingV2ScalarFieldsAreValid(input: Readonly<Record<string, unknown>>)
   if (typeof input.workspaceId !== "string" || input.workspaceId.length === 0) return false;
   if (typeof input.taskId !== "string" || input.taskId.length === 0) return false;
   if (!isWorkspaceManifestRef(input.manifestRef)) return false;
-  if (!Number.isSafeInteger(input.manifestRevision) || (input.manifestRevision as number) < 0) {
-    return false;
-  }
+  if (!Number.isSafeInteger(input.manifestRevision)) return false;
+  const manifestRevision = input.manifestRevision;
+  if (!isWorkspaceRevision(manifestRevision)) return false;
   return isWorkspaceManifestDigest(input.manifestDigest);
 }
 
@@ -1230,13 +1236,13 @@ export const WORKSPACE_RECONCILIATION_STATUSES: readonly WorkspaceReconciliation
   "recovery-required",
 ] as const;
 
+const WORKSPACE_RECONCILIATION_STATUSES_VALUES: readonly string[] =
+  WORKSPACE_RECONCILIATION_STATUSES;
+
 export function isWorkspaceReconciliationStatus(
   value: unknown,
 ): value is WorkspaceReconciliationStatus {
-  return (
-    typeof value === "string" &&
-    WORKSPACE_RECONCILIATION_STATUSES.includes(value as WorkspaceReconciliationStatus)
-  );
+  return typeof value === "string" && WORKSPACE_RECONCILIATION_STATUSES_VALUES.includes(value);
 }
 
 // The content-free facts the server resolves by IO for one persisted instance, fed to the pure
@@ -1765,13 +1771,13 @@ export const WORKSPACE_ACTIVE_RESTORATION_KINDS: readonly WorkspaceActiveRestora
   "ambiguous",
 ] as const;
 
+const WORKSPACE_ACTIVE_RESTORATION_KINDS_VALUES: readonly string[] =
+  WORKSPACE_ACTIVE_RESTORATION_KINDS;
+
 export function isWorkspaceActiveRestorationKind(
   value: unknown,
 ): value is WorkspaceActiveRestorationKind {
-  return (
-    typeof value === "string" &&
-    WORKSPACE_ACTIVE_RESTORATION_KINDS.includes(value as WorkspaceActiveRestorationKind)
-  );
+  return typeof value === "string" && WORKSPACE_ACTIVE_RESTORATION_KINDS_VALUES.includes(value);
 }
 
 export interface WorkspaceActiveRestoration {
@@ -1897,13 +1903,12 @@ export const WORKSPACE_HEALTH_CLASSIFICATIONS: readonly WorkspaceHealthClassific
   "recovery-required",
 ] as const;
 
+const WORKSPACE_HEALTH_CLASSIFICATIONS_VALUES: readonly string[] = WORKSPACE_HEALTH_CLASSIFICATIONS;
+
 export function isWorkspaceHealthClassification(
   value: unknown,
 ): value is WorkspaceHealthClassification {
-  return (
-    typeof value === "string" &&
-    WORKSPACE_HEALTH_CLASSIFICATIONS.includes(value as WorkspaceHealthClassification)
-  );
+  return typeof value === "string" && WORKSPACE_HEALTH_CLASSIFICATIONS_VALUES.includes(value);
 }
 
 // The lifecycle states from which a workspace may be physically cleaned up. STRICTER than the contract
@@ -1939,13 +1944,13 @@ export const WORKSPACE_CLEANUP_REFUSAL_REASONS: readonly WorkspaceCleanupRefusal
   "not-eligible-state",
 ] as const;
 
+const WORKSPACE_CLEANUP_REFUSAL_REASONS_VALUES: readonly string[] =
+  WORKSPACE_CLEANUP_REFUSAL_REASONS;
+
 export function isWorkspaceCleanupRefusalReason(
   value: unknown,
 ): value is WorkspaceCleanupRefusalReason {
-  return (
-    typeof value === "string" &&
-    WORKSPACE_CLEANUP_REFUSAL_REASONS.includes(value as WorkspaceCleanupRefusalReason)
-  );
+  return typeof value === "string" && WORKSPACE_CLEANUP_REFUSAL_REASONS_VALUES.includes(value);
 }
 
 // The content-free facts a cleanup-safety decision needs. `hasRecord` is false for an orphaned managed
@@ -2089,11 +2094,10 @@ export const WORKSPACE_HEALTH_ENTRY_KINDS: readonly WorkspaceHealthEntryKind[] =
   "orphan-worktree",
 ] as const;
 
+const WORKSPACE_HEALTH_ENTRY_KINDS_VALUES: readonly string[] = WORKSPACE_HEALTH_ENTRY_KINDS;
+
 export function isWorkspaceHealthEntryKind(value: unknown): value is WorkspaceHealthEntryKind {
-  return (
-    typeof value === "string" &&
-    WORKSPACE_HEALTH_ENTRY_KINDS.includes(value as WorkspaceHealthEntryKind)
-  );
+  return typeof value === "string" && WORKSPACE_HEALTH_ENTRY_KINDS_VALUES.includes(value);
 }
 
 // The per-entry content-free health record surfaced to UI/support/verification (AC5). Content-free:

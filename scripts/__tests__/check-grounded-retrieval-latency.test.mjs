@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   assertMeasurableBudget,
@@ -159,9 +159,8 @@ describe("assertMeasurableBudget", () => {
   });
 });
 
-// The runner, driven end to end over the REAL pipeline with a one-iteration budget so the suite pays
-// for two evaluations rather than fifteen. This is what covers collectSamples, the reporting, and
-// the failure branch — the pure helpers above cannot reach any of it.
+// The positive runner control uses the committed warmup and sampling methodology over the real
+// pipeline. Negative controls keep bounded one-sample fixtures; pure decision pins stay unchanged.
 describe("runGroundedRetrievalLatencyGate", () => {
   // A named no-op: an empty arrow is a lint error, and the point is that these runs discard their
   // log output rather than that nothing happens.
@@ -185,7 +184,7 @@ describe("runGroundedRetrievalLatencyGate", () => {
   const FAST = { warmupIterations: 0, iterations: 1, regressionProbe: { judgeDelayMs: 1300 } };
 
   it("measures the real pipeline, reports both percentiles, and proves the probe fires", async () => {
-    await withBudgetFile(FAST, async (budgetPath) => {
+    await withBudgetFile({}, async (budgetPath) => {
       const logs = [];
       const failures = [];
       const result = await runGroundedRetrievalLatencyGate({
@@ -223,6 +222,49 @@ describe("runGroundedRetrievalLatencyGate", () => {
       },
     );
   }, 180_000);
+
+  it("excludes warmups and measures every sample before its distinct probe", async () => {
+    const measured = Array.from({ length: budget.iterations }, (_, index) => index + 1);
+    const warmups = Array.from(
+      { length: budget.warmupIterations },
+      () => budget.p95BudgetMs + 1000,
+    );
+    const probeMs = budget.p95BudgetMs + 1;
+    const values = [...warmups, ...measured, probeMs];
+    let index = 0;
+    const producer = vi.fn(async () => ({ totalMs: values[index++] }));
+    vi.doMock("@oscharko-dev/keiko-server", () => ({ runGroundedRetrievalLatencyEval: producer }));
+    vi.resetModules();
+    try {
+      const isolated = await import("../check-grounded-retrieval-latency.mjs");
+      await withBudgetFile({}, async (budgetPath) => {
+        const failures = [];
+        const result = await isolated.runGroundedRetrievalLatencyGate({
+          budgetPath,
+          log: () => discard(),
+          fail: (message) => failures.push(message),
+        });
+        const expected = evaluateGroundedLatency({ samples: measured, budget });
+        expect(result.p50).toBe(expected.p50);
+        expect(result.p95).toBe(expected.p95);
+        expect(result.p50).toBeGreaterThan(0);
+        expect(result.ok).toBe(true);
+        expect(failures).toEqual([]);
+        expect(result.probe.regressedMs).toBe(probeMs);
+        expect(result.probe.detected).toBe(true);
+        expect(producer).toHaveBeenCalledTimes(values.length);
+        for (let call = 1; call < values.length; call += 1) {
+          expect(producer).toHaveBeenNthCalledWith(call);
+        }
+        expect(producer).toHaveBeenLastCalledWith({
+          injectedJudgeDelayMs: budget.regressionProbe.judgeDelayMs,
+        });
+      });
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-server");
+      vi.resetModules();
+    }
+  });
 
   // An absent or malformed budget aborts the run either way. The point of catching it is that CI
   // shows a named gate failure instead of a bare JSON-parser stack trace.

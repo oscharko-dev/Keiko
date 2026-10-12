@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -33,6 +34,33 @@ function enforcingFixture() {
 }
 
 const executePolicy = promisify(execFile);
+function closedChildStatus(value) {
+  if (value === null || (typeof value === "number" && Number.isInteger(value))) return value;
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}$/u.test(value) ? value : "unavailable";
+}
+function capturedByteCount(value) {
+  return typeof value === "string" ? Buffer.byteLength(value, "utf8") : "unavailable";
+}
+// Convert the actual child failure to closed causal facts before it can be printed.
+function policyChildFailure(error) {
+  const details = typeof error === "object" && error !== null ? error : {};
+  const status = {
+    code: closedChildStatus(details.code),
+    signal: closedChildStatus(details.signal),
+    killed: typeof details.killed === "boolean" ? details.killed : "unavailable",
+    stdoutBytes: capturedByteCount(details.stdout),
+    stderrBytes: capturedByteCount(details.stderr),
+  };
+  return new Error(`policy child failed: ${JSON.stringify(status)}`, { cause: status });
+}
+async function executePolicyWithDiagnostics(args, options) {
+  try {
+    return await executePolicy(process.execPath, args, options);
+  } catch (error) {
+    throw policyChildFailure(error);
+  }
+}
+
 async function isolatedPolicyReport(repositoryRoot, timeout = 180_000) {
   const entry = new URL("../check-code-quality-policy.mjs", import.meta.url);
   const args =
@@ -43,7 +71,7 @@ async function isolatedPolicyReport(repositoryRoot, timeout = 180_000) {
           "-e",
           `const { codeQualityPolicyMain } = await import(${JSON.stringify(entry.href)}); process.exitCode = await codeQualityPolicyMain(["--json"], ${JSON.stringify(repositoryRoot)});`,
         ];
-  const { stdout } = await executePolicy(process.execPath, args, {
+  const { stdout } = await executePolicyWithDiagnostics(args, {
     cwd: new URL("../../", import.meta.url),
     encoding: "utf8",
     timeout,
@@ -55,6 +83,46 @@ async function isolatedPolicyReport(repositoryRoot, timeout = 180_000) {
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 describe("production code-quality invocation wiring (#3915)", () => {
+  it("retains genuine finite child failures with body-free status", async () => {
+    const options = { encoding: "utf8", timeout: 1000, killSignal: "SIGKILL", maxBuffer: 1024 };
+    const failure = executePolicyWithDiagnostics(
+      ["-e", 'process.stdout.write("é"); process.stderr.write("bad"); process.exit(7);'],
+      options,
+    );
+    await expect(failure).rejects.toThrow(
+      'policy child failed: {"code":7,"signal":null,"killed":false,"stdoutBytes":2,"stderrBytes":3}',
+    );
+    await expect(failure).rejects.toHaveProperty("cause", {
+      code: 7,
+      signal: null,
+      killed: false,
+      stdoutBytes: 2,
+      stderrBytes: 3,
+    });
+    const healthy = await executePolicyWithDiagnostics(
+      ["-e", 'process.stdout.write("healthy");'],
+      options,
+    );
+    expect(healthy.stdout).toBe("healthy");
+  });
+  it("reports an actual deadline kill without manufacturing an exit code", async () => {
+    await expect(
+      executePolicyWithDiagnostics(["-e", "setInterval(() => undefined, 1000);"], {
+        encoding: "utf8",
+        timeout: 1000,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024,
+      }),
+    ).rejects.toThrow(
+      'policy child failed: {"code":null,"signal":"SIGKILL","killed":true,"stdoutBytes":0,"stderrBytes":0}',
+    );
+  });
+  it("keeps missing child metadata explicitly unavailable", () => {
+    expect(closedChildStatus(undefined)).toBe("unavailable");
+    expect(closedChildStatus("raw unbounded text")).toBe("unavailable");
+    expect(capturedByteCount(undefined)).toBe("unavailable");
+  });
+
   it("emits exactly one receipt from the real parser on empty input", () => {
     const messages = new Linter().verify("", [
       {

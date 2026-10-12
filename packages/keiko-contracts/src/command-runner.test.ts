@@ -479,3 +479,150 @@ describe("validateRunResultCore (shared with container-runtime.ts, KEIKO-0601)",
     expect(errors).toEqual(["engine is invalid", "failureReason is invalid"]);
   });
 });
+
+function observedExecutionFields(
+  input: Record<string, unknown>,
+  reads: string[],
+): Record<string, unknown> {
+  return Object.defineProperties(
+    {},
+    Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [
+        key,
+        {
+          enumerable: true,
+          get: (): unknown => {
+            reads.push(key);
+            return value;
+          },
+        },
+      ]),
+    ),
+  );
+}
+
+describe("#3918 command checked-phase preservation", () => {
+  it("preserves request identity and optional field observation order", () => {
+    const reads: string[] = [];
+    const input = observedExecutionFields(
+      { ...baseRequest(), timeoutMs: 12, requestId: "request-1" },
+      reads,
+    );
+    const result = parseCommandTaskRunRequest(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(reads).toEqual([
+      "projectId",
+      "taskId",
+      "timeoutMs",
+      "timeoutMs",
+      "requestId",
+      "requestId",
+    ]);
+  });
+  it("preserves original catalog and nested task/argument identity", () => {
+    const reads: string[] = [];
+    const task = baseTask();
+    const input = observedExecutionFields({ ...baseCatalog(), tasks: [task] }, reads);
+    const result = validateCommandTaskCatalog(input);
+    const admissionReads = [...reads];
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.tasks[0]).toBe(task);
+      expect(result.value.tasks[0]?.args).toBe(task.args);
+    }
+    expect(admissionReads).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
+  });
+  it("preserves result identity and eager common-field order", () => {
+    const reads: string[] = [];
+    const input = observedExecutionFields({ ...baseResult() }, reads);
+    const result = validateCommandTaskRunResult(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(reads).toEqual([
+      "schemaVersion",
+      "runId",
+      "taskId",
+      "kind",
+      "failureReason",
+      "exitCode",
+      "durationMs",
+      "truncated",
+      "timedOut",
+      "stdout",
+      "stderr",
+    ]);
+  });
+});
+
+describe("#3918 native array member admission", () => {
+  it("rejects malformed tasks despite an own forEach that skips members", () => {
+    const tasks = Object.defineProperty([{ ...baseTask(), id: 0 }], "forEach", {
+      value: (): void => undefined,
+    });
+    expect(validateCommandTaskCatalog({ ...baseCatalog(), tasks })).toEqual({
+      ok: false,
+      errors: ["tasks[0].id must be a non-empty string"],
+    });
+  });
+  it("rejects nonstring arguments despite an own every that claims success", () => {
+    const args = Object.defineProperty([1], "every", { value: (): boolean => true });
+    expect(
+      validateCommandTaskCatalog({ ...baseCatalog(), tasks: [{ ...baseTask(), args }] }),
+    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
+  });
+  it("rejects a task hole that cannot satisfy the member contract", () => {
+    expect(validateCommandTaskCatalog({ ...baseCatalog(), tasks: new Array<unknown>(1) })).toEqual({
+      ok: false,
+      errors: ["tasks[0] must be an object"],
+    });
+  });
+  it("rejects an argument hole that cannot satisfy the string contract", () => {
+    expect(
+      validateCommandTaskCatalog({
+        ...baseCatalog(),
+        tasks: [{ ...baseTask(), args: new Array<unknown>(1) }],
+      }),
+    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
+  });
+  it("rejects a nonarray second task observation with the original two reads", () => {
+    let reads = 0;
+    const input = Object.defineProperty({ ...baseCatalog() }, "tasks", {
+      get: (): unknown => (++reads === 1 ? [baseTask()] : { forEach: (): void => undefined }),
+    });
+    expect(validateCommandTaskCatalog(input)).toEqual({
+      ok: false,
+      errors: ["tasks must be an array"],
+    });
+    expect(reads).toBe(2);
+  });
+});
+
+it("#3918 refuses a large sparse tasks collection at its first missing member", () => {
+  const result = validateCommandTaskCatalog({
+    ...baseCatalog(),
+    tasks: new Array<unknown>(100000),
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toBe("tasks[0] must be an object");
+  }
+});
+
+it("#3918 retains inherited present tasks and their original references", () => {
+  const tasks = new Array<unknown>(1);
+  Object.setPrototypeOf(tasks, Object.defineProperty([], "0", { value: baseTask() }));
+  const input = { ...baseCatalog(), tasks };
+  const result = validateCommandTaskCatalog(input);
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value).toBe(input);
+});
+
+it("#3918 preserves dense task error order", () => {
+  expect(validateCommandTaskCatalog({ ...baseCatalog(), tasks: [null, null] })).toEqual({
+    ok: false,
+    errors: ["tasks[0] must be an object", "tasks[1] must be an object"],
+  });
+});

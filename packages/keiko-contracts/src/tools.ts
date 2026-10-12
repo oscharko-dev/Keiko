@@ -57,7 +57,12 @@ function ownNetworkGatewayPolicyData(value: unknown): Record<string, unknown> | 
   ) {
     return undefined;
   }
-  return Object.fromEntries(entries.map(([key, descriptor]) => [key, descriptor.value as unknown]));
+  return Object.fromEntries(
+    entries.map(([key, descriptor]) => {
+      const value: unknown = descriptor.value;
+      return [key, value];
+    }),
+  );
 }
 
 function networkGatewayPolicyData(value: unknown): Record<string, unknown> | undefined {

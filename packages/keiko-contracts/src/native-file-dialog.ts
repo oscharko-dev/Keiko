@@ -222,15 +222,19 @@ function parseFilters(value: unknown): FieldResult<readonly NativeFileDialogFilt
   return { ok: true, value: filters };
 }
 
+function isNativeFileDialogMode(value: unknown): value is NativeFileDialogMode {
+  return typeof value === "string" && MODE_SET.has(value);
+}
+
 function parseMode(
   value: unknown,
 ):
   | { readonly ok: true; readonly value: NativeFileDialogMode }
   | { readonly ok: false; readonly error: string } {
-  if (typeof value !== "string" || !MODE_SET.has(value)) {
+  if (!isNativeFileDialogMode(value)) {
     return { ok: false, error: "mode is invalid" };
   }
-  return { ok: true, value: value as NativeFileDialogMode };
+  return { ok: true, value: value };
 }
 
 // Fail-closed request validation for the BFF route. Unknown modes, oversized fields, malformed

@@ -190,15 +190,19 @@ function readArrayField(
     reasons.push(`patchScope.${field} must be an array`);
     return undefined;
   }
-  return value as readonly unknown[];
+  const entries: readonly unknown[] = value;
+  return entries;
 }
 
+const EXPECTED_CHECK_VALUES: readonly string[] = EXPECTED_CHECKS;
+const WORKFLOW_KIND_VALUES: readonly string[] = WORKFLOW_KINDS;
+
 function isExpectedCheck(value: unknown): value is ExpectedCheck {
-  return typeof value === "string" && (EXPECTED_CHECKS as readonly string[]).includes(value);
+  return typeof value === "string" && EXPECTED_CHECK_VALUES.includes(value);
 }
 
 function isWorkflowKind(value: unknown): value is WorkflowKind {
-  return typeof value === "string" && (WORKFLOW_KINDS as readonly string[]).includes(value);
+  return typeof value === "string" && WORKFLOW_KIND_VALUES.includes(value);
 }
 
 // ─── Approval-token shape ─────────────────────────────────────────────────────

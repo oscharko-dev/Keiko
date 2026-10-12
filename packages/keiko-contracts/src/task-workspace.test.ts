@@ -987,3 +987,49 @@ describe("delegated subsystems (AC4)", () => {
     }
   });
 });
+
+function revisionObservationBinding(observations: readonly unknown[]): {
+  readonly input: Record<string, unknown>;
+  readonly readCount: () => number;
+} {
+  let reads = 0;
+  const input: Record<string, unknown> = { ...validBindingV2() };
+  Object.defineProperty(input, "manifestRevision", {
+    enumerable: true,
+    get: (): unknown => {
+      const value = observations[reads];
+      reads += 1;
+      return value;
+    },
+  });
+  return { input, readCount: (): number => reads };
+}
+
+describe("#3918 workspace binding revision observation admission", () => {
+  it.each(["2", null, Number.NaN, Number.POSITIVE_INFINITY, 1.5])(
+    "rejects a second revision observation outside safe nonnegative integers: %s",
+    (second) => {
+      const fixture = revisionObservationBinding([2, second]);
+      expect(validateWorkspaceBindingV2(fixture.input)).toEqual({
+        ok: false,
+        reasons: ["multi-root binding invalid"],
+      });
+      expect(fixture.readCount()).toBe(2);
+    },
+  );
+  it.each([
+    { observations: [2, 2], ok: true, reads: 2 },
+    { observations: [-1, 2], ok: true, reads: 2 },
+    { observations: [2, -1], ok: false, reads: 2 },
+    { observations: [1.5, 2], ok: false, reads: 1 },
+    { observations: ["2", 2], ok: false, reads: 1 },
+    { observations: [Number.NaN, 2], ok: false, reads: 1 },
+  ])(
+    "preserves the original numeric observation schedule: $observations",
+    ({ observations, ok, reads }) => {
+      const fixture = revisionObservationBinding(observations);
+      expect(validateWorkspaceBindingV2(fixture.input).ok).toBe(ok);
+      expect(fixture.readCount()).toBe(reads);
+    },
+  );
+});
