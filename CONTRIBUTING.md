@@ -132,10 +132,29 @@ Each group uses its existing relevance-ordered queue head's score, highest first
 existing ties and within-file nomination order. The first jointly feasible target in a different
 physical file whose queue head is not fully funded receives the shared file turn.
 When the relevance file's head was already fully funded in committed state before the turn,
-its pending whole targets at or above the nominated other file's queue-head score also
-participate in that joint proposal. Each guarded additional target retains the last feasible
-joint prefix with the same nominated file, including the original joint proposal as fallback.
-Funding the head only inside a provisional proposal does not enable this extension.
+its pending whole targets at or above the first nominated file's queue-head score also
+participate in the joint proposal. At each guarded relevance-file and first-file checkpoint,
+the existing owned opportunity and then same-file targets tied to that actual head score are
+probed through the unchanged whole-target guards, in existing stable order. Actual new whole
+target progress in either probe closes the extra second-file opportunity for the entire outer
+shared turn and clears any earlier uncommitted second-file checkpoint. Later callbacks cannot
+reopen it. These eligibility probes may remain unpublished; a refused tie is not guaranteed
+funding. Zero-score ties participate under the same rule.
+While eligible, the existing fair order may guard a second body in a physical file distinct
+from both, whose head is not fully funded in the joint proposal and whose nominee meets the
+same first-file head score. Every retained joint preserves committed whole targets, the guarded
+relevance proposal at that checkpoint and the first nominated body. The relevance-only proposal
+grows separately; explicit successful second-file results retain the latest such joint through
+both prefix loops, so a later first-file-only result cannot replace it while eligibility holds.
+The second nominee may change under existing order. This bounded physical-file turn takes
+precedence over later uncommitted higher-scored prefix additions in the already-served file
+when they cannot fit together; when they fit, the latest guarded joint includes them.
+A disqualified turn instead maximizes the original guarded single-fair prefix, then applies
+one final owned opportunity. A prior owned result is reused only for the identical raw joint;
+classification does not publish its probed tied targets. If no second joint is retained, the
+feasible first-file joint remains the fallback. Funding the relevance head only inside a
+provisional proposal does not enable this extension. Scores, ownership, currentness, authority,
+byte caps and deferred retries remain unchanged.
 A shared joint proposal may also fund one finite chain of selected definitions connected by
 certified nearest-owned source calls. The exact parent/child witness carries this ownership;
 a reference edge alone does not qualify. The first new child must itself own a selected child.

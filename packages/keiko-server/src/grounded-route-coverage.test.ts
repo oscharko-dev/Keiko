@@ -1304,6 +1304,92 @@ function pendingFairCompetingCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function twoPendingFairCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...sharedPrefixCoverageFiles() };
+  for (const number of [0, 1]) {
+    const path = `src/record-${String(number)}.ts`;
+    files[path] = (files[path] ?? "").replace(
+      "  return value;",
+      "  const scopeAdmissionBudget = 1024;\n  return scopeAdmissionBudget + value;",
+    );
+  }
+  files["src/record-1.ts"] = (files["src/record-1.ts"] ?? "").replace(
+    "  const scopeAdmissionBudget = 1024;",
+    [
+      ...Array.from({ length: 20 }, () => "  // Preserve the current selected accounting body."),
+      "  const scopeAdmissionBudget = 1024;",
+    ].join("\n"),
+  );
+  for (const [path, body] of Object.entries(delayedStrongFileCoverageFiles()))
+    if (path.startsWith("src/ordinary-")) files[path] = body;
+  return files;
+}
+
+interface TwoPendingFairEntries {
+  readonly head: FiniteOwnedContinuationEntry;
+  readonly caller: FiniteOwnedContinuationEntry;
+  readonly prefix: readonly FiniteOwnedContinuationEntry[];
+  readonly first: FiniteOwnedContinuationEntry;
+  readonly second: FiniteOwnedContinuationEntry;
+}
+
+function twoPendingFairEntries(
+  fixture: CoverageFixture,
+  index: FiniteOwnedContinuationIndex,
+): TwoPendingFairEntries {
+  const entries = fixture.trace.routeCoverage?.entries ?? [];
+  const prefix = entries.filter((entry) =>
+    /^function scopeAdmissionAndPromptFitting\d+\(/u.test(
+      fixture.files[entry.atom.scopePath]?.split("\n")[
+        (entry.atom.lineRange?.startLine ?? 1) - 1
+      ] ?? "",
+    ),
+  );
+  expect(prefix).toHaveLength(6);
+  const first = finiteOwnedContinuationEntry(fixture, entries, index, "retainRecord0");
+  const second = finiteOwnedContinuationEntry(fixture, entries, index, "retainRecord1");
+  const caller = requirePendingBodyFixtureEntry(
+    entries.find((entry) => entry.definitionIdentity === first.parentIdentity),
+    "the actual common caller",
+  );
+  const head = requirePendingBodyFixtureEntry(
+    entries.find(
+      (entry) =>
+        entry.atom.scopePath === caller.atom.scopePath && entry.atom.score > caller.atom.score,
+    ),
+    "the actual physical ranked head",
+  );
+  expect(head.observedBytes).toBeLessThanOrEqual(200);
+  expect(first.atom.scopePath).not.toBe(second.atom.scopePath);
+  expect(first.atom.score).toBeGreaterThan(0);
+  expect(second.atom.score).toBe(first.atom.score);
+  expect(first.observedBytes).toBeGreaterThan(200);
+  expect(second.observedBytes).toBeGreaterThan(200);
+  expect(first.parentWitness?.ownedSourceCall).toBe(true);
+  expect(second.parentWitness?.ownedSourceCall).toBe(true);
+  expect(prefix.every((entry) => entry.atom.score > first.atom.score)).toBe(true);
+  const weak = entries.filter((entry) => /^src\/record-[2-8]\.ts$/u.test(entry.atom.scopePath));
+  expect(weak).toHaveLength(7);
+  expect(weak.every((entry) => entry.atom.score < first.atom.score)).toBe(true);
+  return { head, caller, prefix, first, second };
+}
+
+function twoPendingFairViews(
+  fixture: CoverageFixture,
+  entries: readonly FiniteOwnedContinuationEntry[],
+): readonly FiniteOwnedContinuationView[] {
+  return entries.map((entry) => {
+    const range = requirePendingBodyFixtureEntry(entry.atom.lineRange, "the complete source body");
+    const lines = (fixture.files[entry.atom.scopePath] ?? "")
+      .split("\n")
+      .slice(range.startLine - 1, range.endLine);
+    const body = lines.join("\n");
+    expect(fixture.trace.routeCoverage?.isCurrent(entry.atom)).toBe(true);
+    expect(entry.observedBytes).toBe(Buffer.byteLength(body));
+    return { entry, range, lines, body };
+  });
+}
+
 function delayedFileHeadCoverageFiles(): Readonly<Record<string, string>> {
   const files = { ...delayedStrongFileCoverageFiles() };
   files["src/scope-admission.ts"] = [
@@ -2008,6 +2094,35 @@ describe("current route trace excerpt coverage", () => {
         restricted,
       );
     }
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+  });
+
+  it("retains two pending physical files at an earlier guarded fair checkpoint", async () => {
+    const fixture = await coverageFixture(undefined, twoPendingFairCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const index = await fixture.requestContext.codeIntelligenceIndex();
+    const { head, caller, prefix, first, second } = twoPendingFairEntries(fixture, index);
+    const watched = twoPendingFairViews(fixture, [head, caller, ...prefix, first, second]);
+    const paths = [
+      ...new Set(["src/routes.ts", ...watched.map(({ entry }) => entry.atom.scopePath)]),
+    ];
+    const protectedEntries = [head, caller, prefix[0], first, second].filter(
+      (entry) => entry !== undefined,
+    );
+    const requiredFunding = new Set(protectedEntries.map((entry) => entry.definitionIdentity));
+    const wholeConsumers = new Set(requiredFunding);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    for (const restricted of [paths, undefined])
+      await expectPendingFairCompetingRead(
+        fixture,
+        atoms,
+        budget,
+        watched,
+        requiredFunding,
+        wholeConsumers,
+        restricted,
+      );
     expect(JSON.stringify(atoms)).toBe(originalAtoms);
   });
 
