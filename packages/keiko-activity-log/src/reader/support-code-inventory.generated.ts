@@ -1456,6 +1456,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/grounded-context-diagnostics",
   "keiko-server/grounded-context-index",
   "keiko-server/grounded-context-pack-reranker",
+  "keiko-server/grounded-contextual-fallback",
   "keiko-server/grounded-conversation-continuity",
   "keiko-server/grounded-diagnostic-references",
   "keiko-server/grounded-directory-iteration",
