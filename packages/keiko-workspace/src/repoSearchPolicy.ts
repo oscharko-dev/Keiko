@@ -18,7 +18,11 @@ import {
   naturalLanguageContentTermGroups,
   naturalLanguageContentTerms,
 } from "./repoSearchMatchers.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import {
+  expandedQueryTerms,
+  naturalLanguageSubjectText,
+  withoutEvidenceOnlyUseDirectives,
+} from "./repoSearchQueryTerms.js";
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
 import { isDenied } from "./ignore.js";
@@ -89,6 +93,7 @@ export interface RankedCandidateDiagnostic {
 }
 
 export interface SearchDiagnostics {
+  readonly citationDirectiveClauseCount?: number | undefined;
   readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
@@ -312,16 +317,10 @@ export const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
   "exportiert",
 ]);
 
-const EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS = [
-  /\buse\s+only\s+(?:read|verified|cited)\s+(?:values|evidence|sources)\b/giu,
-  /\bverwende\s+nur\s+(?:gelesene|belegte|verifizierte)\s+(?:werte|evidenz|quellen)\b/giu,
-];
-
 /** Output evidence instructions do not ask which source symbols use another symbol. */
 export function hasSymbolRelationshipQuery(text: string): boolean {
-  const relationshipText = EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS.reduce(
-    (value, pattern) => value.replace(pattern, " "),
-    text,
+  const relationshipText = withoutEvidenceOnlyUseDirectives(
+    naturalLanguageSubjectText(text),
   ).toLowerCase();
   return [...relationshipText.matchAll(/[\p{L}\p{N}_]+/gu)].some((match) =>
     SYMBOL_RELATION_TERMS.has(match[0]),
@@ -439,7 +438,9 @@ function isConfigPath(scopePath: string): boolean {
 }
 
 function normalizedQueryTerms(query: RetrievalQuery): readonly string[] {
-  return queryRankingTerms(query.text);
+  return queryRankingTerms(
+    query.kind === "natural-language" ? naturalLanguageSubjectText(query.text) : query.text,
+  );
 }
 
 const CONTENT_SCORE_STOP_TERMS: ReadonlySet<string> = new Set([
@@ -508,7 +509,7 @@ function isAnchorIdentifierTerm(term: string): boolean {
 const anchorIdentifierQueryTerms: (queryText: string) => readonly string[] = memoizeByStringKey(
   QUERY_TERM_MEMO_MAX_ENTRIES,
   (queryText: string): readonly string[] =>
-    expandedQueryTerms(queryText, true).filter(isAnchorIdentifierTerm),
+    expandedQueryTerms(naturalLanguageSubjectText(queryText), true).filter(isAnchorIdentifierTerm),
 );
 
 function keepContentTerm(term: string): boolean {

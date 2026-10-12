@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e4a7b5964c05f19faf87778dc3bc317b98d1ac6517bd6eb28a88668a775cac25" as const;
+  "c826f4cb885f381496cb32e58046ed3c87d1a1cf4bd802493c2b3a112ed11483" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -12839,6 +12839,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "searchCitationDirectiveClauseCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "structuralCandidateDirectoryCount",

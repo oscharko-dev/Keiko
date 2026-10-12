@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import { expandedQueryTerms, naturalLanguageSubjectText } from "./repoSearchQueryTerms.js";
 
 describe("expandedQueryTerms", () => {
   it("derives source identifiers from test-style names", () => {
@@ -110,5 +110,21 @@ describe("expandedQueryTerms", () => {
     const elapsedMs = performance.now() - start;
     expect(terms.length).toBeLessThanOrEqual(48);
     expect(elapsedMs).toBeLessThan(1_000);
+  });
+});
+
+describe("naturalLanguageSubjectText", () => {
+  it.each([
+    '"Cite implementation files and lines."',
+    "`Cite implementation files and lines.`",
+    "> Cite implementation files and lines.",
+    "Cite `source`.",
+    'Cite "files".',
+    "Cite Source implementation.",
+    "Cite src/policy.ts implementation.",
+    "Cite POST /api/items implementation.",
+  ])("preserves quoted, named and located source subjects: %s", (clause) => {
+    const text = `Find the message in the source. ${clause}`;
+    expect(naturalLanguageSubjectText(text)).toBe(text);
   });
 });

@@ -9,6 +9,99 @@ const STACK_LOCATION_SUFFIX_RE = /^(.+?):\d+(?::\d+)?$/u;
 const ATOMIC_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
 
 const MAX_EXPANDED_QUERY_TERMS = 48;
+
+const CITATION_DIRECTIVE_VERBS: ReadonlySet<string> = new Set([
+  "cite",
+  "include",
+  "provide",
+  "zitiere",
+  "nenne",
+]);
+const CITATION_DIRECTIVE_TERMS: ReadonlySet<string> = new Set([
+  "the",
+  "and",
+  "with",
+  "source",
+  "sources",
+  "implementation",
+  "file",
+  "files",
+  "path",
+  "paths",
+  "line",
+  "lines",
+  "number",
+  "numbers",
+  "citation",
+  "citations",
+  "die",
+  "und",
+  "mit",
+  "quelle",
+  "quellen",
+  "datei",
+  "dateien",
+  "pfad",
+  "pfade",
+  "zeile",
+  "zeilen",
+  "zeilennummer",
+  "zeilennummern",
+  "implementierungsdateien",
+]);
+
+function isCitationOnlyDirective(clause: string): boolean {
+  if (!/^\s*\p{L}/u.test(clause) || /["'`“”‘’«»]/u.test(clause)) return false;
+  const words = clause.match(/[\p{L}\p{N}_$./:-]+/gu) ?? [];
+  const verb = words.shift()?.toLowerCase();
+  const german = verb === "zitiere" || verb === "nenne";
+  return (
+    verb !== undefined &&
+    CITATION_DIRECTIVE_VERBS.has(verb) &&
+    words.length > 0 &&
+    words.every(
+      (word) =>
+        (german || word === word.toLowerCase()) &&
+        CITATION_DIRECTIVE_TERMS.has(word.toLowerCase().replace(/[.!?;]+$/u, "")),
+    )
+  );
+}
+
+interface NaturalLanguageSubject {
+  readonly text: string;
+  readonly citationDirectiveClauseCount: number;
+}
+
+/** Pure citation-format clauses are not source subjects; unknown or named clauses stay intact. */
+export function naturalLanguageSubject(text: string): NaturalLanguageSubject {
+  const unchanged = { text, citationDirectiveClauseCount: 0 };
+  if (/["'`“”‘’«»]/u.test(text)) return unchanged;
+  const clauses = text.split(/(?<=[.!?;])\s+|\n+/u);
+  const retained = clauses.filter((clause) => !isCitationOnlyDirective(clause));
+  if (retained.length === 0 || retained.length === clauses.length) return unchanged;
+  return {
+    text: retained.join(" "),
+    citationDirectiveClauseCount: clauses.length - retained.length,
+  };
+}
+
+export function naturalLanguageSubjectText(text: string): string {
+  return naturalLanguageSubject(text).text;
+}
+
+const EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS = [
+  /\buse\s+only\s+(?:read|verified|cited)\s+(?:values|evidence|sources)\b/giu,
+  /\bverwende\s+nur\s+(?:gelesene|belegte|verifizierte)\s+(?:werte|evidenz|quellen)\b/giu,
+];
+
+/** Evidence restrictions do not request source-code uses; mixed subject clauses remain. */
+export function withoutEvidenceOnlyUseDirectives(text: string): string {
+  return EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS.reduce(
+    (value, pattern) => value.replace(pattern, " "),
+    text,
+  );
+}
+
 const DOMAIN_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
   ["abhängigkeit", ["dependency", "dependencies"]],
   ["arbeit", ["work"]],

@@ -618,6 +618,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     indexReusedRecords: { type: "integer", dataClass: "count", required: false },
     indexStaleRecords: { type: "integer", dataClass: "count", required: false },
     indexSearchCount: { type: "integer", dataClass: "count", required: false },
+    searchCitationDirectiveClauseCount: { type: "integer", dataClass: "count", required: false },
     indexReportCount: { type: "integer", dataClass: "count", required: false },
     indexFallbackSearchCount: { type: "integer", dataClass: "count", required: false },
     indexBypassedSearchCount: { type: "integer", dataClass: "count", required: false },
@@ -1361,6 +1362,7 @@ type WorkspaceIndexLoadStatus = "not-attempted" | "hit" | "miss" | "mixed" | "fa
 type WorkspaceIndexSaveStatus = "not-attempted" | "succeeded" | "unfinished" | "failed";
 
 interface WorkspaceIndexActivityDiagnostics extends WorkspaceIndexPreparationReport {
+  readonly citationDirectiveClauseCount: number;
   readonly providerStatus: WorkspaceIndexProviderStatus;
   readonly searchMode: WorkspaceIndexSearchMode;
   readonly loadStatus: WorkspaceIndexLoadStatus;
@@ -1379,6 +1381,7 @@ interface WorkspaceIndexActivityDiagnostics extends WorkspaceIndexPreparationRep
 }
 
 interface MutableWorkspaceIndexActivityCounters {
+  citationDirectiveClauseCount: number;
   discoveredEntries: number;
   retainedEntries: number;
   indexedRecords: number;
@@ -1457,6 +1460,7 @@ function sumContextDiagnostics(
 
 function emptyWorkspaceIndexActivityCounters(): MutableWorkspaceIndexActivityCounters {
   return {
+    citationDirectiveClauseCount: 0,
     discoveredEntries: 0,
     retainedEntries: 0,
     indexedRecords: 0,
@@ -1494,6 +1498,7 @@ function addWorkspaceIndexResult(
   result: SearchResult,
 ): void {
   counters.searchCount += 1;
+  counters.citationDirectiveClauseCount += result.diagnostics?.citationDirectiveClauseCount ?? 0;
   const report = result.workspaceIndex;
   if (report === undefined) {
     if (stoppedBeforeWorkspaceScan(result)) return;
@@ -10300,6 +10305,7 @@ function completionDetailsActivityExtra(
     ...(execution.status.metadataRetention === undefined
       ? {}
       : { metadataRetentionLimit: execution.status.metadataRetention.limit }),
+    searchCitationDirectiveClauseCount: execution.workspaceIndex.citationDirectiveClauseCount,
     ...retrievalLossActivityExtra(execution.status),
     ...structuralActivityExtra(execution.structural),
     ...workspaceIndexActivityExtra(execution.workspaceIndex),

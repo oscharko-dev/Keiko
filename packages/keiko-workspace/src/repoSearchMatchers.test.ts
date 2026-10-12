@@ -129,6 +129,34 @@ describe("normalizeNaturalLanguageToken", () => {
 });
 
 describe("buildMatcher definition intent scoring", () => {
+  it.each([
+    "Cite implementation files and lines.",
+    "Include source file paths and line numbers.",
+    "Zitiere Implementierungsdateien und Zeilennummern.",
+  ])("does not rank citation-output terms as the requested source subject: %s", (directive) => {
+    const subject = "Trace request authorization through policy enforcement.";
+    const plain = buildMatcher(nlq(subject));
+    const cited = buildMatcher(nlq(`${subject} ${directive}`));
+    for (const line of ["const lines = [];", "function authorizeRequest(policy) {"]) {
+      expect(cited.match(line)).toBe(plain.match(line));
+    }
+  });
+
+  it("preserves a definition question followed by a citation directive", () => {
+    const subject = "Where is handler defined?";
+    const plain = buildMatcher(nlq(subject));
+    const cited = buildMatcher(nlq(`${subject} Cite implementation files and lines.`));
+    expect(cited.match("function handler() {")).toBe(plain.match("function handler() {"));
+    expect(cited.match("function handler() {")).toBeGreaterThan(cited.match("handler reference"));
+  });
+
+  it("keeps named source subjects inside citation requests", () => {
+    const matcher = buildMatcher(nlq("Cite the implementation of authorizeRequest."));
+    expect(matcher.match("function authorizeRequest(policy) {")).toBeGreaterThan(
+      matcher.match("authorizeRequest reference"),
+    );
+  });
+
   it("matches typed declarations without unbounded whitespace backtracking", () => {
     expect(
       lineLooksLikeSymbolDefinition(

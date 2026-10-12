@@ -2500,6 +2500,16 @@ function searchRunState(candidateSet: CandidateSet): {
   };
 }
 
+function queryNormalizationDiagnostics(
+  runner: SearchTextRunner,
+  diagnostics: SearchDiagnostics,
+): SearchDiagnostics {
+  const count = runner.matcher.citationDirectiveClauseCount;
+  return count === undefined
+    ? diagnostics
+    : { ...diagnostics, citationDirectiveClauseCount: count };
+}
+
 function completedSearchTextResult(
   runner: SearchTextRunner,
   candidateSet: CandidateSet,
@@ -2517,7 +2527,7 @@ function completedSearchTextResult(
     matchesReturned: state.matchesReturned,
     elapsedMs: elapsed(runner),
     truncated: state.truncated,
-    diagnostics: candidateSet.diagnostics,
+    diagnostics: queryNormalizationDiagnostics(runner, candidateSet.diagnostics),
     limits: runner.limits,
     candidateTruncated: candidateSet.truncated,
     truncationReasons,
@@ -2691,10 +2701,13 @@ async function streamedSearchResult(
     oversizedFilesScanned: 0,
     elapsedMs,
     truncated: collected.state.truncated,
-    diagnostics: withSemanticRankingDiagnostics(
-      collected.diagnostics,
-      bestLexicalAtomsByPath(collected.atoms),
-      semantic,
+    diagnostics: queryNormalizationDiagnostics(
+      runner,
+      withSemanticRankingDiagnostics(
+        collected.diagnostics,
+        bestLexicalAtomsByPath(collected.atoms),
+        semantic,
+      ),
     ),
     coverage: streamedCoverage(runner, collected, atoms.length, elapsedMs),
   };

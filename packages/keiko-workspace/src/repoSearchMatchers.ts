@@ -11,7 +11,12 @@ import {
   type EcosystemVersionDeclarationPattern,
 } from "./ecosystems.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
-import { expandedQueryTermGroups, expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import {
+  expandedQueryTermGroups,
+  expandedQueryTerms,
+  naturalLanguageSubject,
+  naturalLanguageSubjectText,
+} from "./repoSearchQueryTerms.js";
 import { compileSafeWorkspaceSearchRegex, regexSafetyIssue } from "./repoSearchRegexSafety.js";
 import { repositoryRouteDeclarationMatches, repositoryRouteQuery } from "./repoSearchRoutes.js";
 import {
@@ -21,6 +26,7 @@ import {
 } from "./repoSearchSourceClassification.js";
 
 export interface LineMatcher {
+  readonly citationDirectiveClauseCount?: number | undefined;
   /** Only explicit false skips structural preparation; unknown injected matchers stay conservative. */
   readonly requiresSourceClassification?: boolean | undefined;
   readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
@@ -78,7 +84,16 @@ export function queryIdentityFor(
     maxResults: query.maxResults,
     ...(interpretation === undefined ? {} : { interpretation: interpretation.kind }),
     ...(interpretation?.terms === undefined ? {} : { literalTerms }),
-    ...(matchingSettings === undefined ? {} : { matchingSettings }),
+    ...(matchingSettings === undefined
+      ? {}
+      : {
+          matchingSettings: {
+            ...matchingSettings,
+            ...(query.kind === "natural-language" && interpretation === undefined
+              ? { subjectNormalizationRevision: 1 }
+              : {}),
+          },
+        }),
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -379,7 +394,7 @@ const memoizedContentTerms: (key: string) => readonly string[] = memoizeByString
 const memoizedContentTermGroups: (key: string) => readonly (readonly string[])[] =
   memoizeByStringKey(8, (key: string): readonly (readonly string[])[] => {
     const caseSensitive = key.startsWith("s");
-    const queryText = key.slice(2);
+    const queryText = naturalLanguageSubjectText(key.slice(2));
     const groups = naturalLanguageContentGroups(
       expandedQueryTermGroups(queryText, caseSensitive),
       caseSensitive,
@@ -709,7 +724,8 @@ function adjustedVersionDeclarationScore(
 }
 
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
-  const intentTokens = expandedQueryTerms(query.text, true);
+  const { text: subjectText, citationDirectiveClauseCount } = naturalLanguageSubject(query.text);
+  const intentTokens = expandedQueryTerms(subjectText, true);
   const normalizedTokens = naturalLanguageNormalizedTokens(intentTokens);
   // GRD-033: dedupe alternatives inside each original-token group so aliases/stems improve recall
   // without making every alias an additional required term in `hits/total`.
@@ -722,6 +738,7 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   );
   const total = tokenGroups.length;
   return {
+    citationDirectiveClauseCount,
     match: (line: string, providedSourceLine?: RepositorySourceLine): number => {
       if (total === 0) {
         return 0;

@@ -426,6 +426,12 @@ Binding certification does not replace relevance with a constant score. Declarat
 preserves its admitted score; a further definition reuses the original-query matcher on its actually
 read, redacted source, followed by the existing relationship attenuation. Explicit selected-file
 priority remains intact.
+Natural-language matching separates standalone citation-format clauses from the search subject.
+The conservative citation vocabulary leaves quoted text and unrecognized identifiers, paths and
+routes intact. Definition intent and content groups use that same subject while the original query
+and diagnostic identity remain unchanged. Persistent natural-language match identities carry a
+normalization revision. The existing completion-details Activity Log records only the aggregate
+removed-clause count across actual searches; literal, regex and exact-symbol matching retain their existing semantics.
 Physical excerpt allocation preserves connected parent chains across already selected route files.
 Explicit human file selections remain first. The request-local traversal supplies only current,
 certified definition identities, observed parent relationships and actual body-byte requirements.

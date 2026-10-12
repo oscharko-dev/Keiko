@@ -28085,6 +28085,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      searchCitationDirectiveClauseCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       indexReportCount: {
         type: "integer",
         dataClass: "count",

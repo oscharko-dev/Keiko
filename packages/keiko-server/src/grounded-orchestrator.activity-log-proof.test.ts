@@ -109,6 +109,28 @@ function fixtureDeps(activityLog: BufferedServerLogSink): OrchestratorDeps {
 }
 
 describe("retrieveConnectedContextPack Activity Log proofs", () => {
+  it("records citation-only subject normalization without query or source bodies", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const input = fixtureInput();
+    const query = {
+      ...input.query,
+      text: `${FIXTURE_QUERY_TEXT}. Cite implementation files and lines.`,
+    };
+    await retrieveConnectedContextPack({ ...input, query }, fixtureDeps(activityLog));
+    const details = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completion-details",
+    );
+    const proof = expectActivityLogProof(
+      "search.connected-context.completion-details.line",
+      formatActivityLogProofLine(details ?? {}),
+    );
+    expect(proof.searchCitationDirectiveClauseCount).toBeGreaterThan(0);
+    const serialized = activityLog.lines().join("\n");
+    expect(serialized).not.toContain(FIXTURE_QUERY_TEXT);
+    expect(serialized).not.toContain("Cite implementation files and lines");
+    expect(serialized).not.toContain(SCOPE_FILE);
+  });
+
   it("resolves started, completion, source and selection siblings from one real retrieval", async () => {
     const activityLog = createBufferedServerLogSink();
 

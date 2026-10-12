@@ -111,6 +111,12 @@ deduplication removes only lines already covered by a higher-priority window.
 Exact structural endpoint-registration ranges and their existing surrounding-context boundaries
 split broader ordinary windows. Uncovered surrounding evidence retains its relevance and priority;
 these spans do not certify handler invocation.
+Natural-language matching separates standalone citation-format clauses from the search subject.
+The conservative citation vocabulary leaves quoted text and unrecognized identifiers, paths and
+routes intact. Definition intent and content groups use that same subject while the original query
+and diagnostic identity remain unchanged. Persistent natural-language match identities carry a
+normalization revision. The existing completion-details Activity Log records only the aggregate
+removed-clause count across actual searches; literal, regex and exact-symbol matching retain their existing semantics.
 Physical excerpt allocation funds selected, current target definition windows and their observed
 parent caller spans inside the existing connected share and each physical excerpt's byte limit. A
 compact caller span remains bound to its original current parent, exact child and observed source
