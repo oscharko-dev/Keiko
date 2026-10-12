@@ -935,3 +935,151 @@ describe("governedActionRefErrors's decision read is unreachable-with-undefined 
     expect(result).toEqual({ ok: false, errors: ["decision is invalid"] });
   });
 });
+
+describe("C1A governed output preservation", () => {
+  it.each(["source", "public"])(
+    "retains both governed output identities through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateGovernedActionV1, validateCodeTaskExecutionV1 }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance");
+      const action = allowedAction();
+      const input = execution();
+      const first = validators.validateGovernedActionV1(action);
+      const second = validators.validateCodeTaskExecutionV1(input);
+      expect(first.ok && first.value === action && first.value.grant === action.grant).toBe(true);
+      expect(second.ok && second.value === input && second.value.failure === input.failure).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(["source", "public"])("retains dense eager errors through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateGovernedActionV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+            .validateGovernedActionV1;
+    const result = validate({
+      ...allowedAction(),
+      taskId: 0,
+      stateRevision: -1,
+      actionKind: "bogus",
+    });
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "taskId is invalid",
+        "stateRevision must be a non-negative integer",
+        "actionKind is invalid",
+        "grant is not permitted on a structurally ungrantable action kind",
+      ],
+    });
+  });
+
+  it.each(["source", "public"])(
+    "retains finite repeated decision observations through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateGovernedActionV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+              .validateGovernedActionV1;
+      const action = allowedAction();
+      let reads = 0;
+      Object.defineProperty(action, "decision", {
+        get: (): string => {
+          reads += 1;
+          return "allowed";
+        },
+      });
+      const result = validate(action);
+      expect(result.ok && result.value === action).toBe(true);
+      expect(reads).toBe(2);
+    },
+  );
+});
+
+describe("C1A finite governed discriminator observations", () => {
+  it.each(["source", "public"])("refuses an invalid observed decision through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateGovernedActionV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+            .validateGovernedActionV1;
+    const input = {
+      ...allowedAction(),
+      grant: { outcome: "absent" },
+      question: { outcome: "absent" },
+    };
+    let reads = 0;
+    Object.defineProperty(input, "decision", {
+      get: (): string => {
+        reads += 1;
+        return reads === 1 ? "allowed" : "invalid";
+      },
+    });
+    expect(validate(input).ok).toBe(false);
+    expect(reads).toBe(2);
+  });
+
+  it.each(["source", "public"])(
+    "refuses an invalid observed execution state through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskExecutionV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+              .validateCodeTaskExecutionV1;
+      const input = {
+        ...execution(),
+        state: "failed",
+        failure: { outcome: "known", value: "runtime-failed" },
+      };
+      let reads = 0;
+      Object.defineProperty(input, "state", {
+        get: (): unknown => {
+          reads += 1;
+          return reads === 1 ? "failed" : 0;
+        },
+      });
+      expect(validate(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "preserves valid changing governed branch observations through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateGovernedActionV1, validateCodeTaskExecutionV1 }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance");
+      const action = {
+        ...allowedAction(),
+        grant: { outcome: "absent" },
+        question: { outcome: "absent" },
+      };
+      let decisionReads = 0;
+      Object.defineProperty(action, "decision", {
+        get: (): string => {
+          decisionReads += 1;
+          return decisionReads === 1 ? "allowed" : "denied";
+        },
+      });
+      expect(validators.validateGovernedActionV1(action).ok).toBe(true);
+      expect(decisionReads).toBe(2);
+      const input = { ...execution(), failure: { outcome: "known", value: "runtime-failed" } };
+      let stateReads = 0;
+      Object.defineProperty(input, "state", {
+        get: (): string => {
+          stateReads += 1;
+          return stateReads === 1 ? "failed" : "recovery-required";
+        },
+      });
+      expect(validators.validateCodeTaskExecutionV1(input).ok).toBe(true);
+      expect(stateReads).toBe(2);
+    },
+  );
+});

@@ -502,3 +502,221 @@ describe("boundedStringFactErrors/questionFactErrors collect every violation (Kf
     expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
   });
 });
+
+describe("C1A run-control member admission", () => {
+  it.each(["source", "public"])("refuses skipped grant validation through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateRunControlSnapshotV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+            .validateRunControlSnapshotV1;
+    const grantRefs = [{ grantId: 0, grantScope: "task" }];
+    Object.defineProperty(grantRefs, "forEach", { value: (): void => undefined });
+    expect(validate({ ...snapshot(), grantRefs }).ok).toBe(false);
+  });
+  it.each(["source", "public"])("refuses skipped lifecycle validation through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateRuntimeGovernanceOutcomeV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+            .validateRuntimeGovernanceOutcomeV1;
+    const events = [{ sequence: 0, kind: "bogus", stateRevision: 2 }];
+    Object.defineProperty(events, "forEach", { value: (): void => undefined });
+    expect(
+      validate({ kind: "runtime-governance-outcome", schemaVersion: 1, status: "settled", events })
+        .ok,
+    ).toBe(false);
+  });
+  it.each(["source", "public"])("refuses sparse grants through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateRunControlSnapshotV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+            .validateRunControlSnapshotV1;
+    expect(validate({ ...snapshot(), grantRefs: Array<unknown>(1) }).ok).toBe(false);
+  });
+  it.each(["source", "public"])("refuses sparse lifecycle events through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateRuntimeGovernanceOutcomeV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+            .validateRuntimeGovernanceOutcomeV1;
+    expect(
+      validate({
+        kind: "runtime-governance-outcome",
+        schemaVersion: 1,
+        status: "settled",
+        events: Array<unknown>(1),
+      }).ok,
+    ).toBe(false);
+  });
+  it.each(["source", "public"])("bounds first-hole grant diagnostics through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateRunControlSnapshotV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+            .validateRunControlSnapshotV1;
+    expect(validate({ ...snapshot(), grantRefs: Array<unknown>(100_000) })).toEqual({
+      ok: false,
+      errors: ["grantRefs[0] must be an object"],
+    });
+  });
+  it.each(["source", "public"])(
+    "bounds first-hole lifecycle diagnostics through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateRuntimeGovernanceOutcomeV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+              .validateRuntimeGovernanceOutcomeV1;
+      expect(
+        validate({
+          kind: "runtime-governance-outcome",
+          schemaVersion: 1,
+          status: "settled",
+          events: Array<unknown>(100_000),
+        }),
+      ).toEqual({ ok: false, errors: ["events[0] must be an object"] });
+    },
+  );
+});
+
+describe("C1A run-control preservation", () => {
+  it.each(["source", "public"])(
+    "retains three output identities and empty collections through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? {
+              validateRunControlSnapshotV1,
+              validateRuntimeGovernanceRequestV1,
+              validateRuntimeGovernanceOutcomeV1,
+            }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control");
+      const input = { ...snapshot(), grantRefs: [] };
+      const request = decideRequest();
+      const outcome = {
+        kind: "runtime-governance-outcome",
+        schemaVersion: 1,
+        status: "settled",
+        events: [],
+      };
+      const first = validators.validateRunControlSnapshotV1(input);
+      const second = validators.validateRuntimeGovernanceRequestV1(request);
+      const third = validators.validateRuntimeGovernanceOutcomeV1(outcome);
+      expect(first.ok && first.value === input && first.value.grantRefs === input.grantRefs).toBe(
+        true,
+      );
+      expect(second.ok && second.value === request).toBe(true);
+      expect(third.ok && third.value === outcome && third.value.events === outcome.events).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(["source", "public"])("retains the observed task-id read through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateRunControlSnapshotV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+            .validateRunControlSnapshotV1;
+    const input = snapshot();
+    const taskId = input.taskId;
+    let reads = 0;
+    Object.defineProperty(input, "taskId", {
+      get: (): string => {
+        reads += 1;
+        return taskId;
+      },
+    });
+    const result = validate(input);
+    expect(result.ok && result.value === input).toBe(true);
+    expect(reads).toBe(1);
+  });
+});
+
+describe("C1A finite run-control discriminator observations", () => {
+  it.each(["source", "public"])(
+    "refuses an invalid observed operation through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateRuntimeGovernanceRequestV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+              .validateRuntimeGovernanceRequestV1;
+      const { actionKind: _actionKind, requestedGrantScope: _scope, ...target } = decideRequest();
+      const input = { ...target, operation: "pause" };
+      let reads = 0;
+      Object.defineProperty(input, "operation", {
+        get: (): string => {
+          reads += 1;
+          return reads === 1 ? "pause" : "invalid";
+        },
+      });
+      expect(validate(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses an invalid observed outcome branch through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateRuntimeGovernanceOutcomeV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control"))
+              .validateRuntimeGovernanceOutcomeV1;
+      const input = {
+        kind: "runtime-governance-outcome",
+        schemaVersion: 1,
+        status: "unsupported",
+        reasonCode: "no-capability",
+      };
+      let reads = 0;
+      Object.defineProperty(input, "status", {
+        get: (): string => {
+          reads += 1;
+          return reads === 1 ? "unsupported" : "invalid";
+        },
+      });
+      expect(validate(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "preserves valid changing run-control fallback observations through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateRuntimeGovernanceRequestV1, validateRuntimeGovernanceOutcomeV1 }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-run-control");
+      const { actionKind: _actionKind, requestedGrantScope: _scope, ...target } = decideRequest();
+      const request = { ...target, operation: "pause" };
+      let operationReads = 0;
+      Object.defineProperty(request, "operation", {
+        get: (): string => {
+          operationReads += 1;
+          return operationReads === 1 ? "pause" : "stop";
+        },
+      });
+      expect(validators.validateRuntimeGovernanceRequestV1(request).ok).toBe(true);
+      expect(operationReads).toBe(2);
+      const outcome = {
+        kind: "runtime-governance-outcome",
+        schemaVersion: 1,
+        status: "unsupported",
+        reasonCode: "no-capability",
+      };
+      let statusReads = 0;
+      Object.defineProperty(outcome, "status", {
+        get: (): string => {
+          statusReads += 1;
+          return statusReads === 1 ? "unsupported" : "denied";
+        },
+      });
+      expect(validators.validateRuntimeGovernanceOutcomeV1(outcome).ok).toBe(true);
+      expect(statusReads).toBe(2);
+    },
+  );
+});

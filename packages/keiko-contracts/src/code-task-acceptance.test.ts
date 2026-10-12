@@ -1588,3 +1588,437 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
     ).toContain("duplicate flow taskRunId");
   });
 });
+
+// C1A proposed controls: execute on original source and freshly built public output before repair.
+describe("C1A concrete acceptance member admission", () => {
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), scenarios }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const salvage: unknown[] = [null];
+      Object.defineProperty(salvage, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), salvage }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), scenarios: Array<unknown>(1) }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 4 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const salvage: unknown[] = [null];
+      Object.defineProperty(salvage, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), salvage: Array<unknown>(1) }).ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const artifactDigests: unknown[] = [7];
+      Object.defineProperty(artifactDigests, "every", { value: (): boolean => true });
+      expect(
+        validate({
+          ...contribution,
+          scenarios: [{ ...contribution.scenarios[0], artifactDigests }],
+        }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const knownLimitations: unknown[] = [7];
+      Object.defineProperty(knownLimitations, "every", { value: (): boolean => true });
+      expect(validate({ ...contribution, knownLimitations }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const artifactDigests: unknown[] = [7];
+      Object.defineProperty(artifactDigests, "every", { value: (): boolean => true });
+      expect(
+        validate({
+          ...contribution,
+          scenarios: [{ ...contribution.scenarios[0], artifactDigests: Array<unknown>(1) }],
+        }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 4 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const knownLimitations: unknown[] = [7];
+      Object.defineProperty(knownLimitations, "every", { value: (): boolean => true });
+      expect(validate({ ...contribution, knownLimitations: Array<unknown>(1) }).ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 1 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      expect(validators.validateCodeTaskQualificationManifest({ ...manifest, scenarios }).ok).toBe(
+        false,
+      );
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 2 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const flows: unknown[] = [null];
+      Object.defineProperty(flows, "forEach", { value: (): void => undefined });
+      expect(validators.validateCodeTaskQualificationManifest({ ...manifest, flows }).ok).toBe(
+        false,
+      );
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 3 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const flows: unknown[] = [null];
+      Object.defineProperty(flows, "forEach", { value: (): void => undefined });
+      expect(
+        validators.validateCodeTaskQualificationManifest({ ...manifest, flows: Array<unknown>(1) })
+          .ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 4 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      const artifactDigests: unknown[] = [7];
+      Object.defineProperty(artifactDigests, "every", { value: (): boolean => true });
+      expect(
+        validators.validateCodeTaskQualificationManifest({
+          ...manifest,
+          scenarios: [{ ...manifest.scenarios[0], artifactDigests }],
+        }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 5 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const knownLimitations: unknown[] = [7];
+      Object.defineProperty(knownLimitations, "every", { value: (): boolean => true });
+      expect(
+        validators.validateCodeTaskQualificationManifest({ ...manifest, knownLimitations }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 6 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const transitions = CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS.map(() => "wrong");
+      Object.defineProperty(transitions, "some", { value: (): boolean => false });
+      expect(
+        validators.validateCodeTaskQualificationFlowArtifact({
+          ...validQualificationFlow(),
+          transitions,
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses skipped authority fields case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const approvalRequests = [
+        { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
+        { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
+      ];
+      const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
+      const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
+      for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
+        Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
+      }
+      const authority = flow.authorityObservation;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvalRequests } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped authority fields case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const approvalRequests = [
+        { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
+        { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
+      ];
+      const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
+      const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
+      for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
+        Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
+      }
+      const authority = flow.authorityObservation;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvedProposalActions } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped authority fields case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const approvalRequests = [
+        { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
+        { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
+      ];
+      const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
+      const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
+      for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
+        Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
+      }
+      const authority = flow.authorityObservation;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, effectStartedTools } }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses missing authority slots without changing accounting case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const authority = flow.authorityObservation;
+      const approvalRequests = [...authority.approvalRequests];
+      const approvedProposalActions = [...authority.approvedProposalActions];
+      const effectStartedTools = [...authority.effectStartedTools];
+      approvalRequests.length += 1;
+      approvedProposalActions.length += 1;
+      effectStartedTools.length += 1;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvalRequests } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses missing authority slots without changing accounting case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const authority = flow.authorityObservation;
+      const approvalRequests = [...authority.approvalRequests];
+      const approvedProposalActions = [...authority.approvedProposalActions];
+      const effectStartedTools = [...authority.effectStartedTools];
+      approvalRequests.length += 1;
+      approvedProposalActions.length += 1;
+      effectStartedTools.length += 1;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvedProposalActions } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses missing authority slots without changing accounting case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const authority = flow.authorityObservation;
+      const approvalRequests = [...authority.approvalRequests];
+      const approvedProposalActions = [...authority.approvedProposalActions];
+      const effectStartedTools = [...authority.effectStartedTools];
+      approvalRequests.length += 1;
+      approvedProposalActions.length += 1;
+      effectStartedTools.length += 1;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, effectStartedTools } }).ok,
+      ).toBe(false);
+    },
+  );
+});
+
+describe("C1A acceptance preservation", () => {
+  it.each(["source", "public"])(
+    "retains three accepted roots and nested identities through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? {
+              validateCodeTaskAcceptanceContribution,
+              validateCodeTaskQualificationFlowArtifact,
+              validateCodeTaskQualificationManifest,
+            }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const contribution = validContribution();
+      const flow = validQualificationFlow();
+      const manifest = validQualificationManifest();
+      const first = validators.validateCodeTaskAcceptanceContribution(contribution);
+      const second = validators.validateCodeTaskQualificationFlowArtifact(flow);
+      const third = validators.validateCodeTaskQualificationManifest(manifest);
+      expect(
+        first.ok &&
+          first.value === contribution &&
+          first.value.scenarios === contribution.scenarios,
+      ).toBe(true);
+      expect(
+        second.ok &&
+          second.value === flow &&
+          second.value.authorityObservation === flow.authorityObservation,
+      ).toBe(true);
+      expect(
+        third.ok &&
+          third.value === manifest &&
+          third.value.observedSpendUsd === manifest.observedSpendUsd,
+      ).toBe(true);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "retains the whole-flow repository binding backstop through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const repository = { toString: (): string => flow.repository };
+      const result = validate({ ...flow, rubricReview: { ...flow.rubricReview, repository } });
+      expect(result.ok).toBe(false);
+      if (!result.ok)
+        expect(result.errors).toContain(
+          "flowArtifact.rubricReview must match the completed flow identity",
+        );
+    },
+  );
+
+  it.each(["source", "public"])(
+    "admits inherited present scenario slots through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const scenarios: unknown[] = Array<unknown>(1);
+      Object.setPrototypeOf(scenarios, [contribution.scenarios[0]]);
+      const input = { ...contribution, scenarios };
+      const result = validate(input);
+      expect(result.ok && result.value === input && result.value.scenarios === scenarios).toBe(
+        true,
+      );
+    },
+  );
+});
