@@ -442,6 +442,11 @@ matching, including technical aliases and ordinary context.
 The existing persistent natural-language matching revision invalidates older scores. After actual
 excerpt assembly and final prompt fitting, an unobserved compound hint lowers selection confidence
 without removing evidence or claiming a keep-one fallback; fresh and cached packs share this rule.
+Ordinary natural-language document excerpts include the complete decoded, redacted document when
+it fits both the existing window grant and remaining total bytes. This uses the canonical reader's
+current snapshot and actual full-file range. Explicit selected-file or line-range requests,
+coverage-certified windows and source-code excerpts retain their requested geometry; a larger
+document retains the existing bounded anchor windows.
 Returned and persisted answers use the confidence of their actual sent source; another source cannot
 supply its missing spelling. Existing completion events record the target decision/count, selection
 confidence and actual read counts. The existing `chat.context.selected` event records available
@@ -1060,7 +1065,13 @@ the assembler does not invoke it again. Provider failure preserves identity orde
 recorded as failed, rather than applied. Attempted calls still consume the call grant. An elapsed
 deadline stops subsequent reads, including when a late reranker result would otherwise arrive;
 identity fallback is pinned on the preselection producer, and orchestration pins enforce no
-post-deadline work. Ordinary keep-one fallback records low selection confidence and the
+post-deadline work. For contextual natural-language requests without semantic evidence or an
+applied reranker, the ordinary keep-one fallback preserves the first lexical producer's ordering
+among eligible content candidates. Each retained position must still match the actual atom's
+stable identity, path and query fingerprint. This changes neither relevance scores nor floors,
+exclusions, read grants or source authority. Successful reranking retains its own score order.
+The existing selection-details event records the closed fallback ranking source. Ordinary keep-one
+fallback records low selection confidence and the
 `low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,
 and log. Selection-details carries the calibrated floor, confidence, disposition, failed-call,
 and safe platform failure evidence. Wire semantic/scope dispositions are actual observations,

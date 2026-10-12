@@ -28674,6 +28674,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      fallbackRankingSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["candidate-score", "lexical-producer"],
+      },
       selectionConfidence: {
         type: "string",
         dataClass: "closed-enum",

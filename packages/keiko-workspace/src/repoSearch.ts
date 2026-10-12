@@ -199,6 +199,8 @@ export interface ReadExcerptRequest {
   readonly expectedSourceFingerprint?: string | undefined;
   // Trusted query anchors reposition a clipped view without widening the returned byte cap.
   readonly anchors?: readonly string[] | undefined;
+  // Ordinary document context may include the complete source only when the current grant fits.
+  readonly preferCompleteDocument?: boolean | undefined;
   readonly maxWindows?: number | undefined;
   readonly maxTotalBytes?: number | undefined;
   readonly scopePath: string;
@@ -3713,7 +3715,7 @@ export async function findFilesBatch(
 function buildExcerptFingerprint(request: ReadExcerptRequest): string {
   return fingerprintFor({
     kind: "natural-language",
-    text: `${request.scopePath}:${request.startLine.toString()}-${request.endLine.toString()}${request.anchors === undefined ? "" : JSON.stringify(request.anchors)}`,
+    text: `${request.scopePath}:${request.startLine.toString()}-${request.endLine.toString()}${request.anchors === undefined ? "" : JSON.stringify(request.anchors)}${request.preferCompleteDocument === true ? ":complete-document" : ""}`,
     caseSensitive: false,
     maxResults: 1,
     emittedAtMs: 0,
@@ -4070,19 +4072,19 @@ function excerptWindows(
   allLines: readonly string[],
 ): readonly ReturnType<typeof excerptWindow>[] {
   const maxBytes = Math.min(request.maxBytes, request.maxTotalBytes ?? request.maxBytes);
-  const baseRequest = { ...request, maxBytes };
-  if ((request.maxWindows ?? 1) <= 1 || request.anchors === undefined)
+  const baseRequest = completeDocumentExcerptRequest({ ...request, maxBytes }, allLines);
+  if ((baseRequest.maxWindows ?? 1) <= 1 || baseRequest.anchors === undefined)
     return [excerptWindow(baseRequest, allLines)];
-  const slice = allLines.slice(request.startLine - 1, request.endLine).join("\n");
+  const slice = allLines.slice(baseRequest.startLine - 1, baseRequest.endLine).join("\n");
   const windows = anchoredExcerptByteWindows(
     slice,
-    request.anchors,
+    baseRequest.anchors,
     {
       maxBytes,
-      maxWindows: request.maxWindows ?? 1,
-      maxTotalBytes: request.maxTotalBytes ?? request.maxBytes,
+      maxWindows: baseRequest.maxWindows ?? 1,
+      maxTotalBytes: baseRequest.maxTotalBytes ?? baseRequest.maxBytes,
     },
-    request.startLine,
+    baseRequest.startLine,
   );
   if (windows === undefined) return [excerptWindow(baseRequest, allLines)];
   return windows.map((window) => ({
@@ -4090,6 +4092,16 @@ function excerptWindows(
     truncated: window.content !== slice,
     anchoredWindowApplied: window.anchoredWindowApplied ?? false,
   }));
+}
+
+function completeDocumentExcerptRequest(
+  request: ReadExcerptRequest,
+  allLines: readonly string[],
+): ReadExcerptRequest {
+  if (request.preferCompleteDocument !== true) return request;
+  const bytes = new TextEncoder().encode(allLines.join("\n")).byteLength;
+  if (bytes > request.maxBytes) return request;
+  return { ...request, startLine: 1, endLine: allLines.length, anchors: undefined };
 }
 
 function excerptExecutionError(reason: "aborted" | "timeout"): RepoSearchUnsupportedFileError {

@@ -81,6 +81,7 @@ describe("production reranking precedes relevance selection", () => {
     expect(pack.files.length).toBeGreaterThan(0);
     expect(pack.diagnostics?.selection).toMatchObject({
       keepOneFallbackApplied: true,
+      fallbackRankingSource: "candidate-score",
       selectionConfidence: "low",
     });
     expect(pack.uncertainty.map((marker) => marker.kind)).toContain("low-confidence-selection");

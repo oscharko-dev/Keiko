@@ -20,6 +20,8 @@ export interface AnnotatedCandidate {
 
 export interface FilterOptions {
   readonly minScore: number;
+  // Optional producer ordering applies only to the existing single below-floor fallback.
+  readonly fallbackOrder?: readonly string[] | undefined;
   readonly minScoreExemptPaths?: ReadonlySet<string>;
   readonly generatedExemptPaths?: ReadonlySet<string>;
   readonly maxKept: number;
@@ -121,7 +123,7 @@ function partition(
     const reason = classifyReason(entry, options);
     if (reason === undefined) {
       kept.push(entry.candidate);
-    } else if (reason === "low-relevance") {
+    } else if (reason === "low-relevance" && !(entry.duplicate && options.omitNearDuplicates)) {
       lowRelevance.push(entry.candidate);
     } else {
       omittedEntries.push(toOmittedEntry(entry.candidate.scopePath, reason, nowMs));
@@ -154,7 +156,12 @@ export function filterCandidates(
   const nowMs = options.nowMs();
   const { kept, lowRelevance, omittedEntries } = partition(entries, options, nowMs);
   const maxKept = normalizeMaxKept(options.maxKept);
-  lowRelevance.sort(compareKept);
+  const fallbackRanks = new Map(options.fallbackOrder?.map((path, index) => [path, index]));
+  lowRelevance.sort(
+    (a, b) =>
+      (fallbackRanks.get(a.scopePath) ?? Infinity) - (fallbackRanks.get(b.scopePath) ?? Infinity) ||
+      compareKept(a, b),
+  );
   if (kept.length === 0 && maxKept > 0) {
     const fallback = lowRelevance.shift();
     if (fallback !== undefined) {

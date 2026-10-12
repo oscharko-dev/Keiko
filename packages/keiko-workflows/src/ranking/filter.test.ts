@@ -44,6 +44,38 @@ function annotated(
 }
 
 describe("filterCandidates", () => {
+  it("uses producer ordering only to choose one eligible low-confidence fallback", () => {
+    const result = filterCandidates(
+      [annotated("adjacent/note.md", 0.12), annotated("src/transform.ts", 0.08)],
+      options({ fallbackOrder: ["src/transform.ts", "adjacent/note.md"] }),
+    );
+    expect(result.kept).toEqual([candidate("src/transform.ts", 0.08)]);
+    expect(result.omitted).toEqual([
+      { scopePath: "adjacent/note.md", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+    ]);
+  });
+
+  it("never lets fallback ordering bypass exclusions, the floor, or a zero grant", () => {
+    const entries = [
+      annotated("dist/first.js", 0.13, true),
+      annotated("duplicate.md", 0.12, false, true),
+      {
+        ...annotated("binary.dat", 0.11),
+        candidate: { ...candidate("binary.dat", 0.11), omitted: "binary" as const },
+      },
+      annotated("weak.md", 0.05),
+      annotated("strong.md", 0.7),
+    ];
+    const fallbackOrder = entries.map((entry) => entry.candidate.scopePath);
+    expect(filterCandidates(entries, options({ fallbackOrder })).kept).toEqual([
+      candidate("strong.md", 0.7),
+    ]);
+    expect(filterCandidates(entries, options({ fallbackOrder, maxKept: 0 })).kept).toEqual([]);
+    expect(filterCandidates(entries.slice(0, -1), options({ fallbackOrder })).kept).toEqual([
+      candidate("weak.md", 0.05),
+    ]);
+  });
+
   it("retains certified generated content without overriding eligibility denials", () => {
     const blocked = {
       ...annotated("dist/blocked.ts", 0.9, true),

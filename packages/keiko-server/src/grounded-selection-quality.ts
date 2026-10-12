@@ -21,6 +21,7 @@ export interface SelectionQualityInput {
   readonly scopeKind: SelectedScope["kind"];
   readonly relative: RelativeFloorObservation;
   readonly reranker: PreselectionRerankerResult;
+  readonly fallbackOrder?: readonly string[] | undefined;
 }
 
 export function selectionQuality(input: SelectionQualityInput): ContextSelectionDiagnostics {
@@ -35,6 +36,15 @@ export function selectionQuality(input: SelectionQualityInput): ContextSelection
   return {
     selectionConfidence: fallback ? "low" : "high",
     keepOneFallbackApplied: fallback,
+    ...(fallback
+      ? {
+          fallbackRankingSource: input.selected.some(
+            (candidate) => input.fallbackOrder?.includes(candidate.scopePath) === true,
+          )
+            ? ("lexical-producer" as const)
+            : ("candidate-score" as const),
+        }
+      : {}),
     floorReferenceKind: input.relative.floorReferenceKind,
     relativeFloorPermille: input.relative.relativeFloorPermille,
     strongestOrdinaryScorePermille: Math.round(input.relative.strongestOrdinaryScore * 1000),

@@ -9,7 +9,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { ContextOverflowError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { detectWorkspaceAt, searchText } from "@oscharko-dev/keiko-workspace";
+import { detectWorkspaceAt, readExcerpt, searchText } from "@oscharko-dev/keiko-workspace";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   fittedGroundedGatewayPrompt,
@@ -178,6 +178,115 @@ function assertRetainedSubjectEvidence(sent: SentGroundedPrompt): void {
       .some((excerpt) => excerpt.content.includes("Unit-G42")),
   ).toBe(true);
 }
+
+function shortDocumentRoot(files: Readonly<Record<string, string>>): string {
+  const root = mkdtempSync(join(tmpdir(), "keiko-short-document-context-"));
+  roots.push(root);
+  for (const [path, content] of Object.entries(files)) writeFileSync(join(root, path), content);
+  return root;
+}
+
+function assertCompleteShortSource(
+  pack: ConnectedContextPack,
+  path: string,
+  content: string,
+): void {
+  const excerpts = pack.files.find((file) => file.scopePath === path)?.excerpts;
+  expect(excerpts?.some((excerpt) => excerpt.content === content)).toBe(true);
+  expect(excerpts?.some((excerpt) => excerpt.atom.lineRange?.endLine === 6)).toBe(true);
+  expect(pack.usage.excerptBytes).toBeLessThanOrEqual(pack.budget.excerptBytesMax);
+}
+
+describe("short document source context", () => {
+  it("retains conflicting values and the final precedence statement in current records", async () => {
+    const files = Object.fromEntries(
+      [17, 23, 31].map((capacity, index): readonly [string, string] => [
+        `record-${String(index)}.md`,
+        [
+          "# Atlas-H17 operating directive",
+          "Status: current.",
+          "Approved by the operations owner.",
+          "Audience: onsite coordinators.",
+          `Capacity: ${String(capacity)} packages per shift.`,
+          "No precedence is specified between current directives.",
+        ].join("\n"),
+      ]),
+    );
+    const root = shortDocumentRoot(files);
+    const { pack } = await retrieve(root, 'Compare the current records for "Atlas-H17".');
+    for (const [path, content] of Object.entries(files))
+      assertCompleteShortSource(pack, path, content);
+  });
+
+  it("retains a current bulletin's final identifier with its preceding limit", async () => {
+    const content = [
+      "# Atlas-H17 handover bulletin",
+      "Status: current.",
+      "Approved by the shift owner.",
+      "Processing limit: 26 cartons.",
+      "Bulletin identifier: NIGHT-672.",
+      "This bulletin supersedes previous notices.",
+    ].join("\n");
+    const root = shortDocumentRoot({ "bulletin.md": content });
+    const { pack } = await retrieve(root, 'Read the current handover bulletin for "Atlas-H17".');
+    assertCompleteShortSource(pack, "bulletin.md", content);
+  });
+
+  it("keeps explicit document line reads inside their requested range", async () => {
+    const root = shortDocumentRoot({ "record.md": "one\ntwo\nthree\nfour\nfive\nsix" });
+    const workspace = detectWorkspaceAt(root);
+    const result = await readExcerpt(
+      { workspace, scopeId: "explicit-short-document", relativePaths: [] },
+      { scopePath: "record.md", startLine: 2, endLine: 3, maxBytes: 8192 },
+    );
+    expect(result.content).toBe("two\nthree");
+    expect(result.atom.lineRange).toEqual({ startLine: 2, endLine: 3 });
+  });
+
+  it("keeps the accepted byte grant when a complete document does not fit", async () => {
+    const content = [
+      "# Atlas-H17 directive",
+      "Status: current.",
+      "Owner: operations.",
+      "Audience: coordinators.",
+      "Capacity: 31 packages per shift.",
+      "No precedence is specified between current directives.",
+    ].join("\n");
+    const root = shortDocumentRoot({ "record.md": content });
+    const { pack } = await retrieve(
+      root,
+      'Read the current directive for "Atlas-H17".',
+      {},
+      {
+        ...DEFAULT_EXPLORATION_BUDGET,
+        excerptBytesMax: 80,
+      },
+    );
+    const excerpts = pack.files.flatMap((file) => file.excerpts);
+    expect(
+      excerpts.reduce((bytes, excerpt) => bytes + excerpt.contentBytes, 0),
+    ).toBeLessThanOrEqual(80);
+    expect(excerpts.some((excerpt) => excerpt.content.includes("Capacity: 31"))).toBe(false);
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(80);
+  });
+
+  it("keeps code hit windows bounded instead of appending an unrelated source tail", async () => {
+    const root = shortDocumentRoot({
+      "state.ts": [
+        "// Atlas-H17 state",
+        "const first = 1;",
+        "const second = 2;",
+        "const third = 3;",
+        "const fourth = 4;",
+        "const unrelatedTail = 99;",
+      ].join("\n"),
+    });
+    const { pack } = await retrieve(root, 'Read the state for "Atlas-H17".');
+    const excerpts = pack.files.flatMap((file) => file.excerpts);
+    expect(excerpts.some((excerpt) => excerpt.content.includes("Atlas-H17"))).toBe(true);
+    expect(excerpts.some((excerpt) => excerpt.content.includes("unrelatedTail"))).toBe(false);
+  });
+});
 
 describe("named documents beyond whole-folder context", () => {
   it.each(["unit-g42 wrong.", "Unit-G42x bad.", "Unit-G42-extra x", "nearUnit-G42 x"])(

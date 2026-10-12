@@ -498,6 +498,7 @@ export type ContinuityReferentSource =
 export interface ContextSelectionDiagnostics {
   readonly selectionConfidence: ContextSelectionConfidence;
   readonly keepOneFallbackApplied: boolean;
+  readonly fallbackRankingSource?: "candidate-score" | "lexical-producer";
   readonly floorReferenceKind: "ordinary-p75" | "no-ordinary" | "files-scope";
   readonly relativeFloorPermille: number;
   readonly strongestOrdinaryScorePermille: number;
@@ -1579,6 +1580,15 @@ function validateDiagnosticsSelection(value: unknown, reasons: string[]): void {
     "selection.reranked invalid",
   );
   validateSelectionReranker(value.reranker, reasons);
+  validateSelectionFallback(value.fallbackRankingSource, reasons);
+}
+
+function validateSelectionFallback(value: unknown, reasons: string[]): void {
+  pushIf(
+    reasons,
+    value !== undefined && value !== "candidate-score" && value !== "lexical-producer",
+    "selection.fallbackRankingSource invalid",
+  );
 }
 
 function validateSelectionReranker(value: unknown, reasons: string[]): void {

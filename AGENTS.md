@@ -446,6 +446,11 @@ system that exists, never beside it:
   selection uses the final six available source-detail fields. Additional selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
+  Contextual keep-one fallback logs its closed ranking source and remains low confidence. Its
+  lexical producer order requires matching live content identities and excludes semantic or
+  successfully reranked selections. Short ordinary documents may use the existing canonical
+  reader's complete current redacted source only within both existing byte grants; explicit
+  selections and certified/source-code ranges retain their geometry (ADR-0022).
   The six-reference intake preserves the primary local trace frame and explicitly named question
   paths before secondary frames or conversation referents. Prompt fitting preserves a complete
   matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable

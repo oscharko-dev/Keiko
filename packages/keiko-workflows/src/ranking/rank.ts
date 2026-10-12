@@ -71,6 +71,7 @@ function resolveFilterOptions(
   const base = filter ?? DEFAULT_FILTER_OPTIONS;
   return {
     minScore: base.minScore,
+    fallbackOrder: base.fallbackOrder,
     ...(base.minScoreExemptPaths === undefined
       ? {}
       : { minScoreExemptPaths: base.minScoreExemptPaths }),

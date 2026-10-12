@@ -62,6 +62,11 @@ import {
   withContextualHintConfidence,
 } from "./grounded-selection-quality.js";
 import {
+  captureContextualFallbackCandidates,
+  currentContextualFallbackOrder,
+  type ContextualFallbackCandidate,
+} from "./grounded-contextual-fallback.js";
+import {
   orderDistinctEvidenceCandidates,
   type RankingSelectionObservation,
 } from "./grounded-candidate-ordering.js";
@@ -160,6 +165,7 @@ import {
   type ClarificationReason,
   type ExcerptWindow,
   type ExplorationPlan,
+  type FilterOptions,
   type GovernorState,
   type MicroIndex,
   type RerankerSeam,
@@ -177,6 +183,7 @@ import {
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
   WorkspaceReadError,
+  candidateBucketForPath,
   detectWorkspaceAt,
   decodeTextFileBytes,
   endpointContractAdapter,
@@ -692,6 +699,12 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     strongestOrdinaryScorePermille: { type: "integer", dataClass: "count", required: false },
     absoluteFloorPermille: { type: "integer", dataClass: "count", required: false },
     keepOneFallbackApplied: { type: "boolean", dataClass: "closed-enum", required: false },
+    fallbackRankingSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["candidate-score", "lexical-producer"],
+    },
     selectionConfidence: {
       type: "string",
       dataClass: "closed-enum",
@@ -1701,6 +1714,7 @@ function createStructuralRequestContextPool(
 }
 
 interface RingResult {
+  readonly contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly endpointContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
@@ -2687,6 +2701,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
     return { atoms: [], omitted: [], uncertainty: [], usage: usageDelta({ elapsedMs: 0 }) };
   }
   const result = withoutNamedSemanticSubstitution(await lexicalRingSearch(ring, inputs), inputs);
+  const diagnostics = toPackDiagnostics(result);
   const primaryContentIdentities = certifiedLexicalContent(result, inputs);
   const endpointContentIdentities = endpointLexicalContent(result, inputs);
   const sourceDecision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
@@ -2700,6 +2715,10 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
     knownFitFileBytes: result.knownFitFileBytes,
+    contextualFallbackCandidates:
+      inputs.query.kind === "natural-language" && inputs.targetDecision.kind === "contextual"
+        ? captureContextualFallbackCandidates(result.atoms, diagnostics)
+        : [],
     atoms: result.atoms,
     endpointContentIdentities,
     primaryContentIdentities,
@@ -2712,7 +2731,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
         : []),
     ],
     usage: usageDelta({ elapsedMs: result.elapsedMs }),
-    diagnostics: toPackDiagnostics(result),
+    diagnostics,
   };
 }
 
@@ -2946,6 +2965,7 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly explicitAdmission?: ExplicitPathAdmission;
   readonly referenceObservation?: DiagnosticReferenceObservation | undefined;
@@ -3276,6 +3296,7 @@ async function runReservedRing(
 }
 
 interface RingEvidenceAccumulator {
+  contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   reusedEvidenceAtomCount?: number;
   symbolDiscovery?: SymbolDiscoveryResult;
   verifiedDefinitionContext?: boolean;
@@ -3301,7 +3322,10 @@ function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResul
   evidence.knownFitFileBytes ??= result.knownFitFileBytes;
   evidence.endpointContentIdentities =
     result.endpointContentIdentities ?? evidence.endpointContentIdentities;
-  evidence.diagnostics ??= result.diagnostics;
+  if (evidence.diagnostics === undefined) {
+    evidence.diagnostics = result.diagnostics;
+    evidence.contextualFallbackCandidates = result.contextualFallbackCandidates;
+  }
   evidence.primaryContentIdentities = lexicalContentIdentities(
     result,
     evidence.primaryContentIdentities,
@@ -7883,12 +7907,28 @@ function pathExcerptRequest(
     completedRanges: previous?.completedRanges,
     expectedSourceFingerprint: previous?.sourceFingerprint,
     maxBytes: remainingExcerptWindowBytes(scopePath, remainingBytes, inputs),
+    preferCompleteDocument: preferCompleteDocumentExcerpt(scopePath, inputs, selection),
     anchors: qualifiedWholeFileRanges(scopePath, selection.windows, inputs)
       ? undefined
       : inputs.anchors,
     maxTotalBytes: remainingBytes,
     maxWindows: Math.max(1, remainingBytes),
   };
+}
+
+function preferCompleteDocumentExcerpt(
+  scopePath: string,
+  inputs: ExcerptInputs,
+  selection: ExcerptWindowSelection,
+): boolean {
+  if (
+    inputs.query?.kind !== "natural-language" ||
+    selection.coverageApplied === true ||
+    hasExplicitExcerptSelection(scopePath, inputs)
+  )
+    return false;
+  const bucket = candidateBucketForPath(scopePath);
+  return bucket === "docs" || bucket === "overview-doc";
 }
 
 function readPathExcerptResult(
@@ -9094,6 +9134,25 @@ function rankEligibleEvidencePool(
   );
 }
 
+function finalCandidateFilter(
+  args: AssembleGroundedPackInputs,
+  rings: RingRunSummary,
+  atoms: readonly EvidenceAtom[],
+  reranker: PreselectionRerankerResult,
+): FilterOptions {
+  return {
+    ...primaryCandidateFilter(rings),
+    minScore:
+      args.input.scope.kind === "files"
+        ? 0
+        : absoluteRelevanceFloor(weightsForIntent(effectiveRetrievalIntent(args.plan))),
+    nowMs: args.nowMs,
+    fallbackOrder: reranker.reranked
+      ? []
+      : currentContextualFallbackOrder(rings.contextualFallbackCandidates ?? [], atoms),
+  };
+}
+
 function selectRankedEvidencePool(
   args: AssembleGroundedPackInputs,
   rings: RingRunSummary,
@@ -9102,11 +9161,7 @@ function selectRankedEvidencePool(
   reranker: PreselectionRerankerResult,
 ): Pick<PreparedPackAssembly, "ordered" | "selection" | "priorityPaths"> {
   const { input, plan, nowMs } = args;
-  const absoluteFloor =
-    input.scope.kind === "files"
-      ? 0
-      : absoluteRelevanceFloor(weightsForIntent(effectiveRetrievalIntent(plan)));
-  const options = { ...primaryCandidateFilter(rings), minScore: absoluteFloor, nowMs };
+  const options = finalCandidateFilter(args, rings, atoms, reranker);
   const filtered = filterCandidates(
     reranker.candidates.map((candidate) => ({ candidate, generatedHint: false, duplicate: false })),
     options,
@@ -9136,7 +9191,8 @@ function selectRankedEvidencePool(
     selection: selectionQuality({
       candidates: reranker.candidates,
       selected: ordered.kept,
-      absoluteFloor,
+      absoluteFloor: options.minScore,
+      fallbackOrder: options.fallbackOrder,
       minScoreExemptPaths: options.minScoreExemptPaths ?? new Set(),
       scopeKind: input.scope.kind,
       relative: ordinaryRelativeFloor(selectionInput),

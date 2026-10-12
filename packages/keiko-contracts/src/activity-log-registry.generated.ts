@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a68ed114ddc0f23af6d74214d8ae5a407fd6958b85d11440b90dc5390db34091" as const;
+  "b02e9a89092c9035937f7937b61f15c39880cb3283ab152d0831bf9913f62714" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13411,6 +13411,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "failureKind",
               type: "string",
               dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "fallbackRankingSource",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
