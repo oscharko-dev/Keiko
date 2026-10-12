@@ -1132,6 +1132,41 @@ function pendingFileRelevanceCoverageFiles(): Readonly<Record<string, string>> {
   return files;
 }
 
+function canonicalCompetingCoverageFiles(): Readonly<Record<string, string>> {
+  const files = { ...pendingFileRelevanceCoverageFiles() };
+  for (let index = 0; index < 9; index += 1)
+    files[`src/record-${String(index)}.ts`] = (
+      files[`src/record-${String(index)}.ts`] ?? ""
+    ).replace(
+      "  return value;",
+      "  const scopeAdmissionBudget = 1024;\n  return scopeAdmissionBudget + value;",
+    );
+  files["src/record-0.ts"] = [
+    "export function retainRecord0(value) {",
+    "  const scopeAdmissionBudget = 1024;",
+    ...Array.from({ length: 16 }, () => "  // Retain the current ledger source detail."),
+    "  const ledger = walkLedger(value);",
+    "  return scopeAdmissionBudget + ledger;",
+    "}",
+    ...Array.from({ length: 24 }, () => "// Separate selected declarations."),
+    "function walkLedger(value) {",
+    "  const scopeAdmissionBudget = 1024;",
+    ...Array.from(
+      { length: 20 },
+      () => "  // Retain the complete owned ledger continuation detail.",
+    ),
+    "  const result = finishLedger(value);",
+    "  return scopeAdmissionBudget + result;",
+    "}",
+    ...Array.from({ length: 24 }, () => "// Separate selected declarations."),
+    "function finishLedger(value) {",
+    ...Array.from({ length: 16 }, () => "  // Retain the complete current ledger terminal detail."),
+    "  return value;",
+    "}",
+  ].join("\n");
+  return files;
+}
+
 function delayedFileHeadCoverageFiles(): Readonly<Record<string, string>> {
   const files = { ...delayedStrongFileCoverageFiles() };
   files["src/scope-admission.ts"] = [
@@ -1618,6 +1653,52 @@ describe("current route trace excerpt coverage", () => {
       if (paths === undefined)
         expectTargetCoverageFunding(fixture, requests, head.atom.scopePath, true);
     }
+    expect(JSON.stringify(atoms)).toBe(originalAtoms);
+  });
+
+  it("nominates competing whole bodies in canonical relevance order before a lower owned continuation", async () => {
+    const fixture = await coverageFixture(undefined, canonicalCompetingCoverageFiles());
+    const atoms = await allocationAtoms(fixture);
+    const originalAtoms = JSON.stringify(atoms);
+    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const index = await fixture.requestContext.codeIntelligenceIndex();
+    const prefix = entries.filter((entry) =>
+      /^export function scopeAdmissionAndPromptFitting\d+\(/u.test(
+        fixture.files[entry.atom.scopePath]?.split("\n")[
+          (entry.atom.lineRange?.startLine ?? 1) - 1
+        ] ?? "",
+      ),
+    );
+    const branch = ["retainRecord0", "walkLedger", "finishLedger"].map((name) =>
+      finiteOwnedContinuationEntry(fixture, entries, index, name),
+    );
+    const seed = requirePendingBodyFixtureEntry(branch[0], "the actual borrowed file head");
+    const continuation = requirePendingBodyFixtureEntry(branch[1], "its actual owned branch seed");
+    const terminal = requirePendingBodyFixtureEntry(branch[2], "its actual owned terminal");
+    expect(continuation.atom.score).toBeGreaterThanOrEqual(seed.atom.score);
+    expect(continuation.parentWitness?.ownedSourceCall).toBe(true);
+    expect(terminal.atom.score).toBeLessThan(seed.atom.score);
+    expect(terminal.parentWitness?.ownedSourceCall).toBe(true);
+    const earlier = entries.filter((entry) =>
+      /^src\/record-[1-8]\.ts$/u.test(entry.atom.scopePath),
+    );
+    expect(earlier).toHaveLength(8);
+    expect(earlier.every((entry) => entry.atom.score >= seed.atom.score)).toBe(true);
+    expect(
+      prefix.every((entry) => earlier.every((other) => entry.atom.score > other.atom.score)),
+    ).toBe(true);
+    expect(
+      earlier.every((entry) =>
+        prefix.every((other) => entries.indexOf(entry) < entries.indexOf(other)),
+      ),
+    ).toBe(true);
+    const watched = finiteOwnedContinuationViews(fixture, entries, prefix, branch);
+    const paths = [
+      ...new Set(["src/routes.ts", ...watched.map(({ entry }) => entry.atom.scopePath)]),
+    ];
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 24576 };
+    for (const restricted of [paths, undefined])
+      await expectFiniteOwnedContinuationRead(fixture, atoms, budget, watched, restricted);
     expect(JSON.stringify(atoms)).toBe(originalAtoms);
   });
 

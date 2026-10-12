@@ -6306,6 +6306,7 @@ function fairCoverageEntries(
 interface SharedCoverageAdmission {
   readonly byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>;
   readonly byPath: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
+  readonly rankedTargets: readonly RouteTraceCoverageEntry[];
   readonly ownedChildren: ReadonlyMap<string, readonly RouteTraceCoverageEntry[]>;
   readonly state: CoverageAdmission;
   readonly totalBytes: number;
@@ -6328,7 +6329,15 @@ function admitSharedCoverageEntries(
     }),
   );
   const ownedChildren = ownedCoverageChildren(entries, byIdentity);
-  const admission = { byIdentity, byPath, ownedChildren, state, totalBytes, inputs };
+  const admission = {
+    byIdentity,
+    byPath,
+    rankedTargets: ranked,
+    ownedChildren,
+    state,
+    totalBytes,
+    inputs,
+  };
   for (const entry of ranked) admitSharedCoveragePrefix(entry, targets, admission);
   for (const entry of targets) {
     if (!state.targets.has(entry.definitionIdentity))
@@ -6406,15 +6415,26 @@ function coverageAdmissionWithCompetingCoverageTarget(
   minimumScore: number,
 ): CoverageAdmission | undefined {
   if (ranked === undefined) return undefined;
-  for (const targets of admission.byPath.values()) {
-    for (const entry of targets) {
-      if (entry.atom.score < minimumScore) break;
-      if (state.targets.has(entry.definitionIdentity)) continue;
-      const candidate = coverageAdmissionWithTarget(state, entry, admission);
-      if (candidate !== undefined) return candidate;
-    }
+  for (const entry of admission.rankedTargets) {
+    if (entry.atom.score < minimumScore || state.targets.has(entry.definitionIdentity)) continue;
+    const candidate = coverageAdmissionWithTarget(state, entry, admission);
+    if (candidate !== undefined)
+      return coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
   }
   return undefined;
+}
+
+function coverageAdmissionWithCompetingCoveragePrefix(
+  state: CoverageAdmission,
+  entry: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+): CoverageAdmission {
+  let selected = state;
+  for (const target of sharedCoveragePrefix(entry, admission)) {
+    if (selected.targets.has(target.definitionIdentity)) continue;
+    selected = coverageAdmissionWithTarget(selected, target, admission) ?? selected;
+  }
+  return selected;
 }
 
 function ownedCoverageInitialThreshold(
