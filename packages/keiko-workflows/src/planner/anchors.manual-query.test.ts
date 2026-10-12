@@ -1,7 +1,69 @@
 import { describe, expect, it } from "vitest";
 import { extractRetrievalChannels } from "./references.js";
+import { extractAnchors } from "./anchors.js";
+import { resolveQueryTargetDecision } from "./plan.js";
 
 const SUBJECT = "What temperature trips the Vesper dosing interlock?";
+
+describe("unquoted compound document identifiers", () => {
+  it.each(["Unit-G42", "BATCH-7-Z", "ISO-9001", "engine-room-2", "HarborDock-8ac"])(
+    "retains the complete %s target without changing a contextual request into a lookup",
+    (identifier) => {
+      const text = `For ${identifier}, how long may a shipment wait, what happens afterward, and who records the event? Cite the operational source.`;
+      const anchors = extractAnchors({ text, maxAnchors: 8 }).anchors;
+      const decision = resolveQueryTargetDecision(
+        { kind: "natural-language", text, caseSensitive: false, maxResults: 50, emittedAtMs: 1 },
+        anchors,
+      );
+      expect(decision.kind).toBe("contextual");
+      expect(decision.definitionSymbol).toBeUndefined();
+      expect(decision.targets).toEqual([
+        { term: identifier.toLowerCase(), kind: "identifier", weight: 0.85 },
+      ]);
+    },
+  );
+
+  it.each(["owner-approved", "source-only", "2026-10-12", "22-49"])(
+    "does not promote ordinary prose or a numeric range/date: %s",
+    (term) => {
+      const anchors = extractAnchors({ text: `Explain the ${term} documentation.`, maxAnchors: 8 });
+      expect(anchors.anchors.filter((anchor) => anchor.kind === "identifier")).toEqual([]);
+    },
+  );
+
+  it("keeps quoted targets and paths under their existing interpretation", () => {
+    const anchors = extractAnchors({
+      text: 'Compare "Unit-G42" with docs/BATCH-7.md and https://example.invalid/ISO-9001.',
+      maxAnchors: 8,
+    }).anchors;
+    expect(anchors).toContainEqual({ term: "unit-g42", kind: "quoted", weight: 1 });
+    expect(anchors).toContainEqual({
+      term: "docs/batch-7.md",
+      sourceTerm: "docs/BATCH-7.md",
+      kind: "path",
+      weight: 0.95,
+    });
+    expect(
+      anchors.filter((anchor) => anchor.kind === "identifier").map((anchor) => anchor.term),
+    ).not.toContain("batch-7");
+  });
+
+  it("keeps case-sensitive spellings and the existing aggregate target budget", () => {
+    const text = "Compare Unit-G42 and batch-7-Z.";
+    expect(extractAnchors({ text, maxAnchors: 8, caseSensitive: true }).anchors).toEqual(
+      expect.arrayContaining([
+        { term: "Unit-G42", kind: "identifier", weight: 0.85 },
+        { term: "batch-7-Z", kind: "identifier", weight: 0.85 },
+      ]),
+    );
+    const clipped = extractAnchors({ text, maxAnchors: 1 });
+    expect(clipped.anchors).toHaveLength(1);
+    expect(clipped.truncated).toBe(true);
+    const overlong = extractAnchors({ text: `Where is ${"A".repeat(4096)}-7?`, maxAnchors: 8 });
+    expect(overlong.truncated).toBe(true);
+    expect(overlong.anchors.some((anchor) => anchor.kind === "identifier")).toBe(false);
+  });
+});
 
 describe("manual subject anchors survive presentation instructions", () => {
   it.each([

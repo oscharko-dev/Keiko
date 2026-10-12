@@ -106,6 +106,62 @@ function unavailableFs(): WorkspaceFs {
   };
 }
 
+function compoundDocumentCorpus(): string {
+  const root = ordinaryApp();
+  for (const [division, ceiling] of [
+    ["receiving", 17],
+    ["dispatch", 29],
+  ] as const) {
+    mkdirSync(join(root, "operations", division), { recursive: true });
+    writeFileSync(
+      join(root, "operations", division, "procedure.md"),
+      `# Unit-G42 shipment policy\nStatus: current; approved by the operations owner.\nThe shipment ceiling is ${String(ceiling)} containers.\nNo priority between current procedures is specified.\n`,
+    );
+  }
+  mkdirSync(join(root, "neighbours"), { recursive: true });
+  for (let index = 0; index < 40; index += 1) {
+    writeFileSync(
+      join(root, "neighbours", `${String(index)}.md`),
+      `# Separate shipping station ${String(index)}\n${"The current owner-approved shipment policy specifies a container ceiling and operational documentation.\n".repeat(50)}`,
+    );
+  }
+  return root;
+}
+
+describe("named documents beyond whole-folder context", () => {
+  it("supplies both current conflicting procedures for an unquoted compound identifier", async () => {
+    const log = createBufferedServerLogSink();
+    const out = await retrieve(
+      compoundDocumentCorpus(),
+      "What is the current shipment ceiling for Unit-G42 according to the owner-approved documentation? Cite the sources and state whether the supplied documents establish a single justified value.",
+      { activityLog: log },
+    );
+    const paths = out.pack.files.map((file) => file.scopePath);
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        "operations/receiving/procedure.md",
+        "operations/dispatch/procedure.md",
+      ]),
+    );
+    const contents = out.pack.files.flatMap((file) => file.excerpts).map((entry) => entry.content);
+    expect(contents.some((content) => content.includes("17 containers"))).toBe(true);
+    expect(contents.some((content) => content.includes("29 containers"))).toBe(true);
+    expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+    ).toMatchObject({ retrievalTargetDecision: "contextual", retrievalTargetCount: 1 });
+    expect(log.lines().join("\n")).not.toContain("Unit-G42");
+  });
+
+  it("does not treat an absent compound identifier as permission to answer from neighbours", async () => {
+    const out = await retrieve(
+      compoundDocumentCorpus(),
+      "For Missing-8Z, how many containers are admitted by the current operational policy?",
+    );
+    expect(out.pack.files).toEqual([]);
+  });
+});
+
 function legacyHandbooks(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-natural-legacy-context-"));
   roots.push(root);

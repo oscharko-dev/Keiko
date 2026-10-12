@@ -62,6 +62,7 @@ import {
   settleGatewayProbeSpend,
   transientGatewayStatus,
   type GatewayProbeSpendContext,
+  type GatewayToolCallingProbeStatus,
 } from "./gateway-tool-calling-probe.js";
 import {
   reconcileGatewayContextWindowReadiness,
@@ -1228,24 +1229,36 @@ async function probeToolCalling(
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   let failure: GatewayReadinessProbeResult | undefined;
+  const reportFailure = (probeError: unknown): void => {
+    failure = reportProbeFailure(
+      deps,
+      correlationId,
+      "tool_calling",
+      start,
+      "Tool calling could not be verified.",
+      probeError,
+    );
+  };
   const status = await probeGatewayToolCalling(
     config,
     provider,
     deps.gatewayReadinessFetch,
-    (error) => {
-      failure = reportProbeFailure(
-        deps,
-        correlationId,
-        "tool_calling",
-        start,
-        "Tool calling could not be verified.",
-        error,
-      );
-    },
+    reportFailure,
     probeSpendContext(deps, config, provider, correlationId),
     deps.gatewayReadinessSignal,
-  );
+  ).catch((probeError: unknown): GatewayToolCallingProbeStatus => {
+    reportFailure(probeError);
+    return "unverified";
+  });
   if (failure !== undefined) return failure;
+  return observedToolCallingResult(status, start, provider);
+}
+
+function observedToolCallingResult(
+  status: GatewayToolCallingProbeStatus,
+  start: number,
+  provider: ModelProviderConfig,
+): GatewayReadinessProbeResult {
   if (status === "verified") {
     return result(
       "tool_calling",

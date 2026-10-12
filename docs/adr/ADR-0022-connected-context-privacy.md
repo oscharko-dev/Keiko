@@ -432,6 +432,13 @@ routes intact. Definition intent and content groups use that same subject while 
 and diagnostic identity remain unchanged. Persistent natural-language match identities carry a
 normalization revision. The existing completion-details Activity Log records only the aggregate
 removed-clause count across actual searches; literal, regex and exact-symbol matching retain their existing semantics.
+Numbered, letter-led compound document identifiers retain their full spelling as lexical targets,
+using the existing bounded identifier intake before camel-case fragments are extracted. Ordinary
+hyphenated prose and numeric dates/ranges do not become identifier targets. Contextual questions
+retain their full request and existing decision; lexical identity does not establish a code
+declaration, call, path authority, answer fact or precedence between conflicting sources. Existing
+completion events record the target decision/count and actual selected-file/read counts without
+source bodies. Matching fingerprints already bind the resulting literal interpretation and targets.
 An explicit natural-language request for recursion can retain observed static call cycles as
 coherent source evidence. The request-local trace records exact nearest-owned call edges before
 repeated targets are suppressed, derives finite strongly connected groups from selected declaration

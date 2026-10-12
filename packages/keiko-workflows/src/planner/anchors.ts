@@ -193,6 +193,8 @@ const DEFINITION_TARGET_AFTER_NOUN_RE =
 const CAMEL_IDENTIFIER_RE =
   /\b([A-Za-z_$][A-Za-z0-9_$]{0,127}[a-z0-9][A-Z][A-Za-z0-9_$]{0,127})\b/g;
 const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]{0,127}_[A-Za-z0-9_$]{1,127})\b/g;
+const COMPOUND_IDENTIFIER_TOKEN_RE = /[\p{L}\p{M}\p{N}_$.-]+/gu;
+const NUMBERED_COMPOUND_IDENTIFIER_RE = /^[\p{L}][\p{L}\p{M}\p{N}]*(?:-[\p{L}\p{M}\p{N}]+)+$/u;
 const FILENAME_RE =
   /(?<![\p{L}\p{M}\p{N}_$.-])([\p{L}\p{N}_$-][\p{L}\p{M}\p{N}_$-]{0,254}(?:\.[A-Za-z0-9]{1,16}){1,4})(?![\p{L}\p{M}\p{N}_$-]|\.[\p{L}\p{M}\p{N}_$-])/gu;
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
@@ -332,6 +334,17 @@ function collectMatches(
 
 function isDefinitionTarget(value: string): boolean {
   return !STOP_WORDS.has(value.toLowerCase());
+}
+
+function collectNumberedCompoundIdentifiers(source: string, out: AnchorAccumulator): string {
+  return source.replace(COMPOUND_IDENTIFIER_TOKEN_RE, (raw) => {
+    const term = trimEdgeDots(raw);
+    // Numbered product/document identifiers are atomic subjects, like snake/camel identifiers.
+    // Ordinary hyphenated prose and all-numeric dates/ranges do not establish a named target.
+    if (!/\p{N}/u.test(term) || !NUMBERED_COMPOUND_IDENTIFIER_RE.test(term)) return raw;
+    pushAnchor(out, term, "identifier", 0.85);
+    return " ".repeat(raw.length);
+  });
 }
 
 function collectTechnicalTerms(source: string, out: AnchorAccumulator): string {
@@ -513,6 +526,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   // Explicit target data has already been retained. Remove presentation prose before definition
   // patterns can promote words such as "lines" into independently requested source symbols.
   remaining = withoutPresentationInstructions(remaining);
+  remaining = collectNumberedCompoundIdentifiers(remaining, collected);
   remaining = collectMatches(
     remaining,
     DEFINITION_TARGET_BEFORE_VERB_RE,
