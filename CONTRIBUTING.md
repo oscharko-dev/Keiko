@@ -128,8 +128,10 @@ A shared file turn advances only after a newly funded whole relevance prefix mak
 Pending file nominations first consider existing queue heads below the current relevance
 nomination's score. Nominations from files with higher or tied heads remain fallback candidates
 when no target from the first group fits jointly.
-Each group uses its existing relevance-ordered queue head's score, highest first, with stable
-existing ties and within-file nomination order. The first jointly feasible target in a different
+Each group uses its existing relevance-ordered queue head's score, highest first. At equal head
+scores, an unfunded physical file precedes continuation in a file whose head is already fully
+funded in committed state. Existing ties within each class and within-file nomination order
+remain stable. The first jointly feasible target in a different
 physical file whose queue head is not fully funded receives the shared file turn.
 When the relevance file's head was already fully funded in committed state before the turn,
 its pending whole targets at or above the first nominated file's queue-head score also

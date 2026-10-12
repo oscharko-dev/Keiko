@@ -7015,7 +7015,9 @@ function sharedCoverageFairTargets(
     )
     .sort(
       (left, right) =>
-        coverageFileHeadScore(right, admission) - coverageFileHeadScore(left, admission),
+        coverageFileHeadScore(right, admission) - coverageFileHeadScore(left, admission) ||
+        Number(fundedPaths.has(left.atom.scopePath)) -
+          Number(fundedPaths.has(right.atom.scopePath)),
     );
   return [
     ...pending.filter((entry) => coverageFileHeadScore(entry, admission) < ranked.atom.score),
