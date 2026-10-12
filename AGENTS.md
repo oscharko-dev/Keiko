@@ -503,13 +503,14 @@ system that exists, never beside it:
   owned progress. A global competing return retains its guarded state and any prior owned-progress
   fact; it does not establish that fact merely by returning a different state. Mere file equality
   also does not establish family membership.
-  Actual owned progress or a newly guarded tied family target closes the extra second-file
-  opportunity for the entire outer shared turn and clears any earlier uncommitted second-file
-  checkpoint. Later callbacks cannot reopen it. These eligibility probes may remain unpublished;
+  Actual owned progress or a newly guarded tied family target in these eligibility probes closes
+  the extra second-file opportunity for the entire outer shared turn and clears any earlier
+  uncommitted second-file checkpoint. Later callbacks cannot reopen it. These eligibility probes may remain unpublished;
   a refused tie is not guaranteed funding. Zero-score ties participate under the same rule.
   While eligible, the existing fair order may guard a second body in a physical file distinct
-  from both, whose head is not fully funded in the joint proposal and whose nominee meets the
-  same first-file head score. Every retained joint preserves committed whole targets, the guarded
+  from both, whose nominee meets the same first-file head score. Its head must not be fully funded
+  in the joint proposal, except for a committed parent with a pending owned continuation as
+  described below. Every retained joint preserves committed whole targets, the guarded
   relevance proposal at that checkpoint and the first nominated body. The relevance-only proposal
   grows separately; explicit successful second-file results retain the latest such joint through
   both prefix loops, so a later first-file-only result cannot replace it while eligibility holds.
@@ -540,9 +541,9 @@ system that exists, never beside it:
   relevance and stable ties within each source root, interleaved between roots. Its complete body
   must pass the existing guards first. Pending same-file targets at or above the nominee's score
   may then join in stable file order through the same guards. While retaining this guarded
-  canonical proposal, a distinct physical file whose head is not FULL in the proposal may join
-  through the existing pending fair-file order. This joint addition first uses the canonical
-  nominee's score, then the borrowed floor if no such addition fits; it retains the canonical body
+  canonical proposal, the existing pending fair-file order may admit a distinct physical file
+  whose head is not FULL in the proposal or resume its committed FULL parent. This joint addition
+  first uses the canonical nominee's score, then the borrowed floor if no such addition fits; it retains the canonical body
   and its guarded same-file prefix. If no joint addition fits and the canonical physical file head
   is already FULL in committed state, the existing pending fair-file order may instead nominate
   an alternative from the original pre-child state. That alternative must meet the borrowed floor
@@ -550,6 +551,12 @@ system that exists, never beside it:
   above its own score may join through the same guards. A failed extension retains the previously
   feasible proposal, and the guarded canonical proposal remains the fallback. Failed proposals
   are neither reserved nor read. Deferred final retries retain their existing admission rules.
+  An offered FULL parent can resume its pending owned continuation. It must have been FULL in
+  committed state, lie outside the canonical file, and meet the existing
+  nomination score floor. Its finite certified owned continuation uses its actual physical
+  file-head score and adds at least one newly guarded whole target before it can be retained.
+  This resumed branch preserves the input joint and does not reopen global competing nomination;
+  the existing fair-file order and fresh-target admission remain unchanged.
   Existing source order selects one branch, and
   identity tracking bounds recursive cycles. Every target still passes the existing currentness,
   whole-definition, physical-window and connected-share checks; a failed extension retains the

@@ -6476,19 +6476,57 @@ function coverageAdmissionWithPendingFairTarget(
   canonical?: RouteTraceCoverageEntry,
 ): CoverageAdmission | undefined {
   for (const entry of sharedCoverageFairTargets(ranked, admission.fairTargets, admission)) {
-    if (entry.atom.score < minimumScore || state.targets.has(entry.definitionIdentity)) continue;
-    const head = admission.byPath.get(entry.atom.scopePath)?.[0];
-    if (
-      canonical !== undefined &&
-      (entry.atom.scopePath === canonical.atom.scopePath ||
-        (head !== undefined && state.targets.has(head.definitionIdentity)))
-    )
+    if (entry.atom.score < minimumScore) continue;
+    if (state.targets.has(entry.definitionIdentity)) {
+      if (entry.atom.scopePath === canonical?.atom.scopePath) continue;
+      const continuation = coverageAdmissionWithLiveFullFairTarget(state, entry, admission);
+      if (continuation !== undefined) return continuation;
       continue;
-    const candidate = coverageAdmissionWithTarget(state, entry, admission);
-    if (candidate !== undefined)
-      return coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
+    }
+    const candidate = coverageAdmissionWithFreshPendingFairTarget(
+      state,
+      entry,
+      admission,
+      canonical,
+    );
+    if (candidate !== undefined) return candidate;
   }
   return undefined;
+}
+
+function coverageAdmissionWithFreshPendingFairTarget(
+  state: CoverageAdmission,
+  entry: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+  canonical: RouteTraceCoverageEntry | undefined,
+): CoverageAdmission | undefined {
+  const head = admission.byPath.get(entry.atom.scopePath)?.[0];
+  if (
+    canonical !== undefined &&
+    (entry.atom.scopePath === canonical.atom.scopePath ||
+      (head !== undefined && state.targets.has(head.definitionIdentity)))
+  )
+    return undefined;
+  const candidate = coverageAdmissionWithTarget(state, entry, admission);
+  return candidate === undefined
+    ? undefined
+    : coverageAdmissionWithCompetingCoveragePrefix(candidate, entry, admission);
+}
+
+function coverageAdmissionWithLiveFullFairTarget(
+  state: CoverageAdmission,
+  entry: RouteTraceCoverageEntry,
+  admission: SharedCoverageAdmission,
+): CoverageAdmission | undefined {
+  if (!admission.state.targets.has(entry.definitionIdentity)) return undefined;
+  const continuation = coverageAdmissionWithOwnedContinuation(
+    state,
+    entry,
+    admission,
+    coverageFileHeadScore(entry, admission),
+    undefined,
+  );
+  return continuation.ownedProgress ? continuation.state : undefined;
 }
 
 function coverageAdmissionWithCompetingCoveragePrefix(
