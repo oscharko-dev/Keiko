@@ -117,13 +117,22 @@ routes intact. Definition intent and content groups use that same subject while 
 and diagnostic identity remain unchanged. Persistent natural-language match identities carry a
 normalization revision. The existing completion-details Activity Log records only the aggregate
 removed-clause count across actual searches; literal, regex and exact-symbol matching retain their existing semantics.
-Numbered, letter-led compound document identifiers retain their full spelling as lexical targets,
-using the existing bounded identifier intake before camel-case fragments are extracted. Ordinary
-hyphenated prose and numeric dates/ranges do not become identifier targets. Contextual questions
-retain their full request and existing decision; lexical identity does not establish a code
-declaration, call, path authority, answer fact or precedence between conflicting sources. Existing
-completion events record the target decision/count and actual selected-file/read counts without
-source bodies. Matching fingerprints already bind the resulting literal interpretation and targets.
+Numbered, letter-led compounds retain their full spelling as contextual lexical hints before
+camel-case fragments are extracted. Their shape alone never grants exact-target or code-symbol
+authority: an observed complete spelling receives literal lexical relevance, while an absent
+spelling preserves full-question matching, including technical aliases and ordinary context.
+The existing persistent natural-language matching revision invalidates older scores. After actual
+excerpt assembly, an unobserved compound hint lowers selection confidence without removing evidence
+or claiming a keep-one fallback; fresh and cached packs share this rule. Existing completion events
+record the target decision/count, selection confidence and actual read counts without source bodies.
+Lexical relevance establishes neither an answer fact nor precedence between conflicting sources.
+An observed admitted callable may retain an imported constant declaration only when its current
+TypeScript lexical binding, nearest callable owner, declaration identity and physical identifier
+span agree. Calls retain their existing priority; value references use the remaining bounded
+frontier, carry reference uncertainty and an exact source witness, and never certify invocation or
+a call cycle. Shadowed, uninvoked, dynamic, ambiguous or stale references remain unsupported;
+missing owner metadata reports source-graph-incomplete. Retaining a declaration does not evaluate
+a computed runtime value.
 An explicit natural-language request for recursion can retain observed static call cycles as
 coherent source evidence. The request-local trace records exact nearest-owned call edges before
 repeated targets are suppressed, derives finite strongly connected groups from selected declaration

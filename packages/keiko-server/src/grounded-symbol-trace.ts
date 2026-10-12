@@ -848,7 +848,15 @@ function resolvedTargetAtom(
     input.requestContext?.isCodeIntelligenceSourceCurrent(definition.scopePath) !== true
   )
     return undefined;
-  const fingerprint = traceFingerprint(input.query, [targetIdentity(call)]);
+  return certifiedDefinitionTargetAtom(input, definition, targetIdentity(call));
+}
+
+function certifiedDefinitionTargetAtom(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  definition: CodeSymbol,
+  identity: string,
+): EvidenceAtom {
+  const fingerprint = traceFingerprint(input.query, [identity]);
   const provenance = {
     kind: "structural" as const,
     tool: "discovered-symbol-definition",
@@ -1000,6 +1008,19 @@ function continuationLimit(query: RetrievalQuery): number {
   return Number.isSafeInteger(query.maxResults) && query.maxResults >= 0 ? query.maxResults : 0;
 }
 
+function observedDefinitionCalls(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  observations: readonly DiscoveryExcerptObservation[],
+  index: CodeIntelligenceIndex,
+  clipping: DiscoveredTraceClipping,
+): readonly ObservedBodyTarget[] {
+  return interleaveBodyCalls(
+    observations.map((observation) =>
+      orderedBodyCalls(certifiedBodyCalls(input, observation, index, clipping)),
+    ),
+  );
+}
+
 async function nextDefinitionFrontier(
   input: DiscoveredSymbolTraceEvidenceInput,
   atoms: readonly EvidenceAtom[],
@@ -1022,11 +1043,7 @@ async function nextDefinitionFrontier(
   );
   clipping.excerptsClipped += observations.filter((observation) => observation.truncated).length;
   if (clipping.excerptsClipped > 0) clipping.reasons.add("excerpt-clipped");
-  const calls = interleaveBodyCalls(
-    observations.map((observation) =>
-      orderedBodyCalls(certifiedBodyCalls(input, observation, index, clipping)),
-    ),
-  );
+  const calls = observedDefinitionCalls(input, observations, index, clipping);
   const frontier: EvidenceAtom[] = [];
   for (const target of calls) {
     const call = target.call;
@@ -1041,6 +1058,209 @@ async function nextDefinitionFrontier(
     }
     const atom = await certifiedTargetAtom(input, call, index, target.sourceReference);
     retainDefinitionFrontierAtom(input, target, atom, frontier);
+  }
+  return appendReferencedValueFrontier(
+    input,
+    observations,
+    index,
+    seen,
+    clipping,
+    maxContinuations,
+    frontier,
+  );
+}
+
+interface ObservedValueReference {
+  readonly reference: CodeReferenceEdge;
+  readonly definition: CodeSymbol;
+  readonly observation: DiscoveryExcerptObservation;
+}
+
+function referenceOwnedByObservation(
+  reference: CodeReferenceEdge,
+  observation: DiscoveryExcerptObservation,
+): boolean {
+  const owner = reference.referencerDefinition;
+  const definition = observation.definition;
+  if (definition === undefined) return false;
+  return (
+    owner?.name === definition.name &&
+    owner.lineRange.startLine === definition.lineRange.startLine &&
+    sameDeclarationSpan(owner.declarationSpan, definition.declarationSpan)
+  );
+}
+
+function referenceWithinObservation(
+  reference: CodeReferenceEdge,
+  observation: DiscoveryExcerptObservation,
+): boolean {
+  const range = observation.lineRange;
+  const span = reference.referenceSpan;
+  if (
+    range === undefined ||
+    span === undefined ||
+    reference.referenceLineRange.startLine < range.startLine ||
+    span.endLine > range.endLine
+  )
+    return false;
+  const lines = observation.content.split("\n");
+  const line = lines[reference.referenceLineRange.startLine - range.startLine];
+  return (
+    line !== undefined &&
+    span.endLine === reference.referenceLineRange.startLine &&
+    line.slice(span.startColumn, span.endColumn) === reference.referenceName
+  );
+}
+
+function observedImportedReference(
+  reference: CodeReferenceEdge,
+  observation: DiscoveryExcerptObservation,
+): boolean {
+  return (
+    reference.parser === "typescript-compiler-ast" &&
+    reference.binding === "lexical" &&
+    reference.confidence === "resolved" &&
+    reference.referencerPath === observation.scopePath &&
+    reference.targetPath !== observation.scopePath &&
+    referenceWithinObservation(reference, observation)
+  );
+}
+
+function certifiedValueReferences(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  observation: DiscoveryExcerptObservation,
+  index: CodeIntelligenceIndex,
+  clipping: DiscoveredTraceClipping,
+): readonly ObservedValueReference[] {
+  if (input.requestContext?.isCodeIntelligenceSourceCurrent(observation.scopePath) !== true)
+    return [];
+  const current = index.references.filter((reference) =>
+    observedImportedReference(reference, observation),
+  );
+  const unsupported = current.filter(
+    (reference) => reference.referencerDefinition === undefined,
+  ).length;
+  if (unsupported > 0) {
+    clipping.reasons.add("source-graph-incomplete");
+    clipping.frontierOmitted += unsupported;
+  }
+  return current.flatMap((reference) => {
+    if (!referenceOwnedByObservation(reference, observation)) return [];
+    const definition = indexedReferenceTarget(reference, index);
+    return definition?.kind === "constant" &&
+      input.requestContext?.isCodeIntelligenceSourceCurrent(definition.scopePath) === true
+      ? [{ reference, definition, observation }]
+      : [];
+  });
+}
+
+function observedValueWitness(
+  reference: CodeReferenceEdge,
+  observation: DiscoveryExcerptObservation,
+): RouteTraceParentWitness | undefined {
+  const span = reference.referenceSpan;
+  const definition = observation.definition;
+  const budget = observedLineBudget(observation.content, observation.lineRange);
+  if (
+    span === undefined ||
+    definition === undefined ||
+    budget === undefined ||
+    observation.anchoredWindowApplied === true
+  )
+    return undefined;
+  const first = reference.referenceLineRange.startLine - budget.startLine;
+  const last = span.endLine - budget.startLine;
+  if (first < 0 || last >= budget.lineBytes.length - Number(observation.truncated))
+    return undefined;
+  return {
+    parentIdentity: definitionIdentity(definition),
+    targetIdentity: JSON.stringify([
+      reference.targetPath,
+      reference.targetName,
+      reference.targetLineRange.startLine,
+      reference.targetDeclarationSpan,
+    ]),
+    startLine: reference.referenceLineRange.startLine,
+    lineRange: reference.referenceLineRange,
+    lineBytes: budget.lineBytes.slice(first, last + 1),
+    callerSpan: span,
+  };
+}
+
+async function certifiedValueReferenceAtom(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  target: ObservedValueReference,
+): Promise<EvidenceAtom | undefined> {
+  const { reference, definition } = target;
+  const atom = certifiedDefinitionTargetAtom(input, definition, definitionIdentity(definition));
+  const observation = await discoveryExcerptObservation(input, atom);
+  if (
+    observation.content.length === 0 ||
+    input.requestContext?.isCodeIntelligenceSourceCurrent(definition.scopePath) !== true
+  )
+    return undefined;
+  return certifyDefinitionAtom(
+    input,
+    discoveredTraceProvenance(
+      input.scope.scopeId,
+      {
+        ...atom,
+        score: observedDefinitionScore(input.query, observation),
+        edge: {
+          kind: "reference",
+          confidence: "resolved",
+          source: {
+            scopePath: reference.referencerPath,
+            lineRange: reference.referenceLineRange,
+            symbol: reference.referenceName,
+          },
+          target: {
+            scopePath: definition.scopePath,
+            lineRange: definition.lineRange,
+            symbol: definition.name,
+          },
+        },
+      },
+      "discovered-symbol-definition",
+    ),
+    definition,
+  );
+}
+
+async function appendReferencedValueFrontier(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  observations: readonly DiscoveryExcerptObservation[],
+  index: CodeIntelligenceIndex,
+  seen: Set<string>,
+  clipping: DiscoveredTraceClipping,
+  capacity: number,
+  frontier: EvidenceAtom[],
+): Promise<readonly EvidenceAtom[]> {
+  const references = observations.flatMap((observation) =>
+    certifiedValueReferences(input, observation, index, clipping),
+  );
+  for (const target of references) {
+    const identity = definitionIdentity(target.definition);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    if (frontier.length >= capacity) {
+      clipping.frontierOmitted += 1;
+      clipping.reasons.add("frontier-width");
+      continue;
+    }
+    const atom = await certifiedValueReferenceAtom(input, target);
+    retainDefinitionFrontierAtom(
+      input,
+      {
+        parentIdentity:
+          target.observation.definition === undefined
+            ? undefined
+            : definitionIdentity(target.observation.definition),
+        parentWitness: observedValueWitness(target.reference, target.observation),
+      },
+      atom,
+      frontier,
+    );
   }
   return frontier;
 }
@@ -1064,7 +1284,7 @@ function retainObservedOwnedCall(
 
 function retainDefinitionFrontierAtom(
   input: DiscoveredSymbolTraceEvidenceInput,
-  target: ObservedBodyTarget,
+  target: Pick<ObservedBodyTarget, "parentIdentity" | "parentWitness">,
   atom: EvidenceAtom | undefined,
   frontier: EvidenceAtom[],
 ): void {

@@ -14,6 +14,7 @@ import { RepoSearchInvalidQueryError } from "./errors.js";
 import {
   expandedQueryTermGroups,
   expandedQueryTerms,
+  isNumberedCompoundQueryTerm,
   naturalLanguageSubject,
   naturalLanguageSubjectText,
 } from "./repoSearchQueryTerms.js";
@@ -90,7 +91,7 @@ export function queryIdentityFor(
           matchingSettings: {
             ...matchingSettings,
             ...(query.kind === "natural-language" && interpretation === undefined
-              ? { subjectNormalizationRevision: 1 }
+              ? { subjectNormalizationRevision: 2 }
               : {}),
           },
         }),
@@ -736,6 +737,7 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   const versionDeclarationPatterns = ecosystemVersionDeclarationPatterns.filter((p) =>
     p.routePattern.test(query.text),
   );
+  const wholeCompoundTerms = tokenGroups.flat().filter(isNumberedCompoundQueryTerm);
   const total = tokenGroups.length;
   return {
     citationDirectiveClauseCount,
@@ -746,6 +748,9 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
       const sourceLine = providedSourceLine ?? repositorySourceLines(line)[0];
       if (sourceLine === undefined) return 0;
       const haystack = query.caseSensitive ? line : line.toLowerCase();
+      // A whole compound actually present in the source is strong lexical evidence.
+      // An absent spelling leaves full-question matching intact (e.g. SHA-256 versus sha256).
+      if (wholeCompoundTerms.some((term) => haystack.includes(term))) return 1;
       let hits = 0;
       for (const group of tokenGroups) {
         if (group.some((token) => haystack.includes(token))) {

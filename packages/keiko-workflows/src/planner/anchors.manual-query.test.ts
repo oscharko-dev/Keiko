@@ -17,9 +17,12 @@ describe("unquoted compound document identifiers", () => {
       );
       expect(decision.kind).toBe("contextual");
       expect(decision.definitionSymbol).toBeUndefined();
-      expect(decision.targets).toEqual([
-        { term: identifier.toLowerCase(), kind: "identifier", weight: 0.85 },
-      ]);
+      expect(anchors).toContainEqual({
+        term: identifier.toLowerCase(),
+        kind: "literal",
+        weight: 0.85,
+      });
+      expect(decision.targets).toEqual([]);
     },
   );
 
@@ -52,8 +55,8 @@ describe("unquoted compound document identifiers", () => {
     const text = "Compare Unit-G42 and batch-7-Z.";
     expect(extractAnchors({ text, maxAnchors: 8, caseSensitive: true }).anchors).toEqual(
       expect.arrayContaining([
-        { term: "Unit-G42", kind: "identifier", weight: 0.85 },
-        { term: "batch-7-Z", kind: "identifier", weight: 0.85 },
+        { term: "Unit-G42", kind: "literal", weight: 0.85 },
+        { term: "batch-7-Z", kind: "literal", weight: 0.85 },
       ]),
     );
     const clipped = extractAnchors({ text, maxAnchors: 1 });

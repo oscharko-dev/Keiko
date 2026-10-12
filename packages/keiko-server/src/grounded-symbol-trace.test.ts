@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EvidenceAtom, RetrievalQuery, SelectedScope } from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -17,6 +17,7 @@ import {
   buildMatcher,
   repositorySourceLines,
   repositorySourceMaxLineScore,
+  type CodeIntelligenceIndex,
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { endpointContractAdapter, evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
@@ -640,6 +641,7 @@ async function traceFixture(
   reserve: () => boolean = () => true,
   withContext = true,
   query: RetrievalQuery = routeQuery(),
+  indexProjection?: (index: CodeIntelligenceIndex) => CodeIntelligenceIndex,
 ): Promise<Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>> {
   const fs = memFs(WORKSPACE_ROOT, { "src/routes.ts": ROUTE_CONTENT, ...files });
   const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths: [] };
@@ -648,6 +650,12 @@ async function traceFixture(
         nowMs: () => NOW,
       })
     : undefined;
+  if (requestContext !== undefined && indexProjection !== undefined) {
+    const originalIndex = requestContext.codeIntelligenceIndex.bind(requestContext);
+    vi.spyOn(requestContext, "codeIntelligenceIndex").mockImplementation(async () =>
+      indexProjection(await originalIndex()),
+    );
+  }
   return collectDiscoveredSymbolTraceEvidence({
     scope: selectedScope(),
     query,
@@ -1151,22 +1159,7 @@ describe("bounded sibling delegation frontier", () => {
       ].join("\n"),
       "src/actual.ts": "export function actualDelegate(value) { return value; }",
     });
-    const parent = result.routeCoverage?.entries.find(
-      (entry) => entry.atom.scopePath === "src/implementation.ts",
-    );
-    const target = result.routeCoverage?.entries.find(
-      (entry) => entry.atom.scopePath === "src/actual.ts",
-    );
-    expect(parent).toBeDefined();
-    expect(target).toBeDefined();
-    expect(target?.parentWitness?.parentIdentity).toBe(parent?.definitionIdentity);
-    expect(target?.parentWitness?.targetIdentity).toBe(target?.definitionIdentity);
-    expect(target?.parentWitness?.lineRange).toEqual({ startLine: 3, endLine: 5 });
-    expect(target?.parentWitness?.callerSpan.endLine).toBe(5);
-    expect(target?.atom.edge?.kind).toBe("reference");
-    expect(
-      result.uncertainty.some((marker) => marker.claim.includes("source-graph-incomplete")),
-    ).toBe(true);
+    expectCompactConnectorEvidence(result);
   });
 
   it("does not compact an accepted call inside a physically clipped source line", async () => {
@@ -1461,5 +1454,251 @@ describe("observed owned source call cycles", () => {
     cycleEntryIdentity(result, 1);
     expect(result.routeCoverage).toMatchObject({ ownedCycles: [] });
     cycleParentMapIsAcyclic(result);
+  });
+});
+
+function expectImportedValueEvidence(
+  result: Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>,
+): void {
+  const coverage = result.routeCoverage;
+  expect(coverage).toBeDefined();
+  if (coverage === undefined) throw new TypeError("The actual coverage is required.");
+  const parent = coverage.entries.find((entry) => entry.atom.scopePath === "src/implementation.ts");
+  const value = coverage.entries.find((entry) => entry.atom.scopePath === "src/capacity.ts");
+  expect(parent).toBeDefined();
+  expect(value).toBeDefined();
+  if (parent === undefined || value === undefined)
+    throw new TypeError("The actual source declarations are required.");
+  expect(value.atom.edge).toMatchObject({
+    kind: "reference",
+    source: {
+      scopePath: "src/implementation.ts",
+      lineRange: { startLine: 3, endLine: 3 },
+      symbol: "ceiling",
+    },
+    target: {
+      scopePath: "src/capacity.ts",
+      lineRange: { startLine: 1, endLine: 1 },
+      symbol: "payloadCeiling",
+    },
+    confidence: "resolved",
+  });
+  expect(value.parentIdentity).toBe(parent.definitionIdentity);
+  expect(value.parentWitness?.targetIdentity).toBe(value.definitionIdentity);
+  expect(value.parentWitness?.ownedSourceCall).toBeUndefined();
+  expect(value.observedBytes).toBeGreaterThan(0);
+  expect(value.atom.provenance.tool).toBe("discovered-symbol-definition");
+  expect(coverage.isCurrent(value.atom)).toBe(true);
+  expect(coverage.ownedCycles?.flat()).not.toContain(value.definitionIdentity);
+}
+
+function expectCompactConnectorEvidence(
+  result: Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>,
+): void {
+  const entries = result.routeCoverage?.entries ?? [];
+  const parent = entries.find((entry) => entry.atom.scopePath === "src/implementation.ts");
+  const target = entries.find((entry) => entry.atom.scopePath === "src/actual.ts");
+  expect(parent).toBeDefined();
+  expect(target).toBeDefined();
+  if (parent === undefined || target === undefined)
+    throw new TypeError("The actual connector declarations are required.");
+  const witness = target.parentWitness;
+  if (witness === undefined) throw new TypeError("The actual connector witness is required.");
+  expect(witness.parentIdentity).toBe(parent.definitionIdentity);
+  expect(witness.targetIdentity).toBe(target.definitionIdentity);
+  expect(witness.lineRange).toEqual({ startLine: 3, endLine: 5 });
+  expect(witness.callerSpan.endLine).toBe(5);
+  expect(target.atom.edge?.kind).toBe("reference");
+  expect(
+    result.uncertainty.some((marker) => marker.claim.includes("source-graph-incomplete")),
+  ).toBe(true);
+}
+
+function importedValueOwnerProjection(
+  index: CodeIntelligenceIndex,
+  mode: "missing" | "stale",
+): CodeIntelligenceIndex {
+  return {
+    ...index,
+    references: index.references.map((reference) => {
+      if (reference.referenceName !== "ceiling") return reference;
+      const owner = reference.referencerDefinition;
+      expect(owner?.declarationSpan).toBeDefined();
+      if (owner?.declarationSpan === undefined) throw new TypeError("Actual owner is required.");
+      return {
+        ...reference,
+        referencerDefinition:
+          mode === "missing"
+            ? undefined
+            : {
+                ...owner,
+                declarationSpan: {
+                  ...owner.declarationSpan,
+                  endColumn: owner.declarationSpan.endColumn + 1,
+                },
+              },
+      };
+    }),
+  };
+}
+
+async function staleImportedValueFixture(): Promise<
+  Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>
+> {
+  const files = {
+    "src/routes.ts": ROUTE_CONTENT,
+    "src/implementation.ts":
+      'import { payloadCeiling as ceiling } from "./capacity.js";\nexport function handlePostItem(payload) { return payload.bytes < ceiling; }',
+    "src/capacity.ts": "export const payloadCeiling = 6143;",
+  };
+  const fs = memFs(WORKSPACE_ROOT, files);
+  const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths: [] };
+  const requestContext = createStructuralAdapterRequestContext(
+    searchScope,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    fs,
+    { nowMs: () => NOW },
+  );
+  await requestContext.codeIntelligenceIndex();
+  expect(requestContext.isCodeIntelligenceSourceCurrent("src/capacity.ts")).toBe(true);
+  files["src/capacity.ts"] = "export const changedValue = 8191;\n";
+  expect(requestContext.isCodeIntelligenceSourceCurrent("src/capacity.ts")).toBe(false);
+  return collectDiscoveredSymbolTraceEvidence({
+    scope: selectedScope(),
+    query: routeQuery(),
+    anchors: [],
+    retrievalIntent: "targeted-code-search",
+    searchScope,
+    fs,
+    nowMs: () => NOW,
+    atoms: [routeAtom()],
+    requestContext,
+  });
+}
+
+describe("certified imported source values", () => {
+  it.each([
+    { declaration: "export const payloadCeiling = 6143;", expression: "ceiling" },
+    { declaration: "export const payloadCeiling = { bytes: 6143 };", expression: "ceiling.bytes" },
+  ])(
+    "retains the bound declaration for a non-call value use: $expression",
+    async ({ declaration, expression }) => {
+      const result = await traceFixture({
+        "src/implementation.ts": [
+          'import { payloadCeiling as ceiling } from "./capacity.js";',
+          "export function handlePostItem(payload) {",
+          `  const decision = { admissible: payload.bytes < ${expression} };`,
+          "  return decision.admissible;",
+          "}",
+        ].join("\n"),
+        "src/capacity.ts": declaration,
+      });
+      expectImportedValueEvidence(result);
+    },
+  );
+
+  it.each([
+    "export function handlePostItem(ceiling) { return ceiling; }",
+    "export function handlePostItem() { function dormant() { return ceiling; } return true; }",
+    "export function handlePostItem() { return () => ceiling; }",
+    "export function handlePostItem() { const dormant = () => ceiling; return true; }",
+  ])("does not attribute a shadowed or uninvoked value use to the handler: %s", async (body) => {
+    const result = await traceFixture({
+      "src/implementation.ts": `import { payloadCeiling as ceiling } from "./capacity.js";\n${body}`,
+      "src/capacity.ts": "export const payloadCeiling = 6143;",
+    });
+    expect(result.atoms.some((atom) => atom.scopePath === "src/capacity.ts")).toBe(false);
+  });
+
+  it.each(["missing", "stale"] as const)(
+    "fails closed for %s source owner metadata",
+    async (mode) => {
+      const result = await traceFixture(
+        {
+          "src/implementation.ts":
+            'import { payloadCeiling as ceiling } from "./capacity.js";\nexport function handlePostItem(payload) { return payload.bytes < ceiling; }',
+          "src/capacity.ts": "export const payloadCeiling = 6143;",
+        },
+        () => true,
+        true,
+        routeQuery(),
+        (index) => importedValueOwnerProjection(index, mode),
+      );
+      expect(result.atoms.some((atom) => atom.scopePath === "src/capacity.ts")).toBe(false);
+      if (mode === "missing")
+        expect(
+          result.uncertainty.some((marker) => marker.claim.includes("source-graph-incomplete")),
+        ).toBe(true);
+    },
+  );
+
+  it("retains only the actual imported declaration among equal-named current sources", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts":
+        'import { payloadCeiling as ceiling } from "./limits/current.js";\nexport function handlePostItem(payload) { return payload.bytes < ceiling; }',
+      "src/limits/current.ts": "export const payloadCeiling = 6143;",
+      "src/other/current.ts": "export const payloadCeiling = 8191;",
+    });
+    const values = result.routeCoverage?.entries.filter(
+      (entry) => entry.atom.edge?.target.symbol === "payloadCeiling",
+    );
+    expect(values?.map((entry) => entry.atom.scopePath)).toEqual(["src/limits/current.ts"]);
+    expect(values?.[0]?.atom.edge?.kind).toBe("reference");
+    expect(values?.[0]?.parentWitness?.ownedSourceCall).toBeUndefined();
+  });
+
+  it("keeps actual calls ahead of value references within the same finite target grant", async () => {
+    const result = await traceFixture(
+      {
+        "src/implementation.ts":
+          'import { validate } from "./worker.js";\nimport { payloadCeiling as ceiling } from "./capacity.js";\nexport function handlePostItem() { return validate(ceiling); }',
+        "src/worker.ts": "export function validate(limit) { return limit > 0; }",
+        "src/capacity.ts": "export const payloadCeiling = 6143;",
+      },
+      () => true,
+      true,
+      { ...routeQuery(), maxResults: 2 },
+    );
+    expect(certifiedPaths(result)).toContain("src/worker.ts");
+    expect(certifiedPaths(result)).not.toContain("src/capacity.ts");
+    expect(result.uncertainty.some((marker) => marker.claim.includes("frontier-width"))).toBe(true);
+  });
+
+  it("does not reuse a value declaration after its indexed source changes", async () => {
+    const result = await staleImportedValueFixture();
+    expect(result.atoms.some((atom) => atom.scopePath === "src/capacity.ts")).toBe(false);
+  });
+
+  it("does not certify an enum without a lexical runtime export target", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts":
+        'import { SubmissionLimit } from "./capacity.js";\nexport function handlePostItem(payload) { return payload.bytes < SubmissionLimit.Bytes; }',
+      "src/capacity.ts": "export enum SubmissionLimit { Bytes = 6143 }",
+    });
+    expect(result.atoms.some((atom) => atom.scopePath === "src/capacity.ts")).toBe(false);
+  });
+
+  it("does not choose an ambiguous re-exported value", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts":
+        'import { payloadCeiling as ceiling } from "./capacity.js";\nexport function handlePostItem(payload) { return payload.bytes < ceiling; }',
+      "src/capacity.ts": 'export * from "./east.js";\nexport * from "./west.js";',
+      "src/east.ts": "export const payloadCeiling = 6143;",
+      "src/west.ts": "export const payloadCeiling = 8191;",
+    });
+    expect(
+      result.atoms.some((atom) =>
+        ["src/capacity.ts", "src/east.ts", "src/west.ts"].includes(atom.scopePath),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not invent a target for a dynamic module property", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts":
+        'import * as limits from "./capacity.js";\nexport function handlePostItem(key) { return limits[key]; }',
+      "src/capacity.ts": "export const payloadCeiling = 6143;",
+    });
+    expect(result.atoms.some((atom) => atom.scopePath === "src/capacity.ts")).toBe(false);
   });
 });

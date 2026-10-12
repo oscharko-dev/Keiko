@@ -128,6 +128,37 @@ describe("normalizeNaturalLanguageToken", () => {
   });
 });
 
+describe("contextual compound subject scoring", () => {
+  const question =
+    "For Unit-G42, how long may a shipment wait, what happens afterward, and who records the event?";
+
+  it("retains full-question matches while rewarding observed complete subject spellings", () => {
+    const matcher = buildMatcher(nlq(question));
+    expect(matcher.match("# Unit-G42 shipment policy")).toBe(1);
+    expect(matcher.match("# Different shipment policy")).toBeGreaterThan(0);
+    expect(matcher.match("# Different shipment policy")).toBeLessThan(1);
+    expect(matcher.match("# Unit-G99 policy")).toBeLessThan(1);
+    expect(matcher.match("# Unrelated subject")).toBe(0);
+  });
+
+  it("honors case-sensitive compound evidence without requiring exact hints", () => {
+    const matcher = buildMatcher({ ...nlq(question), caseSensitive: true });
+    expect(matcher.match("# Unit-G42 shipment policy")).toBe(1);
+    expect(matcher.match("# unit-g42 shipment policy")).toBeLessThan(1);
+    expect(matcher.match("A shipment may wait.")).toBeGreaterThan(0);
+  });
+
+  it.each(["SHA-256", "UTF-8", "production-ready-24-7"])(
+    "does not turn the absent hint %s into a literal-only search",
+    (hint) => {
+      const matcher = buildMatcher(nlq(`Explain ${hint} digest calculation.`));
+      expect(matcher.match("export function digest() { return compute(); }")).toBeGreaterThan(0);
+      const literal = buildMatcher(nlq(hint), { kind: "literal", terms: [hint] });
+      expect(literal.match("export function digest() { return compute(); }")).toBe(0);
+    },
+  );
+});
+
 describe("buildMatcher definition intent scoring", () => {
   it.each([
     "Cite implementation files and lines.",

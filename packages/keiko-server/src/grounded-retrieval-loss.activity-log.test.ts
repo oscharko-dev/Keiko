@@ -59,7 +59,7 @@ function selectionDetailsLine(raw: string): Readonly<Record<string, unknown>> {
       value.op === "search.connected-context.selection-details"
     ) {
       expect(value).toHaveProperty("correlationId", CORRELATION);
-      return value as Readonly<Record<string, unknown>>;
+      return value;
     }
   }
   throw new Error("Expected persisted retrieval selection evidence");
@@ -175,9 +175,7 @@ describe("persisted retrieval loss counters", () => {
     const ordinaryRangeCount = selection.excerptOrdinaryRangeCount;
     if (typeof ordinaryRangeCount !== "number")
       throw new TypeError("Expected a numeric persisted ordinary range count");
-    expect(selection.excerptOrdinaryServedRangeCount).toBeLessThanOrEqual(
-      ordinaryRangeCount,
-    );
+    expect(selection.excerptOrdinaryServedRangeCount).toBeLessThanOrEqual(ordinaryRangeCount);
     expect(selection.excerptDeferredDefinitionRangeCount).toBeGreaterThan(0);
     expect(selection).not.toHaveProperty("_truncatedFieldCount");
     expect(completed.excerptReadWindowCount).toBeGreaterThan(0);

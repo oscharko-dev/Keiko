@@ -1,5 +1,8 @@
+import { isNumberedCompoundQueryTerm } from "@oscharko-dev/keiko-workspace";
+import type { SearchAnchor } from "@oscharko-dev/keiko-workflows";
 import type {
   CandidateFile,
+  ConnectedContextPack,
   ContextSelectionDiagnostics,
   SelectedScope,
   UncertaintyMarker,
@@ -46,5 +49,33 @@ export function lowConfidenceSelectionMarker(nowMs: number): UncertaintyMarker {
     claim: "The supplied evidence may be unrelated to the question.",
     impactedAtomIds: [],
     emittedAtMs: nowMs,
+  };
+}
+
+/** Shape hints cannot confer subject confidence when their spelling is absent from admitted excerpts. */
+export function withContextualHintConfidence(
+  pack: ConnectedContextPack,
+  anchors: readonly SearchAnchor[],
+  nowMs: number,
+): ConnectedContextPack {
+  const selection = pack.diagnostics?.selection;
+  if (pack.query.kind !== "natural-language" || selection?.selectionConfidence !== "high")
+    return pack;
+  const hints = anchors.filter(
+    (anchor) => anchor.kind === "literal" && isNumberedCompoundQueryTerm(anchor.term),
+  );
+  if (hints.length === 0) return pack;
+  const bodies = pack.files
+    .flatMap((file) => file.excerpts)
+    .map((excerpt) => (pack.query.caseSensitive ? excerpt.content : excerpt.content.toLowerCase()));
+  if (hints.every((hint) => bodies.some((body) => body.includes(hint.term)))) return pack;
+  return {
+    ...pack,
+    diagnostics: {
+      rankedCandidates: [],
+      ...pack.diagnostics,
+      selection: { ...selection, selectionConfidence: "low" },
+    },
+    uncertainty: [...pack.uncertainty, lowConfidenceSelectionMarker(nowMs)],
   };
 }

@@ -7,6 +7,12 @@ const QUERY_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
 const TOKEN_SEPARATOR_RE = /[/@.:\-_]+/u;
 const STACK_LOCATION_SUFFIX_RE = /^(.+?):\d+(?::\d+)?$/u;
 const ATOMIC_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
+const NUMBERED_COMPOUND_TERM_RE = /^[\p{L}][\p{L}\p{M}\p{N}]*(?:-[\p{L}\p{M}\p{N}]+)+$/u;
+
+/** A lexical shape hint, never authority to require an exact source or code symbol. */
+export function isNumberedCompoundQueryTerm(term: string): boolean {
+  return /\p{N}/u.test(term) && NUMBERED_COMPOUND_TERM_RE.test(term);
+}
 
 const MAX_EXPANDED_QUERY_TERMS = 48;
 

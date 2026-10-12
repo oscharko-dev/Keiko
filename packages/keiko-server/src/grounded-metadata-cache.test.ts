@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { createMicroIndex, type MicroIndex } from "@oscharko-dev/keiko-workflows
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { WorkspaceReadError } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   retrieveConnectedContextPack,
   type OrchestratorDeps,
@@ -76,6 +77,57 @@ function manifestCorpus(root: string, count: number): void {
 }
 
 describe("metadata retention and pre-read cache identity", () => {
+  it.each([
+    ["Missing-8Z", "low"],
+    ["Unit-G42", "high"],
+  ] as const)(
+    "preserves %s subject confidence through an actual pack-cache hit",
+    async (term, confidence) => {
+      const root = physicalRoot();
+      writeFileSync(
+        join(root, "procedure.md"),
+        "# Unit-G42 shipment policy\nThe current owner-approved operational policy admits 29 containers.\n",
+      );
+      const microIndex = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: () => 0 });
+      const get = vi.spyOn(microIndex, "get");
+      const log = createBufferedServerLogSink();
+      const deps = dependencies(root, { microIndex, activityLog: log });
+      const input = request(
+        root,
+        `For ${term}, how many containers are admitted by the current operational policy?`,
+      );
+      const cold = await retrieveConnectedContextPack(input, deps);
+      expect(cold.pack.diagnostics?.selection).toMatchObject({
+        selectionConfidence: confidence,
+        keepOneFallbackApplied: false,
+      });
+      expect(cold.pack.files.map((file) => file.scopePath)).toContain("procedure.md");
+      expect(microIndex.size()).toBeGreaterThan(0);
+      get.mockClear();
+      const warm = await retrieveConnectedContextPack(input, deps);
+      expect(
+        get.mock.results.some((result) => result.type === "return" && result.value !== undefined),
+      ).toBe(true);
+      expect(warm.pack.files).toEqual(cold.pack.files);
+      expect(warm.pack.diagnostics?.selection).toEqual(cold.pack.diagnostics?.selection);
+      expect(warm.pack.uncertainty).toEqual(cold.pack.uncertainty);
+      expect(
+        warm.pack.uncertainty.filter((marker) => marker.kind === "low-confidence-selection"),
+      ).toHaveLength(confidence === "low" ? 1 : 0);
+      const observations = log.events.filter(
+        (event) => event.op === "search.connected-context.selection-details",
+      );
+      expect(observations).toHaveLength(2);
+      for (const observation of observations) {
+        expect(observation.extra).toMatchObject({
+          selectionConfidence: confidence,
+          keepOneFallbackApplied: false,
+        });
+      }
+      expect(log.lines().join("\n")).not.toContain(term);
+    },
+  );
+
   it("invalidates cached output when only metadata enumeration uncertainty changes", async () => {
     const root = physicalRoot();
     mkdirSync(join(root, "optional"));

@@ -3190,3 +3190,33 @@ describe("compiler-owned wildcard module read authority", () => {
     expectWildcardSourceCertification(index, true);
   });
 });
+
+describe("imported value reference owner binding", () => {
+  it.each([
+    { body: "function handler() { return ceiling; }", owner: "handler" },
+    {
+      body: "function handler() { function dormant() { return ceiling; } return true; }",
+      owner: "dormant",
+    },
+    { body: "function handler() { return () => ceiling; }", owner: undefined },
+  ])("binds the nearest real callable for a value reference: $body", ({ body, owner }) => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": `import { payloadCeiling as ceiling } from "./capacity.js";\n${body}`,
+      "src/capacity.ts": "export const payloadCeiling = 6143;",
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+    const reference = index.references.find(
+      (edge) => edge.referenceName === "ceiling" && edge.binding === "lexical",
+    );
+    expect(reference).toBeDefined();
+    expect(reference?.referencerDefinition?.name).toBe(owner);
+    if (owner !== undefined) {
+      const definition = index.symbols.find(
+        (symbol) => symbol.scopePath === "src/entry.ts" && symbol.name === owner,
+      );
+      expect(reference?.referencerDefinition?.declarationSpan).toEqual(definition?.declarationSpan);
+    }
+  });
+});

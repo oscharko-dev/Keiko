@@ -129,6 +129,22 @@ function compoundDocumentCorpus(): string {
 }
 
 describe("named documents beyond whole-folder context", () => {
+  it.each([
+    "How does this app compute SHA-256 digests? Cite the implementation.",
+    "How does this app handle UTF-8 input? Cite the implementation.",
+    "Explain this production-ready-24-7 app and its shipping calculation.",
+  ])("preserves ordinary contextual evidence for %s", async (question) => {
+    const root = ordinaryApp();
+    writeFileSync(
+      join(root, "src/digest.ts"),
+      'import { createHash } from "node:crypto";\nexport function digest(text: string): string {\n  return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");\n}\n',
+    );
+    const out = await retrieve(root, question);
+    expect(out.pack.files.map((file) => file.scopePath)).toContain(
+      question.includes("shipping") ? "src/domain/shipping.ts" : "src/digest.ts",
+    );
+  });
+
   it("supplies both current conflicting procedures for an unquoted compound identifier", async () => {
     const log = createBufferedServerLogSink();
     const out = await retrieve(
@@ -149,16 +165,31 @@ describe("named documents beyond whole-folder context", () => {
     expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
     expect(
       log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
-    ).toMatchObject({ retrievalTargetDecision: "contextual", retrievalTargetCount: 1 });
+    ).toMatchObject({ retrievalTargetDecision: "contextual", retrievalTargetCount: 0 });
     expect(log.lines().join("\n")).not.toContain("Unit-G42");
   });
 
   it("does not treat an absent compound identifier as permission to answer from neighbours", async () => {
+    const log = createBufferedServerLogSink();
     const out = await retrieve(
       compoundDocumentCorpus(),
       "For Missing-8Z, how many containers are admitted by the current operational policy?",
+      { activityLog: log },
     );
-    expect(out.pack.files).toEqual([]);
+    expect(out.pack.diagnostics?.selection?.selectionConfidence).toBe("low");
+    expect(out.pack.files.length).toBeGreaterThan(0);
+    expect(out.pack.uncertainty.some((entry) => entry.kind === "low-confidence-selection")).toBe(
+      true,
+    );
+    expect(
+      log.events.find((entry) => entry.op === "search.connected-context.selection-details")?.extra,
+    ).toMatchObject({ selectionConfidence: "low", keepOneFallbackApplied: false });
+    expect(log.lines().join("\n")).not.toContain("Missing-8Z");
+    expect(
+      out.pack.files
+        .flatMap((file) => file.excerpts)
+        .some((excerpt) => excerpt.content.includes("Missing-8Z")),
+    ).toBe(false);
   });
 });
 

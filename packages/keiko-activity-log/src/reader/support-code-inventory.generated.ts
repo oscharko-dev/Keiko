@@ -1494,6 +1494,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/grounded-semantic-request",
   "keiko-server/grounded-symbol-diagnostics",
   "keiko-server/grounded-symbol-trace",
+  "keiko-server/grounded-symbol-trace-cycles",
   "keiko-server/grounded-turn-registry",
   "keiko-server/grounded-worktree-recency",
   "keiko-server/grounded-worktree-request",

@@ -55,7 +55,11 @@ import {
   rerankGroundedCandidates,
   type PreselectionRerankerResult,
 } from "./grounded-preselection-reranker.js";
-import { selectionQuality, lowConfidenceSelectionMarker } from "./grounded-selection-quality.js";
+import {
+  selectionQuality,
+  lowConfidenceSelectionMarker,
+  withContextualHintConfidence,
+} from "./grounded-selection-quality.js";
 import {
   orderDistinctEvidenceCandidates,
   type RankingSelectionObservation,
@@ -9691,6 +9695,14 @@ function groundedExcerptInputs(
 }
 
 async function assembleGroundedPack(
+  args: AssembleGroundedPackInputs,
+): Promise<GroundedPackAssembly> {
+  const assembly = await assembleGroundedPackEvidence(args);
+  const pack = withContextualHintConfidence(assembly.pack, args.plan.anchors, args.nowMs());
+  return { ...assembly, pack, selectionObservation: pack.diagnostics?.selection };
+}
+
+async function assembleGroundedPackEvidence(
   args: AssembleGroundedPackInputs,
 ): Promise<GroundedPackAssembly> {
   const { input, deps, plan, nowMs } = args;

@@ -864,10 +864,14 @@ describe("retrieveConnectedContextPack activity log", () => {
       });
       const registration = activityLogEventRegistration(completionDetailsEvent(activityLog));
       expect(registration).toBeDefined();
-      expect(Object.keys(registration?.fields ?? {})).toHaveLength(46);
-      expect(Object.keys(registration?.fields ?? {}).length).toBeLessThanOrEqual(
-        MAX_LOG_FIELD_COUNT,
-      );
+      const fields = registration?.fields ?? {};
+      expect(Object.keys(fields)).toHaveLength(47);
+      expect(fields).toHaveProperty("searchCitationDirectiveClauseCount", {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      });
+      expect(Object.keys(fields).length).toBeLessThanOrEqual(MAX_LOG_FIELD_COUNT);
       expectBodyFree(activityLog);
     },
   );

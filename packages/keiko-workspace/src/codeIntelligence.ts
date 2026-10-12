@@ -151,6 +151,7 @@ export interface CodeReferenceEdge {
   readonly confidence: "resolved" | "heuristic";
   readonly binding?: "lexical" | undefined;
   readonly referenceSpan?: CodeCallEdge["callerSpan"];
+  readonly referencerDefinition?: CodeCallEdge["callerDefinition"];
   readonly targetDeclarationSpan?: CodeSymbol["declarationSpan"];
   readonly parser: CodeParserKind;
 }
@@ -3520,11 +3521,11 @@ function callableDeclarationName(node: ts.Node): string | undefined {
 
 function containingCallableDefinition(
   file: SourceFile,
-  call: ts.CallExpression,
+  reference: ts.Node,
   byName: ReadonlyMap<string, readonly CodeSymbol[]>,
 ): CodeCallEdge["callerDefinition"] {
   if (file.syntaxTree === undefined) return undefined;
-  let owner: ts.Node = call.parent;
+  let owner: ts.Node = reference.parent;
   while (!typeScriptCompiler().isSourceFile(owner)) {
     if (typeScriptCompiler().isFunctionLike(owner)) {
       const declaration = callableDeclaration(owner);
@@ -3803,10 +3804,13 @@ function collectTypescriptReferences(
         ].join("|");
         if (!seen.has(key)) {
           seen.add(key);
+          const referencerDefinition =
+            certified === undefined ? undefined : containingCallableDefinition(file, node, byName);
           references.push({
             referencerPath: file.scopePath,
             referenceLineRange: range,
             referenceSpan: span,
+            ...(referencerDefinition === undefined ? {} : { referencerDefinition }),
             referenceName: node.text,
             targetName: resolved.symbol.name,
             targetPath: resolved.symbol.scopePath,

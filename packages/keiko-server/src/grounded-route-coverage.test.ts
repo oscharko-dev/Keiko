@@ -395,7 +395,13 @@ function invalidatingExpansionRead(fixture: CoverageFixture): {
     bytes.set(path, (bytes.get(path) ?? 0) + consumed);
     return result;
   });
-  return { bytes, invalidatedPath: () => invalidated, restore: () => spy.mockRestore() };
+  return {
+    bytes,
+    invalidatedPath: () => invalidated,
+    restore: (): void => {
+      spy.mockRestore();
+    },
+  };
 }
 
 function remainingPublicReadGrant(
@@ -598,7 +604,7 @@ function repeatedFileCoverageFiles(): Readonly<Record<string, string>> {
   const files = { ...configuredCoverageFiles() };
   let implementation = files["src/implementation.ts"] ?? "";
   for (let index = 0; index < 9; index += 1) {
-    delete files[`src/helper-${String(index)}.ts`];
+    Reflect.deleteProperty(files, `src/helper-${String(index)}.ts`);
     implementation = implementation
       .replace(
         `import { bookkeeping${String(index)} as externalBookkeeping${String(index)} } from "./helper-${String(index)}.js";`,
@@ -1035,7 +1041,7 @@ function ordinaryCoverageFiles(): Readonly<Record<string, string>> {
     "}",
   ].join("\n");
   for (const index of [7, 8]) {
-    delete files[`src/helper-${String(index)}.ts`];
+    Reflect.deleteProperty(files, `src/helper-${String(index)}.ts`);
     files["src/implementation.ts"] = (files["src/implementation.ts"] ?? "")
       .replace(
         `import { bookkeeping${String(index)} as externalBookkeeping${String(index)} } from "./helper-${String(index)}.js";`,
@@ -1872,6 +1878,78 @@ function competingRecursionCoverageFiles(): Readonly<Record<string, string>> {
   };
 }
 
+function coverageEntries(fixture: CoverageFixture): readonly FiniteOwnedContinuationEntry[] {
+  return fixture.trace.routeCoverage?.entries ?? [];
+}
+
+function coverageSourceLines(
+  fixture: CoverageFixture,
+  path: string,
+  range: NonNullable<EvidenceAtom["lineRange"]>,
+): string[] {
+  return (fixture.files[path] ?? "").split("\n").slice(range.startLine - 1, range.endLine);
+}
+
+function coverageTargetWithRange(
+  entries: readonly FiniteOwnedContinuationEntry[],
+  predicate: (entry: FiniteOwnedContinuationEntry) => boolean | undefined,
+  description: string,
+): {
+  readonly target: FiniteOwnedContinuationEntry;
+  readonly range: NonNullable<EvidenceAtom["lineRange"]>;
+} {
+  const target = entries.find(predicate);
+  const range = target?.atom.lineRange;
+  if (target === undefined || range === undefined) throw new TypeError(description);
+  return { target, range };
+}
+
+function requireCoverageEntryRange(
+  entry: FiniteOwnedContinuationEntry | undefined,
+  description: string,
+): asserts entry is FiniteOwnedContinuationEntry & {
+  readonly atom: EvidenceAtom & { readonly lineRange: NonNullable<EvidenceAtom["lineRange"]> };
+} {
+  if (entry?.atom.lineRange === undefined) throw new TypeError(description);
+}
+
+function delayedHeadCoverageTargets(fixture: CoverageFixture): {
+  readonly entries: readonly FiniteOwnedContinuationEntry[];
+  readonly head: FiniteOwnedContinuationEntry;
+  readonly terminal: FiniteOwnedContinuationEntry;
+  readonly caller: FiniteOwnedContinuationEntry;
+  readonly later: FiniteOwnedContinuationEntry;
+} {
+  const entries = fixture.trace.routeCoverage?.entries ?? [];
+  const head = entries.find(
+    (entry) =>
+      entry.atom.scopePath === "src/scope-admission.ts" && entry.atom.lineRange?.startLine === 1,
+  );
+  if (head === undefined) throw new TypeError("fixture requires the actual file head");
+  const terminal = entries.find((entry) => entry.parentIdentity === head.definitionIdentity);
+  const caller = entries.find((entry) => entry.definitionIdentity === head.parentIdentity);
+  const later = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
+  if (terminal === undefined || caller === undefined || later === undefined)
+    throw new TypeError("fixture requires the returned continuation and common caller");
+  return { entries, head, terminal, caller, later };
+}
+
+function coverageNativeWindows(
+  result: Awaited<ReturnType<typeof readExcerpt>>,
+): NonNullable<Awaited<ReturnType<typeof readExcerpt>>["windows"]> {
+  return result.windows ?? [];
+}
+
+function coverageDeclarationSourceBody(
+  fixture: CoverageFixture,
+  entry: FiniteOwnedContinuationEntry,
+): string | undefined {
+  return fixture.files[entry.atom.scopePath]
+    ?.split("\n")
+    .slice((entry.atom.lineRange?.startLine ?? 1) - 1, entry.atom.lineRange?.endLine)
+    .join("\n");
+}
+
 describe("current route trace excerpt coverage", () => {
   it("retains an observed mutual call cycle when recursive tracing competes with repeated prose", async () => {
     const fixture = await coverageFixture(undefined, competingRecursionCoverageFiles());
@@ -2034,17 +2112,7 @@ describe("current route trace excerpt coverage", () => {
     const fixture = await coverageFixture(undefined, delayedFileHeadCoverageFiles());
     const atoms = await allocationAtoms(fixture);
     const originalAtoms = JSON.stringify(atoms);
-    const entries = fixture.trace.routeCoverage?.entries ?? [];
-    const head = entries.find(
-      (entry) =>
-        entry.atom.scopePath === "src/scope-admission.ts" && entry.atom.lineRange?.startLine === 1,
-    );
-    if (head === undefined) throw new TypeError("fixture requires the actual file head");
-    const terminal = entries.find((entry) => entry.parentIdentity === head.definitionIdentity);
-    const caller = entries.find((entry) => entry.definitionIdentity === head.parentIdentity);
-    const later = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
-    if (terminal === undefined || caller === undefined || later === undefined)
-      throw new TypeError("fixture requires the returned continuation and common caller");
+    const { entries, head, terminal, caller, later } = delayedHeadCoverageTargets(fixture);
     expect(terminal.atom.scopePath).toBe(head.atom.scopePath);
     expect(terminal.atom.score).toBeLessThan(head.atom.score);
     expect(terminal.parentWitness?.parentIdentity).toBe(head.definitionIdentity);
@@ -2387,7 +2455,7 @@ describe("current route trace excerpt coverage", () => {
     const fixture = await coverageFixture(undefined, pendingFileRelevanceCoverageFiles());
     const atoms = await allocationAtoms(fixture);
     const originalAtoms = JSON.stringify(atoms);
-    const entries = fixture.trace.routeCoverage?.entries ?? [];
+    const entries = coverageEntries(fixture);
     const prefix = entries.filter((entry) =>
       /^export function scopeAdmissionAndPromptFitting\d+\(/u.test(
         fixture.files[entry.atom.scopePath]?.split("\n")[
@@ -2508,11 +2576,11 @@ describe("current route trace excerpt coverage", () => {
       ),
     );
     const target = entries.find((entry) =>
-      /^export function admitScope\(/u.test(
+      (
         fixture.files[entry.atom.scopePath]?.split("\n")[
           (entry.atom.lineRange?.startLine ?? 1) - 1
-        ] ?? "",
-      ),
+        ] ?? ""
+      ).startsWith("export function admitScope("),
     );
     const later = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
     const weak = entries.filter((entry) => entry.atom.scopePath.startsWith("src/record-"));
@@ -2831,11 +2899,12 @@ describe("current route trace excerpt coverage", () => {
     const fixture = await coverageFixture(undefined, crowdedInitialOpportunityFiles());
     const atoms = await allocationAtoms(fixture);
     const originalAtoms = JSON.stringify(atoms);
-    const entries = fixture.trace.routeCoverage?.entries ?? [];
-    const target = entries.find((entry) => entry.atom.scopePath === "src/z-processing.ts");
-    const range = target?.atom.lineRange;
-    if (target === undefined || range === undefined)
-      throw new TypeError("fixture requires the actual current directory target");
+    const entries = coverageEntries(fixture);
+    const { target, range } = coverageTargetWithRange(
+      entries,
+      (entry) => entry.atom.scopePath === "src/z-processing.ts",
+      "fixture requires the actual current directory target",
+    );
     const competitors = entries.filter(
       (entry) =>
         entry.atom.scopePath.startsWith("src/helper-") ||
@@ -2848,8 +2917,7 @@ describe("current route trace excerpt coverage", () => {
     expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
     expect(target.atom.edge?.kind).toBe("reference");
     const parent = entries.find((entry) => entry.definitionIdentity === target.parentIdentity);
-    if (parent === undefined || parent.atom.lineRange === undefined)
-      throw new TypeError("fixture requires the observed caller body");
+    requireCoverageEntryRange(parent, "fixture requires the observed caller body");
     expect(fixture.trace.routeCoverage?.isCurrent(parent.atom)).toBe(true);
     expect(target.parentWitness?.parentIdentity).toBe(parent.definitionIdentity);
     expect(target.parentWitness?.targetIdentity).toBe(target.definitionIdentity);
@@ -2858,9 +2926,7 @@ describe("current route trace excerpt coverage", () => {
         (candidate) => candidate.scopePath === target.atom.scopePath,
       ),
     ).toBe(true);
-    const lines = (fixture.files[target.atom.scopePath] ?? "")
-      .split("\n")
-      .slice(range.startLine - 1, range.endLine);
+    const lines = coverageSourceLines(fixture, target.atom.scopePath, range);
     const body = lines.join("\n");
     expect(target.observedBytes).toBe(Buffer.byteLength(body));
     expect(target.observedBytes).toBeLessThan(4096);
@@ -2879,18 +2945,20 @@ describe("current route trace excerpt coverage", () => {
       expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
       expect(requests.every((request) => request.maxBytes <= 8192)).toBe(true);
       const parentRange = parent.atom.lineRange;
-      const parentBody = (fixture.files[parent.atom.scopePath] ?? "")
-        .split("\n")
-        .slice(parentRange.startLine - 1, parentRange.endLine)
-        .join("\n");
+      const parentBody = coverageSourceLines(fixture, parent.atom.scopePath, parentRange).join(
+        "\n",
+      );
       expect(readContent(reads, parent.atom.scopePath)).toContain(parentBody);
       const retained = competitors[0];
-      if (retained?.atom.lineRange === undefined)
-        throw new TypeError("fixture requires the first higher-scoring current competitor");
-      const retainedBody = (fixture.files[retained.atom.scopePath] ?? "")
-        .split("\n")
-        .slice(retained.atom.lineRange.startLine - 1, retained.atom.lineRange.endLine)
-        .join("\n");
+      requireCoverageEntryRange(
+        retained,
+        "fixture requires the first higher-scoring current competitor",
+      );
+      const retainedBody = coverageSourceLines(
+        fixture,
+        retained.atom.scopePath,
+        retained.atom.lineRange,
+      ).join("\n");
       expect(readContent(reads, retained.atom.scopePath)).toContain(retainedBody);
       expect(
         readContent(reads, target.atom.scopePath).includes(body),
@@ -2927,10 +2995,9 @@ describe("current route trace excerpt coverage", () => {
       multiWindowCoverageFiles(),
     );
     const atoms = await allocationAtoms(fixture);
-    const targets =
-      fixture.trace.routeCoverage?.entries.filter(
-        (entry) => entry.atom.scopePath === "src/implementation.ts",
-      ) ?? [];
+    const targets = coverageEntries(fixture).filter(
+      (entry) => entry.atom.scopePath === "src/implementation.ts",
+    );
     expect(targets).toHaveLength(3);
     expect(targets.every((entry) => fixture.trace.routeCoverage?.isCurrent(entry.atom))).toBe(true);
     const ranges = targets.map((entry) => {
@@ -2958,7 +3025,7 @@ describe("current route trace excerpt coverage", () => {
       excerpts: new Map([
         [
           "src/implementation.ts",
-          (native.windows ?? []).map((window) => {
+          coverageNativeWindows(native).map((window) => {
             const range = window.atom.lineRange;
             if (range === undefined)
               throw new TypeError("native view requires actual source range");
@@ -2988,8 +3055,10 @@ describe("current route trace excerpt coverage", () => {
       const messages = await sentPrompt(fixture, reads, atoms, budget);
       expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
       for (const target of targets) {
-        const range = target.atom.lineRange;
-        if (range === undefined) throw new TypeError("fixture requires actual target range");
+        const range = requirePendingBodyFixtureEntry(
+          target.atom.lineRange,
+          "fixture requires actual target range",
+        );
         const lines = (fixture.files[target.atom.scopePath] ?? "")
           .split("\n")
           .slice(range.startLine - 1, range.endLine);
@@ -3108,12 +3177,11 @@ describe("current route trace excerpt coverage", () => {
   it("retains ordinary opportunity for a selected definition when route coverage is absent", async () => {
     const fixture = await coverageFixture(undefined, disconnectedDefinitionFiles());
     const atoms = await allocationAtoms(fixture);
-    const target = fixture.trace.routeCoverage?.entries.find(
+    const { target, range } = coverageTargetWithRange(
+      coverageEntries(fixture),
       (entry) => entry.atom.scopePath === "src/z-handler.ts",
+      "fixture requires the current registered handler definition",
     );
-    const range = target?.atom.lineRange;
-    if (target === undefined || range === undefined)
-      throw new TypeError("fixture requires the current registered handler definition");
     expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
     expect(target.atom.provenance.tool).toBe("discovered-symbol-definition");
     const targetAtoms = atoms.filter((atom) => atom.scopePath === target.atom.scopePath);
@@ -3284,23 +3352,25 @@ describe("current route trace excerpt coverage", () => {
   it("retains a stronger same-file target when weaker files compete for shared connected bytes", async () => {
     const fixture = await coverageFixture(undefined, sharedRelevanceFiles());
     const originalAtoms = JSON.stringify(fixture.trace.atoms);
-    const entries = fixture.trace.routeCoverage?.entries ?? [];
-    const target = entries.find((entry) =>
-      fixture.files[entry.atom.scopePath]
-        ?.split("\n")
-        [(entry.atom.lineRange?.startLine ?? 1) - 1]?.includes(
-          "function scopeAdmissionAndPromptFitting(",
-        ),
+    const entries = coverageEntries(fixture);
+    const { target, range } = coverageTargetWithRange(
+      entries,
+      (entry) =>
+        fixture.files[entry.atom.scopePath]
+          ?.split("\n")
+          [(entry.atom.lineRange?.startLine ?? 1) - 1]?.includes(
+            "function scopeAdmissionAndPromptFitting(",
+          ),
+      "fixture requires the actual current terminal definition",
     );
-    const range = target?.atom.lineRange;
-    if (target === undefined || range === undefined)
-      throw new TypeError("fixture requires the actual current terminal definition");
     const weak = entries.filter((entry) => entry.atom.scopePath.startsWith("src/record-"));
     expect(weak.length).toBe(9);
     expect(weak.every((entry) => entry.atom.score < target.atom.score)).toBe(true);
     expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
-    const parent = entries.find((entry) => entry.definitionIdentity === target.parentIdentity);
-    if (parent === undefined) throw new TypeError("fixture requires the actual current parent");
+    const parent = requirePendingBodyFixtureEntry(
+      entries.find((entry) => entry.definitionIdentity === target.parentIdentity),
+      "fixture requires the actual current parent",
+    );
     expect(target.parentWitness?.parentIdentity).toBe(parent.definitionIdentity);
     expect(target.parentWitness?.targetIdentity).toBe(target.definitionIdentity);
     expect(fixture.trace.routeCoverage?.isCurrent(parent.atom)).toBe(true);
@@ -3313,9 +3383,7 @@ describe("current route trace excerpt coverage", () => {
     expect(
       coverageRanking(atoms).kept.some((item) => item.scopePath === target.atom.scopePath),
     ).toBe(true);
-    const lines = (fixture.files[target.atom.scopePath] ?? "")
-      .split("\n")
-      .slice(range.startLine - 1, range.endLine);
+    const lines = coverageSourceLines(fixture, target.atom.scopePath, range);
     const body = lines.join("\n");
     expect(target.observedBytes).toBe(Buffer.byteLength(body));
     const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 };
@@ -3349,8 +3417,9 @@ describe("current route trace excerpt coverage", () => {
           .find((file) => file.scopePath === target.atom.scopePath)
           ?.excerpts.some((excerpt) => excerpt.content.includes(body)),
       ).toBe(true);
-      for (const [index, line] of lines.entries())
+      [...lines.entries()].forEach(([index, line]) => {
         expect(messages).toContain(`${String(range.startLine + index)} | ${line}`);
+      });
     }
     expect(JSON.stringify(fixture.trace.atoms)).toBe(originalAtoms);
   });
@@ -3379,7 +3448,7 @@ describe("current route trace excerpt coverage", () => {
       if (returned > 0) {
         const path = args[1].scopePath;
         consumedByPath.set(path, (consumedByPath.get(path) ?? 0) + returned);
-        now = NOW + (budget.elapsedMsMax ?? 0);
+        now = NOW + budget.elapsedMsMax;
       }
       return result;
     });
@@ -3399,7 +3468,9 @@ describe("current route trace excerpt coverage", () => {
         answerer: { answer: () => Promise.resolve("No synthesis was requested") },
         activityLog,
       },
-    ).finally(() => spy.mockRestore());
+    ).finally(() => {
+      spy.mockRestore();
+    });
     const codeConsumed = [...consumedByPath.values()].reduce((bytes, value) => bytes + value, 0);
     expect(codeConsumed).toBeGreaterThan(0);
     for (const path of consumedByPath.keys()) {
@@ -3495,7 +3566,9 @@ describe("current route trace excerpt coverage", () => {
           answerer: { answer: () => Promise.resolve("No synthesis was requested") },
           activityLog: createBufferedServerLogSink(),
         },
-      ).finally(() => observer.mockRestore());
+      ).finally(() => {
+        observer.mockRestore();
+      });
       expect(nativeCalls).toBe(1);
       expect(
         result.pack.files.some((file) =>
@@ -3638,7 +3711,7 @@ describe("current route trace excerpt coverage", () => {
       if (returned > 0) {
         const path = args[1].scopePath;
         consumedByPath.set(path, (consumedByPath.get(path) ?? 0) + returned);
-        now = NOW + (budget.elapsedMsMax ?? 0);
+        now = NOW + budget.elapsedMsMax;
       }
       return result;
     });
@@ -3658,7 +3731,9 @@ describe("current route trace excerpt coverage", () => {
         answerer: { answer: () => Promise.resolve("No synthesis was requested") },
         activityLog,
       },
-    ).finally(() => spy.mockRestore());
+    ).finally(() => {
+      spy.mockRestore();
+    });
     const codeConsumed = [...consumedByPath.values()].reduce((bytes, value) => bytes + value, 0);
     for (const path of consumedByPath.keys()) {
       expect(result.pack.files.some((file) => file.scopePath === path)).toBe(false);
@@ -4111,11 +4186,16 @@ describe("current route trace excerpt coverage", () => {
       `function secondTraversal() { ${secondFact} }`,
       "function scopeAdmissionCompleted(selectedRoot) { return selectedRoot; }",
     ].join("\n");
-    files["src/routes.ts"] += [
-      "",
-      'import { handleSecond } from "./second.js";',
-      'const additionalRoutes = [{ method: "POST", path: "/api/items", handler: handleSecond }];',
-    ].join("\n");
+    files["src/routes.ts"] =
+      requirePendingBodyFixtureEntry(
+        files["src/routes.ts"],
+        "fixture requires the actual route source",
+      ) +
+      [
+        "",
+        'import { handleSecond } from "./second.js";',
+        'const additionalRoutes = [{ method: "POST", path: "/api/items", handler: handleSecond }];',
+      ].join("\n");
     const fixture = await coverageFixture(undefined, files);
     expect(
       fixture.trace.routeCoverage?.entries.filter((entry) => entry.parentIdentity === undefined)
@@ -4195,7 +4275,7 @@ describe("current route trace excerpt coverage", () => {
       "Trace POST /api/items through scope admission recursive candidate discovery and prompt fitting",
       branchCoverageFiles(),
     );
-    const target = fixture.trace.routeCoverage?.entries.find((entry) =>
+    const target = coverageEntries(fixture).find((entry) =>
       fixture.files[entry.atom.scopePath]
         ?.split("\n")
         .slice((entry.atom.lineRange?.startLine ?? 1) - 1, entry.atom.lineRange?.endLine)
@@ -4206,12 +4286,7 @@ describe("current route trace excerpt coverage", () => {
     expect(target?.atom.edge?.kind).toBe("reference");
     if (target === undefined) throw new TypeError("fixture requires an observed target");
     expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
-    const body =
-      fixture.files[target.atom.scopePath]
-        ?.split("\n")
-        .slice((target.atom.lineRange?.startLine ?? 1) - 1, target.atom.lineRange?.endLine)
-        .join("\n")
-        .trim() ?? "";
+    const body = coverageDeclarationSourceBody(fixture, target)?.trim() ?? "";
     expect(target.observedBytes).toBeGreaterThanOrEqual(Buffer.byteLength(body));
     const reads = await coverageRead(fixture);
     expect(readContent(reads, "src/implementation.ts")).toContain(TERMINAL_FACT);
