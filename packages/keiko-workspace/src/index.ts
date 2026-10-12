@@ -129,6 +129,7 @@ export type {
 export {
   candidateBucketForPath,
   hasSymbolRelationshipQuery,
+  hasRecursiveTraversalQuery,
   SYMBOL_RELATION_TERMS,
 } from "./repoSearchPolicy.js";
 export { requestedSourceInspectionExtensions } from "./repoSearchSourceInspection.js";

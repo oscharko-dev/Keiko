@@ -327,6 +327,16 @@ export function hasSymbolRelationshipQuery(text: string): boolean {
   );
 }
 
+const RECURSIVE_TRAVERSAL_PROSE_RE =
+  /(?:^|[\s(,;!?])(?:(not|no|without|nicht|ohne|keine?)\s+)?(?:recursion|recursive|recursively|rekursion|rekursiv(?:e[rsnm]?)?)(?=$|[\s),;!?]|\.(?:$|\s))/giu;
+
+/** Explicit prose requests qualify; paths, quoted identifiers and negated terms do not. */
+export function hasRecursiveTraversalQuery(text: string): boolean {
+  return [...naturalLanguageSubjectText(text).matchAll(RECURSIVE_TRAVERSAL_PROSE_RE)].some(
+    (match) => match[1] === undefined,
+  );
+}
+
 function emptyBucketCounts(): Record<CandidateBucket, number> {
   return {
     "canonical-metadata": 0,

@@ -1385,3 +1385,81 @@ describe("bounded compiler-certified continuation completeness", () => {
     expect(definitions.length).toBeLessThan(names.length);
   });
 });
+
+function cycleEntryIdentity(
+  result: Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>,
+  startLine: number,
+): string {
+  const entry = result.routeCoverage?.entries.find(
+    (candidate) =>
+      candidate.atom.scopePath === "src/implementation.ts" &&
+      candidate.atom.lineRange?.startLine === startLine,
+  );
+  expect(entry).toBeDefined();
+  if (entry === undefined) throw new TypeError("The actual selected definition is required.");
+  expect(result.routeCoverage?.isCurrent(entry.atom)).toBe(true);
+  return entry.definitionIdentity;
+}
+
+function cycleParentMapIsAcyclic(
+  result: Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>,
+): void {
+  const entries = new Map(
+    result.routeCoverage?.entries.map((entry) => [entry.definitionIdentity, entry]),
+  );
+  for (const entry of entries.values()) {
+    const seen = new Set<string>();
+    let current: typeof entry | undefined = entry;
+    while (current !== undefined) {
+      expect(seen.has(current.definitionIdentity)).toBe(false);
+      seen.add(current.definitionIdentity);
+      current =
+        current.parentIdentity === undefined ? undefined : entries.get(current.parentIdentity);
+    }
+  }
+}
+
+describe("observed owned source call cycles", () => {
+  it("retains a real self-call after definition dedup without cycling its evidence parent", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts": [
+        "export function handlePostItem() { visit(3); }",
+        "function visit(depth) { if (depth > 0) visit(depth - 1); }",
+      ].join("\n"),
+    });
+    const visit = cycleEntryIdentity(result, 2);
+    expect(result.routeCoverage).toMatchObject({ ownedCycles: [[visit]] });
+    cycleParentMapIsAcyclic(result);
+  });
+
+  it("retains assigned and statement mutual calls before seen-target suppression", async () => {
+    const result = await traceFixture({
+      "src/implementation.ts": [
+        "export function handlePostItem() { walk(3); }",
+        "function walk(depth) { const found = inspect(depth); return found; }",
+        "function inspect(depth) { if (depth > 0) walk(depth - 1); return depth; }",
+      ].join("\n"),
+    });
+    const walk = cycleEntryIdentity(result, 2);
+    const inspect = cycleEntryIdentity(result, 3);
+    expect(result.routeCoverage).toMatchObject({ ownedCycles: [[walk, inspect]] });
+    cycleParentMapIsAcyclic(result);
+  });
+
+  it.each([
+    ["export function handlePostItem() { walk(); }", "function walk() { return 1; }"],
+    [
+      "export function handlePostItem() { return () => walk(); }",
+      "function walk() { return () => handlePostItem(); }",
+    ],
+    [
+      "export function handlePostItem() { function walk() { return 1; } walk(); }",
+      "function walk() { handlePostItem(); }",
+    ],
+  ])("does not promote acyclic, reference-only or shadowed cycles: %s", async (...lines) => {
+    const result = await traceFixture({ "src/implementation.ts": lines.join("\n") });
+    cycleEntryIdentity(result, 1);
+    expect(result.routeCoverage).toMatchObject({ ownedCycles: [] });
+    cycleParentMapIsAcyclic(result);
+  });
+});

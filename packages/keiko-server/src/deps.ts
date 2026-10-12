@@ -1030,9 +1030,11 @@ export interface UiHandlerDeps {
         correlationId?: string,
       ) => Promise<GatewayModelDiscoveryOutput>)
     | undefined;
-  // Test seam for the non-mutating gateway readiness probes. Production uses globalThis.fetch via
-  // the existing gateway HTTP transport; route tests inject a deterministic fetch implementation.
+  // Test seam for non-mutating gateway readiness probes. Production uses the existing native
+  // gateway HTTP transport; route tests may inject a deterministic fetch implementation.
   readonly gatewayReadinessFetch?: typeof fetch | undefined;
+  /** Graph-owned cancellation stays separate from the injected-fetch test seam. */
+  readonly gatewayReadinessSignal?: AbortSignal | undefined;
   /** Test seams for the platform-neutral portable-release trust root and expiry clock. */
   readonly updatePortableReleaseTrustedKeys?: readonly PortableReleaseTrustedKey[] | undefined;
   readonly updatePortableReleaseNow?: (() => number) | undefined;

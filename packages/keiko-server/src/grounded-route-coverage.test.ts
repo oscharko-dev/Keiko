@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as workspace from "@oscharko-dev/keiko-workspace";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
@@ -268,6 +272,7 @@ async function coverageRead(
   return _readKeptExcerptsForTests(
     options.paths ?? ranking.kept.map((candidate) => candidate.scopePath),
     {
+      query: fixture.query,
       searchScope: fixture.searchScope,
       fs: fixture.fs,
       budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
@@ -1849,7 +1854,182 @@ function expectFullTerminalView(
     expect(prompt).toContain(`${String(range.startLine + index)} | ${line}`);
 }
 
+function competingRecursionCoverageFiles(): Readonly<Record<string, string>> {
+  return {
+    ...coverageFiles(),
+    "src/z-processing.ts": [
+      bookkeepingBody(99),
+      "export function continueProcessing(root) { bookkeeping99(); return descend(root); }",
+      "function descend(root) {",
+      ...Array.from({ length: 25 }, () => "  root.value += 1;"),
+      "  for (const child of root.children) visit(child);",
+      "}",
+      "function visit(child) {",
+      ...Array.from({ length: 25 }, () => "  child.value += 1;"),
+      "  if (child.directory) descend(child);",
+      "}",
+    ].join("\n"),
+  };
+}
+
 describe("current route trace excerpt coverage", () => {
+  it("retains an observed mutual call cycle when recursive tracing competes with repeated prose", async () => {
+    const fixture = await coverageFixture(undefined, competingRecursionCoverageFiles());
+    const reads = await coverageRead(fixture, {
+      inputs: { budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 4096 } },
+    });
+    const content = [...reads.excerpts.values()]
+      .flat()
+      .map((view) => view.content)
+      .join("\n");
+    expect(content).toContain("for (const child of root.children) visit(child)");
+    expect(content).toContain("if (child.directory) descend(child)");
+    expect(reads.bytesConsumed).toBeLessThanOrEqual(4096);
+    expect(reads.observation).toMatchObject({
+      requestedStaticCallCycleCount: 1,
+      plannedStaticCallCycleCount: 1,
+    });
+  });
+
+  it("logs planned call cycles from actual retrieval without claiming execution or source contents", async () => {
+    const fixture = await coverageFixture(undefined, competingRecursionCoverageFiles());
+    const activityLog = createBufferedServerLogSink();
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 4096 };
+    const { pack } = await actualPublicRetrieval(fixture, budget, activityLog);
+    const event = activityLog.events.find(
+      (item) => item.op === "search.connected-context.selection-details",
+    );
+    const proof = expectActivityLogProof(
+      "search.connected-context.selection-details.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(proof).toMatchObject({
+      requestedStaticCallCycleCount: 1,
+      plannedStaticCallCycleCount: 1,
+    });
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(budget.excerptBytesMax);
+    const prompt = buildGroundedGatewayMessages(fixture.query.text, pack, (value) => value)
+      .map((message) => message.content)
+      .join("\n");
+    expect(prompt).toContain("for (const child of root.children) visit(child)");
+    expect(prompt).toContain("if (child.directory) descend(child)");
+    const logged = JSON.stringify(activityLog.events);
+    expect(logged).not.toContain(fixture.query.text);
+    expect(logged).not.toContain("descend(child)");
+    expect(logged).not.toContain("src/z-processing.ts");
+  });
+
+  it("adds a missing mutual cycle while retaining an already complete stronger self-cycle", async () => {
+    const files = { ...competingRecursionCoverageFiles() };
+    const strongPath = "src/helper-0.ts";
+    const body = bookkeepingBody(0).replace("  return false;", "  return bookkeeping0();");
+    files[strongPath] = body;
+    const fixture = await coverageFixture(undefined, files);
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 };
+    expect(fixture.trace.routeCoverage?.ownedCycles).toHaveLength(2);
+    const baseline = await coverageRead(fixture, { inputs: { budget, query: undefined } });
+    expect(readContent(baseline, strongPath)).toContain(body);
+    expect(readContent(baseline, "src/z-processing.ts")).not.toContain(
+      "if (child.directory) descend(child)",
+    );
+    const reads = await coverageRead(fixture, { inputs: { budget } });
+    expect(readContent(reads, strongPath)).toContain(body);
+    expect(readContent(reads, "src/z-processing.ts")).toContain(
+      "for (const child of root.children) visit(child)",
+    );
+    expect(readContent(reads, "src/z-processing.ts")).toContain(
+      "if (child.directory) descend(child)",
+    );
+    expect(reads.bytesConsumed).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expect(reads.observation).toMatchObject({
+      requestedStaticCallCycleCount: 2,
+      plannedStaticCallCycleCount: 2,
+    });
+  });
+
+  it.each([512, 1024])(
+    "preserves the original allocation when a requested cycle cannot fit (%i bytes)",
+    async (excerptBytesMax) => {
+      const fixture = await coverageFixture(undefined, competingRecursionCoverageFiles());
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax };
+      const baseline = await coverageRead(fixture, { inputs: { budget, query: undefined } });
+      const reads = await coverageRead(fixture, { inputs: { budget } });
+      expect(reads.excerpts).toEqual(baseline.excerpts);
+      expect(reads.bytesConsumed).toBeLessThanOrEqual(excerptBytesMax);
+      expect(reads.observation).toMatchObject({
+        requestedStaticCallCycleCount: 1,
+        plannedStaticCallCycleCount: 0,
+      });
+    },
+  );
+
+  it.each([
+    "Trace POST /api/items through scope admission and prompt fitting",
+    "Trace POST /api/recursive through scope admission and prompt fitting",
+    "Explain the non-recursive path through POST /api/items",
+    'Find the identifier "recursive" in POST /api/items',
+    "Explain POST /api/items, not recursive traversal",
+  ])("preserves allocation without recursive traversal intent: %s", async (text) => {
+    const fixture = await coverageFixture(undefined, competingRecursionCoverageFiles());
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 4096 };
+    const baseline = await coverageRead(fixture, { inputs: { budget, query: undefined } });
+    const query = { ...fixture.query, text };
+    const reads = await coverageRead(fixture, { inputs: { budget, query } });
+    expect(reads.excerpts).toEqual(baseline.excerpts);
+    expect(reads.observation).toMatchObject({
+      requestedStaticCallCycleCount: 0,
+      plannedStaticCallCycleCount: 0,
+    });
+  });
+
+  it.each(["unselected", "stale"])(
+    "does not admit a cycle with an %s declaration",
+    async (reason) => {
+      const fixture = await coverageFixture(undefined, competingRecursionCoverageFiles());
+      const coverage = fixture.trace.routeCoverage;
+      const missing = coverage?.ownedCycles?.[0]?.[0];
+      if (coverage === undefined || missing === undefined)
+        throw new TypeError("fixture requires the actual observed cycle");
+      const target = coverage.entries.find((entry) => entry.definitionIdentity === missing);
+      if (target === undefined) throw new TypeError("fixture requires the selected declaration");
+      const atoms =
+        reason === "unselected"
+          ? fixture.trace.atoms.filter((atom) => atom.stableId !== target.atom.stableId)
+          : fixture.trace.atoms;
+      const routeCoverage =
+        reason === "stale"
+          ? {
+              ...coverage,
+              isCurrent: (atom: EvidenceAtom): boolean =>
+                atom.stableId !== target.atom.stableId && coverage.isCurrent(atom),
+            }
+          : coverage;
+      const reads = await coverageRead(fixture, { atoms, inputs: { routeCoverage } });
+      expect(reads.observation).toMatchObject({
+        requestedStaticCallCycleCount: 0,
+        plannedStaticCallCycleCount: 0,
+      });
+    },
+  );
+
+  it("refuses previously observed cycles after the actual source file changes", async () => {
+    const fixture = await coverageFixture(undefined, competingRecursionCoverageFiles());
+    const coverage = fixture.trace.routeCoverage;
+    const identity = coverage?.ownedCycles?.[0]?.[0];
+    const entry = coverage?.entries.find((candidate) => candidate.definitionIdentity === identity);
+    if (coverage === undefined || entry === undefined)
+      throw new TypeError("fixture requires the actual observed cycle declaration");
+    expect(coverage.isCurrent(entry.atom)).toBe(true);
+    fixture.files[entry.atom.scopePath] = "// The source has been replaced after discovery.";
+    expect(coverage.isCurrent(entry.atom)).toBe(false);
+    const reads = await coverageRead(fixture);
+    expect(reads.observation).toMatchObject({
+      requestedStaticCallCycleCount: 0,
+      plannedStaticCallCycleCount: 0,
+    });
+    expect(readContent(reads, entry.atom.scopePath)).not.toContain("descend(child)");
+  });
+
   it("retains a delayed file head and its lower-scored same-file continuation", async () => {
     const fixture = await coverageFixture(undefined, delayedFileHeadCoverageFiles());
     const atoms = await allocationAtoms(fixture);

@@ -432,6 +432,20 @@ routes intact. Definition intent and content groups use that same subject while 
 and diagnostic identity remain unchanged. Persistent natural-language match identities carry a
 normalization revision. The existing completion-details Activity Log records only the aggregate
 removed-clause count across actual searches; literal, regex and exact-symbol matching retain their existing semantics.
+An explicit natural-language request for recursion can retain observed static call cycles as
+coherent source evidence. The request-local trace records exact nearest-owned call edges before
+repeated targets are suppressed, derives finite strongly connected groups from selected declaration
+identities, and leaves the acyclic parent tree and reference uncertainty unchanged. References alone
+never certify a call cycle. Every member must remain selected and current at allocation time.
+The existing allocation runs first and remains unchanged when it already retains all requested
+cycles. If a cycle is missing, one alternative starts from the same bounded initial allocations,
+admits each complete cycle atomically through the existing whole-target and parent-caller guards,
+then continues the existing shared order. It is used only if it retains every cycle already complete
+in the original allocation and adds at least one missing complete cycle; otherwise the original
+allocation remains. This adds no source reads, relevance bonus, reserved bytes, file quota or budget
+increase. Ordinary evidence retains its existing separate share. The existing selection-details
+Activity Log records only requested and planned static-call-cycle counts; those counts do not claim
+that a call executed or that a final answer covered the cycle.
 Physical excerpt allocation preserves connected parent chains across already selected route files.
 Explicit human file selections remain first. The request-local traversal supplies only current,
 certified definition identities, observed parent relationships and actual body-byte requirements.

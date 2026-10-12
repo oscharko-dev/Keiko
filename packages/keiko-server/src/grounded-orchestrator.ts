@@ -1,3 +1,4 @@
+import { hasRecursiveTraversalQuery } from "@oscharko-dev/keiko-workspace";
 import type { RepositorySemanticFreshnessObservation } from "./grounded-repo-semantic-search.js";
 import {
   groundedSemanticFreshnessSummary,
@@ -737,6 +738,8 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     excerptOrdinaryRangeCount: { type: "integer", dataClass: "count", required: false },
     excerptOrdinaryServedRangeCount: { type: "integer", dataClass: "count", required: false },
     excerptDeferredDefinitionRangeCount: { type: "integer", dataClass: "count", required: false },
+    requestedStaticCallCycleCount: { type: "integer", dataClass: "count", required: false },
+    plannedStaticCallCycleCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -3459,6 +3462,7 @@ async function discoverRequiredDefinitionsForRing(
 }
 
 export interface ExcerptInputs {
+  readonly query?: RetrievalQuery | undefined;
   readonly firstExcerptRound?: boolean | undefined;
   readonly previousExcerptResults?: ReadonlyMap<string, ReadPathExcerptWindowsResult> | undefined;
   readonly routeCoverage?: RouteTraceCoverage | undefined;
@@ -3478,6 +3482,8 @@ export interface ExcerptInputs {
 
 type ExcerptStopReason = "file-grant" | "byte-grant" | "deadline";
 interface ExcerptReadObservation {
+  readonly requestedStaticCallCycleCount?: number | undefined;
+  readonly plannedStaticCallCycleCount?: number | undefined;
   readonly omittedRangeCount: number;
   readonly truncatedWindowCount: number;
   readonly unreadFileCount: number;
@@ -6221,6 +6227,8 @@ interface ExcerptWindowSelection {
 }
 
 interface RouteCoverageReadPlan {
+  readonly requestedStaticCallCycleCount: number;
+  readonly plannedStaticCallCycleCount: number;
   readonly paths: readonly string[];
   readonly eligiblePaths: ReadonlySet<string>;
   readonly entries: ReadonlyMap<string, readonly RouteCoverageReadWindow[]>;
@@ -6304,8 +6312,65 @@ function fairCoverageEntries(
       opportunity.remainingBytes -= state.bytes - previousBytes;
     }
   }
+  const baseline = copyCoverageAdmission(state);
+  admitSharedCoverageEntries(entries, targets, byIdentity, baseline, totalBytes, inputs);
+  const cycles = requestedCoverageCycles(inputs, byIdentity);
+  if (cycles.every((cycle) => retainedCoverageCycle(cycle, baseline)))
+    return [...baseline.windows.values()].flat();
+  admitRequestedCoverageCycles(cycles, byIdentity, state, totalBytes, inputs);
+  if (!improvesCoverageCycles(cycles, baseline, state))
+    return [...baseline.windows.values()].flat();
   admitSharedCoverageEntries(entries, targets, byIdentity, state, totalBytes, inputs);
   return [...state.windows.values()].flat();
+}
+
+function requestedCoverageCycles(
+  inputs: ExcerptInputs,
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+): readonly (readonly string[])[] {
+  const query = inputs.query;
+  if (query?.kind !== "natural-language" || !hasRecursiveTraversalQuery(query.text)) return [];
+  return (inputs.routeCoverage?.ownedCycles ?? []).filter(
+    (cycle) => cycle.length > 0 && cycle.every((identity) => byIdentity.has(identity)),
+  );
+}
+
+function retainedCoverageCycle(cycle: readonly string[], state: CoverageAdmission): boolean {
+  return cycle.every((identity) => state.targets.has(identity));
+}
+
+function improvesCoverageCycles(
+  cycles: readonly (readonly string[])[],
+  baseline: CoverageAdmission,
+  proposal: CoverageAdmission,
+): boolean {
+  return (
+    cycles.every(
+      (cycle) => !retainedCoverageCycle(cycle, baseline) || retainedCoverageCycle(cycle, proposal),
+    ) &&
+    cycles.some(
+      (cycle) => !retainedCoverageCycle(cycle, baseline) && retainedCoverageCycle(cycle, proposal),
+    )
+  );
+}
+
+function admitRequestedCoverageCycles(
+  cycles: readonly (readonly string[])[],
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+  state: CoverageAdmission,
+  totalBytes: number,
+  inputs: ExcerptInputs,
+): void {
+  for (const cycle of cycles) {
+    const proposal = copyCoverageAdmission(state);
+    const admitted = cycle.every((identity) => {
+      const entry = byIdentity.get(identity);
+      return (
+        entry !== undefined && admitCoverageTarget(entry, byIdentity, proposal, totalBytes, inputs)
+      );
+    });
+    if (admitted) publishCoverageAdmission(state, proposal);
+  }
 }
 
 interface CoverageOwnedAdmission {
@@ -7234,15 +7299,22 @@ function proposedCoverageWindows(
   return candidate;
 }
 
-function coverageBranchWindow(
+function certifiedCoverageParentWitness(
   entry: RouteTraceCoverageEntry,
   child: RouteTraceCoverageEntry | undefined,
-): RouteCoverageReadWindow | undefined {
+): RouteTraceCoverageEntry["parentWitness"] {
   const witness = child?.parentWitness;
   const certified =
     witness?.parentIdentity === entry.definitionIdentity &&
     witness.targetIdentity === child?.definitionIdentity;
-  const compact = certified ? witness : undefined;
+  return certified ? witness : undefined;
+}
+
+function coverageBranchWindow(
+  entry: RouteTraceCoverageEntry,
+  child: RouteTraceCoverageEntry | undefined,
+): RouteCoverageReadWindow | undefined {
+  const compact = certifiedCoverageParentWitness(entry, child);
   const lineRange = compact?.lineRange ?? entry.atom.lineRange;
   if (lineRange === undefined) return undefined;
   return {
@@ -7427,6 +7499,7 @@ function routeCoverageReadPlan(
   }
   const priorities = paths.filter((path) => inputs.priorityPaths?.has(path) === true);
   return {
+    ...coverageCycleObservation(inputs, byIdentity, entries),
     paths: [
       ...new Set([
         ...explicitExcerptPaths(paths, inputs),
@@ -7437,6 +7510,22 @@ function routeCoverageReadPlan(
     entries: grouped,
     eligiblePaths,
     reserves: connectedCoverageReserves(entries, share),
+  };
+}
+
+function coverageCycleObservation(
+  inputs: ExcerptInputs,
+  byIdentity: ReadonlyMap<string, RouteTraceCoverageEntry>,
+  windows: readonly RouteCoverageReadWindow[],
+): Pick<RouteCoverageReadPlan, "requestedStaticCallCycleCount" | "plannedStaticCallCycleCount"> {
+  const cycles = requestedCoverageCycles(inputs, byIdentity);
+  const whole = new Set(
+    windows.filter((window) => window.fullBody).map((window) => window.entry.definitionIdentity),
+  );
+  return {
+    requestedStaticCallCycleCount: cycles.length,
+    plannedStaticCallCycleCount: cycles.filter((cycle) => cycle.every((id) => whole.has(id)))
+      .length,
   };
 }
 
@@ -7722,16 +7811,24 @@ function hasExplicitExcerptSelection(scopePath: string, inputs: ExcerptInputs): 
   );
 }
 
+function previousExcerptCoverageInvalidated(
+  scopePath: string,
+  inputs: ExcerptInputs,
+  selection: ExcerptWindowSelection,
+): boolean {
+  return (
+    inputs.previousExcerptResults?.get(scopePath)?.coverageApplied === true &&
+    selection.coverageApplied !== true
+  );
+}
+
 async function readPathExcerptWindows(
   scopePath: string,
   inputs: ExcerptInputs,
   remainingBytes: number,
 ): Promise<ReadPathExcerptWindowsResult> {
   const selection = coverageExcerptLineWindows(scopePath, inputs);
-  if (
-    inputs.previousExcerptResults?.get(scopePath)?.coverageApplied === true &&
-    selection.coverageApplied !== true
-  )
+  if (previousExcerptCoverageInvalidated(scopePath, inputs, selection))
     return { ...unreadExcerptWindows(selection, false), invalidatesPrevious: true };
   throwIfCancelled(inputs.signal);
   if (inputs.nowMs() >= inputs.deadlineAtMs || remainingBytes <= 0)
@@ -8112,7 +8209,25 @@ async function readKeptExcerpts(
   if (state.elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
   }
-  return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
+  return withCycleReadObservation(
+    completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs),
+    coveragePlan,
+  );
+}
+
+function withCycleReadObservation(
+  summary: ExcerptReadSummary,
+  plan: RouteCoverageReadPlan | undefined,
+): ExcerptReadSummary {
+  if (plan === undefined || summary.observation === undefined) return summary;
+  return {
+    ...summary,
+    observation: {
+      ...summary.observation,
+      requestedStaticCallCycleCount: plan.requestedStaticCallCycleCount,
+      plannedStaticCallCycleCount: plan.plannedStaticCallCycleCount,
+    },
+  };
 }
 
 async function readPreparedExcerptWaves(
@@ -8311,31 +8426,54 @@ function appendExcerptWave(
 ): void {
   for (const task of results) {
     throwIfCancelled(inputs.signal);
-    const { scopePath, result } = task;
-    const previous = state.pathResults.get(scopePath);
-    if (previous !== undefined) subtractExcerptResultObservation(previous, state);
-    state.coverageReserves.delete(scopePath);
-    state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
-    const bytesConsumed = result?.bytesConsumed ?? 0;
-    state.remainingBytes -= bytesConsumed;
-    state.bytesConsumed += bytesConsumed;
-    if (bytesConsumed > 0) state.readPaths.add(scopePath);
-    if (result?.invalidatesPrevious === true) state.excerpts.delete(scopePath);
-    const merged = mergeExcerptResult(previous, result);
-    if (merged !== undefined) {
-      state.pathResults.set(scopePath, merged);
-      appendExcerptQueueObservation(merged, state);
-      state.omittedWindowCount += observedExcerptOmissionCount(merged);
-      state.truncatedWindowCount += merged.truncatedWindowCount;
-    }
-    if (result === undefined || result.windows.length === 0) {
-      if (task.omissionReason !== undefined)
-        state.omitted.push({ scopePath, reason: task.omissionReason, omittedAtMs: inputs.nowMs() });
-      continue;
-    }
-    state.anchoredWindowCount += result.anchoredWindowCount;
-    state.excerpts.set(scopePath, merged?.windows ?? result.windows);
+    appendExcerptTask(task, inputs, state);
   }
+}
+
+function appendExcerptTask(
+  task: ReadPathExcerptTaskResult,
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): void {
+  const { scopePath, result } = task;
+  const previous = state.pathResults.get(scopePath);
+  if (previous !== undefined) subtractExcerptResultObservation(previous, state);
+  state.coverageReserves.delete(scopePath);
+  state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
+  consumeExcerptTaskBytes(scopePath, result, state);
+  const merged = mergeExcerptResult(previous, result);
+  retainExcerptResultObservation(scopePath, merged, state);
+  if (result === undefined || result.windows.length === 0) {
+    if (task.omissionReason !== undefined)
+      state.omitted.push({ scopePath, reason: task.omissionReason, omittedAtMs: inputs.nowMs() });
+    return;
+  }
+  state.anchoredWindowCount += result.anchoredWindowCount;
+  state.excerpts.set(scopePath, merged?.windows ?? result.windows);
+}
+
+function consumeExcerptTaskBytes(
+  scopePath: string,
+  result: ReadPathExcerptWindowsResult | undefined,
+  state: ExcerptWaveState,
+): void {
+  const bytesConsumed = result?.bytesConsumed ?? 0;
+  state.remainingBytes -= bytesConsumed;
+  state.bytesConsumed += bytesConsumed;
+  if (bytesConsumed > 0) state.readPaths.add(scopePath);
+  if (result?.invalidatesPrevious === true) state.excerpts.delete(scopePath);
+}
+
+function retainExcerptResultObservation(
+  scopePath: string,
+  merged: ReadPathExcerptWindowsResult | undefined,
+  state: ExcerptWaveState,
+): void {
+  if (merged === undefined) return;
+  state.pathResults.set(scopePath, merged);
+  appendExcerptQueueObservation(merged, state);
+  state.omittedWindowCount += observedExcerptOmissionCount(merged);
+  state.truncatedWindowCount += merged.truncatedWindowCount;
 }
 
 function reserveInitialExcerptOpportunities(
@@ -8372,6 +8510,15 @@ function observedExcerptOmissionCount(result: ReadPathExcerptWindowsResult): num
     : (result.unavailableRangeCount ?? 0);
 }
 
+function servedOrdinaryExcerptRanges(
+  result: ReadPathExcerptWindowsResult,
+  windows: readonly ExcerptWindow[],
+): number | undefined {
+  return result.ordinaryWindows?.filter((range) =>
+    windows.some((view) => view.content.length > 0 && overlappingLineWindows(range, view)),
+  ).length;
+}
+
 function mergeExcerptResult(
   previous: ReadPathExcerptWindowsResult | undefined,
   result: ReadPathExcerptWindowsResult | undefined,
@@ -8391,9 +8538,7 @@ function mergeExcerptResult(
     omittedWindowCount: result.omittedWindowCount + (previous.unavailableRangeCount ?? 0),
     unavailableRangeCount:
       (previous.unavailableRangeCount ?? 0) + (result.unavailableRangeCount ?? 0),
-    ordinaryServedRangeCount: result.ordinaryWindows?.filter((range) =>
-      windows.some((view) => view.content.length > 0 && overlappingLineWindows(range, view)),
-    ).length,
+    ordinaryServedRangeCount: servedOrdinaryExcerptRanges(result, windows),
   };
 }
 
@@ -8995,22 +9140,14 @@ function selectRankedEvidencePool(
   };
 }
 
-async function preparePackAssembly(
+function rerankPreparedEvidence(
   args: AssembleGroundedPackInputs,
   rings: RingRunSummary,
-): Promise<PreparedPackAssembly> {
-  const { input, plan, deps, nowMs, deadlineAtMs } = args;
-  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(input, rings);
-  const ranking = rankEligibleEvidencePool(
-    input,
-    plan,
-    rings,
-    atoms,
-    nowMs,
-    args.hasGitMetadata,
-    args.worktreeRecency?.paths.map((path) => path.path) ?? [],
-  );
-  const reranker = await rerankGroundedCandidates({
+  atoms: readonly EvidenceAtom[],
+  ranking: ReturnType<typeof rankCandidates>,
+): Promise<PreselectionRerankerResult> {
+  const { plan, deps, nowMs, deadlineAtMs } = args;
+  return rerankGroundedCandidates({
     reranker: deps.contextPackReranker,
     candidates: ranking.kept,
     atomsByPath: groupEvidenceAtomsByPath(atoms),
@@ -9021,6 +9158,24 @@ async function preparePackAssembly(
     signal: deps.signal,
     literal: plan.targetDecision?.kind === "literal-search",
   });
+}
+
+async function preparePackAssembly(
+  args: AssembleGroundedPackInputs,
+  rings: RingRunSummary,
+): Promise<PreparedPackAssembly> {
+  const { input, plan, nowMs } = args;
+  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(input, rings);
+  const ranking = rankEligibleEvidencePool(
+    input,
+    plan,
+    rings,
+    atoms,
+    nowMs,
+    args.hasGitMetadata,
+    args.worktreeRecency?.paths.map((path) => path.path) ?? [],
+  );
+  const reranker = await rerankPreparedEvidence(args, rings, atoms, ranking);
   const { ordered, selection, priorityPaths } = selectRankedEvidencePool(
     args,
     rings,
@@ -9511,10 +9666,34 @@ function excerptCapacityWithDocuments(
   };
 }
 
+function groundedExcerptInputs(
+  args: AssembleGroundedPackInputs,
+  augmentedRings: RingRunSummary,
+  prepared: PreparedPackAssembly,
+  documentEvidence: DocumentEvidenceResult,
+): ExcerptInputs {
+  const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
+  return {
+    query: input.query,
+    routeCoverage: augmentedRings.routeCoverage,
+    priorityPaths: prepared.priorityPaths,
+    knownFitFileBytes: augmentedRings.knownFitFileBytes,
+    searchScope,
+    fs,
+    budget: plan.budget,
+    initialUsage: excerptCapacityWithDocuments(prepared.initialUsage, documentEvidence),
+    atomsByPath: prepared.atomsByPath,
+    anchors: plan.anchors.filter((anchor) => anchor.kind !== "path").map((anchor) => anchor.term),
+    nowMs,
+    signal: deps.signal,
+    deadlineAtMs,
+  };
+}
+
 async function assembleGroundedPack(
   args: AssembleGroundedPackInputs,
 ): Promise<GroundedPackAssembly> {
-  const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
+  const { input, deps, plan, nowMs } = args;
   const augmentedRings = filterRejectedExplicitPaths(
     await augmentRingsWithDeterministicAtoms(args),
     input.scope,
@@ -9526,20 +9705,10 @@ async function assembleGroundedPack(
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined)
     return cachedGroundedAssembly(ctx.cached, args, prepared, augmentedRings);
-  const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
-    routeCoverage: augmentedRings.routeCoverage,
-    priorityPaths: prepared.priorityPaths,
-    knownFitFileBytes: augmentedRings.knownFitFileBytes,
-    searchScope,
-    fs,
-    budget: plan.budget,
-    initialUsage: excerptCapacityWithDocuments(prepared.initialUsage, ctx.documentEvidence),
-    atomsByPath: prepared.atomsByPath,
-    anchors: plan.anchors.filter((anchor) => anchor.kind !== "path").map((anchor) => anchor.term),
-    nowMs,
-    signal: deps.signal,
-    deadlineAtMs,
-  });
+  const excerptReads = await readKeptExcerpts(
+    prepared.keptPaths,
+    groundedExcerptInputs(args, augmentedRings, prepared, ctx.documentEvidence),
+  );
   const pack = await assemblePackFromReads({
     sourceProgress: args.sourceProgress,
     input,
@@ -10613,11 +10782,17 @@ function selectionDetailsActivityExtra(
 function excerptSchedulingActivityExtra(
   observation: ExcerptReadObservation | undefined,
 ): Partial<ActivityLogFields<typeof SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION>> {
-  if (observation?.ordinaryRangeCount === undefined) return {};
+  if (observation === undefined) return {};
   return {
-    excerptOrdinaryRangeCount: observation.ordinaryRangeCount,
-    excerptOrdinaryServedRangeCount: observation.ordinaryServedRangeCount ?? 0,
-    excerptDeferredDefinitionRangeCount: observation.deferredDefinitionRangeCount ?? 0,
+    requestedStaticCallCycleCount: observation.requestedStaticCallCycleCount ?? 0,
+    plannedStaticCallCycleCount: observation.plannedStaticCallCycleCount ?? 0,
+    ...(observation.ordinaryRangeCount === undefined
+      ? {}
+      : {
+          excerptOrdinaryRangeCount: observation.ordinaryRangeCount,
+          excerptOrdinaryServedRangeCount: observation.ordinaryServedRangeCount ?? 0,
+          excerptDeferredDefinitionRangeCount: observation.deferredDefinitionRangeCount ?? 0,
+        }),
   };
 }
 

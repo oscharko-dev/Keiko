@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { observedOwnedCallCycles } from "./grounded-symbol-trace-cycles.js";
 import type {
   ContextCoverageDiagnostics,
   EvidenceAtom,
@@ -60,6 +61,7 @@ interface DiscoveredSymbolTraceEvidenceInput extends FollowSymbolTraceEvidenceIn
   readonly definitionCertificates?: WeakMap<EvidenceAtom, CodeSymbol> | undefined;
   readonly observedDefinitionBytes?: Map<string, ObservedDefinitionBudget> | undefined;
   readonly observedDefinitionParents?: Map<string, ObservedDefinitionParent> | undefined;
+  readonly observedOwnedCalls?: Map<string, Set<string>> | undefined;
 }
 
 interface ObservedDefinitionBudget {
@@ -96,6 +98,7 @@ export interface RouteTraceCoverageEntry {
 
 export interface RouteTraceCoverage {
   readonly entries: readonly RouteTraceCoverageEntry[];
+  readonly ownedCycles?: readonly (readonly string[])[] | undefined;
   readonly isCurrent: (atom: EvidenceAtom) => boolean;
   readonly matches: (scope: SearchScope, fs: WorkspaceFs) => boolean;
 }
@@ -1028,6 +1031,7 @@ async function nextDefinitionFrontier(
   for (const target of calls) {
     const call = target.call;
     const key = targetIdentity(call);
+    retainObservedOwnedCall(input, target, key);
     if (seen.has(key)) continue;
     seen.add(key);
     if (frontier.length >= maxContinuations) {
@@ -1039,6 +1043,23 @@ async function nextDefinitionFrontier(
     retainDefinitionFrontierAtom(input, target, atom, frontier);
   }
   return frontier;
+}
+
+function retainObservedOwnedCall(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  target: ObservedBodyTarget,
+  identity: string,
+): void {
+  const witness = target.parentWitness;
+  if (
+    witness?.ownedSourceCall !== true ||
+    witness.parentIdentity !== target.parentIdentity ||
+    witness.targetIdentity !== identity
+  )
+    return;
+  const calls = input.observedOwnedCalls?.get(witness.parentIdentity) ?? new Set<string>();
+  calls.add(identity);
+  input.observedOwnedCalls?.set(witness.parentIdentity, calls);
 }
 
 function retainDefinitionFrontierAtom(
@@ -1235,6 +1256,7 @@ export async function collectDiscoveredSymbolTraceEvidence(
     definitionCertificates: new WeakMap<EvidenceAtom, CodeSymbol>(),
     observedDefinitionBytes: new Map<string, ObservedDefinitionBudget>(),
     observedDefinitionParents: new Map<string, ObservedDefinitionParent>(),
+    observedOwnedCalls: new Map<string, Set<string>>(),
   };
   const symbols = await discoveredHandlerSymbols(requestInput);
   if (symbols.length === 0) return { atoms: [], uncertainty: [] };
@@ -1274,6 +1296,10 @@ function discoveredRouteCoverage(
   });
   return {
     entries,
+    ownedCycles: observedOwnedCallCycles(
+      entries.map((entry) => entry.definitionIdentity),
+      input.observedOwnedCalls ?? new Map(),
+    ),
     isCurrent: (atom) =>
       input.definitionCertificates?.has(atom) === true &&
       !traceWorkStopped(input) &&

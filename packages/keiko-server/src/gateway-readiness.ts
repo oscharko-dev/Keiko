@@ -711,6 +711,7 @@ async function providerRequest(
       ...(deps.gatewayReadinessFetch !== undefined
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
+      ...(deps.gatewayReadinessSignal === undefined ? {} : { signal: deps.gatewayReadinessSignal }),
       ...(options.stream === true ? { stream: true } : {}),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
@@ -836,6 +837,7 @@ async function probeConfiguredEmbedding(
       ...(deps.gatewayReadinessFetch !== undefined
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
+      ...(deps.gatewayReadinessSignal === undefined ? {} : { signal: deps.gatewayReadinessSignal }),
       timeoutMs: provider.timeoutMs,
       egress: config.egress,
     });
@@ -907,6 +909,7 @@ async function probeReranker(
       config,
       correlationId,
       fetchImpl: deps.gatewayReadinessFetch,
+      signal: deps.gatewayReadinessSignal,
     });
     return rerankerSelectionResult(selection, start);
   } catch (probeError) {
@@ -1240,6 +1243,7 @@ async function probeToolCalling(
       );
     },
     probeSpendContext(deps, config, provider, correlationId),
+    deps.gatewayReadinessSignal,
   );
   if (failure !== undefined) return failure;
   if (status === "verified") {
@@ -2525,14 +2529,10 @@ export function cancellableConversationProbeDeps(
   deps: UiHandlerDeps,
   signal: AbortSignal,
 ): UiHandlerDeps {
-  const fetch = deps.gatewayReadinessFetch ?? globalThis.fetch;
+  const previous = deps.gatewayReadinessSignal;
   return {
     ...deps,
-    gatewayReadinessFetch: (input, init): Promise<Response> =>
-      fetch(input, {
-        ...init,
-        signal: init?.signal == null ? signal : AbortSignal.any([signal, init.signal]),
-      }),
+    gatewayReadinessSignal: previous === undefined ? signal : AbortSignal.any([previous, signal]),
   };
 }
 

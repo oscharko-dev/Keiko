@@ -4,6 +4,7 @@ import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-con
 import {
   candidateBucketForPath,
   hasSymbolRelationshipQuery,
+  hasRecursiveTraversalQuery,
   legacyDiscoveryPolicy,
   orderCandidatesForSearch,
   policyOmissionReason,
@@ -44,6 +45,37 @@ describe("hasSymbolRelationshipQuery", () => {
     "Verwende nur gelesene Werte aus Funktionen, die LateDefinitionProbe aufrufen.",
   ])("preserves genuine relationships and mixed directives: %s", (text) => {
     expect(hasSymbolRelationshipQuery(text)).toBe(true);
+  });
+});
+
+describe("hasRecursiveTraversalQuery", () => {
+  it.each([
+    "Trace recursive candidate discovery. Cite implementation files and lines.",
+    "Explain recursion.",
+    "Search recursively through the directory tree",
+    "Erkläre die Rekursion.",
+    "Zeige die rekursive Suche.",
+    "Analysiere den rekursiven Aufruf.",
+    "Explain /api/recursive and its recursive traversal",
+  ])("recognizes an explicit traversal subject: %s", (text) => {
+    expect(hasRecursiveTraversalQuery(text)).toBe(true);
+  });
+
+  it.each([
+    "Trace POST /api/recursive",
+    "Find src/recursive.ts",
+    "Trace POST /api/items through recursive.ts",
+    "Explain recursion.value",
+    "Explain non-recursive traversal",
+    'Find the identifier "recursive"',
+    "Show `recursive`",
+    "Explain traversal, not recursive discovery",
+    "Explain traversal without recursion",
+    "Erkläre den Ablauf ohne Rekursion",
+    "Erkläre den Ablauf, nicht rekursiv",
+    "Explain prompt fitting. Cite implementation files and lines.",
+  ])("keeps named targets and negative prose out of traversal intent: %s", (text) => {
+    expect(hasRecursiveTraversalQuery(text)).toBe(false);
   });
 });
 
