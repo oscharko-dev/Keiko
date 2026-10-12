@@ -156,14 +156,16 @@ function assertOpen(state) {
   if (state.closed) throw new TypeError("symbol-resolver-closed");
 }
 
-function snapshot(state, absolute, text) {
-  const digest = policyDigest(text);
+function snapshot(state, absolute, text, digest = policyDigest(text)) {
   const previous = state.snapshots.get(absolute);
   if (previous && previous.digest !== digest) throw new TypeError("symbol-subject-changed");
   if (!previous) {
     state.bytes += Buffer.byteLength(text);
     if (state.bytes > state.limits.sourceBytes) throw new TypeError("symbol-source-budget");
-    state.snapshots.set(absolute, { digest, text });
+    state.snapshots.set(absolute, {
+      digest,
+      utf8Bytes: Buffer.from(text, "utf8").toString("latin1"),
+    });
   }
   return text;
 }
@@ -175,9 +177,9 @@ function readOwned(state, path) {
   regularSource(absolute);
   const text = readFileSync(absolute, "utf8");
   const expected = state.inputs.get(path);
-  if (expected !== undefined && policyDigest(text) !== expected)
-    throw new TypeError("symbol-subject-changed");
-  return snapshot(state, absolute, text);
+  const digest = policyDigest(text);
+  if (expected !== undefined && digest !== expected) throw new TypeError("symbol-subject-changed");
+  return snapshot(state, absolute, text, digest);
 }
 
 function ownerContext(state, path) {
@@ -299,12 +301,18 @@ function assertCurrent(state) {
   for (const [path, expected] of state.inputs) {
     const absolute = join(state.subject.root, path);
     regularSource(absolute);
-    if (policyDigest(readFileSync(absolute)) !== expected)
+    if (!hasCurrentDigest(readFileSync(absolute), state.snapshots.get(absolute), expected))
       throw new TypeError("symbol-subject-changed");
   }
-  for (const [path, { digest }] of state.snapshots) {
-    if (policyDigest(readFileSync(path)) !== digest) throw new TypeError("symbol-subject-changed");
+  for (const [path, previous] of state.snapshots) {
+    if (!hasCurrentDigest(readFileSync(path), previous, previous.digest))
+      throw new TypeError("symbol-subject-changed");
   }
+}
+
+function hasCurrentDigest(bytes, previous, expected) {
+  if (previous?.digest === expected && bytes.toString("latin1") === previous.utf8Bytes) return true;
+  return policyDigest(bytes) === expected;
 }
 
 export function visitCompilerNodes(state, node, visit) {

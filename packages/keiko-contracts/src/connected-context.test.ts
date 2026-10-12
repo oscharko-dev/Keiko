@@ -1720,3 +1720,59 @@ describe("MAX_OMITTED_CONTEXT_ENTRIES", () => {
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 });
+
+import { validateConnectedContextPack as publicConnectedPack } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+
+describe.each([
+  ["source", validateConnectedContextPack],
+  ["public", publicConnectedPack],
+])("%s existing atom diagnostic intake", (_label, validate) => {
+  it("preserves healthy references and refuses a later raw excerpt atom", () => {
+    const excerpt = { atom: happyAtom(), content: "", contentBytes: 0 };
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [excerpt],
+    };
+    const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
+    expect(validate(pack)).toEqual({ ok: true });
+    Object.defineProperty(excerpt, "atom", { value: null });
+    expect(validate(pack)).toEqual({
+      ok: false,
+      reasons: [
+        "pack.files excerpt atom.scopePath does not match parent scopePath",
+        "pack.files excerpt atom invalid",
+      ],
+    });
+    expect(pack.files[0]).toBe(entry);
+    expect(entry.excerpts[0]).toBe(excerpt);
+  });
+
+  it("retains complete eager diagnostic order for malformed nested atom fields", () => {
+    const atom = happyAtom();
+    Object.defineProperties(atom, {
+      schemaVersion: { value: "future" },
+      provenance: { value: null },
+      edge: { value: 0 },
+      metrics: { value: 0 },
+      ledgerRef: { value: 0 },
+    });
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [{ atom, content: "", contentBytes: 0 }],
+    };
+    expect(validate({ ...happyPack(), files: [entry] })).toEqual({
+      ok: false,
+      reasons: [
+        "pack.files excerpt atom.schemaVersion mismatch",
+        "pack.files excerpt atom.provenance missing",
+        "pack.files excerpt atom.edge invalid",
+        "pack.files excerpt atom.metrics invalid",
+        "pack.files excerpt atom.ledgerRef invalid",
+      ],
+    });
+  });
+});

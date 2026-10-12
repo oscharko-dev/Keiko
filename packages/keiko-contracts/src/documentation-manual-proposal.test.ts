@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
 import type { KnowledgePodSummary } from "./local-knowledge-pods.js";
 import {
@@ -578,4 +578,64 @@ describe("validateDocumentationIndexingApproval", () => {
   it("carries explicit consent at the value level", () => {
     expect(baseApproval().approved).toBe(true);
   });
+});
+
+import { parseManualProposalRequest as publicManualRequest } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { DOCUMENTATION_NAVIGATION_REASONS } from "./documentation-browser.js";
+
+describe.each([
+  ["source", parseManualProposalRequest],
+  ["public", publicManualRequest],
+])("%s manual proposal admission preservation", (_label, parse) => {
+  it("preserves known reasons and distinguishes refusal from approval authority", () => {
+    for (const lastNavigationReason of DOCUMENTATION_NAVIGATION_REASONS) {
+      expect(parse({ target: "https://example.test/docs", lastNavigationReason })).toEqual({
+        ok: true,
+        value: { schemaVersion: "1", target: "https://example.test/docs", lastNavigationReason },
+      });
+    }
+    for (const lastNavigationReason of [0, {}, Symbol("reason"), "future-reason"]) {
+      expect(parse({ target: "https://example.test/docs", lastNavigationReason })).toEqual({
+        ok: false,
+        errors: ["lastNavigationReason must be a known navigation reason or null"],
+      });
+    }
+  });
+
+  it("captures target once and preserves omitted versus undefined optional reason normalization", () => {
+    let reads = 0;
+    const input = {
+      get target(): string {
+        reads += 1;
+        return "https://example.test/docs";
+      },
+    };
+    expect(parse(input)).toEqual({
+      ok: true,
+      value: {
+        schemaVersion: "1",
+        target: "https://example.test/docs",
+        lastNavigationReason: null,
+      },
+    });
+    expect(reads).toBe(1);
+    expect(parse({ target: "https://example.test/docs", lastNavigationReason: undefined })).toEqual(
+      parse({ target: "https://example.test/docs" }),
+    );
+  });
+});
+
+function publicManualTarget(input: unknown): string | undefined {
+  const result = publicManualRequest(input);
+  return result.ok ? result.value.target : undefined;
+}
+
+it("retains the public manual parser's primitive direct-result guarantee", () => {
+  type Success = Extract<ReturnType<typeof publicManualRequest>, { readonly ok: true }>;
+  expectTypeOf<Success["value"]["target"]>().toEqualTypeOf<string>();
+  expectTypeOf<Success["value"]["schemaVersion"]>().toEqualTypeOf<"1">();
+  const input = { target: "https://example.test/docs" };
+  expect(publicManualTarget(input)).toBe(input.target);
+  input.target = "";
+  expect(publicManualTarget(input)).toBeUndefined();
 });

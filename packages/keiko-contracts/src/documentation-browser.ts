@@ -194,9 +194,9 @@ function isLoopbackIpv4(octets: readonly number[]): boolean {
 }
 
 function isPrivateIpv4(octets: readonly number[]): boolean {
-  const [a, b] = octets as [number, number, number, number];
+  const [a, b] = octets;
   if (a === 10) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 172 && b !== undefined && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
   if (a === 169 && b === 254) return true;
   return false;
@@ -298,8 +298,11 @@ export function classifyDocumentationTarget(raw: unknown): DocumentationTargetCl
 // KEIKO-0657: read the lookup on a null-prototype object so untrusted keys like `constructor`,
 // `toString`, or `__proto__` return undefined and fall through to the documented
 // "navigation-failed" default instead of resolving to a prototype method.
-const ERROR_CODE_TO_REASON: Readonly<Record<string, DocumentationNavigationReason>> = Object.freeze(
-  Object.assign(Object.create(null) as Record<string, DocumentationNavigationReason>, {
+const ERROR_CODE_TO_REASON: Readonly<Record<string, DocumentationNavigationReason>> =
+  createErrorCodeReasons();
+
+function createErrorCodeReasons(): Readonly<Record<string, DocumentationNavigationReason>> {
+  const reasons: Record<string, DocumentationNavigationReason> = {
     // keiko-tools BrowserToolError codes
     BROWSER_UNAVAILABLE: "browser-backend-unavailable",
     CHROME_UNREACHABLE: "browser-backend-unavailable",
@@ -319,8 +322,10 @@ const ERROR_CODE_TO_REASON: Readonly<Record<string, DocumentationNavigationReaso
     ENETUNREACH: "proxy-or-firewall-blocked",
     ETIMEDOUT: "request-timed-out",
     UND_ERR_CONNECT_TIMEOUT: "request-timed-out",
-  } satisfies Record<string, DocumentationNavigationReason>),
-);
+  };
+  Object.setPrototypeOf(reasons, null);
+  return Object.freeze(reasons);
+}
 
 /**
  * Map a low-level browser/network error code or HTTP status to a governed navigation reason. Fails
@@ -362,20 +367,37 @@ export function resolveDocumentationNavigationReason(
 
 // ─── Request validation ─────────────────────────────────────────────────────────────
 
-function collectNavigationRequestErrors(value: Record<string, unknown>): string[] {
-  const errors: string[] = [];
-  const target = value.target;
+function validateNavigationTarget(target: unknown, errors: string[]): target is string {
   if (typeof target !== "string" || target.length === 0) {
     errors.push("target must be a non-empty string");
-  } else if (target.length > DOCUMENTATION_TARGET_MAX_LENGTH) {
+    return false;
+  }
+  if (target.length > DOCUMENTATION_TARGET_MAX_LENGTH) {
     errors.push(`target must be at most ${String(DOCUMENTATION_TARGET_MAX_LENGTH)} characters`);
+    return false;
   }
-  if (value.cdpPort !== undefined) {
-    const port = value.cdpPort;
-    if (typeof port !== "number" || !Number.isInteger(port) || port < 1024 || port > 65535) {
-      errors.push("cdpPort must be an integer in the range 1024-65535");
-    }
+  return true;
+}
+
+function validateNavigationPort(port: unknown, errors: string[]): port is number {
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1024 || port > 65535) {
+    errors.push("cdpPort must be an integer in the range 1024-65535");
+    return false;
   }
+  return true;
+}
+
+function validateOptionalNavigationPort(
+  port: unknown,
+  errors: string[],
+): port is number | undefined {
+  return port === undefined || validateNavigationPort(port, errors);
+}
+
+function collectNavigationRequestErrors(value: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  validateNavigationTarget(value.target, errors);
+  if (value.cdpPort !== undefined) validateNavigationPort(value.cdpPort, errors);
   return errors;
 }
 
@@ -392,11 +414,16 @@ export function parseDocumentationNavigationRequest(value: unknown): Documentati
     return { ok: false, errors };
   }
   const port = value.cdpPort;
+  const target = value.target;
+  const finalErrors: string[] = [];
+  const targetValid = validateNavigationTarget(target, finalErrors);
+  const portValid = validateOptionalNavigationPort(port, finalErrors);
+  if (!targetValid || !portValid) return { ok: false, errors: finalErrors };
   return {
     ok: true,
     value: {
       schemaVersion: DOCUMENTATION_BROWSER_SCHEMA_VERSION,
-      target: value.target as string,
+      target,
       ...(typeof port === "number" ? { cdpPort: port } : {}),
     },
   };

@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync, rmSync, unlinkSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import {
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+  existsSync,
+  symlinkSync,
+  statSync,
+  utimesSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -1829,5 +1839,137 @@ describe("public parser separate executed controls (#3918)", () => {
     } finally {
       resolver.close();
     }
+  });
+});
+
+async function currentnessFixture(prepare, options = {}) {
+  const own = createSymbolFixture(false, prepare);
+  fixtures.push(own);
+  const subject = await collectPolicySubject(own.root);
+  const compiler = createCompilerContext(subject, options);
+  own.resolver = compiler;
+  return { ...own, compiler };
+}
+
+describe("fresh compiler content observations (#3918)", () => {
+  it.each(["plain", "é🙂"])("preserves unchanged %s text and repeated admission", async (label) => {
+    const path = "src/currentness.ts";
+    const text = `export const label = "${label}";\n`;
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    const admittedBytes = own.compiler.state.bytes;
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    expect(own.compiler.read(path)).toBe(text);
+    expect(own.compiler.state.bytes).toBe(admittedBytes);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+  });
+
+  it.each(["admitted", "input-only"])(
+    "refuses a same-size %s rewrite with restored timestamps",
+    async (mode) => {
+      const path = "src/currentness.ts";
+      const text = 'export const label = "first";\n';
+      const timestamp = new Date("2020-01-01T00:00:00.000Z");
+      const own = await currentnessFixture(({ root, put }) => {
+        put(path, text);
+        utimesSync(join(root, path), timestamp, timestamp);
+      });
+      const absolute = join(own.root, path);
+      if (mode === "admitted") expect(own.compiler.read(path)).toBe(text);
+      else expect(own.compiler.state.snapshots.has(absolute)).toBe(false);
+      expect(() => own.compiler.assertCurrent()).not.toThrow();
+      const original = statSync(absolute);
+      writeFileSync(absolute, text.replace("first", "other"));
+      utimesSync(absolute, original.atime, original.mtime);
+      expect(statSync(absolute).size).toBe(original.size);
+      expect(statSync(absolute).mtimeMs).toBe(original.mtimeMs);
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+
+  it("refuses a changed snapshot-only generated output", async () => {
+    const own = await currentnessFixture();
+    const path = "packages/alpha/dist/owner.d.ts";
+    const absolute = join(own.root, path);
+    const text = readFileSync(absolute, "utf8");
+    expect(own.compiler.state.inputs.has(path)).toBe(false);
+    expect(own.compiler.read(path)).toBe(text);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    writeFileSync(absolute, text + "\n");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+
+  it("freshly refuses mutation after the complete input pass", async () => {
+    const path = "src/currentness.ts";
+    const text = 'export const label = "first";\n';
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    const inputs = own.compiler.state.inputs;
+    const originalIterator = inputs[Symbol.iterator].bind(inputs);
+    let visits = 0;
+    let inputPassCompleted = false;
+    inputs[Symbol.iterator] = function* () {
+      for (const entry of originalIterator()) {
+        visits += 1;
+        yield entry;
+      }
+      inputPassCompleted = true;
+      writeFileSync(join(own.root, path), text.replace("first", "other"));
+    };
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    expect(visits).toBe(inputs.size);
+    expect(inputPassCompleted).toBe(true);
+  });
+
+  it.each(["input", "snapshot-only"])(
+    "refuses malformed %s bytes even when decoded text is identical",
+    async (mode) => {
+      const input = "src/currentness.ts";
+      const text = 'export const label = "\uFFFD";\n';
+      const own = await currentnessFixture(({ put }) => put(input, text));
+      const path = mode === "input" ? input : "packages/alpha/dist/owner.d.ts";
+      const absolute = join(own.root, path);
+      if (mode === "snapshot-only") writeFileSync(absolute, text);
+      expect(own.compiler.read(path)).toBe(text);
+      expect(() => own.compiler.assertCurrent()).not.toThrow();
+      const raw = Buffer.concat([
+        Buffer.from('export const label = "'),
+        Buffer.from([0x80]),
+        Buffer.from('";\n'),
+      ]);
+      expect(raw.toString("utf8")).toBe(text);
+      expect(raw).not.toEqual(Buffer.from(text));
+      writeFileSync(absolute, raw);
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+
+  it("preserves digest refusal for malformed admitted text and equivalent decoding", async () => {
+    const own = await currentnessFixture();
+    const path = "packages/alpha/dist/owner.d.ts";
+    const absolute = join(own.root, path);
+    writeFileSync(absolute, Buffer.from([0x80]));
+    expect(own.compiler.read(path)).toBe("\uFFFD");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    writeFileSync(absolute, Buffer.from([0x81]));
+    expect(readFileSync(absolute, "utf8")).toBe("\uFFFD");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+
+  it("bounds multibyte snapshot storage and clears it on close", async () => {
+    const own = await currentnessFixture(undefined, { sourceBytes: 6 });
+    const path = "packages/alpha/dist/owner.d.ts";
+    writeFileSync(join(own.root, path), "é🙂");
+    expect(own.compiler.read(path)).toBe("é🙂");
+    expect(own.compiler.state.bytes).toBe(6);
+    expect(own.compiler.read(path)).toBe("é🙂");
+    expect(own.compiler.state.bytes).toBe(6);
+    expect(() => own.compiler.read("src/consumer.ts")).toThrow("symbol-source-budget");
+    expect(own.compiler.state.snapshots.size).toBe(1);
+    own.compiler.close();
+    expect(own.compiler.state.snapshots.size).toBe(0);
+    expect(() => own.compiler.read(path)).toThrow("symbol-resolver-closed");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-resolver-closed");
   });
 });

@@ -269,7 +269,8 @@ function hasHtmlDocumentExtension(pathname: string): boolean {
 }
 
 function isIndexEntry(pathname: string): boolean {
-  return INDEX_ENTRY_NAMES.includes(lastPathSegment(pathname).toLowerCase() as never);
+  const allowed: readonly string[] = INDEX_ENTRY_NAMES;
+  return allowed.includes(lastPathSegment(pathname).toLowerCase());
 }
 
 // Segment-anchored, not a raw substring test: `/docsarchive/foo.html` must NOT match `/docs` the way
@@ -655,13 +656,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 const KNOWN_NAVIGATION_REASONS: ReadonlySet<string> = new Set(DOCUMENTATION_NAVIGATION_REASONS);
 
+function isKnownNavigationReason(value: unknown): value is DocumentationNavigationReason {
+  return typeof value === "string" && KNOWN_NAVIGATION_REASONS.has(value);
+}
+
 function parseLastNavigationReason(
   value: unknown,
   errors: string[],
 ): DocumentationNavigationReason | null {
   if (value === undefined || value === null) return null;
-  if (typeof value === "string" && KNOWN_NAVIGATION_REASONS.has(value)) {
-    return value as DocumentationNavigationReason;
+  if (isKnownNavigationReason(value)) {
+    return value;
   }
   errors.push("lastNavigationReason must be a known navigation reason or null");
   return null;
@@ -677,12 +682,12 @@ export function parseManualProposalRequest(value: unknown): DocumentationManualP
     errors.push(`target must be at most ${String(DOCUMENTATION_TARGET_MAX_LENGTH)} characters`);
   }
   const lastNavigationReason = parseLastNavigationReason(value.lastNavigationReason, errors);
-  if (errors.length > 0) return { ok: false, errors };
+  if (errors.length > 0 || typeof target !== "string") return { ok: false, errors };
   return {
     ok: true,
     value: {
       schemaVersion: DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION,
-      target: target as string,
+      target,
       lastNavigationReason,
     },
   };

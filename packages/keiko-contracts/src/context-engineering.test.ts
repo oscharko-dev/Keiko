@@ -3,7 +3,7 @@
 // mutation is caught and the failure points at the broken invariant. Estimator tests assert
 // totality, determinism, monotonicity, and the conservatism bounds from ADR-0052 gate 2.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, expectTypeOf, vi } from "vitest";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_EVICTION_POLICIES,
@@ -1084,4 +1084,40 @@ describe("KEIKO-0797 token-estimate cache byte cap", () => {
     }
     expect(__contextTokenCacheDiagnosticsForTests().entries).toBeLessThanOrEqual(4_096);
   });
+});
+
+import { isContextLaneId as publicContextLaneId } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
+
+describe.each([
+  ["source", isContextLaneId],
+  ["public", publicContextLaneId],
+])("%s context lane vocabulary preservation", (_label, check) => {
+  it("accepts the full owner vocabulary and refuses non-strings without coercion", () => {
+    for (const lane of CONTEXT_LANE_IDS) expect(check(lane)).toBe(true);
+    for (const value of [null, undefined, 0, Symbol("lane"), "future-lane", {}])
+      expect(check(value)).toBe(false);
+    const value = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(check(value)).toBe(false);
+  });
+});
+
+it("retains the public context lane predicate's independent closed vocabulary", () => {
+  const input: unknown = "repo-evidence";
+  expect(publicContextLaneId(input)).toBe(true);
+  if (publicContextLaneId(input)) {
+    expectTypeOf(input).toEqualTypeOf<
+      | "system-contract"
+      | "user-task"
+      | "active-plan"
+      | "repo-evidence"
+      | "tool-observations"
+      | "working-memory"
+      | "history-summary"
+      | "verification-evidence"
+    >();
+  }
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   buildDocumentationNavigationResult,
   classifyDocumentationTarget,
@@ -331,4 +331,151 @@ describe("buildDocumentationNavigationResult", () => {
     expect(result.originSummary).not.toContain("passwd");
     expect(result.originSummary).not.toContain(rightToLeftOverride);
   });
+});
+
+import {
+  parseDocumentationNavigationRequest as publicNavigationRequest,
+  mapBrowserErrorToDocumentationReason as publicBrowserErrorReason,
+} from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
+
+describe.each([
+  ["source", parseDocumentationNavigationRequest],
+  ["public", publicNavigationRequest],
+])("%s navigation admitted observations", (_label, parse) => {
+  it("preserves a healthy getter request and its normalized primitive values", () => {
+    let targetReads = 0;
+    let portReads = 0;
+    const input = {
+      get target(): string {
+        targetReads += 1;
+        return "https://example.test/docs";
+      },
+      get cdpPort(): number {
+        portReads += 1;
+        return 9222;
+      },
+    };
+    expect(parse(input)).toEqual({
+      ok: true,
+      value: { schemaVersion: "1", target: "https://example.test/docs", cdpPort: 9222 },
+    });
+    expect(targetReads).toBe(2);
+    expect(portReads).toBe(3);
+  });
+
+  it("preserves required second-port refusal after established presence", () => {
+    let targetReads = 0;
+    let portReads = 0;
+    const input = {
+      get target(): string {
+        targetReads += 1;
+        return "https://example.test/docs";
+      },
+      get cdpPort(): number | undefined {
+        portReads += 1;
+        return portReads === 2 ? undefined : 1234;
+      },
+    };
+    const result = parse(input);
+    expect({ result, targetReads, portReads }).toEqual({
+      result: {
+        ok: false,
+        errors: ["cdpPort must be an integer in the range 1024-65535"],
+      },
+      targetReads: 1,
+      portReads: 2,
+    });
+  });
+
+  it("preserves optional final captured port absence after healthy initial reads", () => {
+    let portReads = 0;
+    const input = {
+      target: "https://example.test/docs",
+      get cdpPort(): number | undefined {
+        portReads += 1;
+        return portReads === 3 ? undefined : 1234;
+      },
+    };
+    expect(parse(input)).toEqual({
+      ok: true,
+      value: { schemaVersion: "1", target: "https://example.test/docs" },
+    });
+    expect(portReads).toBe(3);
+  });
+
+  it("preserves omitted and explicit undefined port normalization", () => {
+    const expected = {
+      ok: true,
+      value: { schemaVersion: "1", target: "https://example.test/docs" },
+    };
+    expect(parse({ target: "https://example.test/docs" })).toEqual(expected);
+    expect(parse({ target: "https://example.test/docs", cdpPort: undefined })).toEqual(expected);
+  });
+
+  it.each([42, "", "x".repeat(DOCUMENTATION_TARGET_MAX_LENGTH + 1)])(
+    "refuses a fresh invalid target observation %s",
+    (invalid) => {
+      let reads = 0;
+      const input = {
+        get target(): unknown {
+          reads += 1;
+          return reads === 1 ? "https://example.test/docs" : invalid;
+        },
+      };
+      const result = parse(input);
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          typeof invalid === "string" && invalid.length > DOCUMENTATION_TARGET_MAX_LENGTH
+            ? "target must be at most 4096 characters"
+            : "target must be a non-empty string",
+        ],
+      });
+    },
+  );
+
+  it.each([0, 65_536, 1024.5, Number.NaN])(
+    "refuses a fresh invalid port observation %s",
+    (invalid) => {
+      let reads = 0;
+      const input = {
+        target: "https://example.test/docs",
+        get cdpPort(): number {
+          reads += 1;
+          return reads < 3 ? 9222 : invalid;
+        },
+      };
+      expect(parse(input)).toEqual({
+        ok: false,
+        errors: ["cdpPort must be an integer in the range 1024-65535"],
+      });
+    },
+  );
+});
+
+describe.each([
+  ["source", mapBrowserErrorToDocumentationReason],
+  ["public", publicBrowserErrorReason],
+])("%s null-prototype browser reason lookup", (_label, reasonFor) => {
+  it("retains actual error mappings and refuses prototype names", () => {
+    expect(reasonFor("ENOTFOUND")).toBe("host-unreachable");
+    expect(reasonFor("ETIMEDOUT")).toBe("request-timed-out");
+    for (const key of ["constructor", "toString", "__proto__", "future-code"])
+      expect(reasonFor(key)).toBe("navigation-failed");
+  });
+});
+
+function publicNavigationTarget(input: unknown): string | undefined {
+  const result = publicNavigationRequest(input);
+  return result.ok ? result.value.target : undefined;
+}
+
+it("retains public navigation primitive guarantees for the direct result consumer", () => {
+  type Success = Extract<ReturnType<typeof publicNavigationRequest>, { readonly ok: true }>;
+  expectTypeOf<Success["value"]["target"]>().toEqualTypeOf<string>();
+  expectTypeOf<Success["value"]["cdpPort"]>().toEqualTypeOf<number | undefined>();
+  const input = { target: "https://example.test/docs" };
+  expect(publicNavigationTarget(input)).toBe("https://example.test/docs");
+  input.target = "";
+  expect(publicNavigationTarget(input)).toBeUndefined();
 });
