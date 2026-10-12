@@ -457,6 +457,39 @@ const COOKIE_HEADER_RE = /(?<!\w)(?:set-)?cookie\s*:/iu;
 const PROMPT_SCAFFOLD_RE =
   /<\|(?:im_(?:start|end)|system|user|assistant|endoftext)\|>|\[\[topic:|\[\/?INST\]|<<\/?SYS>>/iu;
 
+type PodSummaryStructure = Omit<KnowledgePodSummary, "id" | "compatibility"> & {
+  readonly id: string;
+  readonly compatibility: Omit<KnowledgePodCompatibilitySummary, "capsuleIds" | "sourceIds"> & {
+    readonly capsuleIds: readonly string[];
+    readonly sourceIds: readonly string[];
+  };
+};
+
+function isCapturedExtent(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function validateStableExtent(
+  members: readonly unknown[],
+  extent: number,
+  field: string,
+  errors: string[],
+): boolean {
+  if (members.length !== extent)
+    return reject(errors, `${field} must not change length during validation`);
+  return true;
+}
+
+function combineAdmissions(previous: boolean, current: boolean): boolean {
+  return previous && current;
+}
+
+// A refusal records the original diagnostic and actual failed field evidence.
+function reject(errors: string[], ...reasons: string[]): false {
+  errors.push(...reasons);
+  return false;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -755,32 +788,45 @@ function validateSafeTextArray(
   field: string,
   errors: string[],
   allowEmpty: boolean,
-): void {
+): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
-    errors.push(`${field} must be an array`);
-    return;
+    valid = reject(errors, `${field} must be an array`);
+    return valid;
   }
-  for (const entry of value) {
+  const members = value;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, `${field} must have a valid array length`);
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = members[index];
+
     if (!isSafePodText(entry, allowEmpty)) {
-      errors.push(`${field} entries must be evidence-safe strings`);
-      return;
+      valid = reject(errors, `${field} entries must be evidence-safe strings`);
+      return valid;
     }
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, field, errors));
+  return valid;
 }
 
-function validateCounts(value: unknown, errors: string[]): void {
+function validateCounts(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("counts must be an object");
-    return;
+    valid = reject(errors, "counts must be an object");
+    return valid;
   }
   onlyKeys(value, COUNT_KEYS, "counts", errors);
   for (const key of COUNT_KEYS) {
     const count = value[key];
     if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
-      errors.push(`counts.${key} must be a non-negative integer`);
-      return;
+      valid = reject(errors, `counts.${key} must be a non-negative integer`);
+      return valid;
     }
   }
+  return valid;
 }
 
 function validateSetReadiness(
@@ -788,51 +834,68 @@ function validateSetReadiness(
   kind: unknown,
   counts: unknown,
   errors: string[],
-): void {
-  if (value === undefined) return;
+): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
   if (kind !== "pod-set") {
-    errors.push("setReadiness is only valid for pod-set summaries");
-    return;
+    valid = reject(errors, "setReadiness is only valid for pod-set summaries");
+    return valid;
   }
   if (!isRecord(value)) {
-    errors.push("setReadiness must be an object");
-    return;
+    valid = reject(errors, "setReadiness must be an object");
+    return valid;
   }
   onlyKeys(value, SET_READINESS_KEYS, "setReadiness", errors);
   for (const key of SET_READINESS_KEYS) {
     if (key === "reasonCodes") continue;
     const count = value[key];
     if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
-      errors.push(`setReadiness.${key} must be a non-negative integer`);
-      return;
+      valid = reject(errors, `setReadiness.${key} must be a non-negative integer`);
+      return valid;
     }
   }
-  validateSetReadinessReasonCodes(value.reasonCodes, errors);
-  validateSetReadinessMemberTotal(value, counts, errors);
+  valid = combineAdmissions(valid, validateSetReadinessReasonCodes(value.reasonCodes, errors));
+  valid = combineAdmissions(valid, validateSetReadinessMemberTotal(value, counts, errors));
+  return valid;
 }
 
-function validateSetReadinessReasonCodes(value: unknown, errors: string[]): void {
+function validateSetReadinessReasonCodes(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
-    errors.push("setReadiness.reasonCodes must be an array");
-    return;
+    valid = reject(errors, "setReadiness.reasonCodes must be an array");
+    return valid;
   }
-  for (const code of value) {
+  const members = value;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "setReadiness.reasonCodes must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const code: unknown = members[index];
+
     if (
       typeof code !== "string" ||
-      !KNOWLEDGE_POD_SET_READINESS_REASON_CODES.includes(code as KnowledgePodSetReadinessReasonCode)
+      !KNOWLEDGE_POD_SET_READINESS_REASON_CODES_ADMISSION.includes(code)
     ) {
-      errors.push("setReadiness.reasonCodes entries must be known reason codes");
-      return;
+      valid = reject(errors, "setReadiness.reasonCodes entries must be known reason codes");
+      return valid;
     }
   }
+  valid = combineAdmissions(
+    valid,
+    validateStableExtent(members, extent, "setReadiness.reasonCodes", errors),
+  );
+  return valid;
 }
 
 function validateSetReadinessMemberTotal(
   value: Record<string, unknown>,
   counts: unknown,
   errors: string[],
-): void {
-  if (!isRecord(counts) || typeof counts.capsuleCount !== "number") return;
+): boolean {
+  let valid = true;
+  if (!isRecord(counts) || typeof counts.capsuleCount !== "number") return valid;
   const total =
     Number(value.readyCount) +
     Number(value.draftCount) +
@@ -844,93 +907,136 @@ function validateSetReadinessMemberTotal(
     Number(value.errorCount) +
     Number(value.missingCount);
   if (total !== counts.capsuleCount) {
-    errors.push("setReadiness member counts must match counts.capsuleCount");
+    valid = reject(errors, "setReadiness member counts must match counts.capsuleCount");
   }
+  return valid;
 }
 
-function validateRetrieval(value: unknown, errors: string[]): void {
+function validateRetrieval(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("retrieval must be an object");
-    return;
+    valid = reject(errors, "retrieval must be an object");
+    return valid;
   }
   onlyKeys(value, RETRIEVAL_KEYS, "retrieval", errors);
   for (const key of ["lexicalIndex", "vectorIndex", "hybridGrounding"] as const) {
-    if (typeof value[key] !== "boolean") errors.push(`retrieval.${key} must be a boolean`);
+    if (typeof value[key] !== "boolean")
+      valid = reject(errors, `retrieval.${key} must be a boolean`);
   }
   if (value.crossSpaceScoreMixing !== false) {
-    errors.push("retrieval.crossSpaceScoreMixing must be false");
+    valid = reject(errors, "retrieval.crossSpaceScoreMixing must be false");
   }
-  validateOptionalSafeText(value.embeddingProvider, "retrieval.embeddingProvider", errors);
-  validateOptionalSafeText(value.embeddingModelId, "retrieval.embeddingModelId", errors);
-  validateOptionalSafeText(
-    value.embeddingSpaceFingerprint,
-    "retrieval.embeddingSpaceFingerprint",
-    errors,
+  return combineAdmissions(valid, validateRetrievalIdentity(value, errors));
+}
+
+function validateRetrievalIdentity(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = combineAdmissions(
+    valid,
+    validateOptionalSafeText(value.embeddingProvider, "retrieval.embeddingProvider", errors),
   );
-  validateOptionalSafeText(value.embeddingProfileKey, "retrieval.embeddingProfileKey", errors);
-  validateEmbeddingCompatibilityStatus(value.embeddingCompatibilityStatus, errors);
-  validateEmbeddingCompatibilityReason(value.embeddingCompatibilityReason, errors);
-  validateOptionalBoolean(value.reindexRecommended, "retrieval.reindexRecommended", errors);
-  validateOptionalBoolean(value.queryEmbeddingAllowed, "retrieval.queryEmbeddingAllowed", errors);
-  validateVectorDimensions(value.vectorDimensions, errors);
-  validateVectorMetric(value.vectorMetric, errors);
+  valid = combineAdmissions(
+    valid,
+    validateOptionalSafeText(value.embeddingModelId, "retrieval.embeddingModelId", errors),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateOptionalSafeText(
+      value.embeddingSpaceFingerprint,
+      "retrieval.embeddingSpaceFingerprint",
+      errors,
+    ),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateOptionalSafeText(value.embeddingProfileKey, "retrieval.embeddingProfileKey", errors),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateEmbeddingCompatibilityStatus(value.embeddingCompatibilityStatus, errors),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateEmbeddingCompatibilityReason(value.embeddingCompatibilityReason, errors),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateOptionalBoolean(value.reindexRecommended, "retrieval.reindexRecommended", errors),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateOptionalBoolean(value.queryEmbeddingAllowed, "retrieval.queryEmbeddingAllowed", errors),
+  );
+  valid = combineAdmissions(valid, validateVectorDimensions(value.vectorDimensions, errors));
+  valid = combineAdmissions(valid, validateVectorMetric(value.vectorMetric, errors));
+  return valid;
 }
 
-function validateOptionalBoolean(value: unknown, field: string, errors: string[]): void {
+function validateOptionalBoolean(value: unknown, field: string, errors: string[]): boolean {
+  let valid = true;
   if (value !== undefined && typeof value !== "boolean") {
-    errors.push(`${field} must be a boolean when set`);
+    valid = reject(errors, `${field} must be a boolean when set`);
   }
+  return valid;
 }
 
-function validateEmbeddingCompatibilityStatus(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateEmbeddingCompatibilityStatus(value: unknown, errors: string[]): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
   if (
     typeof value === "string" &&
-    EMBEDDING_PROFILE_COMPATIBILITY_STATUSES.includes(value as EmbeddingProfileCompatibilityStatus)
+    EMBEDDING_PROFILE_COMPATIBILITY_STATUSES_ADMISSION.includes(value)
   ) {
-    return;
+    return valid;
   }
-  errors.push("retrieval.embeddingCompatibilityStatus is invalid when set");
+  valid = reject(errors, "retrieval.embeddingCompatibilityStatus is invalid when set");
+  return valid;
 }
 
-function validateEmbeddingCompatibilityReason(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateEmbeddingCompatibilityReason(value: unknown, errors: string[]): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
   if (
     typeof value === "string" &&
-    EMBEDDING_PROFILE_COMPATIBILITY_REASONS.includes(value as EmbeddingProfileCompatibilityReason)
+    EMBEDDING_PROFILE_COMPATIBILITY_REASONS_ADMISSION.includes(value)
   ) {
-    return;
+    return valid;
   }
-  errors.push("retrieval.embeddingCompatibilityReason is invalid when set");
+  valid = reject(errors, "retrieval.embeddingCompatibilityReason is invalid when set");
+  return valid;
 }
 
-function validateVectorDimensions(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return;
-  errors.push("retrieval.vectorDimensions must be a positive integer when set");
+function validateVectorDimensions(value: unknown, errors: string[]): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return valid;
+  valid = reject(errors, "retrieval.vectorDimensions must be a positive integer when set");
+  return valid;
 }
 
-function validateVectorMetric(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
-  if (
-    typeof value === "string" &&
-    EMBEDDING_VECTOR_METRICS.includes(value as EmbeddingVectorMetric)
-  ) {
-    return;
+function validateVectorMetric(value: unknown, errors: string[]): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
+  if (typeof value === "string" && EMBEDDING_VECTOR_METRICS_ADMISSION.includes(value)) {
+    return valid;
   }
-  errors.push("retrieval.vectorMetric is invalid when set");
+  valid = reject(errors, "retrieval.vectorMetric is invalid when set");
+  return valid;
 }
 
-function validateOptionalSafeText(value: unknown, field: string, errors: string[]): void {
+function validateOptionalSafeText(value: unknown, field: string, errors: string[]): boolean {
+  let valid = true;
   if (value !== undefined && !isSafePodText(value, false)) {
-    errors.push(`${field} must be an evidence-safe string when set`);
+    valid = reject(errors, `${field} must be an evidence-safe string when set`);
   }
+  return valid;
 }
 
-function validatePrivacy(value: unknown, errors: string[]): void {
+function validatePrivacy(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("privacy must be an object");
-    return;
+    valid = reject(errors, "privacy must be an object");
+    return valid;
   }
   onlyKeys(value, PRIVACY_KEYS, "privacy", errors);
   if (
@@ -941,45 +1047,49 @@ function validatePrivacy(value: unknown, errors: string[]): void {
     value.evidenceMode !== "counts-hashes-and-status" ||
     value.storageLocation !== "local-runtime-state"
   ) {
-    errors.push("privacy must preserve the Knowledge Pod redaction posture");
+    valid = reject(errors, "privacy must preserve the Knowledge Pod redaction posture");
   }
+  return valid;
 }
 
-function validateGovernance(value: unknown, errors: string[]): void {
+function validateGovernance(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("governance must be an object");
-    return;
+    valid = reject(errors, "governance must be an object");
+    return valid;
   }
   onlyKeys(value, GOVERNANCE_KEYS, "governance", errors);
-  if (!LOCATION_KINDS.has(value.locationKind as KnowledgePodLocationKind)) {
-    errors.push("governance.locationKind is invalid");
+  if (!LOCATION_KINDS_ADMISSION.has(value.locationKind)) {
+    valid = reject(errors, "governance.locationKind is invalid");
   }
-  if (!SEALING_POSTURES.has(value.sealingPosture as KnowledgePodSealingPosture)) {
-    errors.push("governance.sealingPosture is invalid");
+  if (!SEALING_POSTURES_ADMISSION.has(value.sealingPosture)) {
+    valid = reject(errors, "governance.sealingPosture is invalid");
   }
-  if (!POLICY_POSTURES.has(value.policyPosture as KnowledgePodPolicyPosture)) {
-    errors.push("governance.policyPosture is invalid");
+  if (!POLICY_POSTURES_ADMISSION.has(value.policyPosture)) {
+    valid = reject(errors, "governance.policyPosture is invalid");
   }
   if (typeof value.managedServiceDependency !== "boolean") {
-    errors.push("governance.managedServiceDependency must be a boolean");
+    valid = reject(errors, "governance.managedServiceDependency must be a boolean");
   }
+  return valid;
 }
 
-function validateModelUsePolicy(value: unknown, errors: string[]): void {
+function validateModelUsePolicy(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("modelUsePolicy must be an object");
-    return;
+    valid = reject(errors, "modelUsePolicy must be an object");
+    return valid;
   }
   onlyKeys(value, MODEL_USE_POLICY_KEYS, "modelUsePolicy", errors);
-  if (!MODEL_USE_POLICY_SOURCES.has(value.source as KnowledgePodModelUsePolicySource)) {
-    errors.push("modelUsePolicy.source is invalid");
+  if (!MODEL_USE_POLICY_SOURCES_ADMISSION.has(value.source)) {
+    valid = reject(errors, "modelUsePolicy.source is invalid");
   }
-  if (!KNOWLEDGE_POD_MODEL_USE_POLICY_MODES.includes(value.mode as never)) {
-    errors.push("modelUsePolicy.mode is invalid");
+  if (!KNOWLEDGE_POD_MODEL_USE_POLICY_MODES_ADMISSION.includes(value.mode)) {
+    valid = reject(errors, "modelUsePolicy.mode is invalid");
   }
   if (!isRecord(value.operations)) {
-    errors.push("modelUsePolicy.operations must be an object");
-    return;
+    valid = reject(errors, "modelUsePolicy.operations must be an object");
+    return valid;
   }
   onlyKeys(
     value.operations,
@@ -990,30 +1100,66 @@ function validateModelUsePolicy(value: unknown, errors: string[]): void {
   for (const operation of KNOWLEDGE_POD_MODEL_USE_OPERATIONS) {
     const decision = value.operations[operation];
     if (decision !== "allow" && decision !== "deny") {
-      errors.push(`modelUsePolicy.operations.${operation} is invalid`);
-      return;
+      valid = reject(errors, `modelUsePolicy.operations.${operation} is invalid`);
+      return valid;
     }
   }
+  return valid;
 }
 
-function validateCompatibility(value: unknown, errors: string[]): void {
+function validateCompatibility(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("compatibility must be an object");
-    return;
+    valid = reject(errors, "compatibility must be an object");
+    return valid;
   }
   onlyKeys(value, COMPATIBILITY_KEYS, "compatibility", errors);
-  if (!BACKINGS.has(value.backingKind as KnowledgePodBackingKind)) {
-    errors.push("compatibility.backingKind is invalid");
+  if (!BACKINGS_ADMISSION.has(value.backingKind)) {
+    valid = reject(errors, "compatibility.backingKind is invalid");
   }
-  validateSafeTextArray(value.capsuleIds, "compatibility.capsuleIds", errors, false);
-  validateSafeTextArray(value.sourceIds, "compatibility.sourceIds", errors, false);
+  valid = combineAdmissions(
+    valid,
+    validateSafeTextArray(value.capsuleIds, "compatibility.capsuleIds", errors, false),
+  );
+  valid = combineAdmissions(
+    valid,
+    validateSafeTextArray(value.sourceIds, "compatibility.sourceIds", errors, false),
+  );
   if (
     value.localKnowledgeSchemaVersion !== LOCAL_KNOWLEDGE_SCHEMA_VERSION ||
     value.migrationRequired !== false ||
     value.persistedStateRenamed !== false
   ) {
-    errors.push("compatibility must preserve Local Knowledge state compatibility");
+    valid = reject(errors, "compatibility must preserve Local Knowledge state compatibility");
   }
+  return valid;
+}
+
+function admitsKnowledgePodSummary(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & PodSummaryStructure {
+  let valid = true;
+  onlyKeys(input, SUMMARY_KEYS, "summary", errors);
+  valid = combineAdmissions(valid, validateSummaryScalars(input, errors));
+  valid = combineAdmissions(valid, validateCounts(input.counts, errors));
+  valid = combineAdmissions(
+    valid,
+    validateSetReadiness(input.setReadiness, input.kind, input.counts, errors),
+  );
+  valid = combineAdmissions(valid, validateSourceKinds(input.sourceKinds, errors));
+  valid = combineAdmissions(valid, validateRetrieval(input.retrieval, errors));
+  valid = combineAdmissions(valid, validatePrivacy(input.privacy, errors));
+  valid = combineAdmissions(valid, validateGovernance(input.governance, errors));
+  valid = combineAdmissions(valid, validateModelUsePolicy(input.modelUsePolicy, errors));
+  valid = combineAdmissions(valid, validateCompatibility(input.compatibility, errors));
+  valid = combineAdmissions(valid, validateFuturePlaceholderPosture(input, errors));
+  valid = combineAdmissions(
+    valid,
+    validateSafeTextArray(input.degradationReasons, "summary.degradationReasons", errors, true),
+  );
+
+  return valid;
 }
 
 export function validateKnowledgePodSummary(
@@ -1021,35 +1167,32 @@ export function validateKnowledgePodSummary(
 ): LocalKnowledgeValidation<KnowledgePodSummary> {
   if (!isRecord(input)) return { ok: false, errors: ["summary must be an object"] };
   const errors: string[] = [];
-  onlyKeys(input, SUMMARY_KEYS, "summary", errors);
-  validateSummaryScalars(input, errors);
-  validateCounts(input.counts, errors);
-  validateSetReadiness(input.setReadiness, input.kind, input.counts, errors);
-  validateSourceKinds(input.sourceKinds, errors);
-  validateRetrieval(input.retrieval, errors);
-  validatePrivacy(input.privacy, errors);
-  validateGovernance(input.governance, errors);
-  validateModelUsePolicy(input.modelUsePolicy, errors);
-  validateCompatibility(input.compatibility, errors);
-  validateFuturePlaceholderPosture(input, errors);
-  validateSafeTextArray(input.degradationReasons, "summary.degradationReasons", errors, true);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: input as unknown as KnowledgePodSummary };
+  if (!admitsKnowledgePodSummary(input, errors) || errors.length > 0) return { ok: false, errors };
+  // All non-brand fields are admitted above; this attaches only erased ID brands.
+  const admitted: PodSummaryStructure = input;
+  return { ok: true, value: admitted as KnowledgePodSummary };
 }
 
-function validateFuturePlaceholderPosture(input: Record<string, unknown>, errors: string[]): void {
+function validateFuturePlaceholderPosture(
+  input: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  let valid = true;
   const placeholderKinds = futurePlaceholderKinds(input);
-  if (placeholderKinds.length === 0) return;
+  if (placeholderKinds.length === 0) return valid;
   if (input.readiness !== "degraded" && input.readiness !== "unavailable") {
-    errors.push("future pod placeholders must be degraded or unavailable");
+    valid = reject(errors, "future pod placeholders must be degraded or unavailable");
   }
   if (!retrievalDisabled(input.retrieval)) {
-    errors.push("future pod placeholders must not advertise retrieval capabilities");
+    valid = reject(errors, "future pod placeholders must not advertise retrieval capabilities");
   }
   if (input.kind === "pod-set") {
-    validateFutureSetReadinessReasons(input.setReadiness, placeholderKinds, errors);
+    valid = combineAdmissions(
+      valid,
+      validateFutureSetReadinessReasons(input.setReadiness, placeholderKinds, errors),
+    );
   }
+  return valid;
 }
 
 function futurePlaceholderKinds(
@@ -1060,7 +1203,11 @@ function futurePlaceholderKinds(
     kinds.add(input.governance.locationKind);
   }
   if (Array.isArray(input.sourceKinds)) {
-    for (const sourceKind of input.sourceKinds) {
+    const members = input.sourceKinds;
+    const extent = members.length;
+    for (let index = 0; index < extent; index += 1) {
+      const sourceKind: unknown = members[index];
+
       if (isFuturePodPlaceholderKind(sourceKind)) kinds.add(sourceKind);
     }
   }
@@ -1068,9 +1215,7 @@ function futurePlaceholderKinds(
 }
 
 function isFuturePodPlaceholderKind(value: unknown): value is FuturePodPlaceholderKind {
-  return (
-    typeof value === "string" && FUTURE_POD_PLACEHOLDER_KINDS.has(value as FuturePodPlaceholderKind)
-  );
+  return typeof value === "string" && FUTURE_POD_PLACEHOLDER_KINDS_ADMISSION.has(value);
 }
 
 function retrievalDisabled(value: unknown): boolean {
@@ -1082,62 +1227,92 @@ function retrievalDisabled(value: unknown): boolean {
   );
 }
 
+function containsPhysicalReason(members: unknown, reason: string): boolean {
+  if (!Array.isArray(members)) return false;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (members[index] === reason) return true;
+  }
+  return false;
+}
+
 function validateFutureSetReadinessReasons(
   setReadiness: unknown,
   placeholderKinds: readonly FuturePodPlaceholderKind[],
   errors: string[],
-): void {
-  if (!isRecord(setReadiness) || !Array.isArray(setReadiness.reasonCodes)) return;
+): boolean {
+  let valid = true;
+  if (!isRecord(setReadiness) || !Array.isArray(setReadiness.reasonCodes)) return valid;
   for (const placeholderKind of placeholderKinds) {
     const reason = FUTURE_POD_REASON_BY_KIND[placeholderKind];
-    if (!setReadiness.reasonCodes.includes(reason)) {
-      errors.push(`setReadiness.reasonCodes must include ${reason} for future placeholders`);
-      return;
+    if (!containsPhysicalReason(setReadiness.reasonCodes, reason)) {
+      valid = reject(
+        errors,
+        `setReadiness.reasonCodes must include ${reason} for future placeholders`,
+      );
+      return valid;
     }
   }
+  return valid;
 }
 
-function validateSummaryScalars(input: Record<string, unknown>, errors: string[]): void {
+function validateSummaryScalars(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (input.schemaVersion !== KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION) {
-    errors.push("summary.schemaVersion is invalid");
+    valid = reject(errors, "summary.schemaVersion is invalid");
   }
-  if (!isSafePodText(input.id, false)) errors.push("summary.id must be an evidence-safe string");
-  if (!KINDS.has(input.kind as KnowledgePodSummaryKind)) errors.push("summary.kind is invalid");
+  if (!isSafePodText(input.id, false))
+    valid = reject(errors, "summary.id must be an evidence-safe string");
+  if (!KINDS_ADMISSION.has(input.kind)) valid = reject(errors, "summary.kind is invalid");
   if (!isSafePodText(input.displayName, false)) {
-    errors.push("summary.displayName must be an evidence-safe string");
+    valid = reject(errors, "summary.displayName must be an evidence-safe string");
   }
-  validateOptionalSafeText(input.description, "summary.description", errors);
-  validateSafeTextArray(input.tags, "summary.tags", errors, false);
-  if (!READINESS.has(input.readiness as KnowledgePodReadiness)) {
-    errors.push("summary.readiness is invalid");
-  }
-  validateLifecycleState(input.lifecycleState, errors);
-  validateUpdatedAt(input.updatedAt, errors);
-  validateOptionalSafeText(
-    input.manualSourceFingerprint,
-    "summary.manualSourceFingerprint",
-    errors,
+  valid = combineAdmissions(
+    valid,
+    validateOptionalSafeText(input.description, "summary.description", errors),
   );
-  validateOptionalManualRefresh(input.manualRefresh, errors);
-  validateOptionalConnectorSource(input.connectorSource, errors);
+  valid = combineAdmissions(
+    valid,
+    validateSafeTextArray(input.tags, "summary.tags", errors, false),
+  );
+  if (!READINESS_ADMISSION.has(input.readiness)) {
+    valid = reject(errors, "summary.readiness is invalid");
+  }
+  valid = combineAdmissions(valid, validateLifecycleState(input.lifecycleState, errors));
+  valid = combineAdmissions(valid, validateUpdatedAt(input.updatedAt, errors));
+  valid = combineAdmissions(
+    valid,
+    validateOptionalSafeText(
+      input.manualSourceFingerprint,
+      "summary.manualSourceFingerprint",
+      errors,
+    ),
+  );
+  valid = combineAdmissions(valid, validateOptionalManualRefresh(input.manualRefresh, errors));
+  valid = combineAdmissions(valid, validateOptionalConnectorSource(input.connectorSource, errors));
+  return valid;
 }
 
 // Mirrors validateOptionalManualRefresh for connector-backed pods. Unlike the manual-refresh leaf
 // validator, validateAtlassianConnectorPodSource already rejects unknown/extra keys itself, so no
 // second onlyKeys pass is needed at this layer.
-function validateOptionalConnectorSource(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateOptionalConnectorSource(value: unknown, errors: string[]): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
   const result = validateAtlassianConnectorPodSource(value);
   if (!result.ok) {
-    errors.push(...result.errors.map((error) => `summary.${error}`));
+    valid = reject(errors, ...result.errors.map((error) => `summary.${error}`));
   }
+  return valid;
 }
 
-function validateOptionalManualRefresh(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateOptionalManualRefresh(value: unknown, errors: string[]): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
   if (!isRecord(value)) {
-    errors.push("summary.manualRefresh must be an object");
-    return;
+    valid = reject(errors, "summary.manualRefresh must be an object");
+    return valid;
   }
   onlyKeys(value, MANUAL_REFRESH_KEYS, "summary.manualRefresh", errors);
   if (isRecord(value.counts)) {
@@ -1145,36 +1320,69 @@ function validateOptionalManualRefresh(value: unknown, errors: string[]): void {
   }
   const result = validateManualRefreshChangeSummary(value);
   if (!result.ok) {
-    errors.push(...result.errors.map((error) => `summary.manualRefresh: ${error}`));
+    valid = reject(errors, ...result.errors.map((error) => `summary.manualRefresh: ${error}`));
   }
+  return valid;
 }
 
-function validateUpdatedAt(value: unknown, errors: string[]): void {
+function validateUpdatedAt(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    errors.push("summary.updatedAt must be a finite non-negative number");
+    valid = reject(errors, "summary.updatedAt must be a finite non-negative number");
   }
+  return valid;
 }
 
-function validateLifecycleState(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
-  if (
-    typeof value === "string" &&
-    CAPSULE_LIFECYCLE_STATES.includes(value as CapsuleLifecycleState)
-  ) {
-    return;
+function validateLifecycleState(value: unknown, errors: string[]): boolean {
+  let valid = true;
+  if (value === undefined) return valid;
+  if (typeof value === "string" && CAPSULE_LIFECYCLE_STATES_ADMISSION.includes(value)) {
+    return valid;
   }
-  errors.push("summary.lifecycleState is invalid");
+  valid = reject(errors, "summary.lifecycleState is invalid");
+  return valid;
 }
 
-function validateSourceKinds(value: unknown, errors: string[]): void {
+function validateSourceKinds(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
-    errors.push("sourceKinds must be an array");
-    return;
+    valid = reject(errors, "sourceKinds must be an array");
+    return valid;
   }
-  for (const kind of value) {
-    if (!SOURCE_KINDS.has(kind as KnowledgePodSourceKind)) {
-      errors.push("sourceKinds entries must be known pod source kinds");
-      return;
+  const members = value;
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    reject(errors, "sourceKinds must have a valid array length");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const kind: unknown = members[index];
+
+    if (!SOURCE_KINDS_ADMISSION.has(kind)) {
+      valid = reject(errors, "sourceKinds entries must be known pod source kinds");
+      return valid;
     }
   }
+  valid = combineAdmissions(valid, validateStableExtent(members, extent, "sourceKinds", errors));
+  return valid;
 }
+
+const KNOWLEDGE_POD_SET_READINESS_REASON_CODES_ADMISSION: readonly unknown[] =
+  KNOWLEDGE_POD_SET_READINESS_REASON_CODES;
+const EMBEDDING_PROFILE_COMPATIBILITY_STATUSES_ADMISSION: readonly unknown[] =
+  EMBEDDING_PROFILE_COMPATIBILITY_STATUSES;
+const EMBEDDING_PROFILE_COMPATIBILITY_REASONS_ADMISSION: readonly unknown[] =
+  EMBEDDING_PROFILE_COMPATIBILITY_REASONS;
+const EMBEDDING_VECTOR_METRICS_ADMISSION: readonly unknown[] = EMBEDDING_VECTOR_METRICS;
+const LOCATION_KINDS_ADMISSION: ReadonlySet<unknown> = LOCATION_KINDS;
+const SEALING_POSTURES_ADMISSION: ReadonlySet<unknown> = SEALING_POSTURES;
+const POLICY_POSTURES_ADMISSION: ReadonlySet<unknown> = POLICY_POSTURES;
+const MODEL_USE_POLICY_SOURCES_ADMISSION: ReadonlySet<unknown> = MODEL_USE_POLICY_SOURCES;
+const KNOWLEDGE_POD_MODEL_USE_POLICY_MODES_ADMISSION: readonly unknown[] =
+  KNOWLEDGE_POD_MODEL_USE_POLICY_MODES;
+const BACKINGS_ADMISSION: ReadonlySet<unknown> = BACKINGS;
+const FUTURE_POD_PLACEHOLDER_KINDS_ADMISSION: ReadonlySet<unknown> = FUTURE_POD_PLACEHOLDER_KINDS;
+const KINDS_ADMISSION: ReadonlySet<unknown> = KINDS;
+const READINESS_ADMISSION: ReadonlySet<unknown> = READINESS;
+const CAPSULE_LIFECYCLE_STATES_ADMISSION: readonly unknown[] = CAPSULE_LIFECYCLE_STATES;
+const SOURCE_KINDS_ADMISSION: ReadonlySet<unknown> = SOURCE_KINDS;

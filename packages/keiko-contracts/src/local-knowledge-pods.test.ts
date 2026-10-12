@@ -764,3 +764,111 @@ describe("KnowledgePodSummary connectorSource projection (Issue #2240)", () => {
     );
   });
 });
+
+import { validateKnowledgePodSummary as publicValidateSummary } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+type SummaryAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicSummary(input: unknown): void {
+  const result = publicValidateSummary(input);
+  if (result.ok) {
+    const count: number = result.value.counts.capsuleCount;
+    const raw: false = result.value.privacy.rawContentExposed;
+    const local: true = result.value.privacy.localFirst;
+    const mode: "sealed-local" | "standard" | "custom" = result.value.modelUsePolicy.mode;
+    const decision: "allow" | "deny" = result.value.modelUsePolicy.operations.rawContentRelease;
+    const _concrete: SummaryAny<typeof result.value> = false;
+    const _concretePrivacy: SummaryAny<typeof result.value.privacy.rawContentExposed> = false;
+    expect(result.value).toBe(input);
+    expect(count).toBe(happySummary().counts.capsuleCount);
+    expect(raw).toBe(false);
+    expect(local).toBe(true);
+    expect(mode).toBe(happySummary().modelUsePolicy.mode);
+    expect(decision).toBe(happySummary().modelUsePolicy.operations.rawContentRelease);
+  }
+}
+it("public summary consumer retains redaction and policy declarations and references", () => {
+  const input = happySummary();
+  consumePublicSummary(input);
+  const result = publicValidateSummary(input);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toBe(input);
+  expect(result.value.modelUsePolicy).toBe(input.modelUsePolicy);
+  expect(
+    publicValidateSummary({ ...input, privacy: { ...input.privacy, rawContentExposed: true } }).ok,
+  ).toBe(false);
+});
+
+function futureRemoteSummary(reasonCodes: readonly string[]): unknown {
+  const base = happySummary();
+  return {
+    ...base,
+    kind: "pod-set",
+    readiness: "unavailable",
+    setReadiness: {
+      readyCount: 0,
+      draftCount: 0,
+      degradedCount: 0,
+      unavailableCount: 1,
+      deniedCount: 0,
+      indexingCount: 0,
+      staleCount: 0,
+      errorCount: 0,
+      missingCount: 0,
+      reasonCodes,
+    },
+    sourceKinds: ["remote", "federated"],
+    retrieval: {
+      ...base.retrieval,
+      lexicalIndex: false,
+      vectorIndex: false,
+      hybridGrounding: false,
+    },
+    governance: { ...base.governance, locationKind: "remote" },
+    compatibility: { ...base.compatibility, backingKind: "capsule-set" },
+  };
+}
+
+describe.each([
+  ["source", validateKnowledgePodSummary],
+  ["public", publicValidateSummary],
+])("%s physical future reason membership", (_surface, validate) => {
+  it("refuses missing physical reasons despite an always-true caller method", () => {
+    const reasons: string[] = [];
+    Object.defineProperty(reasons, "includes", { value: () => true });
+    expect(validate(futureRemoteSummary(reasons))).toEqual({
+      ok: false,
+      errors: [
+        "setReadiness.reasonCodes must include future-remote-member for future placeholders",
+      ],
+    });
+  });
+  it("accepts physical reasons despite an always-false caller method", () => {
+    const reasons = ["future-remote-member", "future-federated-member"];
+    Object.defineProperty(reasons, "includes", { value: () => false });
+    const input = futureRemoteSummary(reasons);
+    expect(validate(input)).toEqual({ ok: true, value: input });
+    const result = validate(input);
+    if (!result.ok) throw new Error("expected admitted physical reasons");
+    expect(result.value).toBe(input);
+    expect(result.value.setReadiness?.reasonCodes).toBe(reasons);
+  });
+  it("preserves native present and inherited present reasons", () => {
+    for (const inherited of [false, true]) {
+      const reasons = ["future-remote-member", "future-federated-member"];
+      if (inherited) {
+        expect(Reflect.deleteProperty(reasons, "0")).toBe(true);
+        Object.setPrototypeOf(reasons, ["future-remote-member"]);
+      }
+      const input = futureRemoteSummary(reasons);
+      expect(validate(input)).toEqual({ ok: true, value: input });
+    }
+  });
+  it("preserves the first missing required reason", () => {
+    expect(validate(futureRemoteSummary([]))).toEqual({
+      ok: false,
+      errors: [
+        "setReadiness.reasonCodes must include future-remote-member for future placeholders",
+      ],
+    });
+  });
+});

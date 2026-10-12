@@ -1511,3 +1511,11 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").RegressionProbeResult>();
   });
 });
+
+import { normalizePdfCitationPreviewMarkerIndex as publicPreviewMarker } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
+it("actual public preview subpath preserves closed marker parsing", () => {
+  const parsed: number | undefined = publicPreviewMarker("【2】");
+  expect(parsed).toBe(2);
+  expect(publicPreviewMarker("[2】")).toBeUndefined();
+  expect(publicPreviewMarker(0)).toBeUndefined();
+});

@@ -260,3 +260,89 @@ describe("enumerations", () => {
 
 // Keep the policy type import referenced so the type-only import is not pruned.
 const _policyTypeWitness: LargeDocumentResourcePolicy = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
+
+// The emitted public boundary promises the same complete nested checkpoint shape.
+import { validateExtractionCheckpointRecord as publicValidateCheckpoint } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation";
+
+for (const [entry, validate] of [
+  ["source", validateExtractionCheckpointRecord],
+  ["public", publicValidateCheckpoint],
+] as const) {
+  describe(`${entry} complete checkpoint admission`, () => {
+    it("rejects a fingerprint with an incomplete embedding identity", () => {
+      const input = {
+        ...baseCheckpoint(),
+        fingerprint: { ...baseFingerprint(), embeddingIdentity: {} },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors).toContain(
+        "checkpoint.fingerprint.embeddingIdentity.provider must be a non-empty string",
+      );
+    });
+    it.each([
+      null,
+      {},
+      { severity: "fatal", code: "C", message: "M" },
+      { severity: "error", code: 2, message: "M" },
+      { severity: "warning", code: "C", message: 2 },
+      { severity: "info", code: "C", message: "M", documentId: 2 },
+      { severity: "info", code: "C", message: "M", pageNumber: "1" },
+    ])("rejects malformed diagnostic %#", (diagnostic) => {
+      expect(validate({ ...baseCheckpoint(), terminalDiagnostics: [diagnostic] }).ok).toBe(false);
+    });
+    it("preserves complete checkpoint and diagnostic references", () => {
+      const diagnostic = {
+        severity: "info",
+        code: "fixture",
+        message: "fixture",
+        documentId: "non-uuid",
+        pageNumber: 0,
+      };
+      const input = { ...baseCheckpoint(), terminalDiagnostics: [diagnostic] };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.fingerprint).toBe(input.fingerprint);
+      expect(result.value.terminalDiagnostics).toBe(input.terminalDiagnostics);
+      expect(result.value.terminalDiagnostics[0]).toBe(diagnostic);
+    });
+  });
+}
+
+type CheckpointAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicCheckpoint(input: unknown): void {
+  const result = publicValidateCheckpoint(input);
+  if (result.ok) {
+    const cursor: number = result.value.pageCursor;
+    const provider: string = result.value.fingerprint.embeddingIdentity.provider;
+    const strategy: "standard-buffer" | "progressive-pdf" | "unsupported" | "oversized" =
+      result.value.strategy;
+    const _concrete: CheckpointAny<typeof result.value> = false;
+    const _concreteIdentity: CheckpointAny<typeof result.value.fingerprint.embeddingIdentity> =
+      false;
+    for (const diagnostic of result.value.terminalDiagnostics) {
+      const severity: "info" | "warning" | "error" = diagnostic.severity;
+      const code: string = diagnostic.code;
+      const page: number | undefined = diagnostic.pageNumber;
+      expect(["info", "warning", "error"]).toContain(severity);
+      expect(typeof code).toBe("string");
+      expect(page).toBe(12);
+    }
+    expect(result.value).toBe(input);
+    expect(cursor).toBe(12);
+    expect(provider).toBe(IDENTITY.provider);
+    expect(strategy).toBe("progressive-pdf");
+  }
+}
+it("public checkpoint consumer retains independent nested primitive declarations", () => {
+  consumePublicCheckpoint(baseCheckpoint());
+  consumePublicCheckpoint({
+    ...baseCheckpoint(),
+    terminalDiagnostics: [
+      { severity: "warning", code: "page-skipped", message: "Page skipped", pageNumber: 12 },
+    ],
+  });
+});

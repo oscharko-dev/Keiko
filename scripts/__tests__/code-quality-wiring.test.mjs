@@ -36,7 +36,7 @@ function enforcingFixture() {
 const executePolicy = promisify(execFile);
 function closedChildStatus(value) {
   if (value === null || (typeof value === "number" && Number.isInteger(value))) return value;
-  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}$/u.test(value) ? value : "unavailable";
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(value) ? value : "unavailable";
 }
 function capturedByteCount(value) {
   return typeof value === "string" ? Buffer.byteLength(value, "utf8") : "unavailable";
@@ -117,9 +117,21 @@ describe("production code-quality invocation wiring (#3915)", () => {
       'policy child failed: {"code":null,"signal":"SIGKILL","killed":true,"stdoutBytes":0,"stderrBytes":0}',
     );
   });
+  it("retains native buffer overflow status without captured output bodies", async () => {
+    const failure = executePolicyWithDiagnostics(["-e", 'process.stdout.write("x".repeat(64));'], {
+      encoding: "utf8",
+      timeout: 1000,
+      killSignal: "SIGKILL",
+      maxBuffer: 8,
+    });
+    await expect(failure).rejects.toHaveProperty("cause.code", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
+    await expect(failure).rejects.toHaveProperty("cause.stdoutBytes", 8);
+    await expect(failure).rejects.toHaveProperty("cause.stderrBytes", 0);
+  });
   it("keeps missing child metadata explicitly unavailable", () => {
     expect(closedChildStatus(undefined)).toBe("unavailable");
     expect(closedChildStatus("raw unbounded text")).toBe("unavailable");
+    expect(closedChildStatus("X".repeat(1000))).toBe("unavailable");
     expect(capturedByteCount(undefined)).toBe("unavailable");
   });
 

@@ -373,3 +373,40 @@ describe("validateKnowledgePodRetrievalActivity", () => {
     );
   });
 });
+
+import { validateKnowledgePodRetrievalActivity as publicValidateActivity } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
+type ActivityAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicActivity(input: unknown): void {
+  const result = publicValidateActivity(input);
+  if (result.ok) {
+    const count: number = result.value.summary.citationCount;
+    const privacy: false = result.value.privacy.rawQueryExposed;
+    const _concrete: ActivityAny<typeof result.value> = false;
+    for (const pod of result.value.pods) {
+      const state: "searched" | "skipped" | "degraded" | "denied" | "unavailable" | "not-selected" =
+        pod.state;
+      const podCount: number = pod.counts.sourceCount;
+      const _concreteState: ActivityAny<typeof pod.state> = false;
+      const id: string = pod.podId;
+      const expected = happyActivity().pods.find((candidate) => candidate.podId === id);
+      expect(expected).toBeDefined();
+      expect(state).toBe(expected?.state);
+      expect(podCount).toBe(expected?.counts.sourceCount);
+    }
+    expect(result.value).toBe(input);
+    expect(count).toBe(happyActivity().summary.citationCount);
+    expect(privacy).toBe(false);
+  }
+}
+it("public retrieval consumer retains closed privacy/state/count declarations", () => {
+  const input = happyActivity();
+  consumePublicActivity(input);
+  const result = publicValidateActivity(input);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toBe(input);
+  expect(result.value.pods).toBe(input.pods);
+  expect(
+    publicValidateActivity({ ...input, privacy: { ...input.privacy, rawQueryExposed: true } }).ok,
+  ).toBe(false);
+});
