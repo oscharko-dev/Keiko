@@ -133,9 +133,10 @@ existing ties and within-file nomination order. The first jointly feasible targe
 physical file whose queue head is not fully funded receives the shared file turn.
 When the relevance file's head was already fully funded in committed state before the turn,
 its pending whole targets at or above the first nominated file's queue-head score also
-participate in the joint proposal. At each guarded relevance-file and first-file checkpoint,
-the existing owned opportunity and then same-file targets tied to that actual head score are
-probed through the unchanged whole-target guards, in existing stable order. Actual new whole
+participate in the joint proposal. While the extra opportunity remains eligible, at each guarded
+relevance-file and first-file checkpoint, the existing owned opportunity and then same-file
+targets tied to that actual head score are probed through the unchanged whole-target guards,
+in existing stable order. Actual new whole
 target progress in either probe closes the extra second-file opportunity for the entire outer
 shared turn and clears any earlier uncommitted second-file checkpoint. Later callbacks cannot
 reopen it. These eligibility probes may remain unpublished; a refused tie is not guaranteed
