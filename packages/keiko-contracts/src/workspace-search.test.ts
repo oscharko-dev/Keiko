@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   ValidationResult,
   WorkspaceReplaceApplyRequest,
@@ -457,4 +457,46 @@ describe("workspace search/replace guard coverage", () => {
       ).ok,
     ).toBe(false);
   });
+});
+
+import { validateWorkspaceSearchRequest as publicSearchRequest } from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
+
+describe.each([
+  ["source", validateWorkspaceSearchRequest],
+  ["public", publicSearchRequest],
+])("%s arbitrary search mode membership preservation", (_label, validate) => {
+  it("keeps both mode observations and healthy requests", () => {
+    let reads = 0;
+    const input = {
+      ...searchRequest(),
+      get mode(): string {
+        reads++;
+        return "literal";
+      },
+    };
+    expect(validate(input)).toEqual({ ok: true });
+    expect(reads).toBe(2);
+  });
+  it("refuses malformed vocabulary without coercing it", () => {
+    for (const mode of [null, undefined, 0, Symbol("mode"), "future", {}])
+      expect(validate({ ...searchRequest(), mode })).toEqual({
+        ok: false,
+        reasons: ["mode invalid"],
+      });
+    const mode = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(validate({ ...searchRequest(), mode })).toEqual({
+      ok: false,
+      reasons: ["mode invalid"],
+    });
+  });
+});
+
+it("retains public search's explicit refusal reasons", () => {
+  expectTypeOf<
+    Extract<ReturnType<typeof publicSearchRequest>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
 });

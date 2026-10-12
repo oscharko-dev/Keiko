@@ -201,3 +201,24 @@ describe("validateWorkspaceDescriptorMeta — ADR-0029 rules", () => {
     expect(errors.every((e) => e.objectType === "review")).toBe(true);
   });
 });
+
+import { validateWorkspaceDescriptorMeta as publicDescriptor } from "@oscharko-dev/keiko-contracts/runtime/workspace-descriptors";
+
+it("preserves the public descriptor structured refusal and healthy control", () => {
+  expect(
+    publicDescriptor("under-test", {
+      lifecycle: ["idle", "live"],
+      trustBoundary: ["ui"],
+      authority: "ui-only",
+      persistence: "transient",
+    }),
+  ).toEqual([]);
+  const errors = publicDescriptor("under-test", {
+    lifecycle: ["idle"],
+    trustBoundary: ["fs"],
+    authority: "ui-only",
+    persistence: "transient",
+  });
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatchObject({ objectType: "under-test", field: "consistency" });
+});

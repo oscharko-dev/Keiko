@@ -3,7 +3,7 @@
 // broken invariant; tests assert structural absence of leak vectors (scopeId, workspaceRoot,
 // query text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
@@ -19,6 +19,7 @@ import {
   GROUNDED_RERANKER_FAILURE_KINDS,
   eventIsDesktopChatStreamTerminal,
   GROUNDING_LIMIT_CEILINGS,
+  isConversationMemoryCaptureSurfaceWire,
   isExpandableDirectory,
   isGroundedRerankerFailureKind,
   isDesktopChatStreamEvent,
@@ -1428,4 +1429,151 @@ describe("UNKNOWN_REPOSITORY_ERROR_CODE", () => {
   it("is the BFF wire code for a repository the workspace has not opened", () => {
     expect(UNKNOWN_REPOSITORY_ERROR_CODE).toBe("UNKNOWN_REPOSITORY");
   });
+});
+
+// Published runtime entrypoints: no source alias, and independent primitive/key oracles.
+import {
+  buildGroundedAnswerContextPackSummary as publicContextSummary,
+  isConversationMemoryCaptureSurfaceWire as publicCaptureSurface,
+  isGroundedRerankerFailureKind as publicRerankerKind,
+  eventIsDesktopChatStreamTerminal as publicTerminalEvent,
+  parseUpdateMemoryAutonomyPolicyWire as publicMemoryUpdate,
+  parseUpdateGitHubIssueReaderAuthorizationWire as publicAuthorizationUpdate,
+} from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+
+type PublicMemoryUpdate = NonNullable<ReturnType<typeof publicMemoryUpdate>>;
+type PublicSummary = NonNullable<ReturnType<typeof publicContextSummary>["contextSummary"]>;
+
+it("retains public numeric revisions and the closed complete lane-count domain", () => {
+  expectTypeOf<PublicMemoryUpdate["expectedRevision"]>().toEqualTypeOf<number>();
+  expectTypeOf<keyof PublicSummary["laneCounts"]>().toEqualTypeOf<
+    | "system-contract"
+    | "user-task"
+    | "active-plan"
+    | "repo-evidence"
+    | "tool-observations"
+    | "working-memory"
+    | "history-summary"
+    | "verification-evidence"
+  >();
+  expectTypeOf<PublicSummary["laneCounts"]["repo-evidence"]>().toEqualTypeOf<number>();
+});
+
+describe.each([
+  ["source", isConversationMemoryCaptureSurfaceWire, isGroundedRerankerFailureKind],
+  ["public", publicCaptureSurface, publicRerankerKind],
+])("%s closed BFF membership preservation", (_label, surface, kind) => {
+  it("accepts vocabulary and refuses malformed values without coercion", () => {
+    expect(surface("desktop")).toBe(true);
+    expect(surface("voice")).toBe(true);
+    expect(kind("invalid-response")).toBe(true);
+    for (const value of [undefined, null, 0, Symbol("kind"), {}, "future", "VOICE"]) {
+      expect(surface(value)).toBe(false);
+      expect(kind(value)).toBe(false);
+    }
+    const value = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(surface(value)).toBe(false);
+    expect(kind(value)).toBe(false);
+  });
+});
+
+describe.each([
+  ["source", parseUpdateMemoryAutonomyPolicyWire, parseUpdateGitHubIssueReaderAuthorizationWire],
+  ["public", publicMemoryUpdate, publicAuthorizationUpdate],
+])("%s update parser observations", (_label, memory, authorization) => {
+  it("preserves repeated field observations and concrete primitive output", () => {
+    const reads: string[] = [];
+    const input = {
+      get requestedMode(): string {
+        reads.push("mode");
+        return "governed-assist";
+      },
+      get expectedRevision(): number {
+        reads.push("revision");
+        return 7;
+      },
+    };
+    expect(memory(input)).toEqual({ requestedMode: "governed-assist", expectedRevision: 7 });
+    expect(reads).toEqual(["mode", "revision", "revision", "mode", "revision"]);
+    expect(
+      authorization({ repositoryPath: "/workspace", authorized: true, expectedRevision: 3 }),
+    ).toEqual({ repositoryPath: "/workspace", authorized: true, expectedRevision: 3 });
+  });
+  it("refuses actual malformed ingress and retains thrown getters", () => {
+    for (const input of [
+      null,
+      [],
+      0,
+      { requestedMode: "future", expectedRevision: 0 },
+      { requestedMode: "governed-assist", expectedRevision: 0.5 },
+    ])
+      expect(memory(input)).toBeUndefined();
+    expect(
+      authorization({
+        repositoryPath: "/workspace",
+        authorized: true,
+        expectedRevision: 0,
+        extra: 1,
+      }),
+    ).toBeUndefined();
+    const error = new Error("fixture getter");
+    expect(() =>
+      memory({
+        get requestedMode(): never {
+          throw error;
+        },
+      }),
+    ).toThrow(error);
+  });
+});
+
+describe.each([
+  ["source", buildGroundedAnswerContextPackSummary],
+  ["public", publicContextSummary],
+])("%s complete lane projection", (_label, build) => {
+  it("retains insertion order, zero defaults and final duplicate-lane counts", () => {
+    const diagnostics = assemblyDiagnostics({
+      lanes: [laneDiag("repo-evidence", 2), laneDiag("repo-evidence", 9)],
+    });
+    const result = build(pack(), 0, 0, diagnostics).contextSummary;
+    expect(Object.keys(result?.laneCounts ?? {})).toEqual([
+      "system-contract",
+      "user-task",
+      "active-plan",
+      "repo-evidence",
+      "tool-observations",
+      "working-memory",
+      "history-summary",
+      "verification-evidence",
+    ]);
+    expect(result?.laneCounts).toEqual({
+      "system-contract": 0,
+      "user-task": 0,
+      "active-plan": 0,
+      "repo-evidence": 9,
+      "tool-observations": 0,
+      "working-memory": 0,
+      "history-summary": 0,
+      "verification-evidence": 0,
+    });
+  });
+});
+
+it("preserves the terminal event subset through actual source/public predicates", () => {
+  for (const event of ["error", "cancelled", "done"] as const) {
+    expect(eventIsDesktopChatStreamTerminal(event)).toBe(true);
+    expect(publicTerminalEvent(event)).toBe(true);
+  }
+  expect(eventIsDesktopChatStreamTerminal("token")).toBe(false);
+  expect(publicTerminalEvent("token")).toBe(false);
+});
+
+it("retains the actual public capture predicate's closed narrowing", () => {
+  const input: unknown = "voice";
+  expect(publicCaptureSurface(input)).toBe(true);
+  if (publicCaptureSurface(input)) expectTypeOf(input).toEqualTypeOf<"desktop" | "voice">();
 });
