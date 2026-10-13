@@ -1,3 +1,4 @@
+import type { NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayCallRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 
@@ -105,8 +106,14 @@ function observationDisposition(
 
 interface ConversationCallGuard {
   assert(request: GatewayCallRequest, signal: AbortSignal): void;
-  complete(responseModelId: string, signal: AbortSignal): void;
+  complete(response: NormalizedResponse, signal: AbortSignal): void;
 }
+
+const SERVED_FINISH_REASONS = new Set<NormalizedResponse["finishReason"]>([
+  "stop",
+  "tool_calls",
+  "length",
+]);
 
 function conversationCallGuard(
   modelId: string,
@@ -129,8 +136,13 @@ function conversationCallGuard(
       );
       if (!disposition.startsWith("allowed-")) throw new ConversationModelNotReadyError();
     },
-    complete(responseModelId, signal): void {
-      if (!signal.aborted && responseModelId === modelId) completedAt = Date.now();
+    complete(response, signal): void {
+      if (
+        !signal.aborted &&
+        response.modelId === modelId &&
+        SERVED_FINISH_REASONS.has(response.finishReason)
+      )
+        completedAt = Date.now();
     },
   };
 }
@@ -145,7 +157,7 @@ export function withConversationReadinessAdmission(
   const call: ModelPort["call"] = async (request, signal) => {
     guard.assert(request, signal);
     const response = await model.call(request, signal);
-    guard.complete(response.modelId, signal);
+    guard.complete(response, signal);
     return response;
   };
   if (model.callStream === undefined) return { call };
@@ -157,12 +169,12 @@ export function withConversationReadinessAdmission(
     call,
     callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {
       guard.assert(request, signal);
-      let completedModelId: string | undefined;
+      let completedResponse: NormalizedResponse | undefined;
       for await (const chunk of callStream(request, signal)) {
-        if (chunk.type === "done") completedModelId = chunk.response.modelId;
+        if (chunk.type === "done") completedResponse = chunk.response;
         yield chunk;
       }
-      if (completedModelId !== undefined) guard.complete(completedModelId, signal);
+      if (completedResponse !== undefined) guard.complete(completedResponse, signal);
     },
   };
 }

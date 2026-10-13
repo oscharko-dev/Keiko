@@ -703,7 +703,8 @@ knowledge.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
-and a turn-local completed-call continuation remain distinct. Refusals distinguish model or
+and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
+responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative

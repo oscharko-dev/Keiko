@@ -429,6 +429,49 @@ describe("bounded readiness continuation after successful completion", () => {
     expect(currentConversationReady(deps, ADMITTED_MODEL)).toBe(false);
   });
 
+  it.each([
+    ["buffered", "error"],
+    ["buffered", "cancelled"],
+    ["buffered", "content_filter"],
+    ["streamed", "error"],
+    ["streamed", "cancelled"],
+    ["streamed", "content_filter"],
+  ] as const)(
+    "does not renew continuation after a completed %s response marked %s",
+    async (mode, finishReason) => {
+      const response: NormalizedResponse = { ...doneResponse(), finishReason };
+      const port = new ContinuationPort(
+        () => {
+          expiredClock();
+          return Promise.resolve(response);
+        },
+        async function* (): AsyncIterable<GatewayStreamChunk> {
+          expiredClock();
+          yield await Promise.resolve({ type: "delta", token: "hello" } as const);
+          yield await Promise.resolve({ type: "done", response } as const);
+        },
+      );
+      const { wrapped, deps } = continuationFixture(port);
+      if (mode === "buffered") await expect(callBuffered(wrapped)).resolves.toEqual(response);
+      else {
+        const stream = wrapped.callStream;
+        if (stream === undefined) throw new TypeError("Expected actual streaming ModelPort");
+        const chunks: GatewayStreamChunk[] = [];
+        for await (const chunk of stream(ADMITTED_REQUEST, new AbortController().signal)) {
+          chunks.push(chunk);
+        }
+        expect(chunks).toEqual([
+          { type: "delta", token: "hello" },
+          { type: "done", response },
+        ]);
+      }
+      expect(currentConversationReady(deps, ADMITTED_MODEL)).toBe(false);
+      expect(port.bufferedCalls + port.streamedCalls).toBe(1);
+      await expect(callBuffered(wrapped)).rejects.toBeInstanceOf(ConversationModelNotReadyError);
+      expect(port.bufferedCalls + port.streamedCalls).toBe(1);
+    },
+  );
+
   it("does not derive continuation from an unfinished stream", async () => {
     const port = new ContinuationPort();
     const { wrapped } = continuationFixture(port);
