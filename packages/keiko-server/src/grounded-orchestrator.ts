@@ -562,7 +562,6 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     excerptOmittedRangeCount: { type: "integer", dataClass: "count", required: false },
     excerptTruncatedWindowCount: { type: "integer", dataClass: "count", required: false },
     excerptUnreadFileCount: { type: "integer", dataClass: "count", required: false },
-    excerptPlannedQueryFacetCount: { type: "integer", dataClass: "count", required: false },
     excerptServedQueryFacetCount: { type: "integer", dataClass: "count", required: false },
     excerptStopReasons: {
       type: "string-array",
@@ -10502,7 +10501,6 @@ function retrievalLossActivityExtra(
           ...(excerpt.plannedQueryFacetCount === undefined
             ? {}
             : {
-                excerptPlannedQueryFacetCount: excerpt.plannedQueryFacetCount,
                 excerptServedQueryFacetCount: excerpt.servedQueryFacetCount ?? 0,
               }),
         }),

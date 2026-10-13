@@ -768,7 +768,8 @@ async function contextualBatchObservation(
       anchoredWindowApplied: window.anchoredWindowApplied,
     }));
   } catch (error) {
-    return contextualUnavailableObservation(input, error, impactedAtomIds);
+    if (!contextualReadUnavailable(error)) throw error;
+    return contextualUnavailableObservation(input, impactedAtomIds);
   }
 }
 
@@ -814,20 +815,22 @@ async function contextualExcerptObservation(
   try {
     return [await discoveryExcerptObservation(input, atom)];
   } catch (error) {
-    return contextualUnavailableObservation(input, error, [atom.stableId]);
+    if (!contextualReadUnavailable(error)) throw error;
+    return contextualUnavailableObservation(input, [atom.stableId]);
   }
+}
+
+function contextualReadUnavailable(error: unknown): boolean {
+  return (
+    error instanceof RepoSearchUnsupportedFileError &&
+    (error.reason === "file-unreadable" || error.reason === "io-error" || error.reason === "binary")
+  );
 }
 
 function contextualUnavailableObservation(
   input: DiscoveredSymbolTraceEvidenceInput,
-  error: unknown,
   impactedAtomIds: readonly string[] = [],
 ): readonly DiscoveryExcerptObservation[] {
-  if (
-    !(error instanceof RepoSearchUnsupportedFileError) ||
-    (error.reason !== "file-unreadable" && error.reason !== "io-error" && error.reason !== "binary")
-  )
-    throw error;
   input.contextualReadFailures?.push({
     kind: "tool-unavailable",
     claim: "Contextual source definition evidence is unavailable during excerpt reading.",

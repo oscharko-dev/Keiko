@@ -642,12 +642,13 @@ the optional memory enrichment.
 observed/retained files and charged/capacity bytes; excerpt omitted ranges, truncated windows,
 unread files and stop reasons; and metadata observed, retained and discarded counts. These are
 phase measurements, not a claim that every discovered file reached the model.
-The same `completion-details` event optionally records `excerptPlannedQueryFacetCount` and
-`excerptServedQueryFacetCount`: per-path totals of canonical query groups present in proposed
-ordinary ranges and in actual nonempty returned source views. No query terms, source text or paths
-are recorded. These counts describe reader coverage before final prompt fitting; they do not
-certify complete functions, answer quality or model-sent membership. Absence means the ordinary
-natural-language scheduling did not report that observation, not a measured zero.
+The same `completion-details` event optionally records `excerptServedQueryFacetCount`: the
+per-path total of canonical query groups present in actual nonempty returned ordinary source
+views. No query terms, source text or paths are recorded. This count describes reader coverage
+before final prompt fitting; it does not certify complete functions, answer quality or model-sent
+membership. Zero records planned ordinary query-group work with no served group. Absence means
+that scheduling did not report an observation, not a measured zero. The complete registration,
+including completeness and loss fields, remains within the existing 48-field limit.
 `workspace.root.denied` records the actual safe errno or error class as `failureKind`, preserving
 the underlying recognized cause of `WorkspaceNotFoundError`, with error kind, frames and cause
 chain when available. It no longer substitutes a constant root-not-found label for every cause.

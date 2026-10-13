@@ -220,13 +220,11 @@ describe("ordinary source ranges cover independently requested query facets", ()
     if (line === undefined) throw new TypeError("Missing completion details");
     const record = expectActivityLogProof("search.connected-context.completion-details.line", line);
     expect(record.correlationId).toBe(correlationId);
-    expect(record.excerptPlannedQueryFacetCount).toBeGreaterThan(0);
+    expect(record).not.toHaveProperty("excerptPlannedQueryFacetCount");
     expect(record.excerptServedQueryFacetCount).toBeGreaterThan(0);
-    const planned = record.excerptPlannedQueryFacetCount;
     const served = record.excerptServedQueryFacetCount;
-    if (typeof planned !== "number" || typeof served !== "number")
-      throw new TypeError("Missing numeric query facet observations");
-    expect(served).toBeLessThanOrEqual(planned);
+    if (typeof served !== "number") throw new TypeError("Missing numeric query facet observations");
+    expect(record).not.toHaveProperty("_truncatedFieldCount");
     expect(raw).not.toContain(current.path);
     expect(raw).not.toContain("budget.modelInputTokensMax - usage.promptTokens");
   });

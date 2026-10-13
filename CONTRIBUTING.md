@@ -321,7 +321,7 @@ source currentness and every byte, file and deadline grant still apply. Explicit
 funded definition windows and trace priorities retain their existing behavior. File-pattern, regular-expression
 and exact-symbol queries do not use this scheduling. A matched term group is lexical
 coverage, not proof of a complete implementation or a supported answer.
-The existing completion-details event records planned and served canonical query-group counts
+The existing completion-details event records served canonical query-group counts
 for these ordinary reads. Counts are summed per path and describe actual reader coverage before
 final prompt fitting; no source or query text enters the Activity Log.
 

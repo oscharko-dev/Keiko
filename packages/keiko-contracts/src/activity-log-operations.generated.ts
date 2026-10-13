@@ -28005,11 +28005,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
-      excerptPlannedQueryFacetCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
       excerptServedQueryFacetCount: {
         type: "integer",
         dataClass: "count",
