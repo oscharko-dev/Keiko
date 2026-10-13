@@ -3214,7 +3214,7 @@
         },
         {
           "store": "activity-log",
-          "description": "Registered source-selection, gateway, runtime and redaction events change the Activity Log catalog identity. Existing records are not rewritten. The release bundles historical registries and producing-code inventories through the existing version setter so supported older reports retain their exact validator identity.",
+          "description": "Registered source-selection, gateway, runtime and redaction events change the Activity Log catalog identity. Existing records are not rewritten. The release bundles historical registries and producing-code inventories through the existing release generators so supported older reports retain their exact validator identity.",
           "userActionRequired": false,
           "remediation": "no-action-required"
         }
