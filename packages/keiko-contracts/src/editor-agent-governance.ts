@@ -249,6 +249,11 @@ export interface EditorAgentActionPolicyContext {
   readonly origin?: EditorAgentActionOrigin | undefined;
 }
 
+const EDITOR_AGENT_ACTION_DISPOSITIONS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_AGENT_ACTION_DISPOSITIONS;
+const EDITOR_AGENT_ACTION_DENY_REASONS_ADMISSION_VALUES: readonly unknown[] =
+  EDITOR_AGENT_ACTION_DENY_REASONS;
+
 function rootBindingsEqual(left: EditorAgentRootBinding, right: EditorAgentRootBinding): boolean {
   return (
     left.workspaceId === right.workspaceId &&
@@ -622,11 +627,11 @@ function hasMatchingActionEffect(
     !isEditorAgentActionEffectClass(effectClass) ||
     typeof mutating !== "boolean" ||
     typeof actionType !== "string" ||
-    !Object.hasOwn(EDITOR_AGENT_ACTION_EFFECT_CLASS, actionType)
+    !isEffectActionType(actionType)
   ) {
     return false;
   }
-  const type = actionType as EditorAgentActionType;
+  const type = actionType;
   return (
     EDITOR_AGENT_ACTION_EFFECT_CLASS[type] === effectClass &&
     isMutatingEditorAgentAction(type) === mutating
@@ -733,8 +738,7 @@ export function isEditorAgentActionDisposition(
   value: unknown,
 ): value is EditorAgentActionDisposition {
   return (
-    typeof value === "string" &&
-    EDITOR_AGENT_ACTION_DISPOSITIONS.includes(value as EditorAgentActionDisposition)
+    typeof value === "string" && EDITOR_AGENT_ACTION_DISPOSITIONS_ADMISSION_VALUES.includes(value)
   );
 }
 
@@ -762,11 +766,9 @@ function isEditorAgentActionStatus(value: unknown): value is EditorAgentActionSt
 function hasValidAuditReasonCodes(value: Record<string, unknown>): boolean {
   return (
     (value.denyReason === undefined ||
-      EDITOR_AGENT_ACTION_DENY_REASONS.includes(value.denyReason as EditorAgentActionDenyReason)) &&
+      EDITOR_AGENT_ACTION_DENY_REASONS_ADMISSION_VALUES.includes(value.denyReason)) &&
     (value.reviewReason === undefined ||
-      EDITOR_AGENT_ACTION_REVIEW_REASONS.includes(
-        value.reviewReason as EditorAgentActionReviewReason,
-      )) &&
+      EDITOR_AGENT_ACTION_REVIEW_REASONS_ADMISSION_VALUES.includes(value.reviewReason)) &&
     (value.conflictCode === undefined || isEditorAgentConflictCode(value.conflictCode)) &&
     (value.failureCode === undefined || isEditorAgentFailureCode(value.failureCode))
   );
@@ -812,3 +814,10 @@ export function isEditorAgentActionAuditRecord(
       value.summary.length <= EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS,
   ].every(Boolean);
 }
+
+function isEffectActionType(value: string): value is EditorAgentActionType {
+  return Object.hasOwn(EDITOR_AGENT_ACTION_EFFECT_CLASS, value);
+}
+
+const EDITOR_AGENT_ACTION_REVIEW_REASONS_ADMISSION_VALUES: readonly unknown[] =
+  EDITOR_AGENT_ACTION_REVIEW_REASONS;

@@ -813,3 +813,15 @@ describe("editorAgentRootBindingDenyReason", () => {
     expect(editorAgentRootBindingDenyReason(binding(), binding(), true)).toBeNull();
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const outcome = publicOwner.classifyEditorAgentAction("openFile", ctx());
+    expect(outcome.disposition).toBe("allowed");
+    expect(outcome.effectClass).toBe("navigation");
+    expect(publicOwner.isEditorAgentActionDisposition("invented")).toBe(false);
+  });
+});

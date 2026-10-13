@@ -195,3 +195,16 @@ describe("deep immutability (frozen registry)", () => {
     }).toThrow(TypeError);
   });
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    expect(Object.getPrototypeOf(publicOwner.EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE)).toBeNull();
+    expect(publicOwner.editorBuiltinCapability("typescript")).toBe(
+      publicOwner.EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE.typescript,
+    );
+    expect(publicOwner.editorBuiltinCapability("constructor")).toBeNull();
+  });
+});

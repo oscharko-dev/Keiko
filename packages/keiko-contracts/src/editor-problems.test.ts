@@ -212,3 +212,16 @@ describe("editor-problems guards", () => {
     expect(isEditorProblem({ ...problem(), raw: "secret" })).toBe(false);
   });
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-problems";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const original = problem();
+    const built = publicOwner.buildEditorProblemsSnapshot([original]);
+    expect(publicOwner.isEditorProblemsSnapshot(built)).toBe(true);
+    expect(built.problems[0]).toBe(original);
+    expect(publicOwner.isEditorProblem({ ...original, kind: "invented" })).toBe(false);
+  });
+});

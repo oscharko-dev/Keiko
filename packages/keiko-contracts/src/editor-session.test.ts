@@ -127,3 +127,51 @@ describe("parseEditorDocumentVersion", () => {
     }
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-session";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const version = validVersion();
+    const parsed = publicOwner.parseEditorDocumentVersion(version);
+    expect(parsed).toEqual({ ok: true, value: version });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value).not.toBe(version);
+    expect(publicOwner.parseEditorDocumentVersion({ ...version, sizeBytes: 0.5 })).toEqual({
+      ok: false,
+      errors: ["baseVersion.sizeBytes must be a non-negative integer"],
+    });
+  });
+});
+
+describe.each([
+  ["source", parseEditorDocumentVersion],
+  ["public", publicOwner.parseEditorDocumentVersion],
+] as const)("3918 captured document version %s", (_surface, parse) => {
+  it.each([
+    ["sizeBytes", 0.5, "baseVersion.sizeBytes must be a non-negative integer"],
+    ["modifiedAt", Number.NaN, "baseVersion.modifiedAt must be a finite non-negative number"],
+    ["contentHash", "bad", "baseVersion.contentHash must be a lowercase hex SHA-256 string"],
+  ] as const)("refuses actual copied %s", (field, invalid, diagnostic) => {
+    const value = validVersion();
+    const initial: unknown = value[field];
+    let reads = 0;
+    Object.defineProperty(value, field, {
+      get: (): unknown => (++reads === 1 ? initial : invalid),
+    });
+    expect(parse(value)).toEqual({ ok: false, errors: [diagnostic] });
+    expect(reads).toBe(2);
+  });
+  it("preserves fractional modifiedAt and copied field ordering", () => {
+    const value = validVersion();
+    let reads = 0;
+    Object.defineProperty(value, "modifiedAt", { get: (): number => (++reads === 1 ? 1 : 2.5) });
+    const parsed = parse(value);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("healthy copied version refused");
+    expect(parsed.value.modifiedAt).toBe(2.5);
+    expect(Object.keys(parsed.value)).toEqual(["sizeBytes", "modifiedAt", "contentHash"]);
+    expect(reads).toBe(2);
+  });
+});

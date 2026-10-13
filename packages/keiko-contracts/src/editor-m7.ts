@@ -198,7 +198,7 @@ export interface EditorM7SettingsEvent {
 const ENUM_VALUES: Readonly<
   Record<
     "wordWrap" | "renderWhitespace" | "externalReload" | "largeFileMode" | "gitCommitMessagePolicy",
-    readonly string[]
+    readonly Extract<EditorM7SettingValue, string>[]
   >
 > = Object.freeze({
   wordWrap: Object.freeze(["off", "on", "wordWrapColumn", "bounded"] as const),
@@ -207,6 +207,8 @@ const ENUM_VALUES: Readonly<
   largeFileMode: Object.freeze(["default", "degraded", "readonly"] as const),
   gitCommitMessagePolicy: GIT_COMMIT_MESSAGE_POLICY_MODES,
 });
+
+const SETTING_ENUM_ADMISSION_VALUES = Object.freeze(Object.values(ENUM_VALUES).flat());
 
 // deepFreeze, not Object.freeze: each entry's own `scopes` array was individually frozen at
 // declaration time, but the entry OBJECT itself was not, so a bound (e.g. `minimum`/`maximum`)
@@ -401,6 +403,8 @@ const SETTING_IDS = Object.freeze(EDITOR_M7_SETTING_REGISTRY.map((entry) => entr
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
+const SETTING_IDS_ADMISSION_VALUES: readonly string[] = SETTING_IDS;
+
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -418,7 +422,7 @@ function definitionFor(id: EditorM7SettingId): EditorM7SettingDefinition {
 }
 
 function isSettingId(value: unknown): value is EditorM7SettingId {
-  return typeof value === "string" && SETTING_IDS.includes(value as EditorM7SettingId);
+  return typeof value === "string" && SETTING_IDS_ADMISSION_VALUES.includes(value);
 }
 
 function parseInteger(
@@ -444,8 +448,10 @@ function parseEnum(
   definition: EditorM7SettingDefinition,
 ): EditorM7ParseResult<EditorM7SettingValue> {
   const values = definition.enumValues ?? [];
-  return typeof value === "string" && values.includes(value)
-    ? { ok: true, value: value as EditorM7SettingValue }
+  return typeof value === "string" &&
+    values.includes(value) &&
+    stringIn(value, SETTING_ENUM_ADMISSION_VALUES)
+    ? { ok: true, value }
     : { ok: false, reasonCode: "VALUE_OUT_OF_BOUNDS" };
 }
 
@@ -537,11 +543,26 @@ export function parseEditorM7SettingPatch(
 export function defaultEditorM7Settings(): Readonly<
   Record<EditorM7SettingId, EditorM7SettingValue>
 > {
-  return Object.freeze(
-    Object.fromEntries(
-      EDITOR_M7_SETTING_REGISTRY.map((entry) => [entry.id, entry.defaultValue]),
-    ) as Record<EditorM7SettingId, EditorM7SettingValue>,
-  );
+  return Object.freeze({
+    fontSize: definitionFor("fontSize").defaultValue,
+    tabSize: definitionFor("tabSize").defaultValue,
+    insertSpaces: definitionFor("insertSpaces").defaultValue,
+    wordWrap: definitionFor("wordWrap").defaultValue,
+    renderWhitespace: definitionFor("renderWhitespace").defaultValue,
+    minimap: definitionFor("minimap").defaultValue,
+    formatOnSave: definitionFor("formatOnSave").defaultValue,
+    externalReload: definitionFor("externalReload").defaultValue,
+    inlineCompletion: definitionFor("inlineCompletion").defaultValue,
+    testGeneration: definitionFor("testGeneration").defaultValue,
+    patchApply: definitionFor("patchApply").defaultValue,
+    watcherExclusions: definitionFor("watcherExclusions").defaultValue,
+    largeFileMode: definitionFor("largeFileMode").defaultValue,
+    modelRetentionCount: definitionFor("modelRetentionCount").defaultValue,
+    modelRetentionBytes: definitionFor("modelRetentionBytes").defaultValue,
+    keybindingOverrides: definitionFor("keybindingOverrides").defaultValue,
+    debuggingEnabled: definitionFor("debuggingEnabled").defaultValue,
+    gitCommitMessagePolicy: definitionFor("gitCommitMessagePolicy").defaultValue,
+  });
 }
 
 function layerValue(
@@ -651,23 +672,23 @@ function parseEditorM7SettingsEventUnsafe(
   if (!validSettingsEventEnvelope(value)) {
     return { ok: false, reasonCode: "INVALID_INPUT" };
   }
-  if (!Array.isArray(value.settingIds) || !value.settingIds.every(isSettingId)) {
+  if (!Array.isArray(value.settingIds) || !physicalSettingIds(value.settingIds)) {
     return { ok: false, reasonCode: "UNKNOWN_SETTING" };
   }
-  return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_M7_SCHEMA_VERSION,
-      sequence: value.sequence,
-      kind: value.kind,
-      revision: value.revision,
-      userRevision: value.userRevision,
-      workspaceRevision: value.workspaceRevision,
-      scope: value.scope,
-      settingIds: Object.freeze([...value.settingIds]),
-      storeState: value.storeState,
-    },
+  const event = {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    sequence: value.sequence,
+    kind: value.kind,
+    revision: value.revision,
+    userRevision: value.userRevision,
+    workspaceRevision: value.workspaceRevision,
+    scope: value.scope,
+    settingIds: Object.freeze([...value.settingIds]),
+    storeState: value.storeState,
   };
+  return isCompleteSettingsEvent(event)
+    ? { ok: true, value: event }
+    : { ok: false, reasonCode: "INVALID_INPUT" };
 }
 
 interface SettingsEventRecord {
@@ -824,10 +845,12 @@ function parseEditorM7WatchEventUnsafe(value: unknown): EditorM7ParseResult<Edit
   if (!validWatchPayload(value)) {
     return { ok: false, reasonCode: "UNSAFE_PATH" };
   }
-  return { ok: true, value: value as unknown as EditorM7WatchEvent };
+  return { ok: true, value };
 }
 
-function validWatchEnvelope(value: unknown): value is UnknownRecord {
+function validWatchEnvelope(
+  value: unknown,
+): value is UnknownRecord & Pick<EditorM7WatchEvent, "schemaVersion" | "sequence"> {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, [
@@ -848,7 +871,9 @@ function validWatchEnvelope(value: unknown): value is UnknownRecord {
   );
 }
 
-function validWatchPayload(value: UnknownRecord): boolean {
+function validWatchPayload(
+  value: UnknownRecord,
+): value is UnknownRecord & Omit<EditorM7WatchEvent, "schemaVersion" | "sequence"> {
   return (
     isWatchKind(value.kind) &&
     isSafeRelativePath(value.relativePath) &&
@@ -862,27 +887,29 @@ function validWatchPayload(value: UnknownRecord): boolean {
   );
 }
 
-function validOptionalRelativePath(value: unknown): boolean {
+function validOptionalRelativePath(value: unknown): value is string | undefined {
   return value === undefined || isSafeRelativePath(value);
 }
 
-function validOptionalMetadataHash(value: unknown): boolean {
+function validOptionalMetadataHash(value: unknown): value is string | undefined {
   return value === undefined || (typeof value === "string" && HASH_PATTERN.test(value));
 }
 
-function validOptionalEntryKind(value: unknown): boolean {
+function validOptionalEntryKind(value: unknown): value is EditorM7WatchEntryKind | undefined {
   return value === undefined || isWatchEntryKind(value);
 }
 
-function validOptionalNonNegativeNumber(value: unknown): boolean {
+function validOptionalNonNegativeNumber(value: unknown): value is number | undefined {
   return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0);
 }
 
-function validOptionalWatchHealth(value: unknown): boolean {
+function validOptionalWatchHealth(value: unknown): value is EditorM7WatchHealth | undefined {
   return value === undefined || isWatchHealth(value);
 }
 
-function validOptionalWatchReason(value: unknown): boolean {
+function validOptionalWatchReason(
+  value: unknown,
+): value is EditorM7WatchDegradedReason | undefined {
   return value === undefined || isWatchDegradedReason(value);
 }
 
@@ -902,19 +929,24 @@ function parseEditorM7WatchSnapshotUnsafe(
   if (!validWatchSnapshotEnvelope(value)) {
     return { ok: false, reasonCode: "INVALID_INPUT" };
   }
-  if (!value.degradedReasons.every(isWatchDegradedReason)) {
+  if (!physicalWatchReasons(value.degradedReasons)) {
     return { ok: false, reasonCode: "INVALID_INPUT" };
   }
-  return {
-    ok: true,
-    value: {
-      ...value,
-      degradedReasons: Object.freeze([...value.degradedReasons]),
-    },
+  const snapshot = {
+    ...value,
+    degradedReasons: Object.freeze([...value.degradedReasons]),
   };
+  return isCompleteWatchSnapshot(snapshot)
+    ? { ok: true, value: snapshot }
+    : { ok: false, reasonCode: "INVALID_INPUT" };
 }
 
-function validWatchSnapshotEnvelope(value: unknown): value is EditorM7WatchSnapshot {
+function validWatchSnapshotEnvelope(value: unknown): value is Omit<
+  EditorM7WatchSnapshot,
+  "degradedReasons"
+> & {
+  readonly degradedReasons: readonly unknown[];
+} {
   if (!isRecord(value) || !hasOnlyKeys(value, WATCH_SNAPSHOT_KEYS)) return false;
   return (
     value.schemaVersion === EDITOR_M7_SCHEMA_VERSION &&
@@ -1390,9 +1422,8 @@ function validateEditorM7KeybindingAgainstRegistry(
     if (isReservedBinding(canonical)) {
       return { ok: false, reasonCode: "RESERVED_KEYBINDING" };
     }
-    const active = Array.isArray(args.activeBindings)
-      ? (args.activeBindings as readonly EditorM7ActiveKeybinding[])
-      : activeKeybindingsFromRecord(args.activeBindings as Readonly<Record<string, string>>);
+    const active = activeBindingsForValidation(args);
+    if (active === undefined) return { ok: false, reasonCode: "INVALID_INPUT" };
     const collision = active.find((entry) =>
       collidesWithCommand(command, canonical, entry, registry),
     );
@@ -1453,7 +1484,10 @@ export function parseEditorM7KeybindingOverrideRecord(
   if (parts.length !== 3 || parts[0] !== EDITOR_M7_KEYBINDING_OVERRIDE_VERSION) {
     return { ok: false, reasonCode: "SCHEMA_VERSION_UNSUPPORTED" };
   }
-  const [, commandId, binding] = parts as [string, string, string];
+  const [, commandId, binding] = parts;
+  if (commandId === undefined || binding === undefined) {
+    return { ok: false, reasonCode: "SCHEMA_VERSION_UNSUPPORTED" };
+  }
   const parsed = validateEditorM7Keybinding({ commandId, binding, activeBindings });
   if (!parsed.ok) return parsed;
   return {
@@ -1615,7 +1649,8 @@ function validAiEnums(value: UnknownRecord): boolean {
 }
 
 function stringIn<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && values.includes(value as T);
+  const vocabulary: readonly string[] = values;
+  return typeof value === "string" && vocabulary.includes(value);
 }
 
 export function resolveEditorM7AiActivation(value: unknown): EditorM7AiActivationStatus {
@@ -1721,4 +1756,44 @@ function aiStatus(
     reasonCode,
     policyResult: allowed ? "allowed" : "denied",
   };
+}
+
+function isActiveKeybindingArray(
+  value: EditorM7KeybindingValidationArgs["activeBindings"],
+): value is readonly EditorM7ActiveKeybinding[] {
+  return Array.isArray(value);
+}
+
+function physicalSettingIds(value: unknown): value is readonly EditorM7SettingId[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isSettingId(value[index])) return false;
+  }
+  return true;
+}
+function physicalWatchReasons(value: unknown): value is readonly EditorM7WatchDegradedReason[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isWatchDegradedReason(value[index])) return false;
+  }
+  return true;
+}
+function isCompleteSettingsEvent(value: unknown): value is EditorM7SettingsEvent {
+  return validSettingsEventEnvelope(value) && physicalSettingIds(value.settingIds);
+}
+function isCompleteWatchSnapshot(value: unknown): value is EditorM7WatchSnapshot {
+  return validWatchSnapshotEnvelope(value) && physicalWatchReasons(value.degradedReasons);
+}
+
+function activeBindingsForValidation(
+  args: EditorM7KeybindingValidationArgs,
+): readonly EditorM7ActiveKeybinding[] | undefined {
+  const arrayBindings = Array.isArray(args.activeBindings);
+  const bindings = args.activeBindings;
+  if (arrayBindings !== isActiveKeybindingArray(bindings)) return undefined;
+  return isActiveKeybindingArray(bindings) ? bindings : activeKeybindingsFromRecord(bindings);
 }

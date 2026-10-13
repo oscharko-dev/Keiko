@@ -295,3 +295,169 @@ describe("encrypted editor local history contracts", () => {
     expect(accessCount).toBeLessThanOrEqual(entries.length * 2);
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-local-history";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const value = index([entry()]);
+    expect(publicOwner.validateEditorLocalHistoryIndex(value).ok).toBe(true);
+    expect(publicOwner.validateEditorLocalHistoryIndex({ ...value, revision: 0.5 }).ok).toBe(false);
+    expect(
+      publicOwner.planEditorLocalHistoryRetention(value.entries.map(publicRetentionEntry), {
+        requiredEntryCount: 0,
+        requiredByteCount: 0,
+      }),
+    ).toEqual(
+      planEditorLocalHistoryRetention(value.entries, {
+        requiredEntryCount: 0,
+        requiredByteCount: 0,
+      }),
+    );
+  });
+});
+
+describe.each([
+  ["source", validateEditorLocalHistoryIndex],
+  ["public", publicOwner.validateEditorLocalHistoryIndex],
+] as const)("3918 original-first final local history collection %s", (_surface, parse) => {
+  it("refuses a later malformed collection despite matching totals", () => {
+    const healthy = [entry()];
+    const input = index(healthy);
+    let reads = 0;
+    Object.defineProperty(input, "entries", {
+      get(): readonly unknown[] {
+        reads += 1;
+        return reads <= 2 ? healthy : [{ plaintextByteLength: 128, pinned: false }];
+      },
+    });
+    expect(parse(input)).toEqual({
+      ok: false,
+      reasons: ["editor local history index invalid"],
+    });
+  });
+  it("preserves healthy same-reference collections", () => {
+    const healthy = [entry()];
+    const input = index(healthy);
+    Object.defineProperty(input, "entries", {
+      get: (): readonly EditorLocalHistoryEntry[] => healthy,
+    });
+    expect(parse(input)).toEqual({ ok: true });
+    expect(input.entries).toBe(healthy);
+  });
+});
+
+function observeConsumedExtent(
+  values: readonly unknown[],
+  laterExtent: number,
+): {
+  readonly array: readonly unknown[];
+  readonly snapshot: () => { readonly lengthReads: number; readonly indexReads: number };
+} {
+  let lengthReads = 0;
+  let indexReads = 0;
+  const array = new Proxy([...values], {
+    get(target, property, receiver): unknown {
+      if (property === "length") return ++lengthReads === 2 ? laterExtent : target.length;
+      if (typeof property === "string" && /^\d+$/u.test(property)) indexReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  return { array, snapshot: () => ({ lengthReads, indexReads }) };
+}
+
+describe.each([
+  ["source", validateEditorLocalHistoryIndex],
+  ["public", publicOwner.validateEditorLocalHistoryIndex],
+] as const)("3918 consumed owning extent %s", (_surface, parse) => {
+  it("retains healthy native bounded observations", () => {
+    const observed = observeConsumedExtent([entry()], 1);
+    const value = index([entry()]);
+    Object.defineProperty(value, "entries", { value: observed.array });
+    expect(parse(value).ok).toBe(true);
+    expect(observed.snapshot().indexReads).toBeGreaterThan(0);
+  });
+  it.each([0.5, EDITOR_LOCAL_HISTORY_MAX_ENTRIES + 1])(
+    "refuses actual consumed extent %s before member work",
+    (extent) => {
+      const observed = observeConsumedExtent([entry()], extent);
+      const value = index([entry()]);
+      Object.defineProperty(value, "entries", { value: observed.array });
+      expect(parse(value)).toEqual({ ok: false, reasons: ["editor local history index invalid"] });
+      expect(observed.snapshot().indexReads).toBe(0);
+    },
+  );
+});
+
+describe.each([
+  ["source", validateEditorLocalHistoryIndex],
+  ["public", publicOwner.validateEditorLocalHistoryIndex],
+] as const)("3918 healthy changing history collection %s", (_surface, parse) => {
+  it("retains a distinct valid collection in the original totals observation", () => {
+    const first = [entry()];
+    const later = [entry()];
+    const value = index(first);
+    let reads = 0;
+    Object.defineProperty(value, "entries", {
+      get: (): readonly EditorLocalHistoryEntry[] => (++reads <= 2 ? first : later),
+    });
+    expect(parse(value)).toEqual({ ok: true });
+    expect(reads).toBe(3);
+  });
+});
+
+import * as publicPrimitives from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+
+function publicRetentionEntry(value: EditorLocalHistoryEntry): publicOwner.EditorLocalHistoryEntry {
+  return {
+    ...value,
+    entryRef: checked(value.entryRef, publicPrimitives.isWorkspaceHistoryEntryRef),
+    rootRef: checked(value.rootRef, publicPrimitives.isWorkspaceRootRef),
+    rootIdentityDigest: checked(
+      value.rootIdentityDigest,
+      publicPrimitives.isWorkspaceRootIdentityDigest,
+    ),
+    relativePathDigest: checked(value.relativePathDigest, publicPrimitives.isWorkspacePathDigest),
+    plaintextContentDigest: checked(
+      value.plaintextContentDigest,
+      publicPrimitives.isWorkspaceContentDigest,
+    ),
+    payloadBindingDigest: checked(
+      value.payloadBindingDigest,
+      publicPrimitives.isWorkspaceContentDigest,
+    ),
+    recordedAt: checked(value.recordedAt, publicPrimitives.isWorkspaceIsoInstant),
+    lastAccessedAt: checked(value.lastAccessedAt, publicPrimitives.isWorkspaceIsoInstant),
+    encryptedContent: {
+      ...value.encryptedContent,
+      vaultEntryRef: checked(
+        value.encryptedContent.vaultEntryRef,
+        publicPrimitives.isWorkspaceVaultEntryRef,
+      ),
+    },
+    predecessor: { outcome: "absent" },
+    pinnedAt: { outcome: "absent" },
+  };
+}
+
+describe.each([
+  ["source", validateEditorLocalHistoryIndex],
+  ["public", publicOwner.validateEditorLocalHistoryIndex],
+] as const)("3918 owning history workspace relation %s", (_surface, parse) => {
+  it("refuses a valid foreign-workspace entry hidden by caller every", () => {
+    const entries = [entry({ workspaceId: "workspace-2" })];
+    const value = index(entries);
+    Object.defineProperty(entries, "every", { value: (): boolean => true });
+    expect(parse(value)).toEqual({ ok: false, reasons: ["editor local history index invalid"] });
+  });
+  it("preserves same-workspace caller overrides and ordinary foreign refusal", () => {
+    const entries = [entry()];
+    Object.defineProperty(entries, "every", { value: (): boolean => true });
+    expect(parse(index(entries))).toEqual({ ok: true });
+    expect(parse(index([entry({ workspaceId: "workspace-2" })]))).toEqual({
+      ok: false,
+      reasons: ["editor local history index invalid"],
+    });
+  });
+});

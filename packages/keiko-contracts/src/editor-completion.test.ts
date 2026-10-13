@@ -187,3 +187,45 @@ describe("parseEditorCompletionRequest — rejections", () => {
     );
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-completion";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const input = baseRequest();
+    const parsed = publicOwner.parseEditorCompletionRequest(input);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.document).toBe(input.document);
+    expect(parsed.value.position).toBe(input.position);
+    expect(parsed.value.triggerKind).toBe("invoked");
+    expect(Object.hasOwn(parsed.value, "editorSessionId")).toBe(false);
+  });
+});
+
+// #3918 finite original-first observations.
+describe("#3918 captured output root admission", () => {
+  it.each([
+    ["source", parseEditorCompletionRequest],
+    ["public", publicOwner.parseEditorCompletionRequest],
+  ])("%s refuses a malformed second root", (_surface, parse) => {
+    const input = baseRequest();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : undefined) });
+    expect(parse(input)).toEqual({ ok: false, errors: ["root must be a non-empty string"] });
+    expect(reads).toBe(2);
+  });
+  it.each([
+    ["source", parseEditorCompletionRequest],
+    ["public", publicOwner.parseEditorCompletionRequest],
+  ])("%s keeps a valid changed second root", (_surface, parse) => {
+    const input = baseRequest();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : "/other") });
+    const parsed = parse(input);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.root).toBe("/other");
+    expect(reads).toBe(2);
+  });
+});

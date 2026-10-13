@@ -95,3 +95,46 @@ describe("parseEditorPatchApplyRequest", () => {
     expect(parseEditorPatchApplyRequest(validApply({ allowOverwrite: "yes" })).ok).toBe(false);
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-patch-apply";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const parsed = publicOwner.parseEditorPatchApplyRequest(validApply());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.patchId).toBe(PATCH_ID);
+    expect(parsed.value.decision).toBe("apply");
+    expect(Object.hasOwn(parsed.value, "allowOverwrite")).toBe(false);
+    expect(publicOwner.parseEditorPatchApplyRequest(validApply({ decision: "invented" })).ok).toBe(
+      false,
+    );
+  });
+});
+
+// #3918 finite original-first observations.
+describe("#3918 captured output root admission", () => {
+  it.each([
+    ["source", parseEditorPatchApplyRequest],
+    ["public", publicOwner.parseEditorPatchApplyRequest],
+  ])("%s refuses a malformed second root", (_surface, parse) => {
+    const input = validApply();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : undefined) });
+    expect(parse(input)).toEqual({ ok: false, errors: ["root must be a non-empty string"] });
+    expect(reads).toBe(2);
+  });
+  it.each([
+    ["source", parseEditorPatchApplyRequest],
+    ["public", publicOwner.parseEditorPatchApplyRequest],
+  ])("%s keeps a valid changed second root", (_surface, parse) => {
+    const input = validApply();
+    let reads = 0;
+    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : "/other") });
+    const parsed = parse(input);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.root).toBe("/other");
+    expect(reads).toBe(2);
+  });
+});

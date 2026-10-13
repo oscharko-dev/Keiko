@@ -646,3 +646,22 @@ describe("normalizedActiveFile", () => {
     expect(normalizedActiveFile({ openFiles: ["src/a.ts"] })).toBe("");
   });
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const created = publicOwner.createEditorLayoutStateV2(DEFAULT_INPUT);
+    expect(Object.getPrototypeOf(created.panes)).toBeNull();
+    expect(created.panes[created.activePaneId]?.openFiles).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(
+      publicOwner.editorLayoutReducer(created, {
+        type: "move-tab",
+        fromPaneId: created.activePaneId,
+        toPaneId: created.activePaneId,
+        file: "never-opened.ts",
+      }),
+    ).toBe(created);
+  });
+});
