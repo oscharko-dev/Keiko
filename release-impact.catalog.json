@@ -3168,6 +3168,106 @@
         "warningText": "Before updating to 1.2.0, review custom support scripts: remove legacy inclusion flags and sidecar handling, pass a private directory to --out, and consume the versioned analysis envelope. Regenerate retired legacy bundles at the originating installation. This release requires manual update review; no automatic conversion of those workflows is provided.",
         "verifiedCarryForward": false
       }
+    },
+    {
+      "id": "2026-10-13-keiko-1.2.1-connected-source-and-workbench-reliability",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.2.1",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.2.1",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Connected-source questions retain relevant named files, callable implementation bodies and source locations within the existing authority and budgets. Gateway startup and Coding Workbench streaming, verification and exact file edits are more reliable. Improved source selection does not establish complete Gemma answer or citation quality; the original long-context Gemma case still has a known synthesis limitation.",
+      "affectedStateStores": [
+        "gateway-config",
+        "ui-store-schema",
+        "workspace-search-index",
+        "evidence-store",
+        "activity-log"
+      ],
+      "stateImpact": [
+        {
+          "store": "gateway-config",
+          "description": "Optional coding streaming, reasoning-display and outage-window settings retain defaults when absent. Normal startup preserves configured gateways, credentials and deliberate model selection while readiness refreshes automatically. No credential migration is required.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "ui-store-schema",
+          "description": "The existing SQLite migration to V40 admits closed Coding Workbench failure causes in settled-run records. Existing records remain readable; this is a forward-only schema migration. Chats keep their existing ownership and source scope. No customer workspace files are migrated.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "workspace-search-index",
+          "description": "Revised document decoding and natural-language matching identities invalidate obsolete cached matches. The existing source scanner rebuilds affected results under its original scope and read budgets; no manual Knowledge Pod reindex is required.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "evidence-store",
+          "description": "Existing manifests and persisted grounded answers record the actual excerpts sent to the model, physical source locations and observed budget usage. Earlier evidence and chat history are retained. New evidence does not certify unsupported source relationships or model claims.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Registered source-selection, gateway, runtime and redaction events change the Activity Log catalog identity. Existing records are not rewritten. The release bundles historical registries and producing-code inventories through the existing version setter so supported older reports retain their exact validator identity.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Connected sources: keep explicitly named files and requested implementation bodies in the evidence, including supported imports, callable relationships, document predicates and recursive call cycles, without increasing the caller's read, token or elapsed-time grants. Scope denials and exhausted budgets remain enforced. (#3913)",
+        "Grounded chat: preserve the original question through source search, fit relevant excerpt bodies into the actual model context, and keep physical citation ranges and sent-source accounting aligned. Failed or cancelled work retains its diagnostic evidence. (#3913)",
+        "Files and sources: keep the acknowledged folder aligned with pending reads and source links, preserve relevant document content, and distinguish inspected files from evidence sent to the model. (#3913)",
+        "Code blocks: copying code releases its status timer when the block closes and ignores late clipboard replies, preserving the visible confirmation while the block remains open. (#3913)",
+        "Gateways: normal project startup preserves configured providers and model selection; readiness refreshes without reopening Settings. Region-qualified model identifiers are accepted through the existing validated model store. (#3895) (#4012)",
+        "Coding Workbench: stream answers and reasoning from compatible self-hosted models, attempt one bounded repair of an empty or exhausted answer, and report temporary gateway outages during the configured recovery window. Repository instructions are included as bounded task context. (#3876)",
+        "Coding Workbench: preserve ordinary file-edit text byte for byte, support governed deletion and rename, and require fresh verification after the last edit before claiming completion. Configured provider credentials are still redacted, and other tools retain their existing redaction and authority checks. (#3876) (#3895) (#4012)",
+        "Coding limits: new runs default to 2,000,000 prompt tokens and 120 minutes. Operators can retain the previous 200,000-token and 30-minute limits with KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS and KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES. Explicit narrower ceilings remain enforced. (#3876)",
+        "Known model limitation: the original long-context Gemma question still fails complete answer and validated-citation qualification despite better source evidence. This release does not claim complete Gemma qualification, standalone OpenCode parity or production Windows Coding execution. (#3913) (#3895)",
+        "Update: restart after installation. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow; legacy inclusion flags, filename-based export output and sidecar bundles remain unsupported. Cross-platform automatic carry-forward is not newly qualified by this release."
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-13",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/3913#issuecomment-6150882815",
+        "rationale": "The owner selected 1.2.1 and explicitly authorized autonomous release after verified PR #3913 integration, repeated quality comparison and successful required gates. This durable comment records that instruction; no separate approving GitHub review is claimed. This entry covers changes since v1.2.0 in #3876, #3895, #3911, #4012 and #3913. #3911 strengthens native secure-read qualification without changing product behavior and therefore adds no separate public feature bullet. The measured retrieval improvement and known original Gemma synthesis/citation failure remain distinct. Incomplete epic criteria, standalone runtime parity and Windows Coding are not claimed complete. Publication still requires protected signed delivery, exact-candidate checks, owner-authorized release workflow, customer-shape qualification, signed portable assets, npm publication and artifact alignment. Published catalog entries remain unchanged."
+      },
+      "breakingException": {
+        "rationale": "This patch retains the existing 1.2.0 support-workflow compatibility boundary for customers upgrading from older versions. Retired support scripts and bundles still lack automatic conversion, and the required native cross-platform N-1 to N updater canaries are not established by source or package checks. Keep updater eligibility manual; this does not introduce a new emergency compatibility exception.",
+        "warningText": "Review custom support scripts when upgrading from before 1.2.0: use the canonical private report, a directory for export output and the versioned analysis envelope. Regenerate retired legacy bundles at their originating installation. Restart after installation; automatic carry-forward of these workflows is not provided.",
+        "verifiedCarryForward": false
+      }
     }
   ]
 }
