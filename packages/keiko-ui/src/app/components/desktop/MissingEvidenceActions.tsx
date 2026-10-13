@@ -118,8 +118,8 @@ function useAddDeclaredFile(
         latest.current.draft ? `${latest.current.draft}\n${suggestion}` : suggestion,
       );
       latest.current.focusComposer();
-    } catch (failure) {
-      setError(formatUserError(failure, t("scope.missing.failed")));
+    } catch (error_) {
+      setError(formatUserError(error_, t("scope.missing.failed")));
     } finally {
       setBusy(false);
     }
@@ -137,7 +137,8 @@ function DeclaredFileAction({
 }): ReactNode {
   const t = useTranslate();
   const [selected, setSelected] = useState("");
-  const root = roots.length === 1 ? (roots[0] ?? "") : roots.includes(selected) ? selected : "";
+  const selectedRoot = roots.includes(selected) ? selected : "";
+  const root = roots.length === 1 ? (roots[0] ?? "") : selectedRoot;
   const action = useAddDeclaredFile(props, declaration.scopePath, root);
   if (roots.length === 0) return null;
   return (

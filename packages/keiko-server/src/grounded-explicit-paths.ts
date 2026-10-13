@@ -1,6 +1,7 @@
 import { relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   isPathWithinSelectedScope,
   isValidScopePath,
@@ -268,7 +269,7 @@ function rejectionReason(result: SearchResult, path: string): ExplicitPathReject
     : "missing";
 }
 
-async function findExplicitFiles(
+function findExplicitFiles(
   inputs: AdmissionInputs,
   pattern: string,
   relativePaths: readonly string[],
@@ -480,7 +481,7 @@ async function basenamePaths(
     );
     for (const entry of result.entries) if (entry.kind === "file") paths.add(entry.relativePath);
   }
-  return [...paths].sort().slice(0, BASENAME_MATCH_CAP);
+  return [...paths].sort(compareStrings).slice(0, BASENAME_MATCH_CAP);
 }
 
 async function classifyBasenamePaths(

@@ -1,8 +1,8 @@
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { ContextProfile, ModelKind } from "@oscharko-dev/keiko-contracts";
 import type { SentGroundedPrompt } from "./grounded-prompt-context.js";
 import type { ContextSelectionConfidence } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { ModelKind } from "@oscharko-dev/keiko-contracts";
+
 import {
   activityLogEvent,
   defineActivityLogOperation,

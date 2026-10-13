@@ -1825,7 +1825,8 @@ export function renderHumanTimeline(timeline: LogTimeline): string {
         `  retrieval-miss ${finding.reason} correlationId=${finding.correlationId} fields=${JSON.stringify(finding.fields)}`,
     )
     .join("\n");
-  return `${header}${body}\n${findings.length === 0 ? "" : `${findings}\n`}`;
+  const findingLines = findings.length === 0 ? "" : findings + "\n";
+  return `${header}${body}\n${findingLines}`;
 }
 
 function renderProcessSummary(process: ProcessSummary): string {

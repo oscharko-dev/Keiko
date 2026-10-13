@@ -940,7 +940,8 @@ function referenceButtonClassName(
   className: string,
   state: RepositoryReferenceEvidenceState | undefined,
 ): string {
-  return `${className}${state === undefined ? "" : ` ${referenceEvidenceClassName(state) ?? ""}`}`;
+  const evidenceClass = state === undefined ? "" : ` ${referenceEvidenceClassName(state) ?? ""}`;
+  return `${className}${evidenceClass}`;
 }
 
 export function RepositoryReferenceInline({

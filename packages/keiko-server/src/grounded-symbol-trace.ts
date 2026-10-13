@@ -9,8 +9,10 @@ import type {
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONTEXT_COVERAGE_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/connected-context";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   isDirectEvidenceLookup,
+  resolveQueryTargetDecision,
   type RetrievalIntent,
   type SearchAnchor,
 } from "@oscharko-dev/keiko-workflows";
@@ -108,6 +110,7 @@ export interface FollowSymbolTraceEvidence {
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
   readonly routeCoverage?: RouteTraceCoverage | undefined;
+  readonly contextualDefinitionSeedCount?: number | undefined;
 }
 
 const TRACE_MAX_DEPTH = 3;
@@ -116,7 +119,7 @@ const MAX_DISCOVERY_ATOMS = 12;
 const MAX_DISCOVERED_SYMBOLS = 4;
 const MAX_DISCOVERY_EXCERPT_BYTES = 4096;
 const ROUTER_HANDLER_RE =
-  /\b(?:router|app|server)\s*\.\s*(get|post|put|patch|delete|head|options)\s*\(\s*(["'])([^"'\n]+)\2\s*,\s*([a-z_$][a-z0-9_$]{0,127})(?=\s*[,)])/giu;
+  /\b(?:router|app|server)\s*\.\s*([a-z]{3,7})\s*\(\s*(["'])([^"'\n]+)\2\s*,\s*([a-z_$][a-z0-9_$]{0,127})(?=\s*[,)])/giu;
 const ROUTE_TRACE_QUERY_RE =
   /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b[^\n]*\/[a-z0-9._~!$&'()*+,;=:@%/-]+/iu;
 const TEST_DIRECTORY_PATH_RE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)/iu;
@@ -480,6 +483,149 @@ async function discoveredHandlerSymbols(
   return [
     ...new Map(targets.map((target) => [definitionIdentity(target.definition), target])).values(),
   ].slice(0, MAX_DISCOVERED_SYMBOLS);
+}
+
+function contextualDiscoveryAtoms(
+  input: DiscoveredSymbolTraceEvidenceInput,
+): readonly EvidenceAtom[] {
+  return discoveryAtoms(
+    input.atoms.filter(
+      (atom) =>
+        atom.provenance.kind === "lexical-search" &&
+        atom.provenance.tool === "repo.searchText" &&
+        candidateBucketForPath(atom.scopePath) === "source",
+    ),
+  );
+}
+
+function indexedCallableOwners(
+  index: CodeIntelligenceIndex,
+  scopePath: string,
+): readonly CodeCallEdge["callerDefinition"][] {
+  const calls = index.calls.filter(
+    (call) =>
+      call.parser === "typescript-compiler-ast" &&
+      call.binding === "lexical" &&
+      call.confidence === "resolved" &&
+      call.callerPath === scopePath,
+  );
+  const references = index.references.filter(
+    (reference) =>
+      reference.parser === "typescript-compiler-ast" &&
+      reference.binding === "lexical" &&
+      reference.confidence === "resolved" &&
+      reference.referencerPath === scopePath,
+  );
+  return [
+    ...calls.map((call) => call.callerDefinition),
+    ...references.map((reference) => reference.referencerDefinition),
+  ];
+}
+
+function certifiedCallableDefinition(
+  symbol: CodeSymbol,
+  owners: readonly CodeCallEdge["callerDefinition"][],
+): boolean {
+  if (symbol.kind === "function" || symbol.kind === "method") return true;
+  return (
+    symbol.kind === "constant" &&
+    owners.some(
+      (owner) =>
+        owner?.name === symbol.name &&
+        owner.lineRange.startLine === symbol.lineRange.startLine &&
+        owner.lineRange.endLine === symbol.lineRange.endLine &&
+        sameDeclarationSpan(owner.declarationSpan, symbol.declarationSpan),
+    )
+  );
+}
+
+function unambiguousConstantOwner(
+  definition: CodeSymbol,
+  index: CodeIntelligenceIndex,
+  line: number,
+): boolean {
+  return !index.symbols.some(
+    (symbol) =>
+      symbol !== definition &&
+      symbol.parser === "typescript-compiler-ast" &&
+      symbol.kind === "constant" &&
+      symbol.scopePath === definition.scopePath &&
+      symbol.declarationSpan !== undefined &&
+      symbol.lineRange.startLine <= line &&
+      symbol.lineRange.endLine >= line,
+  );
+}
+
+function currentCallableOwner(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  index: CodeIntelligenceIndex,
+  owners: readonly CodeCallEdge["callerDefinition"][],
+  scopePath: string,
+  line: number,
+): CodeSymbol | undefined {
+  if (input.requestContext?.isCodeIntelligenceSourceCurrent(scopePath) !== true) return undefined;
+  const definitions = index.symbols.filter(
+    (symbol) =>
+      symbol.parser === "typescript-compiler-ast" &&
+      symbol.scopePath === scopePath &&
+      symbol.declarationSpan !== undefined &&
+      symbol.lineRange.startLine <= line &&
+      symbol.lineRange.endLine >= line &&
+      certifiedCallableDefinition(symbol, owners),
+  );
+  const definition = definitions.length === 1 ? definitions[0] : undefined;
+  return definition?.kind === "constant" && !unambiguousConstantOwner(definition, index, line)
+    ? undefined
+    : definition;
+}
+
+function contextualCallableTargets(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  observation: DiscoveryExcerptObservation,
+  index: CodeIntelligenceIndex,
+): readonly RouteHandlerTarget[] {
+  const startLine = observation.lineRange?.startLine;
+  if (startLine === undefined) return [];
+  const matcher = buildMatcher(input.query);
+  const owners = indexedCallableOwners(index, observation.scopePath);
+  return repositorySourceLines(observation.content, observation.scopePath).flatMap(
+    (line, offset) => {
+      if (line.structural.trim().length === 0 || matcher.match(line.structural, line) <= 0)
+        return [];
+      const definition = currentCallableOwner(
+        input,
+        index,
+        owners,
+        observation.scopePath,
+        startLine + offset,
+      );
+      return definition === undefined ? [] : [{ symbol: definition.name, definition }];
+    },
+  );
+}
+
+async function discoveredContextualSymbols(
+  input: DiscoveredSymbolTraceEvidenceInput,
+): Promise<readonly RouteHandlerTarget[]> {
+  const candidates = contextualDiscoveryAtoms(input);
+  const index = await admittedDefinitionIndex(input, candidates);
+  if (index === undefined) return [];
+  const observations = await Promise.all(
+    candidates.map((atom) => discoveryExcerptObservation(input, atom)),
+  );
+  const targets = observations.flatMap((observation) =>
+    contextualCallableTargets(input, observation, index),
+  );
+  return [
+    ...new Map(targets.map((target) => [definitionIdentity(target.definition), target])).values(),
+  ].slice(0, MAX_DISCOVERED_SYMBOLS);
+}
+
+function contextualTraceRequested(input: DiscoveredSymbolTraceEvidenceInput): boolean {
+  return (
+    input.query.kind === "natural-language" &&
+    resolveQueryTargetDecision(input.query, input.anchors).kind === "contextual"
+  );
 }
 
 function exactSymbolQuery(symbol: string, nowMs: () => number): RetrievalQuery {
@@ -1281,9 +1427,11 @@ function requestsTestDeclarationComparison(query: RetrievalQuery): boolean {
   const subject = query.text.replace(/"[^"\n]*"|'[^'\n]*'|`[^`\n]*`/gu, " ");
   return (
     /\b(?:tests?|fixtures?|testdaten|testwerte|testfälle)\b/iu.test(subject) &&
-    /\b(?:compar(?:e[ds]?|ing|isons?)|contrast|versus|differ(?:ent|ences?)|whether|similarly|vergleich(?:e|en|t)?|verglichen|unterschied(?:e|en)?|ob|ähnlich(?:e|en)?)\b/iu.test(
-      subject,
-    )
+    (/\b(?:compar(?:e[ds]?|ing|isons?)|differ(?:ent|ences?))\b/iu.test(subject) ||
+      /\b(?:contrast|versus|whether|similarly)\b/iu.test(subject) ||
+      /\b(?:vergleich(?:e|en|t)?|verglichen|unterschied(?:e|en)?|ob|ähnlich(?:e|en)?)\b/iu.test(
+        subject,
+      ))
   );
 }
 
@@ -1490,7 +1638,7 @@ async function traceDiscoveredSymbols(
   const seen = certifiedSeedIdentities(input, atoms);
   let retained = seen.size;
   let frontier: readonly EvidenceAtom[] = atoms;
-  for (let depth = 1; frontier.length > 0; depth += 1) {
+  while (frontier.length > 0) {
     if (traceWorkStopped(input)) {
       clipping.reasons.add("deadline");
       clipping.frontierOmitted += frontier.length;
@@ -1504,7 +1652,7 @@ async function traceDiscoveredSymbols(
       Math.max(0, capacity - retained),
     );
     retained += frontier.length;
-    clipping.depthsVisited = depth;
+    clipping.depthsVisited += 1;
     atoms.push(...frontier.map((atom) => attenuatedTraceAtom(input, atom)));
   }
   return {
@@ -1519,9 +1667,11 @@ function discoveredTraversalMarker(
   nowMs: () => number,
 ): UncertaintyMarker | undefined {
   if (clipping.reasons.size === 0) return undefined;
+  const reasons = [...clipping.reasons];
+  reasons.sort(compareStrings);
   return {
     kind: "scope-incomplete",
-    claim: `Discovered-symbol traversal was incomplete: reasons=${[...clipping.reasons].sort().join(",")}; frontierOmitted=${String(clipping.frontierOmitted)}, excerptsClipped=${String(clipping.excerptsClipped)}, depthsVisited=${String(clipping.depthsVisited)}.`,
+    claim: `Discovered-symbol traversal was incomplete: reasons=${reasons.join(",")}; frontierOmitted=${String(clipping.frontierOmitted)}, excerptsClipped=${String(clipping.excerptsClipped)}, depthsVisited=${String(clipping.depthsVisited)}.`,
     impactedAtomIds: [],
     emittedAtMs: nowMs(),
   };
@@ -1558,7 +1708,8 @@ export async function collectDiscoveredSymbolTraceEvidence(
 ): Promise<FollowSymbolTraceEvidence> {
   if (traceWorkStopped(input)) return { atoms: [], uncertainty: [] };
   if (!shouldTrace(input)) return { atoms: [], uncertainty: [] };
-  if (!ROUTE_TRACE_QUERY_RE.test(input.query.text)) return { atoms: [], uncertainty: [] };
+  const route = ROUTE_TRACE_QUERY_RE.test(input.query.text);
+  if (!route && !contextualTraceRequested(input)) return { atoms: [], uncertainty: [] };
   const requestInput = {
     ...input,
     definitionCertificates: new WeakMap<EvidenceAtom, CodeSymbol>(),
@@ -1566,11 +1717,15 @@ export async function collectDiscoveredSymbolTraceEvidence(
     observedDefinitionParents: new Map<string, ObservedDefinitionParent>(),
     observedOwnedCalls: new Map<string, Set<string>>(),
   };
-  const symbols = await discoveredHandlerSymbols(requestInput);
-  if (symbols.length === 0) return { atoms: [], uncertainty: [] };
+  const symbols = route
+    ? await discoveredHandlerSymbols(requestInput)
+    : await discoveredContextualSymbols(requestInput);
+  const seedCount = route ? {} : { contextualDefinitionSeedCount: symbols.length };
+  if (symbols.length === 0) return { atoms: [], uncertainty: [], ...seedCount };
   const trace = await traceDiscoveredSymbols(requestInput, symbols);
   const marker = discoveredTraceCoverageMarker(trace.coverage, input.nowMs);
   return {
+    ...seedCount,
     atoms: trace.atoms,
     routeCoverage: discoveredRouteCoverage(requestInput, trace.atoms),
     uncertainty: [marker, discoveredTraversalMarker(trace.clipping, input.nowMs)].filter(

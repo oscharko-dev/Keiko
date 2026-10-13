@@ -737,13 +737,6 @@ async function renderMounted(): Promise<void> {
 }
 
 describe("AppShell grounding connections", () => {
-  it("defers navigation until the client shell mounts and preserves its new-chat action", async () => {
-    expect(leftRailModuleLoadsAtImport).toBe(0);
-    const user = userEvent.setup();
-    await renderMounted();
-    await user.click(await screen.findByTestId("left-rail"));
-    expect(await screen.findByRole("button", { name: "Confirm new chat" })).toBeVisible();
-  });
   beforeAll((): void => {
     originalDialogShowModal = installDialogMethod("showModal", mocks.dialogShowModal);
     originalDialogClose = installDialogMethod("close", mocks.dialogClose);
@@ -819,6 +812,14 @@ describe("AppShell grounding connections", () => {
     mocks.state.rightRailRendered = false;
     mocks.state.rightRailOnTool = undefined;
     document.documentElement.removeAttribute("data-input-modality");
+  });
+
+  it("defers navigation until the client shell mounts and preserves its new-chat action", async () => {
+    expect(leftRailModuleLoadsAtImport).toBe(0);
+    const user = userEvent.setup();
+    await renderMounted();
+    await user.click(await screen.findByTestId("left-rail"));
+    expect(await screen.findByRole("button", { name: "Confirm new chat" })).toBeVisible();
   });
 
   it("adopts the canonical chat after a Git connection instead of retaining the old identity", async () => {

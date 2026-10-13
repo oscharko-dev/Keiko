@@ -1460,18 +1460,18 @@ function CoverageNotice({
     (reason) =>
       reason !== "size-exceeded" && reason !== "tool-unavailable" && omittedCounts[reason] > 0,
   );
+  const pluralCoverageKey =
+    recordedCount === 1
+      ? "grounded.inspection.coverageGap.one"
+      : "grounded.inspection.coverageGap.other";
   return (
     <div className="grounded-coverage-notice" role="note">
       <span className="grounded-coverage-notice-title">{t("grounded.partialCoverage")}</span>
       <span>
-        {t(
-          singleFile
-            ? "grounded.coverage.file"
-            : recordedCount === 1
-              ? "grounded.inspection.coverageGap.one"
-              : "grounded.inspection.coverageGap.other",
-          { count: formatCount(recordedCount, t.locale), detail },
-        )}
+        {t(singleFile ? "grounded.coverage.file" : pluralCoverageKey, {
+          count: formatCount(recordedCount, t.locale),
+          detail,
+        })}
       </span>
       {showDocumentNotice ? <span>{t("grounded.inspection.documentHint")}</span> : null}
     </div>
@@ -1873,7 +1873,6 @@ function FolderAuditDetails(props: FolderAuditDetailsProps): ReactNode {
     <>
       <ConnectedEvidenceInspection
         key={answer.assistantMessageId}
-        contextPack={pack}
         runIds={[
           ...(answer.evidenceRunId === undefined ? [] : [answer.evidenceRunId]),
           ...(answer.evidenceRunIds ?? []),

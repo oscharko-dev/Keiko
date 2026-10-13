@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1d434e41b0e3597d984f2ecdcdc7e306c8c3a1bb54458b4da7232372f9e800a9"
+    "catalogDigest": "4d932b5197e28cec13baaf50563aafc0f1f2f4a65266f12d73369c698314fd9f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2299,7 +2299,8 @@
       "packages/keiko-server/src/grounded-orchestrator.denied-root-log.test.ts",
       "packages/keiko-server/src/grounded-plural-refresh-budget.public-handler.test.ts",
       "packages/keiko-server/src/grounded-route-coverage.test.ts",
-      "packages/keiko-server/src/grounded-semantic-budget.test.ts"
+      "packages/keiko-server/src/grounded-semantic-budget.test.ts",
+      "packages/keiko-server/src/grounded-symbol-trace.test.ts"
     ],
     "search.connected-context.path-ranking.line": [
       "packages/keiko-server/src/grounded-path-ranking.activity-log.test.ts"

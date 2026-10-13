@@ -109,7 +109,11 @@ export function observedOwnedCallCycles(
     startOwnedCycleFrame(identity, undefined, state);
     traverseOwnedCycles(state);
   }
-  return state.groups
-    .map((group) => group.sort((left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0)))
-    .sort((left, right) => (order.get(left[0] ?? "") ?? 0) - (order.get(right[0] ?? "") ?? 0));
+  const groups = state.groups.map((group) => {
+    const ordered = [...group];
+    ordered.sort((left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0));
+    return ordered;
+  });
+  groups.sort((left, right) => (order.get(left[0] ?? "") ?? 0) - (order.get(right[0] ?? "") ?? 0));
+  return groups;
 }

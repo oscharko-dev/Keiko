@@ -545,6 +545,17 @@ interface FilesPatchAcknowledgement {
   scope?: ChatConnectedScope;
 }
 
+function captureCanonicalFilesAcknowledgement(
+  acknowledgement: FilesPatchAcknowledgement,
+  chat: Chat,
+  scopes: readonly ChatConnectedScope[],
+  nextScope: ChatConnectedScope,
+): void {
+  acknowledgement.chat = chat;
+  const acceptedScope = scopes.find((scope) => isScopeConnected([scope], nextScope));
+  if (acceptedScope !== undefined) acknowledgement.scope = acceptedScope;
+}
+
 function sameScopeSnapshot(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
   if (a.connectedAtMs !== b.connectedAtMs) return false;
   if (a.root === undefined || b.root === undefined) {
@@ -1856,9 +1867,7 @@ function AppShellInner(): ReactNode {
       reportFilesOwnershipDecision(attempt, connection, canonicalScopes);
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (filesScopeAlreadyCanonical(canonicalScopes, nextScope, ownedScope)) {
-        acknowledgement.chat = chat;
-        const acceptedScope = canonicalScopes.find((scope) => isScopeConnected([scope], nextScope));
-        if (acceptedScope !== undefined) acknowledgement.scope = acceptedScope;
+        captureCanonicalFilesAcknowledgement(acknowledgement, chat, canonicalScopes, nextScope);
         rememberGroundingChat(chat);
         publishRefreshedGroundingChat(chat);
         return true;

@@ -328,13 +328,28 @@ export function hasSymbolRelationshipQuery(text: string): boolean {
 }
 
 const RECURSIVE_TRAVERSAL_PROSE_RE =
-  /(?:^|[\s(,;!?])(?:(not|no|without|nicht|ohne|keine?)\s+)?(?:recursion|recursive|recursively|rekursion|rekursiv(?:e[rsnm]?)?)(?=$|[\s),;!?]|\.(?:$|\s))/giu;
+  /(?:^|[\s(,;!?])(?:recursi(?:on|ve(?:ly)?)|rekursi(?:on|v(?:e[rsnm]?)?))/giu;
+const RECURSION_SUFFIX_RE = /^(?:$|[\s),;!?]|\.(?:$|\s))/u;
+const RECURSION_NEGATION_RE = /(?:^|[\s(,;!?])(?:not|no|without|nicht|ohne|keine?)$/iu;
+
+function negatedRecursiveTerm(text: string, termStart: number): boolean {
+  let end = termStart;
+  while (end > 0 && /\s/u.test(text[end - 1] ?? "")) end -= 1;
+  // The longest accepted negation is "without"; include its preceding boundary.
+  return end < termStart && RECURSION_NEGATION_RE.test(text.slice(Math.max(0, end - 8), end));
+}
 
 /** Explicit prose requests qualify; paths, quoted identifiers and negated terms do not. */
 export function hasRecursiveTraversalQuery(text: string): boolean {
-  return [...naturalLanguageSubjectText(text).matchAll(RECURSIVE_TRAVERSAL_PROSE_RE)].some(
-    (match) => match[1] === undefined,
-  );
+  const subject = naturalLanguageSubjectText(text);
+  return [...subject.matchAll(RECURSIVE_TRAVERSAL_PROSE_RE)].some((match) => {
+    const start = match.index + Number(/^[\s(,;!?]/u.test(match[0]));
+    return (
+      RECURSION_SUFFIX_RE.test(
+        subject.slice(match.index + match[0].length, match.index + match[0].length + 2),
+      ) && !negatedRecursiveTerm(subject, start)
+    );
+  });
 }
 
 function emptyBucketCounts(): Record<CandidateBucket, number> {

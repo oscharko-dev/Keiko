@@ -1,4 +1,42 @@
-import { hasRecursiveTraversalQuery } from "@oscharko-dev/keiko-workspace";
+import {
+  hasRecursiveTraversalQuery,
+  CANONICAL_MANIFEST_BASENAMES,
+  DEFAULT_SEARCH_LIMITS,
+  FileTooLargeError,
+  PathDeniedError,
+  PathEscapeError,
+  RepoSearchUnsupportedFileError,
+  WorkspaceNotFoundError,
+  WorkspaceReadError,
+  candidateBucketForPath,
+  detectWorkspaceAt,
+  decodeTextFileBytes,
+  endpointContractAdapter,
+  findFiles,
+  gitHistoryAdapter,
+  isCanonicalMetadataFile,
+  isEcosystemSourceFile,
+  isGeneratedArtifactPath,
+  isDenied,
+  readExcerpt,
+  resolveWithinWorkspace,
+  searchText,
+  symbolGraphAdapter,
+  type ReadExcerptResult,
+  type ReadExcerptRequest,
+  type SearchLimits,
+  type SearchResult,
+  type SearchScope,
+  type SemanticSearchProvider,
+  type WorkspaceDirEntry,
+  type WorkspaceFs,
+  type WorkspaceIndex,
+  type WorkspaceIndexPreparationReport,
+  type WorkspaceInfo,
+  type WorkspaceStat,
+  containedRealPathInfo,
+  evidenceAtomStableId,
+} from "@oscharko-dev/keiko-workspace";
 import type { RepositorySemanticFreshnessObservation } from "./grounded-repo-semantic-search.js";
 import {
   groundedSemanticFreshnessSummary,
@@ -27,8 +65,19 @@ import {
 import {
   admissibleDeclaredScopePath,
   isOrdinaryFolderDocumentPath,
+  type ExplicitPathAdmission,
+  type ExplicitPathObservation,
 } from "./grounded-explicit-paths.js";
-import { declaredInsufficiencyPaths } from "./grounded-faithfulness.js";
+import {
+  declaredInsufficiencyPaths,
+  connectedSearchNoEvidenceAnswer,
+  buildPackCitationIndex,
+  incompleteAnswerMarker,
+  missingCitationMarkerFor,
+  noEvidenceMarker,
+  packHasUsableEvidence,
+  unsupportedCitationMarker,
+} from "./grounded-faithfulness.js";
 import {
   splitOwnAssessmentForPolicy,
   type OwnAssessmentPolicy,
@@ -46,6 +95,8 @@ import type {
   CitationRepairDisposition,
   GroundedCitationBehaviour,
   GroundedAnswerEvidenceDeclaration,
+  GroundedRerankerDiagnostics,
+  GroundedPromptContextWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   singleSentEvidencePack,
@@ -127,10 +178,7 @@ import {
   type UncertaintyMarkerKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
-import type {
-  GroundedRerankerDiagnostics,
-  GroundedPromptContextWire,
-} from "@oscharko-dev/keiko-contracts/bff-wire";
+
 import {
   activityLogErrorKindOr,
   activityLogEvent,
@@ -174,44 +222,7 @@ import {
   type SearchAnchor,
   type SearchReference,
 } from "@oscharko-dev/keiko-workflows";
-import {
-  CANONICAL_MANIFEST_BASENAMES,
-  DEFAULT_SEARCH_LIMITS,
-  FileTooLargeError,
-  PathDeniedError,
-  PathEscapeError,
-  RepoSearchUnsupportedFileError,
-  WorkspaceNotFoundError,
-  WorkspaceReadError,
-  candidateBucketForPath,
-  detectWorkspaceAt,
-  decodeTextFileBytes,
-  endpointContractAdapter,
-  findFiles,
-  gitHistoryAdapter,
-  isCanonicalMetadataFile,
-  isEcosystemSourceFile,
-  isGeneratedArtifactPath,
-  isDenied,
-  readExcerpt,
-  resolveWithinWorkspace,
-  searchText,
-  symbolGraphAdapter,
-  type ReadExcerptResult,
-  type ReadExcerptRequest,
-  type SearchLimits,
-  type SearchResult,
-  type SearchScope,
-  type SemanticSearchProvider,
-  type WorkspaceDirEntry,
-  type WorkspaceFs,
-  type WorkspaceIndex,
-  type WorkspaceIndexPreparationReport,
-  type WorkspaceInfo,
-  type WorkspaceStat,
-  containedRealPathInfo,
-  evidenceAtomStableId,
-} from "@oscharko-dev/keiko-workspace";
+
 import {
   isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
@@ -252,15 +263,7 @@ import {
   type GroundedAnswerPayload,
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
-import {
-  connectedSearchNoEvidenceAnswer,
-  buildPackCitationIndex,
-  incompleteAnswerMarker,
-  missingCitationMarkerFor,
-  noEvidenceMarker,
-  packHasUsableEvidence,
-  unsupportedCitationMarker,
-} from "./grounded-faithfulness.js";
+
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   collectDiscoveredSymbolTraceEvidence,
@@ -290,10 +293,7 @@ import {
   tracePriority,
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
-import {
-  type ExplicitPathAdmission,
-  type ExplicitPathObservation,
-} from "./grounded-explicit-paths.js";
+
 import { KnownFitScopeContext, type ScopeContextObservation } from "./grounded-scope-context.js";
 import {
   attachContextBudgetDiagnostics,
@@ -758,6 +758,7 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     excerptDeferredDefinitionRangeCount: { type: "integer", dataClass: "count", required: false },
     requestedStaticCallCycleCount: { type: "integer", dataClass: "count", required: false },
     plannedStaticCallCycleCount: { type: "integer", dataClass: "count", required: false },
+    contextualDefinitionSeedCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -2965,6 +2966,7 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly contextualDefinitionSeedCount?: number | undefined;
   readonly contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly explicitAdmission?: ExplicitPathAdmission;
@@ -5577,6 +5579,7 @@ function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly Evid
 }
 
 interface DeterministicContextEvidence {
+  readonly contextualDefinitionSeedCount?: number | undefined;
   readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly atoms: readonly EvidenceAtom[];
@@ -6624,7 +6627,6 @@ function coverageAdmissionWithLiveFullFairTarget(
     entry,
     admission,
     coverageFileHeadScore(entry, admission),
-    undefined,
   );
   return continuation.ownedProgress ? continuation.state : undefined;
 }
@@ -6750,7 +6752,6 @@ function coverageAdmissionWithFairTarget(
         entry,
         admission,
         coverageFileHeadScore(entry, admission),
-        undefined,
       );
       if (continuation.state.targets.size > state.targets.size)
         return {
@@ -7023,7 +7024,6 @@ function guardedSourceFairCheckpoint(
     fair,
     admission,
     coverageFileHeadScore(fair, admission),
-    undefined,
   );
   return {
     state: continuation.state,
@@ -7428,7 +7428,10 @@ function coverageTargetsByPath(
     queue.push(entry);
     files.set(entry.atom.scopePath, queue);
   }
-  return [...files.values()].map((queue) => queue.sort((a, b) => b.atom.score - a.atom.score));
+  return [...files.values()].map((queue) => {
+    queue.sort((a, b) => b.atom.score - a.atom.score);
+    return queue;
+  });
 }
 
 function interleavedCoverageTargets(
@@ -9572,6 +9575,7 @@ async function augmentRingsWithDeterministicAtoms(
       ...deterministicRings,
       atoms: [...deterministicRings.atoms, ...discoveredTrace.atoms],
       routeCoverage: discoveredTrace.routeCoverage,
+      contextualDefinitionSeedCount: discoveredTrace.contextualDefinitionSeedCount,
       uncertainty: [...deterministicRings.uncertainty, ...discoveredTrace.uncertainty],
     },
     budget,
@@ -9587,6 +9591,7 @@ interface GroundedAssemblyContext {
 }
 
 interface GroundedPackAssembly {
+  readonly contextualDefinitionSeedCount?: number | undefined;
   readonly selectionObservation?: ContextSelectionDiagnostics | undefined;
   readonly rerankFailure?: unknown;
   readonly explicitObservation?: ExplicitPathObservation | undefined;
@@ -9812,6 +9817,7 @@ function groundedAssemblyDetails(
     rankingObservation: prepared.ordered.rankingObservation,
     reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
     metadataRetention: rings.metadataRetention,
+    contextualDefinitionSeedCount: rings.contextualDefinitionSeedCount,
   };
 }
 
@@ -9856,6 +9862,7 @@ function explicitAssemblyDetails(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly contextualDefinitionSeedCount?: number | undefined;
   readonly semanticFreshness?: GroundedSemanticFreshnessSummary | undefined;
   readonly worktreeStatusDurationMs?: number | undefined;
   readonly worktreeRecency?: WorktreeRecencyResult | undefined;
@@ -9970,6 +9977,7 @@ function liveRetrievalCompletion(
     excerptReadWindowCount: assembled.readWindowCount,
     excerptObservation: assembled.excerptObservation,
     metadataRetention: assembled.metadataRetention,
+    contextualDefinitionSeedCount: assembled.contextualDefinitionSeedCount,
     reusedEvidenceAtomCount: assembled.reusedEvidenceAtomCount,
     decisions,
     readBudgetBlocked: assembled.excerptObservation?.readBudgetBlocked ?? false,
@@ -10828,6 +10836,9 @@ function selectionDetailsActivityExtra(
   return {
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
+    ...(status.contextualDefinitionSeedCount === undefined
+      ? {}
+      : { contextualDefinitionSeedCount: status.contextualDefinitionSeedCount }),
     ...status.rankingObservation,
     ...worktreeActivityExtra(status),
     ...status.semanticFreshness,

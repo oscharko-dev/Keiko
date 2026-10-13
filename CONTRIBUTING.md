@@ -95,6 +95,11 @@ without recording source text or paths.
 Endpoint definition traversal binds a registration's observed handler reference to its current
 lexical AST target. Further calls retain their exact callable owner and complete observed spans;
 same-named declarations and uninvoked nested functions do not certify that relationship.
+Contextual natural-language code questions can seed the same bounded definition traversal from
+current AST callable owners of actual lexical source hits without requiring an HTTP route or a
+user-supplied identifier. Lexical overlap does not certify invocation or an unrelated declaration;
+continuation retains the existing exact ownership, currentness and read-budget guards. The existing
+selection-details Activity Log records the admitted contextual definition seed count only.
 Imported targets retain exact runtime module-export identities. Explicit compiler output mappings
 reuse already guarded metadata and can address only admitted sources in the owning package.
 Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file

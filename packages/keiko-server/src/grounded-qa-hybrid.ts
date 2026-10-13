@@ -60,6 +60,7 @@ import {
   type ConnectedContextPack,
   type RetrievalQuery,
   type SelectedScope,
+  type ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   buildGroundedAnswerContextPackSummary,
@@ -78,10 +79,11 @@ import {
   type LocalKnowledgeGroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import type { RouteResult } from "./routes.js";
-import { errorBody } from "./routes.js";
-import type { Redactor, UiHandlerDeps } from "./deps.js";
+import { type RouteResult, errorBody } from "./routes.js";
+
 import {
+  type Redactor,
+  type UiHandlerDeps,
   currentContextProfileForModel,
   currentGroundingLimits,
   currentOwnAssessmentPolicy,
@@ -148,7 +150,7 @@ import {
   capturePluralSynthesisCounts,
 } from "./grounded-plural-synthesis.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import type { ExplorationBudget } from "@oscharko-dev/keiko-contracts/connected-context";
+
 import {
   buildPackCitationIndex,
   groundedAnswerEvidenceFields,

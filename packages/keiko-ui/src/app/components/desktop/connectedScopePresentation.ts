@@ -57,13 +57,10 @@ export function connectedScopeLabel(scope: ChatConnectedScope, t: I18nTranslate)
 }
 
 export function connectedScopeBoundary(scope: ChatConnectedScope, t: I18nTranslate): string {
-  const key =
-    scope.kind === "workspace-root"
-      ? "scope.boundary.noun.repository"
-      : scope.kind === "directory"
-        ? "scope.boundary.noun.folder"
-        : "scope.boundary.noun.fileScope";
-  return t("scope.boundary.description", { noun: t(key) });
+  const pathNoun =
+    scope.kind === "directory" ? "scope.boundary.noun.folder" : "scope.boundary.noun.fileScope";
+  const noun = t(scope.kind === "workspace-root" ? "scope.boundary.noun.repository" : pathNoun);
+  return t("scope.boundary.description", { noun });
 }
 
 export function connectedScopeSignature(scopes: readonly ChatConnectedScope[]): string {

@@ -355,10 +355,31 @@ const CONTRAST_PATTERN =
 
 // Access to selected evidence is distinct from a negative fact about the product. Match only a
 // complete first-person refusal with a closed object/scope clause; claims or examples leave residue.
-const SCOPE_ACCESS_REFUSAL_PATTERNS: readonly RegExp[] = [
-  /^i (?:cannot|can['’]t|am unable to) (?:inspect|read|access|open|view|see) (?:the |this |that )(?:(?:previously referenced|referenced|selected|requested|connected) )?(?:file|folder|directory|document|repository) (?:within|in|from) (?:this |the |my )(?:(?:selected|current|connected|available) )?(?:scope|context|folder|workspace)[.!]?$/iu,
-  /^ich kann (?:die|diese|jene|den|diesen|das) (?:(?:zuvor referenzierte|referenzierte|ausgewählte|angeforderte|verbundene)[nr]? )?(?:datei|ordner|verzeichnis|dokument|repository) (?:in (?:diesem|dem) |im |innerhalb (?:dieses|des) )(?:(?:ausgewählten|aktuellen|verbundenen|verfügbaren) )?(?:scope|kontext|ordner|arbeitsbereich|umfang|geltungsbereich)s? nicht (?:einsehen|lesen|prüfen|öffnen|sehen)[.!]?$/iu,
+const SCOPE_ACCESS_REFUSAL_PATTERNS: readonly (readonly RegExp[])[] = [
+  [
+    /^i (?:cannot|can['’]t|am unable to) (?:inspect|read|access|open|view|see) /iu,
+    /^(?:the |this |that )(?:(?:previously referenced|referenced|selected|requested|connected) )?/iu,
+    /^(?:file|folder|directory|document|repository) (?:within|in|from) /iu,
+    /^(?:this |the |my )(?:(?:selected|current|connected|available) )?(?:scope|context|folder|workspace)[.!]?$/iu,
+  ],
+  [
+    /^ich kann (?:die|diese|jene|den|diesen|das) /iu,
+    /^(?:(?:zuvor referenzierte|referenzierte|ausgewählte|angeforderte|verbundene)[nr]? )?/iu,
+    /^(?:datei|ordner|verzeichnis|dokument|repository) (?:in (?:diesem|dem) |im |innerhalb (?:dieses|des) )/iu,
+    /^(?:(?:ausgewählten|aktuellen|verbundenen|verfügbaren) )?/iu,
+    /^(?:scope|kontext|ordner|arbeitsbereich|umfang|geltungsbereich)s? nicht (?:einsehen|lesen|prüfen|öffnen|sehen)[.!]?$/iu,
+  ],
 ];
+
+function matchesScopeAccessRefusal(sentence: string, patterns: readonly RegExp[]): boolean {
+  let remainder = sentence;
+  for (const pattern of patterns) {
+    const match = pattern.exec(remainder);
+    if (match === null) return false;
+    remainder = remainder.slice(match[0].length);
+  }
+  return remainder.length === 0;
+}
 
 function collapseWhitespace(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
@@ -374,7 +395,10 @@ export function isNoEvidenceAnswerText(answer: string): boolean {
   const compact = collapseWhitespace(answer);
   if (compact.length === 0 || compact.length > NO_EVIDENCE_ANSWER_MAX_CHARS) return false;
   if (findCitationMarkerGroups(compact).length > 0) return false;
-  if (SCOPE_ACCESS_REFUSAL_PATTERNS.some((pattern) => pattern.test(compact))) return true;
+  if (
+    SCOPE_ACCESS_REFUSAL_PATTERNS.some((patterns) => matchesScopeAccessRefusal(compact, patterns))
+  )
+    return true;
   const text = withoutInlineMarkdown(compact);
   if (STOCK_REFUSAL_PATTERNS.some((pattern) => pattern.test(text))) return true;
   if (CONTRAST_PATTERN.test(text)) return false;

@@ -7,7 +7,7 @@ const QUERY_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
 const TOKEN_SEPARATOR_RE = /[/@.:\-_]+/u;
 const STACK_LOCATION_SUFFIX_RE = /^(.+?):\d+(?::\d+)?$/u;
 const ATOMIC_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
-const NUMBERED_COMPOUND_TERM_RE = /^[\p{L}][\p{L}\p{M}\p{N}]*(?:-[\p{L}\p{M}\p{N}]+)+$/u;
+const NUMBERED_COMPOUND_TERM_RE = /^\p{L}[\p{L}\p{M}\p{N}]*(?:-[\p{L}\p{M}\p{N}]+)+$/u;
 
 /** A lexical shape hint, never authority to require an exact source or code symbol. */
 export function isNumberedCompoundQueryTerm(term: string): boolean {
@@ -24,9 +24,10 @@ export function containsNumberedCompoundQueryTerm(
   const spelling = caseSensitive ? term : term.toLowerCase();
   const haystack = caseSensitive ? content : content.toLowerCase();
   // The validated shape contains only letters, marks, numbers and hyphens, so it is regex-literal.
-  return new RegExp(`(?:^|[^\\p{L}\\p{M}\\p{N}_-])${spelling}(?![\\p{L}\\p{M}\\p{N}_-])`, "u").test(
-    haystack,
-  );
+  return new RegExp(
+    String.raw`(?:^|[^\p{L}\p{M}\p{N}_-])${spelling}(?![\p{L}\p{M}\p{N}_-])`,
+    "u",
+  ).test(haystack);
 }
 
 const MAX_EXPANDED_QUERY_TERMS = 48;

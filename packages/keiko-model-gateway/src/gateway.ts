@@ -2454,9 +2454,9 @@ export class Gateway {
         callerReservation,
         reservation: this.spendBudget?.reserve(capability, request, correlationId),
       };
-    } catch (failure) {
+    } catch (error_) {
       settleCallerAttempt(callerReservation, undefined, false, "none");
-      throw failure;
+      throw error_;
     }
   }
 
@@ -2471,9 +2471,9 @@ export class Gateway {
     try {
       request = callerAdmittedRequest(request, caller);
       spend = this.spendBudget?.reserve(capability, request, correlationId);
-    } catch (failure) {
+    } catch (error_) {
       settleCallerAttempt(caller, undefined, false, "none");
-      throw failure;
+      throw error_;
     }
     return onceCallerReservation({
       maxOutputTokens: request.maxOutputTokens,

@@ -4,10 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import { fetchEvidenceManifest } from "@/lib/api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
-import {
-  INSPECTION_PACK as pack,
-  connectedInspectionManifest as manifest,
-} from "./connectedEvidenceInspection.test-fixtures";
+import { connectedInspectionManifest as manifest } from "./connectedEvidenceInspection.test-fixtures";
 import { ConnectedEvidenceInspection } from "./ConnectedEvidenceInspection";
 
 vi.mock("@/lib/api", () => ({ fetchEvidenceManifest: vi.fn() }));
@@ -41,7 +38,7 @@ describe("connected evidence inspection", () => {
     const onRead = vi.fn();
     render(
       <StrictMode>
-        <ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} onReadPaths={onRead} />
+        <ConnectedEvidenceInspection runIds={["run-1"]} onReadPaths={onRead} />
       </StrictMode>,
     );
     expect(fetchEvidenceManifest).toHaveBeenCalledExactlyOnceWith("run-1");
@@ -54,9 +51,7 @@ describe("connected evidence inspection", () => {
   it("reuses a completed manifest across repeated disclosure toggles", async () => {
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest() });
     const onRead = vi.fn();
-    render(
-      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} onReadPaths={onRead} />,
-    );
+    render(<ConnectedEvidenceInspection runIds={["run-1"]} onReadPaths={onRead} />);
     expand();
     await screen.findByRole("table", { name: "Files assembled for this answer" });
     for (let index = 0; index < 5; index += 1) {
@@ -74,11 +69,7 @@ describe("connected evidence inspection", () => {
     const beforeReconnect = vi.fn();
     const afterReconnect = vi.fn();
     const view = render(
-      <ConnectedEvidenceInspection
-        contextPack={pack}
-        runIds={["run-1"]}
-        onReadPaths={beforeReconnect}
-      />,
+      <ConnectedEvidenceInspection runIds={["run-1"]} onReadPaths={beforeReconnect} />,
     );
     expand();
     await screen.findByRole("alert");
@@ -86,13 +77,7 @@ describe("connected evidence inspection", () => {
     expand();
     await screen.findByRole("table", { name: "Files assembled for this answer" });
     toggleInspection(false);
-    view.rerender(
-      <ConnectedEvidenceInspection
-        contextPack={pack}
-        runIds={["run-1"]}
-        onReadPaths={afterReconnect}
-      />,
-    );
+    view.rerender(<ConnectedEvidenceInspection runIds={["run-1"]} onReadPaths={afterReconnect} />);
     expand();
     await waitFor(() => expect(afterReconnect).toHaveBeenCalledOnce());
     expect(fetchEvidenceManifest).toHaveBeenCalledTimes(2);
@@ -110,14 +95,10 @@ describe("connected evidence inspection", () => {
       .mockResolvedValueOnce({ manifest: manifest() })
       .mockResolvedValueOnce({ manifest: manifest("run-2") });
     const onRead = vi.fn();
-    const view = render(
-      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} onReadPaths={onRead} />,
-    );
+    const view = render(<ConnectedEvidenceInspection runIds={["run-1"]} onReadPaths={onRead} />);
     expand();
     await screen.findByRole("table", { name: "Files assembled for this answer" });
-    view.rerender(
-      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-2"]} onReadPaths={onRead} />,
-    );
+    view.rerender(<ConnectedEvidenceInspection runIds={["run-2"]} onReadPaths={onRead} />);
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expand();
     await waitFor(() => expect(onRead).toHaveBeenCalledTimes(2));
@@ -137,13 +118,9 @@ describe("connected evidence inspection", () => {
       )
       .mockResolvedValueOnce({ manifest: manifest("run-2") });
     const onRead = vi.fn();
-    const view = render(
-      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} onReadPaths={onRead} />,
-    );
+    const view = render(<ConnectedEvidenceInspection runIds={["run-1"]} onReadPaths={onRead} />);
     expand();
-    view.rerender(
-      <ConnectedEvidenceInspection contextPack={pack} runIds={["run-2"]} onReadPaths={onRead} />,
-    );
+    view.rerender(<ConnectedEvidenceInspection runIds={["run-2"]} onReadPaths={onRead} />);
     expand();
     await screen.findByRole("table", { name: "Files assembled for this answer" });
     complete?.({ manifest: manifest() });
@@ -159,7 +136,7 @@ describe("connected evidence inspection", () => {
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest() });
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
-    render(<ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} />);
+    render(<ConnectedEvidenceInspection runIds={["run-1"]} />);
     await waitFor(() => expect(fetchEvidenceManifest).toHaveBeenCalledOnce());
     expect(writer).not.toHaveBeenCalled();
     expand();
@@ -184,7 +161,7 @@ describe("connected evidence inspection", () => {
     vi.mocked(fetchEvidenceManifest).mockRejectedValue(new TypeError("private/path/canary"));
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
-    render(<ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} />);
+    render(<ConnectedEvidenceInspection runIds={["run-1"]} />);
     expand();
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load evidence");
     expect(writer).toHaveBeenCalledWith(
@@ -199,14 +176,14 @@ describe("connected evidence inspection", () => {
   });
   it("rejects a manifest for another run rather than assigning its read paths to this answer", async () => {
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest("different") });
-    render(<ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} />);
+    render(<ConnectedEvidenceInspection runIds={["run-1"]} />);
     expand();
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.queryByText("src/feature/read.ts")).toBeNull();
   });
   it("has no axe violations in expanded file tables", async () => {
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: manifest() });
-    const view = render(<ConnectedEvidenceInspection contextPack={pack} runIds={["run-1"]} />);
+    const view = render(<ConnectedEvidenceInspection runIds={["run-1"]} />);
     expand();
     await waitFor(() => expect(screen.getAllByRole("table")).toHaveLength(2));
     expect((await axe(view.container)).violations).toEqual([]);

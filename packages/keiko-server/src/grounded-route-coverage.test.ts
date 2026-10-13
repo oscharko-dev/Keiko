@@ -2912,7 +2912,7 @@ describe("current route trace excerpt coverage", () => {
           ?.split("\n")
           [(entry.atom.lineRange?.startLine ?? 1) - 1]?.includes("function bookkeeping"),
     );
-    expect(competitors.length).toBe(18);
+    expect(competitors).toHaveLength(18);
     expect(competitors.every((entry) => entry.atom.score > target.atom.score)).toBe(true);
     expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
     expect(target.atom.edge?.kind).toBe("reference");
@@ -3364,7 +3364,7 @@ describe("current route trace excerpt coverage", () => {
       "fixture requires the actual current terminal definition",
     );
     const weak = entries.filter((entry) => entry.atom.scopePath.startsWith("src/record-"));
-    expect(weak.length).toBe(9);
+    expect(weak).toHaveLength(9);
     expect(weak.every((entry) => entry.atom.score < target.atom.score)).toBe(true);
     expect(fixture.trace.routeCoverage?.isCurrent(target.atom)).toBe(true);
     const parent = requirePendingBodyFixtureEntry(
@@ -4337,7 +4337,7 @@ describe("current route trace excerpt coverage", () => {
     expect(target.observedBytes).toBeGreaterThanOrEqual(
       Buffer.byteLength(fixture.files["src/z-processing.ts"] ?? ""),
     );
-    expect(helpers.length).toBe(9);
+    expect(helpers).toHaveLength(9);
     expect(helpers.every((entry) => entry.atom.score > target.atom.score)).toBe(true);
     expect(
       coverageRanking(fixture.trace.atoms).kept.some(

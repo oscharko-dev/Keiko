@@ -288,10 +288,22 @@ const CLARIFICATION_PATTERNS: readonly RegExp[] = [
   /^(?:meinst du|meinen sie|kannst du (?:präzisieren|klarstellen)|können sie (?:präzisieren|klarstellen))\b[^.!\n]{0,600}\?$/iu,
 ];
 const INSUFFICIENCY_PATTERNS: readonly RegExp[] = [
-  /^I (?:need|require) (?:(?:the|a|additional|more|missing|relevant) ){0,4}(?:file|files|evidence|information|context)(?: (?:to answer(?: (?:this|the|your) question)?|for (?:this|the|your) (?:question|answer)))?[.!]?$/iu,
   /^(?:Für|Fuer) (?:die|diese) Antwort (?:fehlen|fehlt) (?:mir )?(?:(?:die|weitere|zusätzliche) ){0,3}(?:Belege|Datei|Dateien|Informationen|Kontext)[.!]?$/iu,
   /^(?:Mir fehlen|Ich (?:benötige|brauche)) (?:(?:die|weitere|zusätzliche) ){0,3}(?:Belege|Datei|Dateien|Informationen|Kontext)(?: für (?:die|diese) Antwort)?[.!]?$/iu,
 ];
+
+const ENGLISH_INSUFFICIENCY_REQUEST_RE =
+  /^I (?:need|require) (?:(?:the|a|additional|more|missing|relevant) ){0,4}(?:files?|evidence|information|context)/iu;
+const ENGLISH_INSUFFICIENCY_PURPOSE_RE =
+  /^(?: (?:to answer(?: (?:this|the|your) question)?|for (?:this|the|your) (?:question|answer)))?[.!]?$/iu;
+
+function insufficiencyOnly(prose: string): boolean {
+  const request = ENGLISH_INSUFFICIENCY_REQUEST_RE.exec(prose);
+  return (
+    (request !== null && ENGLISH_INSUFFICIENCY_PURPOSE_RE.test(prose.slice(request[0].length))) ||
+    INSUFFICIENCY_PATTERNS.some((pattern) => pattern.test(prose))
+  );
+}
 
 function evidenceRequestOnly(text: string): boolean {
   const request =
@@ -339,15 +351,9 @@ export function classifyGroundedAnswerKind(answerText: string): GroundedAnswerKi
   const prose = withoutInsufficiencyDeclarations(answerText).trim();
   if (substantiveAnswerText(prose)) return "answer";
   const declared = insufficiencyLines(groundedAnswerSourceText(answerText)).length > 0;
-  if (
-    declared &&
-    (prose.length === 0 || INSUFFICIENCY_PATTERNS.some((pattern) => pattern.test(prose)))
-  )
-    return "insufficiency";
+  if (declared && (prose.length === 0 || insufficiencyOnly(prose))) return "insufficiency";
   if (refusalOnly(prose)) return declared ? "insufficiency" : "refusal";
-  return clarificationOnly(prose) ||
-    evidenceRequestOnly(prose) ||
-    INSUFFICIENCY_PATTERNS.some((pattern) => pattern.test(prose))
+  return clarificationOnly(prose) || evidenceRequestOnly(prose) || insufficiencyOnly(prose)
     ? "clarification"
     : "answer";
 }

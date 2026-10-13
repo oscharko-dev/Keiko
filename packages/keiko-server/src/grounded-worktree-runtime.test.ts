@@ -279,7 +279,7 @@ describe("production working-tree retrieval hints", () => {
         },
       },
     });
-    expect(retrieved.pack.files.length).toBe(1);
+    expect(retrieved.pack.files).toHaveLength(1);
     expect(
       log.events.find((event) => event.op === "search.connected-context.selection-details")?.extra,
     ).toMatchObject({ worktreeStatusDisposition: "unavailable", recentPathHintCount: 0 });

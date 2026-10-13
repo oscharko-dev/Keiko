@@ -139,12 +139,12 @@ export async function repairGroundedAnswer(
       await repair(ctx.answer.content, repairOptions(ctx)),
     );
     return combinedRepairAnswer(ctx, repaired);
-  } catch (failure) {
-    if (ctx.deps.signal?.aborted === true) throw failure;
+  } catch (error_) {
+    if (ctx.deps.signal?.aborted === true) throw error_;
     return {
       answer: retainFailedGroundedSynthesis(ctx.answer, ctx.deps.answerer),
       disposition: "failed",
-      failure,
+      failure: error_,
     };
   }
 }

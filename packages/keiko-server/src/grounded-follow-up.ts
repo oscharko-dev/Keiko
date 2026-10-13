@@ -270,12 +270,12 @@ async function answerFollowUp(
 ): Promise<GroundedAnswerResult | FollowUpResult> {
   try {
     return await ctx.answer(input, retrieved, genuineUnreadPaths(ctx));
-  } catch (failure) {
-    if (ctx.deps.signal?.aborted === true) throw failure;
+  } catch (error_) {
+    if (ctx.deps.signal?.aborted === true) throw error_;
     const retained = originalResult(
       ctx,
       ctx.nowMs() >= ctx.deadlineAtMs ? "elapsed-refused" : "budget-refused",
-      failure,
+      error_,
     );
     return {
       ...retained,
@@ -292,12 +292,12 @@ export async function followUpGroundedAnswer(ctx: FollowUpContext): Promise<Foll
   if (refusal !== undefined) return originalResult(ctx, refusal);
   try {
     return await executeFollowUp(ctx, paths);
-  } catch (failure) {
-    if (ctx.deps.signal?.aborted === true) throw failure;
+  } catch (error_) {
+    if (ctx.deps.signal?.aborted === true) throw error_;
     return originalResult(
       ctx,
       ctx.nowMs() >= ctx.deadlineAtMs ? "elapsed-refused" : "budget-refused",
-      failure,
+      error_,
     );
   }
 }

@@ -1,7 +1,7 @@
 // Deterministic retrieval-intent classification for connected-context planning.
 // This module is intentionally pure: no IO, no clock, no model calls.
 
-import { extractAnchors, NEXT_FRAMEWORK_TERM_RE } from "./anchors.js";
+import { extractAnchors, matchesNextFrameworkTerm } from "./anchors.js";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
@@ -29,12 +29,17 @@ export interface RetrievalIntentContext {
   readonly referencePresent?: boolean | undefined;
 }
 
-const CONVERSATIONAL_FOLLOW_UP_RE =
-  /\b(?:can\s+you\s+see\s+(?:it|them|the\s+file)|siehst\s+du\s+(?:sie|es|die\s+datei)|kannst\s+du\s+das|try\s+again|what\s+about\s+now|and\s+(?:now|then)|that\s+(?:file|one)|this\s+file|in\s+the\s+file|und\s+(?:nun|jetzt)|in\s+der\s+datei|diese[rn]?\s+datei|darin|dazu|weiter)\b/iu;
+const CONVERSATIONAL_FOLLOW_UP_PATTERNS = [
+  /\bcan\s+you\s+see\s+(?:it|them|the\s+file)\b/iu,
+  /\bsiehst\s+du\s+(?:sie|es|die\s+datei)\b/iu,
+  /\b(?:kannst\s+du\s+das|try\s+again|what\s+about\s+now|and\s+(?:now|then))\b/iu,
+  /\b(?:that\s+(?:file|one)|this\s+file|in\s+the\s+file|und\s+(?:nun|jetzt))\b/iu,
+  /\b(?:in\s+der\s+datei|diese[rn]?\s+datei|darin|dazu|weiter)\b/iu,
+];
 
 interface IntentPattern {
   readonly term: string;
-  readonly pattern: RegExp;
+  readonly pattern: Pick<RegExp, "test">;
 }
 
 const BASIC_STOP_WORDS = new Set([
@@ -117,7 +122,7 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "jest", pattern: /\bjest\b/iu },
   { term: "playwright", pattern: /\bplaywright\b/iu },
   { term: "cypress", pattern: /\bcypress\b/iu },
-  { term: "nextjs", pattern: NEXT_FRAMEWORK_TERM_RE },
+  { term: "nextjs", pattern: { test: matchesNextFrameworkTerm } },
   { term: "react", pattern: /\breact\b/iu },
   { term: "eslint", pattern: /\beslint\b/iu },
   // Polyglot ecosystem routing is sourced from the shared registry so questions like "Which Java
@@ -129,10 +134,39 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
 
 // A manifest noun is also a source-domain term. Only a complete enumeration request selects
 // the metadata route; validation, loading and mixed inventory/behavior questions keep code search.
-const MANIFEST_INVENTORY_REQUESTS: readonly RegExp[] = [
-  /^(?:(?:please\s+)?(?:list|enumerate|show)\s+(?:(?:all|the)\s+)?|(?:which|what)\s+)(?:package|project|workspace)[\s_-]+manifests?(?:\s+(?:defines?\s+(?:this|the|our)\s+(?:workspace|project)|(?:in|for|of)\s+(?:this|the|our)\s+(?:workspace|project)))?[.!?\s]*$/iu,
-  /^(?:(?:bitte\s+)?(?:liste|zeige)\s+(?:(?:alle|die)\s+)?|welche\s+)(?:paket|projekt|workspace)[\s_-]*manifeste?(?:\s+(?:definier(?:en|t)\s+(?:dieses|das)\s+(?:workspace|projekt)|(?:in|f[üu]r)\s+(?:dieses|das)\s+(?:workspace|projekt)))?[.!?\s]*$/iu,
+const MANIFEST_INVENTORY_PREFIXES = [
+  /^(?:please\s+)?(?:list|enumerate|show)\s+(?:(?:all|the)\s+)?/iu,
+  /^(?:which|what)\s+/iu,
+  /^(?:bitte\s+)?(?:liste|zeige)\s+(?:(?:alle|die)\s+)?/iu,
+  /^welche\s+/iu,
 ];
+const MANIFEST_INVENTORY_SUBJECTS = [
+  /^(?:package|project|workspace)[\s_-]+manifests?/iu,
+  /^(?:paket|projekt|workspace)[\s_-]*manifeste?/iu,
+];
+const MANIFEST_INVENTORY_TAILS = [
+  /^[.!?\s]*$/u,
+  /^\s+defines?\s+(?:this|the|our)\s+(?:workspace|project)[.!?\s]*$/iu,
+  /^\s+(?:in|for|of)\s+(?:this|the|our)\s+(?:workspace|project)[.!?\s]*$/iu,
+  /^\s+definier(?:en|t)\s+(?:dieses|das)\s+(?:workspace|projekt)[.!?\s]*$/iu,
+  /^\s+(?:in|f[üu]r)\s+(?:dieses|das)\s+(?:workspace|projekt)[.!?\s]*$/iu,
+];
+
+function manifestInventoryRequest(text: string): boolean {
+  return MANIFEST_INVENTORY_PREFIXES.some((prefix, index) => {
+    const match = prefix.exec(text);
+    if (match === null) return false;
+    const rest = text.slice(match[0].length);
+    const subject = MANIFEST_INVENTORY_SUBJECTS[index < 2 ? 0 : 1]?.exec(rest);
+    if (subject === undefined || subject === null) return false;
+    const tail = rest.slice(subject[0].length);
+    const tails =
+      index < 2
+        ? MANIFEST_INVENTORY_TAILS.slice(0, 3)
+        : [MANIFEST_INVENTORY_TAILS[0], ...MANIFEST_INVENTORY_TAILS.slice(3)];
+    return tails.some((pattern) => pattern?.test(tail) === true);
+  });
+}
 
 const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [
   {
@@ -264,7 +298,8 @@ function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext
     matchedTerms(text, normalizeQueryText(text), REPOSITORY_OVERVIEW_PATTERNS).includes(
       "orientation",
     );
-  if (!CONVERSATIONAL_FOLLOW_UP_RE.test(text) && !orientation) return false;
+  if (!CONVERSATIONAL_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(text)) && !orientation)
+    return false;
   return !hasConcreteSourceTarget(text);
 }
 
@@ -274,8 +309,7 @@ function classifyProjectMetadata(
 ): RetrievalIntentClassification | undefined {
   const matched = matchedTerms(text, normalized, PROJECT_METADATA_PATTERNS);
   const terms =
-    matched.includes("manifest-inventory") &&
-    !MANIFEST_INVENTORY_REQUESTS.some((pattern) => pattern.test(text))
+    matched.includes("manifest-inventory") && !manifestInventoryRequest(text)
       ? matched.filter((term) => term !== "manifest-inventory")
       : matched;
   return terms.length === 0 ? undefined : { intent: "project-metadata", normalizedTerms: terms };

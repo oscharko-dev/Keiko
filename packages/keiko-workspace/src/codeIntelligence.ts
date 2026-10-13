@@ -1523,11 +1523,14 @@ function appendTypescriptImportBinding(
   file: SourceFile,
   resolver: TypescriptReExportResolverContext,
   targetBySpecifier: ReadonlyMap<string, string>,
-  specifier: string,
-  localName: string,
-  importedName: string,
-  runtimeBinding = true,
+  binding: {
+    readonly specifier: string;
+    readonly localName: string;
+    readonly importedName: string;
+    readonly runtimeBinding: boolean;
+  },
 ): void {
+  const { specifier, localName, importedName, runtimeBinding } = binding;
   const targetPath = targetBySpecifier.get(specifier);
   if (targetPath === undefined) return;
   const resolved = resolveTypescriptReExportedSymbol(targetPath, importedName, resolver);
@@ -1556,16 +1559,12 @@ function appendTypescriptImportDeclarationBindings(
   const clause = statement.importClause;
   if (specifier === undefined || clause === undefined) return;
   if (clause.name !== undefined) {
-    appendTypescriptImportBinding(
-      bindings,
-      file,
-      resolver,
-      targetBySpecifier,
+    appendTypescriptImportBinding(bindings, file, resolver, targetBySpecifier, {
       specifier,
-      clause.name.text,
-      "default",
-      clause.phaseModifier !== typeScriptCompiler().SyntaxKind.TypeKeyword,
-    );
+      localName: clause.name.text,
+      importedName: "default",
+      runtimeBinding: clause.phaseModifier !== typeScriptCompiler().SyntaxKind.TypeKeyword,
+    });
   }
   if (
     clause.namedBindings === undefined ||
@@ -1573,16 +1572,13 @@ function appendTypescriptImportDeclarationBindings(
   )
     return;
   for (const element of clause.namedBindings.elements) {
-    appendTypescriptImportBinding(
-      bindings,
-      file,
-      resolver,
-      targetBySpecifier,
+    appendTypescriptImportBinding(bindings, file, resolver, targetBySpecifier, {
       specifier,
-      element.name.text,
-      element.propertyName?.text ?? element.name.text,
-      clause.phaseModifier !== typeScriptCompiler().SyntaxKind.TypeKeyword && !element.isTypeOnly,
-    );
+      localName: element.name.text,
+      importedName: element.propertyName?.text ?? element.name.text,
+      runtimeBinding:
+        clause.phaseModifier !== typeScriptCompiler().SyntaxKind.TypeKeyword && !element.isTypeOnly,
+    });
   }
 }
 
@@ -1851,6 +1847,24 @@ function symbolsByDeclarationGeometry(
   return byGeometry;
 }
 
+function appendDeclaredSymbols(
+  byName: Map<string, CodeSymbol[]>,
+  byGeometry: ReadonlyMap<string, readonly CodeSymbol[]>,
+  source: ts.SourceFile,
+  declaration: ts.Node,
+): void {
+  const span = nodeSourceSpan(source, declaration);
+  const range = nodeLineRange(source, declaration);
+  const key = declarationGeometryKey(range, span);
+  for (const symbol of byGeometry.get(key ?? "") ?? []) {
+    if (!sameLineRange(symbol.lineRange, range) || !sameSourceSpan(symbol.declarationSpan, span))
+      continue;
+    const bucket = byName.get(symbol.name);
+    if (bucket === undefined) byName.set(symbol.name, [symbol]);
+    else bucket.push(symbol);
+  }
+}
+
 function topLevelDeclaredSymbols(
   file: SourceFile,
   symbols: readonly CodeSymbol[],
@@ -1861,19 +1875,7 @@ function topLevelDeclaredSymbols(
   const byGeometry = symbolsByDeclarationGeometry(symbols);
   for (const statement of source.statements) {
     for (const declaration of topLevelSymbolDeclarations(statement)) {
-      const span = nodeSourceSpan(source, declaration);
-      const range = nodeLineRange(source, declaration);
-      const key = declarationGeometryKey(range, span);
-      for (const symbol of byGeometry.get(key ?? "") ?? []) {
-        if (
-          !sameLineRange(symbol.lineRange, range) ||
-          !sameSourceSpan(symbol.declarationSpan, span)
-        )
-          continue;
-        const bucket = byName.get(symbol.name);
-        if (bucket === undefined) byName.set(symbol.name, [symbol]);
-        else bucket.push(symbol);
-      }
+      appendDeclaredSymbols(byName, byGeometry, source, declaration);
     }
   }
   return byName;
@@ -2131,6 +2133,26 @@ function directLexicalModuleExport(
     : { targetPath: exporterPath, importedName: symbol.name, symbol };
 }
 
+function directTypescriptImportTarget(
+  exporterPath: string,
+  exportedName: string,
+  resolver: TypescriptReExportResolverContext,
+  lexical: boolean,
+): ResolvedTypescriptImportTarget | undefined {
+  if (lexical) {
+    const direct = directLexicalModuleExport(exporterPath, exportedName, resolver);
+    if (direct !== undefined) return direct;
+  }
+  if (!lexical && exportedName === "default") {
+    const resolvedDefault = resolveDefaultTypescriptExport(exporterPath, resolver);
+    if (resolvedDefault !== undefined) return resolvedDefault;
+  }
+  if (!lexical && fileDefinesTypescriptSymbol(resolver, exporterPath, exportedName)) {
+    return { targetPath: exporterPath, importedName: exportedName };
+  }
+  return undefined;
+}
+
 function resolveTypescriptReExportedSymbol(
   exporterPath: string,
   exportedName: string,
@@ -2148,17 +2170,8 @@ function resolveTypescriptReExportedSymbol(
   }
   const nextSeen = new Set(seen);
   nextSeen.add(key);
-  if (lexical) {
-    const direct = directLexicalModuleExport(exporterPath, exportedName, resolver);
-    if (direct !== undefined) return direct;
-  }
-  if (!lexical && exportedName === "default") {
-    const resolvedDefault = resolveDefaultTypescriptExport(exporterPath, resolver);
-    if (resolvedDefault !== undefined) return resolvedDefault;
-  }
-  if (!lexical && fileDefinesTypescriptSymbol(resolver, exporterPath, exportedName)) {
-    return { targetPath: exporterPath, importedName: exportedName };
-  }
+  const direct = directTypescriptImportTarget(exporterPath, exportedName, resolver, lexical);
+  if (direct !== undefined) return direct;
   const allReExports = resolver.reExportsByFile.get(exporterPath) ?? [];
   const reExports = lexical
     ? allReExports.filter((binding) => binding.typeOnly !== true)
@@ -3594,6 +3607,56 @@ function containingCallableDefinition(
   return undefined;
 }
 
+function observedTypescriptCallTarget(
+  certified: CodeSymbol | undefined,
+  heuristic: ReturnType<typeof resolveCallTarget>,
+): ReturnType<typeof resolveCallTarget> {
+  if (certified !== undefined) return { symbol: certified, confidence: "resolved" };
+  return heuristic === undefined ? undefined : { ...heuristic, confidence: "heuristic" };
+}
+
+function appendTypescriptCall(
+  file: SourceFile,
+  observation: { readonly node: ts.CallExpression; readonly sourceFile: ts.SourceFile },
+  byName: ReadonlyMap<string, readonly CodeSymbol[]>,
+  imports: readonly CodeImportEdge[],
+  importBindings: readonly CodeImportBinding[],
+  bindingScopes: CallBindingScopes,
+  calls: CodeCallEdge[],
+): void {
+  const { node, sourceFile } = observation;
+  const name = calleeNameFromExpression(node.expression);
+  if (name === undefined || IGNORED_CALL_NAMES.has(name.toLowerCase())) return;
+  const certified = certifiedIdentifierCallTarget(
+    file,
+    node,
+    bindingScopes,
+    byName,
+    importBindings,
+  );
+  const heuristic = resolveCallTarget(file.scopePath, name, byName, imports, importBindings);
+  const resolved = observedTypescriptCallTarget(certified, heuristic);
+  if (resolved === undefined) return;
+  const callerDefinition = containingCallableDefinition(file, node, byName);
+  calls.push({
+    callerPath: file.scopePath,
+    callerLine: nodeStartLine(sourceFile, node),
+    callerSpan: nodeSourceSpan(sourceFile, node),
+    ...(callerDefinition === undefined ? {} : { callerDefinition }),
+    calleeName: name,
+    targetName: resolved.symbol.name,
+    targetPath: resolved.symbol.scopePath,
+    targetLineRange: resolved.symbol.lineRange,
+    confidence: resolved.confidence,
+    parser: "typescript-compiler-ast",
+    ...(certified === undefined
+      ? {}
+      : { binding: "lexical" as const, targetDeclarationSpan: certified.declarationSpan }),
+    ...(callReturnsOwnValue(node) ? { resultUsage: "returned" as const } : {}),
+    ...(callIsDirectlyAwaited(node) ? { awaited: true as const } : {}),
+  });
+}
+
 function collectTypescriptCalls(
   file: SourceFile,
   byName: ReadonlyMap<string, readonly CodeSymbol[]>,
@@ -3601,51 +3664,20 @@ function collectTypescriptCalls(
   importBindings: readonly CodeImportBinding[],
 ): readonly CodeCallEdge[] {
   const sourceFile = file.syntaxTree;
-  if (sourceFile === undefined) {
-    return [];
-  }
+  if (sourceFile === undefined) return [];
   const calls: CodeCallEdge[] = [];
   const bindingScopes = collectCallBindingScopes(sourceFile);
   const visit = (node: ts.Node): void => {
-    if (typeScriptCompiler().isCallExpression(node)) {
-      const name = calleeNameFromExpression(node.expression);
-      if (name !== undefined && !IGNORED_CALL_NAMES.has(name.toLowerCase())) {
-        const certified = certifiedIdentifierCallTarget(
-          file,
-          node,
-          bindingScopes,
-          byName,
-          importBindings,
-        );
-        const heuristic = resolveCallTarget(file.scopePath, name, byName, imports, importBindings);
-        const resolved =
-          certified === undefined
-            ? heuristic === undefined
-              ? undefined
-              : { ...heuristic, confidence: "heuristic" as const }
-            : { symbol: certified, confidence: "resolved" as const };
-        if (resolved !== undefined) {
-          const callerDefinition = containingCallableDefinition(file, node, byName);
-          calls.push({
-            callerPath: file.scopePath,
-            callerLine: nodeStartLine(sourceFile, node),
-            callerSpan: nodeSourceSpan(sourceFile, node),
-            ...(callerDefinition === undefined ? {} : { callerDefinition }),
-            calleeName: name,
-            targetName: resolved.symbol.name,
-            targetPath: resolved.symbol.scopePath,
-            targetLineRange: resolved.symbol.lineRange,
-            confidence: resolved.confidence,
-            parser: "typescript-compiler-ast",
-            ...(certified === undefined
-              ? {}
-              : { binding: "lexical" as const, targetDeclarationSpan: certified.declarationSpan }),
-            ...(callReturnsOwnValue(node) ? { resultUsage: "returned" as const } : {}),
-            ...(callIsDirectlyAwaited(node) ? { awaited: true as const } : {}),
-          });
-        }
-      }
-    }
+    if (typeScriptCompiler().isCallExpression(node))
+      appendTypescriptCall(
+        file,
+        { node, sourceFile },
+        byName,
+        imports,
+        importBindings,
+        bindingScopes,
+        calls,
+      );
     typeScriptCompiler().forEachChild(node, visit);
   };
   visit(sourceFile);
@@ -3801,73 +3833,82 @@ function isPolyglotImportOrNamespaceLine(line: string): boolean {
   return /^\s*(?:import|from|package|using|namespace)\b/u.test(line);
 }
 
+function appendTypescriptReference(
+  file: SourceFile,
+  observation: { readonly node: ts.Identifier; readonly sourceFile: ts.SourceFile },
+  byName: ReadonlyMap<string, readonly CodeSymbol[]>,
+  importBindings: readonly CodeImportBinding[],
+  bindingScopes: CallBindingScopes,
+  references: CodeReferenceEdge[],
+  seen: Set<string>,
+): void {
+  const { node, sourceFile } = observation;
+  const certified = certifiedIdentifierTarget(file, node, bindingScopes, byName, importBindings);
+  const resolved =
+    certified === undefined
+      ? resolveReferenceTarget(file, node.text, byName, importBindings)
+      : { symbol: certified, confidence: "resolved" as const };
+  const range = nodeLineRange(sourceFile, node);
+  const span = nodeSourceSpan(sourceFile, node);
+  if (
+    resolved === undefined ||
+    (resolved.symbol.scopePath === file.scopePath &&
+      sameLineRange(resolved.symbol.lineRange, range) &&
+      (certified === undefined || sameSourceSpan(resolved.symbol.declarationSpan, span)))
+  )
+    return;
+  const key = [
+    file.scopePath,
+    String(range.startLine),
+    String(range.endLine),
+    String(span.startColumn),
+    String(span.endColumn),
+    node.text,
+    resolved.symbol.scopePath,
+    resolved.symbol.name,
+  ].join("|");
+  if (seen.has(key)) return;
+  seen.add(key);
+  const referencerDefinition =
+    certified === undefined ? undefined : containingCallableDefinition(file, node, byName);
+  references.push({
+    referencerPath: file.scopePath,
+    referenceLineRange: range,
+    referenceSpan: span,
+    ...(referencerDefinition === undefined ? {} : { referencerDefinition }),
+    referenceName: node.text,
+    targetName: resolved.symbol.name,
+    targetPath: resolved.symbol.scopePath,
+    targetLineRange: resolved.symbol.lineRange,
+    confidence: resolved.confidence,
+    parser: "typescript-compiler-ast",
+    ...(certified === undefined
+      ? {}
+      : { binding: "lexical" as const, targetDeclarationSpan: certified.declarationSpan }),
+  });
+}
+
 function collectTypescriptReferences(
   file: SourceFile,
   byName: ReadonlyMap<string, readonly CodeSymbol[]>,
   importBindings: readonly CodeImportBinding[],
 ): readonly CodeReferenceEdge[] {
   const sourceFile = file.syntaxTree;
-  if (sourceFile === undefined) {
-    return [];
-  }
+  if (sourceFile === undefined) return [];
   const references: CodeReferenceEdge[] = [];
   const seen = new Set<string>();
   const bindingScopes = collectCallBindingScopes(sourceFile);
   const visit = (node: ts.Node): void => {
-    if (typeScriptCompiler().isIdentifier(node) && !isNonReferenceIdentifier(node)) {
-      const certified = certifiedIdentifierTarget(
+    if (typeScriptCompiler().isIdentifier(node) && !isNonReferenceIdentifier(node))
+      appendTypescriptReference(
         file,
-        node,
-        bindingScopes,
+        { node, sourceFile },
         byName,
         importBindings,
+        bindingScopes,
+        references,
+        seen,
       );
-      const resolved =
-        certified === undefined
-          ? resolveReferenceTarget(file, node.text, byName, importBindings)
-          : { symbol: certified, confidence: "resolved" as const };
-      const range = nodeLineRange(sourceFile, node);
-      const span = nodeSourceSpan(sourceFile, node);
-      if (
-        resolved !== undefined &&
-        !(
-          resolved.symbol.scopePath === file.scopePath &&
-          sameLineRange(resolved.symbol.lineRange, range) &&
-          (certified === undefined || sameSourceSpan(resolved.symbol.declarationSpan, span))
-        )
-      ) {
-        const key = [
-          file.scopePath,
-          String(range.startLine),
-          String(range.endLine),
-          String(span.startColumn),
-          String(span.endColumn),
-          node.text,
-          resolved.symbol.scopePath,
-          resolved.symbol.name,
-        ].join("|");
-        if (!seen.has(key)) {
-          seen.add(key);
-          const referencerDefinition =
-            certified === undefined ? undefined : containingCallableDefinition(file, node, byName);
-          references.push({
-            referencerPath: file.scopePath,
-            referenceLineRange: range,
-            referenceSpan: span,
-            ...(referencerDefinition === undefined ? {} : { referencerDefinition }),
-            referenceName: node.text,
-            targetName: resolved.symbol.name,
-            targetPath: resolved.symbol.scopePath,
-            targetLineRange: resolved.symbol.lineRange,
-            confidence: resolved.confidence,
-            parser: "typescript-compiler-ast",
-            ...(certified === undefined
-              ? {}
-              : { binding: "lexical" as const, targetDeclarationSpan: certified.declarationSpan }),
-          });
-        }
-      }
-    }
     typeScriptCompiler().forEachChild(node, visit);
   };
   visit(sourceFile);

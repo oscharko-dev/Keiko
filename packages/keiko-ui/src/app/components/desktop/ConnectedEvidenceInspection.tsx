@@ -16,7 +16,6 @@ import { connectedOmissionLabel, connectedRetrievalNotices } from "./connectedEv
 import styles from "./ConnectedEvidenceInspection.module.css";
 
 export interface ConnectedEvidenceInspectionProps {
-  readonly contextPack: GroundedAnswerContextPackSummary;
   readonly runIds: readonly string[];
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   readonly attachedCitationCount?: number | undefined;
@@ -92,10 +91,10 @@ function useEvidenceAudit(runId: string, retry: number): InspectionState {
       .then((audit) => {
         if (current) setState({ kind: "loaded", runId, audit });
       })
-      .catch((failure: unknown) => {
+      .catch((error_: unknown) => {
         if (!current) return;
         setState({ kind: "failed" });
-        reportEvidenceInspection({ reason: "manifest-fetch-failed" }, failure);
+        reportEvidenceInspection({ reason: "manifest-fetch-failed" }, error_);
       });
     return (): void => {
       current = false;
@@ -145,13 +144,13 @@ function EvidencePath({ path }: { readonly path: string }): ReactNode {
         onClick={() => {
           void copyTextToClipboard(path).then(
             () => setStatus(t("grounded.files.copied")),
-            (failure: unknown) => {
+            (error_: unknown) => {
               setStatus(t("grounded.files.copyFailed"));
               reportClientDiagnostic("evidence-path-copy-failed", {
                 correlationId: newClientCorrelationId(),
                 kind: "other",
-                errorKind: bffRequestErrorKind(failure),
-                errorEvidence: clientErrorEvidence(failure),
+                errorKind: bffRequestErrorKind(error_),
+                errorEvidence: clientErrorEvidence(error_),
               });
             },
           );
@@ -159,7 +158,7 @@ function EvidencePath({ path }: { readonly path: string }): ReactNode {
       >
         {t("grounded.files.copy")}
       </button>
-      <span role="status">{status}</span>
+      <output>{status}</output>
     </>
   );
 }
@@ -241,7 +240,11 @@ function ManifestInspection({
   return (
     <details className={styles.cmpFiles} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>{t("grounded.files.inspect")}</summary>
-      {open && state.kind === "pending" ? <p role="status">{t("grounded.files.loading")}</p> : null}
+      {open && state.kind === "pending" ? (
+        <p>
+          <output>{t("grounded.files.loading")}</output>
+        </p>
+      ) : null}
       {open && state.kind === "failed" ? <p role="alert">{t("grounded.files.failed")}</p> : null}
       {open && state.kind === "loaded" ? (
         <>

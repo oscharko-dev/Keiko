@@ -950,6 +950,14 @@ interface GroundedSendRequest extends Pick<
   readonly correlationId: SendAttemptRequest["correlationId"];
 }
 
+function expectedGroundedScopeIdentity(
+  chat: Chat,
+  clientTurnId: string | undefined,
+): Pick<Parameters<typeof askGrounded>[0], "expectedGroundingScopeIdentity"> {
+  if (clientTurnId === undefined || chat.groundingScopeIdentity === undefined) return {};
+  return { expectedGroundingScopeIdentity: chat.groundingScopeIdentity };
+}
+
 interface SendAttemptExecution {
   readonly terminal: SendAttemptOutcome;
   readonly disclosures: readonly SentDocumentDisclosure[];
@@ -4183,9 +4191,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             modelId,
             memory,
             ...(clientTurnId === undefined ? {} : { clientTurnId }),
-            ...(clientTurnId === undefined || chat.groundingScopeIdentity === undefined
-              ? {}
-              : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
+            ...expectedGroundedScopeIdentity(chat, clientTurnId),
           },
           signal,
           correlationId,

@@ -1726,9 +1726,9 @@ export class OpenAiAdapter implements ProviderAdapter {
       const answer = this.finishedResponse(payload, request, config, secrets, catalog, start);
       settleCallerAttempt(dispatched.reservation, answer.usage, true);
       return answer;
-    } catch (failure) {
-      settleFailedCallerAttempt(dispatched.reservation, failure, true);
-      throw failure;
+    } catch (error_) {
+      settleFailedCallerAttempt(dispatched.reservation, error_, true);
+      throw error_;
     } finally {
       dispatched.dispose();
     }
@@ -1780,9 +1780,9 @@ export class OpenAiAdapter implements ProviderAdapter {
         start,
       };
       yield* this.admittedResponseChunks(dispatched, read);
-    } catch (failure) {
-      settleFailedCallerAttempt(dispatched.reservation, failure, true);
-      throw failure;
+    } catch (error_) {
+      settleFailedCallerAttempt(dispatched.reservation, error_, true);
+      throw error_;
     } finally {
       dispatched.dispose();
     }
@@ -2107,9 +2107,9 @@ export class OpenAiAdapter implements ProviderAdapter {
         body,
         deadline: requestDeadline(config.timeoutMs, readBounds, request.cancellationSignal),
       };
-    } catch (failure) {
+    } catch (error_) {
       settleCallerAttempt(reservation, undefined, false, "none");
-      throw failure;
+      throw error_;
     }
   }
 

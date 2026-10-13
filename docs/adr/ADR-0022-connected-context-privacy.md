@@ -398,6 +398,11 @@ inside an actually read excerpt. Calls belong to their nearest exact indexed cal
 uninvoked nested functions and unsupported anonymous owners cannot inherit the outer handler's
 identity. Known targets reuse their actual indexed definition spans and ranges rather than a
 name-only global lookup. Exact declaration identities distinguish same-line declarations.
+Contextual natural-language code questions can seed the same bounded definition traversal from
+current AST callable owners of actual lexical source hits without requiring an HTTP route or a
+user-supplied identifier. Lexical overlap does not certify invocation or an unrelated declaration;
+continuation retains the existing exact ownership, currentness and read-budget guards. The existing
+selection-details Activity Log records the admitted contextual definition seed count only.
 Imported targets retain the exact runtime module-export declaration through the existing
 re-export resolver; a same-named method or nested declaration cannot replace that identity.
 Runtime re-export declarations retain uncertainty when their source is unreadable, only partially

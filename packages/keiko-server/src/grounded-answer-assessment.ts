@@ -19,22 +19,37 @@ export { isGroundedAssessmentOnly } from "./grounded-faithfulness.js";
 // A claim about selected evidence remains source-authoritative even without a marker or path.
 const SOURCE_ATTRIBUTION_RE =
   /(?<![\p{L}\p{M}\p{N}_])(?:according\s+to|as\s+(?:stated|specified|documented)\s+in|laut|gemäß)(?![\p{L}\p{M}\p{N}_])/iu;
-const SOURCE_DETERMINER_RE =
-  /^(?:the|this|these|that|those|our|my|your|his|her|its|their|die|das|der|den|dem|des|dies(?:e|en|em|er|es)|(?:unser|mein|dein|euer|ihr)(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu;
-const SOURCE_NOUN_RE =
-  /^(?:sources?|files?|manuals?|documents?|folders?|repositor(?:y|ies)|quellen?|datei(?:en)?|handbuchs?|handbüchern?|dokument(?:e|en|s)?|ordnern?|repository)$/iu;
+const SOURCE_DETERMINER_PATTERNS: readonly RegExp[] = [
+  /^(?:the|this|these|that|those|our|my|your|his|her|its|their)$/iu,
+  /^(?:die|das|der|den|dem|des|dies(?:e|en|em|er|es))$/iu,
+  /^(?:unser|mein|dein|euer|ihr)(?:e|en|em|er|es)?$/iu,
+  /^eur(?:e|en|em|er|es)$/iu,
+];
+const SOURCE_NOUN_PATTERNS: readonly RegExp[] = [
+  /^(?:sources?|files?|manuals?|documents?|folders?|repositor(?:y|ies))$/iu,
+  /^(?:quellen?|datei(?:en)?|handbuchs?|handbüchern?)$/iu,
+  /^(?:dokument(?:e|en|s)?|ordnern?|repository)$/iu,
+];
 const SOURCE_PHRASE_TOKEN_RE = /[\p{L}\p{N}-]+|[^\p{L}\p{N}\s-]/gu;
-const SOURCE_PHRASE_BOUNDARY_RE =
-  /^(?:am|is|are|was|were|be|been|being|do|does|did|have|has|had|can|could|may|might|must|shall|should|will|would|to|for|from|with|without|before|after|during|on|in|at|into|over|under|by|about|against|between|through|bin|bist|ist|sind|war|waren|sein|habe|hat|haben|kann|können|könnte|könnten|muss|müssen|soll|sollen|sollte|sollten|wird|werden|würde|würden|zu|für|von|mit|ohne|vor|nach|während|auf|an|über|unter|bei|gegen|zwischen|durch)$/iu;
+const SOURCE_PHRASE_BOUNDARY_PATTERNS: readonly RegExp[] = [
+  /^(?:am|is|are|was|were|be|been|being|do|does|did|have|has|had|can|could|may|might)$/iu,
+  /^(?:must|shall|should|will|would|to|for|from|with|without|before|after|during|on|in|at|into)$/iu,
+  /^(?:over|under|by|about|against|between|through|bin|bist|ist|sind|war|waren|sein|habe|hat|haben)$/iu,
+  /^(?:kann|können|könnte|könnten|muss|müssen|soll|sollen|sollte|sollten|wird|werden|würde|würden)$/iu,
+  /^(?:zu|für|von|mit|ohne|vor|nach|während|auf|an|über|unter|bei|gegen|zwischen|durch)$/iu,
+];
 
 /** Modifiers retain attribution within a noun phrase, not across a separate predicate or clause. */
 function attributedSourcePhrase(content: string): boolean {
   let determined = false;
   for (const match of content.matchAll(SOURCE_PHRASE_TOKEN_RE)) {
     const token = match[0];
-    if (determined && SOURCE_NOUN_RE.test(token)) return true;
-    if (SOURCE_DETERMINER_RE.test(token)) determined = true;
-    else if (SOURCE_PHRASE_BOUNDARY_RE.test(token) || !/^[\p{L}\p{N}-]+$/u.test(token))
+    if (determined && SOURCE_NOUN_PATTERNS.some((pattern) => pattern.test(token))) return true;
+    if (SOURCE_DETERMINER_PATTERNS.some((pattern) => pattern.test(token))) determined = true;
+    else if (
+      SOURCE_PHRASE_BOUNDARY_PATTERNS.some((pattern) => pattern.test(token)) ||
+      !/^[\p{L}\p{N}-]+$/u.test(token)
+    )
       determined = false;
   }
   return false;

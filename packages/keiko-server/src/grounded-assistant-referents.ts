@@ -1,12 +1,15 @@
-import type { GroundedInsufficiencyDeclaration } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { GROUNDING_LIMIT_CEILINGS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  type GroundedInsufficiencyDeclaration,
+  GROUNDING_LIMIT_CEILINGS,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type {
   ConnectedContextPack,
   ContextExcerpt,
+  ContinuityReferentSource,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
+
 import { extractPathReferences, type SearchReference } from "@oscharko-dev/keiko-workflows";
 import { declaredInsufficiencyPaths, parseInlineCitations } from "./grounded-faithfulness.js";
 import type { ChatMessage } from "./store/index.js";

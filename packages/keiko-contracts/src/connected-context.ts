@@ -1523,16 +1523,16 @@ function validateDiagnosticSourceStates(
   pushIf(
     reasons,
     diagnostics.semanticProviderDisposition !== undefined &&
-      !["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"].some(
-        (state) => state === diagnostics.semanticProviderDisposition,
+      !new Set(["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"]).has(
+        diagnostics.semanticProviderDisposition,
       ),
     "pack.diagnostics.semanticProviderDisposition invalid",
   );
   pushIf(
     reasons,
     diagnostics.scopeContextState !== undefined &&
-      !["applied", "overflow", "gate-refused", "incomplete-traversal"].some(
-        (state) => state === diagnostics.scopeContextState,
+      !new Set(["applied", "overflow", "gate-refused", "incomplete-traversal"]).has(
+        diagnostics.scopeContextState,
       ),
     "pack.diagnostics.scopeContextState invalid",
   );
@@ -1552,7 +1552,7 @@ function validateDiagnosticsSelection(value: unknown, reasons: string[]): void {
       ["unconfigured", "applied", "failed", "skipped-budget", "skipped-literal"],
     ],
   ] as const)
-    pushIf(reasons, !allowed.some((entry) => entry === value[field]), `selection.${field} invalid`);
+    pushIf(reasons, !new Set<unknown>(allowed).has(value[field]), `selection.${field} invalid`);
   for (const field of ["relativeFloorPermille", "absoluteFloorPermille"])
     pushIf(
       reasons,
@@ -1599,8 +1599,8 @@ function validateSelectionReranker(value: unknown, reasons: string[]): void {
   }
   pushIf(
     reasons,
-    !["disabled", "denied", "unavailable", "invalid-response", "applied"].some(
-      (state) => state === value.status,
+    !new Set<unknown>(["disabled", "denied", "unavailable", "invalid-response", "applied"]).has(
+      value.status,
     ),
     "selection.reranker.status invalid",
   );

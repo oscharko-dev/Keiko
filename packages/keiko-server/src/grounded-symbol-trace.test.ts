@@ -4,7 +4,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
 } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
-import { rankCandidates } from "@oscharko-dev/keiko-workflows";
+import { extractAnchors, rankCandidates } from "@oscharko-dev/keiko-workflows";
 import type {
   SearchScope,
   WorkspaceFs,
@@ -22,6 +22,11 @@ import {
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { endpointContractAdapter, evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import {
   _readKeptExcerptsForTests,
   retrieveConnectedContextPack,
@@ -40,6 +45,395 @@ const ROUTE_PATH = "src/routes.ts";
 const ROUTE_CONTENT =
   'import { handlePostItem } from "./implementation.js";\nrouter.post("/api/items", handlePostItem);\n';
 const ROUTE_FILE_IDENTITY = `symbol-trace-probe:${WORKSPACE_ROOT}/${ROUTE_PATH}`;
+
+const CONTEXTUAL_CONVERTER_BODY = [
+  "export function prepareContent(value: string): Uint8Array {",
+  '  return new TextEncoder().encode(value.normalize("NFKD"));',
+  "}",
+].join("\n");
+
+function contextualReceiptQuery(): RetrievalQuery {
+  return {
+    ...routeQuery(),
+    text: "Explain the receipt source pipeline: which routine creates the receipt, what Unicode normalization and byte encoding happen before the digest, and how the digest becomes printable text? Cite the conversion and digest implementation.",
+  };
+}
+
+function contextualReceiptFiles(): Record<string, string> {
+  return {
+    "lib/receipt.ts": [
+      'import { createHash } from "node:crypto";',
+      'import { prepareContent as inputBytes } from "./format.js";',
+      "export function issueReceipt(receipt: string): string {",
+      '  return createHash("sha512").update(inputBytes(receipt)).digest("hex");',
+      "}",
+    ].join("\n"),
+    "lib/format.ts": CONTEXTUAL_CONVERTER_BODY,
+    "main.ts":
+      'import { issueReceipt } from "./lib/receipt.js";\nexport const sampleReceipt = issueReceipt("sample");',
+  };
+}
+
+async function contextualTraceFixture(
+  files: Record<string, string>,
+  query: RetrievalQuery = contextualReceiptQuery(),
+  projection?: (index: CodeIntelligenceIndex) => CodeIntelligenceIndex,
+  stalePath?: string,
+): Promise<Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>> {
+  const fs = memFs(WORKSPACE_ROOT, files);
+  const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths: [] };
+  const requestContext = createStructuralAdapterRequestContext(
+    searchScope,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    fs,
+    { nowMs: () => NOW },
+  );
+  if (projection !== undefined) {
+    const index = requestContext.codeIntelligenceIndex.bind(requestContext);
+    vi.spyOn(requestContext, "codeIntelligenceIndex").mockImplementation(async () =>
+      projection(await index()),
+    );
+  }
+  const observed = await requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS);
+  if (stalePath !== undefined) {
+    const current = requestContext.isCodeIntelligenceSourceCurrent.bind(requestContext);
+    vi.spyOn(requestContext, "isCodeIntelligenceSourceCurrent").mockImplementation(
+      (path) => path !== stalePath && current(path),
+    );
+  }
+  return collectDiscoveredSymbolTraceEvidence({
+    scope: selectedScope(),
+    query,
+    anchors: extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors,
+    retrievalIntent: "targeted-code-search",
+    searchScope,
+    fs,
+    nowMs: () => NOW,
+    atoms: observed.atoms,
+    requestContext,
+  });
+}
+
+function receiptDelegationFiles(body: string): Record<string, string> {
+  return {
+    "lib/receipt.ts":
+      'import { prepareContent as inputBytes } from "./format.js";\n' +
+      `export function issueReceipt(receipt: string, key: string) { ${body} }`,
+    "lib/format.ts": CONTEXTUAL_CONVERTER_BODY,
+  };
+}
+
+function receiptDelegationQuery(): RetrievalQuery {
+  return { ...routeQuery(), text: "Explain the receipt source pipeline and its implementation." };
+}
+
+function contextualCallableFiles(declaration: string): Record<string, string> {
+  return {
+    ...contextualReceiptFiles(),
+    "lib/receipt.ts": [
+      'import { createHash } from "node:crypto";',
+      'import { prepareContent as inputBytes } from "./format.js";',
+      declaration,
+      '  return createHash("sha512").update(inputBytes(receipt)).digest("hex");',
+      "};",
+    ].join("\n"),
+  };
+}
+
+describe("contextual source-definition discovery", () => {
+  it.each([
+    ["arrow", "export const issueReceipt = (receipt: string): string => {"],
+    ["function expression", "export const issueReceipt = function (receipt: string): string {"],
+  ])(
+    "follows an imported converter from a certified named %s contextual root",
+    async (_shape, declaration) => {
+      const files = contextualCallableFiles(declaration);
+      const result = await contextualTraceFixture(files, receiptDelegationQuery(), (index) => {
+        const definition = index.symbols.find(
+          (symbol) => symbol.scopePath === "lib/receipt.ts" && symbol.name === "issueReceipt",
+        );
+        const owner = index.calls.find(
+          (call) => call.callerPath === "lib/receipt.ts" && call.calleeName === "inputBytes",
+        )?.callerDefinition;
+        expect(definition?.kind).toBe("constant");
+        expect(owner).toEqual({
+          name: definition?.name,
+          lineRange: definition?.lineRange,
+          declarationSpan: definition?.declarationSpan,
+        });
+        return index;
+      });
+      expect(result.contextualDefinitionSeedCount).toBeGreaterThan(0);
+      const converter = result.routeCoverage?.entries.find(
+        (entry) => entry.atom.scopePath === "lib/format.ts",
+      );
+      expect(converter?.parentWitness?.ownedSourceCall).toBe(true);
+      expect(converter?.parentWitness?.lineRange.startLine).toBe(4);
+      const root = result.routeCoverage?.entries.find(
+        (entry) => entry.atom.scopePath === "lib/receipt.ts",
+      );
+      expect(root).toBeDefined();
+      expect(converter?.parentIdentity).toBe(root?.definitionIdentity);
+      const retrieved = await retrieveConnectedContextPack(
+        {
+          scope: selectedScope(),
+          query: contextualReceiptQuery(),
+          workspaceRoot: WORKSPACE_ROOT,
+          budget: DEFAULT_EXPLORATION_BUDGET,
+        },
+        {
+          correlationId: undefined,
+          fs: memFs(WORKSPACE_ROOT, files),
+          nowMs: () => NOW,
+          detectWorkspace: workspaceInfo,
+          answerer: { answer: () => Promise.resolve("observed source") },
+        },
+      );
+      expect(
+        retrieved.pack.files
+          .find((file) => file.scopePath === "lib/format.ts")
+          ?.excerpts.map((excerpt) => excerpt.content)
+          .join("\n"),
+      ).toContain(CONTEXTUAL_CONVERTER_BODY);
+      expect(
+        buildGroundedGatewayMessages(
+          contextualReceiptQuery().text,
+          retrieved.pack,
+          (value) => value,
+        )
+          .map((message) => message.content)
+          .join("\n"),
+      ).toContain('2 |   return new TextEncoder().encode(value.normalize("NFKD"));');
+    },
+  );
+
+  it.each([
+    'export const issueReceipt = inputBytes("receipt");',
+    'export const issueReceipt = "receipt";',
+    "export const issueReceipt = (receipt: string) => { const dormant = () => inputBytes(receipt); return receipt; };",
+  ])("does not promote an uncertified or overlapping constant owner: %s", async (declaration) => {
+    const files = {
+      "lib/receipt.ts":
+        'import { prepareContent as inputBytes } from "./format.js";\n' + declaration,
+      "lib/format.ts": CONTEXTUAL_CONVERTER_BODY,
+    };
+    const result = await contextualTraceFixture(files, receiptDelegationQuery());
+    expect(result.contextualDefinitionSeedCount).toBe(0);
+    expect(result.atoms).toEqual([]);
+  });
+
+  it.each(["missing", "mismatched", "ambiguous"] as const)(
+    "refuses %s callable owner certification for a named arrow",
+    async (mode) => {
+      const files = contextualCallableFiles(
+        "export const issueReceipt = (receipt: string): string => {",
+      );
+      const result = await contextualTraceFixture(files, receiptDelegationQuery(), (index) => {
+        const symbols = mode === "ambiguous" ? [...index.symbols, ...index.symbols] : index.symbols;
+        const owner = (
+          definition: CodeIntelligenceIndex["calls"][number]["callerDefinition"],
+        ): CodeIntelligenceIndex["calls"][number]["callerDefinition"] =>
+          mode === "missing" || definition === undefined
+            ? undefined
+            : mode === "mismatched"
+              ? { ...definition, name: definition.name + "Other" }
+              : definition;
+        return {
+          ...index,
+          symbols,
+          calls: index.calls.map((call) => ({
+            ...call,
+            callerDefinition: owner(call.callerDefinition),
+          })),
+          references: index.references.map((reference) => ({
+            ...reference,
+            referencerDefinition: owner(reference.referencerDefinition),
+          })),
+        };
+      });
+      expect(result.contextualDefinitionSeedCount).toBe(0);
+      expect(result.atoms).toEqual([]);
+    },
+  );
+
+  it("retains a lexically discovered caller's imported argument converter in the public pack and numbered prompt", async () => {
+    const query = contextualReceiptQuery();
+    expect(
+      extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors.every(
+        (anchor) => anchor.kind === "literal",
+      ),
+    ).toBe(true);
+    const log = createBufferedServerLogSink();
+    const result = await retrieveConnectedContextPack(
+      {
+        scope: selectedScope(),
+        query,
+        workspaceRoot: WORKSPACE_ROOT,
+        budget: DEFAULT_EXPLORATION_BUDGET,
+      },
+      {
+        correlationId: "contextual-source-definition-proof",
+        fs: memFs(WORKSPACE_ROOT, contextualReceiptFiles()),
+        nowMs: () => NOW,
+        detectWorkspace: workspaceInfo,
+        answerer: { answer: () => Promise.resolve("observed source") },
+        activityLog: log,
+      },
+    );
+    const caller = result.pack.files.find((file) => file.scopePath === "lib/receipt.ts");
+    expect(
+      caller?.excerpts.some((excerpt) => excerpt.content.includes("inputBytes(receipt)")),
+    ).toBe(true);
+    const converter = result.pack.files.find((file) => file.scopePath === "lib/format.ts");
+    expect(converter?.excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(
+      CONTEXTUAL_CONVERTER_BODY,
+    );
+    const prompt = buildGroundedGatewayMessages(query.text, result.pack, (value) => value)
+      .map((message) => message.content)
+      .join("\n");
+    expect(prompt).toContain('2 |   return new TextEncoder().encode(value.normalize("NFKD"));');
+    const selection = log.events.find(
+      (event) => event.op === "search.connected-context.selection-details",
+    );
+    expect(selection?.extra?.contextualDefinitionSeedCount).toBeGreaterThan(0);
+    if (selection === undefined) throw new TypeError("Selection details are required.");
+    const line = formatActivityLogProofLine(selection);
+    expectActivityLogProof("search.connected-context.selection-details.line", line);
+    expect(line).not.toContain("lib/format.ts");
+    expect(line).not.toContain("NFKD");
+  });
+
+  it("certifies the actual imported argument call from a current contextual owner", async () => {
+    const result = await contextualTraceFixture(contextualReceiptFiles(), receiptDelegationQuery());
+    expect(result.contextualDefinitionSeedCount).toBeGreaterThan(0);
+    const converter = result.routeCoverage?.entries.find(
+      (entry) => entry.atom.scopePath === "lib/format.ts",
+    );
+    expect(converter?.parentWitness?.ownedSourceCall).toBe(true);
+    expect(converter?.parentWitness?.targetIdentity).toBe(converter?.definitionIdentity);
+    expect(converter?.parentWitness?.lineRange.startLine).toBe(4);
+  });
+
+  it.each([
+    [
+      "shadowed",
+      "function inputBytes(value: string) { return value; } return inputBytes(receipt);",
+    ],
+    ["uninvoked nested", 'function dormant() { return inputBytes("other"); } return receipt;'],
+    ["dynamic", "return namespace[key](receipt);"],
+  ])("does not follow a %s converter reference", async (_name, body) => {
+    const files = receiptDelegationFiles(body);
+    if (_name === "dynamic")
+      files["lib/receipt.ts"] =
+        'import * as namespace from "./format.js";\n' +
+        `export function issueReceipt(receipt: string, key: string) { ${body} }`;
+    const result = await contextualTraceFixture(files, receiptDelegationQuery());
+    expect(result.atoms.some((atom) => atom.scopePath === "lib/format.ts")).toBe(false);
+  });
+
+  it("refuses ambiguous imported bindings instead of guessing a target", async () => {
+    const files = receiptDelegationFiles("return inputBytes(receipt);");
+    files["lib/receipt.ts"] =
+      'import { prepareContent as inputBytes } from "./format.js";\n' +
+      'import { prepareContent as inputBytes } from "./other.js";\n' +
+      "export function issueReceipt(receipt: string) { return inputBytes(receipt); }";
+    files["lib/other.ts"] = CONTEXTUAL_CONVERTER_BODY;
+    const result = await contextualTraceFixture(files, receiptDelegationQuery());
+    expect(result.atoms.some((atom) => atom.scopePath !== "lib/receipt.ts")).toBe(false);
+  });
+
+  it("refuses overlapping callable owners on the same physical hit line", async () => {
+    const files = receiptDelegationFiles(
+      'function dormant() { return inputBytes("other"); } return receipt;',
+    );
+    const result = await contextualTraceFixture(files, receiptDelegationQuery());
+    expect(result.contextualDefinitionSeedCount).toBe(0);
+    expect(result.atoms).toEqual([]);
+  });
+
+  it("does not use missing declaration spans or stale current owners", async () => {
+    const files = receiptDelegationFiles("return inputBytes(receipt);");
+    const missing = await contextualTraceFixture(files, receiptDelegationQuery(), (index) => ({
+      ...index,
+      symbols: index.symbols.map((symbol) => ({ ...symbol, declarationSpan: undefined })),
+    }));
+    const stale = await contextualTraceFixture(
+      files,
+      receiptDelegationQuery(),
+      undefined,
+      "lib/receipt.ts",
+    );
+    expect(missing.contextualDefinitionSeedCount).toBe(0);
+    expect(stale.contextualDefinitionSeedCount).toBe(0);
+    expect(missing.atoms).toEqual([]);
+    expect(stale.atoms).toEqual([]);
+  });
+
+  it("reaches an actually invoked nested continuation without promoting its surrounding context", async () => {
+    const files = {
+      "lib/receipt.ts": [
+        'import { prepareContent as inputBytes } from "./format.js";',
+        "export function issueReceipt(receipt: string) {",
+        "  function invoked() { return inputBytes(receipt); }",
+        "  return invoked();",
+        "}",
+      ].join("\n"),
+      "lib/format.ts": CONTEXTUAL_CONVERTER_BODY,
+    };
+    const result = await contextualTraceFixture(files, receiptDelegationQuery());
+    expect(result.contextualDefinitionSeedCount).toBe(1);
+    const converter = result.routeCoverage?.entries.find(
+      (entry) => entry.atom.scopePath === "lib/format.ts",
+    );
+    expect(converter?.parentWitness?.ownedSourceCall).toBe(true);
+    expect(converter?.parentWitness?.lineRange.startLine).toBe(3);
+  });
+
+  it.each(["literal", "exact-symbol"] as const)(
+    "keeps %s queries isolated from contextual intake",
+    async (kind) => {
+      const result = await contextualTraceFixture(contextualReceiptFiles(), {
+        ...routeQuery(),
+        kind: kind === "literal" ? "natural-language" : kind,
+        text: kind === "literal" ? 'Find "receipt"' : "issueReceipt",
+      });
+      expect(result.contextualDefinitionSeedCount).toBeUndefined();
+      expect(result.atoms).toEqual([]);
+    },
+  );
+
+  it("does not build a code index for documentation-only lexical hits", async () => {
+    let indexCalls = 0;
+    const result = await contextualTraceFixture(
+      {
+        "README.md": "Explain the receipt source pipeline and its implementation.",
+      },
+      receiptDelegationQuery(),
+      (index) => {
+        indexCalls += 1;
+        return index;
+      },
+    );
+    expect(indexCalls).toBe(0);
+    expect(result.contextualDefinitionSeedCount).toBe(0);
+  });
+
+  it("does not promote unmatched code around a comment-only lexical hit", async () => {
+    const files = {
+      "lib/receipt.ts": [
+        'import { prepareContent as inputBytes } from "./format.js";',
+        "export function unrelated(value: string) {",
+        "  // Receipt source pipeline implementation.",
+        "  return inputBytes(value);",
+        "}",
+      ].join("\n"),
+      "lib/format.ts": CONTEXTUAL_CONVERTER_BODY,
+    };
+    const result = await contextualTraceFixture(files, receiptDelegationQuery());
+    expect(result.contextualDefinitionSeedCount).toBe(0);
+    expect(result.atoms).toEqual([]);
+  });
+});
 
 interface FsProbe {
   readonly fs: WorkspaceFs;

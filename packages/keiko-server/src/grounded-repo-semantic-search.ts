@@ -646,12 +646,10 @@ async function repositoryPodHits(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   documents: readonly CandidateDocument[],
-  queryText: string,
-  queryTerms: readonly string[],
-  signal: AbortSignal | undefined,
-  maxResults: number,
+  prepared: PreparedSemanticSearch,
   observeQueryEmbedding?: QueryEmbeddingObserver,
 ): Promise<RepositoryPodHitOutcome> {
+  const { queryText, queryTerms, signal, maxResults } = prepared;
   const chunkFilter = candidateChunkIds(pod, documents);
   if (chunkFilter.length === 0) return { matches: [] };
   const topK = podRetrievalTopK(chunkFilter.length, maxResults);
@@ -758,15 +756,12 @@ async function podRankedHits(
   observeQueryEmbedding?: QueryEmbeddingObserver,
 ): Promise<readonly SemanticSearchMatch[]> {
   if (freshDocuments.length === 0) return [];
-  const { documents, maxResults, queryTerms, queryText, signal } = prepared;
+  const { documents, maxResults } = prepared;
   const podOutcome = await repositoryPodHits(
     ctx,
     pod,
     freshDocuments,
-    queryText,
-    queryTerms,
-    signal,
-    maxResults,
+    prepared,
     observeQueryEmbedding,
   );
   return rankHits(podOutcome.matches, documents, maxResults);

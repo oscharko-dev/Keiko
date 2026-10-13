@@ -62,7 +62,6 @@ import {
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { useConnectedEvidenceReferences } from "./hooks/useConnectedEvidenceReferences";
-import type { RepositoryReferenceEvidence } from "./repositoryReferences";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
@@ -81,6 +80,7 @@ import {
   repositoryRootLabel,
   sanitizeRepositoryEvidenceText,
   type OpenRepositoryReference,
+  type RepositoryReferenceEvidence,
   type RepositoryReferenceRoot,
 } from "./repositoryReferences";
 import {

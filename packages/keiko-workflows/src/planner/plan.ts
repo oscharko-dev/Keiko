@@ -217,7 +217,7 @@ function buildRing(
 }
 
 const DIRECT_ROUTE_LOOKUP_RE =
-  /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/[A-Za-z0-9:_?&=.%+*{}/-]{0,1024}[A-Za-z0-9_}/*-]/iu;
+  /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/[a-z0-9:_?&=.%+*{}/-]{0,1024}[a-z0-9_}/*-]/iu;
 const QUERY_TERM_RE = /[\p{L}\p{N}_]+/gu;
 const HISTORY_QUERY_TERMS: ReadonlySet<string> = new Set([
   "git",
@@ -383,16 +383,23 @@ const ENGLISH_VALUE_REQUEST_RE =
 const GERMAN_VALUE_REQUEST_RE = /^welche\s+werte\s+stehen\s+zu\s+\0$/iu;
 const GERMAN_INFORMATION_REQUEST_RE =
   /^welche\s+information\s+ist\s+(?:für\s+\0|dazu)\s+in\s+diesem\s+ordner\s+belegt$/iu;
-const NAMED_FILE_COMMAND_RE =
-  /^(?:please |bitte )?(?:read|show|open|explain|describe|summarize|inspect|lies|zeige|öffne|erkläre|beschreibe) (?:the |die |das |den )?\0(?: (?:and |und )?\0)*$/iu;
+const NAMED_FILE_COMMAND_PATTERNS = [
+  /^(?:please |bitte )?(?:read|show|open|explain) (?:the |die |das |den )?\0(?: (?:and |und )?\0)*$/iu,
+  /^(?:please |bitte )?(?:describe|summarize|inspect) (?:the |die |das |den )?\0(?: (?:and |und )?\0)*$/iu,
+  /^(?:please |bitte )?(?:lies|zeige|öffne|erkläre|beschreibe) (?:the |die |das |den )?\0(?: (?:and |und )?\0)*$/iu,
+];
 const NAMED_FILE_RETURN_RE =
   /^(?:please |bitte )?(?:return to \0|go back to \0|zurück zu \0|kehre zu \0 zurück)$/iu;
 const NAMED_FILE_FACT_CONTINUATION_RE =
   /^(?:(?:which|what) (?:function|method|section|value)|welch(?:e|er|es|en) (?:funktion|methode|abschnitt|wert)) (.+)$/iu;
-const SOURCE_SCOPE_POSITION_RE =
-  /^(?:in|within|from|across|throughout|all|any|other|every|im|innerhalb|aus|über|alle[nmrs]?|andere[nmrs]?|jede[nmrs]?)$/iu;
-const SOURCE_SCOPE_NONLOCAL_RE =
-  /^(?:another|other|all|any|every|entire|whole|ander(?:e|en|em|er|es)|alle[nmrs]?|jede[nmrs]?|gesamt(?:e|en|em|er|es))$/iu;
+const SOURCE_SCOPE_POSITION_PATTERNS = [
+  /^(?:in|within|from|across|throughout|all|any|other|every|im|innerhalb|aus|über)$/iu,
+  /^(?:alle[nmrs]?|andere[nmrs]?|jede[nmrs]?)$/iu,
+];
+const SOURCE_SCOPE_NONLOCAL_PATTERNS = [
+  /^(?:another|other|all|any|every|entire|whole)$/iu,
+  /^(?:ander(?:e|en|em|er|es)|alle[nmrs]?|jede[nmrs]?|gesamt(?:e|en|em|er|es))$/iu,
+];
 const SOURCE_SCOPE_ELSEWHERE_RE = /^(?:elsewhere|everywhere|anderswo|woanders|überall)$/iu;
 const SOURCE_SCOPE_NOUN_RE =
   /^(?:repos?|workspaces?|projects?|scopes?|projekte?|arbeitsbereiche?)$/iu;
@@ -400,22 +407,84 @@ const NAMED_FILE_CONTAINED_REQUEST_RE =
   /^(?:please |bitte )?(?:explain|describe|summarize|erkläre|beschreibe) (.+) (?:in|within|from|aus) \0$/iu;
 const NAMED_FILE_SUBJECT_REQUEST_RE =
   /^(?:please |bitte )?(?:explain|describe|erkläre|beschreibe) (?:how|wie) \0 (.+)$/iu;
-const INDEPENDENT_REQUEST_GRAMMAR_RE =
-  /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus|then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während|außerdem|zudem|zusätzlich|auch|dann|sowie|was|welche|wo|wie|warum)\b/iu;
-const REQUEST_COMMAND_RE =
-  /\b(?:read|show|open|explain|describe|summarize|inspect|find|search|locate)(?:s|ed|ing)?\b|\b(?:lies|zeige|öffne|erkläre|erklären|erklärst|beschreibe|beschreiben|suche|finde)\b/iu;
+const INDEPENDENT_REQUEST_GRAMMAR_PATTERNS = [
+  /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus)\b/iu,
+  /\b(?:then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während)\b/iu,
+  /\b(?:außerdem|zudem|zusätzlich|auch|dann|sowie|was|welche|wo|wie|warum)\b/iu,
+];
+const REQUEST_COMMAND_PATTERNS = [
+  /\b(?:read|show|open|explain|describe|summarize|inspect|find|search|locate)(?:s|ed|ing)?\b/iu,
+  /\b(?:lies|zeige|öffne|erkläre|erklären|erklärst|beschreibe|beschreiben|suche|finde)\b/iu,
+];
+
+function matchesQueryPattern(text: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function afterQueryPrefix(text: string, patterns: readonly RegExp[]): string | undefined {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match !== null) return text.slice(match[0].length);
+  }
+  return undefined;
+}
+
+function acknowledgementRequest(text: string): boolean {
+  const prefix = text.replace(/^(?:please|bitte)\s+/iu, "").replace(/^(?:briefly|kurz)\s+/iu, "");
+  const afterVerb = afterQueryPrefix(prefix, ACKNOWLEDGEMENT_VERB_PATTERNS);
+  if (afterVerb === undefined) return false;
+  const afterDeterminer = afterQueryPrefix(afterVerb, [ACKNOWLEDGEMENT_DETERMINER_RE]);
+  if (afterDeterminer === undefined) return false;
+  const tail = afterQueryPrefix(afterDeterminer.replace(/^working\s+/iu, ""), [
+    ACKNOWLEDGEMENT_NOUN_RE,
+  ]);
+  return tail !== undefined && (tail.length === 0 || ACKNOWLEDGEMENT_BUDGET_RE.test(tail));
+}
+
+function germanGeneralAdviceTail(text: string): string | undefined {
+  const afterVerb = afterQueryPrefix(text, [GENERAL_ADVICE_GERMAN_VERB_RE]);
+  if (afterVerb === undefined) return undefined;
+  const prefix = afterVerb
+    .replace(/^(?:getrennt|separat|unabhängig) /iu, "")
+    .replace(/^(?:eine|einen) /iu, "")
+    .replace(/^kurze[nr]? /iu, "");
+  const afterAdjective = afterQueryPrefix(prefix, [/^allgemeine[nr]? /iu]);
+  return afterAdjective === undefined
+    ? undefined
+    : afterQueryPrefix(afterAdjective, [GENERAL_ADVICE_GERMAN_NOUN_RE]);
+}
+
+function generalAdviceSubject(text: string): string | undefined {
+  const prefix = text
+    .replace(/^(?:please|bitte) /iu, "")
+    .replace(/^(?:then|dann) /iu, "")
+    .replace(/^(?:separately|independently|getrennt|separat|unabhängig) /iu, "");
+  const english = afterQueryPrefix(prefix, [GENERAL_ADVICE_ENGLISH_HEAD_RE]);
+  const tail =
+    english === undefined
+      ? germanGeneralAdviceTail(prefix)
+      : afterQueryPrefix(english, [GENERAL_ADVICE_ENGLISH_NOUN_RE]);
+  if (tail === undefined) return undefined;
+  const budget = GENERAL_ADVICE_BUDGET_SUFFIX_RE.exec(tail);
+  const subject = budget === null ? tail : tail.slice(0, budget.index);
+  if (subject.length === 0) return "";
+  const result = afterQueryPrefix(subject, [/^ (?:for|about|on|zu|zum|zur|über) /iu]);
+  return result !== undefined && /^[^\n\r\u2028\u2029]+$/u.test(result) ? result : undefined;
+}
 
 function boundNamedFilePredicate(text: string): boolean {
   return (
     text.length > 0 &&
     !text.includes("\0") &&
-    !INDEPENDENT_REQUEST_GRAMMAR_RE.test(text) &&
-    !REQUEST_COMMAND_RE.test(text)
+    !matchesQueryPattern(text, INDEPENDENT_REQUEST_GRAMMAR_PATTERNS) &&
+    !matchesQueryPattern(text, REQUEST_COMMAND_PATTERNS)
   );
 }
 
 function isNamedFileNavigation(clause: string): boolean {
-  return NAMED_FILE_COMMAND_RE.test(clause) || NAMED_FILE_RETURN_RE.test(clause);
+  return (
+    matchesQueryPattern(clause, NAMED_FILE_COMMAND_PATTERNS) || NAMED_FILE_RETURN_RE.test(clause)
+  );
 }
 
 function isNamedFileClause(words: readonly string[]): boolean {
@@ -454,9 +523,9 @@ function namedFileClauseDecision(clause: string): boolean | undefined {
   const projected = queryShapeOutsideTargets(clause, [{ term: "\0", kind: "path", weight: 1 }]);
   if (queryContextOutsideQuotes(projected) !== projected) return false;
   const fragments = projected.includes("\0") ? projected.split(",") : [projected];
-  const decisions = fragments.map(namedFileWordsDecision);
-  if (decisions.includes(false)) return false;
-  return decisions.includes(true) ? true : undefined;
+  const decisions = new Set(fragments.map(namedFileWordsDecision));
+  if (decisions.has(false)) return false;
+  return decisions.has(true) ? true : undefined;
 }
 
 function namedFileWordsDecision(clause: string): boolean | undefined {
@@ -474,11 +543,11 @@ function independentSourceScope(predicate: string): boolean {
     if (
       locating &&
       (SOURCE_SCOPE_NOUN_RE.test(token) ||
-        SOURCE_ADVICE_NOUN_RE.test(token) ||
-        SOURCE_SCOPE_NONLOCAL_RE.test(token))
+        matchesQueryPattern(token, SOURCE_ADVICE_NOUN_PATTERNS) ||
+        matchesQueryPattern(token, SOURCE_SCOPE_NONLOCAL_PATTERNS))
     )
       return true;
-    if (SOURCE_SCOPE_POSITION_RE.test(token)) locating = true;
+    if (matchesQueryPattern(token, SOURCE_SCOPE_POSITION_PATTERNS)) locating = true;
     else if (sourceAdviceBoundary(token)) locating = false;
   }
   return false;
@@ -514,12 +583,22 @@ function namedFileOnlyRequest(query: RetrievalQuery): boolean {
   return bound;
 }
 
-const ACKNOWLEDGEMENT_REQUEST_RE =
-  /^(?:(?:please|bitte)\s+)?(?:(?:briefly|kurz)\s+)?(?:acknowledge|confirm(?:\s+receipt\s+of)?|bestätige(?:\s+den\s+erhalt\s+von)?)\s+(?:these|this|my|our|the|diese|diesen|dieses|meine|unsere)\s+(?:working\s+)?(?:preferences?|notes?|context|message|information|präferenzen|notizen|nachricht|informationen)(?:\s+in\s+(?:no\s+more\s+than\s+)?[\p{L}\d-]+\s+words)?$/iu;
+const ACKNOWLEDGEMENT_VERB_PATTERNS = [
+  /^acknowledge\s+/iu,
+  /^confirm(?:\s+receipt\s+of)?\s+/iu,
+  /^bestätige(?:\s+den\s+erhalt\s+von)?\s+/iu,
+];
+const ACKNOWLEDGEMENT_DETERMINER_RE =
+  /^(?:these|this|my|our|the|diese|diesen|dieses|meine|unsere)\s+/iu;
+const ACKNOWLEDGEMENT_NOUN_RE =
+  /^(?:preferences?|notes?|context|message|information|präferenzen|notizen|nachricht|informationen)(?=\s|$)/iu;
+const ACKNOWLEDGEMENT_BUDGET_RE = /^\s+in\s+(?:no\s+more\s+than\s+)?[\p{L}\d-]+\s+words$/iu;
 const SUPPLIED_CONTEXT_RE =
   /^(?:my|our|this|these|meine|unsere|dies|diese)\b[^.!?;\n]*\b(?:is|are|ist|sind)\b/iu;
-const ACKNOWLEDGEMENT_OUTPUT_RE =
-  /^(?:(?:please|bitte)\s+)?(?:do\s+not\s+repeat\s+(?:the|this|these)\s+(?:note|notes|message|context)|wiederhole\s+(?:die|diese)\s+(?:notiz|notizen|nachricht)\s+nicht)$/iu;
+const ACKNOWLEDGEMENT_OUTPUT_PATTERNS = [
+  /^(?:(?:please|bitte)\s+)?do\s+not\s+repeat\s+(?:the|this|these)\s+(?:note|notes|message|context)$/iu,
+  /^(?:(?:please|bitte)\s+)?wiederhole\s+(?:die|diese)\s+(?:notiz|notizen|nachricht)\s+nicht$/iu,
+];
 const INDEPENDENT_CONTEXT_COMMAND_RE =
   /\b(?:then|also|please|while|dann|außerdem|bitte|während)\s+(?:explain|read|show|find|search|describe|erkläre|lies|zeige|suche|beschreibe)\b/iu;
 const CONTEXT_REQUEST_SUBJECTS = new Set(["i", "we", "you", "ich", "wir", "du", "sie"]);
@@ -552,7 +631,8 @@ function independentContextRequest(clause: string): boolean {
     const next = words[index + 1] ?? "";
     return (
       (CONTEXT_REQUEST_SUBJECTS.has(word) && CONTEXT_REQUEST_HEADS.has(next)) ||
-      (INDEPENDENT_REQUEST_GRAMMAR_RE.test(word) && REQUEST_COMMAND_RE.test(next))
+      (matchesQueryPattern(word, INDEPENDENT_REQUEST_GRAMMAR_PATTERNS) &&
+        matchesQueryPattern(next, REQUEST_COMMAND_PATTERNS))
     );
   });
 }
@@ -562,30 +642,55 @@ function suppliedContextClause(clause: string, index: number): boolean {
   if (SUPPLIED_CONTEXT_RE.test(clause)) return true;
   // A supplied personal heading may be a fragment rather than an asserted source fact.
   if (/^(?:my|our|meine|unsere) [\p{L}\d-]+(?: [\p{L}\d-]+)*$/iu.test(clause))
-    return !REQUEST_COMMAND_RE.test(clause) && !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause);
+    return (
+      !matchesQueryPattern(clause, REQUEST_COMMAND_PATTERNS) &&
+      !matchesQueryPattern(clause, INDEPENDENT_REQUEST_GRAMMAR_PATTERNS)
+    );
   // A neutral initial heading supplies context; it cannot authorize an instruction or question.
   return (
     index === 0 &&
     /^[\p{L}\d][\p{L}\d-]*(?: [\p{L}\d-]+)*$/u.test(clause) &&
-    !REQUEST_COMMAND_RE.test(clause) &&
-    !INDEPENDENT_REQUEST_GRAMMAR_RE.test(clause)
+    !matchesQueryPattern(clause, REQUEST_COMMAND_PATTERNS) &&
+    !matchesQueryPattern(clause, INDEPENDENT_REQUEST_GRAMMAR_PATTERNS)
   );
 }
 
-const GENERAL_ADVICE_REQUEST_RE =
-  /^(?:(?:please|bitte) )?(?:(?:then|dann) )?(?:(?:separately|independently|getrennt|separat|unabhängig) )?(?:(?:suggest|give|provide|recommend) (?:a )?(?:(?:short|brief|concise) )?general (?:process|method|approach|guidance|advice|principles|recommendation)|(?:gib|empfiehl|beschreibe) (?:(?:getrennt|separat|unabhängig) )?(?:(?:eine|einen) )?(?:kurze[nr]? )?allgemeine[nr]? (?:vorgehensweise|methode|ansatz|hinweise|empfehlung))(?: (?:for|about|on|zu|zum|zur|über) (.+?))?(?:, (?:under|below|within|unter) \d{1,6} (?:words|wörtern|worte))?$/iu;
-const GENERAL_ADVICE_QUESTION_RE =
-  /^(?:how (?:should|could|can) (?:a|an|one|we)|wie (?:sollte|könnte|kann) (?:man|wir|ein|eine)) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu;
+const GENERAL_ADVICE_ENGLISH_HEAD_RE =
+  /^(?:suggest|give|provide|recommend) (?:a )?(?:(?:short|brief|concise) )?general /iu;
+const GENERAL_ADVICE_ENGLISH_NOUN_RE =
+  /^(?:process|method|approach|guidance|advice|principles|recommendation)(?=[ ,]|$)/iu;
+const GENERAL_ADVICE_GERMAN_VERB_RE = /^(?:gib|empfiehl|beschreibe) /iu;
+const GENERAL_ADVICE_GERMAN_NOUN_RE =
+  /^(?:vorgehensweise|methode|ansatz|hinweise|empfehlung)(?=[ ,]|$)/iu;
+const GENERAL_ADVICE_BUDGET_SUFFIX_RE =
+  /, (?:under|below|within|unter) \d{1,6} (?:words|wörtern|worte)$/iu;
+const GENERAL_ADVICE_QUESTION_PATTERNS = [
+  /^how (?:should|could|can) (?:a|an|one|we) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu,
+  /^wie (?:sollte|könnte|kann) (?:man|wir|ein|eine) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu,
+];
 const SOURCE_ADVICE_ATTRIBUTION_RE =
   /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b/iu;
-const SOURCE_ADVICE_DETERMINER_RE =
-  /^(?:the|this|these|that|those|our|my|your|his|her|its|their|der|die|das|den|dem|des|dies(?:e|en|em|er|es)|(?:unser|mein|dein|sein|ihr)(?:e|en|em|er|es)?|euer(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu;
-const SOURCE_ADVICE_NOUN_RE =
-  /^(?:sources?|manuals?|documents?|files?|folders?|repositor(?:y|ies)|evidence|codes?|implementations?|handbuch(?:s|es)?|handbüchern?|quellen?|datei(?:en)?|ordner(?:s|n)?|dokument(?:s|es|e|en)?|repositorys?|implementierung(?:en)?)$/iu;
+const SOURCE_ADVICE_DETERMINER_PATTERNS = [
+  /^(?:the|this|these|that|those|our|my|your|his|her|its|their)$/iu,
+  /^(?:der|die|das|den|dem|des|dies(?:e|en|em|er|es))$/iu,
+  /^(?:(?:unser|mein|dein|sein|ihr)(?:e|en|em|er|es)?)$/iu,
+  /^(?:euer(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu,
+];
+const SOURCE_ADVICE_NOUN_PATTERNS = [
+  /^(?:sources?|manuals?|documents?|files?|folders?)$/iu,
+  /^(?:repositor(?:y|ies)|evidence|codes?|implementations?)$/iu,
+  /^(?:handbuch(?:e?s)?|handbüchern?|quellen?|datei(?:en)?|ordner[sn]?)$/iu,
+  /^(?:dokument(?:e[sn]?|s)?|repositorys?|implementierung(?:en)?)$/iu,
+];
 const SOURCE_ADVICE_TOKEN_RE =
   /[\p{L}\p{M}\p{N}_-]+(?:['’][\p{L}\p{M}\p{N}_-]+)*|[^\p{L}\p{M}\p{N}\s_-]/gu;
-const SOURCE_ADVICE_BOUNDARY_RE =
-  /^(?:am|is|are|was|were|be|been|being|do|does|did|have|has|had|may|might|shall|to|for|from|with|without|before|after|during|on|in|at|into|over|under|by|about|against|between|through|bin|bist|ist|sind|war|waren|sein|habe|hat|haben|können|könnten|müssen|werden|würden|zu|für|von|mit|ohne|vor|nach|während|auf|an|über|unter|bei|gegen|zwischen|durch)$/iu;
+const SOURCE_ADVICE_BOUNDARY_PATTERNS = [
+  /^(?:am|is|are|was|were|be|been|being|do|does|did|have|has|had|may|might)$/iu,
+  /^(?:shall|to|for|from|with|without|before|after|during|on|in|at|into|over|under|by)$/iu,
+  /^(?:about|against|between|through|bin|bist|ist|sind|war|waren|sein|habe|hat|haben)$/iu,
+  /^(?:können|könnten|müssen|werden|würden|zu|für|von|mit|ohne|vor|nach|während)$/iu,
+  /^(?:auf|an|über|unter|bei|gegen|zwischen|durch)$/iu,
+];
 
 /** Source modifiers stay inside their noun phrase, never across a predicate or preposition. */
 function sourceConstrainedAdvice(clause: string): boolean {
@@ -593,8 +698,9 @@ function sourceConstrainedAdvice(clause: string): boolean {
   let determined = false;
   for (const match of clause.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
     const token = match[0];
-    if (determined && SOURCE_ADVICE_NOUN_RE.test(token)) return true;
-    if (SOURCE_ADVICE_DETERMINER_RE.test(token) || /['’]s$/u.test(token)) determined = true;
+    if (determined && matchesQueryPattern(token, SOURCE_ADVICE_NOUN_PATTERNS)) return true;
+    if (matchesQueryPattern(token, SOURCE_ADVICE_DETERMINER_PATTERNS) || /['’]s$/u.test(token))
+      determined = true;
     else if (sourceAdviceBoundary(token)) determined = false;
   }
   return false;
@@ -602,21 +708,21 @@ function sourceConstrainedAdvice(clause: string): boolean {
 
 function sourceAdviceBoundary(token: string): boolean {
   return (
-    SOURCE_ADVICE_BOUNDARY_RE.test(token) ||
+    matchesQueryPattern(token, SOURCE_ADVICE_BOUNDARY_PATTERNS) ||
     CONTEXT_REQUEST_HEADS.has(token) ||
-    REQUEST_COMMAND_RE.test(token) ||
+    matchesQueryPattern(token, REQUEST_COMMAND_PATTERNS) ||
     !/^[\p{L}\p{M}\p{N}_-]/u.test(token)
   );
 }
 
 function generalAdviceClause(clause: string): boolean {
   const normalized = normalizedConversationClause(clause);
-  const match = GENERAL_ADVICE_REQUEST_RE.exec(normalized);
+  const subject = generalAdviceSubject(normalized);
   return (
-    match !== null &&
+    subject !== undefined &&
     !normalized.includes("\0") &&
     !sourceConstrainedAdvice(normalized) &&
-    !independentContextRequest(match[1] ?? "")
+    !independentContextRequest(subject)
   );
 }
 
@@ -624,19 +730,19 @@ function generalAdviceRequest(clauses: readonly string[]): boolean {
   if (clauses.length !== 2 || !generalAdviceClause(clauses[1] ?? "")) return false;
   const question = clauses[0] ?? "";
   return (
-    GENERAL_ADVICE_QUESTION_RE.test(question) &&
+    matchesQueryPattern(question, GENERAL_ADVICE_QUESTION_PATTERNS) &&
     !INDEPENDENT_CONTEXT_COMMAND_RE.test(question) &&
     !sourceConstrainedAdvice(question)
   );
 }
 
 function suppliedContextRequest(clauses: readonly string[]): boolean {
-  const acknowledgement = clauses.findIndex((clause) => ACKNOWLEDGEMENT_REQUEST_RE.test(clause));
+  const acknowledgement = clauses.findIndex((clause) => acknowledgementRequest(clause));
   if (acknowledgement < 0) return false;
   return clauses.every((clause, index) =>
     index < acknowledgement
       ? suppliedContextClause(clause, index)
-      : index === acknowledgement || ACKNOWLEDGEMENT_OUTPUT_RE.test(clause),
+      : index === acknowledgement || matchesQueryPattern(clause, ACKNOWLEDGEMENT_OUTPUT_PATTERNS),
   );
 }
 

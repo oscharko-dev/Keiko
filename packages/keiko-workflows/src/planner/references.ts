@@ -107,9 +107,9 @@ function pathReferenceExtraction(text: string): {
     maxAnchors: text.length,
     caseSensitive: true,
   });
-  const terms = new Set([
-    ...anchors.filter(referenceAnchor).map((anchor) => anchor.sourceTerm ?? anchor.term),
-  ]);
+  const terms = new Set(
+    anchors.filter(referenceAnchor).map((anchor) => anchor.sourceTerm ?? anchor.term),
+  );
   for (const token of text.split(/[\s`"'()<>,;!?]+/u)) {
     if (token.startsWith(".") && isDenied(token)) terms.add(token);
     const located = parsePathReference(token);

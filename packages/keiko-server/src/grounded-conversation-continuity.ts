@@ -171,7 +171,9 @@ function renderContinuityMessages(
 }
 
 const REFERENT_PATTERNS: readonly RegExp[] = [
-  /\b(?:can\s+you\s+see\s+(?:it|them|the\s+file)|siehst\s+du\s+(?:sie|es|die\s+datei)|kannst\s+du\s+das|try\s+again|what\s+about\s+now|(?:and|und)\s+(?:now|jetzt)|nochmal)\b/iu,
+  /\bcan\s+you\s+see\s+(?:it|them|the\s+file)\b/iu,
+  /\b(?:siehst\s+du\s+(?:sie|es|die\s+datei)|kannst\s+du\s+das)\b/iu,
+  /\b(?:try\s+again|what\s+about\s+now|(?:and|und)\s+(?:now|jetzt)|nochmal)\b/iu,
   /\b(?:dazu|dafür|hierfür|davon|dessen|hierzu|dabei|dort|weitermachen|weiterführen)\b/iu,
   /\b(?:was|wie|warum)\s+(?:ist|bedeutet|funktioniert)\s+(?:das|dies)\s*[.!?]*$/iu,
   /\b(?:explain|summarize|compare|continue|clarify|describe)\s+(?:it|this|that|them|these|those)\s*[.!?]*$/iu,

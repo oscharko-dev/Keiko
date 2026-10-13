@@ -86,11 +86,11 @@ function mergedAdmission(
   };
 }
 
-async function primaryDiagnosticPair(
+function primaryDiagnosticPair(
   inputs: DiagnosticReferenceInputs,
   primary: SearchReference | undefined,
 ): Promise<readonly EvidenceAtom[]> {
-  if (primary === undefined || !inputs.tryReserveSearchCall()) return [];
+  if (primary === undefined || !inputs.tryReserveSearchCall()) return Promise.resolve([]);
   return testSourcePairingAdapter.lookup(
     inputs.searchScope,
     {

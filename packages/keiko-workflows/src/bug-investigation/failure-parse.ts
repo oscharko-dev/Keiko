@@ -200,10 +200,11 @@ export function parseDiagnosticTraceText(text: string): DiagnosticTraceText {
   const acc: Accumulator = { frames: [], messages: [], seen: new Set() };
   const question: string[] = [];
   let start = 0;
+  let scanned = 0;
   let detected = false;
   // Only source-location parsing is capped. Continue a linear pass over the admitted request
   // to preserve human terms after a long trace or blank prefix, without admitting later frames.
-  for (let scanned = 0; start <= text.length; scanned += 1) {
+  while (start <= text.length) {
     const newline = text.indexOf("\n", start);
     const end = newline === -1 ? text.length : newline;
     const line = text.slice(start, end);
@@ -217,6 +218,7 @@ export function parseDiagnosticTraceText(text: string): DiagnosticTraceText {
       question.push(line);
     if (newline === -1) break;
     start = newline + 1;
+    scanned += 1;
   }
   return { frames: acc.frames, questionText: question.join("\n"), detected };
 }

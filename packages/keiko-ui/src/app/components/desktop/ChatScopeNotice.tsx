@@ -208,8 +208,8 @@ function useFolderRestoration(
     try {
       await restoreFolder(props, notice);
       dismiss();
-    } catch (failure) {
-      setError(formatUserError(failure, t("scope.notice.failed")));
+    } catch (error_) {
+      setError(formatUserError(error_, t("scope.notice.failed")));
     } finally {
       setBusy(false);
     }

@@ -94,17 +94,15 @@ export function useConnectedEvidenceReferences(
     },
     [key, runIds],
   );
+  if (connected === undefined) return { evidence: undefined, onReadPaths };
   return {
-    evidence:
-      connected === undefined
-        ? undefined
-        : inspectedEvidence(
-            connected.citations,
-            snapshot.key === key ? Object.values(snapshot.byRun) : [],
-            roots,
-            runIds.length > 0 &&
-              runIds.every((runId) => snapshot.key === key && snapshot.byRun[runId] !== undefined),
-          ),
+    evidence: inspectedEvidence(
+      connected.citations,
+      snapshot.key === key ? Object.values(snapshot.byRun) : [],
+      roots,
+      runIds.length > 0 &&
+        runIds.every((runId) => snapshot.key === key && snapshot.byRun[runId] !== undefined),
+    ),
     onReadPaths,
   };
 }

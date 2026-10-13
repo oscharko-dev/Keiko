@@ -65,7 +65,7 @@ function describeWindow(
   outcomes: readonly GroundedCitationBehaviour[],
 ): GroundedCitationBehaviour | undefined {
   if (outcomes.every((outcome) => outcome === "cites")) return "cites";
-  if (outcomes.some((outcome) => outcome === "cites-after-repair")) return "cites-after-repair";
+  if (outcomes.includes("cites-after-repair")) return "cites-after-repair";
   return outcomes.every((outcome) => outcome === "never") ? "never" : undefined;
 }
 

@@ -65,7 +65,7 @@ function normalizeLines(value: unknown): readonly ScoredLine[] | undefined {
   if (!Array.isArray(value) || value.length > MAX_QUERY_MATCH_LINES) return undefined;
   const lines: readonly unknown[] = value;
   const best = lines.map(normalizeLine);
-  return best.some((line) => line === undefined)
+  return best.includes(undefined)
     ? undefined
     : best.filter((line): line is ScoredLine => line !== undefined);
 }

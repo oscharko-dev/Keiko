@@ -1,6 +1,10 @@
 import { connectedFollowUpConfiguration } from "./grounded-answer-activity.js";
 import { withContextualHintConfidence } from "./grounded-selection-quality.js";
-import { logGroundedPromptSelection } from "./chat-activity.js";
+import {
+  logGroundedPromptSelection,
+  logChatResponseMessage,
+  type ChatResponseMemoryActivity,
+} from "./chat-activity.js";
 import {
   citationBehaviourFor,
   citationBehaviourObserverFor,
@@ -10,10 +14,16 @@ import {
   containsNumberedCompoundQueryTerm,
   evidenceAtomStableId,
   isNumberedCompoundQueryTerm,
+  isDenied,
+  PathDeniedError,
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
+  WorkspaceNotFoundError,
+  WorkspaceError,
+  type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-import type { GroundedAnswerOptions } from "./grounded-orchestrator.js";
-import type { ContinuityReferentSource } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { RetrievalIntent } from "@oscharko-dev/keiko-workflows";
+
 import {
   assistantReferenceExcerptIds,
   type AssistantRetrievalReference,
@@ -31,7 +41,7 @@ import {
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
-import { logChatResponseMessage, type ChatResponseMemoryActivity } from "./chat-activity.js";
+
 import {
   groundedConversationContinuity,
   type GroundedConversationContinuity,
@@ -63,6 +73,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
+  type RetrievalIntent,
   DEFAULT_LEXICAL_MATCH_LIMIT,
   extractAnchors,
   type SearchAnchor,
@@ -72,19 +83,11 @@ import {
   type ConnectedContextEvidenceInput,
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
-import {
-  isDenied,
-  PathDeniedError,
-  RepoSearchInvalidQueryError,
-  RepoSearchInvalidRangeError,
-  RepoSearchUnsupportedFileError,
-  WorkspaceNotFoundError,
-  WorkspaceError,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
+  type ContinuityReferentSource,
   connectedContextOmittedCount,
   connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -106,8 +109,9 @@ import {
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
+  type GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { GroundedAnswerEvidenceDeclaration } from "@oscharko-dev/keiko-contracts/bff-wire";
+
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
@@ -116,10 +120,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
-import type { RouteContext, RouteResult } from "./routes.js";
-import { errorBody } from "./routes.js";
-import type { Redactor, UiHandlerDeps } from "./deps.js";
+import { type RouteContext, type RouteResult, errorBody } from "./routes.js";
+
 import {
+  type Redactor,
+  type UiHandlerDeps,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
@@ -128,6 +133,7 @@ import {
 } from "./deps.js";
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
 import {
+  type GroundedAnswerOptions,
   ClarificationNeededError,
   clarificationUserMessage,
   runGroundedExploration,
@@ -168,7 +174,7 @@ import {
   type FolderRetriever,
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
-import { GROUNDED_SYSTEM_PROMPT, groundedSystemPrompt } from "./grounded-prompt.js";
+import { groundedSystemPrompt } from "./grounded-prompt.js";
 import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { singleSentEvidencePack, withSentEvidenceInventory } from "./grounded-answer-evidence.js";
 import {
@@ -1564,7 +1570,7 @@ export function uncertaintyLines(
 // paths so both apply the identical capability, untrusted-evidence, citation and no-secret rules.
 // GROUNDED_SYSTEM_PROMPT now lives in the dependency-free ./grounded-prompt.js leaf (re-exported
 // here for back-compat) so the hybrid path can interpolate it without a circular-import TDZ.
-export { GROUNDED_SYSTEM_PROMPT };
+export { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 
 function buildRawGroundedGatewayMessages(
   question: string,
@@ -1821,9 +1827,9 @@ async function dispatchGroundedSynthesis(
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
     return response;
-  } catch (failure) {
-    tracker.settleFallbackFailure(promptTokens, failure);
-    throw failure;
+  } catch (error_) {
+    tracker.settleFallbackFailure(promptTokens, error_);
+    throw error_;
   }
 }
 
@@ -3544,14 +3550,11 @@ function finalGroundedMemoryActivity(
   const markerCount = body.uncertainty.filter(
     (marker) => marker.kind === "uncited-memory-context",
   ).length;
+  const requestedDisposition = markerCount > 0 ? "included" : "excluded";
   return {
     uncitedMemoryContextMarkerCount: markerCount,
     memoryContextDisposition:
-      prepared.input.memory?.enabled !== true
-        ? "not-requested"
-        : markerCount > 0
-          ? "included"
-          : "excluded",
+      prepared.input.memory?.enabled !== true ? "not-requested" : requestedDisposition,
   };
 }
 

@@ -579,15 +579,17 @@ export interface RuntimeGatewayConfig {
     checkedAt: string,
     observedGeneration?: number,
     conversationCheckedAt?: string,
-    citationObservation?: Pick<
-      VerifiedModelCapabilityObservation,
-      | "citationBehaviourWindow"
-      | "citationBehaviourDeploymentSha256"
-      | "citationBehaviourObservationStatus"
-    >,
+    citationObservation?: CitationCapabilityObservation,
   ): void;
   readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
+
+type CitationCapabilityObservation = Pick<
+  VerifiedModelCapabilityObservation,
+  | "citationBehaviourWindow"
+  | "citationBehaviourDeploymentSha256"
+  | "citationBehaviourObservationStatus"
+>;
 
 export type VerifiedModelCapabilityFields = Partial<
   Pick<

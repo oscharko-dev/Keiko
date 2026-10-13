@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1d434e41b0e3597d984f2ecdcdc7e306c8c3a1bb54458b4da7232372f9e800a9" as const;
+  "4d932b5197e28cec13baaf50563aafc0f1f2f4a65266f12d73369c698314fd9f" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -13351,6 +13351,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "contextualDefinitionSeedCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
