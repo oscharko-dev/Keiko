@@ -3358,6 +3358,38 @@ describe("actual source reveal lifecycle", () => {
   );
 });
 
+it.each(["started", "settled"] as const)(
+  "persists code copy feedback %s through the existing activity log",
+  async (phase) => {
+    const sink = captureServerLog();
+    const body = {
+      kind: "stage",
+      stage: "markdown copy feedback",
+      phase,
+      ordinal: 1,
+      correlationId: "copy-feedback-123",
+      ...(phase === "settled" ? { durationMs: 1500 } : {}),
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    const events = clientStageEvents(sink, `client.stage.${phase}`);
+    expect(events).toHaveLength(1);
+    const line = formatActivityLogProofLine(events[0] ?? {});
+    if (phase === "started") expectActivityLogProof("client.stage.started.line", line);
+    else expectActivityLogProof("client.stage.settled.line", line);
+    expect(JSON.parse(line)).toMatchObject({
+      level: "info",
+      correlationId: body.correlationId,
+      stage: "markdown-copy-feedback",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(clientDiagnosticEvents(sink)).toEqual([]);
+    const invalid = { ...body, content: "PRIVATE_CODE" };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(invalid)))).status).toBe(400);
+    expect(sink.lines().join("\n")).not.toContain("PRIVATE_CODE");
+  },
+);
+
 it("persists closed model selection stage evidence through the existing formatter at info", async () => {
   const sink = captureServerLog();
   const parentCorrelationId = "catalog-read-123";

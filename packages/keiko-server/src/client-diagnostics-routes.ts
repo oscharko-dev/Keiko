@@ -592,6 +592,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "gateway-catalog-adoption",
   "gateway-profile-refresh",
   "model-selection-availability",
+  "markdown-copy-feedback",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -611,6 +612,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "gateway catalog adoption": "gateway-catalog-adoption",
   "gateway profile refresh": "gateway-profile-refresh",
   "model selection availability": "model-selection-availability",
+  "markdown copy feedback": "markdown-copy-feedback",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its

@@ -4185,6 +4185,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "gateway-catalog-adoption",
           "gateway-profile-refresh",
           "model-selection-availability",
+          "markdown-copy-feedback",
         ],
       },
       ordinal: {
@@ -4334,6 +4335,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "gateway-catalog-adoption",
           "gateway-profile-refresh",
           "model-selection-availability",
+          "markdown-copy-feedback",
         ],
       },
       ordinal: {

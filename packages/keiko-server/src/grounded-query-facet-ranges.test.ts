@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { DEFAULT_LEXICAL_MATCH_LIMIT } from "@oscharko-dev/keiko-workflows";
 import {
@@ -24,6 +24,7 @@ import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -366,6 +367,8 @@ describe("ordinary source ranges cover independently requested query facets", ()
   it.each(["aborted", "timeout"] as const)(
     "stops facet planning under the original %s control",
     async (reason) => {
+      // The supplied clock drives this planning stop; live IO must not win a 10 ms wall-clock race.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const current = excerptFixture(
         Array.from({ length: 600 }, () => "read token elapsed").join("\n"),
       );
@@ -383,6 +386,7 @@ describe("ordinary source ranges cover independently requested query facets", ()
           { nowMs, signal: controller.signal, deadlineAtMs: 10 },
         ),
       ).rejects.toMatchObject({ reason });
+      expect(checks).toBeGreaterThanOrEqual(100);
     },
   );
 });

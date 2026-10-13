@@ -51,6 +51,7 @@ import {
   type RepositoryReferenceTextPart,
 } from "./repositoryReferences";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import { useWindowStageEvidence } from "./hooks/useWindowStageEvidence";
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
 
@@ -83,9 +84,38 @@ interface RenderOptions {
 
 type CopyState = "idle" | "copied" | "failed";
 
-function CopyButton({ text }: { readonly text: string }): ReactNode {
+function CopyFeedbackTimer({ reset }: { readonly reset: () => void }): null {
+  useWindowStageEvidence("markdown copy feedback");
+  useEffect(() => {
+    const timer = setTimeout(reset, 1500);
+    return (): void => clearTimeout(timer);
+  }, [reset]);
+  return null;
+}
+
+interface CodeCopyFeedback {
+  readonly copyState: CopyState;
+  readonly status: string;
+  readonly copyOrdinal: number;
+  readonly handleCopy: () => void;
+  readonly resetCopy: () => void;
+}
+
+function useCodeCopyFeedback(text: string): CodeCopyFeedback {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [status, setStatus] = useState("");
+  const [copyOrdinal, setCopyOrdinal] = useState(0);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return (): void => {
+      mounted.current = false;
+    };
+  }, []);
+  const resetCopy = useCallback(() => {
+    setCopyState("idle");
+    setStatus("");
+  }, []);
 
   const handleCopy = useCallback(() => {
     // navigator.clipboard is undefined in non-secure contexts (and unimplemented in jsdom).
@@ -98,25 +128,29 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
     }
     void navigator.clipboard.writeText(text).then(
       () => {
+        if (!mounted.current) return;
         setCopyState("copied");
         setStatus("Code copied");
-        setTimeout(() => {
-          setCopyState("idle");
-          setStatus("");
-        }, 1500);
+        setCopyOrdinal((ordinal) => ordinal + 1);
       },
       () => {
+        if (!mounted.current) return;
         setCopyState("failed");
         setStatus("Clipboard access failed. Select the code manually and copy it.");
       },
     );
   }, [text]);
+  return { copyState, status, copyOrdinal, handleCopy, resetCopy };
+}
 
+function CopyButton({ text }: { readonly text: string }): ReactNode {
+  const { copyState, status, copyOrdinal, handleCopy, resetCopy } = useCodeCopyFeedback(text);
   const copied = copyState === "copied";
   const failed = copyState === "failed";
 
   return (
     <div className="sm-code-copy-wrap">
+      {copied && <CopyFeedbackTimer key={copyOrdinal} reset={resetCopy} />}
       <button
         type="button"
         className="sm-code-copy"

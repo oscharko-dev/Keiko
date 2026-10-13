@@ -913,6 +913,7 @@ export const CLIENT_STAGE_IDS = [
   "gateway catalog adoption",
   "gateway profile refresh",
   "model selection availability",
+  "markdown copy feedback",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
