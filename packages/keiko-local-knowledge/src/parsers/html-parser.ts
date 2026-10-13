@@ -25,13 +25,13 @@
 
 import {
   decodeBytes,
-  decodeXmlEntities,
   diagnostic,
   emptyResult,
   oversizeDiagnostic,
   readAttribute,
   shouldStop,
 } from "./_internal.js";
+import { decodeHtmlEntities } from "@oscharko-dev/keiko-workspace";
 import type { DocumentId, ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import type {
@@ -502,7 +502,7 @@ function fragmentTextRaw(fragment: string): string {
     }
     cursor = event.next;
   }
-  return decodeXmlEntities(out);
+  return decodeHtmlEntities(out);
 }
 
 function htmlFragmentText(fragment: string): string {
@@ -1011,13 +1011,13 @@ function handleHeadingClose(state: ScanState, tag: Tag): number {
 function appendTextRun(state: ScanState, from: number, to: number): void {
   if (from >= to) return;
   if (state.pendingHeadingLabel !== null) {
-    state.pendingHeadingLabel += state.text.slice(from, to);
+    state.pendingHeadingLabel += decodeHtmlEntities(state.text.slice(from, to));
     return;
   }
   openBlock(state, from, !isWhitespaceOnly(state.text, from, to));
   // Accumulate only inter-tag text runs — inline tag literals (<b>, <a …>) are never part of
   // a run, so the cleaned projection is tag-free by construction.
-  state.blockText += state.text.slice(from, to);
+  state.blockText += decodeHtmlEntities(state.text.slice(from, to));
 }
 
 // Elements whose whole subtree is skipped in the body scan and re-rendered structurally: table

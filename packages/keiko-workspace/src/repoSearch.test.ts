@@ -1954,6 +1954,52 @@ describe("readExcerpt (memFs)", () => {
     expect(error).toMatchObject({ reason: "outside-range" });
   });
 
+  it("keeps valid windows when another requested range is stale", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "L1\nL2\nL3" });
+    for (const ranges of [
+      [
+        { startLine: 2, endLine: 3 },
+        { startLine: 999, endLine: 1000 },
+      ],
+      [
+        { startLine: 999, endLine: 1000 },
+        { startLine: 2, endLine: 3 },
+      ],
+    ]) {
+      const result = await readExcerpt(
+        scope,
+        {
+          scopePath: "src/a.ts",
+          startLine: 2,
+          endLine: 1000,
+          maxBytes: 256,
+          ranges,
+        },
+        { fs, nowMs: FIXED_NOW },
+      );
+      expect(result.content).toBe("L2\nL3");
+      expect(result.atom.lineRange).toEqual({ startLine: 2, endLine: 3 });
+      expect(result.omittedRangeCount).toBe(1);
+    }
+  });
+
+  it("rejects a batch with no valid requested windows as outside-range", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "L1\nL2\nL3" });
+    await expect(
+      readExcerpt(
+        scope,
+        {
+          scopePath: "src/a.ts",
+          startLine: 1,
+          endLine: 1000,
+          maxBytes: 256,
+          ranges: [{ startLine: 999, endLine: 1000 }],
+        },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toMatchObject({ reason: "outside-range" });
+  });
+
   // #3347: the guarded read lane serves content ONLY through the bounded same-descriptor primitive
   // (ADR-0005 D1), so a port that does not offer one — like every read failure that lane reports —
   // surfaces as WorkspaceReadError. That is a non-denial outcome for ONE file and must degrade to

@@ -8,6 +8,14 @@ const workerSource = () =>
 describe("exact closed Coding Workbench validation boundaries", () => {
   it.each([
     ["packages/keiko-contracts/src/opencode-service-host.ts", "dataRecord"],
+    ["packages/keiko-server/src/grounded-preselection-reranker.ts", "rerankGroundedCandidates"],
+    ["packages/keiko-server/src/grounded-repo-semantic-search.ts", "fingerprintPreflight"],
+    ["packages/keiko-server/src/grounded-worktree-recency.ts", "admittedPath"],
+    ["packages/keiko-workflows/src/bug-investigation/failure-parse.ts", "sourceFile"],
+    [
+      "packages/keiko-workspace/src/structuralAdapterRequestContext.ts",
+      "currentCandidateContentSnapshot",
+    ],
     ["packages/keiko-sandbox/src/seatbelt-execution-root.ts", "copyRuntimeGatewayFilesystem"],
     [
       "packages/keiko-server/src/coding-runtime/opencodeServiceHostArtifact.ts",
@@ -31,6 +39,32 @@ describe("exact closed Coding Workbench validation boundaries", () => {
       unregisteredFailurePathViolations(lost.replace(owner, "unrelatedOwner"), path),
     ).toHaveLength(1);
   });
+});
+
+describe("exact observed workspace-index failure boundaries", () => {
+  const path = "packages/keiko-workspace/src/workspaceIndexStreaming.ts";
+  it.each(["loadSnapshot", "finalize"])(
+    "binds the reviewed catch to its owning method: %s",
+    (name) => {
+      const source = readFileSync(path, "utf8");
+      const owner = `StreamingWorkspaceIndex.${name}`;
+      expect(unregisteredFailurePathViolations(source, path)).not.toContainEqual(
+        expect.objectContaining({ owner }),
+      );
+      const lost = `class StreamingWorkspaceIndex { ${name}() {
+      try { prepare(); } catch { return undefined; }
+    } }`;
+      expect(unregisteredFailurePathViolations(lost, "packages/fixture/src/other.ts")).toHaveLength(
+        1,
+      );
+      expect(
+        unregisteredFailurePathViolations(
+          lost.replace("StreamingWorkspaceIndex", "OtherIndex"),
+          path,
+        ),
+      ).toHaveLength(1);
+    },
+  );
 });
 
 describe("typed asynchronous failure propagation", () => {

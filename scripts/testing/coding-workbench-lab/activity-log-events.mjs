@@ -21,20 +21,25 @@ function parseLine(line) {
   }
 }
 
-/** Every event of the logical log in file order. */
-export async function readActivityEvents(logDirectory) {
+/** Logical text for lab views; normalizes unterminated inter-file delimiters, not a byte-exact artifact. */
+export async function readActivityLogText(logDirectory) {
   const grammar = await importBuilt("keiko-contracts", "activity-log-files.js");
   const files = grammar.readableActivityLogFileNames(
     grammar.orderActivityLogFileNames(readdirSync(logDirectory)),
   );
-  const events = [];
-  for (const file of files) {
-    for (const line of readFileSync(join(logDirectory, file.name), "utf8").split("\n")) {
-      const event = parseLine(line);
-      if (event !== undefined) events.push(event);
-    }
-  }
-  return events;
+  const texts = files.map((file) => readFileSync(join(logDirectory, file.name), "utf8"));
+  return texts
+    .map((text, index) => (index < texts.length - 1 && !text.endsWith("\n") ? `${text}\n` : text))
+    .join("");
+}
+
+/** Every event of the logical log in file order. */
+export async function readActivityEvents(logDirectory) {
+  const text = await readActivityLogText(logDirectory);
+  return text
+    .split("\n")
+    .map(parseLine)
+    .filter((event) => event !== undefined);
 }
 
 /** The run's own events plus those of the child requests it spawned, oldest first. */

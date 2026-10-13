@@ -1,3 +1,12 @@
+import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  composeOwnAssessment,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import * as multiSourceQa from "./grounded-qa-multi-source.js";
+import * as groundedOrchestrator from "./grounded-orchestrator.js";
+import * as chatActivity from "./chat-activity.js";
+import { buildPackCitationIndex, reconcileInlineCitations } from "./grounded-faithfulness.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 import {
@@ -15,6 +24,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { PassThrough, Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -41,6 +51,7 @@ import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gatewa
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   connectedContextOmittedCounts,
+  connectedContextOmittedCount,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -68,11 +79,16 @@ import {
 import { buildMultiSourceGatewayMessages } from "./grounded-qa-multi-source.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
+import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { currentConversationReady, type RuntimeGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
-import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import type {
+  OrchestratorDeps,
+  OrchestratorInput,
+  OrchestratorOutput,
+} from "./grounded-orchestrator.js";
 import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
@@ -278,7 +294,11 @@ async function assertPairedAdmissionReport(stateDir: string, correlationId: stri
 
 function customModelConfig(
   modelId = CHAT_MODEL,
-  capability: { readonly contextWindow?: number; readonly maxOutputTokens?: number } = {},
+  capability: {
+    readonly contextWindow?: number;
+    readonly maxInputTokens?: number;
+    readonly maxOutputTokens?: number;
+  } = {},
 ): GatewayConfig {
   return {
     providers: [
@@ -305,6 +325,9 @@ function customModelConfig(
         id: modelId,
         kind: "chat",
         contextWindow: capability.contextWindow ?? 64_000,
+        ...(capability.maxInputTokens === undefined
+          ? {}
+          : { maxInputTokens: capability.maxInputTokens }),
         maxOutputTokens: capability.maxOutputTokens ?? 4_096,
         toolCalling: true,
         structuredOutput: true,
@@ -461,7 +484,9 @@ function expectGroundedGatewayRequest(request: GatewayRequest): void {
     throw new Error("expected system and user gateway messages");
   }
   expect(systemMessage.role).toBe("system");
-  expect(systemMessage.content).toContain("Use only the supplied repository evidence");
+  expect(systemMessage.content).toContain(
+    "Only supplied repository evidence grounds repository claims",
+  );
   expect(userMessage.role).toBe("user");
   expect(userMessage.content).toContain("User question:");
   expect(userMessage.content).toContain(GROUNDED_FIXTURE_QUESTION);
@@ -605,6 +630,194 @@ function requirePackExcerpt(
   }
   return { file, excerpt };
 }
+
+function minimumFittedPromptBudget(question: string, pack: ConnectedContextPack): number {
+  let low = 1;
+  let high = pack.budget.modelInputTokensMax;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    try {
+      fittedGroundedGatewayPrompt(question, pack, buildRedactor({}), {
+        modelInputTokensMax: middle,
+      });
+      high = middle;
+    } catch (error) {
+      if (!(error instanceof ContextOverflowError)) throw error;
+      low = middle + 1;
+    }
+  }
+  return low;
+}
+
+function withMinimumFittedInputGrant(ports: OrchestratorDeps): OrchestratorDeps {
+  return {
+    ...ports,
+    answerer: {
+      ...ports.answerer,
+      answer: (question, pack, options): ReturnType<OrchestratorDeps["answerer"]["answer"]> => {
+        // The actual reader's pack determines the remaining input grant. A prompt-text change
+        // can move this boundary without changing the product's configured token ceilings.
+        const modelInputTokensMax = minimumFittedPromptBudget(question, pack);
+        const sent = fittedGroundedGatewayPrompt(question, pack, buildRedactor({}), {
+          modelInputTokensMax,
+        });
+        expect(sent.sentReferenceCount).toBe(0);
+        return ports.answerer.answer(question, pack, { ...options, modelInputTokensMax });
+      },
+    },
+  };
+}
+
+async function fittedSubjectChat(partial = false): Promise<string> {
+  const { chatId } = await setupChatWithScope();
+  mkdirSync(join(tmp, "src"), { recursive: true });
+  writeFileSync(
+    join(tmp, "src/procedure.md"),
+    partial
+      ? `${"The shipment policy is documented here.\n".repeat(80)}Unit-G42 ceiling: 29 containers.\n`
+      : "# Unit-G42 shipment policy\nThe shipment ceiling is 29 containers.\n",
+  );
+  store.updateChat(chatId, {
+    connectedScope: { kind: "files", relativePaths: ["src/procedure.md"], connectedAtMs: NOW },
+  });
+  return chatId;
+}
+
+function observedSelectionPorts(
+  ports: OrchestratorDeps,
+  tight: boolean | "partial",
+  assembled: ConnectedContextPack[],
+  sent: ConnectedContextPack[],
+): OrchestratorDeps {
+  const selected = tight === true ? withMinimumFittedInputGrant(ports) : ports;
+  return {
+    ...selected,
+    answerer: {
+      ...selected.answerer,
+      answer: async (
+        question,
+        pack,
+        options,
+      ): ReturnType<OrchestratorDeps["answerer"]["answer"]> => {
+        assembled.push(pack);
+        const fittedOptions =
+          tight === "partial"
+            ? { ...options, modelInputTokensMax: minimumFittedPromptBudget(question, pack) + 256 }
+            : options;
+        const answer = await selected.answerer.answer(question, pack, fittedOptions);
+        sent.push(...(normalizeGroundedAnswerPayload(answer).sentEvidencePacks ?? []));
+        return answer;
+      },
+    },
+  };
+}
+
+function expectPersistedSelection(
+  chatId: string,
+  answer: ConnectedAnswer,
+  confidence: "high" | "low",
+): void {
+  expect(answer.contextPack.selectionConfidence).toBe(confidence);
+  expect(
+    answer.uncertainty.filter((marker) => marker.kind === "low-confidence-selection"),
+  ).toHaveLength(confidence === "low" ? 1 : 0);
+  const persisted = store
+    .listMessages(chatId)
+    .find((message) => message.id === answer.assistantMessageId);
+  expect(persisted?.groundedAnswer?.contextPack).toEqual(answer.contextPack);
+  expect(persisted?.groundedAnswer?.uncertainty).toEqual(answer.uncertainty);
+}
+
+function expectSentManifest(
+  evidenceStore: TestEvidenceStore,
+  answer: ConnectedAnswer,
+  sent: ConnectedContextPack | undefined,
+  original: ConnectedContextPack | undefined,
+): void {
+  if (answer.evidenceRunId === undefined) {
+    expect(sent?.files).toEqual([]);
+    expect(evidenceStore.list()).toEqual([]);
+    return;
+  }
+  if (original === undefined) throw new TypeError("Missing actual retrieved pack");
+  const manifest = requireEvidenceManifest(evidenceStore, answer.evidenceRunId);
+  const audit = requireConnectedContextAudit(manifest);
+  expect(manifest.context?.totalCandidates).toBe(
+    original.files.length + connectedContextOmittedCount(original),
+  );
+  expect(audit.modelRequest.sentToModel).toBe(true);
+  expect(
+    audit.files.flatMap((file) =>
+      file.excerpts.map((excerpt) => ({
+        path: file.scopePath,
+        range: excerpt.lineRange,
+        bytes: excerpt.contentBytes,
+        hash: excerpt.contentSha256,
+      })),
+    ),
+  ).toEqual(
+    sent?.files.flatMap((file) =>
+      file.excerpts.map((excerpt) => ({
+        path: file.scopePath,
+        range: excerpt.atom.lineRange,
+        bytes: excerpt.contentBytes,
+        hash: createHash("sha256").update(excerpt.content).digest("hex"),
+      })),
+    ),
+  );
+}
+
+describe("public grounded answer fitted selection confidence", () => {
+  it.each([false, true, "partial"] as const)(
+    "persists actual sent confidence with minimum grant %s",
+    async (tight) => {
+      const confidence = tight === true ? "low" : "high";
+      const sentCount = tight === true ? 0 : 1;
+      const chatId = await fittedSubjectChat(tight === "partial");
+      const requests: GatewayRequest[] = [];
+      const execute = groundedOrchestrator.runGroundedExploration;
+      const assembled: ConnectedContextPack[] = [];
+      const sent: ConnectedContextPack[] = [];
+      const evidenceStore = createInMemoryEvidenceStore();
+      const runnerSpy = vi
+        .spyOn(groundedOrchestrator, "runGroundedExploration")
+        .mockImplementation((input, ports) =>
+          execute(input, observedSelectionPorts(ports, tight, assembled, sent)),
+        );
+      try {
+        const result = await handleGroundedAsk(
+          ctx(JSON.stringify({ chatId, content: "What is the shipment ceiling for Unit-G42?" })),
+          deps(
+            fakeModel("The document describes shipment policy [src/procedure.md:1].", requests),
+            {},
+            {
+              config: {
+                ...customModelConfig(CHAT_MODEL),
+                groundedAnswers: { ownAssessment: "disabled" },
+              },
+              evidenceStore,
+            },
+          ),
+        );
+        expect(result.status, JSON.stringify(result.body)).toBe(200);
+        const answer = asConnectedAnswer(result.body as GroundedAnswer);
+        expect(assembled[0]?.diagnostics?.selection?.selectionConfidence).toBe("high");
+        expect(sent).toHaveLength(1);
+        expect(sent[0]?.diagnostics?.selection).toMatchObject({
+          selectionConfidence: confidence,
+          keepOneFallbackApplied: false,
+        });
+        expectPersistedSelection(chatId, answer, confidence);
+        expect(answer.contextPack.usage.filesRead).toBe(assembled[0]?.usage.filesRead);
+        expect(answer.contextPack.filesInPrompt).toBe(sentCount);
+        expect(requests).toHaveLength(sentCount);
+        expectSentManifest(evidenceStore, answer, sent[0], assembled[0]);
+      } finally {
+        runnerSpy.mockRestore();
+      }
+    },
+  );
+});
 
 function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
   return (_input: OrchestratorInput): Promise<OrchestratorOutput> => {
@@ -1459,6 +1672,20 @@ describe("folder prompt share", () => {
 });
 
 describe("modelWindowAwareBudget", () => {
+  it.each([
+    [undefined, 1],
+    ["1", 1],
+    ["0", 0],
+    ["invalid", 0],
+  ] as const)("binds the real server follow-up deployment value %s", (value, expected) => {
+    expect(
+      modelWindowAwareBudget(
+        deps(undefined, value === undefined ? {} : { KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX: value }),
+        CHAT_MODEL,
+      ).followUpPassesMax,
+    ).toBe(expected);
+  });
+
   it("uses the configured model context profile instead of a fixed grounded prompt ceiling", () => {
     const longContextDeps = deps(
       undefined,
@@ -1502,11 +1729,16 @@ describe("handleGroundedAsk", () => {
       try {
         const result = await handleGroundedAsk(
           ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
-          deps(fakeModel("Healthy source remains available.", seenRequests)),
+          deps(
+            fakeModel("Healthy source remains available [source:1|src/foo.ts:1-3].", seenRequests),
+          ),
         );
         expect(result.status, JSON.stringify(result.body)).toBe(200);
         expect(seenRequests).toHaveLength(1);
         const answer = asConnectedAnswer(result.body as GroundedAnswer);
+        expect(answer.citations).toContainEqual(
+          expect.objectContaining({ scopePath: "src/foo.ts" }),
+        );
         expect(answer.uncertainty.some((entry) => entry.kind === "source-skipped")).toBe(true);
         expect(JSON.stringify(result)).not.toContain(badRoot);
         expect(JSON.stringify(result)).not.toContain("private-root-detail");
@@ -3594,7 +3826,11 @@ describe("handleGroundedAsk", () => {
     expect(seenRequests).toHaveLength(1);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("Grounded answer [src/foo.ts:1-3]");
-    expect(answer.contextPack.usage.modelInputTokens).toBe(41);
+    // The physical-input ledger charges the canonical sent prompt; the context meter retains the
+    // provider's independent reported measurement, even when that measurement undercounts it.
+    expect(answer.contextPack.usage.modelInputTokens).toBe(
+      countGatewayPromptTokens(firstGatewayRequest(seenRequests)),
+    );
     expect(answer.contextPack.usage.modelOutputTokens).toBe(7);
     // PR #3678 review: a folder answer reports the prompt share of its excerpts to the meter.
     const promptContext = (result.body as GroundedAnswer).promptContext;
@@ -4261,7 +4497,7 @@ describe("handleGroundedAsk", () => {
       );
       expect(answerOnlyContextAvailable).toBe(true);
       expect(answer.uncertainty).toContainEqual({
-        kind: "uncited-answer",
+        kind: "uncited-memory-context",
         claim:
           "The answer received governed memory context outside retrieved evidence. Treat claims " +
           "derived from that memory as uncited and unverified.",
@@ -5175,9 +5411,28 @@ function seedFollowUpHandbook(root: string, limit = 73142, days = 19): void {
   );
 }
 
-async function prepareHandbookChat(): Promise<string> {
+function seedHandbookGitHistory(): void {
+  execFileSync("git", ["init", "-q"], { cwd: tmp });
+  execFileSync("git", ["add", "manual"], { cwd: tmp });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Keiko Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-qm",
+      "Document handbook limits",
+    ],
+    { cwd: tmp },
+  );
+}
+
+async function prepareHandbookChat(gitHistory = false): Promise<string> {
   const { chatId, projectPath } = await setupChatWithoutScope();
   seedFollowUpHandbook(projectPath);
+  if (gitHistory) seedHandbookGitHistory();
   store.updateChat(chatId, {
     connectedScope: {
       kind: "workspace-root",
@@ -5203,6 +5458,7 @@ async function prepareHandbookChat(): Promise<string> {
 async function askFreshHandbook(
   chatId: string,
   content: string,
+  ownAssessment: OwnAssessmentPolicy = "allowed",
 ): Promise<{
   readonly answer: ConnectedAnswer;
   readonly seen: readonly GatewayRequest[];
@@ -5219,6 +5475,8 @@ async function askFreshHandbook(
           "Current values [manual/finance/approval.html:2] [manual/claims/processing.html:2]",
           seen,
         ),
+        {},
+        { config: { ...customModelConfig(CHAT_MODEL), groundedAnswers: { ownAssessment } } },
       ),
     );
     expect(result.status).toBe(200);
@@ -5239,6 +5497,29 @@ function freshSourcePrompt(request: GatewayRequest): string {
 }
 
 describe("fresh handbook evidence for generated Chat artifacts", () => {
+  it("allows labelled learned knowledge without authenticating prior handbook citations", async () => {
+    const chatId = await prepareHandbookChat();
+    const seen: GatewayRequest[] = [];
+    const assessment = composeOwnAssessment(
+      "",
+      "General risk controls use independent checks and clear accountability.",
+    );
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: 'Find the exact literal "AbsentPaymentProbe".' })),
+      deps(fakeModel(assessment, seen)),
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(seen).toHaveLength(1);
+    expect(answer.content).toBe(assessment);
+    expect(answer.contextPack.usage.filesRead).toBe(0);
+    expect(answer.contextPack.filesInPrompt).toBe(0);
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
+    expect(freshSourcePrompt(firstGatewayRequest(seen))).not.toContain("TransferLimit");
+    expect(freshSourcePrompt(firstGatewayRequest(seen))).not.toContain("ClaimsWindow");
+  });
+
   it.each([
     HANDBOOK_FOLLOW_UP,
     "Schreibe hier einen TypeScript-Test anhand der Werte im Handbuch.",
@@ -5277,7 +5558,13 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
   ])(
     "does not use prior handbook evidence for an independent missing source selector: %s",
     async (content) => {
-      const { answer, seen } = await askFreshHandbook(await prepareHandbookChat(), content);
+      // These retained source-only guards abstain; default-allowed learned knowledge has separate
+      // public crossflow controls and must never authenticate old source excerpts.
+      const { answer, seen } = await askFreshHandbook(
+        await prepareHandbookChat(),
+        content,
+        "disabled",
+      );
       expect(seen).toEqual([]);
       expect(answer.contextPack.usage.filesRead).toBe(0);
       expect(answer.citations).toEqual([]);
@@ -5320,7 +5607,7 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
   it("discards overflow instead of treating old history as freshly retained source evidence", async () => {
     const chatId = await prepareHandbookChat();
     writeFileSync(join(tmp, "large.txt"), "z".repeat(200_000));
-    const { answer, seen, log } = await askFreshHandbook(chatId, HANDBOOK_FOLLOW_UP);
+    const { answer, seen, log } = await askFreshHandbook(chatId, HANDBOOK_FOLLOW_UP, "disabled");
     expect(seen).toEqual([]);
     expect(answer.contextPack.usage.filesRead).toBe(0);
     expect(answer.contextPack.coverage).toMatchObject({ filesScanned: 4, incomplete: false });
@@ -5335,7 +5622,7 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
   ])(
     "retains supplemental context without skipping requested relationship/history work: %s",
     async (content) => {
-      const { seen, log } = await askFreshHandbook(await prepareHandbookChat(), content);
+      const { seen, log } = await askFreshHandbook(await prepareHandbookChat(true), content);
       expect(seen).toHaveLength(1);
       const source = freshSourcePrompt(firstGatewayRequest(seen));
       expect(source).toContain("TransferLimit is 73142 EUR");
@@ -5360,6 +5647,7 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
     const { answer, seen, log } = await askFreshHandbook(
       await prepareHandbookChat(),
       "Why does MissingPaymentProbe fail? Write a Vitest test.",
+      "disabled",
     );
     expect(seen).toEqual([]);
     expect(answer.contextPack.usage.filesRead).toBe(0);
@@ -5370,4 +5658,351 @@ describe("fresh handbook evidence for generated Chat artifacts", () => {
       log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
     ).toMatchObject({ retrievalIntent: "diagnostic-search" });
   });
+});
+
+describe("actual fitted repository evidence authority", () => {
+  it("does not substitute assembled evidence for an explicitly empty sent inventory", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const execute = groundedOrchestrator.runGroundedExploration;
+    const spy = vi
+      .spyOn(groundedOrchestrator, "runGroundedExploration")
+      .mockImplementation((input, ports) =>
+        execute(input, {
+          ...ports,
+          answerer: {
+            answer: (_question, pack) => {
+              expect(pack.files.some((file) => file.scopePath === "src/validation.ts")).toBe(true);
+              return Promise.resolve({
+                content: "Threshold is 1000 [src/validation.ts:1].",
+                usage: { promptTokens: 1, completionTokens: 1 },
+                modelInvoked: true,
+                sentEvidencePacks: [],
+              });
+            },
+          },
+        }),
+      );
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+        deps(fakeModel("unused", [])),
+      );
+      expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.contextPack.filesInPrompt).toBe(0);
+      expect(answer.contextPack.usage.filesRead).toBeGreaterThan(0);
+      expect(answer.citations).toHaveLength(0);
+      expect(answer.evidenceRunId).toBeUndefined();
+      expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+        true,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  it("keeps a newly declared follow-up source in the actual second prompt under cumulative tokens", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    mkdirSync(join(tmp, "lib"), { recursive: true });
+    writeFileSync(
+      join(tmp, "src/Feature.ts"),
+      `export const Feature = 1;\n${"// Feature validation details repeat.\n".repeat(160)}`,
+    );
+    writeFileSync(join(tmp, "lib/ConfigurationOrchid.ts"), "42;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        requests.push(request);
+        const tokens = countGatewayPromptTokens(request);
+        return Promise.resolve({
+          content:
+            requests.length === 1
+              ? "I need more evidence.\nMissing evidence: [lib/ConfigurationOrchid.ts]"
+              : "Configuration is 42 [lib/ConfigurationOrchid.ts:1].",
+          usage: {
+            requestId: "fitted-follow-up",
+            promptTokens: tokens,
+            completionTokens: 20,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+          toolCalls: [],
+          finishReason: "stop",
+          structuredOutput: null,
+          modelId: CHAT_MODEL,
+        });
+      },
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain src/Feature.ts" })),
+      deps(
+        model,
+        {},
+        {
+          config: customModelConfig(CHAT_MODEL, {
+            contextWindow: 32768,
+            maxInputTokens: 5000,
+            maxOutputTokens: 1024,
+          }),
+        },
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.messages.map((message) => message.content).join("\n")).not.toContain(
+      "File: lib/ConfigurationOrchid.ts",
+    );
+    expect(requests[1]?.messages.map((message) => message.content).join("\n")).toContain(
+      "File: lib/ConfigurationOrchid.ts",
+    );
+    expect(
+      requests.reduce((sum, request) => sum + countGatewayPromptTokens(request), 0),
+    ).toBeLessThanOrEqual(5000);
+    expect(result.body).toMatchObject({
+      content: "Configuration is 42 [lib/ConfigurationOrchid.ts:1].",
+    });
+  });
+  it("forwards original current-question and answer-context authority through the actual plural dispatcher", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    mkdirSync(join(tmp, "lib"), { recursive: true });
+    writeFileSync(join(tmp, "src/Feature.ts"), "export function Feature() { return true; }\n");
+    writeFileSync(join(tmp, "lib/Companion.ts"), "export const Companion = 42;\n");
+    store.updateChat(chatId, {
+      connectedScopes: [
+        { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
+        { kind: "directory", relativePaths: ["lib"], connectedAtMs: NOW + 1 },
+      ],
+    });
+    const factory = vi.spyOn(multiSourceQa, "createMultiSourceAnswerer");
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain Feature" })),
+        deps(fakeModel("Feature returns true [source:1|src/Feature.ts:1].", [])),
+      );
+      expect(result.status).toBe(200);
+      expect(factory.mock.calls[0]?.[5]).toEqual({
+        currentQuestion: "Explain Feature",
+        answerOnlyContextAvailable: false,
+      });
+    } finally {
+      factory.mockRestore();
+    }
+  });
+  it("publishes only the bounded second answer and persists its validated first declarations", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    mkdirSync(join(tmp, "lib"), { recursive: true });
+    writeFileSync(join(tmp, "src/Feature.ts"), "export function Feature() { return true; }\n");
+    writeFileSync(join(tmp, "lib/Companion.ts"), "42;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    const evidenceStore = createInMemoryEvidenceStore();
+    let calls = 0;
+    const model: ModelPort = {
+      call: (request) => {
+        calls += 1;
+        return fakeModel(
+          calls === 1
+            ? "I need more evidence.\nMissing evidence: [lib/Companion.ts]\nMissing evidence: [../PRIVATE_CANARY.ts]"
+            : "Companion is 42 [lib/Companion.ts:1].",
+          requests,
+        ).call(request, new AbortController().signal);
+      },
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain src/Feature.ts" })),
+      deps(model, {}, { evidenceStore }),
+    );
+    expect(result.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(requests.every((request) => request.stream === false)).toBe(true);
+    expect(result.body).toMatchObject({ content: "Companion is 42 [lib/Companion.ts:1]." });
+    expect(JSON.stringify(result.body)).not.toContain("PRIVATE_CANARY");
+    expect(
+      store
+        .listMessages(chatId)
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.content),
+    ).toEqual(["Companion is 42 [lib/Companion.ts:1]."]);
+    const manifest = loadEvidence(evidenceStore, evidenceStore.list()[0] ?? "");
+    expect(manifest?.connectedContext?.followUp).toMatchObject({
+      passCount: 1,
+      outcome: "answered",
+      firstDeclarations: [{ scopePath: "lib/Companion.ts", state: "unread-in-scope" }],
+    });
+  });
+  it("rejects numeric-token splitting from the actual second grounded gateway answer", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    let calls = 0;
+    const model: ModelPort = {
+      call: (request) => {
+        calls += 1;
+        return fakeModel(
+          calls === 1 ? "The threshold is 1000." : "The threshold is 10 [src/validation.ts:1] 00.",
+          requests,
+        ).call(request, new AbortController().signal);
+      },
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+      deps(model),
+    );
+    expect(calls).toBe(2);
+    expect(result.body).toMatchObject({ content: "The threshold is 1000.", citations: [] });
+    expect(result.body).not.toMatchObject({ citationBehaviour: "cites-after-repair" });
+  });
+  it("refuses gateway dispatch when prompt logging exhausts the original deadline", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src/validation.ts"), "export const threshold = 1000;\n");
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const call = vi.fn(fakeModel("Threshold is 1000 [src/validation.ts:1].", []).call);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const execute = groundedOrchestrator.runGroundedExploration;
+    const logPrompt = chatActivity.logGroundedPromptSelection;
+    const runnerSpy = vi
+      .spyOn(groundedOrchestrator, "runGroundedExploration")
+      .mockImplementation((input, ports) =>
+        execute(
+          {
+            ...input,
+            budget: { ...(input.budget ?? DEFAULT_EXPLORATION_BUDGET), elapsedMsMax: 100 },
+          },
+          ports,
+        ),
+      );
+    const loggerSpy = vi
+      .spyOn(chatActivity, "logGroundedPromptSelection")
+      .mockImplementation((...args) => {
+        logPrompt(...args);
+        clock.mockReturnValue(NOW + 100);
+      });
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain threshold" })),
+        deps({ call }),
+      );
+      expect(loggerSpy).toHaveBeenCalledOnce();
+      expect(call).not.toHaveBeenCalled();
+      expect(result.status).toBe(503);
+    } finally {
+      loggerSpy.mockRestore();
+      runnerSpy.mockRestore();
+      clock.mockRestore();
+    }
+  });
+  it("abstains at the actual fitted-input boundary when every source excerpt is omitted", async () => {
+    const { chatId } = await setupChatWithScope();
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(
+      join(tmp, "src/validation.ts"),
+      "export function validateFeature() { return true; }\n",
+    );
+    store.updateChat(chatId, {
+      connectedScope: { kind: "files", relativePaths: ["src/validation.ts"], connectedAtMs: NOW },
+    });
+    const call = vi.fn(() =>
+      Promise.resolve({
+        content: "Validation returns true [src/validation.ts:1].",
+        usage: {
+          requestId: "zero-source-fitted",
+          promptTokens: 800,
+          completionTokens: 20,
+          latencyMs: 1,
+          costClass: "medium" as const,
+        },
+        toolCalls: [],
+        finishReason: "stop" as const,
+        structuredOutput: null,
+        modelId: CHAT_MODEL,
+      }),
+    );
+    const execute = groundedOrchestrator.runGroundedExploration;
+    const runnerSpy = vi
+      .spyOn(groundedOrchestrator, "runGroundedExploration")
+      .mockImplementation((input, ports) => execute(input, withMinimumFittedInputGrant(ports)));
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain validation" })),
+        deps(
+          { call },
+          {},
+          {
+            config: {
+              ...customModelConfig(CHAT_MODEL, {
+                contextWindow: 4096,
+                maxInputTokens: 970,
+                maxOutputTokens: 1024,
+              }),
+              // This retained pin owns source-only abstention; learned knowledge has its own proofs.
+              groundedAnswers: { ownAssessment: "disabled" },
+            },
+            evidenceStore: createInMemoryEvidenceStore(),
+          },
+        ),
+      );
+      expect(result.status).toBe(200);
+      expect(call).not.toHaveBeenCalled();
+      expect(result.body).toMatchObject({ citations: [], contextPack: { filesInPrompt: 0 } });
+      expect(result.body).not.toHaveProperty("evidenceRunId");
+    } finally {
+      runnerSpy.mockRestore();
+    }
+  });
+});
+
+it("authenticates only actual prefix line ranges after partial prompt fitting", () => {
+  const base = packWithCitations();
+  const { file, excerpt } = requirePackExcerpt(base, 0);
+  const content = Array.from(
+    { length: 100 },
+    (_, i) => `const line${String(i + 1)} = "${"x".repeat(300)}";`,
+  ).join("\n");
+  const pack = {
+    ...base,
+    files: [
+      {
+        ...file,
+        excerpts: [
+          {
+            ...excerpt,
+            content,
+            contentBytes: Buffer.byteLength(content),
+            atom: { ...excerpt.atom, lineRange: { startLine: 1, endLine: 100 } },
+          },
+        ],
+      },
+    ],
+  };
+  const sent = fittedGroundedGatewayPrompt("Explain the implementation", pack, buildRedactor({}), {
+    modelInputTokensMax: 1200,
+  });
+  const actual = sent.sentEvidencePacks?.[0];
+  expect(actual?.files[0]?.excerpts[0]?.content.length).toBeGreaterThan(0);
+  expect(actual?.files[0]?.excerpts[0]?.content.length).toBeLessThan(content.length);
+  const result = reconcileInlineCitations(
+    `The last line declares a value [${file.scopePath}:100].`,
+    buildPackCitationIndex(actual === undefined ? [] : [actual]),
+  );
+  expect(result.citedScopePaths.size).toBe(0);
+  expect(result.unsupported).toHaveLength(1);
 });

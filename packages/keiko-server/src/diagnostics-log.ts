@@ -497,6 +497,7 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
 }
 
 function closedDiagnosticErrorKind(errorClass: string): ActivityLogErrorKind {
+  if (errorClass === "CallerAttemptAdmissionError") return "authority-denied";
   const registered = activityLogErrorKindOr(errorClass, "internal");
   if (registered !== "internal" || errorClass === "internal") return registered;
   if (/timeout/iu.test(errorClass)) return "timeout";

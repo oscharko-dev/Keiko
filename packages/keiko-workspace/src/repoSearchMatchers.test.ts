@@ -128,7 +128,82 @@ describe("normalizeNaturalLanguageToken", () => {
   });
 });
 
+describe("contextual compound subject scoring", () => {
+  const question =
+    "For Unit-G42, how long may a shipment wait, what happens afterward, and who records the event?";
+
+  it("retains full-question matches while rewarding observed complete subject spellings", () => {
+    const matcher = buildMatcher(nlq(question));
+    expect(matcher.match("# Unit-G42 shipment policy")).toBe(1);
+    expect(matcher.match("# Different shipment policy")).toBeGreaterThan(0);
+    expect(matcher.match("# Different shipment policy")).toBeLessThan(1);
+    expect(matcher.match("# Unit-G99 policy")).toBeLessThan(1);
+    expect(matcher.match("# Unrelated subject")).toBe(0);
+  });
+
+  it("honors case-sensitive compound evidence without requiring exact hints", () => {
+    const matcher = buildMatcher({ ...nlq(question), caseSensitive: true });
+    expect(matcher.match("# Unit-G42 shipment policy")).toBe(1);
+    expect(matcher.match("# unit-g42 shipment policy")).toBeLessThan(1);
+    expect(matcher.match("A shipment may wait.")).toBeGreaterThan(0);
+  });
+
+  it.each(["A", "λ", "𐐀", "\u0301", "7", "٣", "_", "-"])(
+    "does not reward a compound joined to the prefix or suffix %s",
+    (continuation) => {
+      const matcher = buildMatcher(nlq(question));
+      expect(matcher.match(`# ${continuation}Unit-G42 shipment policy`)).toBeLessThan(1);
+      expect(matcher.match(`# Unit-G42${continuation} shipment policy`)).toBeLessThan(1);
+    },
+  );
+
+  it.each(["(Unit-G42)", "Unit-G42,", "docs/Unit-G42.md", "Unit-G42: approved"])(
+    "rewards a complete spelling separated by punctuation or filename boundaries: %s",
+    (spelling) => {
+      expect(buildMatcher(nlq(question)).match(spelling)).toBe(1);
+    },
+  );
+
+  it.each(["SHA-256", "UTF-8", "production-ready-24-7"])(
+    "does not turn the absent hint %s into a literal-only search",
+    (hint) => {
+      const matcher = buildMatcher(nlq(`Explain ${hint} digest calculation.`));
+      expect(matcher.match("export function digest() { return compute(); }")).toBeGreaterThan(0);
+      const literal = buildMatcher(nlq(hint), { kind: "literal", terms: [hint] });
+      expect(literal.match("export function digest() { return compute(); }")).toBe(0);
+    },
+  );
+});
+
 describe("buildMatcher definition intent scoring", () => {
+  it.each([
+    "Cite implementation files and lines.",
+    "Include source file paths and line numbers.",
+    "Zitiere Implementierungsdateien und Zeilennummern.",
+  ])("does not rank citation-output terms as the requested source subject: %s", (directive) => {
+    const subject = "Trace request authorization through policy enforcement.";
+    const plain = buildMatcher(nlq(subject));
+    const cited = buildMatcher(nlq(`${subject} ${directive}`));
+    for (const line of ["const lines = [];", "function authorizeRequest(policy) {"]) {
+      expect(cited.match(line)).toBe(plain.match(line));
+    }
+  });
+
+  it("preserves a definition question followed by a citation directive", () => {
+    const subject = "Where is handler defined?";
+    const plain = buildMatcher(nlq(subject));
+    const cited = buildMatcher(nlq(`${subject} Cite implementation files and lines.`));
+    expect(cited.match("function handler() {")).toBe(plain.match("function handler() {"));
+    expect(cited.match("function handler() {")).toBeGreaterThan(cited.match("handler reference"));
+  });
+
+  it("keeps named source subjects inside citation requests", () => {
+    const matcher = buildMatcher(nlq("Cite the implementation of authorizeRequest."));
+    expect(matcher.match("function authorizeRequest(policy) {")).toBeGreaterThan(
+      matcher.match("authorizeRequest reference"),
+    );
+  });
+
   it("matches typed declarations without unbounded whitespace backtracking", () => {
     expect(
       lineLooksLikeSymbolDefinition(

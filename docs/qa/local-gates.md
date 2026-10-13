@@ -88,33 +88,39 @@ each ruler answers is in [`coverage-truth-model.md`](coverage-truth-model.md).
 `KEIKO_LOCAL_GATE_CONTAINER=1` is set inside the container so nothing downstream mistakes a local
 run for authoritative measurement evidence.
 
-## Local-only workspace-pattern micro-benchmark
+## Controlled local grounding performance pins
 
-The relocated #3347 S8786 regression pin deliberately stays out of ordinary required Vitest runs:
-those runs verify the adversarial blocked-slash shape behaviorally, while a shared runner must not
-decide an authoritative wall-clock budget (ADR-0139 D1). The local gate container's `fast` suite
-(and therefore its `tests`, `e2e`, and `full` supersets) runs the focused pin on purpose. This is the
+The relocated #3347 S8786 algorithm pin and the line-9000 public-handler scenario keep their
+wall-clock verdicts out of required shared Vitest runs (ADR-0139 D1). The full handler case still
+runs there: exact fitted source content, admitted path, logging and content-read work ceilings
+remain unconditional, with the production source-currentness guards unchanged. The local gate
+container's `fast` suite (and therefore its `tests`, `e2e`, and `full` supersets) runs both focused
+pins sequentially and fails if either child fails. This is the
 version-pinned local Linux developer-machine pre-flight path; it standardizes Linux userland but
 neither controls host CPU contention nor supplies reference-hardware evidence. It is not wired into
-`npm test` or a hosted required workflow.
+`npm test` or a hosted required workflow as a wall-clock verdict.
 
 On an idle machine, run the container-owned check with `npm run gates:local`. To repeat only this
-micro-benchmark from an already controlled environment, use:
+focused pair from an already controlled environment, use:
 
 ```bash
 npm run check:grounded-workspace-pattern-performance
 ```
 
-The command builds the workspace packages, launches only
-`grounded-orchestrator.workspace-pattern.test.ts`, and sets
-`KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1` for that child process. It does not turn wall-clock assertions
-on for the rest of the suite. Its scope is deliberately narrow: it enforces a consolidated,
-strengthened 1000 ms ceiling for both workspace-pattern helpers on the 320k adversarial blocked-slash
-input. It is not D12 evidence, not evidence about end-to-end grounded-retrieval latency, and not a
-substitute for `npm run perf:evidence:regen` on the declared D12 reference architecture. The
-container continues to
-set `KEIKO_LOCAL_GATE_CONTAINER=1`, so no generated evidence can mistake this pre-flight for the
-official performance producer.
+The command builds the workspace packages and launches separate sequential Vitest children for
+`grounded-orchestrator.workspace-pattern.test.ts` and
+`grounded-symbol-line.public-handler.test.ts`. Each child sets
+`KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`; no other suite inherits it. The first preserves the 1000 ms
+ceiling on the 320k adversarial blocked-slash input. The second runs the unchanged 10,000-line
+source, query, handler and 5000 ms predicate with `vitest.coverage.packages.config.ts --coverage`.
+Its coverage output goes to `coverage/grounded-line-performance`, leaving package-gate coverage
+untouched. Its 90-second process deadline includes setup and coverage serialization; it does not
+raise the measured handler budget. This scenario includes real file and log IO with a fixture
+provider, not a pure-CPU algorithm or a native-provider qualification. Keep the machine idle for
+the pair and retain the first outcome; do not retry a slow run into a pass. The checks are
+mandatory local pre-flight diagnostics, not D12 evidence or a substitute for
+`npm run perf:evidence:regen` on the declared reference architecture. The container retains
+`KEIKO_LOCAL_GATE_CONTAINER=1`, so the pre-flight cannot be mistaken for the official producer.
 
 ## What a macOS host cannot answer — and where the suite will not tell you
 

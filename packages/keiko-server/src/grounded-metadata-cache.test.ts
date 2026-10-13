@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { createMicroIndex, type MicroIndex } from "@oscharko-dev/keiko-workflows
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { WorkspaceReadError } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   retrieveConnectedContextPack,
   type OrchestratorDeps,
@@ -76,6 +77,64 @@ function manifestCorpus(root: string, count: number): void {
 }
 
 describe("metadata retention and pre-read cache identity", () => {
+  it.each([
+    ["Missing-8Z", "low", "Unit-G42", false],
+    ["Unit-G42", "high", "Unit-G42", false],
+    ["Unit-G42", "low", "Unit-G420", false],
+    ["Unit-G42", "low", "Unit-G42-Extra", false],
+    ["Unit-G42", "low", "λUnit-G42", false],
+    ["Unit-G42", "low", "Unit-G42\u0301", false],
+    ["Unit-G42", "high", "Unit-G42", true],
+    ["Unit-G42", "low", "unit-g42", true],
+  ] as const)(
+    "preserves %s subject confidence %s with observed %s and case-sensitive %s through a cache hit",
+    async (term, confidence, observed, caseSensitive) => {
+      const root = physicalRoot();
+      writeFileSync(
+        join(root, "procedure.md"),
+        `# ${observed} shipment policy\nThe current owner-approved operational policy admits 29 containers.\n`,
+      );
+      const microIndex = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: () => 0 });
+      const get = vi.spyOn(microIndex, "get");
+      const log = createBufferedServerLogSink();
+      const deps = dependencies(root, { microIndex, activityLog: log });
+      const base = request(
+        root,
+        `For ${term}, how many containers are admitted by the current operational policy?`,
+      );
+      const input = { ...base, query: { ...base.query, caseSensitive } };
+      const cold = await retrieveConnectedContextPack(input, deps);
+      expect(cold.pack.diagnostics?.selection).toMatchObject({
+        selectionConfidence: confidence,
+        keepOneFallbackApplied: false,
+      });
+      expect(cold.pack.files.map((file) => file.scopePath)).toContain("procedure.md");
+      expect(microIndex.size()).toBeGreaterThan(0);
+      get.mockClear();
+      const warm = await retrieveConnectedContextPack(input, deps);
+      expect(
+        get.mock.results.some((result) => result.type === "return" && result.value !== undefined),
+      ).toBe(true);
+      expect(warm.pack.files).toEqual(cold.pack.files);
+      expect(warm.pack.diagnostics?.selection).toEqual(cold.pack.diagnostics?.selection);
+      expect(warm.pack.uncertainty).toEqual(cold.pack.uncertainty);
+      expect(
+        warm.pack.uncertainty.filter((marker) => marker.kind === "low-confidence-selection"),
+      ).toHaveLength(confidence === "low" ? 1 : 0);
+      const observations = log.events.filter(
+        (event) => event.op === "search.connected-context.selection-details",
+      );
+      expect(observations).toHaveLength(2);
+      for (const observation of observations) {
+        expect(observation.extra).toMatchObject({
+          selectionConfidence: confidence,
+          keepOneFallbackApplied: false,
+        });
+      }
+      expect(log.lines().join("\n")).not.toContain(term);
+    },
+  );
+
   it("invalidates cached output when only metadata enumeration uncertainty changes", async () => {
     const root = physicalRoot();
     mkdirSync(join(root, "optional"));

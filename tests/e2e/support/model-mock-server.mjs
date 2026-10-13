@@ -116,6 +116,10 @@ function completionContent(rawRequest) {
   ) {
     return GROUNDING_PARITY_REPLY;
   }
+  // This witness exists only in the real source excerpt, never in the user's fixture question.
+  if (rawRequest.includes("KEIKO_E2E_READ_METADATA")) {
+    return "The supplied files include src/read.ts and src/cited.ts [src/cited.ts:1]. src/excluded.ts was not supplied.";
+  }
   if (
     !rawRequest.includes(JOURNAL_CAPTURE_MARKER) ||
     !rawRequest.includes(SALIENCE_PROMPT_MARKER)

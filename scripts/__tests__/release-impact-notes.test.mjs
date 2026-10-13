@@ -4,22 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { PORTABLE_RELEASE_IMPACT_CONTRACT, PORTABLE_TARGET_NAMES } from "../portable-runtime.mjs";
-import { renderReleaseImpactNotes } from "../release-impact-notes.mjs";
+import {
+  renderReleaseImpactNotes,
+  renderReleaseImpactNotesFromRoot,
+} from "../release-impact-notes.mjs";
 
 function currentRepoVersion() {
   return JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version;
-}
-
-function currentCatalogBullet(version) {
-  const catalog = JSON.parse(
-    readFileSync(join(process.cwd(), "release-impact.catalog.json"), "utf8"),
-  );
-  const catalogEntry = catalog.entries.find((candidate) => candidate.packageVersion === version);
-  const bullet = catalogEntry?.releaseNoteBullets?.[0];
-  if (typeof bullet !== "string" || bullet.length === 0) {
-    throw new Error(`release-impact catalog has no note bullet for ${version}`);
-  }
-  return bullet;
 }
 
 function rootManifest(overrides = {}) {
@@ -374,11 +365,13 @@ describe("release-impact release notes", () => {
     const version = currentRepoVersion();
     const result = releasePublish(["--plan-only", "--tag", "beta"]);
     const output = `${result.stdout}\n${result.stderr}`;
+    const expected = renderReleaseImpactNotesFromRoot(process.cwd(), { tag: "beta" });
 
+    expect(expected.ok, expected.failures.join("\n")).toBe(true);
     expect(result.status).toBe(0);
     expect(output).toContain("-----BEGIN KEIKO RELEASE NOTES-----");
     expect(output).toContain(`## Keiko ${version} Release Notes`);
-    expect(output).toContain(currentCatalogBullet(version));
+    expect(output).toContain(expected.notes.trim());
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
   }, 60_000);
 

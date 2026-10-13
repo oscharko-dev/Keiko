@@ -83,12 +83,20 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 
 ## Honest limits
 
-- Updating to 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
+- Updating from before 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
 - Windows Chat, Files and manual Editor use are separate from Coding execution. The Windows gateway-filter work remains a development implementation and does not enable the Coding runtime; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/windows-gateway-runtime-progress.md).
 - Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.2.1
+
+- **More relevant source evidence.** Connected-folder questions retain named files and relevant implementation bodies more reliably within the existing read, token and time budgets. Physical source ranges and the evidence actually sent to the model stay aligned.
+- **Reliable startup and edits.** Configured gateways and selected models survive normal project startup, readiness refreshes automatically, and governed file edits preserve ordinary text exactly. Coding completion requires fresh verification after the final edit.
+- **Workbench progress and recovery.** Compatible self-hosted models stream answers and reasoning, with bounded repair of empty answers and visible recovery from temporary gateway outages. New runs default to 2,000,000 prompt tokens and 120 minutes; operators can lower these through `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`.
+
+The original long-context Gemma question still fails complete answer and validated-citation qualification even when the relevant implementation is present in the model's evidence. This release improves source selection and reliability; it does not establish complete Gemma qualification or standalone OpenCode parity. Existing Windows Coding and manual-update limitations above remain in force.
 
 ## What's in 1.2
 

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
+  groupConnectedContextOmissions,
   chatConnectedScopeFingerprintInput,
   chatConnectedScopeIdentity,
   canonicalDesktopChatTurnReferenceSeed,
@@ -307,6 +308,9 @@ describe("parseUpdateGitHubIssueReaderAuthorizationWire", () => {
   });
 });
 
+const RESOURCE_BUDGET_FIXTURE = { ...DEFAULT_EXPLORATION_BUDGET };
+delete RESOURCE_BUDGET_FIXTURE.followUpPassesMax;
+
 describe("buildGroundedAnswerContextPackSummary", () => {
   it("produces a complete summary from a 2-file files-scope pack", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
@@ -318,7 +322,7 @@ describe("buildGroundedAnswerContextPackSummary", () => {
       fileCount: 2,
       queryKind: "natural-language",
       usage: USAGE_FIXTURE,
-      budget: DEFAULT_EXPLORATION_BUDGET,
+      budget: RESOURCE_BUDGET_FIXTURE,
       citationCount: 4,
       omittedCount: 0,
       omittedCounts: emptyOmittedCounts(),
@@ -497,11 +501,14 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     }
   });
 
-  it("surfaces usage and budget identity-equal to the source pack fields", () => {
+  it("preserves source usage identity and projects all public resource limits", () => {
     const p = pack();
     const summary = buildGroundedAnswerContextPackSummary(p, 0, 0);
     expect(summary.usage).toBe(p.usage);
-    expect(summary.budget).toBe(p.budget);
+    const { followUpPassesMax, ...resources } = p.budget;
+    expect(summary.budget).toStrictEqual(resources);
+    expect(summary.budget).not.toHaveProperty("followUpPassesMax");
+    expect(p.budget.followUpPassesMax).toBe(followUpPassesMax);
   });
 
   it("carries elapsedMs and citationCount verbatim from the caller's arguments", () => {
@@ -628,7 +635,7 @@ describe("buildGroundedAnswerContextPackSummary contextSummary (ADR-0057 D1)", (
       fileCount: 2,
       queryKind: "natural-language",
       usage: USAGE_FIXTURE,
-      budget: DEFAULT_EXPLORATION_BUDGET,
+      budget: RESOURCE_BUDGET_FIXTURE,
       citationCount: 4,
       omittedCount: 0,
       omittedCounts: emptyOmittedCounts(),
@@ -1427,5 +1434,82 @@ describe("UNKNOWN_REPOSITORY_ERROR_CODE", () => {
   // wire change for every producer and consumer at once (PR #3452 review).
   it("is the BFF wire code for a repository the workspace has not opened", () => {
     expect(UNKNOWN_REPOSITORY_ERROR_CODE).toBe("UNKNOWN_REPOSITORY");
+  });
+});
+
+describe("grounded wire resource budget", () => {
+  it.each([0, 1] as const)(
+    "omits internal follow-up admission while retaining every resource limit (passes=%s)",
+    (passes) => {
+      const input = { ...pack(), budget: { ...pack().budget, followUpPassesMax: passes } };
+      const { followUpPassesMax, ...resources } = input.budget;
+      expect(followUpPassesMax).toBe(passes);
+      const summary = buildGroundedAnswerContextPackSummary(input, 0, 0);
+      expect(summary.budget).not.toHaveProperty("followUpPassesMax");
+      expect(summary.budget).toStrictEqual(resources);
+      expect(input.budget.followUpPassesMax).toBe(passes);
+    },
+  );
+});
+
+describe("retrieval diagnostics projection", () => {
+  it("projects canonical reranker and selection confidence without inventing defaults", () => {
+    const reranker: GroundedRerankerDiagnostics = {
+      status: "applied",
+      mode: "local-only",
+      candidateCount: 9,
+      documentCount: 3,
+      keptCount: 2,
+    };
+    const baseline = buildGroundedAnswerContextPackSummary(pack(), 2, 3);
+    expect(baseline).not.toHaveProperty("reranker");
+    expect(baseline).not.toHaveProperty("selectionConfidence");
+    const actual = buildGroundedAnswerContextPackSummary(pack(), 2, 3, undefined, {
+      reranker,
+      selectionConfidence: "low",
+    });
+    expect(actual).toMatchObject({ reranker, selectionConfidence: "low" });
+  });
+  it("preserves old summary shape and projects prompt-reaching counts and canonical dispositions", () => {
+    const diagnostics = {
+      filesInPrompt: 1,
+      semanticProviderDisposition: "suppressed" as const,
+      scopeContextState: "overflow" as const,
+    };
+    const baseline = buildGroundedAnswerContextPackSummary(pack(), 2, 3);
+    expect(baseline).not.toHaveProperty("filesInPrompt");
+    const actual = buildGroundedAnswerContextPackSummary(pack(), 2, 3, undefined, diagnostics);
+    expect(actual).toMatchObject(diagnostics);
+    expect(actual.usage.filesRead).toBe(USAGE_FIXTURE.filesRead);
+    expect(
+      Object.keys(actual)
+        .filter((key) => !Object.hasOwn(baseline, key))
+        .sort(),
+    ).toEqual(["filesInPrompt", "scopeContextState", "semanticProviderDisposition"]);
+  });
+});
+
+describe("connected-context omission groups", () => {
+  it("separates ranking exclusions from eligibility exclusions without changing counts", () => {
+    const counts = {
+      ...emptyOmittedCounts(),
+      "low-relevance": 2,
+      "near-duplicate": 3,
+      "budget-exhausted": 4,
+      ignored: 5,
+      binary: 6,
+      "tool-unavailable": 7,
+      "outside-scope": 8,
+    };
+    expect(groupConnectedContextOmissions(counts)).toEqual({ ranking: 9, eligibility: 26 });
+    expect(counts["budget-exhausted"]).toBe(4);
+  });
+  it("projects only named path-free diagnostic fields", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0, undefined, {
+      filesInPrompt: 0,
+      scopePath: "private/canary",
+    } as { filesInPrompt: number });
+    expect(summary.filesInPrompt).toBe(0);
+    expect(JSON.stringify(summary)).not.toContain("private/canary");
   });
 });

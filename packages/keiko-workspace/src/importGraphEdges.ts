@@ -1,5 +1,7 @@
 import { posix as path } from "node:path";
-import { readWorkspaceFile } from "./discovery.js";
+import { readWorkspaceFile, readWorkspaceFileBytesForTextInspection } from "./discovery.js";
+import { decodeTextFileBytes } from "./binaryDetect.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -8,7 +10,6 @@ import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import {
   gatherCandidatesWithControl,
   limitCandidateSetForStructuralBuild,
-  probeBinary,
   type CandidateSet,
 } from "./repoSearchScan.js";
 import { importEdgeStableId } from "./stableId.js";
@@ -726,7 +727,7 @@ function boundedImportGraphInputs(candidateSet: CandidateSet, limits: SearchLimi
   const metadataInputs = candidateSet.files.filter(
     (file) => !isImportSource(file.relativePath) && isImportResolverMetadata(file.relativePath),
   );
-  const fileBudget = Math.max(0, limits.maxFilesScanned ?? 2048);
+  const fileBudget = Math.max(0, limits.maxFilesScanned ?? candidateSet.files.length);
   const metadataCapacity = sourceInputs.length === 0 ? fileBudget : Math.floor(fileBudget / 2);
   const rankedMetadata = rankResolverMetadata(metadataInputs, sourceInputs);
   const reservedMetadata = rankedMetadata.slice(0, metadataCapacity);
@@ -759,13 +760,17 @@ async function readImportSource(
     }
     const stat = fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return undefined;
-    if (await probeBinary(fs, contained.path, stat.size)) return undefined;
-    return readWorkspaceFile(
+    const read = await readWorkspaceFileBytesForTextInspection(
       scope.workspace,
       scopePath,
-      { maxBytes: limits.maxBytesPerFileScanned },
+      limits.maxBytesPerFileScanned,
       fs,
-    ).text;
+    );
+    if (read.binary || !read.complete) return undefined;
+    const decoded = decodeTextFileBytes(read.bytes, { scopePath, requireSupportedEncoding: true });
+    return decoded === undefined
+      ? undefined
+      : redact(decoded.text, [], { preserveSourceLineBreaks: true });
   } catch {
     return undefined;
   }

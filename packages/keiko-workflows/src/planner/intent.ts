@@ -1,7 +1,8 @@
 // Deterministic retrieval-intent classification for connected-context planning.
 // This module is intentionally pure: no IO, no clock, no model calls.
 
-import { extractAnchors } from "./anchors.js";
+import { extractAnchors, matchesNextFrameworkTerm } from "./anchors.js";
+import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import {
@@ -14,16 +15,31 @@ export type RetrievalIntent =
   | "repository-overview"
   | "targeted-code-search"
   | "diagnostic-search"
+  | "conversational-follow-up"
   | "clarification-needed";
 
 export interface RetrievalIntentClassification {
   readonly intent: RetrievalIntent;
+  readonly effectiveIntent?: RetrievalIntent;
   readonly normalizedTerms: readonly string[];
 }
 
+export interface RetrievalIntentContext {
+  readonly previousIntent?: RetrievalIntent | undefined;
+  readonly referencePresent?: boolean | undefined;
+}
+
+const CONVERSATIONAL_FOLLOW_UP_PATTERNS = [
+  /\bcan\s+you\s+see\s+(?:it|them|the\s+file)\b/iu,
+  /\bsiehst\s+du\s+(?:sie|es|die\s+datei)\b/iu,
+  /\b(?:kannst\s+du\s+das|try\s+again|what\s+about\s+now|and\s+(?:now|then))\b/iu,
+  /\b(?:that\s+(?:file|one)|this\s+file|in\s+the\s+file|und\s+(?:nun|jetzt))\b/iu,
+  /\b(?:in\s+der\s+datei|diese[rn]?\s+datei|darin|dazu|weiter)\b/iu,
+];
+
 interface IntentPattern {
   readonly term: string;
-  readonly pattern: RegExp;
+  readonly pattern: Pick<RegExp, "test">;
 }
 
 const BASIC_STOP_WORDS = new Set([
@@ -85,6 +101,11 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "package-json", pattern: /\bpackage\.json\b/iu },
   { term: "package-manager", pattern: /\bpackage[\s_-]?manager\b/iu },
   { term: "package-manager", pattern: /\bpaket[\s_-]?manager\b/iu },
+  {
+    term: "manifest-inventory",
+    pattern:
+      /\b(?:(?:package|project|workspace)[\s_-]+manifests?|(?:paket|projekt|workspace)[\s_-]*manifeste?)\b/iu,
+  },
   { term: "tsconfig", pattern: /\btsconfig(?:\.[a-z0-9]+)?\b/iu },
   { term: "dependency", pattern: /\bdevdependencies\b|\bdependencies\b|\bdependency\b/iu },
   { term: "dependency", pattern: /\babhaengigkeit(?:en)?\b|\babhängigkeit(?:en)?\b/iu },
@@ -101,7 +122,7 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "jest", pattern: /\bjest\b/iu },
   { term: "playwright", pattern: /\bplaywright\b/iu },
   { term: "cypress", pattern: /\bcypress\b/iu },
-  { term: "nextjs", pattern: /\bnext(?:\.js)?\b/iu },
+  { term: "nextjs", pattern: { test: matchesNextFrameworkTerm } },
   { term: "react", pattern: /\breact\b/iu },
   { term: "eslint", pattern: /\beslint\b/iu },
   // Polyglot ecosystem routing is sourced from the shared registry so questions like "Which Java
@@ -110,6 +131,42 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   // harmless because matched terms are de-duplicated before classification.
   ...ecosystemMetadataIntentPatterns,
 ];
+
+// A manifest noun is also a source-domain term. Only a complete enumeration request selects
+// the metadata route; validation, loading and mixed inventory/behavior questions keep code search.
+const MANIFEST_INVENTORY_PREFIXES = [
+  /^(?:please\s+)?(?:list|enumerate|show)\s+(?:(?:all|the)\s+)?/iu,
+  /^(?:which|what)\s+/iu,
+  /^(?:bitte\s+)?(?:liste|zeige)\s+(?:(?:alle|die)\s+)?/iu,
+  /^welche\s+/iu,
+];
+const MANIFEST_INVENTORY_SUBJECTS = [
+  /^(?:package|project|workspace)[\s_-]+manifests?/iu,
+  /^(?:paket|projekt|workspace)[\s_-]*manifeste?/iu,
+];
+const MANIFEST_INVENTORY_TAILS = [
+  /^[.!?\s]*$/u,
+  /^\s+defines?\s+(?:this|the|our)\s+(?:workspace|project)[.!?\s]*$/iu,
+  /^\s+(?:in|for|of)\s+(?:this|the|our)\s+(?:workspace|project)[.!?\s]*$/iu,
+  /^\s+definier(?:en|t)\s+(?:dieses|das)\s+(?:workspace|projekt)[.!?\s]*$/iu,
+  /^\s+(?:in|f[üu]r)\s+(?:dieses|das)\s+(?:workspace|projekt)[.!?\s]*$/iu,
+];
+
+function manifestInventoryRequest(text: string): boolean {
+  return MANIFEST_INVENTORY_PREFIXES.some((prefix, index) => {
+    const match = prefix.exec(text);
+    if (match === null) return false;
+    const rest = text.slice(match[0].length);
+    const subject = MANIFEST_INVENTORY_SUBJECTS[index < 2 ? 0 : 1]?.exec(rest);
+    if (subject === undefined || subject === null) return false;
+    const tail = rest.slice(subject[0].length);
+    const tails =
+      index < 2
+        ? MANIFEST_INVENTORY_TAILS.slice(0, 3)
+        : [MANIFEST_INVENTORY_TAILS[0], ...MANIFEST_INVENTORY_TAILS.slice(3)];
+    return tails.some((pattern) => pattern?.test(tail) === true);
+  });
+}
 
 const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [
   {
@@ -224,17 +281,69 @@ function classifyShortTarget(text: string): RetrievalIntentClassification {
     : { intent: "clarification-needed", normalizedTerms: [] };
 }
 
+function hasConcreteSourceTarget(text: string): boolean {
+  return extractAnchors({ text, maxAnchors: text.length }).anchors.some(
+    (anchor) => anchor.kind === "path" || anchor.kind === "quoted" || anchor.kind === "identifier",
+  );
+}
+
+function canInheritRetrievalIntent(text: string, context: RetrievalIntentContext): boolean {
+  if (
+    context.previousIntent !== "diagnostic-search" &&
+    context.previousIntent !== "targeted-code-search"
+  )
+    return false;
+  const orientation =
+    context.referencePresent === true &&
+    matchedTerms(text, normalizeQueryText(text), REPOSITORY_OVERVIEW_PATTERNS).includes(
+      "orientation",
+    );
+  if (!CONVERSATIONAL_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(text)) && !orientation)
+    return false;
+  return !hasConcreteSourceTarget(text);
+}
+
+function classifyProjectMetadata(
+  text: string,
+  normalized: string,
+): RetrievalIntentClassification | undefined {
+  const matched = matchedTerms(text, normalized, PROJECT_METADATA_PATTERNS);
+  const terms =
+    matched.includes("manifest-inventory") && !manifestInventoryRequest(text)
+      ? matched.filter((term) => term !== "manifest-inventory")
+      : matched;
+  return terms.length === 0 ? undefined : { intent: "project-metadata", normalizedTerms: terms };
+}
+
 export function classifyRetrievalIntent(
   queryText: string,
   _scope?: SelectedScope,
+  context: RetrievalIntentContext = {},
 ): RetrievalIntentClassification {
-  const trimmed = queryText.trim();
+  const trace = parseDiagnosticTraceText(queryText);
+  const trimmed = trace.questionText.trim();
   const normalized = normalizeQueryText(trimmed);
+  if (trace.detected) return { intent: "diagnostic-search", normalizedTerms: ["stacktrace"] };
+  if (canInheritRetrievalIntent(trimmed, context)) {
+    return {
+      intent: "conversational-follow-up",
+      effectiveIntent: context.previousIntent ?? "targeted-code-search",
+      normalizedTerms: searchableTokens(normalized).slice(0, 8),
+    };
+  }
+
   if (trimmed.length === 0) return { intent: "clarification-needed", normalizedTerms: [] };
   if (searchableTokens(normalized).length === 0) {
     return classifyShortTarget(trimmed);
   }
 
+  return classifyRequestedIntent(trimmed, normalized);
+}
+
+function classifyRequestedIntent(
+  trimmed: string,
+  normalized: string,
+): RetrievalIntentClassification {
   return (
     classifyByPatterns(trimmed, normalized, DIAGNOSTIC_PATTERNS, "diagnostic-search") ??
     (requestedSourceInspectionExtensions(trimmed).length > 0
@@ -243,7 +352,7 @@ export function classifyRetrievalIntent(
           normalizedTerms: searchableTokens(normalized).slice(0, 8),
         }
       : undefined) ??
-    classifyByPatterns(trimmed, normalized, PROJECT_METADATA_PATTERNS, "project-metadata") ??
+    classifyProjectMetadata(trimmed, normalized) ??
     classifyByPatterns(trimmed, normalized, TARGETED_CODE_PATTERNS, "targeted-code-search") ??
     classifyByPatterns(
       trimmed,

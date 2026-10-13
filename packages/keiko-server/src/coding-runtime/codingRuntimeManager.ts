@@ -1151,9 +1151,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.deps,
       deadline,
     );
-    if (availability !== undefined) return this.recordLaunchFailure(request, availability);
+    if (availability !== undefined)
+      return await this.recordUnspawnedFailure(request, availability, lifecycleAdapter);
     if (this.deps.now() >= deadline)
-      return this.recordLaunchFailure(request, failure("start-timeout", true));
+      return await this.recordUnspawnedFailure(
+        request,
+        failure("start-timeout", true),
+        lifecycleAdapter,
+      );
     return await this.spawnAttestedRuntime(
       request,
       executablePath,
@@ -1182,19 +1187,29 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       request.workspaceRoot,
     );
     if (!proof.ok)
-      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
+      return this.recordUnspawnedFailure(
+        request,
+        failure("workspace-root-denied", false),
+        lifecycleAdapter,
+      );
     if (serviceHost !== undefined && serviceHost.binding.workspace !== proof.cwd)
-      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
+      return this.recordUnspawnedFailure(
+        request,
+        failure("workspace-root-denied", false),
+        lifecycleAdapter,
+      );
     const eligible = runtimeSpawnEligibilityFailure(request, this.deps, deadline);
-    if (eligible !== undefined) return this.recordLaunchFailure(request, eligible);
+    if (eligible !== undefined)
+      return this.recordUnspawnedFailure(request, eligible, lifecycleAdapter);
     const launched = this.deps.supervisor.spawnOwnedTree({
       ...supervisorLaunchRequest(request, executablePath, env, args, proof.cwd),
       ...(parentLifetime === undefined ? {} : { parentLifetime }),
     });
     if (!launched.ok) {
-      return this.recordLaunchFailure(
+      return this.recordUnspawnedFailure(
         request,
         failure(launched.failureCode, launched.failureCode === "spawn-failed"),
+        lifecycleAdapter,
       );
     }
     const active = createActiveRuntime(request, launched.tree, this.deps, lifecycleAdapter);
@@ -1261,9 +1276,17 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   ): Promise<CodingRuntimeStartResult> {
     const program = prepared.serviceHost;
     if (program === undefined || !validPreparedHostBinding(program, request))
-      return this.recordLaunchFailure(request, failure("protocol-schema-mismatch", false));
+      return await this.recordUnspawnedFailure(
+        request,
+        failure("protocol-schema-mismatch", false),
+        adapter,
+      );
     if (this.deps.supervisor.supportsStdinLifetime !== true)
-      return this.recordLaunchFailure(request, failure("runtime-unqualified", false));
+      return await this.recordUnspawnedFailure(
+        request,
+        failure("runtime-unqualified", false),
+        adapter,
+      );
     const deadline = this.deps.now() + request.startTimeoutMs;
     const unavailable = await preparedHostAvailabilityFailure(
       program,
@@ -1273,7 +1296,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.deps,
       deadline,
     );
-    if (unavailable !== undefined) return this.recordLaunchFailure(request, unavailable);
+    if (unavailable !== undefined)
+      return await this.recordUnspawnedFailure(request, unavailable, adapter);
     return await this.spawnAttestedRuntime(
       request,
       program.executable,
@@ -1816,6 +1840,30 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         retryable: false,
       }),
     );
+  }
+
+  private recordUnspawnedFailure(
+    request: CodingRuntimeLaunchRequest,
+    result: FailureResult,
+    adapter: OpenCodeLifecycleAdapter | undefined,
+  ): FailureResult | Promise<FailureResult> {
+    if (adapter?.prepare === undefined || adapter.dispose === undefined)
+      return this.recordLaunchFailure(request, result);
+    return boundedLifecycleDisposal(
+      (signal) => adapter.dispose?.(request.runId, signal) ?? false,
+      request.shutdownTimeoutMs,
+      (error): void => {
+        emitRuntimeDisposalFailure(this.deps, request.runId, error);
+      },
+    ).then((disposed): FailureResult => {
+      if (!disposed)
+        emitRuntimeDisposalFailure(
+          this.deps,
+          request.runId,
+          new Error("unspawned-runtime-disposal-unproven"),
+        );
+      return this.recordLaunchFailure(request, result);
+    });
   }
 
   private recordLaunchFailure(

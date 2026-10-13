@@ -18,18 +18,24 @@ import {
   naturalLanguageContentTermGroups,
   naturalLanguageContentTerms,
 } from "./repoSearchMatchers.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import {
+  expandedQueryTerms,
+  naturalLanguageSubjectText,
+  withoutEvidenceOnlyUseDirectives,
+} from "./repoSearchQueryTerms.js";
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
 import { isDenied } from "./ignore.js";
 import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
 import {
-  REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES,
   repositoryRouteDeclarationMarker,
-  repositoryRouteDeclarationMarkers,
+  repositoryRouteDeclarationWindowContains,
   repositoryRouteQuery,
 } from "./repoSearchRoutes.js";
-import { repositorySourceLines } from "./repoSearchSourceClassification.js";
+import {
+  repositorySourceLines,
+  type RepositorySourceLine,
+} from "./repoSearchSourceClassification.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -87,6 +93,7 @@ export interface RankedCandidateDiagnostic {
 }
 
 export interface SearchDiagnostics {
+  readonly citationDirectiveClauseCount?: number | undefined;
   readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
@@ -310,20 +317,39 @@ export const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
   "exportiert",
 ]);
 
-const EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS = [
-  /\buse\s+only\s+(?:read|verified|cited)\s+(?:values|evidence|sources)\b/giu,
-  /\bverwende\s+nur\s+(?:gelesene|belegte|verifizierte)\s+(?:werte|evidenz|quellen)\b/giu,
-];
-
 /** Output evidence instructions do not ask which source symbols use another symbol. */
 export function hasSymbolRelationshipQuery(text: string): boolean {
-  const relationshipText = EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS.reduce(
-    (value, pattern) => value.replace(pattern, " "),
-    text,
+  const relationshipText = withoutEvidenceOnlyUseDirectives(
+    naturalLanguageSubjectText(text),
   ).toLowerCase();
   return [...relationshipText.matchAll(/[\p{L}\p{N}_]+/gu)].some((match) =>
     SYMBOL_RELATION_TERMS.has(match[0]),
   );
+}
+
+const RECURSIVE_TRAVERSAL_PROSE_RE =
+  /(?:^|[\s(,;!?])(?:recursi(?:on|ve(?:ly)?)|rekursi(?:on|v(?:e[rsnm]?)?))/giu;
+const RECURSION_SUFFIX_RE = /^(?:$|[\s),;!?]|\.(?:$|\s))/u;
+const RECURSION_NEGATION_RE = /(?:^|[\s(,;!?])(?:not|no|without|nicht|ohne|keine?)$/iu;
+
+function negatedRecursiveTerm(text: string, termStart: number): boolean {
+  let end = termStart;
+  while (end > 0 && /\s/u.test(text[end - 1] ?? "")) end -= 1;
+  // The longest accepted negation is "without"; include its preceding boundary.
+  return end < termStart && RECURSION_NEGATION_RE.test(text.slice(Math.max(0, end - 8), end));
+}
+
+/** Explicit prose requests qualify; paths, quoted identifiers and negated terms do not. */
+export function hasRecursiveTraversalQuery(text: string): boolean {
+  const subject = naturalLanguageSubjectText(text);
+  return [...subject.matchAll(RECURSIVE_TRAVERSAL_PROSE_RE)].some((match) => {
+    const start = match.index + Number(/^[\s(,;!?]/u.test(match[0]));
+    return (
+      RECURSION_SUFFIX_RE.test(
+        subject.slice(match.index + match[0].length, match.index + match[0].length + 2),
+      ) && !negatedRecursiveTerm(subject, start)
+    );
+  });
 }
 
 function emptyBucketCounts(): Record<CandidateBucket, number> {
@@ -437,7 +463,9 @@ function isConfigPath(scopePath: string): boolean {
 }
 
 function normalizedQueryTerms(query: RetrievalQuery): readonly string[] {
-  return queryRankingTerms(query.text);
+  return queryRankingTerms(
+    query.kind === "natural-language" ? naturalLanguageSubjectText(query.text) : query.text,
+  );
 }
 
 const CONTENT_SCORE_STOP_TERMS: ReadonlySet<string> = new Set([
@@ -506,7 +534,7 @@ function isAnchorIdentifierTerm(term: string): boolean {
 const anchorIdentifierQueryTerms: (queryText: string) => readonly string[] = memoizeByStringKey(
   QUERY_TERM_MEMO_MAX_ENTRIES,
   (queryText: string): readonly string[] =>
-    expandedQueryTerms(queryText, true).filter(isAnchorIdentifierTerm),
+    expandedQueryTerms(naturalLanguageSubjectText(queryText), true).filter(isAnchorIdentifierTerm),
 );
 
 function keepContentTerm(term: string): boolean {
@@ -649,15 +677,9 @@ function routeDeclarationContentBonus(
   const route = routeQueryTermsForSearch(query);
   if (route === undefined) return 0;
   const expectedMarker = repositoryRouteDeclarationMarker(route.method, route.path);
-  for (let index = 0; index < sourceLines.length; index += 1) {
-    const window = sourceLines.slice(index, index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES);
-    const code = window.map((line) => line.code).join("\n");
-    const structural = window.map((line) => line.structural).join("\n");
-    if (repositoryRouteDeclarationMarkers(code, structural).includes(expectedMarker)) {
-      return ROUTE_DECLARATION_BONUS;
-    }
-  }
-  return 0;
+  return repositoryRouteDeclarationWindowContains(sourceLines, expectedMarker)
+    ? ROUTE_DECLARATION_BONUS
+    : 0;
 }
 
 export function scoreContentHitsForSearch(
@@ -687,6 +709,7 @@ export function scoreContentForSearch(
   text: string,
   policy: SearchPolicy,
   scopePath?: string,
+  sourceLinesFor?: () => readonly RepositorySourceLine[],
 ): number {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
     return 0;
@@ -700,7 +723,10 @@ export function scoreContentForSearch(
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
   const tokens = contentTokenSet(text, query.caseSensitive);
-  const sourceLines = repositorySourceLines(text, scopePath);
+  const sourceLines =
+    routeQueryTermsForSearch(query) === undefined && symbolDefinitionQueryTerms(query).length === 0
+      ? []
+      : (sourceLinesFor?.() ?? repositorySourceLines(text, scopePath));
   return scoreContentHitsForSearch(
     policy,
     groups.length,
@@ -907,6 +933,15 @@ interface ScoredCandidate {
 // computation drives both ordering and the explainable ranking diagnostics (a reviewer can see WHY
 // a file was selected: which bucket, the intent-specific bucket weight, the path-term bonus, the
 // depth penalty, and — for a manifest — which ecosystem classified it).
+function queryAwareBucket(scopePath: string, terms: readonly string[]): CandidateBucket {
+  const bucket = bucketByPath(scopePath);
+  if (bucket === "low-value") return bucket;
+  const path = normalizedPath(scopePath);
+  return terms.some((term) => term.includes("/") && (path === term || path.endsWith(`/${term}`)))
+    ? "exact-path"
+    : bucket;
+}
+
 function scoreCandidate(
   file: DiscoveredFile,
   terms: readonly string[],
@@ -915,7 +950,7 @@ function scoreCandidate(
   sourceOverProse: boolean,
 ): ScoredCandidate {
   const path = file.relativePath;
-  const bucket = bucketByPath(path);
+  const bucket = queryAwareBucket(path, terms);
   const lexical = lexicalPathSignals(path, terms);
   const depth = depthPenalty(path);
   const bucketTiebreak = bucketScore(bucket, policy.intent);

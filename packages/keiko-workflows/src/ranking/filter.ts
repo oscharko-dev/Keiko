@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 // Negative-context filter for the ranker (Epic #177, Issue #182). Converts annotated
 // candidates into a kept/omitted partition with explicit CandidateOmissionReason values.
 // Priority is fixed (pre-set reason > generated > low-relevance > duplicate); a hard maxKept
@@ -19,6 +20,8 @@ export interface AnnotatedCandidate {
 
 export interface FilterOptions {
   readonly minScore: number;
+  // Optional producer ordering applies only to the existing single below-floor fallback.
+  readonly fallbackOrder?: readonly string[] | undefined;
   readonly minScoreExemptPaths?: ReadonlySet<string>;
   readonly generatedExemptPaths?: ReadonlySet<string>;
   readonly maxKept: number;
@@ -70,17 +73,18 @@ function classifyReason(
   return undefined;
 }
 
+function signal(candidate: CandidateFile, name: string): number {
+  return candidate.signals.find((entry) => entry.name === name)?.value ?? 0;
+}
+
 function compareKept(a: CandidateFile, b: CandidateFile): number {
-  if (b.score !== a.score) {
-    return b.score - a.score;
-  }
-  if (a.scopePath < b.scopePath) {
-    return -1;
-  }
-  if (a.scopePath > b.scopePath) {
-    return 1;
-  }
-  return 0;
+  return (
+    b.score - a.score ||
+    signal(b, "exact-path-match") - signal(a, "exact-path-match") ||
+    signal(b, "path-segment-affinity") - signal(a, "path-segment-affinity") ||
+    a.scopePath.split("/").length - b.scopePath.split("/").length ||
+    compareStrings(a.scopePath, b.scopePath)
+  );
 }
 
 function compareOmitted(a: OmittedContextEntry, b: OmittedContextEntry): number {
@@ -119,7 +123,7 @@ function partition(
     const reason = classifyReason(entry, options);
     if (reason === undefined) {
       kept.push(entry.candidate);
-    } else if (reason === "low-relevance") {
+    } else if (reason === "low-relevance" && !(entry.duplicate && options.omitNearDuplicates)) {
       lowRelevance.push(entry.candidate);
     } else {
       omittedEntries.push(toOmittedEntry(entry.candidate.scopePath, reason, nowMs));
@@ -152,7 +156,12 @@ export function filterCandidates(
   const nowMs = options.nowMs();
   const { kept, lowRelevance, omittedEntries } = partition(entries, options, nowMs);
   const maxKept = normalizeMaxKept(options.maxKept);
-  lowRelevance.sort(compareKept);
+  const fallbackRanks = new Map(options.fallbackOrder?.map((path, index) => [path, index]));
+  lowRelevance.sort(
+    (a, b) =>
+      (fallbackRanks.get(a.scopePath) ?? Infinity) - (fallbackRanks.get(b.scopePath) ?? Infinity) ||
+      compareKept(a, b),
+  );
   if (kept.length === 0 && maxKept > 0) {
     const fallback = lowRelevance.shift();
     if (fallback !== undefined) {

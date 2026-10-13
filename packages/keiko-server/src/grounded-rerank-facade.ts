@@ -112,6 +112,8 @@ export interface RerankSelectionInput<T> {
   readonly policy?: RerankSelectionPolicy | undefined;
   readonly applyScore?: ((candidate: T, result: RerankResult) => T) | undefined;
   readonly fallbackMode: RerankFallbackMode;
+  /** An already-admitted candidate identity; this never adds provider-visible documents. */
+  readonly requiredCandidateKey?: (candidate: T) => string | undefined;
   /**
    * Pins the gateway-config generation this call reports against. `currentGatewayConfig` is a live
    * accessor whose backing closure is replaced by the gateway-setup save route, so a caller that
@@ -483,7 +485,10 @@ export async function rerankSelection<T>(
   input: RerankSelectionInput<T>,
 ): Promise<RerankSelection<T>> {
   const elapsed = startLogTimer();
-  const selection = retainUnsubmittedCandidates(input, await resolveRerankSelection(input));
+  const selection = retainRequiredCandidates(
+    input,
+    retainUnsubmittedCandidates(input, await resolveRerankSelection(input)),
+  );
   logRerankOutcome(
     selection.diagnostics,
     input.fallbackMode,
@@ -492,6 +497,28 @@ export async function rerankSelection<T>(
     elapsed(),
   );
   return selection;
+}
+
+function retainRequiredCandidates<T>(
+  input: RerankSelectionInput<T>,
+  selection: RerankSelection<T>,
+): RerankSelection<T> {
+  const key = input.requiredCandidateKey;
+  if (key === undefined) return selection;
+  const retained: T[] = [];
+  const seen = new Set<string>();
+  for (const candidate of input.candidates) {
+    const identity = key(candidate);
+    if (identity === undefined || seen.has(identity)) continue;
+    seen.add(identity);
+    retained.push(selection.selected.find((selected) => key(selected) === identity) ?? candidate);
+  }
+  if (retained.length === 0) return selection;
+  const selected = [
+    ...retained,
+    ...selection.selected.filter((candidate) => key(candidate) === undefined),
+  ].slice(0, Math.max(0, input.topN));
+  return { selected, diagnostics: withKeptCount(selection.diagnostics, selected.length) };
 }
 
 function retainUnsubmittedCandidates<T>(

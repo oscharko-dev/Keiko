@@ -620,6 +620,7 @@ describe("bffCodeErrorKind", () => {
     ["CLARIFICATION_NEEDED", 400],
     ["NOT_FOUND", 404],
     ["DENIED", 403],
+    ["GATEWAY_ATTEMPT_ADMISSION_DENIED", 403],
     ["FORBIDDEN", 403],
     ["UNAUTHORIZED", 401],
     ["CONFLICT", 409],

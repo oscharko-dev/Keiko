@@ -10,6 +10,9 @@
 
 import {
   buildPackCitationIndex,
+  classifyGroundedAnswerKind,
+  missingCitationMarker,
+  missingCitationMarkerFor,
   packHasUsableEvidence,
   reconcileInlineCitations,
   type PackCitationIndex,
@@ -25,6 +28,8 @@ import type {
   EvalFloorResult,
   LineRange,
 } from "@oscharko-dev/keiko-contracts";
+
+import type { GroundedAnswerKind } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 type FaithfulnessVariant =
   "faithful" | "hallucinated-citation" | "confident-over-empty" | "refusal";
@@ -175,6 +180,74 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
   },
 ];
 
+interface AnswerKindFixture {
+  readonly name: string;
+  readonly text: string;
+  readonly kind: GroundedAnswerKind;
+  readonly warns: boolean;
+}
+
+const ANSWER_KIND_FIXTURES: readonly AnswerKindFixture[] = [
+  { name: "substantive", text: "The route validates sessions.", kind: "answer", warns: true },
+  {
+    name: "clarification-en",
+    text: "Which version do you mean?",
+    kind: "clarification",
+    warns: false,
+  },
+  {
+    name: "clarification-de",
+    text: "Welche Version meinst du?",
+    kind: "clarification",
+    warns: false,
+  },
+  {
+    name: "insufficiency",
+    text: "Missing evidence: [src/auth/login.ts]",
+    kind: "insufficiency",
+    warns: false,
+  },
+  {
+    name: "refusal",
+    text: connectedSearchNoEvidenceAnswer("What evidence exists?"),
+    kind: "refusal",
+    warns: false,
+  },
+  {
+    name: "mixed-claim",
+    text: "The route validates sessions. Which version do you mean?",
+    kind: "answer",
+    warns: true,
+  },
+];
+
+export type GroundedFaithfulnessEvalVariant = "baseline" | "treat-clarification-as-answer";
+
+function answerKindScores(variant: GroundedFaithfulnessEvalVariant): {
+  readonly answerKindAccuracy: number;
+  readonly missingCitationAccuracy: number;
+  readonly failures: readonly string[];
+} {
+  let kinds = 0;
+  let warnings = 0;
+  const failures: string[] = [];
+  for (const fixture of ANSWER_KIND_FIXTURES) {
+    const actualKind = classifyGroundedAnswerKind(fixture.text);
+    const mutated = variant === "treat-clarification-as-answer" && actualKind === "clarification";
+    const kind = mutated ? "answer" : actualKind;
+    const marker = mutated ? missingCitationMarker(1) : missingCitationMarkerFor(fixture.text, 1);
+    if (kind === fixture.kind) kinds += 1;
+    else failures.push(`answer-kind mismatch in '${fixture.name}'`);
+    if ((marker !== undefined) === fixture.warns) warnings += 1;
+    else failures.push(`citation-warning mismatch in '${fixture.name}'`);
+  }
+  return {
+    answerKindAccuracy: rate(kinds, ANSWER_KIND_FIXTURES.length),
+    missingCitationAccuracy: rate(warnings, ANSWER_KIND_FIXTURES.length),
+    failures,
+  };
+}
+
 function indexFor(fixture: FaithfulnessFixture): PackCitationIndex {
   return buildPackCitationIndex([packFor(fixture)]);
 }
@@ -205,6 +278,8 @@ export interface GroundedFaithfulnessScorecard {
   // Of the empty-evidence fixtures, the fraction whose answer text is correctly classified:
   // the canonical refusal abstains, while a confident answer is detected as a bad output.
   readonly abstentionOnEmptyRate: number;
+  readonly answerKindAccuracy: number;
+  readonly missingCitationAccuracy: number;
   readonly failures: readonly string[];
 }
 
@@ -230,55 +305,69 @@ function emptyEvidenceVariantMatched(fixture: FaithfulnessFixture): boolean {
   return abstained === (fixture.variant === "refusal");
 }
 
-export function runGroundedFaithfulnessEval(): GroundedFaithfulnessScorecard {
-  const failures: string[] = [];
-  const hallucinated = FIXTURES.filter((f) => f.variant === "hallucinated-citation");
-  const faithful = FIXTURES.filter((f) => f.variant === "faithful");
-  const empty = FIXTURES.filter(
-    (f) => f.variant === "confident-over-empty" || f.variant === "refusal",
+function unsupportedCitationsMatch(fixture: FaithfulnessFixture): boolean {
+  const result = reconcileInlineCitations(fixture.answerText, indexFor(fixture));
+  return citationsMatchExpected(
+    result.unsupported.map((citation) => citation.raw),
+    fixture.expectedUnsupportedCitations,
   );
+}
 
-  let detected = 0;
-  for (const fixture of hallucinated) {
-    const result = reconcileInlineCitations(fixture.answerText, indexFor(fixture));
-    const unsupported = result.unsupported.map((citation) => citation.raw);
-    if (citationsMatchExpected(unsupported, fixture.expectedUnsupportedCitations)) {
-      detected += 1;
-    } else {
-      failures.push(`citation reconciliation mismatch in '${fixture.name}'`);
-    }
+function noUnsupportedCitations(fixture: FaithfulnessFixture): boolean {
+  return reconcileInlineCitations(fixture.answerText, indexFor(fixture)).unsupported.length === 0;
+}
+
+function fixtureScore(
+  fixtures: readonly FaithfulnessFixture[],
+  predicate: (fixture: FaithfulnessFixture) => boolean,
+  message: string,
+  failures: string[],
+): number {
+  let hits = 0;
+  for (const fixture of fixtures) {
+    if (predicate(fixture)) hits += 1;
+    else failures.push(`${message} in '${fixture.name}'`);
   }
+  return rate(hits, fixtures.length);
+}
 
-  let clean = 0;
-  for (const fixture of faithful) {
-    const result = reconcileInlineCitations(fixture.answerText, indexFor(fixture));
-    if (result.unsupported.length === 0) {
-      clean += 1;
-    } else {
-      failures.push(`false-positive unsupported flag in '${fixture.name}'`);
-    }
-  }
-
-  let abstained = 0;
-  for (const fixture of empty) {
-    if (emptyEvidenceVariantMatched(fixture)) {
-      abstained += 1;
-    } else {
-      failures.push(`empty-evidence answer mismatch in '${fixture.name}'`);
-    }
-  }
-
+export function runGroundedFaithfulnessEval(
+  variant: GroundedFaithfulnessEvalVariant = "baseline",
+): GroundedFaithfulnessScorecard {
+  const kindScores = answerKindScores(variant);
+  const failures: string[] = [...kindScores.failures];
   return {
-    fixtures: FIXTURES.length,
-    unsupportedDetectionRate: rate(detected, hallucinated.length),
-    citationPrecision: rate(clean, faithful.length),
-    abstentionOnEmptyRate: rate(abstained, empty.length),
+    fixtures: FIXTURES.length + ANSWER_KIND_FIXTURES.length,
+    answerKindAccuracy: kindScores.answerKindAccuracy,
+    missingCitationAccuracy: kindScores.missingCitationAccuracy,
+    unsupportedDetectionRate: fixtureScore(
+      FIXTURES.filter((f) => f.variant === "hallucinated-citation"),
+      unsupportedCitationsMatch,
+      "citation reconciliation mismatch",
+      failures,
+    ),
+    citationPrecision: fixtureScore(
+      FIXTURES.filter((f) => f.variant === "faithful"),
+      noUnsupportedCitations,
+      "false-positive unsupported flag",
+      failures,
+    ),
+    abstentionOnEmptyRate: fixtureScore(
+      FIXTURES.filter((f) => f.variant === "confident-over-empty" || f.variant === "refusal"),
+      emptyEvidenceVariantMatched,
+      "empty-evidence answer mismatch",
+      failures,
+    ),
     failures,
   };
 }
 
 type GroundedFaithfulnessBudgetMetric =
-  "minUnsupportedDetectionRate" | "minCitationPrecision" | "minAbstentionOnEmptyRate";
+  | "minUnsupportedDetectionRate"
+  | "minCitationPrecision"
+  | "minAbstentionOnEmptyRate"
+  | "minAnswerKindAccuracy"
+  | "minMissingCitationAccuracy";
 
 export type GroundedFaithfulnessBudget = EvalBudget<GroundedFaithfulnessBudgetMetric>;
 
@@ -289,6 +378,8 @@ export const DEFAULT_GROUNDED_FAITHFULNESS_BUDGET: GroundedFaithfulnessBudget = 
   minUnsupportedDetectionRate: 1,
   minCitationPrecision: 1,
   minAbstentionOnEmptyRate: 1,
+  minAnswerKindAccuracy: 1,
+  minMissingCitationAccuracy: 1,
 };
 
 function missesFiniteFloor(value: number, floor: number): boolean {
@@ -308,6 +399,12 @@ export function evaluateGroundedFaithfulnessBudget(
     ],
     ["citationPrecision", scorecard.citationPrecision, budget.minCitationPrecision],
     ["abstentionOnEmptyRate", scorecard.abstentionOnEmptyRate, budget.minAbstentionOnEmptyRate],
+    ["answerKindAccuracy", scorecard.answerKindAccuracy, budget.minAnswerKindAccuracy],
+    [
+      "missingCitationAccuracy",
+      scorecard.missingCitationAccuracy,
+      budget.minMissingCitationAccuracy,
+    ],
   ] as const;
   for (const [name, value, floor] of checks) {
     if (missesFiniteFloor(value, floor)) failures.push(name);

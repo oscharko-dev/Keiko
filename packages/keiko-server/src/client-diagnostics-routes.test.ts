@@ -1,4 +1,5 @@
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import {
   resetServerLogger,
   setSupportIncidentTriggerForTests,
@@ -40,6 +41,125 @@ import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
 const CORRELATION_ID = "diagnostics-route-test";
 const CLIENT_TS = "2026-08-21T10:00:00.000Z";
+
+describe("scope notice and evidence inspection ingestion", () => {
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
+  afterEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+    resetServerLogger();
+  });
+
+  it("persists a body-free scope notice through the registered writer", async () => {
+    const sink = captureServerLog();
+    const scopeNotice = { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 };
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private-message-canary",
+          clientTs: CLIENT_TS,
+          correlationId: "scope-notice-123",
+          scopeNotice,
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const event = sink.events.find((candidate) => candidate.op === "client.scope.notice");
+    expect(event).toBeDefined();
+    expect(
+      expectActivityLogProof("client.scope.notice.line", formatActivityLogProofLine(event ?? {})),
+    ).toMatchObject({
+      ...scopeNotice,
+      correlationId: "scope-notice-123",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(event?.level).toBe("info");
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(JSON.stringify(event)).not.toContain("private-message-canary");
+    if (event === undefined) throw new Error("Missing scope notice event");
+    expect(
+      observedFailureQuery([event]).events.filter((entry) => entry.parsed.view.op === event.op),
+    ).toHaveLength(0);
+  });
+
+  it.each(["summary-expanded", "file-table-opened", "manifest-fetch-failed"])(
+    "persists %s inspection with its actual failure disposition",
+    async (reason) => {
+      const sink = captureServerLog();
+      const failed = reason === "manifest-fetch-failed";
+      const evidenceInspection = { reason, readFileCount: 2, omittedFileCount: 1 };
+      const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"];
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private-inspection-canary",
+            clientTs: CLIENT_TS,
+            correlationId: "inspection-123",
+            evidenceInspection,
+            ...(failed
+              ? {
+                  errorKind: "unavailable",
+                  errorEvidence: { errorClass: "TypeError", frames, causeChain: ["TypeError"] },
+                }
+              : {}),
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+      const event = sink.events.find((candidate) => candidate.op === "client.evidence.inspected");
+      expect(event).toBeDefined();
+      expect(
+        expectActivityLogProof(
+          "client.evidence.inspected.line",
+          formatActivityLogProofLine(event ?? {}),
+        ),
+      ).toMatchObject({
+        ...evidenceInspection,
+        correlationId: "inspection-123",
+        ...(failed
+          ? {
+              errorKind: "unavailable",
+              errorClass: "TypeError",
+              frames: redactLogFields({ frames })?.frames,
+              causeChain: ["TypeError"],
+            }
+          : {}),
+      });
+      expect(event?.level).toBe(failed ? "warn" : "info");
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      expect(JSON.stringify(event)).not.toContain("private-inspection-canary");
+      if (event === undefined) throw new Error("Missing evidence inspection event");
+      expect(
+        observedFailureQuery([event]).events.filter((entry) => entry.parsed.view.op === event.op),
+      ).toHaveLength(failed ? 1 : 0);
+    },
+  );
+
+  it("refuses a path-bearing scope report without retaining its contents", async () => {
+    const sink = captureServerLog();
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private-message-canary",
+          clientTs: CLIENT_TS,
+          correlationId: "scope-notice-123",
+          scopeNotice: {
+            reason: "narrowed-to-file",
+            scopeKind: "files",
+            pathCount: 1,
+            path: "private/path.ts",
+          },
+        }),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect(sink.events.some((candidate) => candidate.op === "client.scope.notice")).toBe(false);
+    expect(sink.lines().join("\n")).not.toContain("private/path.ts");
+    expect(sink.lines().join("\n")).not.toContain("private-message-canary");
+  });
+});
 
 function request(rawBody: string): IncomingMessage {
   const req = new IncomingMessage(new Socket());
@@ -3237,6 +3357,38 @@ describe("actual source reveal lifecycle", () => {
     },
   );
 });
+
+it.each(["started", "settled"] as const)(
+  "persists code copy feedback %s through the existing activity log",
+  async (phase) => {
+    const sink = captureServerLog();
+    const body = {
+      kind: "stage",
+      stage: "markdown copy feedback",
+      phase,
+      ordinal: 1,
+      correlationId: "copy-feedback-123",
+      ...(phase === "settled" ? { durationMs: 1500 } : {}),
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    const events = clientStageEvents(sink, `client.stage.${phase}`);
+    expect(events).toHaveLength(1);
+    const line = formatActivityLogProofLine(events[0] ?? {});
+    if (phase === "started") expectActivityLogProof("client.stage.started.line", line);
+    else expectActivityLogProof("client.stage.settled.line", line);
+    expect(JSON.parse(line)).toMatchObject({
+      level: "info",
+      correlationId: body.correlationId,
+      stage: "markdown-copy-feedback",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(clientDiagnosticEvents(sink)).toEqual([]);
+    const invalid = { ...body, content: "PRIVATE_CODE" };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(invalid)))).status).toBe(400);
+    expect(sink.lines().join("\n")).not.toContain("PRIVATE_CODE");
+  },
+);
 
 it("persists closed model selection stage evidence through the existing formatter at info", async () => {
   const sink = captureServerLog();

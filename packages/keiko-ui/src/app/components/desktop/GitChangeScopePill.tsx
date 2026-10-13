@@ -1,5 +1,6 @@
 "use client";
 
+import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate as I18nTranslate,
@@ -839,7 +840,7 @@ function PendingGitChangePillItem({
   const label = pendingComparisonLabel(comparison);
   const accessibleLabel = t("gitChangeScope.pending.accessible", { label });
   return (
-    <span className="scope-pill-wrap">
+    <span className={`scope-pill-wrap ${scopeNoticeStyles.cmpPillWrap}`}>
       <span className="scope-pill" data-testid="git-change-scope-pending">
         <span aria-hidden="true">⇄</span>
         <span aria-label={accessibleLabel}>{label}</span>
@@ -916,7 +917,7 @@ function GitChangePillItem(props: GitChangePillItemProps): ReactNode {
     descriptionResultState(descriptionActions.result) ?? scope.descriptionStatus;
 
   return (
-    <span className="scope-pill-wrap">
+    <span className={`scope-pill-wrap ${scopeNoticeStyles.cmpPillWrap}`}>
       <GitChangePillRow
         scope={scope}
         status={displayedStatus}

@@ -1038,6 +1038,13 @@ export interface InternalWorkspaceByteRead {
 }
 
 export interface InternalWorkspaceTextRead {
+  readonly snapshot?:
+    | {
+        readonly canonicalRoot: string;
+        readonly before: WorkspaceStat;
+        readonly descriptor: WorkspaceStat;
+      }
+    | undefined;
   readonly content: string;
   readonly sizeBytes: number;
   readonly stat: WorkspaceStat;
@@ -1045,6 +1052,7 @@ export interface InternalWorkspaceTextRead {
 
 interface StableRawFileContent extends RawFileContent {
   readonly stat: WorkspaceStat;
+  readonly descriptorStat: WorkspaceStat;
 }
 
 interface ReadableWorkspaceFile {
@@ -1184,6 +1192,7 @@ function readRawContent(
     rawText: read.rawText,
     truncated: false,
     stat: after,
+    descriptorStat: read.stat,
   };
 }
 
@@ -1291,10 +1300,13 @@ export function readWorkspaceFilePrefixForEvidence(
   relPath: string,
   maxBytes: number,
   fs: WorkspaceFs,
+  assertBeforeRead?: () => void,
 ): string | undefined {
   const readPrefix = fs.readFileUtf8Prefix;
   if (readPrefix === undefined) return undefined;
+  assertBeforeRead?.();
   const target = resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
+  assertBeforeRead?.();
   let rawText: string;
   try {
     rawText = readPrefix(target.resolvedPath, maxBytes, "reject", target.stat);
@@ -1302,6 +1314,7 @@ export function readWorkspaceFilePrefixForEvidence(
     mapPrefixReadFailure(error, target, maxBytes);
   }
   assertStablePrefixRead(workspace, fs, target);
+  assertBeforeRead?.();
   return redact(rawText, [], { preserveSourceLineBreaks: true });
 }
 
@@ -1312,11 +1325,30 @@ export function readWorkspaceFileTextForInternalUse(
   opts: ReadOptions,
   fs: WorkspaceFs,
   lane: WorkspaceContentLane,
+  preserveSourceLineBreaks = false,
+  assertBeforeRead?: () => void,
 ): InternalWorkspaceTextRead {
-  const target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
+  let target: ReadableWorkspaceFile;
+  try {
+    target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
+  } catch (error) {
+    assertBeforeRead?.();
+    throw error;
+  }
+  assertBeforeRead?.();
   const raw = readRawContent(workspace, fs, target, opts);
   return {
-    content: lane === "editor" ? raw.rawText : redact(raw.rawText),
+    ...(preserveSourceLineBreaks
+      ? {
+          snapshot: {
+            canonicalRoot: target.realBase,
+            before: target.stat,
+            descriptor: raw.descriptorStat,
+          },
+        }
+      : {}),
+    content:
+      lane === "editor" ? raw.rawText : redact(raw.rawText, [], { preserveSourceLineBreaks }),
     sizeBytes: raw.sizeBytes,
     stat: raw.stat,
   };

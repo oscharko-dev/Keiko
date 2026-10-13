@@ -260,6 +260,85 @@ async function runAdapters(useContext: boolean): Promise<RunAllResult> {
 }
 
 describe("StructuralAdapterRequestContext", () => {
+  it("keeps an admitted late source inside the shared code-index file ceiling", async () => {
+    const sourcePaths = Array.from({ length: 8 }, (_, index) => `src/early-${String(index)}.ts`);
+    const selectedPath = "src/zz-addressed.ts";
+    const files = Object.fromEntries<string>([
+      ...sourcePaths.map((path, index): readonly [string, string] => [
+        path,
+        `export const early${String(index)} = 1;`,
+      ]),
+      [
+        selectedPath,
+        "export function remainingAllowance(limit: number, used: number) { return limit - used; }",
+      ],
+    ]);
+    const limits = { ...BOUNDED_REQUEST_LIMITS, maxFilesScanned: 4 };
+    const baseline = createStructuralAdapterRequestContext(scope(), limits, memFs(ROOT, files));
+    expect(
+      (await baseline.codeIntelligenceIndex()).symbols.some(
+        (symbol) => symbol.scopePath === selectedPath,
+      ),
+    ).toBe(false);
+    const deps = { nowMs: FIXED_NOW, preferredCodeIntelligenceSourcePaths: [selectedPath] };
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      limits,
+      memFs(ROOT, files),
+      deps,
+    );
+    const first = context.codeIntelligenceIndex();
+    expect(context.codeIntelligenceIndex()).toBe(first);
+    const index = await first;
+    expect(index.symbols).toContainEqual(
+      expect.objectContaining({
+        name: "remainingAllowance",
+        scopePath: selectedPath,
+        parser: "typescript-compiler-ast",
+      }),
+    );
+    expect(index.filesIndexed).toBe(4);
+    expect(index.candidateLimitReached).toBe(true);
+    expect(context.isCodeIntelligenceSourceCurrent(selectedPath)).toBe(true);
+    expect(context.diagnostics().codeIndexBuildCount).toBe(1);
+    expect(context.diagnostics().candidateInventoryBuildCount).toBe(1);
+  });
+
+  it("fixes admitted-source preferences when the shared index is first requested", async () => {
+    const preferred = ["src/api/client.ts"];
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      { ...BOUNDED_REQUEST_LIMITS, maxFilesScanned: 1 },
+      memFs(ROOT, FILES),
+      { nowMs: FIXED_NOW, preferredCodeIntelligenceSourcePaths: preferred },
+    );
+    const first = context.codeIntelligenceIndex();
+    preferred.splice(0, 1, "src/math.ts");
+    expect(context.codeIntelligenceIndex()).toBe(first);
+    const index = await first;
+    expect(index.symbols.map((symbol) => symbol.scopePath)).toEqual(["src/api/client.ts"]);
+    expect(context.isCodeIntelligenceSourceCurrent("src/math.ts")).toBe(false);
+    expect(context.diagnostics().codeIndexBuildCount).toBe(1);
+  });
+
+  it("does not admit a preferred source outside the context candidate policy", async () => {
+    const selectedPath = "src/api/client.ts";
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      { ...BOUNDED_REQUEST_LIMITS, maxFilesScanned: 1 },
+      memFs(ROOT, FILES),
+      {
+        nowMs: FIXED_NOW,
+        preferredCodeIntelligenceSourcePaths: [selectedPath, "../outside.ts"],
+        isCandidateAllowed: (path) => path !== selectedPath,
+      },
+    );
+    const index = await context.codeIntelligenceIndex();
+    expect(index.symbols.some((symbol) => symbol.scopePath === selectedPath)).toBe(false);
+    expect(index.filesIndexed).toBe(1);
+    expect(context.isCodeIntelligenceSourceCurrent(selectedPath)).toBe(false);
+  });
+
   it("shares one promise per structural product and one candidate inventory across products", async () => {
     const searchScope = scope();
     const baseline = countingFs();
@@ -354,6 +433,7 @@ describe("StructuralAdapterRequestContext", () => {
     expect(thrownBy(() => context.candidatePaths())).toBe(sharedReason);
     expect(thrownBy(() => context.candidatePaths())).toBe(sharedReason);
     expect(statCalls).toBe(1);
+    expect(context.diagnostics().endpointGraphBuildCount).toBe(1);
   });
 
   it("preserves adapter output when the request-local context replaces direct builders", async () => {
@@ -1234,9 +1314,14 @@ describe("StructuralAdapterRequestContext", () => {
       let contentReads = 0;
       const fs: WorkspaceFs = {
         ...base,
-        // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
-        // readFileUtf8 fallback was removed), so the counter/clock-advance has to live there —
-        // mirrors countingFs's own readFileUtf8SameDescriptor wrapper above.
+        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+          const read = base.readFileBytes;
+          if (read === undefined) throw new TypeError("byte fixture missing");
+          const result = await read(absolutePath, maxBytes, hardLinkPolicy, expected);
+          contentReads += 1;
+          currentMs = 2;
+          return result;
+        },
         readFileUtf8SameDescriptor: (
           absolutePath,
           maxBytes,
@@ -1807,5 +1892,197 @@ describe("shared streaming filename searches", () => {
       release();
       await pending;
     }
+  });
+});
+
+describe("admitted endpoint graph source preferences", () => {
+  it("prioritizes only an existing admitted source before the unchanged structural file cap", async () => {
+    const files = {
+      "src/a.ts": "export const unrelated = 1;",
+      "src/z.ts": 'const routes = [{ method: "POST", path: "/api/items", handler: handleItem }];',
+    };
+    const fs = memFs(ROOT, files);
+    const limits = { ...PUBLIC_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const selected = scope();
+    const context = createStructuralAdapterRequestContext(selected, limits, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const natural = {
+      ...query(),
+      kind: "natural-language" as const,
+      text: "Trace POST /api/items",
+    };
+    const atoms = await endpointContractAdapter.lookup(selected, natural, limits, fs, {
+      requestContext: context,
+      endpointPreferredSourcePaths: ["src/z.ts"],
+    });
+    expect(atoms.map((atom) => atom.scopePath)).toEqual(["src/z.ts"]);
+    const coverage = await endpointContractAdapter.coverage?.(selected, limits, fs, {
+      requestContext: context,
+      endpointPreferredSourcePaths: ["src/z.ts"],
+    });
+    expect(coverage?.filesIndexed).toBe(1);
+    expect(context.diagnostics().endpointGraphBuildCount).toBe(1);
+    expect(context.diagnostics().candidateInventoryBuildCount).toBe(1);
+  });
+});
+
+describe("endpoint preference isolation", () => {
+  const preferredFiles = {
+    "src/a.ts": "export const unrelated = 1;",
+    "src/y.ts": 'const routes = [{ method: "POST", path: "/api/other", handler: other }];',
+    "src/z.ts": 'const routes = [{ method: "POST", path: "/api/items", handler: handleItem }];',
+  };
+  const preferredLimits = { ...PUBLIC_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+  it("captures mutation-safe preferences and returns each concurrent graph for its own key", async () => {
+    const fs = memFs(ROOT, preferredFiles);
+    const selected = scope();
+    const context = createStructuralAdapterRequestContext(selected, preferredLimits, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const preference = ["src/z.ts"];
+    const first = context.endpointContractGraph(preference);
+    preference[0] = "src/y.ts";
+    const second = context.endpointContractGraph(preference);
+    expect(context.endpointContractGraph(["src/y.ts", "src/y.ts"])).toBe(second);
+    const [graphA, graphB] = await Promise.all([first, second]);
+    expect(graphA.routes.map((route) => route.scopePath)).toEqual(["src/z.ts"]);
+    expect(graphB.routes.map((route) => route.scopePath)).toEqual(["src/y.ts"]);
+    expect(context.diagnostics().endpointGraphBuildCount).toBe(2);
+    const deps = { requestContext: context, endpointPreferredSourcePaths: ["src/z.ts"] };
+    const natural = {
+      ...query(),
+      kind: "natural-language" as const,
+      text: "Trace POST /api/items",
+    };
+    expect(
+      (await endpointContractAdapter.lookup(selected, natural, preferredLimits, fs, deps)).map(
+        (atom) => atom.scopePath,
+      ),
+    ).toEqual(["src/z.ts"]);
+    expect(
+      (await endpointContractAdapter.coverage?.(selected, preferredLimits, fs, deps))?.filesIndexed,
+    ).toBe(1);
+    expect(context.diagnostics().endpointGraphBuildCount).toBe(3);
+  });
+
+  it.each(["../outside.ts", "missing.ts", "src/z.ts"])(
+    "does not append a path absent from the selected inventory: %s",
+    async (preferred) => {
+      const fs = memFs(ROOT, preferredFiles);
+      const context = createStructuralAdapterRequestContext(
+        scope(["src/a.ts"]),
+        preferredLimits,
+        fs,
+        { nowMs: FIXED_NOW },
+      );
+      const graph = await context.endpointContractGraph([preferred]);
+      expect(graph.routes).toEqual([]);
+      expect(graph.diagnostics.filesScanned).toBe(1);
+      expect(context.candidatePaths()).toEqual(["src/a.ts"]);
+    },
+  );
+
+  it("declines a preferred path denied after lexical admission", async () => {
+    const fs = memFs(ROOT, preferredFiles);
+    let denied = false;
+    const context = createStructuralAdapterRequestContext(scope(), preferredLimits, fs, {
+      nowMs: FIXED_NOW,
+      isCandidateAllowed: (path) => !denied || path !== "src/z.ts",
+    });
+    const result = await context.searchText(
+      { ...query(), kind: "natural-language", text: "POST /api/items" },
+      preferredLimits,
+    );
+    expect(result.atoms.some((atom) => atom.scopePath === "src/z.ts")).toBe(true);
+    denied = true;
+    const graph = await context.endpointContractGraph(["src/z.ts"]);
+    expect(graph.routes).toEqual([]);
+    expect(graph.diagnostics.filesScanned).toBe(1);
+  });
+
+  it("refuses a preferred source whose descriptor snapshot changes during its admitted read", async () => {
+    const base = memFs(ROOT, preferredFiles);
+    let changed = false;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (path) => {
+        const observed = base.stat(path);
+        return changed && path.endsWith("/src/z.ts")
+          ? { ...observed, size: observed.size + 1 }
+          : observed;
+      },
+      readFileUtf8SameDescriptor: (path, cap, policy, expected) => {
+        const result = base.readFileUtf8SameDescriptor?.(path, cap, policy, expected);
+        if (result === undefined) throw new Error("Missing descriptor reader");
+        if (path.endsWith("/src/z.ts")) changed = true;
+        return result;
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), preferredLimits, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const graph = await context.endpointContractGraph(["src/z.ts"]);
+    expect(graph.routes).toEqual([]);
+    expect(graph.diagnostics.filesSkipped).toBe(1);
+  });
+});
+
+describe("canonical endpoint preference identity", () => {
+  it("filters unknown preferences before the existing cap and reuses an equivalent admitted key", async () => {
+    const fs = memFs(ROOT, {
+      "src/a.ts": "export const unrelated = 1;",
+      "src/z.ts": 'const routes = [{ method: "POST", path: "/api/items", handler: handleItem }];',
+    });
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      { ...PUBLIC_SEARCH_LIMITS, maxFilesScanned: 1 },
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    const first = context.endpointContractGraph(["missing.ts", "src/z.ts"]);
+    expect((await first).routes.map((route) => route.scopePath)).toEqual(["src/z.ts"]);
+    expect(context.endpointContractGraph(["src/z.ts", "missing.ts"])).toBe(first);
+    expect(context.diagnostics().endpointGraphBuildCount).toBe(1);
+  });
+
+  it("declines index-source certification without strong descriptor metadata", async () => {
+    const base = memFs(ROOT, { "src/a.ts": "export function admitted() { return true; }" });
+    const fs = {
+      ...base,
+      stat: (path: string): ReturnType<WorkspaceFs["stat"]> => {
+        const result = { ...base.stat(path) };
+        delete result.mtimeNs;
+        delete result.ctimeNs;
+        return result;
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), PUBLIC_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    await context.codeIntelligenceIndex();
+    expect(context.isCodeIntelligenceSourceCurrent("src/a.ts")).toBe(false);
+    expect(context.isCodeIntelligenceSourceCurrent("missing.ts")).toBe(false);
+    expect(context.diagnostics().codeIndexBuildCount).toBe(1);
+  });
+});
+
+describe("eligible endpoint preference identity", () => {
+  it("filters an admitted non-source file before capping and memoizing endpoint preferences", async () => {
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      { ...PUBLIC_SEARCH_LIMITS, maxFilesScanned: 1 },
+      memFs(ROOT, {
+        "README.md": "Documentation",
+        "src/a.ts": "export const unrelated = true;",
+        "src/z.ts": 'const routes = [{ method: "POST", path: "/api/items", handler: handleItem }];',
+      }),
+      { nowMs: FIXED_NOW },
+    );
+    const first = context.endpointContractGraph(["README.md", "src/z.ts"]);
+    expect((await first).routes.map((route) => route.scopePath)).toEqual(["src/z.ts"]);
+    expect(context.endpointContractGraph(["src/z.ts"])).toBe(first);
+    expect(context.diagnostics().endpointGraphBuildCount).toBe(1);
   });
 });

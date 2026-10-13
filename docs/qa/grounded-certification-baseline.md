@@ -114,3 +114,126 @@ The gate emits evidence only when all six proof areas pass together. Its negativ
 the ≥ 0.95 ANN recall floor, reranker-reversed and embedding-flat regressions, the tautological
 evaluation control, neutral-purpose rejection for editor assembly, and fail-closed ANN fallback
 diagnostics live.
+
+## Connected-folder retrieval incident (#3881 / #3882)
+
+The owner's later ordinary-folder scale requirement is recorded in the
+[delivery plan](connected-chat-retrieval-plan.md). Pointed same-port observations at
+`70bbffe82f13b7b855c4ce62262cd3493797a786` over 100,000 synthetic non-Git files are preserved in
+[body-free evidence](evidence/3881/ordinary-folder-query-match-scale.json). Cold matching read
+100,000 bodies (73,365,218 bytes) in 39,172 ms; unchanged warm matching read zero bodies in
+17,026 ms. One changed target required one fresh scan read in 17,047 ms; a novel query required
+100,000 scan reads in 35,043 ms. Every unrestricted mode freshly enumerated all 100,000 files,
+but retained only the unchanged 200-hit cap and therefore reported `match-cap` incomplete coverage.
+Separate real evidence reads verified the original or changed synthetic fact. Public known-fit
+observation and final excerpts remain live; these counts do not imply a zero-read grounded answer.
+The two 50 ms deadline/cancel controls retained truthful incomplete reasons and settled all readers
+and iterators. These are single-sample workspace observations, not a latency floor, complete model
+qualification, or a substitute for the unchanged certification gates below.
+
+The incident cases extend the existing retrieval gates without changing their floors. Historical
+workspace cases still exercise `searchText` with the sanctioned `memFs` adapter. Incident cases
+materialize the inline synthetic repository and exercise the production conversation-continuity
+entry point and connected-context orchestrator. They therefore observe admission, excerpt windows,
+selection floors and the actual files retained for the answer. Neutral oversized documentation
+forces the known-fit folder context to report over-capacity rather than concealing a retrieval miss
+by supplying the entire tiny fixture. A bounded, safely initialized fixture Git repository preserves
+the existing generated-file exclusion policy; an ordinary folder's generated-directory text remains covered by
+its separate historical positive control.
+
+| Case family                              | Languages       | Archived fixture discovery at `3d46ff9ac`    |
+| ---------------------------------------- | --------------- | -------------------------------------------- |
+| `explicit-relative-path`                 | English, German | green                                        |
+| `bare-basename-collision`                | English, German | green                                        |
+| `vitest-stack-trace-node-modules`        | English, German | green                                        |
+| `path-only-in-previous-assistant-answer` | English, German | orphan-history fixture: no selected evidence |
+| `conversational-orientation-follow-up`   | English, German | orphan-history fixture: metadata selected    |
+| `floor-outlier-explicit-file`            | English, German | green                                        |
+| `generated-and-node-modules-ignored`     | shared control  | green: zero generated leaks                  |
+
+The original assistant-referent and orientation fixtures began with an orphan assistant message.
+The canonical `store.listGatewayMessages` correctly excluded that message. Their archived failures
+therefore describe that fixture setup, not an eligible-history continuity regression. The historical
+metric output remains traceable below and is not relabeled as current eligible-chat evidence.
+Several literal cases were already green; each owning child proves remaining gaps with focused
+failing-first controls rather than manufacturing red cases.
+
+The corrected fixture in `ef2947375` prepends a neutral user question, "Explain the connected feature
+validation routine.", before the same assistant message. The user wording contains no target path
+or copied ranking expectation. Both languages and all four original row queries, files, target
+paths, line predicates and floors remain unchanged. Direct `evaluateCase` calls through the built
+production continuity and orchestrator establish the authoritative valid-exchange proof:
+
+| Valid-exchange family                    | Languages       | Before continuity producer (`a6ead363c` + corrected fixture) | After producer `d334b552a`                |
+| ---------------------------------------- | --------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| `path-only-in-previous-assistant-answer` | English, German | top/line false; recall@5 and MRR 0; generated leaks 0        | top/line true; recall/MRR/nDCG 1; leaks 0 |
+| `conversational-orientation-follow-up`   | English, German | top/line false; recall@5 and MRR 0; generated leaks 0        | top/line true; recall/MRR/nDCG 1; leaks 0 |
+
+Each four-row replay uses the same corrected eligible exchange. Body-free results are preserved in
+`3884-valid-history-before.log` and `3884-valid-history-after.log` in the task evidence artifacts.
+The post-fix run independently rebuilt only the server package and evaluated those unchanged rows;
+it does not claim the final full retrieval or quality matrix is complete.
+
+Archived body-free `npm run check:retrieval-quality` output from the original fixture discovery:
+
+```text
+retrieval-quality: cases=29 top1=86.2% recall@5=86.2% mrr=0.862 ndcg@5=0.859 line-hit=86.2% generated-leaks=0.
+```
+
+The grounded semantic corpus additionally contains two identically named files in different
+directories, with path-discriminating questions. `basename-tie-alphabetical` flattens candidate
+scores before production fusion and disables the scripted reranker, so production tie resolution
+must fail the unchanged grounded floors. The shared regression probe runner checks that this
+injected ranking defect cannot pass unnoticed. Existing `reranker-off`, `reranker-reversed` and
+`embedding-flat` controls remain in place.
+
+The Activity Log incident scenario drives a healthy grounded ask through the real producer,
+persisted writer and `analyzeLogText` reader. It asserts supported evidence, complete evidence
+classes, one correlation and the registered read/omission/coverage counters without fixture bodies
+or paths in the log. A second scenario injects a genuine workspace-detection dependency failure
+beside that healthy control and exercises the existing canonical support-report reconstruction.
+Healthy user-reported reports intentionally retain `no-registered-failure` on their incident
+selection; the test does not invent a fault to call that selection complete. The actual dependency
+failure report is complete with no sufficiency gaps. Every new incident case also passes through
+the shared regression-probe runner with an omitted-addressed-file or generated-leak bad-output
+injection, preserving its golden paths and the existing correctness floors.
+
+Canonical-report revalidation additionally exposed a genuine `git.process.failed` from the eval's
+unborn Git fixture. Although the raw analyzer reported supported, complete evidence, the private
+report honestly retained `evidence-partial`; these are distinct verdicts. The eval now initializes
+and commits its synthetic repository through the existing bounded, config-isolated Git runner,
+with an empty template and fixture-owned identity. Source contents and the four eligible-history
+continuity rows are unchanged. The healthy scenario proves no Git process failure, supported and
+complete analysis, no retrieval finding, and `no-registered-failure` incident selection. The genuine
+dependency-failure scenario remains separate. `3893-healthy-unborn-git-before.json`,
+`3893-healthy-selection-probe.log`, `3893-healthy-git-fixture-after.log` and the unchanged four-row
+`3884-valid-git-history-after.log` retain the body-free setup correction evidence; no privacy
+projection, operation registry or correctness threshold was weakened.
+
+The current-instrumentation customer-shape replay adds the four German incident turns in order:
+stack trace, assistant-referent question, explicit relative path, and basename collision. Each turn
+uses the canonical production eval and receives the preceding normalized answers as an eligible
+exchange. This is a reconstructed-history replay; each eval materializes its own fixture repository,
+so it does not claim to replace the separate same-chat, real-model lab journey. Both variants keep
+the ordinary exploration ceilings and differ only in `followUpPassesMax` (0 or 1).
+
+The explicit-path turn first declares a genuinely unread in-scope companion file. With follow-up
+disabled, the canonical persisted reader and private support report retain
+`declared-unread-in-scope` and the secondary `semantic-unavailable-with-miss` finding: the fixture's
+semantic provider is unavailable and this turn actually missed evidence. With follow-up enabled,
+the production second pass admits the companion, returns its cited answer with two synthesis calls,
+and disposes both findings across the original correlation and source identity. The healthy lexical
+control still produces no retrieval finding. All four pointed scenarios report supported, complete
+analysis, and retain only body-free counters and closed dispositions in the log.
+
+`3893-current-producer-customer-shape-valid-red.log` preserves the pre-follow-up producer's two
+failures beside the two historical passing controls. `3893-current-producer-customer-shape-after.log`
+records the actual two-reason disabled result that corrected the initial one-reason fixture
+expectation; `3893-current-producer-customer-shape-green.log` records the unchanged behavior after
+that truthful expectation refinement. This pointed evidence does not claim the final gate matrix or
+the real-model lab journey is complete.
+
+The [signed-history provenance record](evidence/3881/README.md) preserves all 170 old-to-new commit
+references across the source-identical replacement of archived PR #3912 by PR #3913. It keeps earlier
+review and producer evidence traceable without importing unsigned synchronization ancestry or
+claiming that historical setup artifacts satisfy corrected fixture eligibility.

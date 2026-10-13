@@ -6,6 +6,7 @@ import type {
   ConnectedContextPack,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { extractRetrievalChannels } from "@oscharko-dev/keiko-workflows";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
@@ -25,6 +26,7 @@ afterEach(() => {
 interface RoutingResult {
   readonly pack: ConnectedContextPack;
   readonly semanticCalls: number;
+  readonly semanticQueries: readonly string[];
   readonly completion: Readonly<Record<string, unknown>> | undefined;
   readonly logLines: readonly string[];
 }
@@ -34,9 +36,11 @@ async function retrieve(
   kind: RetrievalQuery["kind"] = "natural-language",
 ): Promise<RoutingResult> {
   const activityLog = createBufferedServerLogSink();
-  const search = vi.fn(() =>
-    Promise.resolve([{ scopePath: "source/related.ts", line: 1, score: 0.99 }]),
-  );
+  const semanticQueries: string[] = [];
+  const search = vi.fn((request: { readonly query: RetrievalQuery }) => {
+    semanticQueries.push(request.query.text);
+    return Promise.resolve([{ scopePath: "source/related.ts", line: 1, score: 0.99 }]);
+  });
   const result = await retrieveConnectedContextPack(
     {
       workspaceRoot: root,
@@ -61,11 +65,12 @@ async function retrieve(
     },
   );
   const completion = activityLog.events.find(
-    (event) => event.op === "search.connected-context.completed",
+    (event) => event.op === "search.connected-context.completion-details",
   );
   return {
     pack: result.pack,
     semanticCalls: search.mock.calls.length,
+    semanticQueries,
     completion: completion?.extra,
     logLines: activityLog.lines(),
   };
@@ -83,6 +88,52 @@ it.each([
   );
   expect(completion?.augmentationSkipReason).not.toBe("complete-exact-lookup");
   expect(logLines.join("\n")).not.toContain("BUILD_ERR_17");
+});
+
+it("searches the independent diagnostic question while preserving the original trace as model context", async () => {
+  const question =
+    "Why does the build fail with BUILD_ERR_17?\n" +
+    "    at execute (node_modules/vitest/runner.js:10:3)";
+  const { pack, semanticQueries, logLines } = await retrieve(question);
+  expect(semanticQueries).toEqual([extractRetrievalChannels(question, 8).questionText]);
+  const prompt = JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value));
+  expect(prompt).toContain("node_modules/vitest/runner.js:10:3");
+  expect(logLines.join("\n")).not.toContain("node_modules/vitest");
+});
+
+it.each(["source/missing.ts", ".env"])(
+  "does not search raw frames when a questionless diagnostic target is unadmitted: %s",
+  async (path) => {
+    const trace =
+      `AssertionError: expected 1 to be 2\n    at Object.get (${path}:1:1)\n` +
+      "    at execute (node_modules/vitest/runner.js:10:3)";
+    const { pack, semanticQueries, logLines } = await retrieve(trace);
+    expect(pack.query.text).toBe(trace);
+    expect(pack.files.map((file) => file.scopePath)).not.toContain(path);
+    expect(
+      pack.files.flatMap((file) => file.excerpts.map((excerpt) => excerpt.atom.provenance.kind)),
+    ).not.toContain("lexical-search");
+    expect(semanticQueries).toEqual([]);
+    expect(logLines.join("\n")).not.toContain("node_modules/vitest");
+  },
+);
+
+it.each([
+  "    at Object.get (source/failure.ts:1:1)",
+  "AssertionError: expected 1 to be 2\n    at Object.get (source/failure.ts:1:1)",
+  "AssertionError: expected 1 to be 2\n    at Object.get (source/failure.ts:1:1)\n" +
+    "    at execute (node_modules/vitest/runner.js:10:3)",
+])("retains admitted source evidence for a questionless diagnostic paste: %s", async (trace) => {
+  const { pack, semanticQueries, logLines } = await retrieve(trace);
+  expect(pack.query.text).toBe(trace);
+  expect(pack.files.map((file) => file.scopePath)).toContain("source/failure.ts");
+  expect(pack.files.map((file) => file.scopePath)).not.toContain("package.json");
+  expect(semanticQueries).toEqual(["source/failure.ts"]);
+  expect(JSON.stringify(buildGroundedGatewayMessages(trace, pack, (value) => value))).toContain(
+    "BUILD_ERR_17",
+  );
+  expect(logLines.join("\n")).not.toContain("source/failure.ts");
+  expect(logLines.join("\n")).not.toContain("node_modules/vitest");
 });
 
 it.each([

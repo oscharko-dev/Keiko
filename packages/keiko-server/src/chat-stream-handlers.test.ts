@@ -63,6 +63,11 @@ import type {
   NormalizedResponse,
   OpenAIEmbeddingOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
+import {
+  Gateway,
+  createDefaultChatCapability,
+  parseGatewayConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
   Chat,
@@ -3677,6 +3682,72 @@ describe("desktop chat SSE streaming handler", () => {
     expect(record?.message).toBe("server-operation-failed");
     expect(JSON.stringify(record)).not.toContain("boom-unexpected-mid-stream");
   });
+
+  it.each(["buffered", "streamed"] as const)(
+    "keeps caller admission typed on the public %s boundary",
+    async (mode) => {
+      const chatId = seedChat();
+      const fetchImpl = vi.fn<typeof fetch>();
+      const gateway = new Gateway(
+        parseGatewayConfig({
+          providers: [
+            {
+              modelId: CHAT_MODEL,
+              baseUrl: "https://admission.example.invalid/v1",
+              apiKey: "fixture",
+              maxRetries: 0,
+            },
+          ],
+          capabilities: [createDefaultChatCapability(CHAT_MODEL)],
+        }),
+        { fetchImpl },
+      );
+      const model: ModelPort = {
+        call: (request) => gateway.chat({ ...request, attemptAdmission: () => undefined }),
+        callStream: (request) =>
+          gateway.chatStream({ ...request, attemptAdmission: () => undefined }),
+      };
+      const records: import("./diagnostics-log.js").ServerDiagnosticRecord[] = [];
+      const response = captureRes();
+      const ctx = {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+          response.res,
+        ),
+        correlationId: "cid-caller-admission",
+      };
+      const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+      const result: unknown = await handler(
+        ctx,
+        deps(model, { diagnostics: { record: (record) => records.push(record) } }),
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+      if (mode === "buffered")
+        expect(result).toMatchObject({
+          status: 403,
+          body: { error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } },
+        });
+      else {
+        const error = parseSse(response.writes).find((record) => record.event === "error");
+        expect(error?.data).toMatchObject({
+          code: "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+          correlationId: "cid-caller-admission",
+        });
+      }
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        code: "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+        errorClass: "CallerAttemptAdmissionError",
+        correlationId: "cid-caller-admission",
+        message: "server-operation-failed",
+      });
+      expect(JSON.stringify(records)).not.toContain("Caller synthesis attempt grant");
+      expect(gateway.circuitStatus(CHAT_MODEL)).toMatchObject({
+        state: "closed",
+        consecutiveFailures: 0,
+      });
+    },
+  );
 
   // ADR-0173 D5: the streaming call site (streamAndPersist) must stamp the request's correlation id
   // into GatewayCallRequest.logContext, mirroring the buffered path, so a gateway retry line for a

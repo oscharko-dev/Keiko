@@ -20,6 +20,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
+import { CallerAttemptAdmissionError } from "./gateway-attempt-admission.js";
 import {
   activityLogErrorKind,
   GATEWAY_FAILURE_EVIDENCE_FIELDS,
@@ -483,6 +484,7 @@ export function steeredAnswerRepair(error: Error): RetryRepairReason | undefined
 // only failures outside this list (`gateway.ts`), and the outage window extends only their retries
 // (`decisionWindowMs`, #3873 review).
 const NON_PROVIDER_FAULTS = [
+  CallerAttemptAdmissionError,
   CancelledError,
   ConfigInvalidError,
   MalformedToolCallError,

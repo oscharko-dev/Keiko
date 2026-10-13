@@ -1,3 +1,33 @@
+import { connectedFollowUpConfiguration } from "./grounded-answer-activity.js";
+import { withContextualHintConfidence } from "./grounded-selection-quality.js";
+import {
+  logGroundedPromptSelection,
+  logChatResponseMessage,
+  type ChatResponseMemoryActivity,
+} from "./chat-activity.js";
+import {
+  citationBehaviourFor,
+  citationBehaviourObserverFor,
+} from "./grounded-citation-capability.js";
+import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
+import {
+  containsNumberedCompoundQueryTerm,
+  evidenceAtomStableId,
+  isNumberedCompoundQueryTerm,
+  isDenied,
+  PathDeniedError,
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
+  WorkspaceNotFoundError,
+  WorkspaceError,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace";
+
+import {
+  assistantReferenceExcerptIds,
+  type AssistantRetrievalReference,
+} from "./grounded-assistant-referents.js";
 import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
@@ -11,7 +41,7 @@ import {
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
-import { logChatResponseMessage } from "./chat-activity.js";
+
 import {
   groundedConversationContinuity,
   type GroundedConversationContinuity,
@@ -29,7 +59,9 @@ import type { IncomingMessage } from "node:http";
 import { basename } from "node:path";
 import {
   CancelledError,
+  TimeoutError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   GatewayError,
   ProviderError,
   findCapability,
@@ -40,25 +72,22 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { DEFAULT_LEXICAL_MATCH_LIMIT } from "@oscharko-dev/keiko-workflows";
+import {
+  type RetrievalIntent,
+  DEFAULT_LEXICAL_MATCH_LIMIT,
+  extractAnchors,
+  type SearchAnchor,
+} from "@oscharko-dev/keiko-workflows";
 import {
   persistConnectedContextEvidence,
   type ConnectedContextEvidenceInput,
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
-import {
-  isDenied,
-  PathDeniedError,
-  RepoSearchInvalidQueryError,
-  RepoSearchInvalidRangeError,
-  RepoSearchUnsupportedFileError,
-  WorkspaceNotFoundError,
-  WorkspaceError,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
+  type ContinuityReferentSource,
   connectedContextOmittedCount,
   connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -80,7 +109,9 @@ import {
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
+  type GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
@@ -89,17 +120,20 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
-import type { RouteContext, RouteResult } from "./routes.js";
-import { errorBody } from "./routes.js";
-import type { Redactor, UiHandlerDeps } from "./deps.js";
+import { type RouteContext, type RouteResult, errorBody } from "./routes.js";
+
 import {
+  type Redactor,
+  type UiHandlerDeps,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
+  currentOwnAssessmentPolicy,
   currentRedactionSecrets,
 } from "./deps.js";
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
 import {
+  type GroundedAnswerOptions,
   ClarificationNeededError,
   clarificationUserMessage,
   runGroundedExploration,
@@ -108,11 +142,20 @@ import {
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
 import { createEntailmentStage, type EntailmentStage } from "./grounded-entailment-stage.js";
-import type { GroundedAnswerResult } from "./grounded-answer.js";
+import {
+  createGroundedSynthesisCallBudget,
+  createGroundedSynthesisAttemptAdmission,
+  type GroundedSynthesisCallBudget,
+  type GroundedAnswerResult,
+} from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
-import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
+import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
+import {
+  createSemanticRefreshDocumentBudget,
+  type SemanticRefreshDocumentBudget,
+} from "./grounded-repo-semantic-search.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -131,7 +174,9 @@ import {
   type FolderRetriever,
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { groundedSystemPrompt } from "./grounded-prompt.js";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { singleSentEvidencePack, withSentEvidenceInventory } from "./grounded-answer-evidence.js";
 import {
   isExpectedWorkspaceRootFailure,
   recordWorkspaceRootDenial,
@@ -143,6 +188,7 @@ import {
 } from "./workspace-root-denial-log.js";
 import {
   uncitedMemoryContextMarker,
+  connectedSearchNoEvidenceAnswer,
   type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
 import {
@@ -286,6 +332,7 @@ export function mappedContextPackValidationError(
 // added through PATCH /api/gateway/config after process start (Epic #177).
 export function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  if (error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return 403;
   if (error.retryable) return 503;
   return 502;
 }
@@ -374,7 +421,55 @@ export function mappedWorkspaceError(
   return undefined;
 }
 
-export interface AskInput {
+export interface GroundedRetrievalContinuityInput {
+  readonly assistantReferents?: readonly AssistantRetrievalReference[] | undefined;
+  readonly previousRetrievalIntent?: RetrievalIntent | undefined;
+  readonly continuityReferentSource?: ContinuityReferentSource | undefined;
+}
+
+function assistantReferencesForSource(
+  references: readonly AssistantRetrievalReference[] | undefined,
+  sourceScopeFingerprint: string | undefined,
+): readonly AssistantRetrievalReference[] | undefined {
+  if (sourceScopeFingerprint === undefined) return references;
+  return references
+    ?.filter(
+      (reference) =>
+        reference.sourceScopeFingerprint === undefined ||
+        reference.sourceScopeFingerprint === sourceScopeFingerprint,
+    )
+    .map(({ path, line, origin }) => ({ path, ...(line === undefined ? {} : { line }), origin }));
+}
+
+export function groundedRetrievalContinuityFields(
+  input: GroundedRetrievalContinuityInput,
+  scope?: SelectedScope,
+  connectedScope?: ChatConnectedScope,
+  selectedFingerprints?: ReadonlyMap<ChatConnectedScope, string>,
+): GroundedRetrievalContinuityInput {
+  const sourceScopeFingerprint =
+    scope === undefined
+      ? undefined
+      : groundedSourceScopeFingerprint(scope, connectedScope, selectedFingerprints);
+  const assistantReferents = assistantReferencesForSource(
+    input.assistantReferents,
+    sourceScopeFingerprint,
+  );
+  const continuityReferentSource =
+    assistantReferents?.length === 0 &&
+    input.continuityReferentSource?.startsWith("assistant-") === true
+      ? "none"
+      : input.continuityReferentSource;
+  return {
+    ...(assistantReferents === undefined ? {} : { assistantReferents }),
+    ...(input.previousRetrievalIntent === undefined
+      ? {}
+      : { previousRetrievalIntent: input.previousRetrievalIntent }),
+    ...(continuityReferentSource === undefined ? {} : { continuityReferentSource }),
+  };
+}
+
+export interface AskInput extends GroundedRetrievalContinuityInput {
   readonly retrievalContent?: string | undefined;
   readonly chatId: string;
   readonly content: string;
@@ -763,9 +858,13 @@ function contextProfileForGroundedModel(
 
 export function modelWindowAwareBudget(deps: UiHandlerDeps, modelId: string): ExplorationBudget {
   const profile = contextProfileForGroundedModel(deps, modelId);
-  if (profile === undefined) return DEFAULT_EXPLORATION_BUDGET;
+  const followUpPassesMax = connectedFollowUpConfiguration(
+    deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+  ).passesMax;
+  if (profile === undefined) return { ...DEFAULT_EXPLORATION_BUDGET, followUpPassesMax };
   return {
     ...DEFAULT_EXPLORATION_BUDGET,
+    followUpPassesMax,
     modelInputTokensMax: profile.effectiveInputBudget,
     modelOutputTokensMax: profile.reservedOutputTokens,
   };
@@ -784,7 +883,7 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
       high = mid - 1;
     }
   }
-  return value.slice(0, low);
+  return value.slice(0, (value.codePointAt(low - 1) ?? 0) > 0xffff ? low - 1 : low);
 }
 
 function positiveInteger(value: number): number | undefined {
@@ -805,8 +904,12 @@ export function groundedPromptInputTokensForCapability(
 }
 
 export interface GroundedGatewayPromptOptions {
+  readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
   readonly modelInputTokensMax?: number | undefined;
+  readonly callerInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
+  readonly requiredEvidencePaths?: readonly string[] | undefined;
+  readonly requiredEvidenceAtomIds?: readonly string[] | undefined;
 }
 
 function withPromptModelInputBudget(
@@ -817,6 +920,38 @@ function withPromptModelInputBudget(
     modelInputTokensMax === undefined ? undefined : positiveInteger(modelInputTokensMax);
   if (effective === undefined || effective === pack.budget.modelInputTokensMax) return pack;
   return { ...pack, budget: { ...pack.budget, modelInputTokensMax: effective } };
+}
+
+function withCallerPromptInputBudget(
+  pack: ConnectedContextPack,
+  callerInputTokensMax: number | undefined,
+): ConnectedContextPack {
+  if (callerInputTokensMax === undefined) return pack;
+  const modelInputTokensMax = Math.min(
+    pack.budget.modelInputTokensMax,
+    Math.max(0, Math.floor(callerInputTokensMax)),
+  );
+  return { ...pack, budget: { ...pack.budget, modelInputTokensMax } };
+}
+
+export function assertGroundedPromptOverheadFits(
+  overhead: { readonly bytes: number; readonly tokens: number },
+  modelInputTokensMax: number,
+  callerInputTokensMax: number | undefined,
+): void {
+  const limit = modelInputPromptByteLimit(modelInputTokensMax);
+  if (overhead.bytes > limit || overhead.tokens > modelInputTokensMax)
+    throw new ContextOverflowError(
+      `Grounded prompt overhead (${String(overhead.bytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
+    );
+  if (
+    callerInputTokensMax !== undefined &&
+    (overhead.bytes > modelInputPromptByteLimit(callerInputTokensMax) ||
+      overhead.tokens > callerInputTokensMax)
+  )
+    throw new CallerAttemptAdmissionError(
+      `Grounded prompt overhead (${String(overhead.bytes)} bytes) exceeds remaining caller input allowance (${String(modelInputPromptByteLimit(callerInputTokensMax))} bytes).`,
+    );
 }
 
 function packExcerptCount(pack: ConnectedContextPack): number {
@@ -856,7 +991,11 @@ interface RankedPromptExcerpt {
   readonly excerpt: ContextExcerpt;
 }
 
-function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPromptExcerpt[] {
+function rankedPromptExcerpts(
+  pack: ConnectedContextPack,
+  requiredEvidencePaths: readonly string[] = [],
+  requiredEvidenceAtomIds: readonly string[] = [],
+): readonly RankedPromptExcerpt[] {
   const ranked: RankedPromptExcerpt[] = [];
   for (let fileIndex = 0; fileIndex < pack.files.length; fileIndex += 1) {
     const file = pack.files[fileIndex];
@@ -869,6 +1008,10 @@ function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPrompt
   }
   ranked.sort(
     (a, b) =>
+      Number(requiredEvidencePaths.includes(b.excerpt.atom.scopePath)) -
+        Number(requiredEvidencePaths.includes(a.excerpt.atom.scopePath)) ||
+      Number(requiredEvidenceAtomIds.includes(b.excerpt.atom.stableId)) -
+        Number(requiredEvidenceAtomIds.includes(a.excerpt.atom.stableId)) ||
       promptExcerptScore(b.excerpt) - promptExcerptScore(a.excerpt) ||
       promptExcerptProvenancePriority(b.excerpt) - promptExcerptProvenancePriority(a.excerpt) ||
       a.fileIndex - b.fileIndex ||
@@ -877,28 +1020,139 @@ function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPrompt
   return ranked;
 }
 
-function excerptWithContent(excerpt: ContextExcerpt, content: string): ContextExcerpt {
-  return { ...excerpt, content, contentBytes: Buffer.byteLength(content, "utf8") };
+function excerptWithContent(
+  excerpt: ContextExcerpt,
+  content: string,
+  scopeId: string,
+  lineOffset = 0,
+): ContextExcerpt {
+  const original = excerpt.atom.lineRange;
+  if (original === undefined || content === excerpt.content)
+    return { ...excerpt, content, contentBytes: Buffer.byteLength(content, "utf8") };
+  const lineCount = content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
+  const lineRange = {
+    startLine: original.startLine + lineOffset,
+    endLine: Math.min(
+      original.endLine,
+      original.startLine + lineOffset + Math.max(1, lineCount) - 1,
+    ),
+  };
+  const atom = {
+    ...excerpt.atom,
+    lineRange,
+    stableId: evidenceAtomStableId({
+      scopeId,
+      scopePath: excerpt.atom.scopePath,
+      lineRange,
+      provenanceKind: excerpt.atom.provenance.kind,
+      provenanceTool: excerpt.atom.provenance.tool,
+      queryFingerprint: excerpt.atom.provenance.queryFingerprint,
+    }),
+  };
+  return { ...excerpt, atom, content, contentBytes: Buffer.byteLength(content, "utf8") };
 }
 
-function withPromptExcerptTotalByteBudget(
+function fittingAnchorMatchesLine(
+  line: string,
+  anchor: SearchAnchor,
+  caseSensitive: boolean,
+): boolean {
+  const term = caseSensitive ? (anchor.sourceTerm ?? anchor.term) : anchor.term;
+  if (anchor.kind === "literal" && isNumberedCompoundQueryTerm(term))
+    return containsNumberedCompoundQueryTerm(line, term, caseSensitive);
+  return (caseSensitive ? line : line.toLowerCase()).includes(
+    caseSensitive ? term : term.toLowerCase(),
+  );
+}
+
+function fittingMatchedLine(
+  lines: readonly string[],
+  anchors: readonly SearchAnchor[],
+  maxBytes: number,
+  caseSensitive: boolean,
+): number | undefined {
+  let best: number | undefined;
+  let bestScore = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (Buffer.byteLength(line, "utf8") > maxBytes) continue;
+    const score = anchors.reduce(
+      (sum, anchor) =>
+        sum + (fittingAnchorMatchesLine(line, anchor, caseSensitive) ? anchor.weight : 0),
+      0,
+    );
+    if (score <= bestScore) continue;
+    bestScore = score;
+    best = index;
+  }
+  return best;
+}
+
+function fittingExcerptContent(
+  excerpt: ContextExcerpt,
+  maxBytes: number,
+  anchors: readonly SearchAnchor[],
+  caseSensitive: boolean,
+): { readonly content: string; readonly lineOffset: number } {
+  const lines = excerpt.content.split("\n");
+  const matched =
+    excerpt.atom.lineRange === undefined
+      ? undefined
+      : fittingMatchedLine(lines, anchors, maxBytes, caseSensitive);
+  if (matched === undefined)
+    return { content: clampUtf8Bytes(excerpt.content, maxBytes), lineOffset: 0 };
+  const sizes = lines.map((line) => Buffer.byteLength(line, "utf8"));
+  let start = matched;
+  let end = matched;
+  let remaining = maxBytes - (sizes[matched] ?? 0);
+  while (remaining > 0) {
+    const before = start > 0 ? adjacentLineBytes(sizes, start - 1) : Infinity;
+    const after = end + 1 < lines.length ? adjacentLineBytes(sizes, end + 1) : Infinity;
+    if (before <= remaining) {
+      start -= 1;
+      remaining -= before;
+    } else if (after <= remaining) {
+      end += 1;
+      remaining -= after;
+    } else break;
+  }
+  return { content: lines.slice(start, end + 1).join("\n"), lineOffset: start };
+}
+
+function adjacentLineBytes(sizes: readonly number[], index: number): number {
+  return (sizes[index] ?? 0) + 1;
+}
+
+function fittingQueryAnchors(query: RetrievalQuery): readonly SearchAnchor[] {
+  return extractAnchors({
+    text: query.text,
+    maxAnchors: 8,
+    caseSensitive: query.caseSensitive,
+  }).anchors.filter((anchor) => anchor.kind !== "path");
+}
+
+function trimPromptExcerptTotalByteBudget(
   pack: ConnectedContextPack,
   maxExcerptBytes: number,
+  requiredEvidencePaths: readonly string[] = [],
+  requiredEvidenceAtomIds?: readonly string[],
 ): ConnectedContextPack {
   if (maxExcerptBytes <= 0) return { ...pack, files: [] };
   const byFile = new Map<number, ContextExcerpt[]>();
+  const anchors = fittingQueryAnchors(pack.query);
   let remaining = Math.floor(maxExcerptBytes);
-  for (const ranked of rankedPromptExcerpts(pack)) {
+  for (const ranked of rankedPromptExcerpts(pack, requiredEvidencePaths, requiredEvidenceAtomIds)) {
     if (remaining <= 0) break;
     const fullBytes = Buffer.byteLength(ranked.excerpt.content, "utf8");
     if (fullBytes === 0) continue;
-    const content =
+    const fitted =
       fullBytes <= remaining
-        ? ranked.excerpt.content
-        : clampUtf8Bytes(ranked.excerpt.content, remaining);
+        ? { content: ranked.excerpt.content, lineOffset: 0 }
+        : fittingExcerptContent(ranked.excerpt, remaining, anchors, pack.query.caseSensitive);
+    const { content, lineOffset } = fitted;
     if (content.length === 0) break;
     const bucket = byFile.get(ranked.fileIndex) ?? [];
-    bucket.push(excerptWithContent(ranked.excerpt, content));
+    bucket.push(excerptWithContent(ranked.excerpt, content, pack.scope.scopeId, lineOffset));
     byFile.set(ranked.fileIndex, bucket);
     remaining -= Buffer.byteLength(content, "utf8");
     if (fullBytes > Buffer.byteLength(content, "utf8")) break;
@@ -927,8 +1181,42 @@ function withPromptExcerptTotalByteBudget(
 export function withPromptExcerptBudget(
   pack: ConnectedContextPack,
   totalExcerptBytes: number,
+  requiredEvidencePaths?: readonly string[],
+  requiredEvidenceAtomIds?: readonly string[],
 ): ConnectedContextPack {
-  return withPromptExcerptTotalByteBudget(pack, totalExcerptBytes);
+  return withPromptExcerptTotalByteBudget(
+    pack,
+    totalExcerptBytes,
+    requiredEvidencePaths,
+    requiredEvidenceAtomIds,
+  );
+}
+
+function withPromptExcerptTotalByteBudget(
+  pack: ConnectedContextPack,
+  totalExcerptBytes: number,
+  requiredEvidencePaths?: readonly string[],
+  requiredEvidenceAtomIds?: readonly string[],
+): ConnectedContextPack {
+  const trimmed = trimPromptExcerptTotalByteBudget(
+    pack,
+    totalExcerptBytes,
+    requiredEvidencePaths,
+    requiredEvidenceAtomIds,
+  );
+  return refreshedPromptSelectionConfidence(trimmed);
+}
+
+function refreshedPromptSelectionConfidence(pack: ConnectedContextPack): ConnectedContextPack {
+  return withContextualHintConfidence(
+    pack,
+    extractAnchors({
+      text: pack.query.text,
+      maxAnchors: 8,
+      caseSensitive: pack.query.caseSensitive,
+    }).anchors,
+    Date.now(),
+  );
 }
 
 type GroundedPromptBuilder = (
@@ -974,7 +1262,9 @@ function fitGroundedPrompt(
   build: GroundedPromptBuilder,
   options: GroundedGatewayPromptOptions = {},
 ): FittedPromptPack {
-  const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
+  const modelPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
+  const budgetedPack = withCallerPromptInputBudget(modelPack, options.callerInputTokensMax);
+  const fitOptions = { ...options, modelInputTokensMax: modelPack.budget.modelInputTokensMax };
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
   const fits = (candidate: readonly GatewayChatMessage[]): boolean =>
     promptByteLength(candidate) <= limit &&
@@ -989,24 +1279,63 @@ function fitGroundedPrompt(
   );
   if (metadataFit !== undefined) return { ...metadataFit, pack: budgetedPack };
 
-  const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
-  const emptyMessages = build(question, emptyPack, redactor, 0);
+  const render = (candidate: ConnectedContextPack): readonly GatewayChatMessage[] =>
+    build(question, candidate, redactor, 0);
+  // Adding uncertainty when a hint is clipped can make prompt cost nonmonotonic. Find the
+  // source window with stable metadata first, then admit only its truthful, re-rendered form.
+  const optimistic = fitExcerptPromptWindow(
+    budgetedPack,
+    render,
+    fits,
+    limit,
+    fitOptions,
+    trimPromptExcerptTotalByteBudget,
+  );
+  const observedPack = refreshedPromptSelectionConfidence(optimistic.pack);
+  const observedMessages = render(observedPack);
+  if (fits(observedMessages))
+    return { messages: observedMessages, pack: observedPack, omissionPathBytes: 0 };
+  return fitExcerptPromptWindow(
+    budgetedPack,
+    render,
+    fits,
+    limit,
+    fitOptions,
+    withPromptExcerptBudget,
+  );
+}
+
+function fitExcerptPromptWindow(
+  pack: ConnectedContextPack,
+  build: (candidate: ConnectedContextPack) => readonly GatewayChatMessage[],
+  fits: (messages: readonly GatewayChatMessage[]) => boolean,
+  limit: number,
+  options: GroundedGatewayPromptOptions,
+  trim: typeof withPromptExcerptBudget,
+): FittedPromptPack {
+  const emptyPack = trim(pack, 0);
+  const emptyMessages = build(emptyPack);
   const overheadBytes = promptByteLength(emptyMessages);
-  // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
-  // excerpt trimming can bring the prompt within budget. Throw instead of sending an over-limit
-  // prompt to the provider which would result in an opaque 400 context-window error.
-  if (!fits(emptyMessages)) {
-    throw new ContextOverflowError(
-      `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
-    );
-  }
+  assertGroundedPromptOverheadFits(
+    {
+      bytes: overheadBytes,
+      tokens: countGatewayPromptTokens({ messages: emptyMessages }, options.tokenAccounting),
+    },
+    options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    options.callerInputTokensMax,
+  );
   let low = 0;
   let high = Math.max(0, limit - overheadBytes);
   let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack, omissionPathBytes: 0 };
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
-    const candidatePack = withPromptExcerptBudget(budgetedPack, totalExcerptBytes);
-    const candidate = build(question, candidatePack, redactor, 0);
+    const candidatePack = trim(
+      pack,
+      totalExcerptBytes,
+      options.requiredEvidencePaths,
+      options.requiredEvidenceAtomIds,
+    );
+    const candidate = build(candidatePack);
     if (fits(candidate)) {
       best = { messages: candidate, pack: candidatePack, omissionPathBytes: 0 };
       low = totalExcerptBytes + 1;
@@ -1056,16 +1385,18 @@ export function fittedGroundedGatewayPrompt(
     question,
     pack,
     redactor,
-    buildRawGroundedGatewayMessages,
+    groundedPromptBuilder(options),
     options,
   );
   return {
     messages: fitted.messages,
+    sentEvidencePacks: [fitted.pack],
     withoutSources: buildRawGroundedGatewayMessages(
       question,
-      withPromptExcerptBudget(fitted.pack, 0),
+      { ...fitted.pack, files: [] },
       redactor,
       -1,
+      options?.ownAssessmentPolicy,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -1239,19 +1570,17 @@ export function uncertaintyLines(
 // paths so both apply the identical capability, untrusted-evidence, citation and no-secret rules.
 // GROUNDED_SYSTEM_PROMPT now lives in the dependency-free ./grounded-prompt.js leaf (re-exported
 // here for back-compat) so the hybrid path can interpolate it without a circular-import TDZ.
-export { GROUNDED_SYSTEM_PROMPT };
+export { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 
 function buildRawGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
   omissionPathBytes?: number,
+  ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
-    "User question:",
-    safeQuestion,
-    "",
     "Connected repository context pack:",
     `- schemaVersion: ${pack.schemaVersion}`,
     `- stableId: ${redactedString(redactor, pack.stableId)}`,
@@ -1267,9 +1596,12 @@ function buildRawGroundedGatewayMessages(
     "",
     "Known uncertainty from retrieval:",
     ...uncertaintyLines(pack, redactor),
+    "",
+    "User question:",
+    safeQuestion,
   ].join("\n");
   return [
-    { role: "system", content: GROUNDED_SYSTEM_PROMPT },
+    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
     { role: "user", content: userContent },
   ];
 }
@@ -1280,7 +1612,29 @@ export function buildGroundedGatewayMessages(
   redactor: Redactor,
   options?: GroundedGatewayPromptOptions,
 ): readonly GatewayChatMessage[] {
-  return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages, options);
+  return promptBudgetedMessages(question, pack, redactor, groundedPromptBuilder(options), options);
+}
+
+function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): GroundedPromptBuilder {
+  return (question, pack, redactor, omissionPathBytes): readonly GatewayChatMessage[] =>
+    buildRawGroundedGatewayMessages(
+      question,
+      pack,
+      redactor,
+      omissionPathBytes,
+      options?.ownAssessmentPolicy,
+    );
+}
+
+interface GroundedGatewayAnswerContext {
+  readonly assistantReferences: NonNullable<OrchestratorInput["assistantReferents"]>;
+  readonly synthesis: GroundedSynthesisCallBudget;
+  readonly deps: UiHandlerDeps;
+  readonly model: ModelPort;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly tokenAccounting: ContextProfile["tokenAccounting"];
 }
 
 function createGatewayAnswerer(
@@ -1290,42 +1644,214 @@ function createGatewayAnswerer(
   signal: AbortSignal,
   correlationId: string | undefined,
   tokenAccounting: ContextProfile["tokenAccounting"],
+  assistantReferences: OrchestratorInput["assistantReferents"],
 ): GroundedAnswerer {
-  // The input budget is read per attempt, not captured once: when the provider's overflow answer
-  // taught Keiko the model's real window, the retry re-budgets the excerpts to fit it. The prompt
-  // of the last attempt is kept for the context meter's share of this answer.
-  let sent: SentGroundedPrompt | undefined;
-  const call = (question: string, pack: ConnectedContextPack): Promise<NormalizedResponse> => {
-    const promptOptions = groundedPromptOptions(deps, modelId, tokenAccounting);
-    sent = fittedGroundedGatewayPrompt(question, pack, deps.redactor, promptOptions);
-    return model.call(
-      { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
-      signal,
-    );
+  const synthesis = createGroundedSynthesisCallBudget();
+  const ctx = {
+    deps,
+    model,
+    modelId,
+    signal,
+    correlationId,
+    tokenAccounting,
+    synthesis,
+    assistantReferences: assistantReferences ?? [],
   };
   return {
-    answer: async (question, pack): Promise<GroundedAnswerResult> => {
-      ensureNotCancelled(signal);
-      const response = await withAdoptedContextWindowRetry(
-        deps,
-        { modelId, surface: "grounded", correlationId },
-        () => call(question, pack),
-      );
-      const content = response.content.trim();
-      assertUsableAssistantContent(content, modelId);
-      return {
-        content,
-        usage: {
-          promptTokens: response.usage.promptTokens,
-          completionTokens: response.usage.completionTokens,
-        },
-        // GEN-AI-GATEWAY-001 (RB-4): carry the finishReason so a truncated ("length") completion is
-        // surfaced by runGroundedExploration instead of being consumed as a complete answer.
-        finishReason: response.finishReason,
-        ...sentPromptContextField(sent, response, currentContextProfileForModel(deps, modelId)),
-      };
-    },
+    completedSynthesisCalls: synthesis.completed,
+    remainingSynthesisCalls: synthesis.remaining,
+    pendingSynthesisUsage: synthesis.pendingUsage,
+    takeFailedSynthesisUsage: synthesis.takeUsage,
+    reservedSynthesisOutputTokens: synthesis.reservedOutputTokens,
+    answer: (question, pack, options) => gatewayGroundedAnswer(ctx, question, pack, options ?? {}),
+    repair: (question, pack, original, options) =>
+      gatewayGroundedAnswer(
+        ctx,
+        `${question}\n\n${buildCitationRepairPrompt(original)}`,
+        pack,
+        options,
+      ),
   };
+}
+
+function groundedAnswerContextSignal(
+  ctx: GroundedGatewayAnswerContext,
+  options: GroundedAnswerOptions,
+): GroundedGatewayAnswerContext {
+  const signals = [ctx.signal, ...(options.signal === undefined ? [] : [options.signal])];
+  if (options.deadlineAtMs !== undefined && Number.isFinite(options.deadlineAtMs)) {
+    signals.push(AbortSignal.timeout(Math.max(1, Math.ceil(options.deadlineAtMs - Date.now()))));
+  }
+  return { ...ctx, signal: AbortSignal.any(signals) };
+}
+
+async function gatewayGroundedAnswer(
+  ctx: GroundedGatewayAnswerContext,
+  question: string,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): Promise<GroundedAnswerResult> {
+  ctx = groundedAnswerContextSignal(ctx, options);
+  ensureNotCancelled(ctx.signal);
+  const remainingBefore = ctx.synthesis.remaining();
+  const reservedBefore = ctx.synthesis.reservedOutputTokens();
+  const completedBefore = ctx.synthesis.completed();
+  const attempt = await withAdoptedContextWindowRetry(
+    ctx.deps,
+    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
+    () => groundedGatewayAttempt(ctx, question, pack, options),
+  );
+  if (attempt.response === undefined)
+    return {
+      content: connectedSearchNoEvidenceAnswer(options.currentQuestion ?? question),
+      ...settledSynthesisFields(ctx, remainingBefore, reservedBefore, completedBefore),
+      modelInvoked: false,
+      noEvidence: true,
+      sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
+      filesInPrompt: 0,
+    };
+  const response = attempt.response;
+  assertUsableAssistantContent(response.content.trim(), ctx.modelId);
+  return {
+    content: response.content.trim(),
+    ...settledSynthesisFields(ctx, remainingBefore, reservedBefore, completedBefore),
+    finishReason: response.finishReason,
+    modelInvoked: true,
+    sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
+    ...sentPromptContextField(
+      attempt.sent,
+      response,
+      currentContextProfileForModel(ctx.deps, ctx.modelId),
+    ),
+  };
+}
+
+function settledSynthesisFields(
+  ctx: GroundedGatewayAnswerContext,
+  remainingBefore: number,
+  reservedBefore: number,
+  completedBefore: number,
+): Pick<
+  GroundedAnswerResult,
+  "usage" | "synthesisCallCount" | "completedSynthesisCallCount" | "synthesisReservedOutputTokens"
+> {
+  return {
+    usage: ctx.synthesis.takeUsage(),
+    synthesisCallCount: remainingBefore - ctx.synthesis.remaining(),
+    completedSynthesisCallCount: ctx.synthesis.completed() - completedBefore,
+    synthesisReservedOutputTokens: ctx.synthesis.reservedOutputTokens() - reservedBefore,
+  };
+}
+
+function groundedRemainingOptions(
+  ctx: GroundedGatewayAnswerContext,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): GroundedAnswerOptions {
+  const pending = ctx.synthesis.pendingUsage();
+  return {
+    ...options,
+    modelInputTokensMax: Math.max(
+      0,
+      (options.modelInputTokensMax ?? pack.budget.modelInputTokensMax) - pending.promptTokens,
+    ),
+    modelOutputTokensMax: Math.max(
+      0,
+      (options.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax) - pending.completionTokens,
+    ),
+  };
+}
+
+async function groundedGatewayAttempt(
+  ctx: GroundedGatewayAnswerContext,
+  question: string,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): Promise<{ readonly sent: SentGroundedPrompt; readonly response?: NormalizedResponse }> {
+  if (ctx.synthesis.remaining() <= 0)
+    throw new CallerAttemptAdmissionError("Grounded synthesis attempt allowance exhausted");
+  const remaining = groundedRemainingOptions(ctx, pack, options);
+  const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
+  const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
+    ...promptOptions,
+    requiredEvidencePaths: options.requiredEvidencePaths,
+    requiredEvidenceAtomIds: assistantReferenceExcerptIds(pack, ctx.assistantReferences),
+    callerInputTokensMax: remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+  });
+  if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
+  if (
+    sent.sentReferenceCount === 0 &&
+    options.answerOnlyContextAvailable !== true &&
+    promptOptions.ownAssessmentPolicy !== "allowed"
+  )
+    return { sent };
+  if ((remaining.modelOutputTokensMax ?? 0) <= 0) return { sent };
+  const response = await dispatchGroundedSynthesis(ctx, sent, pack, options, remaining);
+  return { sent, response };
+}
+
+async function dispatchGroundedSynthesis(
+  ctx: GroundedGatewayAnswerContext,
+  sent: SentGroundedPrompt,
+  pack: ConnectedContextPack,
+  original: GroundedAnswerOptions,
+  remaining: GroundedAnswerOptions,
+): Promise<NormalizedResponse> {
+  assertGroundedGatewayDispatchActive(ctx, original);
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    sent,
+    remaining.modelInputTokensMax ?? 0,
+    ctx.tokenAccounting,
+  );
+  assertGroundedGatewayDispatchActive(ctx, original);
+  const tracker = createGroundedSynthesisAttemptAdmission(ctx.synthesis, {
+    inputTokensMax: original.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+    outputTokensMax: original.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax,
+    signal: ctx.signal,
+    deadlineAtMs: original.deadlineAtMs,
+  });
+  const promptTokens = countGatewayPromptTokens({ messages: sent.messages }, ctx.tokenAccounting);
+  try {
+    const response = await ctx.model.call(
+      {
+        modelId: ctx.modelId,
+        messages: sent.messages,
+        stream: false,
+        maxOutputTokens: remaining.modelOutputTokensMax,
+        logContext: { correlationId: ctx.correlationId },
+        attemptAdmission: tracker.admission,
+      },
+      ctx.signal,
+    );
+    ctx.synthesis.recordCompleted();
+    tracker.settleFallback(promptTokens, response.usage);
+    return response;
+  } catch (error_) {
+    tracker.settleFallbackFailure(promptTokens, error_);
+    throw error_;
+  }
+}
+
+function assertGroundedGatewayDispatchActive(
+  ctx: GroundedGatewayAnswerContext,
+  options: GroundedAnswerOptions,
+): void {
+  ensureNotCancelled(ctx.signal);
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) {
+    throw new TimeoutError("Grounded synthesis deadline elapsed before gateway admission");
+  }
+}
+
+function requiredEvidenceSent(sent: SentGroundedPrompt, paths: readonly string[] = []): boolean {
+  const present = new Set(
+    sent.sentEvidencePacks?.flatMap((pack) =>
+      pack.files
+        .filter((file) => file.excerpts.some((excerpt) => excerpt.content.length > 0))
+        .map((file) => file.scopePath),
+    ),
+  );
+  return paths.every((path) => present.has(path));
 }
 
 // The input budget of one attempt, read from the model's current capability.
@@ -1336,6 +1862,7 @@ export function groundedPromptOptions(
 ): GroundedGatewayPromptOptions {
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
   };
@@ -1364,6 +1891,7 @@ function resolveGroundedAnswerModel(
 }
 
 interface DefaultRunnerContext {
+  readonly refreshDocuments: SemanticRefreshDocumentBudget;
   readonly deps: UiHandlerDeps;
   readonly modelId: string;
   readonly signal: AbortSignal;
@@ -1380,7 +1908,6 @@ function runDefaultGroundedExploration(
   input: OrchestratorInput,
 ): Promise<OrchestratorOutput> {
   const { deps, modelId, signal, contextProfile, model, entailmentStage } = runnerCtx;
-  const nowMs = Date.now;
   const budgetedInput = {
     ...input,
     budget: input.budget ?? modelWindowAwareBudget(deps, modelId),
@@ -1391,12 +1918,18 @@ function runDefaultGroundedExploration(
     signal,
     budgetedInput.budget.excerptBytesMax,
   );
-  const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
+  const semanticLease = configuredGroundedSemanticRequest(
     deps,
-    signal,
     budgetedInput.workspaceRoot,
+    runnerCtx.refreshDocuments,
   );
   return runGroundedExploration(budgetedInput, {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
+    followUpConfigurationDisposition: connectedFollowUpConfiguration(
+      deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+    ).disposition,
+    reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
+    observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
     answerer: createGatewayAnswerer(
       deps,
       model,
@@ -1404,18 +1937,18 @@ function runDefaultGroundedExploration(
       signal,
       runnerCtx.correlationId,
       contextProfile?.tokenAccounting,
+      input.assistantReferents,
     ),
-    nowMs,
+    nowMs: Date.now,
     signal,
     // ADR-0173 D5: the same id the Gateway answerer above already carries, so a git-history read
     // that failed during THIS ask is joinable to it in `server.log`.
     correlationId: runnerCtx.correlationId,
-    microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
+    microIndex: microIndexForGroundedScope(budgetedInput.scope, Date.now),
     workspaceIndexForRoot: deps.workspaceIndexForRoot,
     ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
-    ...(semanticLease.provider === undefined
-      ? {}
-      : { repoSemanticSearchProvider: semanticLease.provider }),
+    repoSemanticSearchProviderFor: semanticLease.providerFor,
+    diagnostics: deps.diagnostics,
     ...(entailmentStage === undefined ? {} : { entailmentStage }),
     // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
     // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
@@ -1448,6 +1981,7 @@ function defaultRunner(
     signal,
   );
   const runnerCtx: DefaultRunnerContext = {
+    refreshDocuments: createSemanticRefreshDocumentBudget(deps),
     deps,
     modelId,
     signal,
@@ -1564,7 +2098,7 @@ function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
 
 // ─── Route worker (extracted to keep handleGroundedAsk under the LOC bound) ───
 
-interface AskWorkerCtx {
+interface AskWorkerCtx extends GroundedRetrievalContinuityInput {
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly scope: SelectedScope;
@@ -1777,6 +2311,7 @@ function persistGroundedAuditEvidence(
   output: OrchestratorOutput,
   citationCount: number,
 ): string {
+  const pack = withSentEvidenceInventory(output.pack, output.sentEvidencePacks);
   const finishedAt = Date.now();
   const startedAt = Math.max(0, finishedAt - output.elapsedMs);
   const runId = groundedEvidenceRunId({
@@ -1795,13 +2330,17 @@ function persistGroundedAuditEvidence(
       // the real grounding root so the audit trail is honest about which tree produced the answer.
       workspaceRoot: workerCtx.scope.workspaceRoot,
       chatId: workerCtx.chat.id,
+      sourceScopeFingerprint: groundedSourceScopeFingerprint(output.pack.scope),
+      followUp: output.followUp,
+      completedSynthesisCallCount: output.completedSynthesisCallCount,
       plan: output.plan,
-      pack: output.pack,
+      pack,
+      retrievedFileCount: output.pack.files.length,
       citationCount,
       elapsedMs: output.elapsedMs,
       startedAt,
       finishedAt,
-      ...groundedContextAssemblyInput({ contextProfile: workerCtx.contextProfile }, output.pack),
+      ...groundedContextAssemblyInput({ contextProfile: workerCtx.contextProfile }, pack),
     },
     {
       store: workerCtx.deps.evidenceStore,
@@ -1853,6 +2392,34 @@ function registerSingleGroundedTurn(
   );
 }
 
+function singleAnswerEvidenceDeclaration(
+  output: OrchestratorOutput,
+): GroundedAnswerEvidenceDeclaration {
+  return {
+    ...(output.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: output.citationBehaviour }),
+    ...(output.answerKind === undefined ? {} : { answerKind: output.answerKind }),
+    ...(output.insufficiencyDeclarations === undefined
+      ? {}
+      : { insufficiencyDeclarations: output.insufficiencyDeclarations }),
+  };
+}
+
+function singleAnswerContextSummary(
+  workerCtx: AskWorkerCtx,
+  output: OrchestratorOutput,
+  citationCount: number,
+): ReturnType<typeof buildGroundedAnswerContextPackSummary> {
+  return buildGroundedAnswerContextPackSummary(
+    output.pack,
+    citationCount,
+    output.elapsedMs,
+    groundedContextSummaryInput({ contextProfile: workerCtx.contextProfile }, output.pack),
+    output.filesInPrompt === undefined ? undefined : { filesInPrompt: output.filesInPrompt },
+  );
+}
+
 // Persists the exchange, projects citations/uncertainty, and assembles the wire answer for a
 // single-source folder ask. Split out of runAsk to keep both under the LOC bound.
 function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
@@ -1865,7 +2432,11 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   const sourceEvidenceAvailable = output.noEvidence !== true;
   const modelInvoked = output.modelInvoked ?? sourceEvidenceAvailable;
   const citations = modelInvoked
-    ? buildAnswerCitations(output.pack, output.assistantContent, deps.redactor)
+    ? buildAnswerCitations(
+        singleSentEvidencePack(output, output.pack),
+        output.assistantContent,
+        deps.redactor,
+      )
     : [];
   const evidenceRunId = sourceEvidenceAvailable
     ? persistGroundedAuditEvidence(workerCtx, output, citations.length)
@@ -1877,23 +2448,18 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     assistantContent,
     workerCtx.userMessage,
   );
-  const contextPack = buildGroundedAnswerContextPackSummary(
-    output.pack,
-    citations.length,
-    output.elapsedMs,
-    groundedContextSummaryInput({ contextProfile: workerCtx.contextProfile }, output.pack),
-  );
   const answer: GroundedAnswer = {
     groundingKind: "connected-context",
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
     ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
     content: assistantContent,
+    ...singleAnswerEvidenceDeclaration(output),
     citations,
     uncertainty: buildUncertainty(output.pack, deps.redactor),
     omittedCount: connectedContextOmittedCount(output.pack),
     elapsedMs: output.elapsedMs,
-    contextPack,
+    contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
     ...(modelInvoked && output.promptContext !== undefined
       ? { promptContext: output.promptContext }
       : {}),
@@ -1937,6 +2503,7 @@ async function runGroundedRunner(
     const output = await runner({
       scope,
       query,
+      ...groundedRetrievalContinuityFields(workerCtx, scope),
       answerQuestion: answerContent,
       currentQuestion: workerCtx.content,
       answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
@@ -2036,6 +2603,7 @@ function resolveMultiSourceSeam(
   signal: AbortSignal,
   override: MultiSourceSeam | undefined,
   correlationId: string | undefined,
+  answerOptions: Pick<GroundedAnswerOptions, "currentQuestion" | "answerOnlyContextAvailable">,
 ): MultiSourceSeam | RouteResult {
   if (override !== undefined) return override;
   const resolvedModel = deps.modelPortFactory(modelId);
@@ -2050,7 +2618,7 @@ function resolveMultiSourceSeam(
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
-    answerer: createMultiSourceAnswerer(deps, model, modelId, signal, correlationId),
+    answerer: createMultiSourceAnswerer(deps, model, modelId, signal, correlationId, answerOptions),
   };
 }
 
@@ -2073,9 +2641,11 @@ async function dispatchMultiSourceAsk(
     signal,
     seamOverride,
     args.correlationId,
+    { currentQuestion: input.content, answerOnlyContextAvailable: hasAnswerOnlyContext(args) },
   );
   if ("status" in seam) return seam;
   return runMultiSourceAsk({
+    ...groundedRetrievalContinuityFields(input),
     chat,
     scopes,
     ...(args.sourceScopeFingerprints === undefined
@@ -2174,8 +2744,8 @@ async function dispatchFolderAsk(
     prepared.correlationId,
   );
   if ("status" in resolved) return resolved;
-  const workspaceFs = firstScopeWorkspaceFs(scopes);
   return runAsk({
+    ...groundedRetrievalContinuityFields(input),
     chat,
     scope,
     content: input.content,
@@ -2189,7 +2759,7 @@ async function dispatchFolderAsk(
     contextProfile: resolved.contextProfile,
     deps,
     runner: resolved.runner,
-    ...optionalWorkspaceFs(workspaceFs),
+    ...optionalWorkspaceFs(firstScopeWorkspaceFs(scopes)),
     signal,
     correlationId: prepared.correlationId,
   });
@@ -2235,6 +2805,7 @@ async function dispatchHybridAsk(
   // path does: there is no real model port to validate. Production resolves the guardrails once.
   const modelId = groundedModelId(prepared);
   return runHybridGroundedAsk({
+    ...groundedRetrievalContinuityFields(input),
     chat,
     ...(prepared.sourceScopeFingerprints === undefined
       ? {}
@@ -2463,6 +3034,7 @@ async function withGroundedContinuity(
       ...prepared.input,
       content,
       retrievalContent: continuity.retrievalContent,
+      ...groundedRetrievalContinuityFields(continuity),
       answerContent: [continuity.answerContext, content].filter(Boolean).join("\n\n"),
     },
   };
@@ -2704,7 +3276,7 @@ async function runAdmittedGroundedAsk(
     return settled;
   } catch (error) {
     if (stagedAssistantId !== undefined) discardGroundedTurn(stagedAssistantId);
-    deps.store.failChatTurn(admitted.chat.id, groundedCommitTurnId(admitted));
+    failGroundedChatTurn(admitted, deps, error instanceof CancelledError);
     if (admitted.signal.aborted) return groundedCancelledResult();
     throw error;
   }
@@ -2780,6 +3352,18 @@ function groundedCancelledResult(): RouteResult {
   return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
 }
 
+function failGroundedChatTurn(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  cancelled: boolean,
+): void {
+  deps.store.failChatTurn(
+    prepared.chat.id,
+    groundedCommitTurnId(prepared),
+    prepared.signal.aborted || cancelled ? "cancelled" : "failed",
+  );
+}
+
 function settleGroundedChatTurn(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -2787,7 +3371,7 @@ function settleGroundedChatTurn(
 ): RouteResult {
   const commitTurnId = groundedCommitTurnId(prepared);
   if (result.status !== 200 || !groundedAnswerBody(result.body)) {
-    deps.store.failChatTurn(prepared.chat.id, commitTurnId);
+    failGroundedChatTurn(prepared, deps, result.status === 499);
     return result;
   }
   if (!groundedScopeStillCurrent(prepared, deps)) {
@@ -2959,6 +3543,21 @@ function groundedAnswerWithMemoryUncertainty(
   };
 }
 
+function finalGroundedMemoryActivity(
+  prepared: PreparedGroundedAsk,
+  body: GroundedAnswer,
+): ChatResponseMemoryActivity {
+  const markerCount = body.uncertainty.filter(
+    (marker) => marker.kind === "uncited-memory-context",
+  ).length;
+  const requestedDisposition = markerCount > 0 ? "included" : "excluded";
+  return {
+    uncitedMemoryContextMarkerCount: markerCount,
+    memoryContextDisposition:
+      prepared.input.memory?.enabled !== true ? "not-requested" : requestedDisposition,
+  };
+}
+
 export async function handleGroundedAsk(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2973,7 +3572,11 @@ export async function handleGroundedAsk(
     if ("status" in prepared) return prepared;
     const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
     if (result.status === 200 && groundedAnswerBody(result.body)) {
-      logChatResponseMessage(result.body.assistantMessageId, ctx.correlationId);
+      logChatResponseMessage(
+        result.body.assistantMessageId,
+        ctx.correlationId,
+        finalGroundedMemoryActivity(prepared, result.body),
+      );
     }
     return result;
   } finally {

@@ -184,6 +184,8 @@ export interface ModelCapability {
    * into a dead model picker until a manual probe (customer field incident, 0.3.11).
    */
   readonly conversationReady?: boolean | undefined;
+  /** Observed repository-citation behavior; absent means unknown and grants no execution authority. */
+  readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   /**
    * Whether the provider's discovery metadata explicitly declared a chat-compatible mode for this
    * model (e.g. a LiteLLM `/model/info` `mode` of "chat" / "completion" / "responses"). Absent

@@ -30,6 +30,8 @@ import {
   type CandidateFile,
   type CandidateOmissionReason,
   type EvidenceAtom,
+  type ExplorationBudget,
+  type ExplorationUsage,
   type OmittedContextEntry,
   type RetrievalQuery,
   type SelectedScope,
@@ -52,7 +54,7 @@ import {
   isWorkspacePathSnapshotCurrent,
   WorkspaceDescriptorReadError,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
-import type { ExcerptWindow } from "@oscharko-dev/keiko-workflows";
+import { compactExcerpt, type ExcerptWindow } from "@oscharko-dev/keiko-workflows";
 import { createHash } from "node:crypto";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 
@@ -140,6 +142,10 @@ function isWithinSelectedScope(searchScope: SearchScope, realRelativePath: strin
 // document (DOCX/XLSX/PDF) or a known-but-unsupported document format. The orchestrator uses this
 // to keep every such file off the code-first excerpt-read path so document handling (extraction or
 // a stable unsupported diagnostic) is the single source of truth (Issue #1285).
+export function isExtractableConnectedDocumentPath(scopePath: string): boolean {
+  return EXTENSION_BINDINGS.has(extensionOf(scopePath));
+}
+
 export function isConnectedDocumentPath(scopePath: string): boolean {
   const extension = extensionOf(scopePath);
   return EXTENSION_BINDINGS.has(extension) || UNSUPPORTED_DOCUMENT_EXTENSIONS.has(extension);
@@ -155,6 +161,8 @@ export interface DocumentEvidenceInputs {
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
   readonly deadlineAtMs?: number | undefined;
+  readonly budget?: ExplorationBudget | undefined;
+  readonly initialUsage?: ExplorationUsage | undefined;
 }
 
 export interface DocumentEvidenceResult {
@@ -163,6 +171,24 @@ export interface DocumentEvidenceResult {
   readonly excerpts: ReadonlyMap<string, readonly ExcerptWindow[]>;
   readonly omitted: readonly OmittedContextEntry[];
   readonly uncertainty: readonly UncertaintyMarker[];
+}
+
+function documentProjectionText(windows: readonly ExcerptWindow[]): string {
+  return windows.map((view) => view.content).join("\n");
+}
+
+export function documentProjectionUsage(
+  excerpts: DocumentEvidenceResult["excerpts"],
+): Pick<ExplorationUsage, "filesRead" | "excerptBytes"> {
+  let filesRead = 0;
+  let excerptBytes = 0;
+  for (const windows of excerpts.values()) {
+    const bytes = utf8ByteLength(documentProjectionText(windows));
+    if (bytes === 0) continue;
+    filesRead += 1;
+    excerptBytes += bytes;
+  }
+  return { filesRead, excerptBytes };
 }
 
 const EMPTY_RESULT: DocumentEvidenceResult = {
@@ -364,6 +390,27 @@ interface MutableEvidence {
   readonly omitted: OmittedContextEntry[];
   readonly uncertainty: UncertaintyMarker[];
   totalExtractedBytes: number;
+}
+
+function remainingDocumentBytes(inputs: DocumentEvidenceInputs, acc: MutableEvidence): number {
+  const sharedBytes =
+    inputs.budget === undefined
+      ? MAX_TOTAL_DOCUMENT_EXTRACTED_BYTES
+      : inputs.budget.excerptBytesMax - (inputs.initialUsage?.excerptBytes ?? 0);
+  return Math.max(
+    0,
+    Math.min(MAX_TOTAL_DOCUMENT_EXTRACTED_BYTES, sharedBytes) - acc.totalExtractedBytes,
+  );
+}
+
+function documentFileCapacityReached(
+  inputs: DocumentEvidenceInputs,
+  acc: MutableEvidence,
+): boolean {
+  const fileGrant = inputs.budget?.filesReadMax ?? Number.POSITIVE_INFINITY;
+  const used =
+    (inputs.initialUsage?.filesRead ?? 0) + documentProjectionUsage(acc.excerpts).filesRead;
+  return used >= fileGrant;
 }
 
 function omit(
@@ -578,6 +625,34 @@ async function loadDocumentBytes(
   return sameResolvedDocument(resolved, after) ? bytes : "tool-unavailable";
 }
 
+function boundedDocumentProjection(
+  inputs: DocumentEvidenceInputs,
+  scopePath: string,
+  extraction: { readonly text: string; readonly truncated: boolean },
+  queryFingerprint: string,
+  acc: MutableEvidence,
+  nowMs: number,
+): { readonly windows: readonly ExcerptWindow[]; readonly truncated: boolean } {
+  const windows = windowExtractedText(redact(stripUnsafeFormatChars(extraction.text)));
+  if (inputs.budget === undefined || windows.length === 0)
+    return { windows, truncated: extraction.truncated };
+  const content = documentProjectionText(windows);
+  const projection = {
+    startLine: windows[0]?.startLine ?? 1,
+    endLine: windows.at(-1)?.endLine ?? 1,
+    content,
+  };
+  const compacted = compactExcerpt({
+    atom: documentAtom(inputs.scope, scopePath, projection, queryFingerprint, nowMs),
+    rawContent: content,
+    maxBytes: remainingDocumentBytes(inputs, acc),
+  });
+  return {
+    windows: compacted.truncated ? windowExtractedText(compacted.excerpt.content) : windows,
+    truncated: extraction.truncated || compacted.truncated,
+  };
+}
+
 // Redacts the extracted text and records the document atoms + excerpt windows, or an omission when
 // redaction left no usable text.
 function recordExtractedDocument(
@@ -590,10 +665,17 @@ function recordExtractedDocument(
 ): void {
   // The Local Knowledge extractor is pure and does NOT redact; the document text is redacted here,
   // before it enters any excerpt window, prompt, or citation surface (Issue #1285 trust boundary).
-  const windows = windowExtractedText(redact(stripUnsafeFormatChars(extraction.text)));
-  if (windows.length === 0) {
-    // All extracted text was redaction-stripped — disclose the document was reachable but unusable.
-    omit(acc, scopePath, "redacted-only", nowMs);
+  const projection = boundedDocumentProjection(
+    inputs,
+    scopePath,
+    extraction,
+    queryFingerprint,
+    acc,
+    nowMs,
+  );
+  const { windows } = projection;
+  if (utf8ByteLength(documentProjectionText(windows)) === 0) {
+    omit(acc, scopePath, projection.truncated ? "budget-exhausted" : "redacted-only", nowMs);
     return;
   }
   for (const window of windows) {
@@ -601,11 +683,11 @@ function recordExtractedDocument(
   }
   acc.candidates.push(documentCandidate(scopePath));
   acc.excerpts.set(scopePath, windows);
-  acc.totalExtractedBytes += windows.reduce(
-    (sum, window) => sum + utf8ByteLength(window.content),
-    0,
-  );
-  if (extraction.truncated) {
+  acc.totalExtractedBytes +=
+    inputs.budget === undefined
+      ? windows.reduce((sum, window) => sum + utf8ByteLength(window.content), 0)
+      : utf8ByteLength(documentProjectionText(windows));
+  if (projection.truncated) {
     // The document was clipped to the extraction byte budget; disclose that the evidence is partial.
     acc.uncertainty.push({
       kind: "scope-incomplete",
@@ -671,8 +753,8 @@ async function processDocument(
     omit(acc, scopePath, "budget-exhausted", nowMs);
     return;
   }
-  const remainingBudget = MAX_TOTAL_DOCUMENT_EXTRACTED_BYTES - acc.totalExtractedBytes;
-  if (remainingBudget <= 0) {
+  const remainingBudget = remainingDocumentBytes(documentInputs, acc);
+  if (remainingBudget <= 0 || documentFileCapacityReached(documentInputs, acc)) {
     omit(acc, scopePath, "budget-exhausted", nowMs);
     return;
   }

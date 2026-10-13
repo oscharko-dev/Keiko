@@ -141,3 +141,11 @@ regexTarget = "line"
 regexes = [
   '''apiKey: \["example-test-token-", "1234567890abcd"\]\.join\(""\),''',
 ]
+
+[[allowlists]]
+description = "PR #3913: recorded owner Git commit identities in the acceptance ledger. The generic-api-key rule mistakes the authentic owner field names and this verified existing commit for a credential. Only the two exact metadata field names, the exact recorded commit value and the exact ledger path are exempt in history and squash-equivalent scans; other values, fields and files remain scanned."
+condition = "AND"
+paths = ['''^docs/qa/evidence/3881/acceptance-ledger\.json$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*"authentic(?:Old)?OwnerCommit": "a535fae06f6b26f278614cc049a67e02caef5aa2",\s*$''']

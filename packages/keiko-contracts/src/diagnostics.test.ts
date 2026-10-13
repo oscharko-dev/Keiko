@@ -58,6 +58,84 @@ function validRequest(): Record<string, unknown> {
   };
 }
 
+describe("scope notice and evidence inspection diagnostic contracts", () => {
+  const envelope = { ...validRequest(), correlationId: "scope-action-123" };
+  const scopeNotice = { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 };
+  const evidenceInspection = { reason: "file-table-opened", readFileCount: 2, omittedFileCount: 1 };
+
+  it("admits correlated closed scope changes and healthy evidence inspection", () => {
+    expect(isClientDiagnosticIngestRequest({ ...envelope, scopeNotice })).toBe(true);
+    expect(isClientDiagnosticIngestRequest({ ...envelope, evidenceInspection })).toBe(true);
+  });
+
+  it.each([
+    { reason: "narrowed-to-directory", scopeKind: "directory", pathCount: 1 },
+    { reason: "widened", scopeKind: "workspace-root", pathCount: 0 },
+    { reason: "pinned-folder", scopeKind: "directory", pathCount: 1 },
+    { reason: "pinned-folder", scopeKind: "workspace-root", pathCount: 0 },
+    { reason: "missing-evidence-added", scopeKind: "files", pathCount: 2 },
+  ])("admits each coherent scope action %j", (notice) => {
+    expect(isClientDiagnosticIngestRequest({ ...envelope, scopeNotice: notice })).toBe(true);
+  });
+
+  it.each([
+    { reason: "private/path.ts" },
+    { scopeKind: "private/path.ts" },
+    { pathCount: -1 },
+    { pathCount: 1.5 },
+    { pathCount: Number.MAX_SAFE_INTEGER },
+    { pathCount: 0 },
+    { scopeKind: "workspace-root", pathCount: 1 },
+    { reason: "narrowed-to-directory", scopeKind: "directory", pathCount: 2 },
+    { reason: "narrowed-to-file", scopeKind: "directory" },
+    { reason: "pinned-folder" },
+    { reason: "missing-evidence-added", scopeKind: "directory" },
+    { path: "private/path.ts" },
+  ])("refuses malformed or content-bearing scope facts %j", (patch) => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...envelope, scopeNotice: { ...scopeNotice, ...patch } }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { reason: "private/path.ts" },
+    { readFileCount: -1 },
+    { readFileCount: Number.MAX_SAFE_INTEGER },
+    { omittedFileCount: 1.5 },
+    { path: "private/path.ts" },
+    { reason: "manifest-fetch-failed" },
+  ])("refuses malformed or insufficient inspection facts %j", (patch) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...envelope,
+        evidenceInspection: { ...evidenceInspection, ...patch },
+      }),
+    ).toBe(false);
+  });
+
+  it("requires a canonical correlation and refuses mixed report families", () => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...envelope, correlationId: undefined, scopeNotice }),
+    ).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...envelope, scopeNotice, evidenceInspection })).toBe(
+      false,
+    );
+  });
+
+  it("admits a manifest failure only with closed failure facts", () => {
+    const failure = {
+      ...envelope,
+      evidenceInspection: { reason: "manifest-fetch-failed" },
+      errorKind: "unavailable",
+      errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+    };
+    expect(isClientDiagnosticIngestRequest(failure)).toBe(true);
+    expect(isClientDiagnosticIngestRequest({ ...failure, errorKind: undefined })).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...failure, errorEvidence: undefined })).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...failure, evidenceInspection })).toBe(false);
+  });
+});
+
 describe("Linux gateway diagnostic contract", () => {
   it("accepts every closed kind and rejects extensions or non-strings", () => {
     for (const kind of LINUX_GATEWAY_DIAGNOSTIC_KINDS) {

@@ -124,6 +124,7 @@ import {
   type CitationSupportCaveat,
 } from "./grounded-citation-log.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
   assertConversationReadinessAdmission,
@@ -254,6 +255,7 @@ export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdap
   }
   const cached = EMBEDDING_ADAPTERS_BY_CONFIG.get(config);
   if (cached !== undefined) return cached;
+  const log = processServerLogSink();
   const adapter: OpenAIEmbeddingAdapter = {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
@@ -263,6 +265,7 @@ export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdap
         return { ok: false, kind: "unsupported-model" };
       }
       return requestEmbeddingImpl(deps)({
+        log,
         ...request,
         endpoint: provider.baseUrl,
         apiKey: provider.apiKey,
@@ -2663,6 +2666,7 @@ async function runScopedGroundedAnswer(
       retrieval: {
         store: env.store,
         embeddingAdapter,
+        ...(correlationId !== undefined ? { logContext: { correlationId } } : {}),
         queryTransformer: createBroadQueryTransformer(model, modelId, correlationId),
         vectorIndex: env.vectorIndex,
       },

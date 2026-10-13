@@ -4,6 +4,7 @@ import {
   CancelledError,
   CircuitOpenError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
@@ -2321,6 +2322,7 @@ function modelTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode | 
   // before that check.
   if (
     error instanceof ContextOverflowError ||
+    error instanceof CallerAttemptAdmissionError ||
     error instanceof ModelRefusalError ||
     error instanceof ResponseRedactionError
   )

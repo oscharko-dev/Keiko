@@ -71,6 +71,22 @@ through the initial two-minute window, including when cached models already look
 minute for an unchanged catalog. Hidden tabs pause and catch up immediately on visibility or focus.
 Failed reads back off from five seconds to one minute and report one correlated transport failure
 per outage streak.
+A conversation's first provider dispatch still requires fresh readiness. A completed successful
+call gives only that turn's existing model-port wrapper a continuation witness, valid for the same
+five-minute interval from completion. A bounded follow-up or citation repair can use it when the
+original positive probe merely aged during the call. The current observation must remain positive
+with a valid, non-future timestamp and the admitted model and configuration generation must still
+match. Cleared observations, explicit failed probes, replacement, a different requested model and
+cancellation continue to deny dispatch. Only normalized `stop`, `tool_calls` and `length` responses
+can establish the serving witness; `error`, `cancelled` and `content_filter` terminal responses
+cannot, even when the model promise resolves or the stream emits `done`. A streaming witness also
+requires full iterator exhaustion. Failed or unfinished streams create no witness. This does not
+update the shared observation ledger, admit another turn, extend a deadline or grant attempts or
+tokens. The existing caller's original bounds still govern every continuation.
+`gateway.conversation.admission` records the closed decision and admitted/current generations under
+the request correlation. A known refusal before the model port is invoked incurs no physical
+synthesis attempt or uncertain output reservation.
+
 A deliberate conversation-eligible human selection remains remembered and unsendable while
 unready, then restores on recovery; ready alternatives remain selectable. Automatically elected
 choices may fall back to ready alternatives. Actual removal or structural ineligibility permits

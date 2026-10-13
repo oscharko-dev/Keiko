@@ -17,6 +17,7 @@ import { subText } from "../windows/connectionUtils";
 import { isSecretShapedString } from "./isSecretShapedString";
 import { chatReferenceFingerprint } from "../widgets/chatReferenceFingerprint";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
+import { KEEP_FILES_FOLDER_CFG_KEY } from "./workspaceActions";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -68,6 +69,26 @@ describe("workspace-persistence", () => {
       }
     },
   );
+
+  it("persists the chat-owned folder pin as a boolean without retaining scope paths", () => {
+    for (const keep of [true, false]) {
+      const retained = sanitizePersistedWindows([
+        win({ id: "pinned-chat", type: "chat", cfg: { [KEEP_FILES_FOLDER_CFG_KEY]: keep } }),
+      ]);
+      expect(retained[0]?.cfg).toEqual({ [KEEP_FILES_FOLDER_CFG_KEY]: keep });
+    }
+    for (const keep of ["/private/source", "true", 1, null, { root: "/private/source" }]) {
+      const rejected = sanitizePersistedWindows([
+        { ...win({ id: "pinned-chat", type: "chat" }), cfg: { [KEEP_FILES_FOLDER_CFG_KEY]: keep } },
+      ]);
+      expect(rejected[0]?.cfg).toEqual({});
+    }
+    expect(
+      sanitizePersistedWindows([
+        win({ id: "files", type: "files", cfg: { [KEEP_FILES_FOLDER_CFG_KEY]: true } }),
+      ])[0]?.cfg,
+    ).toEqual({});
+  });
 
   it("retains only the closed Coding Workbench Git binding marker", () => {
     const retained = sanitizePersistedWindows([

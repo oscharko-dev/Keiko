@@ -19,6 +19,7 @@ import {
   ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM,
   NUMERIC_EVIDENCE_FRAMING_CHARS,
   buildPackCitationIndex,
+  buildInsufficiencyScopeIndex,
   buildPackExcerptTextResolver,
   type EntailmentJudge,
   type EntailmentJudgeInput,
@@ -125,6 +126,24 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it.each(["app/users/[id]/page.tsx", "app/docs/[...slug]/page.tsx"])(
+    "authenticates the whole literal bracket path %s and strips its complete marker",
+    (path) => {
+      const answer = `The page returns true [${path}:180-182].`;
+      const index = buildPackCitationIndex([
+        packWith([{ scopePath: path, excerpts: [excerpt(path, 180, 182)] }]),
+      ]);
+      expect(parseInlineCitations(answer)).toMatchObject([
+        { scopePath: path, lineRange: { startLine: 180, endLine: 182 } },
+      ]);
+      expect(reconcileInlineCitations(answer, index).unsupported).toEqual([]);
+      expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual([path]);
+      expect(segmentCitedClaims(answer)).toMatchObject([
+        { claimText: "The page returns true .", citations: [{ scopePath: path }] },
+      ]);
+      expect(stripInlineCitations(answer)).toBe("The page returns true .");
+    },
+  );
   it.each([
     "listens on 127.0.0.1:1983",
     "api.example.com:8080",
@@ -751,7 +770,28 @@ describe("unsupportedCitationMarker", () => {
   });
 
   it("reports governed memory context outside the evidence as uncited, not as a fabricated citation", () => {
-    expect(uncitedMemoryContextMarker(NOW).kind).toBe("uncited-answer");
+    expect(uncitedMemoryContextMarker(NOW).kind).toBe("uncited-memory-context");
+  });
+});
+
+describe("actual prompt membership for missing evidence", () => {
+  it("downgrades discovery-only reads and admits only files with actual sent excerpts", () => {
+    const pack = packWith([
+      { scopePath: "src/read.ts", excerpts: [excerpt("src/read.ts", 1, 3)] },
+      { scopePath: "src/not-sent.ts", excerpts: [] },
+    ]);
+    expect([
+      ...buildInsufficiencyScopeIndex(
+        [pack],
+        new Map([
+          ["src/old-read.ts", "read-in-this-turn"],
+          ["src/read.ts", "unread-in-scope"],
+        ]),
+      ),
+    ]).toEqual([
+      ["src/old-read.ts", "unread-in-scope"],
+      ["src/read.ts", "read-in-this-turn"],
+    ]);
   });
 });
 
@@ -1729,5 +1769,48 @@ describe("unsupportedClaimMarker / entailmentUnavailableMarker", () => {
     const marker = entailmentUnavailableMarker(NOW);
     expect(marker.kind).toBe("entailment-unavailable");
     expect(marker.claim.toLowerCase()).toContain("could not be verified");
+  });
+});
+
+describe("labelled general knowledge authority", () => {
+  const source = "The page returns true [src/page.ts:1].";
+  const general =
+    "<assessment>My recommendation: compare alternatives [missing.ts:9] [99].</assessment>";
+  it("never authenticates a file citation from model knowledge", () => {
+    expect(
+      parseInlineCitations(`${source}\n${general}`).map((citation) => citation.scopePath),
+    ).toEqual(["src/page.ts"]);
+  });
+  it("never authenticates a numeric citation from model knowledge", () => {
+    const result = reconcileNumericCitations(`Fact [1].\n${general}`, new Set([1, 99]));
+    expect([...result.citedMarkers]).toEqual([1]);
+    expect(result.unsupportedMarkers).toEqual([]);
+  });
+  it("does not repair an assessment-only answer as an uncited source claim", () => {
+    expect(missingCitationMarkerFor(general, NOW)).toBeUndefined();
+  });
+  it("judges only source-backed file claims", () => {
+    expect(segmentCitedClaims(`${source}\n${general}`)).toMatchObject([
+      { claimText: "The page returns true .", citations: [{ scopePath: "src/page.ts" }] },
+    ]);
+    expect(segmentCitedClaims(`${source}\n${general}`)).toHaveLength(1);
+  });
+  it("judges only source-backed numeric claims", () => {
+    expect(segmentNumericCitedClaims(`Fact [1].\n${general}`)).toEqual([
+      { claimText: "Fact .", markers: [1] },
+    ]);
+  });
+  it("keeps an unlabelled source assertion subject to missing-citation warning", () => {
+    expect(
+      missingCitationMarkerFor(
+        "The page returns true.\n<assessment>Use robust tests.</assessment>",
+        NOW,
+      ),
+    ).toMatchObject({ kind: "uncited-answer" });
+  });
+  it("does not accept a loose assessment heading as an authority delimiter", () => {
+    expect(missingCitationMarkerFor("Own assessment: the page returns true.", NOW)).toMatchObject({
+      kind: "uncited-answer",
+    });
   });
 });
