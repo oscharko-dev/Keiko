@@ -870,6 +870,11 @@ existing `chat.response.message` operation: the actual structured
 This distinguishes actual included memory from budget exclusion across single, multiple, and hybrid
 sources; neither retrieval candidate counts nor model-authored marker prose proves inclusion.
 The observation carries no memory content or answer text.
+Citation repair is decided from the current answer: a substantive source answer without markers
+may use the single bounded repair even if earlier answers from the same model cited reliably.
+Historical citation observations remain descriptive and cannot waive current source validation.
+The existing Activity Log records the actual repair disposition and final citation behaviour;
+clarifications and already cited answers do not acquire an extra model call.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
 maximum of two physical synthesis attempts and the original remaining search/read/token/spend/time grants.
 Declared unread targets receive priority during final prompt fitting;

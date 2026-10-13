@@ -3062,7 +3062,7 @@ describe("multi-source bounded citation repair", () => {
       expect(answer.citations).toEqual([]);
     },
   );
-  it("skips repair only for three current reliable citation observations", async () => {
+  it("repairs a current missing citation despite three prior reliable citation observations", async () => {
     const configured = reliableCitationRuntime(tmp, CHAT_MODEL);
     try {
       expect(citationBehaviourFor(configured, CHAT_MODEL)).toBe("cites");
@@ -3071,9 +3071,11 @@ describe("multi-source bounded citation repair", () => {
         "The implementation works.",
         { gatewayConfig: configured.gatewayConfig },
       );
-      expect(calls).toHaveLength(1);
-      expect(answer.content).toBe("The implementation works.");
-      expect(answer.citationBehaviour).toBe("never");
+      expect(calls).toHaveLength(2);
+      expect(answer.content).toBe("The implementation works [source:2|src/beta.ts:1-5].");
+      expect(answer.citationBehaviour).toBe("cites-after-repair");
+      expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("uncited-answer");
+      expect(answer.citations.length).toBe(1);
       expect(citationBehaviourFor(configured, CHAT_MODEL)).toBeUndefined();
     } finally {
       await configured.dispose?.();

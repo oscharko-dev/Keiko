@@ -62,8 +62,7 @@ export interface GroundedRepairResult {
 function repairDisposition(ctx: GroundedRepairContext): CitationRepairDisposition | undefined {
   if (!hasSubstantiveEvidenceAnswer(ctx)) return "not-needed";
   if (hasParsedRepairCitations(ctx)) return "not-needed";
-  if (ctx.deps.reliableCitationBehaviour === "cites" || repairInvoker(ctx) === undefined)
-    return "skipped-capability";
+  if (repairInvoker(ctx) === undefined) return "skipped-capability";
   if (ctx.deps.answerer?.remainingSynthesisCalls?.() === 0) return "skipped-budget";
   if (repairBudgetExhausted(ctx)) return "skipped-budget";
   return undefined;

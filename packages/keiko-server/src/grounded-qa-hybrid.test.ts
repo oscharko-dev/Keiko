@@ -2559,16 +2559,18 @@ describe("hybrid bounded citation repair", () => {
     expect(answer.knowledgeCitations).toEqual([]);
   });
 
-  it("skips numeric repair only for three current reliable citation observations", async () => {
+  it("repairs a current missing citation despite three prior reliable citation observations", async () => {
     const configured = reliableCitationRuntime(tmp, CHAT_MODEL);
     try {
       expect(citationBehaviourFor(configured, CHAT_MODEL)).toBe("cites");
       const { calls, answer } = await repairAsk("The implementation works [1].", false, {
         gatewayConfig: configured.gatewayConfig,
       });
-      expect(calls).toHaveLength(1);
-      expect(answer.content).toBe("The implementation works.");
-      expect(answer.citationBehaviour).toBe("never");
+      expect(calls).toHaveLength(2);
+      expect(answer.content).toBe("The implementation works [1].");
+      expect(answer.citationBehaviour).toBe("cites-after-repair");
+      expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("uncited-answer");
+      expect(answer.citations.length + answer.knowledgeCitations.length).toBe(1);
       expect(citationBehaviourFor(configured, CHAT_MODEL)).toBeUndefined();
     } finally {
       await configured.dispose?.();
