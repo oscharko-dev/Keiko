@@ -3165,13 +3165,18 @@ describe("current route trace excerpt coverage", () => {
       { startLine: 43, endLine: 43 },
     ]);
     const budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 256 };
-    const reads = await coverageRead(fixture, { atoms, inputs: { budget } });
+    const { reads, requests } = await observedCoverageRead(fixture, {
+      atoms,
+      inputs: { budget },
+    });
     const prompt = await sentPrompt(fixture, reads, atoms, budget);
     for (const [index, line] of registrations.entries()) {
       expect(readContent(reads, "src/routes.ts")).toContain(line);
       expect(prompt).toContain(`${String(42 + index)} | ${line}`);
     }
     expect(readBytes(reads)).toBeLessThanOrEqual(budget.excerptBytesMax);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((request) => request.query === undefined)).toBe(true);
   });
 
   it("retains ordinary opportunity for a selected definition when route coverage is absent", async () => {

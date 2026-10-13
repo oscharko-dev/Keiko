@@ -7944,6 +7944,8 @@ function ordinaryExcerptFacetQuery(
     (inputs.atomsByPath.get(scopePath) ?? []).some(
       (atom) =>
         (atom.provenance.tool === "repo.selectedFile" && atom.lineRange !== undefined) ||
+        (atom.provenance.kind === "structural" &&
+          atom.provenance.tool === "endpoint-contract-server-route") ||
         (atom.provenance.tool !== "repo.selectedFile" && tracePriority(atom) > 0),
     )
   )

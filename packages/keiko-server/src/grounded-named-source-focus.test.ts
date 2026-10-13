@@ -372,3 +372,35 @@ describe("live-admitted query-named source focus under the original grants", () 
     ).toBe(true);
   });
 });
+
+describe("same-file explanatory coordination retains the public source focus", () => {
+  it.each([
+    `Explain ${TARGET} and how it preserves elapsed limits.`,
+    `Explain ${TARGET} and how it preserves the original read, token and elapsed limits. Cite implementation lines. Keep the answer under 200 words.`,
+    `Explain how ${TARGET} preserves reads, tokens and elapsed limits.`,
+  ])("binds coordinated source prose through public retrieval: %s", async (text) => {
+    const root = await fixture();
+    const out = await retrieve(root, text);
+    expect(out.result.plan.targetDecision?.namedFileOnly).toBe(true);
+    expect(out.result.pack.files.map((file) => file.scopePath)).toEqual([TARGET]);
+    expect(out.prompt).toContain("source evidence requires actual citations");
+    expect(out.bodies.filter((path) => path.includes("navigation-"))).toEqual([]);
+    expect(
+      out.log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+    ).toMatchObject({ explicitPathAdmittedCount: 1, explicitPathRejectedCount: 0 });
+  });
+
+  it.each(["describe", "find"])(
+    "preserves independent comma instructions headed by %s",
+    async (command) => {
+      const root = await fixture();
+      const out = await retrieve(
+        root,
+        `Explain how ${TARGET} preserves elapsed limits, ${command} pump reset delays.`,
+      );
+      expect(out.result.plan.targetDecision?.namedFileOnly).toBeUndefined();
+      expect(out.result.pack.files.map((file) => file.scopePath)).toContain(SECOND);
+      expect(out.prompt).toContain("pumpResetDelay = 43");
+    },
+  );
+});

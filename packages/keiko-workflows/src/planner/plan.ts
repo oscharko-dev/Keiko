@@ -393,7 +393,9 @@ const NAMED_FILE_RETURN_RE =
 const NAMED_FILE_FACT_CONTINUATION_RE =
   /^(?:(?:which|what) (?:function|method|section|value)|welch(?:e|er|es|en) (?:funktion|methode|abschnitt|wert)) (.+)$/iu;
 const SOURCE_SCOPE_POSITION_PATTERNS = [
-  /^(?:in|within|from|across|throughout|all|any|other|every|im|innerhalb|aus|über)$/iu,
+  /^(?:in|within|inside|outside|into|from|across|through|throughout|with|against|versus)$/iu,
+  /^(?:all|any|other|every)$/iu,
+  /^(?:im|innerhalb|außerhalb|aus|über|mit|gegen)$/iu,
   /^(?:alle[nmrs]?|andere[nmrs]?|jede[nmrs]?)$/iu,
 ];
 const SOURCE_SCOPE_NONLOCAL_PATTERNS = [
@@ -401,12 +403,21 @@ const SOURCE_SCOPE_NONLOCAL_PATTERNS = [
   /^(?:ander(?:e|en|em|er|es)|alle[nmrs]?|jede[nmrs]?|gesamt(?:e|en|em|er|es))$/iu,
 ];
 const SOURCE_SCOPE_ELSEWHERE_RE = /^(?:elsewhere|everywhere|anderswo|woanders|überall)$/iu;
-const SOURCE_SCOPE_NOUN_RE =
-  /^(?:repos?|workspaces?|projects?|scopes?|projekte?|arbeitsbereiche?)$/iu;
+const SOURCE_SCOPE_NOUN_PATTERNS = [
+  /^(?:repos?|repositor(?:y|ies)|workspaces?|projects?|scopes?)$/iu,
+  /^(?:files?|folders?|director(?:y|ies)|manuals?|documents?|sources)$/iu,
+  /^(?:projekte?|arbeitsbereiche?|datei(?:en)?|ordner[sn]?|verzeichnis(?:se|sen)?|dokumente?)$/iu,
+  /^(?:handbuch(?:e?s)?|handbüchern?)$/iu,
+];
 const NAMED_FILE_CONTAINED_REQUEST_RE =
   /^(?:please |bitte )?(?:explain|describe|summarize|erkläre|beschreibe) (.+) (?:in|within|from|aus) \0$/iu;
 const NAMED_FILE_SUBJECT_REQUEST_RE =
   /^(?:please |bitte )?(?:explain|describe|erkläre|beschreibe) (?:how|wie) \0 (.+)$/iu;
+const NAMED_FILE_ANAPHORIC_REQUEST_RE =
+  /^(?:please |bitte )?(?:explain|describe|erkläre|beschreibe) \0 (?:and how it|und wie (?:es|sie)) (.+)$/iu;
+const COORDINATED_OBJECT_SEPARATOR_RE = /,|\s+(?:and|or|und|oder)\s+/u;
+const COORDINATED_SUBJECT_HEAD_RE =
+  /^(?:i|we|you|he|she|it|they|a|an|the|this|that|these|those|ich|wir|du|er|sie|es|ein|eine|der|die|das)$/iu;
 const INDEPENDENT_REQUEST_GRAMMAR_PATTERNS = [
   /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus)\b/iu,
   /\b(?:then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während)\b/iu,
@@ -477,7 +488,8 @@ function boundNamedFilePredicate(text: string): boolean {
     text.length > 0 &&
     !text.includes("\0") &&
     !matchesQueryPattern(text, INDEPENDENT_REQUEST_GRAMMAR_PATTERNS) &&
-    !matchesQueryPattern(text, REQUEST_COMMAND_PATTERNS)
+    !matchesQueryPattern(text, REQUEST_COMMAND_PATTERNS) &&
+    !independentNamedPredicate(text)
   );
 }
 
@@ -496,6 +508,90 @@ function isNamedFileClause(words: readonly string[]): boolean {
   const subject = NAMED_FILE_SUBJECT_REQUEST_RE.exec(clause)?.[1];
   const predicate = contained ?? subject;
   return predicate !== undefined && boundNamedFilePredicate(predicate);
+}
+
+/** An object determiner can bind the noun "read"; a later command remains an instruction. */
+function namedPredicateObjectText(text: string): string {
+  let determined = false;
+  return text.replace(SOURCE_ADVICE_TOKEN_RE, (token: string, offset: number) => {
+    const tail = text.slice(offset + token.length).trimStart();
+    if (token === "read" && determined && /^(?:$|,|(?:and|or|und|oder)\b)/u.test(tail))
+      return "\u0001";
+    if (matchesQueryPattern(token, SOURCE_ADVICE_DETERMINER_PATTERNS)) determined = true;
+    else if (sourceAdviceBoundary(token)) determined = false;
+    return token;
+  });
+}
+
+function coordinatedObjectPart(text: string): boolean {
+  const words = shapeWords(text);
+  const head = words[0];
+  return (
+    head !== undefined &&
+    !COORDINATED_SUBJECT_HEAD_RE.test(head) &&
+    /^(?:[\p{L}\p{N}_$-]+|[\p{L}\p{N}_$-]+(?:ed|ing) [\p{L}\p{N}_$-]+)$/u.test(text) &&
+    !matchesQueryPattern(text, INDEPENDENT_REQUEST_GRAMMAR_PATTERNS) &&
+    (text === "reads" || !matchesQueryPattern(text, REQUEST_COMMAND_PATTERNS)) &&
+    !words.some((word) => CONTEXT_REQUEST_HEADS.has(word))
+  );
+}
+
+function coordinatedPredicateHead(head: string, objects: readonly string[]): boolean {
+  if (shapeWords(head).length < 2) return false;
+  if (objects.length === 1 && shapeWords(objects[0] ?? "").length > 1 && !head.includes("\u0001"))
+    return false;
+  // The explanatory subject already owns the first predicate verb. Remaining request verbs
+  // cannot become objects merely because a comma or conjunction precedes them.
+  const afterVerb = head.slice(/^[^ ]+ /u.exec(head)?.[0].length ?? 0);
+  return boundNamedFilePredicate(afterVerb) || afterVerb === "reads";
+}
+
+function coordinatedNamedPredicate(text: string, verbLast: boolean): boolean {
+  if (text.includes(",") && !/\s+(?:and|or|und|oder)\s+[^,]+$/u.test(text)) return false;
+  const [head, ...objects] = text.split(COORDINATED_OBJECT_SEPARATOR_RE).map((part) => part.trim());
+  if (head === undefined || objects.length === 0) return false;
+  if (verbLast) return coordinatedGermanObjects([head, ...objects]);
+  return coordinatedPredicateHead(head, objects) && objects.every(coordinatedObjectPart);
+}
+
+function coordinatedGermanObjects(parts: readonly string[]): boolean {
+  const tail = parts.at(-1) ?? "";
+  if (matchesQueryPattern(tail, REQUEST_COMMAND_PATTERNS)) return false;
+  const verbStart = tail.lastIndexOf(" ");
+  if (verbStart < 0) return false;
+  const withoutVerb = tail.slice(0, verbStart);
+  return [...parts.slice(0, -1), withoutVerb].every(coordinatedObjectPart);
+}
+
+function boundExplanatoryPredicate(predicate: string, verbLast: boolean): boolean {
+  if (independentNamedPredicate(predicate)) return false;
+  if (!predicate.includes(",") && boundNamedFilePredicate(predicate)) return true;
+  const objectText = namedPredicateObjectText(predicate);
+  if (!predicate.includes(",") && boundNamedFilePredicate(objectText)) return true;
+  return coordinatedNamedPredicate(objectText, verbLast);
+}
+
+function scopedNamedFileExplanation(clause: string, singleFile: boolean): boolean | undefined {
+  const text = normalizedConversationClause(clause);
+  const anaphoric = NAMED_FILE_ANAPHORIC_REQUEST_RE.exec(text)?.[1];
+  const subject = NAMED_FILE_SUBJECT_REQUEST_RE.exec(text)?.[1];
+  const predicate = anaphoric ?? subject ?? NAMED_FILE_CONTAINED_REQUEST_RE.exec(text)?.[1];
+  if (predicate === undefined) return undefined;
+  if (anaphoric !== undefined && (!singleFile || independentNamedPredicate(predicate)))
+    return false;
+  const verbLast = /^(?:bitte )?(?:erkläre|beschreibe) /u.test(text);
+  return boundExplanatoryPredicate(predicate, verbLast);
+}
+
+function independentNamedPredicate(text: string): boolean {
+  return (
+    text.includes("\0") ||
+    hasHistoryQuery(text) ||
+    hasSymbolRelation(text) ||
+    REQUESTED_TEST_RELATION_RE.test(text) ||
+    ROUTE_TRAVERSAL_RE.test(text) ||
+    independentSourceScope(text)
+  );
 }
 
 function namedFileRequestShape(
@@ -519,9 +615,11 @@ function namedFileRequestShape(
   };
 }
 
-function namedFileClauseDecision(clause: string): boolean | undefined {
+function namedFileClauseDecision(clause: string, singleFile: boolean): boolean | undefined {
   const projected = queryShapeOutsideTargets(clause, [{ term: "\0", kind: "path", weight: 1 }]);
   if (queryContextOutsideQuotes(projected) !== projected) return false;
+  const explanation = scopedNamedFileExplanation(projected, singleFile);
+  if (explanation !== undefined) return explanation;
   const fragments = projected.includes("\0") ? projected.split(",") : [projected];
   const decisions = new Set(fragments.map(namedFileWordsDecision));
   if (decisions.has(false)) return false;
@@ -538,12 +636,11 @@ function namedFileWordsDecision(clause: string): boolean | undefined {
 function independentSourceScope(predicate: string): boolean {
   let locating = false;
   for (const match of predicate.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
-    const token = match[0];
+    const token = match[0].replace(/['’]s$/u, "");
     if (SOURCE_SCOPE_ELSEWHERE_RE.test(token)) return true;
     if (
       locating &&
-      (SOURCE_SCOPE_NOUN_RE.test(token) ||
-        matchesQueryPattern(token, SOURCE_ADVICE_NOUN_PATTERNS) ||
+      (matchesQueryPattern(token, SOURCE_SCOPE_NOUN_PATTERNS) ||
         matchesQueryPattern(token, SOURCE_SCOPE_NONLOCAL_PATTERNS))
     )
       return true;
@@ -575,7 +672,7 @@ function namedFileOnlyRequest(query: RetrievalQuery): boolean {
   if (shape === undefined) return false;
   let bound = false;
   for (const clause of shape.text.split(/[.!?;\n&]/u)) {
-    const decision = namedFileClauseDecision(clause);
+    const decision = namedFileClauseDecision(clause, shape.singleFile);
     if (decision === false && !(shape.singleFile && bound && namedFileFactContinuation(clause)))
       return false;
     bound = bound || decision === true;

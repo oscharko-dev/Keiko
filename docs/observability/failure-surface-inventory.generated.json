@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "40ed58edaff0737e40e0370bb4777e9dd3a686a3b9f60e798ad5cc68ee2aac9f"
+    "catalogDigest": "6c1f38922f134e26624e3d165c05cdaaf263e32fd5b914e81386fe56ec63666a"
   },
   "autonomyContext": {
     "role": "closed-context",

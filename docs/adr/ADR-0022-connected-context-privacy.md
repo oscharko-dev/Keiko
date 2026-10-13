@@ -312,7 +312,10 @@ does not add source work; unknown or source-constrained independent clauses rema
 The existing target decision supplies a positive, completely parsed `namedFileOnly` result;
 finding a path somewhere in an otherwise unknown clause is insufficient. Closed file-list,
 file-contained fact and file-subject explanation forms retain canonical quote and presentation
-projection. A positively parsed return/open/read orientation to one exact query-named path may
+projection. An explanatory predicate attached to one named file, including an explicit singular
+anaphor and its coordinated objects, retains that binding. Commas are classified before word
+projection so a separate command or subject cannot become part of that file's predicate.
+A positively parsed return/open/read orientation to one exact query-named path may
 bind subsequent local function, method, section or value questions in the same request. Those
 questions cannot precede the orientation or choose among multiple distinct paths. Actual quoted
 targets, nonlocal locations, other source constraints, relationship/history requests and unknown
@@ -432,7 +435,8 @@ context lines, preventing neighbouring definitions from consuming each other's e
 Existing own-return and direct-await annotations order certified calls with fair sibling traversal.
 Exact structural endpoint-registration ranges and their existing surrounding-context boundaries
 split broader ordinary windows. Uncovered surrounding evidence retains its relevance and priority;
-these spans do not certify handler invocation.
+these spans do not certify handler invocation. Ordinary query-facet scheduling cannot repartition
+those exact structural registration queues.
 Binding certification does not replace relevance with a constant score. Declaration promotion
 preserves its admitted score; a further definition reuses the original-query matcher on its actually
 read, redacted source, followed by the existing relationship attenuation. Explicit selected-file
@@ -631,10 +635,11 @@ redacted source. Only already proposed ranges can receive separate bounded oppor
 those groups; repeated stronger matches cannot consume every opportunity before another requested
 aspect is considered. Existing order within each group, full-range admission, deduplication,
 source currentness and every byte, file and deadline grant still apply. Explicit selected line windows,
-funded definition windows and trace priorities retain their existing behavior. File-pattern, regular-expression
+funded definition windows, exact structural endpoint-registration queues and trace priorities retain
+their existing behavior. File-pattern, regular-expression
 and exact-symbol queries do not use this scheduling. A matched term group is lexical
 coverage, not proof of a complete implementation or a supported answer.
-The existing completion-details event records planned and served canonical query-group counts
+The existing completion-details event records served canonical query-group counts
 for these ordinary reads. Counts are summed per path and describe actual reader coverage before
 final prompt fitting; no source or query text enters the Activity Log.
 
