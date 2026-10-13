@@ -500,3 +500,142 @@ describe("managed LSP runtime configuration", () => {
     expect(parseManagedLspRuntimeConfiguration(hostile).ok).toBe(false);
   });
 });
+
+import { parseManagedLspRuntimeConfiguration as publicRuntime } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
+
+describe.each([
+  ["source", parseManagedLspRuntimeConfiguration],
+  ["public", publicRuntime],
+] as const)("3918 runtime owning admission %s", (_surface, parse) => {
+  it("retains the complete healthy Go configuration and settings", () => {
+    const input = configuration("go", goSettings());
+    const result = parse(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.settings).toBe(input.settings);
+    if (result.value.language === "go") expect(result.value.settings.moduleDownloads).toBe(false);
+  });
+  it("refuses an absent physical build tag", () => {
+    expect(
+      parse(configuration("go", { ...goSettings(), buildTags: new Array<unknown>(1) })),
+    ).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+  });
+  it("refuses a malformed physical build tag concealed by caller every", () => {
+    const buildTags = [42];
+    Object.defineProperty(buildTags, "every", { value: (): boolean => true });
+    expect(parse(configuration("go", { ...goSettings(), buildTags }))).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+  });
+  it("refuses a malformed path concealed by caller validation and projection", () => {
+    const extraPaths = [{}];
+    Object.defineProperty(extraPaths, "every", { value: (): boolean => true });
+    Object.defineProperty(extraPaths, "map", { value: (): string[] => ["src"] });
+    expect(parse(configuration("python", { ...pythonSettings(), extraPaths }))).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+  });
+});
+
+describe.each([
+  ["source", parseManagedLspRuntimeConfiguration],
+  ["public", publicRuntime],
+] as const)("3918 managed-lsp-runtime captured extent %s", (_surface, parse) => {
+  function inspectExtent(
+    laterExtent: number,
+    firstObservation: { readonly first: unknown } = { first: 1 },
+  ): {
+    readonly result: boolean;
+    readonly indexReads: number;
+    readonly lengths: readonly unknown[];
+  } {
+    const values: unknown[] = ["integration"];
+    const lengths: unknown[] = [];
+    let indexReads = 0;
+    let nativeVisits = 0;
+    const observed = new Proxy(values, {
+      get(target, key, receiver): unknown {
+        if (key === "length") {
+          const length =
+            lengths.length === 0
+              ? firstObservation.first
+              : lengths.length === 1
+                ? laterExtent
+                : target.length;
+          lengths.push(length);
+          return length;
+        }
+        if (typeof key === "string" && /^\d+$/u.test(key)) indexReads += 1;
+        const datum: unknown = Reflect.get(target, key, receiver);
+        return datum;
+      },
+      has(target, key): boolean {
+        if (typeof key === "string" && /^\d+$/u.test(key)) nativeVisits += 1;
+        if (nativeVisits > MANAGED_LSP_BUILD_TAG_MAX_COUNT + 1)
+          throw new TypeError("fixture native traversal bound");
+        return Reflect.has(target, key);
+      },
+    });
+    return {
+      result: parse(configuration("go", { ...goSettings(), buildTags: observed })).ok,
+      indexReads,
+      lengths,
+    };
+  }
+  it("preserves a healthy actual captured extent", () => {
+    const observation = inspectExtent(1);
+    expect(observation.result).toBe(true);
+    expect(observation.lengths.slice(0, 2)).toEqual([1, 1]);
+    expect(observation.indexReads).toBeGreaterThan(0);
+  });
+  it.each([NaN, undefined])("preserves original first-limit refusal for %s", (first) => {
+    const observation = inspectExtent(1, { first });
+    expect(observation).toEqual({ result: false, indexReads: 0, lengths: [first] });
+  });
+
+  it.each([MANAGED_LSP_BUILD_TAG_MAX_COUNT + 1, Infinity, 0.5, -1])(
+    "refuses captured extent %s before indexing",
+    (extent) => {
+      const observation = inspectExtent(extent);
+      expect({
+        accepted: observation.result,
+        indexReads: observation.indexReads,
+        firstTwoLengths: observation.lengths.slice(0, 2),
+      }).toEqual({
+        accepted: false,
+        indexReads: 0,
+        firstTwoLengths: [1, extent],
+      });
+    },
+  );
+});
+
+describe.each([
+  ["source", parseManagedLspRuntimeConfiguration],
+  ["public", publicRuntime],
+] as const)("3918 runtime original exclusion-limit %s", (_surface, parse) => {
+  it.each([NaN, undefined])(
+    "preserves the original negative first-cap path observation %s",
+    (first) => {
+      let lengths = 0;
+      const paths = new Proxy([contained("src")], {
+        get(target, key, receiver): unknown {
+          if (key === "length") return lengths++ === 0 ? first : target.length;
+          const datum: unknown = Reflect.get(target, key, receiver);
+          return datum;
+        },
+      });
+      const result = parse(configuration("python", { ...pythonSettings(), extraPaths: paths }));
+      expect(result.ok).toBe(true);
+      if (result.ok && result.value.language === "python")
+        expect(result.value.settings.extraPaths).toBe(paths);
+      expect(lengths).toBeGreaterThan(1);
+    },
+  );
+});

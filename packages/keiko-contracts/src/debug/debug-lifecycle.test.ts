@@ -299,3 +299,47 @@ describe("debug lifecycle closed-vocabulary derivation (KEIKO-0377)", () => {
     expect(isDebugLifecycleEvidence(candidate)).toBe(false);
   });
 });
+
+import * as lifecyclePublic from "@oscharko-dev/keiko-contracts/runtime/debug/debug-lifecycle";
+
+describe("3918 debug lifecycle concrete vocabulary and sequence observations", () => {
+  for (const [surface, evidence, event] of [
+    ["source", isDebugLifecycleEvidence, isDebugLifecycleEvent],
+    ["public", lifecyclePublic.isDebugLifecycleEvidence, lifecyclePublic.isDebugLifecycleEvent],
+  ] as const) {
+    it.each(["eventKind", "reason"] as const)(
+      `${surface} refuses coerced %s vocabulary`,
+      (field) => {
+        const token = field === "eventKind" ? "start" : "requested";
+        expect(evidence({ ...valid, [field]: { toString: (): string => token } })).toBe(false);
+      },
+    );
+    it.each([Infinity, "1"] as const)(`${surface} refuses late sequence %s`, (later) => {
+      let reads = 0;
+      const value = {
+        ...valid,
+        get sequence(): unknown {
+          return ++reads === 1 ? 1 : later;
+        },
+      };
+      expect(event(value)).toBe(false);
+      expect(reads).toBe(2);
+    });
+    it(`${surface} preserves independent valid sequence observations`, () => {
+      let reads = 0;
+      const value = {
+        ...valid,
+        get sequence(): number {
+          return ++reads === 1 ? -1 : 1;
+        },
+      };
+      expect(event(value)).toBe(true);
+      expect(reads).toBe(2);
+    });
+    it(`${surface} preserves ordinary producer vocabulary and its exact schema`, () => {
+      expect(evidence(valid)).toBe(true);
+      expect(event({ ...valid, sequence: 1 })).toBe(true);
+      expect(evidence({ ...valid, state: { toString: (): string => "starting" } })).toBe(false);
+    });
+  }
+});

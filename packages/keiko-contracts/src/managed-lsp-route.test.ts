@@ -431,3 +431,192 @@ describe("managed-LSP route response parser", () => {
     expect(parseManagedLspControlResponse(hostile)).toMatchObject({ ok: false });
   });
 });
+
+import {
+  parseManagedLspControlRequest as publicRequest,
+  parseManagedLspControlResponse as publicResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
+
+describe.each([
+  ["source", parseManagedLspControlRequest, parseManagedLspControlResponse],
+  ["public", publicRequest, publicResponse],
+] as const)("3918 route owning admission %s", (_surface, parseRequest, parseResponse) => {
+  it("copies the healthy request without inventing configuration", () => {
+    const input = {
+      root: "/workspace/a",
+      language: "python",
+      action: "restart",
+      expectedRevision: 0,
+    };
+    const result = parseRequest(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (result.ok) {
+      expect(result.value).not.toBe(input);
+      expect(Object.hasOwn(result.value, "configuration")).toBe(false);
+    }
+  });
+  it("refuses an invalid action captured after initial scalar admission", () => {
+    let reads = 0;
+    const input = {
+      root: "/workspace/a",
+      language: "python",
+      expectedRevision: 0,
+      get action(): unknown {
+        reads += 1;
+        return reads === 1 ? "restart" : "spawn";
+      },
+    };
+    expect(parseRequest(input)).toEqual({
+      ok: false,
+      errors: ["managed LSP control request is invalid"],
+    });
+    expect(reads).toBe(2);
+  });
+  it("retains the healthy response reference and exact five-language coverage", () => {
+    const input = response();
+    const result = parseResponse(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.languages.map((entry) => (entry.ok ? entry.language : undefined))).toEqual(
+      MANAGED_LSP_LANGUAGES,
+    );
+  });
+  it("refuses malformed physical provider metadata concealed by caller methods", () => {
+    const providerMetadata = [{}];
+    Object.defineProperty(providerMetadata, "every", { value: (): boolean => true });
+    Object.defineProperty(providerMetadata, "map", { value: (): string[] => ["python"] });
+    expect(parseResponse({ ...response(), providerMetadata })).toEqual({
+      ok: false,
+      errors: ["managed LSP control response is invalid or contains unknown fields"],
+    });
+  });
+});
+
+describe.each([
+  ["source", parseManagedLspControlResponse],
+  ["public", publicResponse],
+] as const)("3918 managed-lsp-route captured extent %s", (_surface, parse) => {
+  function inspectExtent(laterExtent: number): {
+    readonly result: boolean;
+    readonly indexReads: number;
+    readonly lengths: readonly number[];
+  } {
+    const values: unknown[] = ["runtime"];
+    const lengths: number[] = [];
+    let indexReads = 0;
+    let nativeVisits = 0;
+    const observed = new Proxy(values, {
+      get(target, key, receiver): unknown {
+        if (key === "length") {
+          const length = lengths.length === 1 ? laterExtent : target.length;
+          lengths.push(length);
+          return length;
+        }
+        if (typeof key === "string" && /^\d+$/u.test(key)) indexReads += 1;
+        const datum: unknown = Reflect.get(target, key, receiver);
+        return datum;
+      },
+      has(target, key): boolean {
+        if (typeof key === "string" && /^\d+$/u.test(key)) nativeVisits += 1;
+        if (nativeVisits > 2 + 1) throw new TypeError("fixture native traversal bound");
+        return Reflect.has(target, key);
+      },
+    });
+    return {
+      result: parse({
+        ...response(),
+        settings: MANAGED_LSP_LANGUAGES.map((language) =>
+          language === "python"
+            ? { ...settings(language), restartRequired: true, restartFields: observed }
+            : settings(language),
+        ),
+      }).ok,
+      indexReads,
+      lengths,
+    };
+  }
+  it("preserves a healthy actual captured extent", () => {
+    const observation = inspectExtent(1);
+    expect(observation.result).toBe(true);
+    expect(observation.lengths.slice(0, 2)).toEqual([1, 1]);
+    expect(observation.indexReads).toBeGreaterThan(0);
+  });
+  it.each([2 + 1, Infinity, 0.5, -1])("refuses captured extent %s before indexing", (extent) => {
+    const observation = inspectExtent(extent);
+    expect({
+      accepted: observation.result,
+      indexReads: observation.indexReads,
+      firstTwoLengths: observation.lengths.slice(0, 2),
+    }).toEqual({
+      accepted: false,
+      indexReads: 0,
+      firstTwoLengths: [1, extent],
+    });
+  });
+});
+
+import { parseManagedLspControlMutationResponse as publicMutation } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
+
+describe.each([
+  ["source", parseManagedLspControlMutationResponse],
+  ["public", publicMutation],
+] as const)("3918 mutation complete owning admission %s", (_surface, parse) => {
+  function observedMutation(malformed: boolean): {
+    readonly input: object;
+    readonly reads: string[];
+  } {
+    const reads: string[] = [];
+    const value = {
+      kind: malformed ? "invalid" : "ok",
+      changed: malformed ? "invalid" : true,
+      revision: malformed ? -1 : 0,
+      etag: malformed ? "invalid" : ETAG,
+      status: malformed ? { ...status(), state: "invalid" } : status(),
+    };
+    const input = new Proxy(value, {
+      get(target, key, receiver): unknown {
+        reads.push(String(key));
+        const datum: unknown = Reflect.get(target, key, receiver);
+        return datum;
+      },
+      ownKeys(target): (string | symbol)[] {
+        reads.push("ownKeys");
+        return Reflect.ownKeys(target);
+      },
+    });
+    return { input, reads };
+  }
+  it("preserves healthy mutation reference and the eager status-first read order", () => {
+    const observation = observedMutation(false);
+    const result = parse(observation.input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(observation.input);
+    expect(observation.reads).toEqual([
+      "status",
+      "ownKeys",
+      "kind",
+      "changed",
+      "revision",
+      "etag",
+      "revision",
+      "revision",
+    ]);
+  });
+  it("preserves malformed status refusal and all eager outer field reads", () => {
+    const observation = observedMutation(true);
+    expect(parse(observation.input)).toEqual({
+      ok: false,
+      errors: ["managed LSP mutation response is invalid or contains unknown fields"],
+    });
+    expect(observation.reads).toEqual([
+      "status",
+      "ownKeys",
+      "kind",
+      "changed",
+      "revision",
+      "etag",
+      "revision",
+    ]);
+  });
+});

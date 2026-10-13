@@ -95,28 +95,24 @@ function isNonNegativeInteger(value: unknown): value is number {
 }
 
 function isActorClass(value: unknown): value is ManagedLspEvidenceActorClass {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EVIDENCE_ACTOR_CLASSES.includes(value as ManagedLspEvidenceActorClass)
-  );
+  const managedLspEvidenceActorClassesValues: readonly string[] =
+    MANAGED_LSP_EVIDENCE_ACTOR_CLASSES;
+  return typeof value === "string" && managedLspEvidenceActorClassesValues.includes(value);
 }
 
 function isManagedLanguage(value: unknown): value is ManagedLspLanguage {
-  return typeof value === "string" && MANAGED_LSP_LANGUAGES.includes(value as ManagedLspLanguage);
+  const managedLspLanguagesValues: readonly string[] = MANAGED_LSP_LANGUAGES;
+  return typeof value === "string" && managedLspLanguagesValues.includes(value);
 }
 
 function isAction(value: unknown): value is ManagedLspEvidenceAction {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EVIDENCE_ACTIONS.includes(value as ManagedLspEvidenceAction)
-  );
+  const managedLspEvidenceActionsValues: readonly string[] = MANAGED_LSP_EVIDENCE_ACTIONS;
+  return typeof value === "string" && managedLspEvidenceActionsValues.includes(value);
 }
 
 function isOutcome(value: unknown): value is ManagedLspEvidenceOutcome {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EVIDENCE_OUTCOMES.includes(value as ManagedLspEvidenceOutcome)
-  );
+  const managedLspEvidenceOutcomesValues: readonly string[] = MANAGED_LSP_EVIDENCE_OUTCOMES;
+  return typeof value === "string" && managedLspEvidenceOutcomesValues.includes(value);
 }
 
 function isKindActionConsistent(value: UnknownRecord): boolean {
@@ -126,10 +122,8 @@ function isKindActionConsistent(value: UnknownRecord): boolean {
 }
 
 function isEffectiveState(value: unknown): value is ManagedLspEffectiveState {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EFFECTIVE_STATES.includes(value as ManagedLspEffectiveState)
-  );
+  const managedLspEffectiveStatesValues: readonly string[] = MANAGED_LSP_EFFECTIVE_STATES;
+  return typeof value === "string" && managedLspEffectiveStatesValues.includes(value);
 }
 
 function hasConsistentEffectiveStatus(value: UnknownRecord): boolean {
@@ -144,9 +138,12 @@ function hasConsistentEffectiveStatus(value: UnknownRecord): boolean {
   }).ok;
 }
 
-function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
-  if (!isRecord(value)) return { ok: false, errors: ["managed LSP evidence must be an object"] };
-  const valid = [
+function isEvidenceKind(value: unknown): value is ManagedLspEvidenceKind {
+  return value === "activationChange" || value === "lifecycle";
+}
+
+function isManagedEvidence(value: UnknownRecord): value is UnknownRecord & ManagedLspEvidence {
+  return [
     hasOnlyKeys(value, [
       "schemaVersion",
       "kind",
@@ -162,7 +159,7 @@ function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
       "policyResult",
     ]),
     value.schemaVersion === MANAGED_LSP_EVIDENCE_SCHEMA_VERSION,
-    ["activationChange", "lifecycle"].includes(value.kind as string),
+    isEvidenceKind(value.kind),
     isAction(value.action),
     isOutcome(value.outcome),
     isKindActionConsistent(value),
@@ -173,8 +170,12 @@ function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
     isNonNegativeInteger(value.timestampMs),
     hasConsistentEffectiveStatus(value),
   ].every(Boolean);
-  return valid
-    ? { ok: true, value: value as unknown as ManagedLspEvidence }
+}
+
+function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
+  if (!isRecord(value)) return { ok: false, errors: ["managed LSP evidence must be an object"] };
+  return isManagedEvidence(value)
+    ? { ok: true, value }
     : { ok: false, errors: ["managed LSP evidence is invalid or contains unknown fields"] };
 }
 
