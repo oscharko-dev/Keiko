@@ -1107,3 +1107,80 @@ describe("timeout / reconnect defaults", () => {
     expect(t.maxReconnectAttempts).toBeGreaterThan(0);
   });
 });
+
+// SOURCE-ONLY preparation: original/source and freshly built public outcomes remain unexecuted.
+describe("voice protocol current dispatch observation", () => {
+  it.each(["source", "public"] as const)(
+    "refuses an unknown second kind through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceControlMessage
+          : (await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol"))
+              .validateVoiceControlMessage;
+      let reads = 0;
+      const input = {
+        protocolVersion: VOICE_PROTOCOL_VERSION,
+        sessionId: "session-current-dispatch",
+        seq: 1,
+        direction: "client-to-host",
+        get kind(): string {
+          reads += 1;
+          return reads === 1 ? "control.cancel" : "unknown-control";
+        },
+      };
+      expect(validate(input)).toEqual({ ok: false, reasons: ["kind invalid"] });
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "preserves a stable healthy kind through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceControlMessage
+          : (await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol"))
+              .validateVoiceControlMessage;
+      let reads = 0;
+      const input = {
+        protocolVersion: VOICE_PROTOCOL_VERSION,
+        sessionId: "session-current-dispatch",
+        seq: 1,
+        direction: "client-to-host",
+        get kind(): string {
+          reads += 1;
+          return "control.cancel";
+        },
+      };
+      expect(validate(input)).toEqual({ ok: true });
+      expect(reads).toBe(2);
+    },
+  );
+});
+
+// Source-only healthy changing second dispatch observation; no transport authority is granted.
+describe("family6 healthy changing current voice dispatch", () => {
+  it.each(["source", "public"])(
+    "retains an allowed envelope-only second kind through %s",
+    async (entry) => {
+      const validate =
+        entry === "source"
+          ? validateVoiceControlMessage
+          : (await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol"))
+              .validateVoiceControlMessage;
+      let reads = 0;
+      const input = {
+        protocolVersion: VOICE_PROTOCOL_VERSION,
+        sessionId: "session-current-dispatch",
+        seq: 1,
+        direction: "client-to-host",
+        get kind(): string {
+          return ++reads === 1 ? "control.cancel" : "transcript.discarded";
+        },
+      };
+      expect(validate(input)).toEqual({ ok: true });
+      expect(reads).toBe(2);
+    },
+  );
+});

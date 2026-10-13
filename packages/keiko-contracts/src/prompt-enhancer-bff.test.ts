@@ -218,3 +218,142 @@ describe("prompt enhancer wire constants", () => {
     ]);
   });
 });
+
+// Family6 preparation: conditional original-first source/public copy-phase hypotheses.
+// These controls have not been executed and are not a regression claim.
+describe("family6 wire copy observations", () => {
+  const sourceEntry = validatePromptEnhancementWireRequest;
+  it.each(["source", "public"])("admits the actual copied text through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? sourceEntry
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+            .validatePromptEnhancementWireRequest;
+    let reads = 0;
+    const input = {
+      get text(): unknown {
+        reads += 1;
+        return reads === 4 ? 42 : "healthy draft";
+      },
+    };
+    expect(validate(input)).toEqual({ ok: false, errors: ["request.text must be a string"] });
+    expect(reads).toBe(4);
+  });
+  it.each(["source", "public"])("preserves a healthy copied text through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? sourceEntry
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+            .validatePromptEnhancementWireRequest;
+    let reads = 0;
+    const input = {
+      get text(): string {
+        reads += 1;
+        return "healthy draft";
+      },
+    };
+    const result = validate(input);
+    expect(result).toEqual({ ok: true, value: { text: "healthy draft" } });
+    expect(reads).toBe(4);
+    if (result.ok) expect(result.value).not.toBe(input);
+  });
+});
+
+// Source-only healthy changing copy observation; UNEXECUTED.
+describe("family6 healthy changing wire copy", () => {
+  it.each(["source", "public"])(
+    "retains the fourth valid copied text through %s",
+    async (entry) => {
+      const validate =
+        entry === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        get text(): string {
+          return ++reads === 4 ? "later valid draft" : "earlier valid draft";
+        },
+      };
+      const result = validate(input);
+      expect(result).toEqual({ ok: true, value: { text: "later valid draft" } });
+      expect(reads).toBe(4);
+      if (result.ok) expect(result.value).not.toBe(input);
+    },
+  );
+});
+
+describe("complete wire optional copy admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves absent and ordinary undefined omission through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      for (const input of [
+        { text: "healthy draft" },
+        { text: "healthy draft", profilePreference: undefined },
+      ]) {
+        const result = validate(input);
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(Object.keys(result.value)).toEqual(["text"]);
+          expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+          expect(result.value).not.toBe(input);
+        }
+      }
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves the actual later-valid profile copy through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "healthy draft",
+        get profilePreference(): string {
+          return ++reads < 4 ? "technical" : "precise";
+        },
+      };
+      const result = validate(input);
+      const observedReads = reads;
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.profilePreference).toBe("precise");
+        expect(Object.keys(result.value)).toEqual(["text", "profilePreference"]);
+        expect(result.value).not.toBe(input);
+      }
+      expect(observedReads).toBe(4);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "refuses an actual present undefined profile copy through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "healthy draft",
+        get profilePreference(): unknown {
+          return ++reads < 4 ? "technical" : undefined;
+        },
+      };
+      const result = validate(input);
+      const observedReads = reads;
+      expect(result).toEqual({
+        ok: false,
+        errors: ["request.profilePreference must be a known profile id when set"],
+      });
+      expect(observedReads).toBe(4);
+    },
+  );
+});

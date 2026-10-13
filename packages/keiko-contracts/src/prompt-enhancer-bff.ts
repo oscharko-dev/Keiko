@@ -242,7 +242,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isMember = <T extends string>(value: unknown, allowed: readonly T[]): value is T =>
-  typeof value === "string" && (allowed as readonly string[]).includes(value);
+  typeof value === "string" && new Set<string>(allowed).has(value);
 
 const isNonNegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -252,81 +252,113 @@ const isBoundedSafeText = (value: unknown, max: number): value is string =>
 
 // One field check. Pushes a content-free error message when its field is present and invalid. Kept
 // individually small so the aggregate validator stays well under the cyclomatic-complexity bound.
-type WireFieldValidator = (input: Record<string, unknown>, errors: string[]) => void;
+type WireFieldValidator = (
+  input: Record<string, unknown>,
+  errors: string[],
+  copied?: boolean,
+) => boolean;
+
+function hasWireField(input: Record<string, unknown>, field: string, copied: boolean): boolean {
+  return input[field] !== undefined || (copied && Object.hasOwn(input, field));
+}
 
 const validateUnknownFields: WireFieldValidator = (input, errors) => {
   if (Object.keys(input).some((key) => !WIRE_REQUEST_KEYS.has(key))) {
     errors.push("request must not contain unknown fields");
+    return false;
   }
+  return true;
 };
 
 const validateTextField: WireFieldValidator = (input, errors) => {
   if (typeof input.text !== "string") {
     errors.push("request.text must be a string");
+    return false;
   } else if (input.text.trim().length === 0) {
     errors.push("request.text must not be empty or whitespace-only");
+    return false;
   } else if (input.text.length > PROMPT_REQUEST_TEXT_MAX_CHARS) {
     errors.push(`request.text must be at most ${String(PROMPT_REQUEST_TEXT_MAX_CHARS)} characters`);
+    return false;
   }
+  return true;
 };
 
-const validateProfileField: WireFieldValidator = (input, errors) => {
+const validateProfileField: WireFieldValidator = (input, errors, copied = false) => {
   if (
-    input.profilePreference !== undefined &&
+    hasWireField(input, "profilePreference", copied) &&
     !isMember(input.profilePreference, PROMPT_ENHANCEMENT_PROFILE_IDS)
   ) {
     errors.push("request.profilePreference must be a known profile id when set");
+    return false;
   }
+  return true;
 };
 
-const validateStrategyField: WireFieldValidator = (input, errors) => {
+const validateStrategyField: WireFieldValidator = (input, errors, copied = false) => {
   if (
-    input.missingInformationStrategy !== undefined &&
+    hasWireField(input, "missingInformationStrategy", copied) &&
     !isMember(input.missingInformationStrategy, MISSING_INFORMATION_STRATEGIES)
   ) {
     errors.push("request.missingInformationStrategy must be a known strategy when set");
+    return false;
   }
+  return true;
 };
 
-const validateConnectedContextField: WireFieldValidator = (input, errors) => {
-  if (input.hasConnectedContext !== undefined && typeof input.hasConnectedContext !== "boolean") {
-    errors.push("request.hasConnectedContext must be a boolean when set");
-  }
-};
-
-const validateAttachmentCountField: WireFieldValidator = (input, errors) => {
-  if (input.attachmentCount !== undefined && !isNonNegativeInteger(input.attachmentCount)) {
-    errors.push("request.attachmentCount must be a non-negative integer when set");
-  }
-};
-
-const validateLocaleField: WireFieldValidator = (input, errors) => {
+const validateConnectedContextField: WireFieldValidator = (input, errors, copied = false) => {
   if (
-    input.locale !== undefined &&
+    hasWireField(input, "hasConnectedContext", copied) &&
+    typeof input.hasConnectedContext !== "boolean"
+  ) {
+    errors.push("request.hasConnectedContext must be a boolean when set");
+    return false;
+  }
+  return true;
+};
+
+const validateAttachmentCountField: WireFieldValidator = (input, errors, copied = false) => {
+  if (
+    hasWireField(input, "attachmentCount", copied) &&
+    !isNonNegativeInteger(input.attachmentCount)
+  ) {
+    errors.push("request.attachmentCount must be a non-negative integer when set");
+    return false;
+  }
+  return true;
+};
+
+const validateLocaleField: WireFieldValidator = (input, errors, copied = false) => {
+  if (
+    hasWireField(input, "locale", copied) &&
     !isBoundedSafeText(input.locale, PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS)
   ) {
     errors.push(
       `request.locale must be safe text of at most ${String(PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS)} characters when set`,
     );
+    return false;
   }
+  return true;
 };
 
-const validateModelIdField: WireFieldValidator = (input, errors) => {
+const validateModelIdField: WireFieldValidator = (input, errors, copied = false) => {
   if (
-    input.modelId !== undefined &&
+    hasWireField(input, "modelId", copied) &&
     (!isBoundedSafeText(input.modelId, PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS) ||
       input.modelId.trim().length === 0)
   ) {
     errors.push(
       `request.modelId must be non-empty safe text of at most ${String(PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS)} characters when set`,
     );
+    return false;
   }
+  return true;
 };
 
-const validateCandidateCountField: WireFieldValidator = (input, errors) => {
+const validateCandidateCountField: WireFieldValidator = (input, errors, copied = false) => {
   const value = input.candidateCount;
   if (
-    value !== undefined &&
+    (value !== undefined || (copied && Object.hasOwn(input, "candidateCount"))) &&
     (typeof value !== "number" ||
       !Number.isInteger(value) ||
       value < 1 ||
@@ -335,7 +367,9 @@ const validateCandidateCountField: WireFieldValidator = (input, errors) => {
     errors.push(
       `request.candidateCount must be an integer in [1, ${String(PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT)}] when set`,
     );
+    return false;
   }
+  return true;
 };
 
 const WIRE_FIELD_VALIDATORS: readonly WireFieldValidator[] = [
@@ -351,30 +385,36 @@ const WIRE_FIELD_VALIDATORS: readonly WireFieldValidator[] = [
 ];
 
 // Assemble the validated wire request, omitting absent optionals so exactOptionalPropertyTypes holds.
-function buildWireRequestValue(input: Record<string, unknown>): PromptEnhancementWireRequest {
+function buildWireRequestValue(input: Record<string, unknown>): Record<string, unknown> {
   return {
-    text: input.text as string,
+    text: input.text,
     ...(input.profilePreference === undefined
       ? {}
-      : { profilePreference: input.profilePreference as PromptEnhancementProfileId }),
+      : { profilePreference: input.profilePreference }),
     ...(input.missingInformationStrategy === undefined
       ? {}
       : {
-          missingInformationStrategy:
-            input.missingInformationStrategy as MissingInformationStrategy,
+          missingInformationStrategy: input.missingInformationStrategy,
         }),
     ...(input.hasConnectedContext === undefined
       ? {}
-      : { hasConnectedContext: input.hasConnectedContext as boolean }),
-    ...(input.attachmentCount === undefined
-      ? {}
-      : { attachmentCount: input.attachmentCount as number }),
-    ...(input.locale === undefined ? {} : { locale: input.locale as string }),
-    ...(input.modelId === undefined ? {} : { modelId: input.modelId as string }),
-    ...(input.candidateCount === undefined
-      ? {}
-      : { candidateCount: input.candidateCount as number }),
+      : { hasConnectedContext: input.hasConnectedContext }),
+    ...(input.attachmentCount === undefined ? {} : { attachmentCount: input.attachmentCount }),
+    ...(input.locale === undefined ? {} : { locale: input.locale }),
+    ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
+    ...(input.candidateCount === undefined ? {} : { candidateCount: input.candidateCount }),
   };
+}
+
+function isWireRequestValue(
+  input: unknown,
+  errors: string[],
+): input is PromptEnhancementWireRequest {
+  if (!isRecord(input)) return false;
+  const admissions = WIRE_FIELD_VALIDATORS.map((validate): boolean =>
+    validate(input, errors, true),
+  );
+  return admissions.every(Boolean);
 }
 
 export function validatePromptEnhancementWireRequest(
@@ -390,5 +430,7 @@ export function validatePromptEnhancementWireRequest(
   if (errors.length > 0) {
     return { ok: false, errors };
   }
-  return { ok: true, value: buildWireRequestValue(input) };
+  const value = buildWireRequestValue(input);
+  if (!isWireRequestValue(value, errors)) return { ok: false, errors };
+  return { ok: true, value };
 }

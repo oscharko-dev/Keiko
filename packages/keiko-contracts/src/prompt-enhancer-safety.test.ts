@@ -586,3 +586,74 @@ describe("validatePromptSafetyAssessment", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+// SOURCE-ONLY preparation: the public module must be freshly built from each bound source phase.
+describe("complete safety findings admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves a real structural assessment through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validatePromptSafetyAssessment
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety"))
+              .validatePromptSafetyAssessment;
+      const produced = assessEnhancedPromptStructuralSafety(safePrompt(), analysis());
+      const result = validate(produced);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(produced);
+        expect(result.value.findings).toBe(produced.findings);
+        expect(result.value.leastPrivilege).toBe(produced.leastPrivilege);
+      }
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "refuses an absent finding through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validatePromptSafetyAssessment
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety"))
+              .validatePromptSafetyAssessment;
+      const produced = assessEnhancedPromptStructuralSafety(safePrompt(), analysis());
+      const input = { ...produced, findings: Array<unknown>(1) };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["assessment.findings[0] must be an object"],
+      });
+    },
+  );
+});
+
+describe("complete prompt least-privilege member admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy least-privilege references through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptSafetyAssessment
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety"))
+              .validatePromptSafetyAssessment;
+      const input = assessEnhancedPromptStructuralSafety(safePrompt(), analysis());
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value.leastPrivilege).toBe(input.leastPrivilege);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "refuses an absent least-privilege member through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptSafetyAssessment
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety"))
+              .validatePromptSafetyAssessment;
+      const input = {
+        ...assessEnhancedPromptStructuralSafety(safePrompt(), analysis()),
+        leastPrivilege: Array<unknown>(1),
+      };
+      expect(validate(input).ok).toBe(false);
+    },
+  );
+});

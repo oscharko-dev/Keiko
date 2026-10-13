@@ -188,13 +188,11 @@ export const VOICE_PLAYBACK_TRANSITIONS: Record<VoicePlaybackPhase, readonly Voi
 
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 export function isVoicePlaybackPhase(value: unknown): value is VoicePlaybackPhase {
-  return typeof value === "string" && (VOICE_PLAYBACK_PHASES as readonly string[]).includes(value);
+  return typeof value === "string" && new Set<string>(VOICE_PLAYBACK_PHASES).has(value);
 }
 
 export function isVoicePlaybackFailureKind(value: unknown): value is VoicePlaybackFailureKind {
-  return (
-    typeof value === "string" && (VOICE_PLAYBACK_FAILURE_KINDS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(VOICE_PLAYBACK_FAILURE_KINDS).has(value);
 }
 
 export function voicePlaybackPhaseReplayClass(phase: VoicePlaybackPhase): VoiceReplayClass {
@@ -207,12 +205,12 @@ export function voicePlaybackPhaseRedactionClass(phase: VoicePlaybackPhase): Voi
 
 // Whether audio is live or imminent in this phase (the user-facing transport controls are meaningful).
 export function isActiveVoicePlaybackPhase(phase: VoicePlaybackPhase): boolean {
-  return (VOICE_PLAYBACK_ACTIVE_PHASES as readonly string[]).includes(phase);
+  return new Set<string>(VOICE_PLAYBACK_ACTIVE_PHASES).has(phase);
 }
 
 // Whether this phase is a terminal lifecycle fact of the turn's playback (AC5 consumption).
 export function isSettledVoicePlaybackPhase(phase: VoicePlaybackPhase): boolean {
-  return (VOICE_PLAYBACK_SETTLED_PHASES as readonly string[]).includes(phase);
+  return new Set<string>(VOICE_PLAYBACK_SETTLED_PHASES).has(phase);
 }
 
 // Whether `to` is reachable from `from` by a legal state-changing transition.
@@ -295,7 +293,7 @@ export const VOICE_PLAYBACK_EFFECTS: readonly VoicePlaybackEffect[] = [
 ] as const;
 
 export function isVoicePlaybackEffect(value: unknown): value is VoicePlaybackEffect {
-  return typeof value === "string" && (VOICE_PLAYBACK_EFFECTS as readonly string[]).includes(value);
+  return typeof value === "string" && new Set<string>(VOICE_PLAYBACK_EFFECTS).has(value);
 }
 
 // ─── Capability-gating predicates (AC1/AC2) — derived from the contract ─────────

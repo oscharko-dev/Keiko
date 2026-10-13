@@ -549,3 +549,298 @@ describe("grounding plan validator agrees with its producer (KEIKO-0267)", () =>
     expect(validateGroundingPlan(plan).ok).toBe(true);
   });
 });
+
+// Family6 preparation: physical-member hypotheses are unexecuted original-first obligations.
+describe("family6 analysis physical member admission", () => {
+  it.each(["source", "public"])("refuses a missing risk position through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? validatePromptTaskAnalysis
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptTaskAnalysis;
+    const analysis = analyzePrompt(validRequest());
+    const input = { ...analysis, riskFlags: Array<string>(1) };
+    const result = validate(input);
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors).toContain("analysis.riskFlags must be an array of known risk classes");
+  });
+  it.each(["source", "public"])("retains actual producer identity through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? validatePromptTaskAnalysis
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptTaskAnalysis;
+    const analysis = analyzePrompt(validRequest());
+    const result = validate(analysis);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(analysis);
+      expect(result.value.riskFlags).toBe(analysis.riskFlags);
+    }
+  });
+});
+
+// SOURCE-ONLY preparation: these finite physical-member hypotheses require original-first proof.
+describe("complete prompt field admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves the enhanced producer fixture reference through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      const input = validEnhancedPrompt();
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(result.value.groundingPlan).toBe(input.groundingPlan);
+        expect(result.value.context).toBe(input.context);
+      }
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "refuses a missing enhanced context member through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      const input = { ...validEnhancedPrompt(), context: Array<string>(1) };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["enhancedPrompt.context must be a bounded array of control-free strings"],
+      });
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "refuses a missing source-policy member through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateGroundingPlan
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateGroundingPlan;
+      const produced = planFor("Explain why the sky is blue.");
+      expect(validate(produced).ok).toBe(true);
+      const input = { ...produced, sourcePriority: Array<unknown>(produced.sourcePriority.length) };
+      const result = validate(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok)
+        expect(result.errors[0]).toBe(
+          "groundingPlan.sourcePriority must match strategy ordering, 1-based priorities, and required-source rules",
+        );
+    },
+  );
+});
+
+// Conditional finite observation repairs: execute original source/public controls before activation.
+describe("prompt scalar observations used by admission", () => {
+  it.each(["source", "public"] as const)(
+    "refuses the invalid second raw text through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validatePromptEnhancementRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validatePromptEnhancementRequest;
+      let reads = 0;
+      const input = {
+        ...validRequest(),
+        input: {
+          get text(): unknown {
+            reads += 1;
+            return reads === 1 ? "healthy draft" : 42;
+          },
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: [
+          `request.input.text must be a string of at most ${String(PROMPT_REQUEST_TEXT_MAX_CHARS)} characters`,
+        ],
+      });
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "preserves changing valid raw text through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validatePromptEnhancementRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validatePromptEnhancementRequest;
+      let reads = 0;
+      const raw = {
+        get text(): string {
+          reads += 1;
+          return reads === 1 ? "first draft" : "second draft";
+        },
+      };
+      const input = { ...validRequest(), input: raw };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(input);
+        expect(result.value.input).toBe(raw);
+      }
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "refuses the invalid fourth output format through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      let reads = 0;
+      const input = {
+        ...validEnhancedPrompt(),
+        outputSchema: {
+          structured: false,
+          hints: [],
+          get format(): string {
+            reads += 1;
+            return reads < 4 ? "code" : "foreign-format";
+          },
+        },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]).toMatch(/^outputSchema\.format must be one of /);
+      }
+      expect(reads).toBe(4);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "preserves a stable healthy output format through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      let reads = 0;
+      const input = {
+        ...validEnhancedPrompt(),
+        outputSchema: {
+          structured: false,
+          hints: [],
+          get format(): string {
+            reads += 1;
+            return "code";
+          },
+        },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+      expect(reads).toBe(4);
+    },
+  );
+});
+
+// Source-only healthy changing output-format observation; UNEXECUTED.
+describe("family6 healthy changing output schema", () => {
+  it.each(["source", "public"])(
+    "retains a fourth valid format observation through %s",
+    async (entry) => {
+      const validate =
+        entry === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      let reads = 0;
+      const input = {
+        ...validEnhancedPrompt(),
+        outputSchema: {
+          structured: false,
+          hints: [],
+          get format(): string {
+            return ++reads < 4 ? "code" : "prose";
+          },
+        },
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+      expect(reads).toBe(4);
+    },
+  );
+});
+
+describe("complete prompt nested member admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy analysis and grounding through %s",
+    async (surface) => {
+      const api =
+        surface === "source"
+          ? { validatePromptTaskAnalysis, validateGroundingPlan }
+          : await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation");
+      const analysis = analyzePrompt(validRequest());
+      expect(api.validatePromptTaskAnalysis(analysis).ok).toBe(true);
+      const plan = planFor("Explain why the sky is blue.");
+      expect(api.validateGroundingPlan(plan).ok).toBe(true);
+    },
+  );
+  it.each([
+    ["missingContext", "source"],
+    ["missingContext", "public"],
+    ["signals", "source"],
+    ["signals", "public"],
+  ] as const)("refuses an absent %s member through %s", async (field, surface) => {
+    const validate =
+      surface === "source"
+        ? validatePromptTaskAnalysis
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptTaskAnalysis;
+    const input = { ...analyzePrompt(validRequest()), [field]: Array<unknown>(1) };
+    expect(validate(input).ok).toBe(false);
+  });
+  it.each(["source", "public"] as const)(
+    "refuses missing fixed RAG hint members through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validateGroundingPlan
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateGroundingPlan;
+      const input = {
+        ...planFor("Explain why the sky is blue."),
+        ragEvaluation: Array<unknown>(RAG_EVALUATION_DIMENSIONS.length),
+      };
+      expect(validate(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves inherited-present context members through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validateEnhancedPrompt
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validateEnhancedPrompt;
+      const context = Array<string>(1);
+      const prototype = { 0: "Inherited healthy context" };
+      Object.setPrototypeOf(prototype, Array.prototype);
+      Object.setPrototypeOf(context, prototype);
+      const input = { ...validEnhancedPrompt(), context };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value.context).toBe(context);
+    },
+  );
+});

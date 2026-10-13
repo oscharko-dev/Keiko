@@ -420,3 +420,39 @@ describe("shared ranking-order fixture (KEIKO-1026)", () => {
     expect(validatePromptCandidateSelection(selectionOf(swapped)).ok).toBe(false);
   });
 });
+
+// The original sparse-array observations are tested at the actual selection boundary.
+describe("complete prompt selection member admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy selection references through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptCandidateSelection
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+              .validatePromptCandidateSelection;
+      const input = validSelection();
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    },
+  );
+  it.each([
+    ["ranked", "source"],
+    ["ranked", "public"],
+    ["rankedPrompts", "source"],
+    ["rankedPrompts", "public"],
+    ["rankedSafetyAssessments", "source"],
+    ["rankedSafetyAssessments", "public"],
+    ["rejected", "source"],
+    ["rejected", "public"],
+  ] as const)("refuses absent %s members through %s", async (field, surface) => {
+    const validate =
+      surface === "source"
+        ? validatePromptCandidateSelection
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation"))
+            .validatePromptCandidateSelection;
+    const input = { ...validSelection(), [field]: Array<unknown>(1) };
+    expect(validate(input).ok).toBe(false);
+  });
+});
