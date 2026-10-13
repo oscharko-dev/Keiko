@@ -42,9 +42,7 @@ export const GATEWAY_SETUP_TARGET_CLASSES: readonly GatewaySetupTargetClass[] = 
 ]);
 
 export function isGatewaySetupTargetClass(value: unknown): value is GatewaySetupTargetClass {
-  return (
-    typeof value === "string" && (GATEWAY_SETUP_TARGET_CLASSES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(GATEWAY_SETUP_TARGET_CLASSES).has(value);
 }
 
 /** Which setup path produced the record: a freshly probed candidate, or an update of a saved one. */
@@ -56,9 +54,7 @@ export const GATEWAY_SETUP_OUTCOME_KINDS: readonly GatewaySetupOutcomeKind[] = O
 ]);
 
 export function isGatewaySetupOutcomeKind(value: unknown): value is GatewaySetupOutcomeKind {
-  return (
-    typeof value === "string" && (GATEWAY_SETUP_OUTCOME_KINDS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(GATEWAY_SETUP_OUTCOME_KINDS).has(value);
 }
 
 export interface GatewaySetupAuditRecord {

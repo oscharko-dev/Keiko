@@ -137,64 +137,160 @@ export const validateQualityIntelligenceIdString = (
   return { ok: true };
 };
 
-/**
- * Validate `value` and return it unchanged. Throws `TypeError` on rejection. The
- * caller casts the returned string to the appropriate branded type — keeping the
- * cast at the constructor site rather than inside this helper avoids an
- * unnecessary type parameter (lint: no-unnecessary-type-parameters).
- */
-const construct = (value: string, kind: string): string => {
-  const result = validateQualityIntelligenceIdString(value, kind);
+// Each specific constructor admits the existing lexical ID shape and preserves the original
+// string. The phantom brand distinguishes entities; it does not attest historical issuance.
+
+function assertQualityIntelligenceRunId(value: string): asserts value is QualityIntelligenceRunId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceRunId");
   if (!result.ok) {
-    throw new TypeError(`Invalid ${kind}: ${result.reason}`);
+    throw new TypeError(`Invalid QualityIntelligenceRunId: ${result.reason}`);
   }
+}
+
+export const asQualityIntelligenceRunId = (value: string): QualityIntelligenceRunId => {
+  assertQualityIntelligenceRunId(value);
   return value;
 };
 
-// ─── Constructors ──────────────────────────────────────────────────────────────
-export const asQualityIntelligenceRunId = (value: string): QualityIntelligenceRunId =>
-  construct(value, "QualityIntelligenceRunId") as QualityIntelligenceRunId;
+function assertQualityIntelligenceTestCaseId(
+  value: string,
+): asserts value is QualityIntelligenceTestCaseId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceTestCaseId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceTestCaseId: ${result.reason}`);
+  }
+}
 
-export const asQualityIntelligenceTestCaseId = (value: string): QualityIntelligenceTestCaseId =>
-  construct(value, "QualityIntelligenceTestCaseId") as QualityIntelligenceTestCaseId;
+export const asQualityIntelligenceTestCaseId = (value: string): QualityIntelligenceTestCaseId => {
+  assertQualityIntelligenceTestCaseId(value);
+  return value;
+};
+
+function assertQualityIntelligenceCoverageMapId(
+  value: string,
+): asserts value is QualityIntelligenceCoverageMapId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceCoverageMapId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceCoverageMapId: ${result.reason}`);
+  }
+}
 
 export const asQualityIntelligenceCoverageMapId = (
   value: string,
-): QualityIntelligenceCoverageMapId =>
-  construct(value, "QualityIntelligenceCoverageMapId") as QualityIntelligenceCoverageMapId;
+): QualityIntelligenceCoverageMapId => {
+  assertQualityIntelligenceCoverageMapId(value);
+  return value;
+};
+
+function assertQualityIntelligenceValidationFindingId(
+  value: string,
+): asserts value is QualityIntelligenceValidationFindingId {
+  const result = validateQualityIntelligenceIdString(
+    value,
+    "QualityIntelligenceValidationFindingId",
+  );
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceValidationFindingId: ${result.reason}`);
+  }
+}
 
 export const asQualityIntelligenceValidationFindingId = (
   value: string,
-): QualityIntelligenceValidationFindingId =>
-  construct(
-    value,
-    "QualityIntelligenceValidationFindingId",
-  ) as QualityIntelligenceValidationFindingId;
+): QualityIntelligenceValidationFindingId => {
+  assertQualityIntelligenceValidationFindingId(value);
+  return value;
+};
+
+function assertQualityIntelligenceReviewRecordId(
+  value: string,
+): asserts value is QualityIntelligenceReviewRecordId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceReviewRecordId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceReviewRecordId: ${result.reason}`);
+  }
+}
 
 export const asQualityIntelligenceReviewRecordId = (
   value: string,
-): QualityIntelligenceReviewRecordId =>
-  construct(value, "QualityIntelligenceReviewRecordId") as QualityIntelligenceReviewRecordId;
+): QualityIntelligenceReviewRecordId => {
+  assertQualityIntelligenceReviewRecordId(value);
+  return value;
+};
+
+function assertQualityIntelligenceExportBundleId(
+  value: string,
+): asserts value is QualityIntelligenceExportBundleId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceExportBundleId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceExportBundleId: ${result.reason}`);
+  }
+}
 
 export const asQualityIntelligenceExportBundleId = (
   value: string,
-): QualityIntelligenceExportBundleId =>
-  construct(value, "QualityIntelligenceExportBundleId") as QualityIntelligenceExportBundleId;
+): QualityIntelligenceExportBundleId => {
+  assertQualityIntelligenceExportBundleId(value);
+  return value;
+};
+
+function assertQualityIntelligenceSourceEnvelopeId(
+  value: string,
+): asserts value is QualityIntelligenceSourceEnvelopeId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceSourceEnvelopeId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceSourceEnvelopeId: ${result.reason}`);
+  }
+}
 
 export const asQualityIntelligenceSourceEnvelopeId = (
   value: string,
-): QualityIntelligenceSourceEnvelopeId =>
-  construct(value, "QualityIntelligenceSourceEnvelopeId") as QualityIntelligenceSourceEnvelopeId;
+): QualityIntelligenceSourceEnvelopeId => {
+  assertQualityIntelligenceSourceEnvelopeId(value);
+  return value;
+};
+
+function assertQualityIntelligenceEvidenceAtomId(
+  value: string,
+): asserts value is QualityIntelligenceEvidenceAtomId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceEvidenceAtomId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceEvidenceAtomId: ${result.reason}`);
+  }
+}
 
 export const asQualityIntelligenceEvidenceAtomId = (
   value: string,
-): QualityIntelligenceEvidenceAtomId =>
-  construct(value, "QualityIntelligenceEvidenceAtomId") as QualityIntelligenceEvidenceAtomId;
+): QualityIntelligenceEvidenceAtomId => {
+  assertQualityIntelligenceEvidenceAtomId(value);
+  return value;
+};
+
+function assertQualityIntelligenceAuditSummaryId(
+  value: string,
+): asserts value is QualityIntelligenceAuditSummaryId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceAuditSummaryId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceAuditSummaryId: ${result.reason}`);
+  }
+}
 
 export const asQualityIntelligenceAuditSummaryId = (
   value: string,
-): QualityIntelligenceAuditSummaryId =>
-  construct(value, "QualityIntelligenceAuditSummaryId") as QualityIntelligenceAuditSummaryId;
+): QualityIntelligenceAuditSummaryId => {
+  assertQualityIntelligenceAuditSummaryId(value);
+  return value;
+};
 
-export const asQualityIntelligenceHandoffId = (value: string): QualityIntelligenceHandoffId =>
-  construct(value, "QualityIntelligenceHandoffId") as QualityIntelligenceHandoffId;
+function assertQualityIntelligenceHandoffId(
+  value: string,
+): asserts value is QualityIntelligenceHandoffId {
+  const result = validateQualityIntelligenceIdString(value, "QualityIntelligenceHandoffId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid QualityIntelligenceHandoffId: ${result.reason}`);
+  }
+}
+
+export const asQualityIntelligenceHandoffId = (value: string): QualityIntelligenceHandoffId => {
+  assertQualityIntelligenceHandoffId(value);
+  return value;
+};
