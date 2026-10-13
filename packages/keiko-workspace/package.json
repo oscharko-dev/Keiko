@@ -71,8 +71,8 @@
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "1.2.1",
     "@oscharko-dev/keiko-security": "1.2.1",
-    "entities": "8.0.0",
-    "typescript": "~6.0.3"
+    "entities": "8.1.0",
+    "typescript": "~7.0.2"
   },
   "private": true
 }
