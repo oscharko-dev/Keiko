@@ -355,3 +355,63 @@ describe("coding workbench runtime questions module structure (KEIKO-0532)", () 
     expect(/^function isQuestionId/m.test(source)).toBe(false);
   });
 });
+
+describe("C2 owning question member admissions", () => {
+  it.each(["requests", "questions", "options"] as const)(
+    "refuses skipped malformed %s",
+    (surface) => {
+      const entries: unknown[] = [null];
+      Object.defineProperty(entries, "forEach", { value: (): void => undefined });
+      const request = response.questions[0];
+      const question = request?.questions[0];
+      if (request === undefined || question === undefined)
+        throw new Error("expected question fixture");
+      const value =
+        surface === "requests"
+          ? { questions: entries }
+          : surface === "questions"
+            ? { questions: [{ ...request, questions: entries }] }
+            : { questions: [{ ...request, questions: [{ ...question, options: entries }] }] };
+      expect(validateCodingWorkbenchRuntimeQuestionsResponse(value).ok).toBe(false);
+    },
+  );
+
+  it("refuses skipped malformed answer lists", () => {
+    const answers: unknown[] = [null];
+    Object.defineProperty(answers, "forEach", { value: (): void => undefined });
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({ ...VALID_ANSWER_BASE, answers }).ok,
+    ).toBe(false);
+  });
+
+  it("refuses a numeric selection hidden by the caller's every", () => {
+    const answer: unknown[] = [3];
+    Object.defineProperty(answer, "every", { value: (): boolean => true });
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({ ...VALID_ANSWER_BASE, answers: [answer] })
+        .ok,
+    ).toBe(false);
+  });
+
+  it("retains a healthy response and its nested collection references", () => {
+    const result = validateCodingWorkbenchRuntimeQuestionsResponse(response);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(response);
+      expect(result.value.questions).toBe(response.questions);
+    }
+  });
+
+  it.each(["0", null, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
+    "refuses an invalid observed second revision",
+    (second) => {
+      let reads = 0;
+      const value = { ...VALID_ANSWER_BASE, answers: [["Continue"]] };
+      Object.defineProperty(value, "expectedRevision", {
+        get: (): unknown => (++reads === 1 ? 0 : second),
+      });
+      expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest(value).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+});

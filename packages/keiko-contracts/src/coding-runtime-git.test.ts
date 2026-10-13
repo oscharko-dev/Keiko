@@ -60,3 +60,57 @@ describe("closed runtime Git evidence", () => {
       expect(isCodingWorkbenchEvidenceSafeText(value)).toBe(false);
   });
 });
+
+describe("C2 owning Git change admission", () => {
+  it("refuses malformed changes hidden behind an own every method", () => {
+    const changes: unknown[] = [42];
+    Object.defineProperty(changes, "every", { value: (): boolean => true });
+    const value = {
+      kind: "status",
+      headSha: "a".repeat(40),
+      stagedTreeDigest: "b".repeat(64),
+      branch: "dev",
+      changes,
+      truncated: false,
+    };
+    expect(isCodingRuntimeGitResult(value)).toBe(false);
+  });
+
+  it("refuses a sparse changed-file array", () => {
+    const changes: unknown[] = [];
+    changes.length = 50;
+    const value = {
+      kind: "status",
+      headSha: "a".repeat(40),
+      stagedTreeDigest: "b".repeat(64),
+      branch: "dev",
+      changes,
+      truncated: false,
+    };
+    expect(isCodingRuntimeGitResult(value)).toBe(false);
+  });
+
+  it("admits a canonical dense change despite an own every override", () => {
+    const changes = [
+      {
+        path: "src/test.ts",
+        indexStatus: " ",
+        worktreeStatus: "M",
+        staged: false,
+        unstaged: true,
+        untracked: false,
+        conflicted: false,
+      },
+    ];
+    Object.defineProperty(changes, "every", { value: (): boolean => true });
+    const value = {
+      kind: "status",
+      headSha: "a".repeat(40),
+      stagedTreeDigest: "b".repeat(64),
+      branch: "dev",
+      changes,
+      truncated: false,
+    };
+    expect(isCodingRuntimeGitResult(value)).toBe(true);
+  });
+});

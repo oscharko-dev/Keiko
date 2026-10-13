@@ -182,3 +182,23 @@ describe("coding workbench runtime research channel payload", () => {
     ).toBe(false);
   });
 });
+
+describe("C2 owning research domain admission", () => {
+  it("refuses a numeric domain hidden by a caller-owned every", () => {
+    const domains: unknown[] = [3];
+    Object.defineProperty(domains, "every", { value: (): boolean => true });
+    expect(
+      validateCodingWorkbenchRuntimeResearchChannelPayload({
+        session: "active",
+        grant: grant({ domains }),
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("retains the healthy grant and domain references", () => {
+    const value = { session: "active", grant: grant() };
+    const result = validateCodingWorkbenchRuntimeResearchChannelPayload(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+});

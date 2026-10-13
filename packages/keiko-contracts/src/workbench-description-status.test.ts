@@ -125,3 +125,16 @@ describe("isWorkbenchDescriptionStatus", () => {
     expect(isWorkbenchDescriptionStatus(candidate)).toBe(false);
   });
 });
+
+describe("C2 observed description reason admission", () => {
+  it("refuses an invalid third mapping key without a fourth read", () => {
+    const value = { ...valid(), state: undefined };
+    let reads = 0;
+    Object.defineProperty(value, "reason", {
+      enumerable: true,
+      get: (): string => (++reads < 3 ? "generated" : "invalid"),
+    });
+    expect(isWorkbenchDescriptionStatus(value)).toBe(false);
+    expect(reads).toBe(3);
+  });
+});
