@@ -5,6 +5,9 @@ import ts from "typescript";
 import { collectPolicyMembership, policyDigest } from "./code-quality-inventory.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 
+// Byte witnesses remain private: exposed compiler metadata must not expose a mutable Buffer.
+const SNAPSHOT_UTF8_BYTES = new WeakMap();
+
 const DEFAULT_LIMITS = Object.freeze({
   programs: 2,
   sourceBytes: 64 * 1024 * 1024,
@@ -146,6 +149,7 @@ export function createCompilerContext(subject, options = {}, roots = []) {
       state.emissions.clear();
       state.declarations.clear();
       state.proofFailures.clear();
+      for (const previous of state.snapshots.values()) SNAPSHOT_UTF8_BYTES.delete(previous);
       state.snapshots.clear();
       state.closed = true;
     },
@@ -162,10 +166,9 @@ function snapshot(state, absolute, text, digest = policyDigest(text)) {
   if (!previous) {
     state.bytes += Buffer.byteLength(text);
     if (state.bytes > state.limits.sourceBytes) throw new TypeError("symbol-source-budget");
-    state.snapshots.set(absolute, {
-      digest,
-      utf8Bytes: Buffer.from(text, "utf8").toString("latin1"),
-    });
+    const admitted = { digest };
+    SNAPSHOT_UTF8_BYTES.set(admitted, Buffer.from(text, "utf8"));
+    state.snapshots.set(absolute, admitted);
   }
   return text;
 }
@@ -311,7 +314,9 @@ function assertCurrent(state) {
 }
 
 function hasCurrentDigest(bytes, previous, expected) {
-  if (previous?.digest === expected && bytes.toString("latin1") === previous.utf8Bytes) return true;
+  const utf8Bytes = SNAPSHOT_UTF8_BYTES.get(previous);
+  if (previous?.digest === expected && utf8Bytes !== undefined && bytes.equals(utf8Bytes))
+    return true;
   return policyDigest(bytes) === expected;
 }
 

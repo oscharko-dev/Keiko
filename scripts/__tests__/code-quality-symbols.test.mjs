@@ -1973,3 +1973,21 @@ describe("fresh compiler content observations (#3918)", () => {
     expect(() => own.compiler.assertCurrent()).toThrow("symbol-resolver-closed");
   });
 });
+
+// Candidate representation proof, not an original runtime defect: private mutable byte storage
+// must not let the exposed metadata rewrite the admitted witness.
+describe("compiler private canonical byte witness", () => {
+  it("keeps currentness refusal after attempting to rewrite reachable byte storage", async () => {
+    const path = "src/currentness.ts";
+    const original = 'export const label = "first";\n';
+    const changed = Buffer.from(original.replace("first", "other"));
+    const own = await currentnessFixture(({ put }) => put(path, original));
+    expect(own.compiler.read(path)).toBe(original);
+    const previous = own.compiler.state.snapshots.get(join(own.compiler.state.subject.root, path));
+    for (const value of Object.values(previous)) {
+      if (Buffer.isBuffer(value)) changed.copy(value);
+    }
+    writeFileSync(join(own.root, path), changed);
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+});
