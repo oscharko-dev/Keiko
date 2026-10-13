@@ -76,3 +76,22 @@ qualify a real model, service workers or native updates.
 The updater evidence's eight source and four harness bindings remain unchanged, and its freshness
 gate passed on the composed UI source. Full repository coverage, final source qualification,
 required CI and the original local-model campaign remain separate acceptance obligations.
+
+## Scoped acceptance and customer evidence
+
+[acceptance-ledger.json](acceptance-ledger.json) maps the original 96 requirements to their
+implementation and owning evidence. It distinguishes demonstrated historical failures, already
+healthy controls, current verification and outstanding release obligations. Evidence records retain
+their actual producer commits; a later documentation commit does not become their test producer.
+
+[customer-lab-timeline.json](customer-lab-timeline.json) records the body-free correlated customer
+timeline, same-scope fresh follow-up read, mounted scope and evidence controls, and the separately
+attributed public-handler clarification and marker-free controls. The original native citation
+failure remains a failure. Its subsequent bounded-repair regression tests are separate from a native
+replay. Historical unsupported log entries and the observed sequence anomaly remain disclosed;
+supported current correlations do not certify the entire accumulated log.
+
+These are scoped implementation and acceptance records. Final local gates, required current-head
+CI, review settlement and integration remain pending. They are not the final closeout document or
+a release signoff. Original unseen-case results retain their first scores; later regression runs
+are identified separately.

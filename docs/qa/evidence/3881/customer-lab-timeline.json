@@ -1,0 +1,1374 @@
+{
+  "evidenceClass": "sanitized-customer-lab-partial-progress-timeline",
+  "createdAtUtc": "2026-10-13T07:47:18.991150+00:00",
+  "scope": "Selected registered Activity stages, counts and qualified customer joins. Required CI/release and final closeout remain separate.",
+  "activityCollectionMethod": "Canonical Activity Log reader.query plus actual public support query, export and analyze commands. Native process-level integrity and per-query consulted-segment anomalies are recorded separately.",
+  "nativeProducer": {
+    "head": "d56d32169d72dbf41983b5fc0a5b4576ee73c892",
+    "bffPid": 18869,
+    "canonicalReaderSha256": "42cb968b599af76bbbf8da47656d244cafe9e2eaada67972d9179e26a348dff3",
+    "activeSourceHashesBindConsumedBytesAtObservation": true
+  },
+  "activityIntegrity": {
+    "classification": "supported",
+    "completeness": "complete",
+    "loss": "none",
+    "unsupportedLineCount": 0,
+    "corruptLineCount": 0,
+    "truncatedLineCount": 0,
+    "incompleteLineCount": 0,
+    "sequenceAnomalyCount": 1,
+    "currentPidUnsupportedLineCount": 0,
+    "historicalUnsupportedLineCount": 6188,
+    "historicalUnsupportedRecordsNotDeletedOrReinterpreted": true,
+    "sequenceAnomalyScope": "One process-level observed anomaly, not five accumulated case anomalies."
+  },
+  "customerFive": [
+    {
+      "caseId": "customer-trace-de",
+      "correlationIdentitySha256": "0bddf8b06cf8dc66f642b31bfc906ddbeac9588fa79df971a1e5bfcda7c7326f",
+      "scopeIdentitySha256": "968ba27ea85c60e28fb7d89413dc733a1d6a3da7a892004f5a5fe48410dccfdd",
+      "queryIdentitySha256": "beeb599dfc303b6f1c5555fe59eb2d6aa8a2da2faa3005f8f1cced200303eea1",
+      "selectedStageAnchors": [
+        {
+          "seq": 135,
+          "atUtc": "2026-10-13T06:01:19.698Z",
+          "op": "chat.continuity.capture"
+        },
+        {
+          "seq": 136,
+          "atUtc": "2026-10-13T06:01:19.722Z",
+          "op": "search.connected-context.started"
+        },
+        {
+          "seq": 138,
+          "atUtc": "2026-10-13T06:01:20.008Z",
+          "op": "search.connected-context.completion-details"
+        },
+        {
+          "seq": 139,
+          "atUtc": "2026-10-13T06:01:20.008Z",
+          "op": "search.connected-context.source-details"
+        },
+        {
+          "seq": 140,
+          "atUtc": "2026-10-13T06:01:20.008Z",
+          "op": "search.connected-context.selection-details"
+        },
+        {
+          "seq": 141,
+          "atUtc": "2026-10-13T06:01:20.008Z",
+          "op": "search.connected-context.completed"
+        },
+        {
+          "seq": 142,
+          "atUtc": "2026-10-13T06:01:20.012Z",
+          "op": "chat.context.selected"
+        },
+        {
+          "seq": 146,
+          "atUtc": "2026-10-13T06:01:20.028Z",
+          "op": "gateway.prompt.admission"
+        },
+        {
+          "seq": 147,
+          "atUtc": "2026-10-13T06:01:20.029Z",
+          "op": "chat.request.dispatch"
+        },
+        {
+          "seq": 151,
+          "atUtc": "2026-10-13T06:01:54.963Z",
+          "op": "gateway.chat.completed"
+        },
+        {
+          "seq": 154,
+          "atUtc": "2026-10-13T06:01:54.968Z",
+          "op": "search.connected-context.answer-details"
+        },
+        {
+          "seq": 155,
+          "atUtc": "2026-10-13T06:01:54.968Z",
+          "op": "search.citations.reconciled"
+        },
+        {
+          "seq": 157,
+          "atUtc": "2026-10-13T06:01:55.004Z",
+          "op": "chat.response.message"
+        },
+        {
+          "seq": 158,
+          "atUtc": "2026-10-13T06:01:55.005Z",
+          "op": "request"
+        }
+      ],
+      "registeredCounters": [
+        {
+          "seq": 138,
+          "op": "search.connected-context.completion-details",
+          "workspaceIoContentReadCalls": 110,
+          "workspaceIoContentReadBytes": 193564,
+          "indexProviderStatus": "available",
+          "indexSearchMode": "persistent-cold",
+          "indexIndexedRecords": 11,
+          "indexReusedRecords": 0
+        },
+        {
+          "seq": 141,
+          "op": "search.connected-context.completed",
+          "usageFilesRead": 8,
+          "excerptReadWindowCount": 14,
+          "selectedFileCount": 8
+        },
+        {
+          "seq": 154,
+          "op": "search.connected-context.answer-details",
+          "filesInPrompt": 8,
+          "synthesisCallCount": 1,
+          "completedSynthesisCallCount": 1,
+          "followUpPassCount": 0,
+          "citationBehaviour": "cites",
+          "citationRepairDisposition": "not-needed",
+          "answerKind": "answer"
+        }
+      ],
+      "diagnosticSufficiency": "complete",
+      "physicalRequestCountInferredFromSynthesisCounter": false,
+      "mountedJoins": {
+        "persistedAnswerJoined": true,
+        "browserResponseAnswerJoined": true,
+        "mountedMatchingUserTurnVisible": true,
+        "pillEdgeHintAgree": true,
+        "evidenceLineMatchesCanonicalProducer": true,
+        "freshCurrentContentReadObserved": true
+      },
+      "mountedCounts": {
+        "promptFiles": 8,
+        "citations": 2,
+        "uncitedWarnings": 0
+      }
+    },
+    {
+      "caseId": "customer-follow-up-de",
+      "correlationIdentitySha256": "f8798a6afc7101637bad2771d554641b42a2a6873ec6fc9994ba58f084e02713",
+      "scopeIdentitySha256": "968ba27ea85c60e28fb7d89413dc733a1d6a3da7a892004f5a5fe48410dccfdd",
+      "queryIdentitySha256": "f008fa43fffe00c4f17e0b607bc8ae30899cbcfa19b96fe637295a0528fa94a7",
+      "selectedStageAnchors": [
+        {
+          "seq": 177,
+          "atUtc": "2026-10-13T06:04:35.981Z",
+          "op": "chat.continuity.capture"
+        },
+        {
+          "seq": 178,
+          "atUtc": "2026-10-13T06:04:35.983Z",
+          "op": "search.connected-context.started"
+        },
+        {
+          "seq": 180,
+          "atUtc": "2026-10-13T06:04:36.143Z",
+          "op": "search.connected-context.completion-details"
+        },
+        {
+          "seq": 181,
+          "atUtc": "2026-10-13T06:04:36.143Z",
+          "op": "search.connected-context.source-details"
+        },
+        {
+          "seq": 182,
+          "atUtc": "2026-10-13T06:04:36.144Z",
+          "op": "search.connected-context.selection-details"
+        },
+        {
+          "seq": 183,
+          "atUtc": "2026-10-13T06:04:36.144Z",
+          "op": "search.connected-context.completed"
+        },
+        {
+          "seq": 184,
+          "atUtc": "2026-10-13T06:04:36.146Z",
+          "op": "chat.context.selected"
+        },
+        {
+          "seq": 188,
+          "atUtc": "2026-10-13T06:04:36.157Z",
+          "op": "gateway.prompt.admission"
+        },
+        {
+          "seq": 189,
+          "atUtc": "2026-10-13T06:04:36.157Z",
+          "op": "chat.request.dispatch"
+        },
+        {
+          "seq": 193,
+          "atUtc": "2026-10-13T06:05:08.281Z",
+          "op": "gateway.chat.completed"
+        },
+        {
+          "seq": 196,
+          "atUtc": "2026-10-13T06:05:08.284Z",
+          "op": "search.connected-context.answer-details"
+        },
+        {
+          "seq": 197,
+          "atUtc": "2026-10-13T06:05:08.284Z",
+          "op": "search.citations.reconciled"
+        },
+        {
+          "seq": 199,
+          "atUtc": "2026-10-13T06:05:08.310Z",
+          "op": "chat.response.message"
+        },
+        {
+          "seq": 200,
+          "atUtc": "2026-10-13T06:05:08.310Z",
+          "op": "request"
+        }
+      ],
+      "registeredCounters": [
+        {
+          "seq": 180,
+          "op": "search.connected-context.completion-details",
+          "workspaceIoContentReadCalls": 110,
+          "workspaceIoContentReadBytes": 193564,
+          "indexProviderStatus": "available",
+          "indexSearchMode": "persistent-cold",
+          "indexIndexedRecords": 11,
+          "indexReusedRecords": 0
+        },
+        {
+          "seq": 183,
+          "op": "search.connected-context.completed",
+          "usageFilesRead": 8,
+          "excerptReadWindowCount": 16,
+          "selectedFileCount": 8
+        },
+        {
+          "seq": 196,
+          "op": "search.connected-context.answer-details",
+          "filesInPrompt": 8,
+          "synthesisCallCount": 1,
+          "completedSynthesisCallCount": 1,
+          "followUpPassCount": 0,
+          "citationBehaviour": "cites",
+          "citationRepairDisposition": "not-needed",
+          "answerKind": "answer"
+        }
+      ],
+      "diagnosticSufficiency": "complete",
+      "physicalRequestCountInferredFromSynthesisCounter": false,
+      "mountedJoins": {
+        "persistedAnswerJoined": true,
+        "browserResponseAnswerJoined": true,
+        "mountedMatchingUserTurnVisible": true,
+        "pillEdgeHintAgree": true,
+        "evidenceLineMatchesCanonicalProducer": true,
+        "freshCurrentContentReadObserved": true
+      },
+      "mountedCounts": {
+        "promptFiles": 8,
+        "citations": 2,
+        "uncitedWarnings": 0
+      }
+    },
+    {
+      "caseId": "customer-explicit-de",
+      "correlationIdentitySha256": "6decb152a9c37c7042c2ced59bc96a888b06257cc62d70b37f1d4af621098c7f",
+      "scopeIdentitySha256": "968ba27ea85c60e28fb7d89413dc733a1d6a3da7a892004f5a5fe48410dccfdd",
+      "queryIdentitySha256": "9829d013ec8f07e10809d8fcd48de4d318d3c03868e3b68f6963cf83417449a8",
+      "selectedStageAnchors": [
+        {
+          "seq": 214,
+          "atUtc": "2026-10-13T06:06:51.744Z",
+          "op": "chat.continuity.capture"
+        },
+        {
+          "seq": 215,
+          "atUtc": "2026-10-13T06:06:51.746Z",
+          "op": "search.connected-context.started"
+        },
+        {
+          "seq": 217,
+          "atUtc": "2026-10-13T06:06:51.899Z",
+          "op": "search.connected-context.completion-details"
+        },
+        {
+          "seq": 218,
+          "atUtc": "2026-10-13T06:06:51.899Z",
+          "op": "search.connected-context.source-details"
+        },
+        {
+          "seq": 219,
+          "atUtc": "2026-10-13T06:06:51.899Z",
+          "op": "search.connected-context.selection-details"
+        },
+        {
+          "seq": 220,
+          "atUtc": "2026-10-13T06:06:51.900Z",
+          "op": "search.connected-context.completed"
+        },
+        {
+          "seq": 221,
+          "atUtc": "2026-10-13T06:06:51.901Z",
+          "op": "chat.context.selected"
+        },
+        {
+          "seq": 225,
+          "atUtc": "2026-10-13T06:06:51.912Z",
+          "op": "gateway.prompt.admission"
+        },
+        {
+          "seq": 226,
+          "atUtc": "2026-10-13T06:06:51.913Z",
+          "op": "chat.request.dispatch"
+        },
+        {
+          "seq": 231,
+          "atUtc": "2026-10-13T06:07:22.318Z",
+          "op": "gateway.chat.completed"
+        },
+        {
+          "seq": 234,
+          "atUtc": "2026-10-13T06:07:22.321Z",
+          "op": "search.connected-context.answer-details"
+        },
+        {
+          "seq": 235,
+          "atUtc": "2026-10-13T06:07:22.323Z",
+          "op": "search.citations.reconciled"
+        },
+        {
+          "seq": 237,
+          "atUtc": "2026-10-13T06:07:22.357Z",
+          "op": "chat.response.message"
+        },
+        {
+          "seq": 238,
+          "atUtc": "2026-10-13T06:07:22.357Z",
+          "op": "request"
+        }
+      ],
+      "registeredCounters": [
+        {
+          "seq": 217,
+          "op": "search.connected-context.completion-details",
+          "workspaceIoContentReadCalls": 110,
+          "workspaceIoContentReadBytes": 194517,
+          "indexProviderStatus": "available",
+          "indexSearchMode": "persistent-cold",
+          "indexIndexedRecords": 11,
+          "indexReusedRecords": 0
+        },
+        {
+          "seq": 220,
+          "op": "search.connected-context.completed",
+          "usageFilesRead": 9,
+          "excerptReadWindowCount": 14,
+          "selectedFileCount": 9
+        },
+        {
+          "seq": 234,
+          "op": "search.connected-context.answer-details",
+          "filesInPrompt": 9,
+          "synthesisCallCount": 1,
+          "completedSynthesisCallCount": 1,
+          "followUpPassCount": 0,
+          "citationBehaviour": "cites",
+          "citationRepairDisposition": "not-needed",
+          "answerKind": "answer"
+        }
+      ],
+      "diagnosticSufficiency": "complete",
+      "physicalRequestCountInferredFromSynthesisCounter": false,
+      "mountedJoins": {
+        "persistedAnswerJoined": true,
+        "browserResponseAnswerJoined": true,
+        "mountedMatchingUserTurnVisible": true,
+        "pillEdgeHintAgree": true,
+        "evidenceLineMatchesCanonicalProducer": true,
+        "freshCurrentContentReadObserved": true
+      },
+      "mountedCounts": {
+        "promptFiles": 9,
+        "citations": 2,
+        "uncitedWarnings": 0
+      }
+    },
+    {
+      "caseId": "customer-basename-de",
+      "correlationIdentitySha256": "8a2788b9d3a4b069f7c7d147c81ea604052ea4c125f30632f071e3ae6a5a5e12",
+      "scopeIdentitySha256": "968ba27ea85c60e28fb7d89413dc733a1d6a3da7a892004f5a5fe48410dccfdd",
+      "queryIdentitySha256": "17bdcf63c82a7263bcb58aed38aa29952c91d0fe07e667b8634cbc1460ec6e6f",
+      "selectedStageAnchors": [
+        {
+          "seq": 257,
+          "atUtc": "2026-10-13T06:10:39.711Z",
+          "op": "chat.continuity.capture"
+        },
+        {
+          "seq": 258,
+          "atUtc": "2026-10-13T06:10:39.713Z",
+          "op": "search.connected-context.started"
+        },
+        {
+          "seq": 260,
+          "atUtc": "2026-10-13T06:10:39.869Z",
+          "op": "search.connected-context.completion-details"
+        },
+        {
+          "seq": 261,
+          "atUtc": "2026-10-13T06:10:39.870Z",
+          "op": "search.connected-context.source-details"
+        },
+        {
+          "seq": 262,
+          "atUtc": "2026-10-13T06:10:39.870Z",
+          "op": "search.connected-context.selection-details"
+        },
+        {
+          "seq": 263,
+          "atUtc": "2026-10-13T06:10:39.870Z",
+          "op": "search.connected-context.completed"
+        },
+        {
+          "seq": 264,
+          "atUtc": "2026-10-13T06:10:39.872Z",
+          "op": "chat.context.selected"
+        },
+        {
+          "seq": 268,
+          "atUtc": "2026-10-13T06:10:39.886Z",
+          "op": "gateway.prompt.admission"
+        },
+        {
+          "seq": 269,
+          "atUtc": "2026-10-13T06:10:39.886Z",
+          "op": "chat.request.dispatch"
+        },
+        {
+          "seq": 274,
+          "atUtc": "2026-10-13T06:11:36.801Z",
+          "op": "gateway.chat.completed"
+        },
+        {
+          "seq": 277,
+          "atUtc": "2026-10-13T06:11:36.804Z",
+          "op": "search.connected-context.answer-details"
+        },
+        {
+          "seq": 278,
+          "atUtc": "2026-10-13T06:11:36.804Z",
+          "op": "search.citations.reconciled"
+        },
+        {
+          "seq": 280,
+          "atUtc": "2026-10-13T06:11:36.827Z",
+          "op": "chat.response.message"
+        },
+        {
+          "seq": 281,
+          "atUtc": "2026-10-13T06:11:36.827Z",
+          "op": "request"
+        }
+      ],
+      "registeredCounters": [
+        {
+          "seq": 260,
+          "op": "search.connected-context.completion-details",
+          "workspaceIoContentReadCalls": 120,
+          "workspaceIoContentReadBytes": 531354,
+          "indexProviderStatus": "available",
+          "indexSearchMode": "persistent-cold",
+          "indexIndexedRecords": 11,
+          "indexReusedRecords": 0
+        },
+        {
+          "seq": 263,
+          "op": "search.connected-context.completed",
+          "usageFilesRead": 11,
+          "excerptReadWindowCount": 13,
+          "selectedFileCount": 11
+        },
+        {
+          "seq": 277,
+          "op": "search.connected-context.answer-details",
+          "filesInPrompt": 11,
+          "synthesisCallCount": 1,
+          "completedSynthesisCallCount": 1,
+          "followUpPassCount": 0,
+          "citationBehaviour": "cites",
+          "citationRepairDisposition": "not-needed",
+          "answerKind": "answer"
+        }
+      ],
+      "diagnosticSufficiency": "complete",
+      "physicalRequestCountInferredFromSynthesisCounter": false,
+      "mountedJoins": {
+        "persistedAnswerJoined": true,
+        "browserResponseAnswerJoined": true,
+        "mountedMatchingUserTurnVisible": true,
+        "pillEdgeHintAgree": true,
+        "evidenceLineMatchesCanonicalProducer": true,
+        "freshCurrentContentReadObserved": true
+      },
+      "mountedCounts": {
+        "promptFiles": 11,
+        "citations": 5,
+        "uncitedWarnings": 0
+      }
+    },
+    {
+      "caseId": "customer-orientation-en",
+      "correlationIdentitySha256": "a0e8724ea50cceea3db084e6cd77b293e00ddd19cc2bf92680fd69d9cf62bae9",
+      "scopeIdentitySha256": "968ba27ea85c60e28fb7d89413dc733a1d6a3da7a892004f5a5fe48410dccfdd",
+      "queryIdentitySha256": "8722beb391d3b080ed2efa7c8a08076acc82f86368c7c04998c87e21fa6dd8c3",
+      "selectedStageAnchors": [
+        {
+          "seq": 295,
+          "atUtc": "2026-10-13T06:13:56.574Z",
+          "op": "chat.continuity.capture"
+        },
+        {
+          "seq": 296,
+          "atUtc": "2026-10-13T06:13:56.575Z",
+          "op": "search.connected-context.started"
+        },
+        {
+          "seq": 298,
+          "atUtc": "2026-10-13T06:13:56.728Z",
+          "op": "search.connected-context.completion-details"
+        },
+        {
+          "seq": 299,
+          "atUtc": "2026-10-13T06:13:56.729Z",
+          "op": "search.connected-context.source-details"
+        },
+        {
+          "seq": 300,
+          "atUtc": "2026-10-13T06:13:56.729Z",
+          "op": "search.connected-context.selection-details"
+        },
+        {
+          "seq": 301,
+          "atUtc": "2026-10-13T06:13:56.729Z",
+          "op": "search.connected-context.completed"
+        },
+        {
+          "seq": 302,
+          "atUtc": "2026-10-13T06:13:56.731Z",
+          "op": "chat.context.selected"
+        },
+        {
+          "seq": 306,
+          "atUtc": "2026-10-13T06:13:56.744Z",
+          "op": "gateway.prompt.admission"
+        },
+        {
+          "seq": 307,
+          "atUtc": "2026-10-13T06:13:56.744Z",
+          "op": "chat.request.dispatch"
+        },
+        {
+          "seq": 314,
+          "atUtc": "2026-10-13T06:14:48.640Z",
+          "op": "gateway.chat.completed"
+        },
+        {
+          "seq": 317,
+          "atUtc": "2026-10-13T06:14:48.642Z",
+          "op": "search.connected-context.answer-details"
+        },
+        {
+          "seq": 318,
+          "atUtc": "2026-10-13T06:14:48.642Z",
+          "op": "search.citations.reconciled"
+        },
+        {
+          "seq": 320,
+          "atUtc": "2026-10-13T06:14:48.662Z",
+          "op": "chat.response.message"
+        },
+        {
+          "seq": 321,
+          "atUtc": "2026-10-13T06:14:48.662Z",
+          "op": "request"
+        }
+      ],
+      "registeredCounters": [
+        {
+          "seq": 298,
+          "op": "search.connected-context.completion-details",
+          "workspaceIoContentReadCalls": 39,
+          "workspaceIoContentReadBytes": 343001,
+          "indexProviderStatus": "available",
+          "indexSearchMode": "persistent-cold",
+          "indexIndexedRecords": 8,
+          "indexReusedRecords": 0
+        },
+        {
+          "seq": 301,
+          "op": "search.connected-context.completed",
+          "usageFilesRead": 11,
+          "excerptReadWindowCount": 11,
+          "selectedFileCount": 11
+        },
+        {
+          "seq": 317,
+          "op": "search.connected-context.answer-details",
+          "filesInPrompt": 11,
+          "synthesisCallCount": 1,
+          "completedSynthesisCallCount": 1,
+          "followUpPassCount": 0,
+          "citationBehaviour": "cites",
+          "citationRepairDisposition": "not-needed",
+          "answerKind": "answer"
+        }
+      ],
+      "diagnosticSufficiency": "complete",
+      "physicalRequestCountInferredFromSynthesisCounter": false,
+      "mountedJoins": {
+        "persistedAnswerJoined": true,
+        "browserResponseAnswerJoined": true,
+        "mountedMatchingUserTurnVisible": true,
+        "pillEdgeHintAgree": true,
+        "evidenceLineMatchesCanonicalProducer": true,
+        "freshCurrentContentReadObserved": true
+      },
+      "mountedCounts": {
+        "promptFiles": 11,
+        "citations": 7,
+        "uncitedWarnings": 0
+      }
+    }
+  ],
+  "freshUserFollowUp": {
+    "previousRole": "customer-trace-de",
+    "nextRole": "customer-follow-up-de",
+    "sameChatAndScope": true,
+    "noManualScopeChange": true,
+    "distinctActualQueryIdentities": true,
+    "separateUserTurnNotAutomaticRetrievalFollowUp": true,
+    "actualFollowUpPassCountInEachAnswer": 0,
+    "freshNativeTurnWithCurrentSourceCitationObserved": true,
+    "newFileCreatedBetweenTurnsClaimed": false
+  },
+  "sourceAndPersistence": {
+    "actualCaseCount": 5,
+    "actualCitationCount": 18,
+    "directPositiveBodyIds": 10,
+    "sharedWindowProvenanceAliasIds": 8,
+    "sameChatAndScope": true,
+    "returnedPersistedAnswersAndCitationsExactlyEqual": true,
+    "positiveBodyRangeJoinsQualified": true,
+    "emptyAliasesReceiveIndependentFactCredit": false,
+    "pureClarificationOrMarkerFreeRepairProvenByCustomerFive": false
+  },
+  "mountedAssets": {
+    "actualServedJsResponses": 46,
+    "wholeStaticFilesVerified": 293,
+    "noObserverModelRequests": true,
+    "noObserverScopeMutations": true
+  },
+  "firstNativeKnowledgeFailure": {
+    "actualProducerHead": "d56d32169d72dbf41983b5fc0a5b4576ee73c892",
+    "outcome": "substantive-source-answer-without-supported-citations",
+    "firstFailurePreserved": true,
+    "observedRepairDisposition": "skipped-capability",
+    "sourceAnswerQualitySuccessClaimed": false,
+    "timeline": {
+      "caseId": "keiko-source-budget",
+      "correlationIdentitySha256": "f3513626fb8f63c4d28386a7aa873246c0a0acfd7c75a36a94a3633d5ab68640",
+      "scopeIdentitySha256": "f57379a6b40e0c41d65715b822576aaff28a83e18957bd2e3cfea1874a0cb567",
+      "queryIdentitySha256": "4ea3029d6973f13759a7ca84b8021cf6ae584de4d56014e9d87ad95bc1e13253",
+      "selectedStageAnchors": [
+        {
+          "seq": 339,
+          "atUtc": "2026-10-13T06:18:12.963Z",
+          "op": "chat.continuity.capture"
+        },
+        {
+          "seq": 340,
+          "atUtc": "2026-10-13T06:18:12.964Z",
+          "op": "search.connected-context.started"
+        },
+        {
+          "seq": 342,
+          "atUtc": "2026-10-13T06:18:42.533Z",
+          "op": "search.connected-context.completion-details"
+        },
+        {
+          "seq": 343,
+          "atUtc": "2026-10-13T06:18:42.534Z",
+          "op": "search.connected-context.source-details"
+        },
+        {
+          "seq": 344,
+          "atUtc": "2026-10-13T06:18:42.534Z",
+          "op": "search.connected-context.selection-details"
+        },
+        {
+          "seq": 345,
+          "atUtc": "2026-10-13T06:18:42.534Z",
+          "op": "search.connected-context.completed"
+        },
+        {
+          "seq": 346,
+          "atUtc": "2026-10-13T06:18:42.552Z",
+          "op": "chat.context.selected"
+        },
+        {
+          "seq": 350,
+          "atUtc": "2026-10-13T06:18:42.591Z",
+          "op": "gateway.prompt.admission"
+        },
+        {
+          "seq": 351,
+          "atUtc": "2026-10-13T06:18:42.592Z",
+          "op": "chat.request.dispatch"
+        },
+        {
+          "seq": 366,
+          "atUtc": "2026-10-13T06:27:15.610Z",
+          "op": "gateway.chat.completed"
+        },
+        {
+          "seq": 372,
+          "atUtc": "2026-10-13T06:27:15.673Z",
+          "op": "search.connected-context.answer-details"
+        },
+        {
+          "seq": 373,
+          "atUtc": "2026-10-13T06:27:15.673Z",
+          "op": "search.citations.reconciled"
+        },
+        {
+          "seq": 375,
+          "atUtc": "2026-10-13T06:27:15.746Z",
+          "op": "chat.response.message"
+        },
+        {
+          "seq": 376,
+          "atUtc": "2026-10-13T06:27:15.746Z",
+          "op": "request"
+        }
+      ],
+      "registeredCounters": [
+        {
+          "seq": 342,
+          "op": "search.connected-context.completion-details",
+          "workspaceIoContentReadCalls": 13976,
+          "workspaceIoContentReadBytes": 146418145,
+          "indexProviderStatus": "available",
+          "indexSearchMode": "persistent-reconciled",
+          "indexIndexedRecords": 6937,
+          "indexReusedRecords": 0
+        },
+        {
+          "seq": 345,
+          "op": "search.connected-context.completed",
+          "usageFilesRead": 11,
+          "excerptReadWindowCount": 175,
+          "selectedFileCount": 11
+        },
+        {
+          "seq": 372,
+          "op": "search.connected-context.answer-details",
+          "filesInPrompt": 11,
+          "synthesisCallCount": 1,
+          "completedSynthesisCallCount": 1,
+          "followUpPassCount": 0,
+          "citationBehaviour": "never",
+          "citationRepairDisposition": "skipped-capability",
+          "answerKind": "answer"
+        }
+      ],
+      "diagnosticSufficiency": "complete",
+      "physicalRequestCountInferredFromSynthesisCounter": false
+    },
+    "causalScope": "The historical reliable-cites veto was isolated separately by the controlled public owning comparison; this native response is not relabeled as a repaired native replay."
+  },
+  "controlledCitationRepairComparison": {
+    "kind": "scripted-public-owning-boundary-comparison",
+    "publishedOwnerHead": "824960728d583c5d002f0884dffe6f77bb9ef470",
+    "actualOldOwnerCommit": "cb7c5dfcbe90988233d4e8ae5cefc2fa0af02c73",
+    "ownerPath": "packages/keiko-server/src/grounded-answer-repair.ts",
+    "oldOwnerSha256": "146eb153aea755dbec4f55ac0bc4cb35c4ee25ce26e537f2da3ff087085f136f",
+    "currentOwnerSha256": "92b1a1fb260e1ccaa28e3d27ad2a3c4f08c04b3ee1b15c911c3baff3c39b4db6",
+    "parent": {
+      "pid": 27492,
+      "startedAt": "2026-10-13T06:55:48.100367+00:00",
+      "finishedAt": "2026-10-13T06:55:56.527677+00:00",
+      "exitCode": 1,
+      "actualAssertionFailures": 2
+    },
+    "current": {
+      "pid": 27541,
+      "startedAt": "2026-10-13T06:55:56.583835+00:00",
+      "finishedAt": "2026-10-13T06:56:05.057380+00:00",
+      "exitCode": 0,
+      "actualSelectedPasses": 2
+    },
+    "trigger": "A current substantive marker-free answer after three verified earlier citation observations.",
+    "verifiedBehavior": [
+      "One initial call and exactly one bounded repair call.",
+      "Prose unchanged except for a validated source or numeric marker.",
+      "A validated citation and cites-after-repair disposition.",
+      "No uncited-answer warning."
+    ],
+    "otherGuardsPreserved": "Non-claim, invocation, call/token/output/deadline, cancellation and marker-only validation. Healthy controls are not historical failures.",
+    "canonicalNativeRepairEventInvented": false
+  },
+  "criterionSpecificComposition": {
+    "criterionId": "3894.2",
+    "independentDisposition": "supported",
+    "actualNativeProducerHead": "d56d32169d72dbf41983b5fc0a5b4576ee73c892",
+    "controlledFixtureCommittedHead": "a535fae06f6b26f278614cc049a67e02caef5aa2",
+    "fixtureCommitPublished": true,
+    "pureAndMarkerFreeControls": "Separate scripted public-handler controls; all five native customer answers were already cited.",
+    "wholeAcceptanceComplete": false
+  },
+  "pending": {
+    "a535NativeRepairReplay": "Actual replay failed before the bounded repair provider dispatch; no repaired native success is claimed.",
+    "actualActivityLogCliExportAndAnalyze": "Executed: all 20 public commands exited 0; conservative incident-selection/timeline limits retained. Recipe finalization exited 1 after an ordinary active-to-sealed log-segment rename.",
+    "requiredCiAndRelease": "pending",
+    "finalCloseout": "reserved-for-verified-green",
+    "firstBlindOutcomes": "Preserved separately; not replaced or regraded by this customer timeline."
+  },
+  "references": {
+    "privateTimeline": {
+      "artifact": "core-824-customer5-citation-timeline-r1.PRIVATE.json",
+      "sha256": "dfee1c9e773ec58f994ec61f254c96afbb829b7d07e76c5bca8bdad19391bc4c"
+    },
+    "customerActivity": {
+      "artifact": "resume-runtime-d56d321-customer5-canonical-activity-r1.json",
+      "sha256": "a2c04980ed0aeaea0e83b79ab6e667c45556b33910b98f3036c1a567671ff8e7"
+    },
+    "citationFailureActivity": {
+      "artifact": "resume-root-d56d321-budget-canonical-activity-r1.json",
+      "sha256": "4ddb5389c8b126e8339afc222211d9f07d2caa5084c6ec81b15479315da9e520"
+    },
+    "customerSourcePersistenceQualification": {
+      "artifact": "d56-customer5-independent-source-persistence-qualification.json",
+      "sha256": "4bc5b7bcd8ceab647c270dc5547130a524ff560afdbb7c3905a255e16d5e9922"
+    },
+    "customerSourcePersistenceJoin": {
+      "artifact": "resume-runtime-d56d321-customer5-manifest-source-persistence-join-r1.json",
+      "sha256": "79d921635297bc61ba09b72c0e62eba7534f4df281d14c5e3289bc187772576f"
+    },
+    "citationRepairQualification": {
+      "artifact": "824-current-citation-repair-independent-qualification.json",
+      "sha256": "2af0b677138c79cfc8af0f62633c0983e13ada00aaf1ecb7d0c727514b1e42f3"
+    },
+    "independentMountedQualification": {
+      "artifact": "d56-customer5-mounted-independent-qualification.json",
+      "sha256": "af3c5d2dacc81b737d05e4cea9a368a8b52a3e7550477632aab75275ad424b31"
+    },
+    "independentComposedLabQualification": {
+      "artifact": "a535-composed-lab-3894-2-independent-qualification.json",
+      "sha256": "c2421b3b0c58f9ef92a097bf093af376a6e9f879881126a1694564f0cbf62bb9"
+    },
+    "actualMountedCapture": {
+      "artifact": "customer-ui-join-body-free.json",
+      "sha256": "e9e957f41ed57539c3490f9efe5a65ee16feddabe0ef64f2d6b3e5c7a09abb5c"
+    },
+    "wholeUiPostCapture": {
+      "artifact": "resume-root-whole-ui-after-customer-r1.json",
+      "sha256": "1afab88d2dcc3aa2a42b444bf54e34df74b4e3b345d94e25467592d3120ba951"
+    },
+    "controlledPublicQualification": {
+      "artifact": "resume-root-public-clarification-owning-qualification-r1.json",
+      "sha256": "c37724d69a4ecf59ea8fe5dec0c26b803825431ac8b2b0323b2c26b714964188"
+    },
+    "controlledPublic39Result": {
+      "artifact": "resume-root-public-clarification-owning-r1.json",
+      "sha256": "e39ec5d5127885407e6251dacdc54a5ce40a53ddc445ae1398dc25460c8f81cc"
+    },
+    "controlledRepairParent": {
+      "artifact": "resume-root-citation-bound-r1-reliable-citation-miss-red-execution.json",
+      "sha256": "1557c4f2ee99c685d25bf66904a5442b2d48a7ddcd63bcab59a6da6d8ec2c083"
+    },
+    "controlledRepairCurrent": {
+      "artifact": "resume-root-citation-bound-r1-reliable-citation-miss-green-execution.json",
+      "sha256": "376a9a9ef77e07903530f676da1267d26e842a89f64dd83db3f43e68ab456945"
+    },
+    "a535NativeRepairFailure": {
+      "artifact": "resume-runtime-a535fae-known-knowledge2-repair-failure-and-budget-r1.json",
+      "sha256": "de10c3236f34b9a132a7512ab6fb0f777e9dce7c49f8d41d673b8020ff5a4fbb"
+    },
+    "a535ReadinessVerdictTimeline": {
+      "artifact": "resume-runtime-a535fae-failed-knowledge2-readiness-verdict-timeline-r1.json",
+      "sha256": "2e0a0cf3525245beb7f2fed3a951aa9959e808e84fcaa0fdab1eadd5988af82d"
+    },
+    "publicSupportCliActual20": {
+      "artifact": "resume-runtime-a535fae-d56-customer-public-cli-actual20-command-proof-r1.json",
+      "sha256": "b4c68c022199feb3f854d496d02a67cd43eecd8455ffe39bacfc125fef38aa08"
+    }
+  },
+  "privacyBoundary": "Operation names, sequence/time metadata, counts, hashes, commit IDs, relative product code paths and artifact basenames only. No question, answer, source body, customer path, endpoint, absolute private path, PII or configuration values.",
+  "actualA535NativeRepairReplay": {
+    "producerHead": "a535fae06f6b26f278614cc049a67e02caef5aa2",
+    "disposition": "failed-before-repair-provider-dispatch",
+    "correlationId": "71fb9af0-67bb-46ac-9a83-8d3eeeb12998",
+    "failureKind": "ConversationModelNotReadyError",
+    "firstGatewayCompletion": {
+      "atUTC": "2026-10-13T07:45:39.495Z",
+      "promptTokens": 61419,
+      "completionTokens": 829,
+      "finishReason": "stop"
+    },
+    "repairFit": {
+      "promptTokens": 55403,
+      "remainingInputTokens": 55557
+    },
+    "physicalGatewayChatDispatchCount": 1,
+    "synthesisCallCount": 2,
+    "completedSynthesisCallCount": 1,
+    "synthesisReservedOutputTokens": 7363,
+    "canonicalFailure": {
+      "atUTC": "2026-10-13T07:45:39.783Z",
+      "op": "search.connected-context.answer-details",
+      "citationRepairDisposition": "failed"
+    },
+    "causeScope": "The typed per-call readiness refusal is established. The readiness holder generation and observation at refusal were not retained; expiry, replacement, clear or explicit failure subtype remains unproven.",
+    "nativeRepairSuccess": false
+  },
+  "actualPublicSupportCli": {
+    "readerProducerHead": "a535fae06f6b26f278614cc049a67e02caef5aa2",
+    "historicalNativeProducerHead": "d56d32169d72dbf41983b5fc0a5b4576ee73c892",
+    "actualPublicCommandCount": 20,
+    "allPublicCommandsExitedZero": true,
+    "recipeExitCode": 1,
+    "recipeFinalizationError": "ENOENT for a prior CLI active segment renamed to sealed",
+    "recipeFinalizationFailureDoesNotRelabelPublicCommandOutcomes": true,
+    "sourceComparisonCompletedBeforeFinalizationError": true,
+    "originalNativeLogPrefixesPreserved": true,
+    "historicalUnsupportedLineCount": 6188,
+    "nativeProducerUnsupportedLineCount": 0,
+    "sequenceAnomalyScope": "Per-query consulted segments: 5/2/1/1/1. These are not five copies of the native process-level anomaly recorded above.",
+    "reportsReconstructedOrFiltered": false,
+    "additionalModelCalls": 0,
+    "browserCalls": 0,
+    "cases": [
+      {
+        "caseId": "customer-trace-de",
+        "commands": [
+          {
+            "surface": "support query",
+            "pid": 33074,
+            "exitCode": 0,
+            "stdoutSha256": "43fd04cddfc5e7414d9924e103301135e798953e42a6385b4746d8a852630d0d",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support export",
+            "pid": 33079,
+            "exitCode": 0,
+            "stdoutSha256": "519fb46ebd959c9afe9152eba5efde15586f24fd8fda7d4a3c61488ce852d746",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze",
+            "pid": 33086,
+            "exitCode": 0,
+            "stdoutSha256": "268e950480d5232e8e6823ca1b6cc0f437f1602cf223a4a21d5cc189bcad856b",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze --correlation",
+            "pid": 33090,
+            "exitCode": 0,
+            "stdoutSha256": "b3c70e95f711ab8ee93463bee13b29582cb7927ad898b1a9c4aa2f60cc533444",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "joinedProof": {
+          "artifact": "actual-native-joined-proof.json",
+          "sha256": "00f76556a8ba31efaf654a84a1ed4071067c63ee56bcb48869a139a294cae0a3"
+        },
+        "query": {
+          "eventCount": 255,
+          "sufficiencyStatus": "complete",
+          "integrity": {
+            "classification": "supported",
+            "consultedFileCount": 7,
+            "supportedLineCount": 1582,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalyCount": 5,
+            "completeness": "complete",
+            "loss": "none"
+          }
+        },
+        "exportedReport": {
+          "artifact": "keiko-support-v1-ca53ae59d504-2026-10-13.json",
+          "sha256": "2f480dffd2f84a1aa4984cd0d98794a8c14f6b8533cee6d39c5ffe67773fb0ee"
+        },
+        "analysis": {
+          "evidence": {
+            "classification": "supported",
+            "supportedLineCount": 255,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalies": []
+          },
+          "sufficiencyStatus": "complete",
+          "incidentSelection": {
+            "status": "insufficient",
+            "reasons": ["no-registered-failure", "parent-correlation-missing"],
+            "requiredBytes": 30845,
+            "requiredRecordCount": 31
+          }
+        },
+        "timeline": {
+          "actualLineCount": 33,
+          "sufficiencyStatus": "insufficient",
+          "reasons": ["no-registered-failure", "parent-correlation-missing"],
+          "opaqueCorrelationIdSha256": "427ebf22fb9fc29f95658c1d8fca4b082ad800918a7bb1a414b0f3161694cf7e"
+        },
+        "registeredRetrievalFailureCount": 0
+      },
+      {
+        "caseId": "customer-follow-up-de",
+        "commands": [
+          {
+            "surface": "support query",
+            "pid": 33093,
+            "exitCode": 0,
+            "stdoutSha256": "50a90d32ac9a638d7807e886124428c44365a266aa51d004393f73afadfe3c35",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support export",
+            "pid": 33098,
+            "exitCode": 0,
+            "stdoutSha256": "a0fc4ec6fdde50430668347101213a55265e6a10a70e61db20813955d7297c0c",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze",
+            "pid": 33105,
+            "exitCode": 0,
+            "stdoutSha256": "f67a541012bb086afa20b7c55a5a0e81831fcb83006f6807d48c899e7853fe7b",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze --correlation",
+            "pid": 33108,
+            "exitCode": 0,
+            "stdoutSha256": "76455c1f54301d19ed67142390eac0849b0aee0e4b4a69d9025f7b293ab2cbbe",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "joinedProof": {
+          "artifact": "actual-native-joined-proof.json",
+          "sha256": "a8837ca7c5699a868143aa0022696e5676de18abc0dfd33c8db35d333e50d06c"
+        },
+        "query": {
+          "eventCount": 27,
+          "sufficiencyStatus": "complete",
+          "integrity": {
+            "classification": "supported",
+            "consultedFileCount": 3,
+            "supportedLineCount": 391,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalyCount": 2,
+            "completeness": "complete",
+            "loss": "none"
+          }
+        },
+        "exportedReport": {
+          "artifact": "keiko-support-v1-1c7c43846090-2026-10-13.json",
+          "sha256": "9b2287ffe9528b9f7ffdd4c34fd5daa84eb0ef378844c1ff3b3dd9ca8fd50c90"
+        },
+        "analysis": {
+          "evidence": {
+            "classification": "supported",
+            "supportedLineCount": 27,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalies": []
+          },
+          "sufficiencyStatus": "complete",
+          "incidentSelection": {
+            "status": "insufficient",
+            "reasons": ["no-registered-failure"],
+            "requiredBytes": 23255,
+            "requiredRecordCount": 21
+          }
+        },
+        "timeline": {
+          "actualLineCount": 24,
+          "sufficiencyStatus": "insufficient",
+          "reasons": ["no-registered-failure"],
+          "opaqueCorrelationIdSha256": "427ebf22fb9fc29f95658c1d8fca4b082ad800918a7bb1a414b0f3161694cf7e"
+        },
+        "registeredRetrievalFailureCount": 0
+      },
+      {
+        "caseId": "customer-explicit-de",
+        "commands": [
+          {
+            "surface": "support query",
+            "pid": 33111,
+            "exitCode": 0,
+            "stdoutSha256": "7d1927e8e505000343f0a91565288e8d52893972f339b6ae2a8d9771bdf35b25",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support export",
+            "pid": 33117,
+            "exitCode": 0,
+            "stdoutSha256": "4d1b557fa0f47f1b4e174b542a2723d27d06b83481aba7fba4eed2c951eb84c0",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze",
+            "pid": 33124,
+            "exitCode": 0,
+            "stdoutSha256": "68a81ccd4614b178c4cace91e93b3da27087bdaa133d6be0ec3dc375e93ea959",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze --correlation",
+            "pid": 33127,
+            "exitCode": 0,
+            "stdoutSha256": "f1d442ebecd5699c5ef1208572cebebe3e5bf5d19bdaba3983acb4bca56401d4",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "joinedProof": {
+          "artifact": "actual-native-joined-proof.json",
+          "sha256": "5302e1eac2292e40032b90371106b0a015ff89a93dbdfaaa932444d5fd677b43"
+        },
+        "query": {
+          "eventCount": 27,
+          "sufficiencyStatus": "complete",
+          "integrity": {
+            "classification": "supported",
+            "consultedFileCount": 3,
+            "supportedLineCount": 425,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalyCount": 1,
+            "completeness": "complete",
+            "loss": "none"
+          }
+        },
+        "exportedReport": {
+          "artifact": "keiko-support-v1-9403f4f98555-2026-10-13.json",
+          "sha256": "b8d214a97d56d406d0e7959f44805fa692cfee5083bf4a8b49dcca4c6cdeab70"
+        },
+        "analysis": {
+          "evidence": {
+            "classification": "supported",
+            "supportedLineCount": 27,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalies": []
+          },
+          "sufficiencyStatus": "complete",
+          "incidentSelection": {
+            "status": "insufficient",
+            "reasons": ["no-registered-failure"],
+            "requiredBytes": 23257,
+            "requiredRecordCount": 21
+          }
+        },
+        "timeline": {
+          "actualLineCount": 24,
+          "sufficiencyStatus": "insufficient",
+          "reasons": ["no-registered-failure"],
+          "opaqueCorrelationIdSha256": "427ebf22fb9fc29f95658c1d8fca4b082ad800918a7bb1a414b0f3161694cf7e"
+        },
+        "registeredRetrievalFailureCount": 0
+      },
+      {
+        "caseId": "customer-basename-de",
+        "commands": [
+          {
+            "surface": "support query",
+            "pid": 33130,
+            "exitCode": 0,
+            "stdoutSha256": "8a52ab7405375f3958ab99706e4d10d06e0232c9feff7503ad2731536cf0d535",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support export",
+            "pid": 33135,
+            "exitCode": 0,
+            "stdoutSha256": "9b7e57758f036def3d539716b7beca753fb74d063e8d4062ee7f6294af87bc7a",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze",
+            "pid": 33142,
+            "exitCode": 0,
+            "stdoutSha256": "78f1fd1df3f72a0f9fd48bcf02a0ba68a346b97cebb4b6e960ff91f94b0cf67f",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze --correlation",
+            "pid": 33145,
+            "exitCode": 0,
+            "stdoutSha256": "402f15051c5f609dfccfbeb10c57d5af116882ac1622a57e4648e0e6a26a7e21",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "joinedProof": {
+          "artifact": "actual-native-joined-proof.json",
+          "sha256": "ea3eb228b394927831be7311f6bcd0e828d31b1302a08d8fbc53ceb4d1a726de"
+        },
+        "query": {
+          "eventCount": 29,
+          "sufficiencyStatus": "complete",
+          "integrity": {
+            "classification": "supported",
+            "consultedFileCount": 2,
+            "supportedLineCount": 387,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalyCount": 1,
+            "completeness": "complete",
+            "loss": "none"
+          }
+        },
+        "exportedReport": {
+          "artifact": "keiko-support-v1-4f6732231080-2026-10-13.json",
+          "sha256": "d327e358ea97477fa41db543b3f01524a599e8ae368c8969ec3fcff6560e1924"
+        },
+        "analysis": {
+          "evidence": {
+            "classification": "supported",
+            "supportedLineCount": 29,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalies": []
+          },
+          "sufficiencyStatus": "complete",
+          "incidentSelection": {
+            "status": "insufficient",
+            "reasons": ["no-registered-failure", "parent-correlation-missing"],
+            "requiredBytes": 23267,
+            "requiredRecordCount": 21
+          }
+        },
+        "timeline": {
+          "actualLineCount": 24,
+          "sufficiencyStatus": "insufficient",
+          "reasons": ["no-registered-failure", "parent-correlation-missing"],
+          "opaqueCorrelationIdSha256": "427ebf22fb9fc29f95658c1d8fca4b082ad800918a7bb1a414b0f3161694cf7e"
+        },
+        "registeredRetrievalFailureCount": 0
+      },
+      {
+        "caseId": "customer-orientation-en",
+        "commands": [
+          {
+            "surface": "support query",
+            "pid": 33148,
+            "exitCode": 0,
+            "stdoutSha256": "dca4d8c79ef2a040a55c8da7f333c130eb44378e8507c2faf6fe9c019135f834",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support export",
+            "pid": 33153,
+            "exitCode": 0,
+            "stdoutSha256": "695ccd0b78141e3a99cfbd40740c6f33e9749d5d01d191136aea82823a390eb0",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze",
+            "pid": 33160,
+            "exitCode": 0,
+            "stdoutSha256": "364e326ccb9245b58a2b5cc3f998ad86d3c22842e9d45a9f3eb2d8b839e220aa",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "surface": "support analyze --correlation",
+            "pid": 33163,
+            "exitCode": 0,
+            "stdoutSha256": "4bb71df39a8a181d5cd0388a7f5f174ef401c1de651c4b88ab05b119bba8d97e",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "joinedProof": {
+          "artifact": "actual-native-joined-proof.json",
+          "sha256": "0ef535f2ad0bacd9707aa89553158006dec09e9a209168969b0337b047e04d64"
+        },
+        "query": {
+          "eventCount": 29,
+          "sufficiencyStatus": "complete",
+          "integrity": {
+            "classification": "supported",
+            "consultedFileCount": 2,
+            "supportedLineCount": 387,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalyCount": 1,
+            "completeness": "complete",
+            "loss": "none"
+          }
+        },
+        "exportedReport": {
+          "artifact": "keiko-support-v1-2e7d596e5e0a-2026-10-13.json",
+          "sha256": "b563897adf9adc9db0fda80e727887baf9f06d8c28aa79148aa619aa0219e8ac"
+        },
+        "analysis": {
+          "evidence": {
+            "classification": "supported",
+            "supportedLineCount": 29,
+            "legacyLineCount": 0,
+            "unsupportedLineCount": 0,
+            "corruptLineCount": 0,
+            "truncatedLineCount": 0,
+            "incompleteLineCount": 0,
+            "sequenceAnomalies": []
+          },
+          "sufficiencyStatus": "complete",
+          "incidentSelection": {
+            "status": "insufficient",
+            "reasons": ["no-registered-failure", "parent-correlation-missing"],
+            "requiredBytes": 23255,
+            "requiredRecordCount": 21
+          }
+        },
+        "timeline": {
+          "actualLineCount": 24,
+          "sufficiencyStatus": "insufficient",
+          "reasons": ["no-registered-failure", "parent-correlation-missing"],
+          "opaqueCorrelationIdSha256": "427ebf22fb9fc29f95658c1d8fca4b082ad800918a7bb1a414b0f3161694cf7e"
+        },
+        "registeredRetrievalFailureCount": 0
+      }
+    ],
+    "qualificationLimit": "Complete supported query/report analysis does not turn insufficient incident selection or timeline into a complete incident. No registered retrieval failure and any missing parent correlation remain explicit."
+  }
+}
