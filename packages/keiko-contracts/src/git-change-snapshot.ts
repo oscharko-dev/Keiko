@@ -617,11 +617,6 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-// Prototype-resolved fields never count: a hostile `Object.prototype.outcome` must not validate.
-function field(record: Record<string, unknown>, key: string): unknown {
-  return ownField(record, key);
-}
-
 // Closed key set on OWN names (not only enumerable keys) plus a symbol guard, so a non-enumerable
 // or symbol-keyed extra cannot ride along past `exactKeys`.
 function rejectObservedSnapshotField(reasons: string[], message: string): false {
@@ -661,7 +656,7 @@ function requireCounts(
 ): boolean {
   let valid = true;
   for (const key of keys) {
-    if (!isNonNegativeSafeInteger(field(record, key))) {
+    if (!isNonNegativeSafeInteger(ownField(record, key))) {
       valid = rejectSnapshotField(reasons, `${path}.${key} must be a non-negative safe integer`);
     }
   }
@@ -716,14 +711,14 @@ function validateLimits(value: unknown, reasons: string[]): value is GitChangeSn
   closedKeys(value, LIMIT_KEYS, "limits", reasons);
   let ok = true;
   for (const key of LIMIT_KEYS) {
-    const limit = field(value, key);
+    const limit = ownField(value, key);
     if (!isPositiveSafeInteger(limit) || limit > GIT_CHANGE_SNAPSHOT_LIMIT_CEILINGS[key]) {
       reasons.push(`limits.${key} must be a positive safe integer within the ceiling`);
       ok = false;
     }
   }
-  const patch = field(value, "maxPatchBytes");
-  const total = field(value, "maxTotalBytes");
+  const patch = ownField(value, "maxPatchBytes");
+  const total = ownField(value, "maxTotalBytes");
   if (typeof patch === "number" && typeof total === "number" && patch > total) {
     reasons.push("limits.maxPatchBytes must not exceed limits.maxTotalBytes");
     ok = false;
@@ -742,7 +737,7 @@ function validateHunk(
     return valid;
   }
   valid = closedKeys(value, HUNK_KEYS, path, reasons) && valid;
-  valid = requireDigest(field(value, "hunkDigest"), `${path}.hunkDigest`, reasons) && valid;
+  valid = requireDigest(ownField(value, "hunkDigest"), `${path}.hunkDigest`, reasons) && valid;
   valid =
     requireCounts(
       value,
@@ -765,14 +760,14 @@ function validateEntryIdentity(
   reasons: string[],
 ): boolean {
   let valid = true;
-  valid = requireDigest(field(entry, "evidenceId"), `${path}.evidenceId`, reasons) && valid;
-  valid = requireDigest(field(entry, "pathDigest"), `${path}.pathDigest`, reasons) && valid;
-  valid = requireMode(field(entry, "oldMode"), `${path}.oldMode`, reasons) && valid;
-  valid = requireMode(field(entry, "newMode"), `${path}.newMode`, reasons) && valid;
-  valid = requireObjectId(field(entry, "oldObjectId"), `${path}.oldObjectId`, reasons) && valid;
-  valid = requireObjectId(field(entry, "newObjectId"), `${path}.newObjectId`, reasons) && valid;
+  valid = requireDigest(ownField(entry, "evidenceId"), `${path}.evidenceId`, reasons) && valid;
+  valid = requireDigest(ownField(entry, "pathDigest"), `${path}.pathDigest`, reasons) && valid;
+  valid = requireMode(ownField(entry, "oldMode"), `${path}.oldMode`, reasons) && valid;
+  valid = requireMode(ownField(entry, "newMode"), `${path}.newMode`, reasons) && valid;
+  valid = requireObjectId(ownField(entry, "oldObjectId"), `${path}.oldObjectId`, reasons) && valid;
+  valid = requireObjectId(ownField(entry, "newObjectId"), `${path}.newObjectId`, reasons) && valid;
   valid = requireCounts(entry, ["additions", "deletions", "omittedHunks"], path, reasons) && valid;
-  if (typeof field(entry, "truncated") !== "boolean") {
+  if (typeof ownField(entry, "truncated") !== "boolean") {
     valid = rejectSnapshotField(reasons, `${path}.truncated must be a boolean`);
   }
   return valid;
@@ -786,8 +781,8 @@ function validatePairing(
   reasons: string[],
 ): boolean {
   let valid = true;
-  const oldPathDigest = field(entry, "oldPathDigest");
-  const similarity = field(entry, "similarity");
+  const oldPathDigest = ownField(entry, "oldPathDigest");
+  const similarity = ownField(entry, "similarity");
   if (!paired) {
     if (oldPathDigest !== undefined || similarity !== undefined) {
       valid = rejectSnapshotField(reasons, `${path} must not carry oldPathDigest or similarity`);
@@ -795,7 +790,7 @@ function validatePairing(
     return valid;
   }
   valid = requireDigest(oldPathDigest, `${path}.oldPathDigest`, reasons) && valid;
-  if (oldPathDigest !== undefined && oldPathDigest === field(entry, "pathDigest")) {
+  if (oldPathDigest !== undefined && oldPathDigest === ownField(entry, "pathDigest")) {
     valid = rejectSnapshotField(reasons, `${path}.oldPathDigest must differ from pathDigest`);
   }
   if (!isNonNegativeSafeInteger(similarity) || similarity > 100) {
@@ -806,19 +801,19 @@ function validatePairing(
 
 function entryIsPaired(entry: Record<string, unknown>, kind: GitChangeSnapshotEntryKind): boolean {
   if (kind === "rename" || kind === "copy") return true;
-  const change = field(entry, "change");
+  const change = ownField(entry, "change");
   return (kind === "binary" || kind === "submodule") && (change === "rename" || change === "copy");
 }
 
 function isContentFree(entry: Record<string, unknown>): boolean {
-  const hunks = field(entry, "hunks");
+  const hunks = ownField(entry, "hunks");
   return (
     Array.isArray(hunks) &&
     hunks.length === 0 &&
-    field(entry, "omittedHunks") === 0 &&
-    field(entry, "additions") === 0 &&
-    field(entry, "deletions") === 0 &&
-    field(entry, "truncated") === false
+    ownField(entry, "omittedHunks") === 0 &&
+    ownField(entry, "additions") === 0 &&
+    ownField(entry, "deletions") === 0 &&
+    ownField(entry, "truncated") === false
   );
 }
 
@@ -833,15 +828,15 @@ function validateContentless(
     valid = rejectSnapshotField(reasons, `${path} must carry no hunks, statistics or truncation`);
   }
   if (kind === "mode-change") {
-    if (field(entry, "omission") !== undefined) {
+    if (ownField(entry, "omission") !== undefined) {
       valid = rejectSnapshotField(reasons, `${path}.omission is not allowed on a mode change`);
     }
     return valid;
   }
-  if (!isOneOf(field(entry, "change"), GIT_CHANGE_SNAPSHOT_CONTENT_CHANGES)) {
+  if (!isOneOf(ownField(entry, "change"), GIT_CHANGE_SNAPSHOT_CONTENT_CHANGES)) {
     valid = rejectSnapshotField(reasons, `${path}.change must be a content change`);
   }
-  if (field(entry, "omission") !== kind)
+  if (ownField(entry, "omission") !== kind)
     valid = rejectSnapshotField(reasons, `${path}.omission must be ${kind}`);
   return valid;
 }
@@ -865,13 +860,13 @@ function isContentFreeGeneratedOmission(
   entry: Record<string, unknown>,
   omittedHunks: unknown,
 ): boolean {
-  const hunks = field(entry, "hunks");
+  const hunks = ownField(entry, "hunks");
   return (
     Array.isArray(hunks) &&
     hunks.length === 0 &&
     omittedHunks === 0 &&
-    field(entry, "additions") === 0 &&
-    field(entry, "deletions") === 0
+    ownField(entry, "additions") === 0 &&
+    ownField(entry, "deletions") === 0
   );
 }
 
@@ -884,9 +879,9 @@ function validateTextualOmission(
   reasons: string[],
 ): boolean {
   let valid = true;
-  const omission = field(entry, "omission");
-  const truncated = field(entry, "truncated") === true;
-  const omittedHunks = field(entry, "omittedHunks");
+  const omission = ownField(entry, "omission");
+  const truncated = ownField(entry, "truncated") === true;
+  const omittedHunks = ownField(entry, "omittedHunks");
   if (omission === undefined) {
     if (truncated)
       valid = rejectSnapshotField(reasons, `${path}.truncated requires an omission reason`);
@@ -920,7 +915,7 @@ function validateEntryHunks(
   path: string,
   reasons: string[],
 ): boolean {
-  const hunks = field(entry, "hunks");
+  const hunks = ownField(entry, "hunks");
   if (!Array.isArray(hunks)) return rejectSnapshotField(reasons, `${path}.hunks must be an array`);
   let valid = true;
   if (limits !== undefined && hunks.length > limits.maxHunksPerFile) {
@@ -942,13 +937,13 @@ function validateEntry(
   reasons: string[],
 ): value is GitChangeSnapshotEntry {
   if (!isRecord(value)) return rejectSnapshotField(reasons, `${path} must be an object`);
-  const kind = field(value, "kind");
+  const kind = ownField(value, "kind");
   if (!isOneOf(kind, GIT_CHANGE_SNAPSHOT_ENTRY_KINDS)) {
     return rejectSnapshotField(reasons, `${path}.kind must be a snapshot entry kind`);
   }
   let valid = closedKeys(value, entryKeysFor(kind), path, reasons);
   valid = validateEntryIdentity(value, path, reasons) && valid;
-  const omission = field(value, "omission");
+  const omission = ownField(value, "omission");
   if (omission !== undefined && !isOneOf(omission, GIT_CHANGE_SNAPSHOT_OMISSION_REASONS)) {
     valid = rejectSnapshotField(reasons, `${path}.omission must be an omission reason`);
   }
@@ -977,7 +972,7 @@ function validateEntries(
     }
     const entry: unknown = value[index];
     valid = validateEntry(entry, limits, `entries[${String(index)}]`, reasons) && valid;
-    if (isRecord(entry)) evidenceIds.add(field(entry, "evidenceId"));
+    if (isRecord(entry)) evidenceIds.add(ownField(entry, "evidenceId"));
   }
   if (evidenceIds.size !== value.length) {
     valid = rejectSnapshotField(reasons, "entries must carry unique evidenceIds");
@@ -996,7 +991,7 @@ function validateOmissionRecord(
     return valid;
   }
   valid = closedKeys(value, OMISSION_KEYS, path, reasons) && valid;
-  if (!isOneOf(field(value, "reason"), GIT_CHANGE_SNAPSHOT_OMISSION_REASONS)) {
+  if (!isOneOf(ownField(value, "reason"), GIT_CHANGE_SNAPSHOT_OMISSION_REASONS)) {
     valid = rejectSnapshotField(reasons, `${path}.reason must be an omission reason`);
   }
   valid = requireCounts(value, ["files", "hunks"], path, reasons) && valid;
@@ -1013,9 +1008,9 @@ function sameOmissions(
       const candidate = actual[index];
       return (
         isRecord(candidate) &&
-        field(candidate, "reason") === omission.reason &&
-        field(candidate, "files") === omission.files &&
-        field(candidate, "hunks") === omission.hunks
+        ownField(candidate, "reason") === omission.reason &&
+        ownField(candidate, "files") === omission.files &&
+        ownField(candidate, "hunks") === omission.hunks
       );
     })
   );
@@ -1031,8 +1026,8 @@ function validateCompletenessRollUp(
   reasons: string[],
 ): boolean {
   let valid = true;
-  const totalFiles = field(completeness, "totalFiles");
-  const bytes = field(completeness, "bytes");
+  const totalFiles = ownField(completeness, "totalFiles");
+  const bytes = ownField(completeness, "bytes");
   if (!isNonNegativeSafeInteger(totalFiles))
     return rejectObservedSnapshotField(
       reasons,
@@ -1050,7 +1045,7 @@ function validateCompletenessRollUp(
   const expected = summarizeGitChangeSnapshotCompleteness({ entries, totalFiles, bytes });
   const scalarKeys = ["files", "hunks", "omittedFiles", "omittedHunks", "truncatedFiles"] as const;
   for (const key of scalarKeys) {
-    if (field(completeness, key) !== expected[key]) {
+    if (ownField(completeness, key) !== expected[key]) {
       valid = rejectSnapshotField(reasons, `completeness.${key} must equal the roll-up of entries`);
     }
   }
@@ -1060,7 +1055,9 @@ function validateCompletenessRollUp(
       "completeness.omissions must roll up the entries' omissions in vocabulary order",
     );
   }
-  return validateCompletenessKinds(field(completeness, "kinds"), expected.kinds, reasons) && valid;
+  return (
+    validateCompletenessKinds(ownField(completeness, "kinds"), expected.kinds, reasons) && valid
+  );
 }
 
 function validateCompletenessKinds(
@@ -1071,7 +1068,7 @@ function validateCompletenessKinds(
   if (!isRecord(kinds)) return rejectSnapshotField(reasons, "completeness.kinds must be an object");
   let valid = closedKeys(kinds, GIT_CHANGE_SNAPSHOT_ENTRY_KINDS, "completeness.kinds", reasons);
   for (const kind of GIT_CHANGE_SNAPSHOT_ENTRY_KINDS) {
-    if (field(kinds, kind) !== expected[kind])
+    if (ownField(kinds, kind) !== expected[kind])
       valid = rejectSnapshotField(reasons, "completeness.kinds must roll up entries");
   }
   return valid;
@@ -1111,11 +1108,11 @@ function validateCompleteness(
   if (!isRecord(value)) return rejectSnapshotField(reasons, "completeness must be an object");
   let valid = closedKeys(value, COMPLETENESS_KEYS, "completeness", reasons);
   valid = requireCounts(value, COMPLETENESS_KEYS.slice(0, -2), "completeness", reasons) && valid;
-  const omissions = field(value, "omissions");
+  const omissions = ownField(value, "omissions");
   if (!Array.isArray(omissions))
     return rejectSnapshotField(reasons, "completeness.omissions must be an array");
   valid = validateOmissions(omissions, reasons) && valid;
-  valid = validateCompletenessByteBudget(field(value, "bytes"), limits, reasons) && valid;
+  valid = validateCompletenessByteBudget(ownField(value, "bytes"), limits, reasons) && valid;
   if (entries !== undefined)
     valid = validateCompletenessRollUp(value, entries, omissions, reasons) && valid;
   return entries !== undefined && valid;
@@ -1134,10 +1131,10 @@ function validateDivergence(value: unknown, reasons: string[]): boolean {
 
 function validateBinding(record: Record<string, unknown>, reasons: string[]): boolean {
   let valid = true;
-  if (field(record, "schemaVersion") !== GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION) {
+  if (ownField(record, "schemaVersion") !== GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION) {
     valid = rejectSnapshotField(reasons, "schemaVersion invalid");
   }
-  const repositoryId = field(record, "repositoryId");
+  const repositoryId = ownField(record, "repositoryId");
   validateSafeId(
     repositoryId,
     "repositoryId",
@@ -1145,23 +1142,23 @@ function validateBinding(record: Record<string, unknown>, reasons: string[]): bo
     GIT_CHANGE_SNAPSHOT_REPOSITORY_ID_MAX_CHARS,
   );
   valid = typeof repositoryId === "string" && valid;
-  valid = requireInstant(field(record, "capturedAt"), "capturedAt", reasons) && valid;
+  valid = requireInstant(ownField(record, "capturedAt"), "capturedAt", reasons) && valid;
   return valid;
 }
 
 function validateSnapshotRevisions(record: Record<string, unknown>, reasons: string[]): boolean {
   let valid = true;
-  if (!isSafeRef(field(record, "baseRef")))
+  if (!isSafeRef(ownField(record, "baseRef")))
     valid = rejectSnapshotField(reasons, "baseRef must be a safe git ref");
-  if (!isSafeRef(field(record, "headRef")))
+  if (!isSafeRef(ownField(record, "headRef")))
     valid = rejectSnapshotField(reasons, "headRef must be a safe git ref");
-  valid = requireObjectId(field(record, "baseSha"), "baseSha", reasons) && valid;
-  valid = requireObjectId(field(record, "headSha"), "headSha", reasons) && valid;
-  valid = requireObjectId(field(record, "mergeBaseSha"), "mergeBaseSha", reasons) && valid;
-  if (field(record, "baseSha") === field(record, "headSha")) {
+  valid = requireObjectId(ownField(record, "baseSha"), "baseSha", reasons) && valid;
+  valid = requireObjectId(ownField(record, "headSha"), "headSha", reasons) && valid;
+  valid = requireObjectId(ownField(record, "mergeBaseSha"), "mergeBaseSha", reasons) && valid;
+  if (ownField(record, "baseSha") === ownField(record, "headSha")) {
     valid = rejectSnapshotField(reasons, "baseSha and headSha must differ");
   }
-  if (field(record, "mergeBaseSha") === field(record, "headSha")) {
+  if (ownField(record, "mergeBaseSha") === ownField(record, "headSha")) {
     valid = rejectSnapshotField(reasons, "mergeBaseSha must differ from headSha");
   }
   return validateSnapshotDigests(record, reasons) && valid;
@@ -1169,18 +1166,18 @@ function validateSnapshotRevisions(record: Record<string, unknown>, reasons: str
 
 function validateSnapshotDigests(record: Record<string, unknown>, reasons: string[]): boolean {
   let valid = true;
-  const remoteDigest = field(record, "remoteDigest");
+  const remoteDigest = ownField(record, "remoteDigest");
   if (remoteDigest !== undefined)
     valid = requireDigest(remoteDigest, "remoteDigest", reasons) && valid;
-  valid = requireDigest(field(record, "snapshotDigest"), "snapshotDigest", reasons) && valid;
+  valid = requireDigest(ownField(record, "snapshotDigest"), "snapshotDigest", reasons) && valid;
   return valid;
 }
 
 function validateSnapshotWindow(record: Record<string, unknown>, reasons: string[]): boolean {
   let valid = true;
-  valid = requireInstant(field(record, "expiresAt"), "expiresAt", reasons) && valid;
-  const capturedAt = field(record, "capturedAt");
-  const expiresAt = field(record, "expiresAt");
+  valid = requireInstant(ownField(record, "expiresAt"), "expiresAt", reasons) && valid;
+  const capturedAt = ownField(record, "capturedAt");
+  const expiresAt = ownField(record, "expiresAt");
   if (!isCodeTaskIsoInstant(capturedAt))
     return rejectObservedSnapshotField(reasons, "capturedAt must be a UTC ISO-8601 instant");
   if (!isCodeTaskIsoInstant(expiresAt))
@@ -1199,12 +1196,12 @@ function validateSnapshotCompleteness(
   reasons: string[],
 ): boolean {
   let valid = true;
-  const completenessValue = field(record, "completeness");
+  const completenessValue = ownField(record, "completeness");
   const completenessValid = validateCompleteness(completenessValue, entries, limits, reasons);
   valid = completenessValid && valid;
   if (completenessValid) {
     const derived = deriveGitChangeSnapshotOutcome(completenessValue);
-    if (field(record, "outcome") !== derived) {
+    if (ownField(record, "outcome") !== derived) {
       valid = rejectSnapshotField(reasons, `outcome must be ${derived} for this completeness`);
     }
   }
@@ -1217,13 +1214,13 @@ function validateSnapshot(record: Record<string, unknown>, reasons: string[]): b
   valid = validateBinding(record, reasons) && valid;
   valid = validateSnapshotRevisions(record, reasons) && valid;
   valid = validateSnapshotWindow(record, reasons) && valid;
-  const limitsValue = field(record, "limits");
+  const limitsValue = ownField(record, "limits");
   const limits = validateLimits(limitsValue, reasons) ? limitsValue : undefined;
-  const entriesValue = field(record, "entries");
+  const entriesValue = ownField(record, "entries");
   const entries = validateEntries(entriesValue, limits, reasons) ? entriesValue : undefined;
   valid = [limits !== undefined, entries !== undefined, valid].every(Boolean);
   valid = validateSnapshotCompleteness(record, entries, limits, reasons) && valid;
-  valid = validateDivergence(field(record, "localDivergence"), reasons) && valid;
+  valid = validateDivergence(ownField(record, "localDivergence"), reasons) && valid;
   return valid;
 }
 
@@ -1235,8 +1232,8 @@ function validateUnresolvedReason(
 ): boolean {
   let valid = true;
   const bothResolved =
-    field(record, "baseSha") !== undefined && field(record, "headSha") !== undefined;
-  if (field(record, "mergeBaseSha") !== undefined) {
+    ownField(record, "baseSha") !== undefined && ownField(record, "headSha") !== undefined;
+  if (ownField(record, "mergeBaseSha") !== undefined) {
     valid = rejectSnapshotField(reasons, "mergeBaseSha is not allowed for this reason");
   }
   if (reason === "invalid-ref" && bothResolved)
@@ -1252,9 +1249,9 @@ function validateDivergentReason(
   reasons: string[],
 ): boolean {
   let valid = true;
-  const headSha = field(record, "headSha");
-  const mergeBaseSha = field(record, "mergeBaseSha");
-  if (field(record, "baseSha") === headSha) {
+  const headSha = ownField(record, "headSha");
+  const mergeBaseSha = ownField(record, "mergeBaseSha");
+  if (ownField(record, "baseSha") === headSha) {
     valid = rejectSnapshotField(reasons, `${reason} requires baseSha and headSha to differ`);
   }
   if (reason === "no-merge-base" && mergeBaseSha !== undefined) {
@@ -1272,8 +1269,8 @@ function validateResolvedReason(
   reasons: string[],
 ): boolean {
   let valid = true;
-  const baseSha = field(record, "baseSha");
-  const headSha = field(record, "headSha");
+  const baseSha = ownField(record, "baseSha");
+  const headSha = ownField(record, "headSha");
   if (baseSha === undefined || headSha === undefined) {
     valid = rejectSnapshotField(reasons, `${reason} requires baseSha and headSha`);
   }
@@ -1283,7 +1280,7 @@ function validateResolvedReason(
   }
   if (baseSha !== headSha)
     valid = rejectSnapshotField(reasons, "identical-revisions requires baseSha to equal headSha");
-  if (field(record, "mergeBaseSha") !== undefined) {
+  if (ownField(record, "mergeBaseSha") !== undefined) {
     valid = rejectSnapshotField(reasons, "mergeBaseSha is not allowed for identical-revisions");
   }
   return valid;
@@ -1296,13 +1293,13 @@ function validateUnavailableConsistency(
 ): boolean {
   let valid = true;
   if (reason === "unsupported-object-format") {
-    if (["baseSha", "headSha", "mergeBaseSha"].some((key) => field(record, key) !== undefined)) {
+    if (["baseSha", "headSha", "mergeBaseSha"].some((key) => ownField(record, key) !== undefined)) {
       valid = rejectSnapshotField(reasons, "unsupported-object-format resolves no revisions");
     }
     return valid;
   }
   if (reason === "head-mismatch" || reason === "revision-mismatch") {
-    if (field(record, "headSha") === undefined)
+    if (ownField(record, "headSha") === undefined)
       valid = rejectSnapshotField(reasons, `${reason} requires headSha`);
     return valid;
   }
@@ -1316,10 +1313,10 @@ function validateUnavailableConsistency(
 
 function validateUnavailableRevisions(record: Record<string, unknown>, reasons: string[]): boolean {
   let valid = true;
-  valid = validateOptionalRef(field(record, "baseRef"), "baseRef", reasons) && valid;
-  valid = validateOptionalRef(field(record, "headRef"), "headRef", reasons) && valid;
+  valid = validateOptionalRef(ownField(record, "baseRef"), "baseRef", reasons) && valid;
+  valid = validateOptionalRef(ownField(record, "headRef"), "headRef", reasons) && valid;
   for (const key of ["baseSha", "headSha", "mergeBaseSha"]) {
-    const value = field(record, key);
+    const value = ownField(record, key);
     if (value !== undefined) valid = requireObjectId(value, key, reasons) && valid;
   }
   return valid;
@@ -1330,14 +1327,14 @@ function validateUnavailable(record: Record<string, unknown>, reasons: string[])
   valid = closedKeys(record, UNAVAILABLE_KEYS, "snapshot", reasons) && valid;
   valid = validateBinding(record, reasons) && valid;
   valid = validateUnavailableRevisions(record, reasons) && valid;
-  const reason = field(record, "reason");
+  const reason = ownField(record, "reason");
   if (!isOneOf(reason, GIT_CHANGE_SNAPSHOT_UNAVAILABLE_REASONS)) {
     valid = rejectSnapshotField(reasons, "reason must be an unavailable reason");
     return valid;
   }
   if (
     reason !== "invalid-ref" &&
-    (!isSafeRef(field(record, "baseRef")) || !isSafeRef(field(record, "headRef")))
+    (!isSafeRef(ownField(record, "baseRef")) || !isSafeRef(ownField(record, "headRef")))
   ) {
     valid = rejectSnapshotField(reasons, `${reason} requires both refs`);
   }
@@ -1349,12 +1346,12 @@ function validateFailed(record: Record<string, unknown>, reasons: string[]): boo
   let valid = true;
   valid = closedKeys(record, FAILED_KEYS, "snapshot", reasons) && valid;
   valid = validateBinding(record, reasons) && valid;
-  valid = validateOptionalRef(field(record, "baseRef"), "baseRef", reasons) && valid;
-  valid = validateOptionalRef(field(record, "headRef"), "headRef", reasons) && valid;
-  if (!isOneOf(field(record, "reason"), GIT_CHANGE_SNAPSHOT_FAILURE_REASONS)) {
+  valid = validateOptionalRef(ownField(record, "baseRef"), "baseRef", reasons) && valid;
+  valid = validateOptionalRef(ownField(record, "headRef"), "headRef", reasons) && valid;
+  if (!isOneOf(ownField(record, "reason"), GIT_CHANGE_SNAPSHOT_FAILURE_REASONS)) {
     valid = rejectSnapshotField(reasons, "reason must be a failure reason");
   }
-  const errorKind = field(record, "errorKind");
+  const errorKind = ownField(record, "errorKind");
   if (typeof errorKind !== "string" || !ERROR_KIND.test(errorKind)) {
     valid = rejectSnapshotField(reasons, "errorKind must be a bounded machine token");
   }
@@ -1365,7 +1362,7 @@ function validateSnapshotResultFields(
   input: Record<string, unknown>,
   reasons: string[],
 ): input is Record<string, unknown> & GitChangeSnapshotResult {
-  const outcome = field(input, "outcome");
+  const outcome = ownField(input, "outcome");
   if (outcome === "complete" || outcome === "partial") return validateSnapshot(input, reasons);
   if (outcome === "unavailable") return validateUnavailable(input, reasons);
   if (outcome === "failed") return validateFailed(input, reasons);

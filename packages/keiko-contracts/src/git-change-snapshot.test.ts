@@ -965,3 +965,27 @@ describe("G1 later snapshot observations", () => {
     }
   }
 });
+
+it.each([
+  ["source", validateGitChangeSnapshotResult],
+  ["public", publicSnapshotResult],
+] as const)("G1 raw read preserves the thrown getter identity through %s", (_name, parse) => {
+  const input = snapshot();
+  const failure = new TypeError("fixture raw observation failure");
+  let reads = 0;
+  Object.defineProperty(input, "outcome", {
+    enumerable: true,
+    get: (): never => {
+      reads += 1;
+      throw failure;
+    },
+  });
+  let observed: unknown;
+  try {
+    parse(input);
+  } catch (error) {
+    observed = error;
+  }
+  expect(observed).toBe(failure);
+  expect(reads).toBe(1);
+});
