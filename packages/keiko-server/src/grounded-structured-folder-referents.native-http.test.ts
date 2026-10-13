@@ -304,22 +304,69 @@ async function numericHistory(
   return second;
 }
 
+function continuityRecords(): readonly Record<string, unknown>[] {
+  const raw = readPersistedActivityLog(join(directory, "state"));
+  const analysis = analyzeLogText(raw);
+  expect(analysis.evidence.classification).toBe("supported");
+  expect(raw).not.toContain(AFTER);
+  return raw
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function continuityCountsInSourceOrder(
+  records: readonly Record<string, unknown>[],
+  sourceCount: number,
+  field: "continuityReferentCount" | "continuityAdmittedCount",
+): readonly number[] {
+  const started = records
+    .filter((record) => record.op === "search.connected-context.started")
+    .slice(-sourceCount);
+  expect(started).toHaveLength(sourceCount);
+  const correlationId = started[0]?.correlationId;
+  expect(started.every((record) => record.correlationId === correlationId)).toBe(true);
+  expect(new Set(started.map((record) => record.scopeIdentitySha256)).size).toBe(sourceCount);
+  const selections = records.filter(
+    (record) =>
+      record.op === "search.connected-context.selection-details" &&
+      record.correlationId === correlationId,
+  );
+  expect(selections).toHaveLength(sourceCount);
+  return started.map((start) => {
+    const matching = selections.filter(
+      (selection) => selection.scopeIdentitySha256 === start.scopeIdentitySha256,
+    );
+    expect(matching).toHaveLength(1);
+    return Number(matching[0]?.[field]);
+  });
+}
+
 function continuityCounts(
   setup: Fixture,
   field: "continuityReferentCount" | "continuityAdmittedCount" = "continuityReferentCount",
 ): readonly number[] {
-  const raw = readPersistedActivityLog(join(directory, "state"));
-  const analysis = analyzeLogText(raw);
-  expect(analysis.evidence.classification).toBe("supported");
   const sourceCount = setup.deps.store.findChatById(setup.chatId)?.connectedScopes?.length ?? 1;
-  const selections = raw
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((record) => record.op === "search.connected-context.selection-details")
-    .slice(-sourceCount);
-  expect(raw).not.toContain(AFTER);
-  return selections.map((record) => Number(record[field]));
+  return continuityCountsInSourceOrder(continuityRecords(), sourceCount, field);
+}
+
+function completionOrderPermutation(): readonly Record<string, unknown>[] {
+  const records = continuityRecords();
+  const correlationId = records
+    .filter((record) => record.op === "search.connected-context.started")
+    .at(-1)?.correlationId;
+  const selections = records.filter(
+    (record) =>
+      record.op === "search.connected-context.selection-details" &&
+      record.correlationId === correlationId,
+  );
+  expect(selections).toHaveLength(2);
+  return [
+    ...records.filter((record) => !selections.includes(record)),
+    ...[...selections].sort(
+      (left, right) => Number(left.continuityReferentCount) - Number(right.continuityReferentCount),
+    ),
+  ];
 }
 
 function assertFresh(setup: Fixture, answer: HybridGroundedAnswer, referred = true): void {
@@ -428,6 +475,9 @@ describe("structured folder citations through native follow-up admission", () =>
       assertFresh(setup, answer);
       expect(continuityCounts(setup)).toEqual([1, 0]);
       expect(continuityCounts(setup, "continuityAdmittedCount")).toEqual([1, 0]);
+      expect(
+        continuityCountsInSourceOrder(completionOrderPermutation(), 2, "continuityReferentCount"),
+      ).toEqual([1, 0]);
       expect(answer.citations.find((citation) => citation.scopePath === TARGET)).toMatchObject({
         sourceScopeFingerprint: previous.citations[0]?.sourceScopeFingerprint,
       });
