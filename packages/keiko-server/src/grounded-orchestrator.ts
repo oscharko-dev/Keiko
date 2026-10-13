@@ -268,6 +268,7 @@ import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   collectDiscoveredSymbolTraceEvidence,
   collectFollowSymbolTraceEvidence,
+  contextualDiscoveredSymbolTraceRequested,
   GROUNDED_TRACE_SEARCH_LIMITS,
   type RouteTraceCoverage,
   type RouteTraceCoverageEntry,
@@ -9449,23 +9450,31 @@ function finishAugmentationBudget(
   };
 }
 
+function discoveredTraceGraphContext(
+  args: AssembleGroundedPackInputs,
+): Pick<
+  Parameters<typeof collectDiscoveredSymbolTraceEvidence>[0],
+  "requestContext" | "graphSearchLimits"
+> {
+  let graphSearchLimits: SearchLimits = GROUNDED_TRACE_SEARCH_LIMITS;
+  if (contextualDiscoveredSymbolTraceRequested(args.input.query, planSearchAnchors(args.plan))) {
+    graphSearchLimits =
+      args.plan.rings.find((ring) => ring.kind === "structural")?.searchLimits ?? graphSearchLimits;
+  }
+  return {
+    requestContext: args.structuralContexts.forLimits(graphSearchLimits),
+    graphSearchLimits,
+  };
+}
+
 async function discoveredTraceForAugmentation(
   args: AssembleGroundedPackInputs,
   rings: RingRunSummary,
   budget: AugmentationBudgetMeter,
 ): Promise<DeterministicContextEvidence> {
-  if (!budget.canContinue()) return { atoms: [], uncertainty: [] };
-  const {
-    input,
-    deps,
-    plan,
-    searchScope,
-    fs,
-    nowMs,
-    structuralContexts,
-    workspaceIndex,
-    deadlineAtMs,
-  } = args;
+  if (!budget.canContinue() || rings.verifiedDefinitionContext === true)
+    return { atoms: [], uncertainty: [] };
+  const { input, deps, plan, searchScope, fs, nowMs, workspaceIndex, deadlineAtMs } = args;
   return availableStructuralEvidence(
     {
       ...deterministicEvidenceObservers(args),
@@ -9487,7 +9496,7 @@ async function discoveredTraceForAugmentation(
         atoms: rings.atoms,
         signal: deps.signal,
         workspaceIndex,
-        requestContext: structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS),
+        ...discoveredTraceGraphContext(args),
         deadlineAtMs,
         tryReserveSearchCall: budget.tryReserveSearchCall,
       }),

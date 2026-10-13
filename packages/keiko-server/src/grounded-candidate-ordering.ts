@@ -21,6 +21,10 @@ function signal(candidate: CandidateFile, name: string): number {
   return candidate.signals.find((entry) => entry.name === name)?.value ?? 0;
 }
 
+function diagnosticPriority(a: CandidateFile, b: CandidateFile): number {
+  return signal(b, "stacktrace-position-bonus") - signal(a, "stacktrace-position-bonus");
+}
+
 function isAddressed(
   candidate: CandidateFile,
   anchors: readonly SearchAnchor[],
@@ -116,7 +120,7 @@ export function orderDistinctEvidenceCandidates(
   };
   const addressed = kept
     .filter((candidate) => isAddressed(candidate, anchors, addressedPaths))
-    .sort(compare);
+    .sort((a, b) => diagnosticPriority(a, b) || compare(a, b));
   const paths = new Set(addressed.map((candidate) => candidate.scopePath));
   for (const path of paths) priorityPaths.add(path);
   const unaddressed = independentUnaddressedCandidates(

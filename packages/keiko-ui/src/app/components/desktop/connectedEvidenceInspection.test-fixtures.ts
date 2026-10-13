@@ -5,7 +5,7 @@ import {
   connectedContextOmittedCounts,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { GroundedAnswerContextPackSummary, GroundedAnswer } from "@/lib/types";
-export const INSPECTION_PACK: GroundedAnswerContextPackSummary = {
+const INSPECTION_PACK: GroundedAnswerContextPackSummary = {
   schemaVersion: "1",
   scopeId: "cs-redacted",
   scopeKind: "directory",

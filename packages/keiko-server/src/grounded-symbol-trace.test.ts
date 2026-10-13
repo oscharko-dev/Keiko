@@ -20,7 +20,11 @@ import {
   type CodeIntelligenceIndex,
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
-import { endpointContractAdapter, evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
+import {
+  endpointContractAdapter,
+  evidenceAtomStableId,
+  PathDeniedError,
+} from "@oscharko-dev/keiko-workspace";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
@@ -140,7 +144,139 @@ function contextualCallableFiles(declaration: string): Record<string, string> {
   };
 }
 
+const LITERAL_CONVERTER_BODY = [
+  "export function toText(value: string): Uint8Array {",
+  '  return new TextEncoder().encode(value.normalize("NFKC"));',
+  "}",
+].join("\n");
+
+function contextualLiteralQuery(): RetrievalQuery {
+  return { ...routeQuery(), text: "Explain the cobalt marker handling pipeline." };
+}
+
+function contextualLiteralFiles(commentOnly = false): Record<string, string> {
+  return {
+    "src/operation.ts": [
+      'import { toText } from "../lib/output.js";',
+      "export function make(value: string): Uint8Array {",
+      commentOnly
+        ? "  // cobalt-marker: handling pipeline"
+        : '  return toText("cobalt-marker:" + value);',
+      ...(commentOnly ? ["  return toText(value);"] : []),
+      "}",
+    ].join("\n"),
+    "lib/output.ts": LITERAL_CONVERTER_BODY,
+    "reference-notes.md": "Background archive entry.\n".repeat(6000),
+  };
+}
+
+async function contextualReadFailureTrace(
+  failure?: Error,
+): Promise<Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>> {
+  const storage = memFs(WORKSPACE_ROOT, contextualLiteralFiles());
+  let unavailable = false;
+  const fs: WorkspaceFs = { ...storage };
+  Object.defineProperty(fs, "readFileUtf8SameDescriptor", {
+    get(): WorkspaceFs["readFileUtf8SameDescriptor"] {
+      if (unavailable && failure !== undefined) throw failure;
+      return unavailable ? undefined : storage.readFileUtf8SameDescriptor;
+    },
+  });
+  const query = contextualLiteralQuery();
+  const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths: [] };
+  const requestContext = createStructuralAdapterRequestContext(
+    searchScope,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    fs,
+    { nowMs: () => NOW },
+  );
+  const observed = await requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS);
+  const index = await requestContext.codeIntelligenceIndex();
+  expect(
+    index.calls.some(
+      (call) =>
+        call.calleeName === "toText" &&
+        call.binding === "lexical" &&
+        call.callerDefinition?.name === "make",
+    ),
+  ).toBe(true);
+  unavailable = true;
+  return collectDiscoveredSymbolTraceEvidence({
+    scope: selectedScope(),
+    query,
+    anchors: extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors,
+    retrievalIntent: "targeted-code-search",
+    searchScope,
+    fs,
+    nowMs: () => NOW,
+    atoms: observed.atoms,
+    requestContext,
+  });
+}
+
 describe("contextual source-definition discovery", () => {
+  it("follows a converter from a literal-only contextual source hit in the public pack and numbered prompt", async () => {
+    const query = contextualLiteralQuery();
+    const log = createBufferedServerLogSink();
+    const result = await retrieveConnectedContextPack(
+      {
+        scope: selectedScope(),
+        query,
+        workspaceRoot: WORKSPACE_ROOT,
+        budget: DEFAULT_EXPLORATION_BUDGET,
+      },
+      {
+        correlationId: "contextual-literal-source-proof",
+        fs: memFs(WORKSPACE_ROOT, contextualLiteralFiles()),
+        nowMs: () => NOW,
+        detectWorkspace: workspaceInfo,
+        activityLog: log,
+        answerer: { answer: () => Promise.resolve("observed source") },
+      },
+    );
+    expect(
+      result.pack.files
+        .find((file) => file.scopePath === "src/operation.ts")
+        ?.excerpts.some((excerpt) => excerpt.content.includes('toText("cobalt-marker:" + value)')),
+    ).toBe(true);
+    const converter = result.pack.files.find((file) => file.scopePath === "lib/output.ts");
+    expect(converter).toBeDefined();
+    expect(converter?.excerpts.map((excerpt) => excerpt.content).join("\n") ?? "").toContain(
+      LITERAL_CONVERTER_BODY,
+    );
+    expect(
+      buildGroundedGatewayMessages(query.text, result.pack, (value) => value)
+        .map((message) => message.content)
+        .join("\n"),
+    ).toContain('2 |   return new TextEncoder().encode(value.normalize("NFKC"));');
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.selection-details")?.extra
+        ?.contextualDefinitionSeedCount,
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not use a comment-only marker as a contextual callable hit", async () => {
+    const result = await contextualTraceFixture(
+      contextualLiteralFiles(true),
+      contextualLiteralQuery(),
+    );
+    expect(result.contextualDefinitionSeedCount).toBe(0);
+    expect(result.atoms).toEqual([]);
+  });
+
+  it("retains uncertainty when an observed nonterminal source becomes unreadable", async () => {
+    const result = await contextualReadFailureTrace();
+    expect(result.atoms).toEqual([]);
+    expect(result.uncertainty.some((marker) => marker.kind === "tool-unavailable")).toBe(true);
+  });
+
+  it.each([
+    new PathDeniedError("Source evidence denied", "src/operation.ts"),
+    new CancelledError("Source read cancelled"),
+  ])("propagates contextual read authority or cancellation failures: $name", async (failure) => {
+    await expect(contextualReadFailureTrace(failure)).rejects.toBe(failure);
+  });
+
   it.each([
     ["arrow", "export const issueReceipt = (receipt: string): string => {"],
     ["function expression", "export const issueReceipt = function (receipt: string): string {"],

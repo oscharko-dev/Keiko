@@ -100,6 +100,12 @@ current AST callable owners of actual lexical source hits without requiring an H
 user-supplied identifier. Lexical overlap does not certify invocation or an unrelated declaration;
 continuation retains the existing exact ownership, currentness and read-budget guards. The existing
 selection-details Activity Log records the admitted contextual definition seed count only.
+Productive string literals can identify a callable; comment-only matches cannot. Contextual roots
+reuse their observed exact declarations and original-query relevance instead of repeating a global
+symbol-name search. Only sources with indexed outgoing relationships require contextual excerpt
+reads. Unavailable source reads retain explicit uncertainty; cancellation and scope denials propagate.
+Contextual traversal shares the plan's structural request context and exact limit binding. Fully
+verified definition lookups retain the existing decision to skip redundant optional traversal.
 Imported targets retain exact runtime module-export identities. Explicit compiler output mappings
 reuse already guarded metadata and can address only admitted sources in the owning package.
 Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file

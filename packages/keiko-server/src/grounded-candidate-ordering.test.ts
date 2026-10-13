@@ -9,6 +9,23 @@ function candidate(scopePath: string, score: number): CandidateFile {
 }
 
 describe("addressed same-basename ordering", () => {
+  it("keeps the primary diagnostic frame before a higher scored admitted implementation", () => {
+    const frame: CandidateFile = {
+      ...candidate("tests/payments/refund.test.ts", 0.6),
+      signals: [{ name: "stacktrace-position-bonus", value: 1 }],
+    };
+    const implementation: CandidateFile = {
+      ...candidate("src/payments/refund.ts", 0.9),
+      signals: [{ name: "symbol-definition", value: 1 }],
+    };
+    const result = orderDistinctEvidenceCandidates(
+      [implementation, frame],
+      [],
+      new Set(),
+      new Set([frame.scopePath, implementation.scopePath]),
+    );
+    expect(result.kept).toEqual([frame, implementation]);
+  });
   it("separates healthy unaddressed diversity from any addressed-file demotion", () => {
     const addressed = candidate("src/Feature/validation.ts", 0.8);
     const first = candidate("src/A/helper.ts", 0.7);
