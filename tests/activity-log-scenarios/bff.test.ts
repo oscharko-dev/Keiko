@@ -141,10 +141,8 @@ async function driveManualWriterFailure(mode: ManualWriterFailure, jobId: string
           )
           .run(deps.capsuleId, deps.sourceId);
       const refreshed = await refreshHtmlManualPod({ ...deps, onCrawlEvent });
-      const bytes = JSON.stringify(refreshed.changeSummary).replace(
-        "{",
-        '{"outcome":"discarded-private-marker",',
-      );
+      const summary = JSON.stringify(refreshed.changeSummary);
+      const bytes = `{"outcome":"discarded-private-marker",${summary.slice(1)}`;
       updateHtmlManualRefreshState(deps.store, deps.capsuleId, deps.sourceId, {
         lastRefreshedAt: refreshed.changeSummary.refreshedAt,
         lastCrawlRunId: "bff-manual-run",
