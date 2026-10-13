@@ -543,7 +543,7 @@ function coordinatedPredicateHead(head: string, objects: readonly string[]): boo
   // The explanatory subject already owns the first predicate verb. Remaining request verbs
   // cannot become objects merely because a comma or conjunction precedes them.
   const afterVerb = head.slice(/^[^ ]+ /u.exec(head)?.[0].length ?? 0);
-  return boundNamedFilePredicate(afterVerb) || afterVerb === "reads";
+  return boundNamedFilePredicate(afterVerb) || /^reads?$/u.test(afterVerb);
 }
 
 function coordinatedNamedPredicate(text: string, verbLast: boolean): boolean {
