@@ -172,3 +172,32 @@ head/tree identity and platform limitations. Required CI is the full final arbit
 red. Child issues remain open until the owner merges, review findings settle and closure evidence
 exists. Record any proven gaps in multi-source reranking, hybrid insufficiency or Knowledge Pod
 parity as explicit follow-ups; never disguise them as completed acceptance.
+
+## Current limitations and follow-ups
+
+- **Plural-folder reranking:** the single-folder runner supplies the configured repository
+  context-pack reranker before selection floors. The plural-folder `defaultRetriever` in
+  `grounded-qa-multi-source.ts`, also used for hybrid folder retrieval, does not supply that seam.
+  Hybrid does retain its separate final text-candidate reranker. Follow-up work belongs to the
+  existing plural retrieval and reranker owners: qualify any per-folder integration under the
+  original shared call, byte, token and elapsed grants, with truthful configured, applied and failed
+  dispositions.
+- **Plural and hybrid insufficiency:** these answer paths validate declarations against admitted
+  scopes and actual sent evidence and retain bounded citation repair, but declarations do not
+  trigger another retrieval pass in the same turn. The connected-folder follow-up implementation
+  is not invoked by these plural answer paths. [ADR-0180](../adr/ADR-0180-bounded-connected-folder-follow-up.md)
+  explicitly leaves hybrid and Knowledge Pod follow-up execution outside #3889. Any extension
+  belongs to the existing plural/hybrid answer and follow-up owners and requires an accepted scope
+  decision plus remaining-budget, declaration-authority and physical-attempt controls; this plan
+  grants no additional pass.
+- **Knowledge Pod parity:** Knowledge Pod keeps its independent numeric-reference grounding,
+  sent-reference validation and citation-repair contract. It does not share the connected-folder
+  answer-kind, insufficiency-declaration and follow-up flow or its marker-only repair acceptance
+  check. Connected-folder qualification therefore does not establish full Knowledge Pod parity.
+  Follow-up work belongs to the existing local-knowledge grounded-answer runner and server adapter,
+  reusing shared contracts where appropriate and qualifying Pod-specific behavior before making a
+  parity claim.
+
+These are current implementation boundaries and follow-up directions, not final gate or closeout
+evidence. Carry their reviewed disposition into #3894's closeout only after the integration branch
+is green.

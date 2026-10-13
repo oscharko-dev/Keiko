@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatConnectedScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
-import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -33,12 +33,47 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 
+type FixtureResponse = string | ((request: GatewayCallRequest) => string);
+
 const MODEL = "declaration-fixture";
 const cleanups: (() => void)[] = [];
 afterEach(() => {
   resetServerLogger();
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
+
+function selectedBodyMarker(path: string): string {
+  return `TARGET_${path.replaceAll(/[^A-Za-z0-9]/gu, "_")}`;
+}
+
+function omittedSelectedPath(
+  request: GatewayCallRequest,
+  scopes: readonly ChatConnectedScope[],
+): string {
+  const prompt = request.messages.map((message) => message.content).join("\n");
+  const path = scopes
+    .flatMap((scope) => (scope.kind === "files" ? scope.relativePaths : []))
+    .find((candidate) => !prompt.includes(selectedBodyMarker(candidate)));
+  if (path === undefined)
+    throw new TypeError("Expected a selected file body omitted from the dispatched prompt");
+  return path;
+}
+
+function expectWhollyOmittedSelectedFile(deps: UiHandlerDeps, path: string): void {
+  const store = deps.evidenceStore;
+  const sent = store
+    .list()
+    .map((runId) => loadEvidence(store, runId)?.connectedContext)
+    .filter((audit) => audit?.modelRequest.sentToModel === true);
+  expect(sent.length).toBeGreaterThan(0);
+  const supplied = sent.flatMap((audit) =>
+    (audit?.files ?? []).filter((file) =>
+      file.excerpts.some((excerpt) => excerpt.contentBytes > 0),
+    ),
+  );
+  expect(supplied.length).toBeGreaterThan(0);
+  expect(supplied.some((file) => file.scopePath === path)).toBe(false);
+}
 
 function selectedScope(root: string, count: number, bracket: boolean): ChatConnectedScope {
   const relativePaths = bracket
@@ -48,7 +83,7 @@ function selectedScope(root: string, count: number, bracket: boolean): ChatConne
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(
       join(root, path),
-      `export const TARGET_${path.replaceAll(/[^A-Za-z0-9]/gu, "_")} = 73;\n` +
+      `export const ${selectedBodyMarker(path)} = 73;\n` +
         (bracket
           ? ""
           : "// Selected implementation needs its actual repository evidence.\n".repeat(80)),
@@ -60,7 +95,7 @@ function selectedScope(root: string, count: number, bracket: boolean): ChatConne
 function fixture(
   scopeCount: number,
   bracket: boolean,
-  response: string,
+  response: FixtureResponse,
 ): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
@@ -88,7 +123,7 @@ function fixture(
 function runtimeDeps(
   store: UiHandlerDeps["store"],
   calls: GatewayCallRequest[],
-  response: string,
+  response: FixtureResponse,
 ): UiHandlerDeps {
   const config = parseGatewayConfig({
     providers: [
@@ -132,13 +167,13 @@ async function connectReadyPod(deps: UiHandlerDeps, chatId: string): Promise<UiH
   return { ...deps, uiDbPath: join(runtimeStateDir, "keiko-ui.db") };
 }
 
-function answerModel(calls: GatewayCallRequest[], content: string): ModelPort {
+function answerModel(calls: GatewayCallRequest[], content: FixtureResponse): ModelPort {
   return {
     call: (request): ReturnType<ModelPort["call"]> => {
       calls.push(request);
       return Promise.resolve({
         modelId: MODEL,
-        content,
+        content: typeof content === "string" ? content : content(request),
         toolCalls: [],
         structuredOutput: null,
         finishReason: "stop",
@@ -215,17 +250,20 @@ describe("public declaration membership", () => {
   ])(
     "retains a verified budget-omitted selected file across $scopeCount folder scopes (hybrid: $hybrid)",
     async ({ scopeCount, hybrid }) => {
-      const path = "src/selected-11.ts";
-      const { deps, chatId, calls, log } = fixture(
-        scopeCount,
-        false,
-        `Missing evidence: [${path}]`,
-      );
+      let omittedPath: string | undefined;
+      const { deps, chatId, calls, log } = fixture(scopeCount, false, (request) => {
+        const scopes = deps.store.findChatById(chatId)?.connectedScopes ?? [];
+        omittedPath = omittedSelectedPath(request, scopes);
+        return `Missing evidence: [${omittedPath}]`;
+      });
       const answer = await ask(hybrid ? await connectReadyPod(deps, chatId) : deps, chatId);
+      if (omittedPath === undefined) throw new TypeError("Missing actual omitted selected path");
+      const path = omittedPath;
       expect(calls).toHaveLength(1);
       expect(calls[0]?.messages.map((message) => message.content).join("\n")).not.toContain(
-        "TARGET_src_selected_11_ts",
+        selectedBodyMarker(path),
       );
+      expectWhollyOmittedSelectedFile(deps, path);
       expect(answer.answerKind).toBe("insufficiency");
       expect(answer.insufficiencyDeclarations).toEqual([
         { scopePath: path, state: "unread-in-scope" },
