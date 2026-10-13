@@ -144,6 +144,7 @@ export function validateMemoryProposal(input: unknown): MemoryValidation<MemoryP
   if (!admitMemoryProposal(input, errors)) return { ok: false, errors };
   const fields: MemoryProposalFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryProposal };
 }
 
@@ -207,6 +208,7 @@ export function validateMemoryAcceptance(input: unknown): MemoryValidation<Memor
   if (!admitMemoryAcceptance(input, errors)) return { ok: false, errors };
   const fields: MemoryAcceptanceFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryAcceptance };
 }
 
@@ -238,6 +240,7 @@ export function validateMemoryRejection(input: unknown): MemoryValidation<Memory
   if (!admitMemoryRejection(input, errors)) return { ok: false, errors };
   const fields: MemoryRejectionFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryRejection };
 }
 
@@ -340,6 +343,7 @@ export function validateMemoryUpdate(input: unknown): MemoryValidation<MemoryUpd
   if (!admitMemoryUpdate(input, errors)) return { ok: false, errors };
   const fields: MemoryUpdateFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryUpdate };
 }
 
@@ -385,6 +389,7 @@ export function validateMemorySupersession(input: unknown): MemoryValidation<Mem
   if (!admitMemorySupersession(input, errors)) return { ok: false, errors };
   const fields: MemorySupersessionFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemorySupersession };
 }
 
@@ -433,6 +438,7 @@ function validatePinOrUnpinShape(
     return { ok: false, errors };
   const fields: MemoryPinOrMemoryUnpinFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryPin | MemoryUnpin };
 }
 
@@ -471,6 +477,7 @@ export function validateMemoryArchive(input: unknown): MemoryValidation<MemoryAr
   if (!admitMemoryArchive(input, errors)) return { ok: false, errors };
   const fields: MemoryArchiveFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryArchive };
 }
 
@@ -512,5 +519,6 @@ export function validateMemoryForget(input: unknown): MemoryValidation<MemoryFor
   if (!admitMemoryForget(input, errors)) return { ok: false, errors };
   const fields: MemoryForgetFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryForget };
 }

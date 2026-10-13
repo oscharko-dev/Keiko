@@ -510,7 +510,7 @@ function admitCodingWorkbenchRuntimeAuthorityEnvelope(
   valid = [validateDigest(value.intentDigest, "intentDigest", errors), valid].every(Boolean);
   valid = [validateDigest(value.nonceDigest, "nonceDigest", errors), valid].every(Boolean);
   valid = [validateRuntimeUtcField(value.issuedAt, "issuedAt", errors), valid].every(Boolean);
-  if (authority.ok && authority.value.workspace.rootDigest !== bindingRootDigest(value.binding)) {
+  if (authority.ok && !bindingRootMatches(authority.value.workspace.rootDigest, value.binding)) {
     valid = [
       appendValidationIssues(
         errors,
@@ -1026,8 +1026,8 @@ function validateBinding(value: unknown, errors: string[]): boolean {
   return valid;
 }
 
-function bindingRootDigest(value: unknown): unknown {
-  return isRecord(value) ? value.workspaceRootDigest : undefined;
+function bindingRootMatches(expectedDigest: string, rawBinding: unknown): boolean {
+  return expectedDigest === (isRecord(rawBinding) ? rawBinding.workspaceRootDigest : undefined);
 }
 
 function validateDigest(value: unknown, path: string, errors: string[]): boolean {

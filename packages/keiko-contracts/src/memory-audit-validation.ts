@@ -346,5 +346,6 @@ export function validateMemoryAuditRecord(input: unknown): MemoryValidation<Memo
   if (!admitMemoryAuditRecord(input, errors)) return { ok: false, errors };
   const fields: MemoryAuditRecordFields = input;
   // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  // SAFETY: The owning guard checks all concrete fields; only erased ID brands remain.
   return { ok: true, value: fields as MemoryAuditRecord };
 }

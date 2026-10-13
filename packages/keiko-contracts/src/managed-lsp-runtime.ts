@@ -332,14 +332,14 @@ function isBoundedPhysicalArray<T>(
   value: unknown,
   maximum: number,
   guard: (member: unknown) => member is T,
-  identity: (member: T) => unknown,
+  identity: (member: T) => string,
   initialInclusive = false,
 ): value is readonly T[] {
   if (!Array.isArray(value) || !isInitialExtentAllowed(value.length, maximum, initialInclusive))
     return false;
   const extent = value.length;
   if (!isIntegerWithin(extent, 0, maximum)) return false;
-  const identities = new Set<unknown>();
+  const identities = new Set<string>();
   for (let index = 0; index < extent; index += 1) {
     if (!(index in value)) return false;
     const member: unknown = value[index];

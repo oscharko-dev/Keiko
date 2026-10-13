@@ -1023,3 +1023,60 @@ describe("C1B runtime closed ingress branches", () => {
     expect(validateCodingWorkbenchRuntimeAuthorityEnvelope(input).ok).toBe(false);
   });
 });
+
+it("preserves full authority-validator digest observation order (#3918)", async () => {
+  const publicModule =
+    await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+  const observations = [];
+  for (const validate of [
+    validateCodingWorkbenchRuntimeAuthorityEnvelope,
+    publicModule.validateCodingWorkbenchRuntimeAuthorityEnvelope,
+  ]) {
+    for (const variant of ["equal", "mismatch", "non-record", "digest-throws"] as const) {
+      const input = runtimeAuthority();
+      const binding = input.binding;
+      const trace: string[] = [];
+      const failure = new TypeError("fixture observation failure");
+      Object.defineProperty(input.authority.workspace, "rootDigest", {
+        enumerable: true,
+        get: (): string => {
+          trace.push("expected");
+          return DIGEST;
+        },
+      });
+      Object.defineProperty(input, "binding", {
+        enumerable: true,
+        get: (): unknown => {
+          trace.push("binding");
+          return variant === "non-record" ? null : binding;
+        },
+      });
+      Object.defineProperty(binding, "workspaceRootDigest", {
+        enumerable: true,
+        get: (): string => {
+          trace.push("digest");
+          if (variant === "digest-throws") throw failure;
+          return variant === "mismatch" ? "b".repeat(64) : DIGEST;
+        },
+      });
+      let outcome: boolean | "threw";
+      try {
+        outcome = validate(input).ok;
+      } catch (error) {
+        expect(error).toBe(failure);
+        outcome = "threw";
+      }
+      observations.push(`${variant}:${String(outcome)}:${trace.join(">")}`);
+    }
+  }
+  expect(observations.join("\n")).toMatchInlineSnapshot(`
+    "equal:true:expected>binding>digest>expected>binding>digest>binding>binding
+    mismatch:false:expected>binding>digest>expected>binding>digest>binding>binding
+    non-record:false:expected>binding>expected>binding>binding
+    digest-throws:threw:expected>binding>digest
+    equal:true:expected>binding>digest>expected>binding>digest>binding>binding
+    mismatch:false:expected>binding>digest>expected>binding>digest>binding>binding
+    non-record:false:expected>binding>expected>binding>binding
+    digest-throws:threw:expected>binding>digest"
+  `);
+});

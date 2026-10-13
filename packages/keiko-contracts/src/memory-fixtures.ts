@@ -20,6 +20,7 @@ import type { MemoryScope, UserId } from "./memory-contracts.js";
  */
 export const FIXED_NOW_MS = 1_700_000_000_000;
 
+// SAFETY: This bounded ID literal supplies an erased brand; defaults are validated.
 const DEFAULT_SCOPE: MemoryScope = { kind: "user", userId: "u-1" as UserId };
 
 /**
@@ -32,6 +33,7 @@ const DEFAULT_SCOPE: MemoryScope = { kind: "user", userId: "u-1" as UserId };
  */
 export function makeMemoryRecord(overrides?: Partial<MemoryRecord>): MemoryRecord {
   const base: MemoryRecord = {
+    // SAFETY: This bounded ID literal supplies an erased brand; defaults are validated.
     id: "m-1" as MemoryRecord["id"],
     schemaVersion: "1",
     scope: DEFAULT_SCOPE,

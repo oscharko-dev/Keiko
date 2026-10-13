@@ -777,6 +777,7 @@ export function validateKnowledgeCapsule(
   if (!admitsKnowledgeCapsule(input, errors) || errors.length > 0) return { ok: false, errors };
   // All non-brand fields are admitted above; this attaches only erased ID brands.
   const admitted: CapsuleStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
   return { ok: true, value: admitted as KnowledgeCapsule };
 }
 
@@ -848,6 +849,7 @@ export function validateCapsuleSet(input: unknown): LocalKnowledgeValidation<Cap
   if (!admitsCapsuleSet(input, errors) || errors.length > 0) return { ok: false, errors };
   // All non-brand fields are admitted above; this attaches only erased ID brands.
   const admitted: CapsuleSetStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
   return { ok: true, value: admitted as CapsuleSet };
 }
 
@@ -881,6 +883,7 @@ export function validateCapsuleReindexRequest(
     return { ok: false, errors };
   // All non-brand fields are admitted above; this attaches only erased ID brands.
   const admitted: ReindexStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
   return { ok: true, value: admitted as CapsuleReindexRequest };
 }
 
@@ -1143,6 +1146,7 @@ export function validateConnectorGraphState(
   const errors: string[] = [];
   if (!admitsConnectorGraphState(input, errors) || errors.length > 0) return { ok: false, errors };
   // All non-brand fields are admitted above; this attaches only erased ID brands.
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
   return { ok: true, value: input as ConnectorGraphState };
 }
 

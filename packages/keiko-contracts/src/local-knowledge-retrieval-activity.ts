@@ -558,6 +558,7 @@ export function validateKnowledgePodRetrievalActivity(
     return { ok: false, errors };
   // All non-brand fields are admitted above; this attaches only erased ID brands.
   const admitted: ActivityStructure = input;
+  // SAFETY: The checked structure retains every concrete field; only ID brands differ.
   return { ok: true, value: admitted as KnowledgePodRetrievalActivity };
 }
 
