@@ -1581,9 +1581,6 @@ function buildRawGroundedGatewayMessages(
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
-    "User question:",
-    safeQuestion,
-    "",
     "Connected repository context pack:",
     `- schemaVersion: ${pack.schemaVersion}`,
     `- stableId: ${redactedString(redactor, pack.stableId)}`,
@@ -1599,6 +1596,9 @@ function buildRawGroundedGatewayMessages(
     "",
     "Known uncertainty from retrieval:",
     ...uncertaintyLines(pack, redactor),
+    "",
+    "User question:",
+    safeQuestion,
   ].join("\n");
   return [
     { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },

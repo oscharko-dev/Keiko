@@ -221,6 +221,14 @@ is identified by its canonical omission count, separately from unavailable tool 
 The current traversal's incomplete flag and closed reasons are also projected; these counts
 do not imply the contents or specific encoding of an unread file. The existing prompt fitter charges this serialized metadata
 and line-number overhead against the actual model input budget.
+The single-source, multi-source and hybrid renderers place their existing redacted answer task
+after the evidence and uncertainty metadata. Single-source and multi-source marker repair uses
+that same ordering; hybrid repair already appends its task to the existing prompt. Task text
+remains an opaque block, including any governed memory or continuity context; ordering does not
+promote that context to source evidence. System authority, citation validation and the original
+input/output grants remain unchanged. Existing final-prompt selection and gateway admission
+events describe the actual fitted source counts and token costs; ordering is not proof that a
+model answered correctly.
 When that budget requires shrinking a located excerpt, a complete matching line that fits the
 remaining UTF-8 byte grant takes priority over an unrelated leading prefix. Adjacent complete
 lines may fill the remaining grant. The fitted excerpt retains its physical source offsets and

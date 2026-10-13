@@ -458,6 +458,12 @@ system that exists, never beside it:
   classification and parsing share one complete guarded source read rather than charging another
   classification read. Existing final-prompt, range and read observations describe these decisions
   without recording source text or paths.
+  Grounded single-source, multi-source and hybrid prompts place the existing redacted answer
+  task after supplied evidence and uncertainty. The same ordering applies to single-source and
+  multi-source marker repair; hybrid repair already appends its task. Governed memory and
+  continuity remain untrusted context inside that unchanged task block. Existing final-prompt
+  selection and gateway admission record fitted counts and costs; citation validation and
+  original input/output grants remain authoritative.
   Endpoint definition traversal binds a registration's observed handler reference to its current
   lexical AST target. Further calls retain their exact callable owner and complete observed spans;
   same-named declarations and uninvoked nested functions do not certify that relationship.

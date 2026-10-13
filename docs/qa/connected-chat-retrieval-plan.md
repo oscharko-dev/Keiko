@@ -201,3 +201,79 @@ parity as explicit follow-ups; never disguise them as completed acceptance.
 These are current implementation boundaries and follow-up directions, not final gate or closeout
 evidence. Carry their reviewed disposition into #3894's closeout only after the integration branch
 is green.
+
+## Version-unbound release-cut metadata
+
+These two draft records normalize the [Epic's planned update impact](https://github.com/oscharko-dev/Keiko/issues/3881)
+for #3894. They describe the implemented increment, not the published `1.2.0` package. They do not
+select a release version, authorize publication, or claim final gates or native qualification.
+
+| Shared field                                            | Planned value                                                                                                                                                                 |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packageName`                                           | `@oscharko-dev/keiko`                                                                                                                                                         |
+| `packageVersion`, `releaseTag`                          | Unassigned; the release owner selects the carrying release.                                                                                                                   |
+| Supported-from baseline                                 | **the first release after 1.2.0 that carries this epic**, exactly as recorded on #3881. Concrete catalog `supportedFrom` versions remain unassigned until release-cut review. |
+| `internalOnly`, `observableImpact`, `defaultPatchNotes` | `false`, `true`, `true` for both records.                                                                                                                                     |
+| `userActionRequired`, `remediation`                     | `false`, `no-action-required` for this Epic increment.                                                                                                                        |
+| `review.status`                                         | `pending`; no release-owner approval or approval reference is asserted here.                                                                                                  |
+| `oneClickEligible`, `publishGates`                      | Not qualified here; compatibility eligibility and actual gate outcomes belong to the carrying release.                                                                        |
+
+### Improvements record
+
+- `releaseNoteCategory`: `improvements`.
+- `releaseNotePriority`: `normal`.
+- `userVisibleChange`: `behavioral`.
+- `userVisibleSummary`: Connected-folder chat follows admitted explicit, stack-trace and prior-answer
+  file references, distinguishes shared basenames by path evidence, and exposes the effective scope
+  and evidence omissions.
+- `releaseNoteBullets` (one): "Connected-folder chat: explicitly named, stack-trace and follow-up file
+  references are retrieved within the allowed scope and budgets; files that share a name are
+  disambiguated by path; the scope indicator shows the effective file or folder and makes narrowing
+  visible."
+- `affectedStateStores`: `ui-store-schema`, `browser-workspace-state`.
+
+### Fixes record
+
+- `releaseNoteCategory`: `fixes`.
+- `releaseNotePriority`: `high`.
+- `userVisibleChange`: `behavioral`.
+- `userVisibleSummary`: Pure clarification and insufficiency responses retain their distinct answer
+  kind; source-answer citation warnings, prompt evidence counters and prose-link states describe the
+  evidence actually supplied.
+- `releaseNoteBullets` (one): "Connected-folder chat: pure clarifications are no longer flagged as
+  uncited source answers; evidence counters explain why files were skipped, and prose file links
+  distinguish supplied evidence from unread references."
+- `affectedStateStores`: `activity-log`, `support-artifacts`.
+
+### State impact and compatibility scope
+
+| Record / `stateImpact.store`             | Implemented change                                                                                                                                                                                                                                                                   | Increment remediation                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| Improvements / `ui-store-schema`         | Existing assistant-message metadata stores additive answer-kind, declaration and context diagnostics. Older messages may lack them; they are not retrospectively re-grounded or rewritten. These additions do not introduce a separate conversation store.                           | `userActionRequired: false`, `no-action-required` |
+| Improvements / `browser-workspace-state` | The existing chat-window configuration persists the optional boolean `keepFilesFolder` preference. An absent preference retains ordinary preview behavior; the preference cannot grant broader server authority.                                                                     | `userActionRequired: false`, `no-action-required` |
+| Fixes / `activity-log`                   | Registered operations, closed fields and vocabularies change registry/catalog and producer-inventory identities. Existing records are retained unchanged. Historical interpretation requires a matching trusted producer contract; unknown identities remain explicitly unsupported. | `userActionRequired: false`, `no-action-required` |
+| Fixes / `support-artifacts`              | Newly produced existing evidence manifests enumerate final sent excerpt hashes/ranges and retain original retrieval counts, usage and omissions. Earlier stored answers and reports are not rewritten or silently converted.                                                         | `userActionRequired: false`, `no-action-required` |
+
+The new server configuration surface is also material: [ADR-0180](../adr/ADR-0180-bounded-connected-folder-follow-up.md)
+documents `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX`, default `1`, with explicit `0` disabling the pass
+and invalid values failing closed. It is an environment setting, not a new persisted credential or
+model store. Semantic refresh retains its separate opt-in setting. These records therefore do not
+claim "no persisted state change" merely because no user migration is prescribed.
+
+The no-action remediation is scoped to this Epic. It does not override earlier release compatibility
+exceptions, certify every historical support report, or assert that the complete integration branch
+has no store migrations. Other integrated work and its carry-forward requirements remain part of
+the release owner's aggregate compatibility review.
+
+### Promotion into the canonical catalog
+
+Under [ADR-0177](../adr/ADR-0177-rehearse-the-stable-release-on-every-dev-push.md), the release owner
+must select a carrying version and use the existing `set-version` procedure before these records
+can become valid entries in `release-impact.catalog.json`. Resolve the supported-from versions and
+aggregate remediation from actual compatibility evidence, record release-owner review and actual
+publish-gate outcomes, and validate through the existing catalog and release-note tooling.
+Preserve published records; a same-version correction must not attribute this later implementation
+to published `1.2.0`. Merge into `dev` does not itself authorize a release.
+
+UI polish is folded into the improvements bullet. Gate fixtures, analyzer projections, ADR
+amendments and the troubleshooting entry remain internal-only and stay out of default patch notes.

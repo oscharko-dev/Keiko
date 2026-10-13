@@ -516,13 +516,13 @@ function buildRawMultiSourceGatewayMessages(
     sourceSection(entry, index, redactor, omissionPathBytes),
   );
   const userContent = [
-    "User question:",
-    redactString(redactor, question),
+    ...sections,
     "",
     `Connected sources (${String(labeledPacks.length)}). For every repository claim, cite its`,
     "source ordinal and file in one marker (e.g. [source:1|src/file.ts:10-20]).",
     "",
-    ...sections,
+    "User question:",
+    redactString(redactor, question),
   ].join("\n");
   return [
     { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },

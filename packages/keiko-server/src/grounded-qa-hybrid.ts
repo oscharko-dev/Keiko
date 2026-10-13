@@ -987,9 +987,6 @@ function buildRerankedHybridUserMessage(
   const folderCount = selected.filter((s) => s.kind === "folder").length;
   const connectorCount = selected.filter((s) => s.kind === "connector").length;
   const lines: string[] = [
-    "User question:",
-    redactString(redactor, question),
-    "",
     `Connected sources: ${String(folderCount)} folder(s), ${String(connectorCount)} connector(s).`,
     "Cite every claim by its [n] marker and source label.",
     ...omissionMetadata,
@@ -998,6 +995,7 @@ function buildRerankedHybridUserMessage(
   for (const candidate of selected) {
     lines.push(renderHybridCandidateBlock(candidate), "");
   }
+  lines.push("User question:", redactString(redactor, question), "");
   return lines.join("\n");
 }
 
