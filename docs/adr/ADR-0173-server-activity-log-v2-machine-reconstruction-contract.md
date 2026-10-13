@@ -731,7 +731,10 @@ action; degraded history protection retains its contextual action.
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000
 containers, 3,000,000 values and 256 keys per object. The shape bounds are checked on the raw text
-before `JSON.parse` allocates anything, and every string is printable ASCII. Derived ordinary
+before `JSON.parse` allocates anything, and every string is printable ASCII. Canonicalization
+constructs ordinary arrays by bounded numeric-index traversal instead of dispatching caller-owned
+mapping methods or array species. Sparse positions retain their canonical `null` bytes and consume
+the same scalar-value budget as those bytes do in the parser. Derived ordinary
 and update timelines share an additional ceiling of 80,000 record occurrences and 64 MiB of UTF-8
 record-view payloads; parent fan-out is charged before expansion. A producer that exceeds these
 limits emits explicitly insufficient evidence, while an incoming report is rejected before output.
