@@ -443,6 +443,34 @@ describe("learned knowledge uses the existing assessment authority across connec
     },
   );
 
+  it.each(["single", "plural", "hybrid"] as const)(
+    "persists a pure clarification without an uncited warning or repair in %s",
+    async (topology) => {
+      const clarification = "Which function do you mean?";
+      const setup = await fixture(topology, [clarification]);
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const answer = await ask(setup, "Explain src/Feature.ts");
+      if (answer.groundingKind !== "connected-context" && answer.groundingKind !== "hybrid")
+        throw new TypeError("Expected folder evidence authority");
+      expect(answer.content).toBe(clarification);
+      expect(answer.answerKind).toBe("clarification");
+      expect(sourceCitationCount(answer)).toBe(0);
+      expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
+      expect(synthesisCalls(setup)).toHaveLength(1);
+      expect(setup.deps.store.listMessages(setup.chatId).at(-1)?.groundedAnswer).toEqual(answer);
+      const details = sink.events.filter(
+        (event) => event.op === "search.connected-context.answer-details",
+      );
+      expect(details).not.toHaveLength(0);
+      for (const event of details)
+        expect(event.extra).toMatchObject({
+          answerKind: "clarification",
+          citationRepairDisposition: "not-needed",
+        });
+    },
+  );
+
   it.each(["plural", "hybrid"] as const)(
     "retains the citation requirement for an unsupported source claim in %s",
     async (topology) => {

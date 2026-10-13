@@ -126,7 +126,7 @@ export function citationBehaviourObserverFor(
   };
 }
 
-/** Persisted descriptive metadata alone never authorizes skipping repair after a replacement. */
+/** Describe observed citation reliability only within the current deployment generation. */
 export function citationBehaviourFor(
   deps: UiHandlerDeps,
   modelId: string,

@@ -108,7 +108,7 @@ describe("generation-owned citation observation window", () => {
     },
   );
 
-  it("requires three current consistent outcomes for repair-skipping reliability and clears it on regression", () => {
+  it("requires three current consistent outcomes for observed citation reliability and clears it on regression", () => {
     const deps = fixture();
     observe(deps, "cites");
     observe(deps, "cites");
