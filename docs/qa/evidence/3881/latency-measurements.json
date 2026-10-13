@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "kind": "scoped-current-source-latency-and-reranker-measurement-evidence",
+  "status": "measurements-complete-independent-criterion-disposition-owned-by-reviewer",
+  "recordedAt": "2026-10-13T09:06:28.408325+00:00",
+  "source": {
+    "head": "3a989fd0ad34bd4c6bae44025a3787f67eca1856",
+    "tree": "4a3c2b84e7cd557166840da8d256a2ade8f29fc0",
+    "packageBuildPid": 37933,
+    "compiledCapturePid": 38052,
+    "sourceDistSnapshotPairCount": 2062,
+    "compiledFileCount": 6510,
+    "compiledGraphSha256": "982d94abb4f9d17c14eb9570ea0a09349480257fac2acb9dbc8c8a3aa9d14426",
+    "capture": {
+      "artifact": "resume-runtime-actual-root-build-3a989fd0.json",
+      "sha256": "896536b20da48c676bb6a6e47ea40e690643e7b111337a25d293aeabad018269"
+    },
+    "freeze": {
+      "artifact": "resume-runtime-3a989fd-known-knowledge2-delivery-build-r1-frozen-producer-bindings.json",
+      "sha256": "e645a48e12073bc312f03809f87d97e2e57c6786b2ad37e54d871d59a5275443"
+    },
+    "priorFullUiBuildAttribution": {
+      "head": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+      "fullBuildPid": 7045,
+      "uiBuildPid": 7146,
+      "currentFullUiBuildInvented": false
+    }
+  },
+  "authority": {
+    "quietGrant": "quiet-window-3a989fd0-20261013-0853",
+    "realModelCalls": 0,
+    "liveNetworkCalls": 0,
+    "buildsDuringMeasurements": 0,
+    "sourceWritesDuringMeasurements": 0,
+    "budgetWidening": false
+  },
+  "budgetBindings": [
+    {
+      "path": "scripts/check-retrieval-latency.budget.json",
+      "sha256": "cb99c92d673194189ee51b3f31fa9dd805316e667f594e2cdac05377406db85f",
+      "unchangedCeilings": {
+        "budgetMs": 500
+      },
+      "historicalReferenceHead": "3d46ff9aca669c349bf0528a2a356ba95991099a",
+      "exactComparedFields": ["budgetMs"]
+    },
+    {
+      "path": "scripts/check-grounded-retrieval-latency.budget.json",
+      "sha256": "82a32fab8ae090069a4f5ed70da4bca51369852b11024c9305ca283c1235d226",
+      "unchangedCeilings": {
+        "p50BudgetMs": 400,
+        "p95BudgetMs": 800
+      },
+      "historicalReferenceHead": "3d46ff9aca669c349bf0528a2a356ba95991099a",
+      "exactComparedFields": ["p50BudgetMs", "p95BudgetMs"]
+    }
+  ],
+  "canonicalScriptBindings": [
+    {
+      "path": "scripts/check-retrieval-latency.mjs",
+      "sha256": "e0aa2fa0ffca5b7bda2c70a506b4b6c8b8430e40cbbb0e33f4c0a80b1706f219"
+    },
+    {
+      "path": "scripts/check-grounded-retrieval-latency.mjs",
+      "sha256": "3fb7bdf721823a2c3467fd1f570d503f3df0a8ecb5affcf5207b221d5d4342a3"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-latency-eval.ts",
+      "sha256": "84def09ae3611f951ef10b23879b83bc3fc45fd37f34df6700a8bfbe5661cad7"
+    }
+  ],
+  "canonicalLinuxLatency": {
+    "environment": {
+      "image": "sha256:ff129e111a71bd190226f30f56af803aab8dc8cc92a940d1750c6cc66ea22d1b",
+      "node": "v24.18.0",
+      "platform": "linux",
+      "architecture": "arm64",
+      "logicalCpus": 16,
+      "nodeOptions": "--max-old-space-size=3072",
+      "network": "none"
+    },
+    "classification": "canonical developer-container code-path measurement; no host repetition, native serving, CI timing or D12 claim",
+    "firstAttempt": true,
+    "hostWrapperPid": 38697,
+    "containerRunnerPid": 8,
+    "childProcesses": [
+      {
+        "pid": 20,
+        "command": "scripts/check-retrieval-latency.mjs",
+        "exitCode": 0,
+        "startedAt": "2026-10-13T09:02:07.777Z",
+        "finishedAt": "2026-10-13T09:02:09.856Z"
+      },
+      {
+        "pid": 27,
+        "command": "scripts/check-grounded-retrieval-latency.mjs",
+        "exitCode": 0,
+        "startedAt": "2026-10-13T09:02:09.857Z",
+        "finishedAt": "2026-10-13T09:02:14.987Z"
+      }
+    ],
+    "measurements": {
+      "reportedPrecision": "one decimal place in canonical stdout",
+      "lexical": {
+        "warmups": 5,
+        "samples": 20,
+        "fixtureFiles": 2000,
+        "percentile": 95,
+        "observedMs": 75.9,
+        "budgetMs": 500
+      },
+      "semanticAndEntailment": {
+        "warmups": 3,
+        "samples": 12,
+        "p50Ms": 40.8,
+        "p95Ms": 43.5,
+        "p50BudgetMs": 400,
+        "p95BudgetMs": 800,
+        "regressionProbe": {
+          "injectedJudgeDelayMs": 1300,
+          "observedMs": 1344.9,
+          "detected": true
+        }
+      },
+      "boundedFollowUp": {
+        "warmups": 3,
+        "samples": 12,
+        "p50Ms": 31.7,
+        "p95Ms": 42.7,
+        "p50BudgetMs": 400,
+        "p95BudgetMs": 800,
+        "regressionProbe": {
+          "injectedSecondSynthesisDelayMs": 1300,
+          "observedMs": 1350.9,
+          "detected": true
+        }
+      }
+    },
+    "containerStopped": true,
+    "sourceDistFixturesUnchanged": true,
+    "receipt": {
+      "artifact": "core-latency-3a989fd-linux-r1-completed.json",
+      "sha256": "d5c9da895f793ef31cb215f42d4dbf745b8c26bff2132bc5de332293823e10e7"
+    },
+    "execution": {
+      "artifact": "core-latency-3a989fd-linux-r1-wrapper-execution.json",
+      "sha256": "fab7456615c0ed81440d250e7a3c6c067ec140b802a83c451b94ea15aee8cd98"
+    },
+    "canonicalStdout": {
+      "artifact": "core-latency-3a989fd-linux-r1-run.log",
+      "sha256": "33da6200df6ef2eaada55b039fbb6408597825a7d6500fe99109a11269b78bcc"
+    }
+  },
+  "rerankerStage": {
+    "environment": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "node": "v24.18.0",
+      "nodeBinarySha256": "ee6fb0e015284d83a91e8ec5213f43a157f8a392b58555301682892ba928c04a",
+      "npm": "11.16.0",
+      "logicalCores": 16,
+      "totalMemoryBytes": 137438953472
+    },
+    "classification": "informational host code-path characterization with scripted transport; canonical latency gates independently retained",
+    "pid": 38416,
+    "timedSamples": 72,
+    "discardedWarmups": 18,
+    "samplesPerVersionAndControl": 12,
+    "metadataDocumentLimitUnchanged": 64,
+    "summaries": [
+      {
+        "label": "before",
+        "rerankerEnabled": false,
+        "full": {
+          "p50Ms": 19.447791999999936,
+          "p95Ms": 23.865707999999813,
+          "samples": 12
+        },
+        "seam": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "samples": 12
+        },
+        "scriptedTransport": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "samples": 12
+        },
+        "outsideSeam": {
+          "p50Ms": 19.447791999999936,
+          "p95Ms": 23.865707999999813,
+          "samples": 12
+        },
+        "submittedDocumentCounts": [],
+        "submittedDocumentBytes": [],
+        "selectedFileCounts": [1]
+      },
+      {
+        "label": "before",
+        "rerankerEnabled": true,
+        "full": {
+          "p50Ms": 19.903709000000163,
+          "p95Ms": 23.08416699999998,
+          "samples": 12
+        },
+        "seam": {
+          "p50Ms": 0.13429099999848404,
+          "p95Ms": 0.21949999999969805,
+          "samples": 12
+        },
+        "scriptedTransport": {
+          "p50Ms": 0.0030830000005153124,
+          "p95Ms": 0.0097499999997126,
+          "samples": 12
+        },
+        "outsideSeam": {
+          "p50Ms": 19.759625999999116,
+          "p95Ms": 22.86466700000028,
+          "samples": 12
+        },
+        "submittedDocumentCounts": [1],
+        "submittedDocumentBytes": [386],
+        "selectedFileCounts": [1]
+      },
+      {
+        "label": "relocation",
+        "rerankerEnabled": false,
+        "full": {
+          "p50Ms": 19.53949999999986,
+          "p95Ms": 23.336749999999938,
+          "samples": 12
+        },
+        "seam": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "samples": 12
+        },
+        "scriptedTransport": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "samples": 12
+        },
+        "outsideSeam": {
+          "p50Ms": 19.53949999999986,
+          "p95Ms": 23.336749999999938,
+          "samples": 12
+        },
+        "submittedDocumentCounts": [],
+        "submittedDocumentBytes": [],
+        "selectedFileCounts": [1]
+      },
+      {
+        "label": "relocation",
+        "rerankerEnabled": true,
+        "full": {
+          "p50Ms": 21.84479199999987,
+          "p95Ms": 23.72583399999985,
+          "samples": 12
+        },
+        "seam": {
+          "p50Ms": 0.1402509999998074,
+          "p95Ms": 0.2278759999999238,
+          "samples": 12
+        },
+        "scriptedTransport": {
+          "p50Ms": 0.004291999999622931,
+          "p95Ms": 0.007417000000259577,
+          "samples": 12
+        },
+        "outsideSeam": {
+          "p50Ms": 21.717084000000796,
+          "p95Ms": 23.497957999999926,
+          "samples": 12
+        },
+        "submittedDocumentCounts": [2],
+        "submittedDocumentBytes": [776],
+        "selectedFileCounts": [2]
+      },
+      {
+        "label": "final",
+        "rerankerEnabled": false,
+        "full": {
+          "p50Ms": 15.175500000000284,
+          "p95Ms": 21.058290999999826,
+          "samples": 12
+        },
+        "seam": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "samples": 12
+        },
+        "scriptedTransport": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "samples": 12
+        },
+        "outsideSeam": {
+          "p50Ms": 15.175500000000284,
+          "p95Ms": 21.058290999999826,
+          "samples": 12
+        },
+        "submittedDocumentCounts": [],
+        "submittedDocumentBytes": [],
+        "selectedFileCounts": [1]
+      },
+      {
+        "label": "final",
+        "rerankerEnabled": true,
+        "full": {
+          "p50Ms": 17.45641699999942,
+          "p95Ms": 18.57429200000024,
+          "samples": 12
+        },
+        "seam": {
+          "p50Ms": 0.12433299999884184,
+          "p95Ms": 0.16991700000107812,
+          "samples": 12
+        },
+        "scriptedTransport": {
+          "p50Ms": 0.003875000000334694,
+          "p95Ms": 0.005000000000109139,
+          "samples": 12
+        },
+        "outsideSeam": {
+          "p50Ms": 17.338166999998975,
+          "p95Ms": 18.404374999999163,
+          "samples": 12
+        },
+        "submittedDocumentCounts": [2],
+        "submittedDocumentBytes": [776],
+        "selectedFileCounts": [2]
+      }
+    ],
+    "pairedDeltas": [
+      {
+        "comparison": "authentic-parent-to-relocation-merge",
+        "fullDeltaMs": {
+          "p50": 2.0391660000004777,
+          "p95": 2.600166000000172
+        },
+        "seamDeltaMs": {
+          "p50": 0.008376000000225758,
+          "p95": 0.06654100000014296
+        },
+        "pairedSamples": 12
+      },
+      {
+        "comparison": "historical-parent-to-final-with-subsequent-changes",
+        "fullDeltaMs": {
+          "p50": -2.468792000000576,
+          "p95": -1.6172499999993306
+        },
+        "seamDeltaMs": {
+          "p50": -0.0073319999983141315,
+          "p95": 0.042000000000371074
+        },
+        "pairedSamples": 12
+      }
+    ],
+    "historicalSources": [
+      {
+        "label": "before",
+        "sourceCommit": "cc1910ee2b3391e96ab25fb26851a2bfb4054bda",
+        "actualBuildReceiptSha256": "f7bc14d1313da69a8c1035e96cdd72df25673e994843f474f09203caa2d4cf1f",
+        "historicalBuildNode": "v24.21.0"
+      },
+      {
+        "label": "relocation",
+        "sourceCommit": "a85696ac94fa442eb15d50897f72490038578aa3",
+        "actualBuildReceiptSha256": "5e3c3a49804cff553ccb25321fbb7edc103499276e0713311db289ad8e2f401b",
+        "historicalBuildNode": "v24.21.0"
+      }
+    ],
+    "finalSource": "3a989fd0ad34bd4c6bae44025a3787f67eca1856",
+    "sameEnvironmentExecutionNode": "v24.18.0",
+    "receipt": {
+      "artifact": "resume-runtime-reranker-stage-cost-v3-quiet-window-3a989fd0-20261013-0853.json",
+      "sha256": "4a1a9973b8793c9510652c2f3b0cbe679f501ad3262fefa2e7a164a93f3f19ad"
+    },
+    "execution": {
+      "artifact": "core-3a989fd-reranker-first-r1-execution.json",
+      "sha256": "6905fc24453db4ccbf08339a41f283f196249ab5b2da4541313d4650057bfc48"
+    },
+    "limitations": [
+      "Scripted transport excludes native model and network variance.",
+      "One-to-two document corpus does not saturate the 64-document limit.",
+      "Historical parent-to-relocation delta and final-source effects are distinct; final differences include subsequent changes."
+    ]
+  },
+  "optionalRankingCharacterization": {
+    "timedSamples": 0,
+    "criterionCredit": false,
+    "outcomes": [
+      {
+        "stage": "original private fixture",
+        "disposition": "scope-invalid before sampling",
+        "pid": 38290,
+        "execution": {
+          "artifact": "core-3a989fd-ranking-first-r1-execution.json",
+          "sha256": "583942fab3d02450a8fe3d15a140a31d7b7d436436432aa0241823b0b27d8ca3"
+        }
+      },
+      {
+        "stage": "same whole-root fixture with canonical scope kind corrected",
+        "disposition": "misplaced raw-atom forbidden-path assertion before sampling",
+        "pid": 38507,
+        "execution": {
+          "artifact": "core-3a989fd-ranking-valid-root-r2-execution.json",
+          "sha256": "e72bc54d458601a056c3031c7719578f287dd2b647fb78fd0a4082162779eebb"
+        }
+      }
+    ],
+    "limitations": "No timing or quality pass is claimed. Forbidden paths are a final-pack criterion; raw and partially ranked inputs are not that boundary. No third optional attempt was executed."
+  },
+  "criterionSupport": {
+    "3885.6": "Actual unchanged-budget canonical Linux numbers recorded.",
+    "3887.7": "Actual unchanged-budget canonical Linux numbers plus explicitly separated authentic reranker relocation delta recorded."
+  },
+  "deliveryLimits": [
+    "This scoped record is not a release closeout or a whole acceptance declaration.",
+    "Existing pending CI/release/causal-mapping obligations remain independently governed."
+  ]
+}

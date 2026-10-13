@@ -95,3 +95,10 @@ These are scoped implementation and acceptance records. Final local gates, requi
 CI, review settlement and integration remain pending. They are not the final closeout document or
 a release signoff. Original unseen-case results retain their first scores; later regression runs
 are identified separately.
+
+[latency-measurements.json](latency-measurements.json) records the canonical developer-container
+latency results on producer `3a989fd0`, unchanged numeric ceilings and detected negative probes.
+It separately attributes the scripted reranker relocation delta and current code-path costs.
+The optional ranking characterization stopped before any sample and receives no timing credit.
+These scoped measurements support #3885 criterion 6 and #3887 criterion 7; final current-head
+gates, native answer qualification and integration remain separate obligations.
