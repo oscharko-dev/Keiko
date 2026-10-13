@@ -40,9 +40,21 @@ function observedInputs(subject) {
   return inputs;
 }
 
+// Native realpath needs procfs on musl; the ordinary API remains the compatibility fallback.
+function canonicalSourcePath(path) {
+  if (process.platform !== "linux") return realpathSync(path);
+  try {
+    const resolved = realpathSync.native(path);
+    if (resolved === path) return resolved;
+  } catch {
+    return realpathSync(path);
+  }
+  return realpathSync(path);
+}
+
 function regularSource(path) {
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(path) !== path)
+  if (!stat.isFile() || stat.isSymbolicLink() || canonicalSourcePath(path) !== path)
     throw new TypeError("unsafe-symbol-source");
 }
 

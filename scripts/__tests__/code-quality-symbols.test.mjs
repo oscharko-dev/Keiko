@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Buffer } from "node:buffer";
 import {
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -1989,5 +1991,92 @@ describe("compiler private canonical byte witness", () => {
     }
     writeFileSync(join(own.root, path), changed);
     expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+});
+
+// Preservation controls for the proposed Linux native path-resolution fastpath.
+describe("compiler canonical source path preservation", () => {
+  it("repeatedly admits a canonical nested Unicode source path", async () => {
+    const path = "src/é🙂/currentness.ts";
+    const text = "export const current = 1;\n";
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    expect(own.compiler.read(path)).toBe(text);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+  });
+
+  it("refuses a same-byte parent redirect after source admission", async () => {
+    const path = "src/currentness.ts";
+    const text = "export const current = 1;\n";
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    const source = join(own.compiler.state.subject.root, "src");
+    const retained = `${source}.retained`;
+    renameSync(source, retained);
+    symlinkSync(retained, source, "junction");
+    expect(readFileSync(join(source, "currentness.ts"), "utf8")).toBe(text);
+    expect(() => own.compiler.read(path)).toThrow("unsafe-symbol-source");
+  });
+});
+
+// Candidate-only fallback branch controls; these do not claim an original runtime defect.
+describe.skipIf(process.platform !== "linux")("compiler native path compatibility fallback", () => {
+  it.each(["exception", "different-spelling"])(
+    "uses ordinary resolution for a healthy source after native %s",
+    async (mode) => {
+      const path = "src/currentness.ts";
+      const text = "export const current = 1;\n";
+      const own = await currentnessFixture(({ put }) => put(path, text));
+      const native = vi.spyOn(realpathSync, "native").mockImplementation(() => {
+        if (mode === "exception") throw new TypeError("fixture-native-unavailable");
+        return "fixture-different-spelling";
+      });
+      try {
+        expect(own.compiler.read(path)).toBe(text);
+        expect(native).toHaveBeenCalledTimes(1);
+      } finally {
+        native.mockRestore();
+      }
+    },
+  );
+
+  it.each(["exception", "different-spelling"])(
+    "retains ordinary parent-redirect refusal after native %s",
+    async (mode) => {
+      const path = "src/currentness.ts";
+      const text = "export const current = 1;\n";
+      const own = await currentnessFixture(({ put }) => put(path, text));
+      expect(own.compiler.read(path)).toBe(text);
+      const source = join(own.compiler.state.subject.root, "src");
+      const retained = `${source}.retained`;
+      renameSync(source, retained);
+      symlinkSync(retained, source, "junction");
+      const native = vi.spyOn(realpathSync, "native").mockImplementation(() => {
+        if (mode === "exception") throw new TypeError("fixture-native-unavailable");
+        return "fixture-different-spelling";
+      });
+      try {
+        expect(() => own.compiler.read(path)).toThrow("unsafe-symbol-source");
+        expect(native).toHaveBeenCalledTimes(1);
+      } finally {
+        native.mockRestore();
+      }
+    },
+  );
+
+  it("propagates the real ordinary error after native resolution becomes unavailable", async () => {
+    const path = "src/currentness.ts";
+    const own = await currentnessFixture(({ put }) => put(path, "export const current = 1;\n"));
+    const absolute = join(own.compiler.state.subject.root, path);
+    const native = vi.spyOn(realpathSync, "native").mockImplementation(() => {
+      unlinkSync(absolute);
+      throw new TypeError("fixture-native-unavailable");
+    });
+    try {
+      expect(() => own.compiler.read(path)).toThrow(expect.objectContaining({ code: "ENOENT" }));
+      expect(native).toHaveBeenCalledTimes(1);
+    } finally {
+      native.mockRestore();
+    }
   });
 });
