@@ -143,6 +143,11 @@ describe("shared assessment authority", () => {
       expect(rule).toContain(kind === "file" ? "[path/to/file:line]" : "[n]");
       expect(rule).toContain("learned knowledge");
       expect(rule).toContain("even without matching excerpts");
+      expect(rule).toContain("Explaining supplied source material is a source-specific task");
+      expect(rule).toContain("only if the user asks for an evaluation, recommendation or proposal");
+      expect(rule).toContain("must not invent facts about the sources");
+      expect(rule).toContain("source-proven call-site bindings or defaults");
+      expect(rule).toContain("distinguish all of these from observed execution");
       expect(rule).toContain("Source-specific claims stay outside");
       expect(rule).toContain("Do not claim current or live verification");
     },

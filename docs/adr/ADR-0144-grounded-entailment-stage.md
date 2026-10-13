@@ -232,13 +232,19 @@ including offline folders, Knowledge Pods, multiple sources, and hybrid answers.
 existing labelled assessment authority rather than adding question-specific routing or a tool call.
 
 - **Two parts, one boundary.** When the operator allows it, every grounded prompt adds one short
-  rule (`OWN_ASSESSMENT_PROMPT_RULE`, keiko-contracts `runtime/grounded-assessment`). Whatever the
-  excerpts do not back (a recommendation, an opinion, general knowledge, small talk) goes after the
-  source-backed part inside one `<assessment>` block. The block opens by saying it is Keiko's own
-  assessment and carries no source markers or missing-evidence declarations. Source-specific claims
-  remain outside it and use the actual supplied file or numeric marker grammar. This policy rule
-  participates in prompt fitting before dispatch. A plain text tag works with every model family,
-  open-weight models included, and needs no structured-output support.
+  rule (`OWN_ASSESSMENT_PROMPT_RULE`, keiko-contracts `runtime/grounded-assessment`). Explaining
+  supplied sources alone does not request an assessment. For source-specific questions, the shared
+  rule requests an assessment only for a requested evaluation, recommendation or proposal. It must
+  not repeat the source answer or invent facts to fill missing evidence. Code explanations
+  distinguish available declarations and imports from source-proven call-site bindings or defaults,
+  and from observed execution. The existing `search.answer.assessed` event records the resulting
+  presence or absence. Whatever the excerpts do not back (a recommendation, an opinion, general
+  knowledge, small talk) goes after the source-backed part inside one `<assessment>` block. The
+  block opens by saying it is Keiko's own assessment and carries no source markers or
+  missing-evidence declarations. Source-specific claims remain outside it and use the actual
+  supplied file or numeric marker grammar. This policy rule participates in prompt fitting before
+  dispatch. A plain text tag works with every model family, open-weight models included, and needs
+  no structured-output support.
 - **Only the source-backed part is checked.** The runner splits the block off right after
   generation (`splitOwnAssessment`), so the following steps see only the text outside it:
   - citation attachment and citation repair (an answer that is only the assessment is not

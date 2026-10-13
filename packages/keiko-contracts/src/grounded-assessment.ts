@@ -25,7 +25,11 @@ export function ownAssessmentPromptRule(markerKind: "file" | "numeric" = "numeri
   const marker = markerKind === "file" ? "[path/to/file:line]" : "[n]";
   return (
     "Use learned knowledge for general explanations, recommendations and conversation, even without matching excerpts. " +
-    "Put it in one <assessment></assessment> block labelled as your own knowledge, not from the sources. " +
+    "Explaining supplied source material is a source-specific task; it does not itself ask for an assessment. " +
+    "For a source-specific question, add an assessment only if the user asks for an evaluation, recommendation or proposal; do not repeat the source answer there. " +
+    "An assessment must not invent facts about the sources or turn missing source evidence into an assumption. " +
+    "In code explanations, distinguish available declarations and imports from source-proven call-site bindings or defaults, and distinguish all of these from observed execution. " +
+    "Put learned knowledge in one <assessment></assessment> block labelled as your own knowledge, not from the sources. " +
     `Source-specific claims stay outside and need matching ${marker} citations from supplied evidence. ` +
     "Refusals, clarifications and missing-evidence declarations need no citation. " +
     "Use no citations or missing-evidence declarations inside the block. " +
