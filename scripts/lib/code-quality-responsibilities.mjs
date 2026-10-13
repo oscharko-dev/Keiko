@@ -1,3 +1,7 @@
+import {
+  executeResponsibilityProofs,
+  responsibilityProofToolIdentity,
+} from "./code-quality-responsibility-proofs.mjs";
 import { createSymbolResolver } from "./code-quality-symbols.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 
@@ -237,9 +241,26 @@ function pendingRecord(record, structural, reasons) {
   };
 }
 
-export function assessPolicyResponsibilities(subject, policy, files = subject.inventory.files) {
+function addDeclaredProofPaths(subject, manifest, record) {
+  for (const path of record.proofs) {
+    const owner = subject.inventory.packages.find((entry) =>
+      path.startsWith(`${entry.directory}/`),
+    );
+    const directory = owner?.directory ?? "";
+    manifest.set(
+      directory,
+      [...new Set([...(manifest.get(directory) ?? []), path])].sort(compareStrings),
+    );
+  }
+}
+
+function responsibilityResolver(subject, policy, executeProofs = false) {
   const manifest = new Map();
   for (const record of policy.responsibilities ?? []) {
+    if (executeProofs) {
+      addDeclaredProofPaths(subject, manifest, record);
+      continue;
+    }
     if (!proofConsumerKind(record)) continue;
     const owner = subject.inventory.packages.find((entry) => entry.name === record.consumer.owner);
     if (!owner || !record.proofs.includes(record.consumer.consumerPath)) continue;
@@ -247,26 +268,113 @@ export function assessPolicyResponsibilities(subject, policy, files = subject.in
     paths.push(record.consumer.consumerPath);
     manifest.set(owner.directory, [...new Set(paths)].sort(compareStrings));
   }
-  const resolver = createSymbolResolver(
+  return createSymbolResolver(
     subject,
     {},
     [...manifest].map(([owner, paths]) => ({ owner, paths })),
   );
+}
+
+function responsibilityAssessment(subject, policy, files, resolver) {
+  return (policy.responsibilities ?? []).map((record) =>
+    assessRecord(subject, resolver, record, files),
+  );
+}
+
+function responsibilityReport(assessments) {
+  const count = (key, value) => assessments.filter((record) => record[key] === value).length;
+  return {
+    assessments,
+    counts: {
+      ready: count("structural", "ready"),
+      incomplete: count("structural", "incomplete"),
+      invalid: count("structural", "invalid"),
+      qualified: count("semantic", "qualified"),
+      pending: count("semantic", "pending"),
+      rejected: count("semantic", "rejected"),
+    },
+  };
+}
+
+export function assessPolicyResponsibilities(subject, policy, files = subject.inventory.files) {
+  const resolver = responsibilityResolver(subject, policy);
   try {
-    const assessments = (policy.responsibilities ?? []).map((record) =>
-      assessRecord(subject, resolver, record, files),
-    );
+    const assessments = responsibilityAssessment(subject, policy, files, resolver);
     resolver.assertCurrent();
-    const count = (key, value) => assessments.filter((record) => record[key] === value).length;
+    return responsibilityReport(assessments);
+  } finally {
+    resolver.close();
+  }
+}
+
+function proofRuntimeWitness(subject, resolver, assessments) {
+  const producers = new Set(
+    assessments.flatMap((record) =>
+      record.roles.input.identities.map((identity) => identity.producer.path),
+    ),
+  );
+  if (producers.size === 0) throw new TypeError("semantic-proof-runtime-unavailable");
+  const outputs = [...subject.outputs].filter(([, source]) => producers.has(source));
+  for (const producer of producers) {
+    const paths = outputs.filter(([, source]) => source === producer).map(([path]) => path);
+    if (
+      !paths.some((path) => /\.[cm]?js$/u.test(path)) ||
+      !paths.some((path) => /\.d\.[cm]?ts$/u.test(path))
+    )
+      throw new TypeError("semantic-proof-runtime-unavailable");
+  }
+  return outputs.map(([path]) => resolver.sourceIdentity(path));
+}
+
+function completedResponsibility(record, execution) {
+  const observation = execution.find((entry) => entry.id === record.id);
+  if (!observation) throw new TypeError("semantic-proof-assertion-missing");
+  return {
+    ...record,
+    semantic: "qualified",
+    obligations: [],
+    proofs: record.proofs.map((proof) => ({
+      ...proof,
+      executed: observation.executedPaths.includes(proof.path),
+    })),
+    proofAssertions: observation.assertions,
+  };
+}
+
+export async function qualifyPolicyResponsibilities(
+  subject,
+  policy,
+  files = subject.inventory.files,
+) {
+  const resolver = responsibilityResolver(subject, policy, true);
+  try {
+    const assessments = responsibilityAssessment(subject, policy, files, resolver);
+    if (assessments.length === 0 || assessments.some((record) => record.structural !== "ready"))
+      return {
+        ...responsibilityReport(assessments),
+        execution: { status: "failed", reason: "semantic-proof-structural-incomplete" },
+      };
+    const tools = responsibilityProofToolIdentity(subject.root);
+    const runtime = proofRuntimeWitness(subject, resolver, assessments);
+    resolver.assertCurrent();
+    const execution = await executeResponsibilityProofs(subject.root, policy.responsibilities);
+    resolver.assertCurrent();
+    if (
+      JSON.stringify(tools) !== JSON.stringify(responsibilityProofToolIdentity(subject.root)) ||
+      JSON.stringify(runtime) !==
+        JSON.stringify(proofRuntimeWitness(subject, resolver, assessments))
+    )
+      throw new TypeError("semantic-proof-subject-changed");
     return {
-      assessments,
-      counts: {
-        ready: count("structural", "ready"),
-        incomplete: count("structural", "incomplete"),
-        invalid: count("structural", "invalid"),
-        qualified: count("semantic", "qualified"),
-        pending: count("semantic", "pending"),
-        rejected: count("semantic", "rejected"),
+      ...responsibilityReport(
+        assessments.map((record) => completedResponsibility(record, execution.records)),
+      ),
+      execution: {
+        status: "passed",
+        invocationCount: 1,
+        tools,
+        runtime,
+        process: execution.process,
       },
     };
   } finally {

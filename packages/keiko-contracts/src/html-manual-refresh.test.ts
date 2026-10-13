@@ -266,3 +266,29 @@ describe("refresh timestamp observation preservation", () => {
     },
   );
 });
+
+import { validateManualRefreshChangeSummary as responsibilityPublicSummary } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
+
+describe("shipped manual summary responsibility output", () => {
+  it("retains actual public summary members and refuses a malformed nested count", () => {
+    const input = validSummary();
+    const result = responsibilityPublicSummary(input);
+    if (!result.ok) throw new TypeError("healthy public summary refused");
+    expect(result.value).toBe(input);
+    expect(result.value.counts).toBe(input.counts);
+    expect(result.value.reasonCodes).toBe(input.reasonCodes);
+    const outcome: ResponsibilityValue<
+      typeof result.value.outcome,
+      "unchanged" | "updated" | "partial" | "failed" | "cancelled"
+    > = result.value.outcome;
+    expect(outcome).toBe("updated");
+    const addedPages: ResponsibilityValue<typeof result.value.counts.addedPages, number> =
+      result.value.counts.addedPages;
+    expect(addedPages).toBe(2);
+    expect(
+      responsibilityPublicSummary({ ...input, counts: { ...input.counts, addedPages: -1 } }).ok,
+    ).toBe(false);
+  });
+});
+
+type ResponsibilityValue<T, Expected> = 0 extends 1 & T ? never : Expected;

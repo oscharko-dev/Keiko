@@ -351,3 +351,58 @@ describe("validateHtmlManualPodCreateRequest", () => {
     ).toBe(false);
   });
 });
+
+import {
+  validateHtmlManualPodCreateRequest as responsibilityPublicCreate,
+  validateHtmlManualPodRefreshRequest as responsibilityPublicRefresh,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-job";
+
+describe("shipped manual request responsibility output", () => {
+  it("admits actual public create output and refuses a malformed origin", () => {
+    const result = responsibilityPublicCreate({
+      displayName: "  Ops  ",
+      origin: "https://manual.example.com",
+    });
+    if (!result.ok) throw new TypeError("healthy public create refused");
+    const displayName: ResponsibilityValue<typeof result.value.displayName, string> =
+      result.value.displayName;
+    const origin: ResponsibilityValue<typeof result.value.origin, string> = result.value.origin;
+    const prefix: ResponsibilityValue<typeof result.value.pathPrefix, string | null> =
+      result.value.pathPrefix;
+    expect(displayName).toBe("Ops");
+    expect(origin).toBe("https://manual.example.com");
+    expect(prefix).toBeNull();
+    expect(result).toStrictEqual({
+      ok: true,
+      value: {
+        displayName: "Ops",
+        origin: "https://manual.example.com",
+        pathPrefix: null,
+      },
+    });
+    expect(responsibilityPublicCreate({ displayName: "Ops", origin: "ftp://invalid" }).ok).toBe(
+      false,
+    );
+  });
+
+  it("retains actual public refresh input and refuses a malformed identifier", () => {
+    const input = { capsuleId: "cap", sourceId: "src" };
+    const result = responsibilityPublicRefresh(input);
+    expect(result).toStrictEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public refresh refused");
+    expect(result.value).toBe(input);
+    const capsuleId: ResponsibilityValue<typeof result.value.capsuleId, string> =
+      result.value.capsuleId;
+    const sourceId: ResponsibilityValue<typeof result.value.sourceId, string> =
+      result.value.sourceId;
+    expect(capsuleId).toBe("cap");
+    expect(sourceId).toBe("src");
+    expect(responsibilityPublicRefresh({ capsuleId: "../escape", sourceId: "src" })).toStrictEqual({
+      ok: false,
+      errors: ["capsuleId must be a safe id token"],
+    });
+  });
+});
+
+// These primitive witnesses are compiled in the actual contracts proof context.
+type ResponsibilityValue<T, Expected> = 0 extends 1 & T ? never : Expected;

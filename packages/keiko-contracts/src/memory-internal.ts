@@ -7,6 +7,7 @@
 // browser surface without truncation, and to keep the body cap aligned with a comfortable
 // MemoriaViva card without scrolling.
 import { hasControlCharacter, stripUnsafeFormatChars } from "./text-safety.js";
+import type { MemoryRetentionHint } from "./memory-records.js";
 
 export const MEMORY_BODY_MAX_CHARS = 4096;
 export const MEMORY_RATIONALE_MAX_CHARS = 1024;
@@ -41,7 +42,10 @@ export function isUnitInterval(value: unknown): value is number {
 }
 
 export function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  if (!Array.isArray(value)) return false;
+  // Preserve the original lookup observation, but never delegate admission to its value.
+  const _observedEvery = value.every;
+  return Array.prototype.every.call(value, (entry: unknown) => typeof entry === "string");
 }
 
 export function isMember<T extends string>(value: unknown, allowed: readonly T[]): value is T {
@@ -59,7 +63,11 @@ export function isSafeText(value: unknown, maxChars: number): value is string {
   return !FORBIDDEN_CONTROL_RE.test(value);
 }
 
-export function validateTags(field: string, input: unknown, errors: string[]): boolean {
+export function validateTags(
+  field: string,
+  input: unknown,
+  errors: string[],
+): input is readonly string[] {
   if (!isStringArray(input)) {
     errors.push(`${field} must be a string array`);
     return false;
@@ -68,7 +76,21 @@ export function validateTags(field: string, input: unknown, errors: string[]): b
     errors.push(`${field} must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
     return false;
   }
-  for (const tag of input) {
+  // Keep the original iterator lookup and native physical read phase. The existing tag
+  // cap also bounds a growing native traversal; caller-owned iterators cannot certify tags.
+  const _observedIterator = input[Symbol.iterator];
+  let inspected = 0;
+  for (const observed of Array.prototype.values.call(input)) {
+    inspected += 1;
+    if (inspected > MEMORY_TAGS_MAX_COUNT) {
+      errors.push(`${field} must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
+      return false;
+    }
+    const tag: unknown = observed;
+    if (typeof tag !== "string") {
+      errors.push(`${field} must be a string array`);
+      return false;
+    }
     if (tag.length === 0 || tag.length > MEMORY_TAG_MAX_CHARS || FORBIDDEN_CONTROL_RE.test(tag)) {
       errors.push(`${field} entry must be a non-empty bounded control-free string`);
       return false;
@@ -77,7 +99,11 @@ export function validateTags(field: string, input: unknown, errors: string[]): b
   return true;
 }
 
-export function validateRetentionHint(field: string, input: unknown, errors: string[]): boolean {
+export function validateRetentionHint(
+  field: string,
+  input: unknown,
+  errors: string[],
+): input is MemoryRetentionHint {
   let valid = true;
   if (!isRecord(input)) {
     errors.push(`${field} must be an object when set`);
@@ -122,13 +148,18 @@ export interface NestedValidation {
   readonly errors?: readonly string[];
 }
 
-export function pushNestedErrors(prefix: string, result: NestedValidation, errors: string[]): void {
+export function pushNestedErrors(
+  prefix: string,
+  result: NestedValidation,
+  errors: string[],
+): boolean {
   if (result.ok) {
-    return;
+    return true;
   }
   for (const reason of result.errors ?? []) {
     errors.push(`${prefix}.${reason}`);
   }
+  return false;
 }
 
 // Memory ids are branded identifiers that reach the memory store, evidence exports and the browser,
@@ -159,18 +190,26 @@ function memoryIdReason(value: unknown): string | null {
   return null;
 }
 
-export function validateMemoryIdString(field: string, value: unknown, errors: string[]): void {
+export function validateMemoryIdString(
+  field: string,
+  value: unknown,
+  errors: string[],
+): value is string {
   const reason = memoryIdReason(value);
   if (reason !== null) {
     errors.push(`${field} ${reason}`);
+    return false;
   }
+  return true;
 }
 
 export function validateSchemaVersionLiteral(
   input: Record<string, unknown>,
   errors: string[],
-): void {
+): input is Record<string, unknown> & { readonly schemaVersion: "1" } {
   if (input.schemaVersion !== "1") {
     errors.push('schemaVersion must be the literal "1"');
+    return false;
   }
+  return true;
 }

@@ -1551,3 +1551,422 @@ describe("public parser canonical producer premises (#3918)", () => {
     },
   );
 });
+
+describe("closed monotonic semantic proof selectors", () => {
+  it("admits declared exact assertions without changing default assessment", () => {
+    const policy = responsibilityPolicy([responsibilityRecord()]);
+    const record = policy.responsibilities[0];
+    record.proofAssertions = [
+      { path: record.proofs[0], testName: "actual producer healthy and refusal" },
+    ];
+    expect(validatePolicy(policy)).toEqual([]);
+  });
+
+  it.each(["foreign-path", "duplicate", "empty", "command"])("refuses %s selectors", (kind) => {
+    const policy = responsibilityPolicy([responsibilityRecord()]);
+    const record = policy.responsibilities[0];
+    const assertion = { path: record.proofs[0], testName: "actual producer healthy and refusal" };
+    record.proofAssertions = kind === "empty" ? [] : [assertion];
+    if (kind === "foreign-path") assertion.path = "scripts/__tests__/unregistered.test.mjs";
+    if (kind === "duplicate") record.proofAssertions.push({ ...assertion });
+    if (kind === "command") assertion.command = "arbitrary";
+    expect(validatePolicy(policy)).toContain("invalid-responsibilities");
+  });
+
+  it("refuses selector history removal or rebinding", () => {
+    const policy = responsibilityPolicy([responsibilityRecord()]);
+    const record = policy.responsibilities[0];
+    record.proofAssertions = [
+      { path: record.proofs[0], testName: "actual producer healthy and refusal" },
+    ];
+    const previous = structuredClone(policy);
+    record.proofAssertions[0].testName = "unrelated case";
+    expect(validatePolicy(policy, [previous])).toContain("responsibility-shrank");
+    delete record.proofAssertions;
+    expect(validatePolicy(policy, [previous])).toContain("responsibility-shrank");
+  });
+});
+
+// Genuine installed Vitest/public-parser controls for the new result admission seam.
+// These helper fixtures do not qualify any production responsibility or import saved green facts.
+async function semanticProofFixture(mode) {
+  const { mkdtempSync, symlinkSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const root = mkdtempSync(join(tmpdir(), "keiko-semantic-proof-"));
+  roots.push(root);
+  const tools = new URL("../../", import.meta.url);
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ name: "owned-semantic-proof", type: "module" }),
+  );
+  writeFileSync(join(root, "package-lock.json"), readFileSync(new URL("package-lock.json", tools)));
+  symlinkSync(new URL("node_modules", tools), join(root, "node_modules"), "junction");
+  const title = "actual public healthy and malformed diagnostic";
+  const assertion = `() => { expect(check(defaults)).toHaveLength(0); expect(check(null)).toContain("limits must be an object"); }`;
+  const call =
+    mode === "todo"
+      ? `it.todo(${JSON.stringify(title)});`
+      : `it${mode === "skip" ? ".skip" : ""}(${JSON.stringify(title)}, ${assertion});`;
+  const source = `import { it, expect } from "vitest";\nimport { validateHtmlManualScopeLimits as check } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";\nimport { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS as defaults } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";\n${call}\n${mode === "duplicate" ? call : ""}`;
+  const path = "selected-proof.test.mjs";
+  writeFileSync(join(root, path), source);
+  return {
+    root,
+    records: [
+      {
+        id: "owned-helper-proof",
+        proofs: [path],
+        proofAssertions: [{ path, testName: mode === "missing" ? "absent assertion" : title }],
+      },
+    ],
+  };
+}
+
+describe("fresh semantic assertion observations", () => {
+  it.skipIf(process.platform === "win32")(
+    "admits a genuinely reached actual public proof",
+    async () => {
+      const { executeResponsibilityProofs } =
+        await import("../lib/code-quality-responsibility-proofs.mjs");
+      const own = await semanticProofFixture("healthy");
+      const observations = await executeResponsibilityProofs(own.root, own.records);
+      expect(observations.records).toStrictEqual([
+        {
+          id: "owned-helper-proof",
+          assertions: [
+            {
+              path: "selected-proof.test.mjs",
+              testName: "actual public healthy and malformed diagnostic",
+              status: "passed",
+            },
+          ],
+          executedPaths: ["selected-proof.test.mjs"],
+        },
+      ]);
+      expect(observations.process.directChildClosed).toBe(true);
+      expect(observations.process.groupAbsent).toBe(true);
+      expect(observations.process.reportBytes).toBeGreaterThan(0);
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32").each(["missing", "skip", "todo", "duplicate"])(
+    "never qualifies %s assertions from a genuine child result",
+    async (mode) => {
+      const { executeResponsibilityProofs } =
+        await import("../lib/code-quality-responsibility-proofs.mjs");
+      const own = await semanticProofFixture(mode);
+      await expect(executeResponsibilityProofs(own.root, own.records)).rejects.toThrow(
+        "semantic-proof-assertion-missing",
+      );
+    },
+    195_000,
+  );
+});
+
+async function inheritedPipeSurvivorFixture() {
+  const own = await semanticProofFixture("healthy");
+  const owner = "owned-semantic-inherited-pipe";
+  const pidFile = join(own.root, "owned-survivor.json");
+  own.records[0].proofAssertions[0].testName = "owned inherited-pipe output-overflow fixture";
+  const idle =
+    'process.send("ready", () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0));';
+  const source = `import { it, expect } from "vitest";
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+it("owned inherited-pipe output-overflow fixture", async () => {
+  const survivor = spawn(process.execPath, ["-e", ${JSON.stringify(idle)}], {
+    detached: true, stdio: ["ignore", process.stdout, process.stderr, "ipc"],
+  });
+  writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify({ owner: ${JSON.stringify(owner)}, pid: survivor.pid }));
+  await new Promise((resolve, reject) => {
+    survivor.once("message", resolve);
+    survivor.once("error", reject);
+  });
+  survivor.disconnect();
+  survivor.unref();
+  // The actual unchanged 32MiB production output bound triggers group termination.
+  process.stdout.write(Buffer.alloc(32 * 1024 * 1024 + 1, 97));
+  await new Promise(() => {});
+});`;
+  writeFileSync(join(own.root, "selected-proof.test.mjs"), source);
+  return { ...own, owner, pidFile };
+}
+
+async function cleanupInheritedPipeSurvivor(own, existsSync) {
+  if (!existsSync(own.pidFile)) return;
+  const survivor = JSON.parse(readFileSync(own.pidFile, "utf8"));
+  if (survivor.owner !== own.owner || !Number.isSafeInteger(survivor.pid) || survivor.pid <= 0)
+    throw new TypeError("owned-survivor-fixture-identity-invalid");
+  process.kill(-survivor.pid, "SIGKILL");
+  await vi.waitFor(
+    () => {
+      expect(() => process.kill(-survivor.pid, 0)).toThrow(
+        expect.objectContaining({ code: "ESRCH" }),
+      );
+    },
+    { timeout: 5_000 },
+  );
+}
+
+// A real escaped fixture child deliberately retains the actual npm-owned pipe descriptors.
+// This verifies failed direct-close settlement, never escaped-descendant containment.
+it.skipIf(process.platform === "win32")(
+  "fails output overflow and closes inherited readers without certifying the escaped survivor",
+  async () => {
+    const { executeResponsibilityProofs } =
+      await import("../lib/code-quality-responsibility-proofs.mjs");
+    const { existsSync } = await import("node:fs");
+    const own = await inheritedPipeSurvivorFixture();
+    try {
+      await expect(executeResponsibilityProofs(own.root, own.records)).rejects.toThrow(
+        "semantic-proof-output-limit",
+      );
+      const survivor = JSON.parse(readFileSync(own.pidFile, "utf8"));
+      expect(survivor.owner).toBe(own.owner);
+      expect(Number.isSafeInteger(survivor.pid) && survivor.pid > 0).toBe(true);
+      expect(() => process.kill(-survivor.pid, 0)).not.toThrow();
+    } finally {
+      await cleanupInheritedPipeSurvivor(own, existsSync);
+    }
+  },
+  30_000,
+);
+
+import { qualifyPolicyResponsibilities } from "../lib/code-quality-responsibilities.mjs";
+
+async function directSemanticQualifierFixture(mode) {
+  const { symlinkSync } = await import("node:fs");
+  const own = createEnforcementFixture();
+  roots.push(own.root);
+  const tools = new URL("../../", import.meta.url);
+  mkdirSync(join(own.root, "node_modules/.bin"));
+  for (const name of ["vitest", "typescript"])
+    symlinkSync(
+      new URL(`node_modules/${name}`, tools),
+      join(own.root, "node_modules", name),
+      "junction",
+    );
+  symlinkSync(
+    new URL("node_modules/.bin/vitest", tools),
+    join(own.root, "node_modules/.bin/vitest"),
+  );
+  own.put("package-lock.json", readFileSync(new URL("package-lock.json", tools), "utf8"));
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  config.exclude = ["**/*.test.ts"];
+  own.put("packages/alpha/tsconfig.json", config);
+  emitSymbolFixture(own.root);
+  const proofPath = own.record.proofs[0];
+  const titles = [
+    "actual public healthy producer and consumer",
+    "actual public malformed producer refusal",
+  ];
+  const target = join(
+    own.root,
+    mode === "source" ? "packages/alpha/src/owner.ts" : "packages/alpha/dist/owner.js",
+  );
+  const mutation =
+    mode === "healthy"
+      ? ""
+      : `writeFileSync(${JSON.stringify(target)}, ${JSON.stringify(readFileSync(target, "utf8") + "\n")});`;
+  own.put(
+    proofPath,
+    `import { it, expect } from "vitest";
+import { writeFileSync } from "node:fs";
+import { validate, consume } from "alpha/runtime";
+it(${JSON.stringify(titles[0])}, () => {
+  expect(validate(1)).toEqual({ ok: true, value: 1 });
+  expect(consume(1)).toBe(1);
+});
+it(${JSON.stringify(titles[1])}, () => {
+  expect(validate(null)).toEqual({ ok: false });
+  ${mutation}
+});`,
+  );
+  own.record.proofAssertions = titles.map((testName) => ({ path: proofPath, testName }));
+  own.put("scripts/code-quality-policy.json", own.policy);
+  own.subject = await collectPolicySubject(own.root);
+  return { ...own, proofPath, target };
+}
+
+describe("direct semantic responsibility qualification", () => {
+  it.skipIf(process.platform === "win32")(
+    "qualifies one responsibility only after actual public healthy and malformed assertions pass",
+    async () => {
+      const own = await directSemanticQualifierFixture("healthy");
+      const report = await qualifyPolicyResponsibilities(own.subject, own.policy);
+      expect(report.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+      expect(report.execution).toMatchObject({ status: "passed", invocationCount: 1 });
+      expect(report.execution.process).toMatchObject({
+        directChildClosed: true,
+        groupAbsent: true,
+      });
+      expect(report.assessments[0]).toMatchObject({ semantic: "qualified", obligations: [] });
+      expect(report.assessments[0].proofs).toEqual([
+        expect.objectContaining({ path: own.proofPath, executed: true }),
+      ]);
+      expect(report.assessments[0].proofAssertions).toEqual(
+        own.record.proofAssertions.map((assertion) => ({ ...assertion, status: "passed" })),
+      );
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32").each(["source", "runtime"])(
+    "refuses %s mutation performed by the actual reached child proof",
+    async (mode) => {
+      const own = await directSemanticQualifierFixture(mode);
+      const before = readFileSync(own.target, "utf8");
+      await expect(qualifyPolicyResponsibilities(own.subject, own.policy)).rejects.toThrow(
+        "symbol-subject-changed",
+      );
+      expect(readFileSync(own.target, "utf8")).toBe(before + "\n");
+    },
+    195_000,
+  );
+});
+
+async function embeddedSemanticCliFixture(kind) {
+  const { unlinkSync } = await import("node:fs");
+  const { nativeCompilerExecutable } = await import("../lib/code-quality-provenance.mjs");
+  const own = await directSemanticQualifierFixture("healthy");
+  const args =
+    kind === "healthy"
+      ? ["-b", "packages/alpha/tsconfig.json", "--force"]
+      : ["-p", "packages/alpha/tsconfig.json"];
+  if (kind === "missing-runtime") args.push("--emitDeclarationOnly");
+  own.put(
+    "scripts/semantic-fixture-build.mjs",
+    `import { execFileSync } from "node:child_process";
+execFileSync(${JSON.stringify(nativeCompilerExecutable())}, ${JSON.stringify(args)}, {
+  cwd: process.cwd(), timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
+});`,
+  );
+  const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+  manifest.scripts = { "build:packages": "node scripts/semantic-fixture-build.mjs" };
+  own.put("package.json", manifest);
+  if (kind === "legacy") {
+    delete own.policy.responsibilities;
+    own.policy.version = 1;
+  }
+  if (kind === "empty") own.policy.responsibilities = [];
+  if (kind === "missing-selector") delete own.record.proofAssertions;
+  if (kind === "foreign-selector") own.record.proofAssertions[0].path = "unregistered.test.ts";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  const runtime = join(own.root, "packages/alpha/dist/owner.js");
+  const emittedRuntime = readFileSync(runtime, "utf8");
+  if (kind === "healthy") own.put("packages/alpha/dist/owner.js", "export const stale = true;\n");
+  else unlinkSync(runtime);
+  return { ...own, emittedRuntime };
+}
+
+function embeddedSemanticOptions() {
+  return { mode: "enforce", scope: "repository", json: true, qualifyResponsibilities: true };
+}
+
+describe("explicit semantic CLI build and admission", () => {
+  it.skipIf(process.platform === "win32")(
+    "rebuilds stale actual runtime before evaluating and qualifying its public assertions",
+    async () => {
+      const own = await embeddedSemanticCliFixture("healthy");
+      const runtime = join(own.root, "packages/alpha/dist/owner.js");
+      expect(readFileSync(runtime, "utf8")).toBe("export const stale = true;\n");
+      const report = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
+      expect(readFileSync(runtime, "utf8")).toBe(own.emittedRuntime);
+      expect(report).toMatchObject({
+        mode: "enforce",
+        outcome: "passed",
+        enforcementOutcome: "passed",
+      });
+      expect(report.responsibilities.counts).toMatchObject({ qualified: 1, pending: 0 });
+      expect(report.responsibilities.execution).toMatchObject({
+        status: "passed",
+        invocationCount: 1,
+      });
+      expect(report.counts.visited).toBe(report.counts.expected);
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["legacy", "semantic-proof-assertion-missing"],
+    ["empty", "semantic-proof-assertion-missing"],
+    ["missing-selector", "semantic-proof-assertion-missing"],
+    ["foreign-selector", "invalid-responsibilities"],
+  ])(
+    "refuses %s before the actual build",
+    async (kind, reason) => {
+      const { existsSync } = await import("node:fs");
+      const own = await embeddedSemanticCliFixture(kind);
+      await expect(executeCodeQualityPolicy(embeddedSemanticOptions(), own.root)).rejects.toThrow(
+        reason,
+      );
+      expect(existsSync(join(own.root, "packages/alpha/dist/owner.js"))).toBe(false);
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses an actual declaration-only build that leaves the public runtime absent",
+    async () => {
+      const { existsSync } = await import("node:fs");
+      const own = await embeddedSemanticCliFixture("missing-runtime");
+      await expect(executeCodeQualityPolicy(embeddedSemanticOptions(), own.root)).rejects.toThrow(
+        "unpacked-export-target",
+      );
+      expect(existsSync(join(own.root, "packages/alpha/dist/owner.js"))).toBe(false);
+      expect(existsSync(join(own.root, "packages/alpha/dist/owner.d.ts"))).toBe(true);
+    },
+    195_000,
+  );
+});
+
+describe("direct semantic prerequisite refusals", () => {
+  it("reports empty obligations as incomplete without assigning qualification", async () => {
+    const own = await directSemanticQualifierFixture("healthy");
+    own.policy.responsibilities = [];
+    own.put("scripts/code-quality-policy.json", own.policy);
+    own.subject = await collectPolicySubject(own.root);
+    const report = await qualifyPolicyResponsibilities(own.subject, own.policy);
+    expect(report.assessments).toEqual([]);
+    expect(report.counts).toMatchObject({ qualified: 0, pending: 0 });
+    expect(report.execution).toEqual({
+      status: "failed",
+      reason: "semantic-proof-structural-incomplete",
+    });
+  }, 195_000);
+
+  it.skipIf(process.platform === "win32")(
+    "refuses an unmapped declaration-only public runtime at subject collection",
+    async () => {
+      const { unlinkSync } = await import("node:fs");
+      const own = await directSemanticQualifierFixture("healthy");
+      const config = JSON.parse(
+        readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"),
+      );
+      config.compilerOptions.emitDeclarationOnly = true;
+      own.put("packages/alpha/tsconfig.json", config);
+      emitSymbolFixture(own.root);
+      unlinkSync(join(own.root, "packages/alpha/dist/owner.js"));
+      await expect(collectPolicySubject(own.root)).rejects.toThrow("unmapped-production-export");
+    },
+    195_000,
+  );
+});
+
+describe("explicit semantic CLI build and admission", () => {
+  it.skipIf(process.platform === "win32")(
+    "refuses an actual failed build before qualifying or replacing stale runtime",
+    async () => {
+      const own = await embeddedSemanticCliFixture("healthy");
+      own.put("scripts/semantic-fixture-build.mjs", "process.exit(7);\n");
+      await expect(executeCodeQualityPolicy(embeddedSemanticOptions(), own.root)).rejects.toThrow(
+        "semantic-proof-build-failed",
+      );
+      expect(readFileSync(join(own.root, "packages/alpha/dist/owner.js"), "utf8")).toBe(
+        "export const stale = true;\n",
+      );
+    },
+    195_000,
+  );
+});

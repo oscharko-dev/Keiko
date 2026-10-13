@@ -142,7 +142,7 @@ function validResponsibilityConsumer(record) {
     : validConsumerSelector(record.consumer);
 }
 
-function validResponsibility(record) {
+function responsibilityKeys(record) {
   const keys = [
     "id",
     "owner",
@@ -154,19 +154,55 @@ function validResponsibility(record) {
     "consumer",
     "proofs",
   ];
+  if (record !== null && typeof record === "object" && Object.hasOwn(record, "proofAssertions"))
+    keys.push("proofAssertions");
+  return keys;
+}
+
+function validResponsibilityIdentity(record) {
   return (
-    exactKeys(record, keys) &&
     boundedText(record.id, 128) &&
     boundedText(record.owner, 256) &&
     ["validator", "structural-redactor", "diagnostic-checker", "public-parser"].includes(
       record.kind,
     ) &&
     validResponsibilityRules(record.rules) &&
-    validPublicParserRules(record) &&
+    validPublicParserRules(record)
+  );
+}
+
+function validResponsibilitySelectors(record) {
+  return (
     validSelector(record.input, true) &&
     [record.transform, record.output].every((selector) => validSelector(selector)) &&
-    validResponsibilityConsumer(record) &&
-    validProofs(record.proofs)
+    validResponsibilityConsumer(record)
+  );
+}
+
+function validResponsibility(record) {
+  return (
+    exactKeys(record, responsibilityKeys(record)) &&
+    validResponsibilityIdentity(record) &&
+    validResponsibilitySelectors(record) &&
+    validProofs(record.proofs) &&
+    (!Object.hasOwn(record, "proofAssertions") || validProofAssertions(record))
+  );
+}
+
+function validProofAssertions(record) {
+  const assertions = record.proofAssertions;
+  return (
+    Array.isArray(assertions) &&
+    assertions.length > 0 &&
+    assertions.length <= 16 &&
+    assertions.every(
+      (entry) =>
+        exactKeys(entry, ["path", "testName"]) &&
+        record.proofs.includes(entry.path) &&
+        boundedText(entry.testName, 1024),
+    ) &&
+    new Set(assertions.map((entry) => JSON.stringify([entry.path, entry.testName]))).size ===
+      assertions.length
   );
 }
 
@@ -204,6 +240,12 @@ function canonicalIdentity(value) {
   ]);
 }
 
+function retainsProofAssertion(record, proof) {
+  return record.proofAssertions?.some(
+    (entry) => entry.path === proof.path && entry.testName === proof.testName,
+  );
+}
+
 function responsibilityShrank(policy, previous) {
   return previous.some((baseline) =>
     (baseline.responsibilities ?? []).some((record) => {
@@ -215,7 +257,8 @@ function responsibilityShrank(policy, previous) {
           (key) => canonicalIdentity(current[key]) !== canonicalIdentity(record[key]),
         ) ||
         record.rules.some((rule) => !current.rules.includes(rule)) ||
-        record.proofs.some((proof) => !current.proofs.includes(proof))
+        record.proofs.some((proof) => !current.proofs.includes(proof)) ||
+        (record.proofAssertions ?? []).some((proof) => !retainsProofAssertion(current, proof))
       );
     }),
   );

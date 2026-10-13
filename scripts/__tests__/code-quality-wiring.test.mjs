@@ -362,3 +362,26 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(1);
   });
 });
+
+describe("explicit responsibility qualification arguments", () => {
+  it("keeps default static options and admits only the explicit switch", async () => {
+    const { parsePolicyArguments } = await import("../check-code-quality-policy.mjs");
+    expect(parsePolicyArguments([], false)).toEqual({
+      mode: "enforce",
+      scope: "repository",
+      json: false,
+    });
+    expect(parsePolicyArguments(["--qualify-responsibilities", "--json"], false)).toEqual({
+      mode: "enforce",
+      scope: "repository",
+      json: true,
+      qualifyResponsibilities: true,
+    });
+    expect(() =>
+      parsePolicyArguments(["--qualify-responsibilities", "--qualify-responsibilities"], false),
+    ).toThrow("invalid-arguments");
+    expect(() =>
+      parsePolicyArguments(["--mode", "census", "--qualify-responsibilities"], false),
+    ).toThrow("invalid-mode");
+  });
+});

@@ -189,6 +189,20 @@
       "proofs": [
         "packages/keiko-contracts/src/html-manual-job.test.ts",
         "packages/keiko-server/src/manual/manual-pod-routes.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-job.test.ts",
+          "testName": "shipped manual request responsibility output admits actual public create output and refuses a malformed origin"
+        },
+        {
+          "path": "packages/keiko-server/src/manual/manual-pod-routes.test.ts",
+          "testName": "manual responsibility checked route flow does not invoke either service on malformed create input"
+        },
+        {
+          "path": "packages/keiko-server/src/manual/manual-pod-routes.test.ts",
+          "testName": "manual responsibility checked route flow forwards normalized checked create fields and the exact service job"
+        }
       ]
     },
     {
@@ -221,6 +235,20 @@
       "proofs": [
         "packages/keiko-contracts/src/html-manual-job.test.ts",
         "packages/keiko-server/src/manual/manual-pod-routes.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-job.test.ts",
+          "testName": "shipped manual request responsibility output retains actual public refresh input and refuses a malformed identifier"
+        },
+        {
+          "path": "packages/keiko-server/src/manual/manual-pod-routes.test.ts",
+          "testName": "manual responsibility checked route flow does not invoke either service on malformed refresh input"
+        },
+        {
+          "path": "packages/keiko-server/src/manual/manual-pod-routes.test.ts",
+          "testName": "manual responsibility checked route flow forwards checked refresh fields and the exact service job"
+        }
       ]
     },
     {
@@ -252,7 +280,26 @@
       },
       "proofs": [
         "packages/keiko-contracts/src/html-manual-source.test.ts",
-        "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts"
+        "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts",
+        "tests/activity-log-scenarios/bff.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-source.test.ts",
+          "testName": "shipped manual source responsibility output binds actual public admitted scope into the same source and rejects a bad scope"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts",
+          "testName": "refreshHtmlManualPod reports an unchanged manual as unchanged and preserves the ready pod"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts",
+          "testName": "refreshHtmlManualPod throws when the persisted manual source fails re-validation"
+        },
+        {
+          "path": "tests/activity-log-scenarios/bff.test.ts",
+          "testName": "Activity Log scenario: bff reconstructs the actual manual owner refusal through default job diagnostics (persisted-source)"
+        }
       ]
     },
     {
@@ -287,6 +334,36 @@
         "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
         "packages/keiko-local-knowledge/src/manual-pod.test.ts",
         "tests/activity-log-scenarios/bff.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-source.test.ts",
+          "testName": "shipped manual source responsibility output binds actual public admitted scope into the same source and rejects a bad scope"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
+          "testName": "manual-source-metadata persistHtmlManualSourceMetadata / readHtmlManualSourceMetadata round-trips an http manual scope with a non-default port and a path prefix"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
+          "testName": "manual-source-metadata physical manual persistence boundary rejects selected invalid source facts before INSERT (schema)"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-pod.test.ts",
+          "testName": "createHtmlManualPod refuses a source mutated across the crawl await at the actual metadata writer"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-pod.test.ts",
+          "testName": "createHtmlManualPod crawls, parses, chunks, indexes, and represents an approved manual as a ready pod"
+        },
+        {
+          "path": "tests/activity-log-scenarios/bff.test.ts",
+          "testName": "Activity Log scenario: bff reconstructs the actual manual owner refusal through default job diagnostics (source-insert)"
+        },
+        {
+          "path": "tests/activity-log-scenarios/bff.test.ts",
+          "testName": "Activity Log scenario: bff does not emit a refusal diagnostic for an actual healthy manual create job"
+        }
       ]
     },
     {
@@ -321,6 +398,28 @@
         "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
         "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts",
         "tests/activity-log-scenarios/bff.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-refresh.test.ts",
+          "testName": "shipped manual summary responsibility output retains actual public summary members and refuses a malformed nested count"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
+          "testName": "manual-source-metadata physical manual persistence boundary rejects invalid captured summary bytes before UPDATE (incomplete)"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts",
+          "testName": "manual-source-metadata captured writer facts binds healthy captured summary bytes without rereading the original state"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts",
+          "testName": "refreshHtmlManualPod persists the redacted change summary and crawl-run id for later diagnostics"
+        },
+        {
+          "path": "tests/activity-log-scenarios/bff.test.ts",
+          "testName": "Activity Log scenario: bff reconstructs the actual manual owner refusal through default job diagnostics (summary-update)"
+        }
       ]
     },
     {
@@ -350,7 +449,21 @@
         "exportName": "validateHtmlManualSource",
         "owner": "@oscharko-dev/keiko-contracts"
       },
-      "proofs": ["packages/keiko-contracts/src/html-manual-source.test.ts"]
+      "proofs": ["packages/keiko-contracts/src/html-manual-source.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-source.test.ts",
+          "testName": "shipped manual source responsibility output binds actual public admitted scope into the same source and rejects a bad scope"
+        },
+        {
+          "path": "packages/keiko-contracts/src/html-manual-source.test.ts",
+          "testName": "substantive manual source validation checks scope-local independently of error recording"
+        },
+        {
+          "path": "packages/keiko-contracts/src/html-manual-source.test.ts",
+          "testName": "shipped manual local scope type evidence retains actual local primitives and omitted entryPath"
+        }
+      ]
     },
     {
       "id": "manual-summary-projection",
@@ -383,6 +496,20 @@
         "packages/keiko-contracts/src/html-manual-refresh.test.ts",
         "packages/keiko-local-knowledge/src/knowledge-pods.test.ts",
         "tests/activity-log-scenarios/memory-knowledge.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-refresh.test.ts",
+          "testName": "shipped manual summary responsibility output retains actual public summary members and refuses a malformed nested count"
+        },
+        {
+          "path": "packages/keiko-local-knowledge/src/knowledge-pods.test.ts",
+          "testName": "examined manual refresh summary rejection evidence counts only examined refusals and stops at the first valid source"
+        },
+        {
+          "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
+          "testName": "Activity Log scenario: memory-knowledge retains rejected persisted manual summaries through the physical writer and complete incident analysis"
+        }
       ]
     },
     {
@@ -413,7 +540,17 @@
         "specifier": "@oscharko-dev/keiko-contracts/runtime/html-manual-source",
         "exportName": "countPublicManualLimitDiagnostics"
       },
-      "proofs": ["packages/keiko-contracts/src/html-manual-source.test.ts"]
+      "proofs": ["packages/keiko-contracts/src/html-manual-source.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/html-manual-source.test.ts",
+          "testName": "shipped public manual diagnostic consumer executes the public checker on healthy and malformed input"
+        },
+        {
+          "path": "packages/keiko-contracts/src/html-manual-source.test.ts",
+          "testName": "shipped manual diagnostic type evidence admits the actual diagnostic element without unknown or any erasure"
+        }
+      ]
     }
   ]
 }

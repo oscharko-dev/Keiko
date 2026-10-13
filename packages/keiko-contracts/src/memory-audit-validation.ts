@@ -6,9 +6,9 @@
 // storage (#214), so a leaked secret would otherwise bypass body-only redaction sweeps.
 // The shape check is `looksLikeSecretShape` from memory-validation.ts.
 
-import type { MemoryAuditRecord } from "./memory-operations.js";
+import type { MemoryAuditRecord, MemoryUpdateField } from "./memory-operations.js";
 import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
-import type { MemoryAuditActionKind } from "./memory-contracts.js";
+import type { MemoryAuditActionKind, MemoryScope, MemoryEdgeKind } from "./memory-contracts.js";
 import { MEMORY_AUDIT_ACTION_KINDS, MEMORY_EDGE_KINDS } from "./memory-contracts.js";
 import {
   looksLikeSecretShape,
@@ -44,118 +44,298 @@ const AUDIT_ACTION_KIND_FIELDS: ReadonlyMap<MemoryAuditActionKind, readonly stri
   ["retrieved", ["scopes", "matchedMemoryIds"]],
 ]);
 
-function validateAuditScopeArrayField(value: unknown, errors: string[]): void {
+// Explicit non-brand admission shapes; no fields are omitted except phantom IDs.
+type MemoryAuditActionFields =
+  | { readonly kind: "proposed"; readonly proposalId: string; readonly scope: MemoryScope }
+  | {
+      readonly kind: "accepted";
+      readonly proposalId: string;
+      readonly memoryId: string;
+      readonly scope: MemoryScope;
+    }
+  | { readonly kind: "rejected"; readonly proposalId: string; readonly reason: string }
+  | {
+      readonly kind: "updated";
+      readonly memoryId: string;
+      readonly fieldsChanged: readonly MemoryUpdateField[];
+    }
+  | {
+      readonly kind: "superseded";
+      readonly oldMemoryId: string;
+      readonly newMemoryId: string;
+      readonly edgeId: string;
+      readonly edgeKind: MemoryEdgeKind;
+    }
+  | { readonly kind: "pinned" | "unpinned" | "archived"; readonly memoryId: string }
+  | {
+      readonly kind: "forgotten";
+      readonly memoryId: string;
+      readonly scope: MemoryScope;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "retrieved";
+      readonly scopes: readonly MemoryScope[];
+      readonly matchedMemoryIds: readonly string[];
+    };
+type MemoryAuditRecordFields = Omit<MemoryAuditRecord, "id" | "action" | "initiatorReviewerId"> & {
+  readonly id: string;
+  readonly action: MemoryAuditActionFields;
+  readonly initiatorReviewerId?: string;
+};
+
+function validateAuditScopeArrayField(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(value) || value.length === 0) {
     errors.push("action.scopes must be a non-empty array");
-    return;
+    valid = false;
+    return valid;
   }
-  for (const scope of value) {
-    pushNestedErrors("action", validateMemoryScope(scope), errors);
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 1) {
+    errors.push("action.scopes must be a non-empty array");
+    return false;
   }
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) {
+      pushNestedErrors("action", validateMemoryScope(undefined), errors);
+      return false;
+    }
+    const scope: unknown = value[index];
+    valid = pushNestedErrors("action", validateMemoryScope(scope), errors) && valid;
+  }
+  return valid;
 }
 
-function validateAuditMatchedIds(value: unknown, errors: string[]): void {
+function validateAuditMatchedIds(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(value)) {
     errors.push("action.matchedMemoryIds must be an array");
-    return;
+    valid = false;
+    return valid;
   }
-  for (const id of value) {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) {
+    errors.push("action.matchedMemoryIds must be an array");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const id: unknown = value[index];
     if (!isNonEmptyTrimmedString(id)) {
       errors.push("action.matchedMemoryIds entry must be a non-empty string");
-      return;
+      valid = false;
+      return valid;
     }
   }
+  return valid;
 }
 
-function validateAuditFieldsChanged(value: unknown, errors: string[]): void {
+function validateAuditFieldsChanged(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!Array.isArray(value) || value.length === 0) {
     errors.push("action.fieldsChanged must be a non-empty array");
-    return;
+    valid = false;
+    return valid;
   }
-  for (const field of value) {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 1) {
+    errors.push("action.fieldsChanged must be a non-empty array");
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const field: unknown = value[index];
     if (!isMember(field, MEMORY_UPDATE_FIELDS)) {
       errors.push(`action.fieldsChanged entry must be one of ${MEMORY_UPDATE_FIELDS.join("|")}`);
-      return;
+      valid = false;
+      return valid;
     }
   }
+  return valid;
 }
 
-function validateAuditActionFieldShapes(action: Record<string, unknown>, errors: string[]): void {
+function validateAuditActionArrays(action: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if ("scope" in action) {
-    pushNestedErrors("action", validateMemoryScope(action.scope), errors);
+    valid = pushNestedErrors("action", validateMemoryScope(action.scope), errors) && valid;
   }
   if ("scopes" in action) {
-    validateAuditScopeArrayField(action.scopes, errors);
+    valid = validateAuditScopeArrayField(action.scopes, errors) && valid;
   }
   if ("matchedMemoryIds" in action) {
-    validateAuditMatchedIds(action.matchedMemoryIds, errors);
+    valid = validateAuditMatchedIds(action.matchedMemoryIds, errors) && valid;
   }
   if ("fieldsChanged" in action) {
-    validateAuditFieldsChanged(action.fieldsChanged, errors);
+    valid = validateAuditFieldsChanged(action.fieldsChanged, errors) && valid;
   }
-  validateOptionalAuditIdField("action.proposalId", action.proposalId, errors);
-  validateOptionalAuditIdField("action.memoryId", action.memoryId, errors);
-  validateOptionalAuditIdField("action.edgeId", action.edgeId, errors);
-  validateOptionalAuditIdField("action.oldMemoryId", action.oldMemoryId, errors);
-  validateOptionalAuditIdField("action.newMemoryId", action.newMemoryId, errors);
+  return valid;
+}
+
+function validateAuditActionIds(
+  action: Record<string, unknown>,
+  required: ReadonlySet<string>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid =
+    validateOptionalAuditIdField(
+      "action.proposalId",
+      action.proposalId,
+      required.has("proposalId"),
+      errors,
+    ) && valid;
+  valid =
+    validateOptionalAuditIdField(
+      "action.memoryId",
+      action.memoryId,
+      required.has("memoryId"),
+      errors,
+    ) && valid;
+  valid =
+    validateOptionalAuditIdField("action.edgeId", action.edgeId, required.has("edgeId"), errors) &&
+    valid;
+  valid =
+    validateOptionalAuditIdField(
+      "action.oldMemoryId",
+      action.oldMemoryId,
+      required.has("oldMemoryId"),
+      errors,
+    ) && valid;
+  valid =
+    validateOptionalAuditIdField(
+      "action.newMemoryId",
+      action.newMemoryId,
+      required.has("newMemoryId"),
+      errors,
+    ) && valid;
+  return valid;
+}
+
+function validateAuditActionVocabulary(action: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if ("edgeKind" in action && !isMember(action.edgeKind, MEMORY_EDGE_KINDS)) {
     errors.push(`action.edgeKind must be one of ${MEMORY_EDGE_KINDS.join("|")}`);
+    valid = false;
   }
   if ("reason" in action && !isSafeText(action.reason, MEMORY_REASON_MAX_CHARS)) {
     errors.push("action.reason must be a bounded control-free non-empty string");
+    valid = false;
   }
+  return valid;
 }
 
-function validateOptionalAuditIdField(field: string, value: unknown, errors: string[]): void {
-  if (value === undefined) {
-    return;
-  }
-  validateMemoryIdString(field, value, errors);
+function validateAuditActionFieldShapes(
+  action: Record<string, unknown>,
+  required: ReadonlySet<string>,
+  errors: string[],
+): boolean {
+  let valid = true;
+  valid = validateAuditActionArrays(action, errors) && valid;
+  valid = validateAuditActionIds(action, required, errors) && valid;
+  valid = validateAuditActionVocabulary(action, errors) && valid;
+  return valid;
 }
 
-function validateAuditActionKindShape(action: Record<string, unknown>, errors: string[]): void {
+function validateOptionalAuditIdField(
+  field: string,
+  value: unknown,
+  required: boolean,
+  errors: string[],
+): boolean {
+  let valid = true;
+  if (value === undefined && !required) {
+    return valid;
+  }
+  valid = validateMemoryIdString(field, value, errors) && valid;
+  return valid;
+}
+
+function validateAuditActionKindShape(action: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isMember(action.kind, MEMORY_AUDIT_ACTION_KINDS)) {
     errors.push(`action.kind must be one of ${MEMORY_AUDIT_ACTION_KINDS.join("|")}`);
-    return;
+    valid = false;
+    return valid;
   }
   const expected = AUDIT_ACTION_KIND_FIELDS.get(action.kind);
   if (expected === undefined) {
     errors.push(`action.kind ${action.kind} is missing field expectations`);
-    return;
+    valid = false;
+    return valid;
   }
+  const presentRequired = new Set<string>();
   for (const field of expected) {
     if (!(field in action)) {
       errors.push(`action.${field} is required for kind=${action.kind}`);
+      valid = false;
+    } else {
+      presentRequired.add(field);
     }
   }
-  validateAuditActionFieldShapes(action, errors);
+  valid = validateAuditActionFieldShapes(action, presentRequired, errors) && valid;
+  return valid;
 }
 
-function validateAuditRecordCore(input: Record<string, unknown>, errors: string[]): void {
-  validateSchemaVersionLiteral(input, errors);
-  validateMemoryIdString("auditRecord.id", input.id, errors);
+function validateAuditRecordTextAndTime(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  if (!isFiniteNonNegativeNumber(input.occurredAt)) {
+    errors.push("auditRecord.occurredAt must be a finite non-negative number");
+    valid = false;
+  }
+  if (!isSafeText(input.summary, MEMORY_SUMMARY_MAX_CHARS)) {
+    errors.push("auditRecord.summary must be a bounded control-free non-empty string");
+    valid = false;
+  } else if (looksLikeSecretShape(input.summary)) {
+    errors.push("auditRecord.summary must not carry credential-shaped content");
+    valid = false;
+  }
+  return valid;
+}
+
+function validateAuditRecordCore(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = validateSchemaVersionLiteral(input, errors) && valid;
+  valid = validateMemoryIdString("auditRecord.id", input.id, errors) && valid;
   if (!isMember(input.actionKind, MEMORY_AUDIT_ACTION_KINDS)) {
     errors.push(`auditRecord.actionKind must be one of ${MEMORY_AUDIT_ACTION_KINDS.join("|")}`);
+    valid = false;
   }
   if (!isMember(input.initiatorSurface, MEMORY_AUDIT_INITIATOR_SURFACES)) {
     errors.push(
       `auditRecord.initiatorSurface must be one of ${MEMORY_AUDIT_INITIATOR_SURFACES.join("|")}`,
     );
+    valid = false;
   }
   if (
     input.initiatorReviewerId !== undefined &&
     !isNonEmptyTrimmedString(input.initiatorReviewerId)
   ) {
     errors.push("auditRecord.initiatorReviewerId must be a non-empty string when set");
+    valid = false;
   }
-  if (!isFiniteNonNegativeNumber(input.occurredAt)) {
-    errors.push("auditRecord.occurredAt must be a finite non-negative number");
+  valid = validateAuditRecordTextAndTime(input, errors) && valid;
+  return valid;
+}
+
+function admitMemoryAuditRecord(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & MemoryAuditRecordFields {
+  let valid = true;
+  valid = validateAuditRecordCore(input, errors) && valid;
+  if (!isRecord(input.action)) {
+    errors.push("auditRecord.action must be an object");
+    valid = false;
+  } else {
+    if (
+      isMember(input.actionKind, MEMORY_AUDIT_ACTION_KINDS) &&
+      input.action.kind !== input.actionKind
+    ) {
+      errors.push("auditRecord.action.kind must match auditRecord.actionKind");
+      valid = false;
+    }
+    valid = validateAuditActionKindShape(input.action, errors) && valid;
   }
-  if (!isSafeText(input.summary, MEMORY_SUMMARY_MAX_CHARS)) {
-    errors.push("auditRecord.summary must be a bounded control-free non-empty string");
-  } else if (looksLikeSecretShape(input.summary)) {
-    errors.push("auditRecord.summary must not carry credential-shaped content");
-  }
+  return valid;
 }
 
 export function validateMemoryAuditRecord(input: unknown): MemoryValidation<MemoryAuditRecord> {
@@ -163,20 +343,8 @@ export function validateMemoryAuditRecord(input: unknown): MemoryValidation<Memo
     return { ok: false, errors: ["auditRecord must be an object"] };
   }
   const errors: string[] = [];
-  validateAuditRecordCore(input, errors);
-  if (!isRecord(input.action)) {
-    errors.push("auditRecord.action must be an object");
-  } else {
-    if (
-      isMember(input.actionKind, MEMORY_AUDIT_ACTION_KINDS) &&
-      input.action.kind !== input.actionKind
-    ) {
-      errors.push("auditRecord.action.kind must match auditRecord.actionKind");
-    }
-    validateAuditActionKindShape(input.action, errors);
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as MemoryAuditRecord };
+  if (!admitMemoryAuditRecord(input, errors)) return { ok: false, errors };
+  const fields: MemoryAuditRecordFields = input;
+  // Only phantom ID brands remain; every non-brand field was concretely admitted above.
+  return { ok: true, value: fields as MemoryAuditRecord };
 }

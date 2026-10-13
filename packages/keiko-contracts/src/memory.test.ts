@@ -1908,3 +1908,169 @@ it.each(["push", "every"])(
     expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: "" });
   },
 );
+
+// Original-first obligations for the remaining DTO chains. Both actual source and built
+// public calls must reach their healthy controls before a refusal is called a regression red.
+describe("remaining memory DTO physical admission (#3918)", () => {
+  it.each(["source", "public"])("retains %s healthy envelope references", (surface) => {
+    const proposal = happyProposal();
+    const auditRecord = happyAuditRecord();
+    const retrieval = { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()] };
+    const proposalResult =
+      surface === "source"
+        ? validateMemoryProposal(proposal)
+        : publicMemory.validateMemoryProposal(proposal);
+    const auditResult =
+      surface === "source"
+        ? validateMemoryAuditRecord(auditRecord)
+        : publicMemory.validateMemoryAuditRecord(auditRecord);
+    const retrievalResult =
+      surface === "source"
+        ? validateMemoryRetrievalRequest(retrieval)
+        : publicMemory.validateMemoryRetrievalRequest(retrieval);
+    expect(proposalResult.ok).toBe(true);
+    if (proposalResult.ok) expect(proposalResult.value).toBe(proposal);
+    expect(auditResult.ok).toBe(true);
+    if (auditResult.ok) expect(auditResult.value).toBe(auditRecord);
+    expect(retrievalResult.ok).toBe(true);
+    if (retrievalResult.ok) expect(retrievalResult.value).toBe(retrieval);
+  });
+
+  it.each(["source", "public"])("rejects %s own undefined required audit proposalId", (surface) => {
+    const input = {
+      ...happyAuditRecord(),
+      action: {
+        kind: "accepted",
+        proposalId: undefined,
+        memoryId: "mem-1",
+        scope: happyScopeUser(),
+      },
+    };
+    const result =
+      surface === "source"
+        ? validateMemoryAuditRecord(input)
+        : publicMemory.validateMemoryAuditRecord(input);
+    expect(result).toEqual({ ok: false, errors: ["action.proposalId must be a non-empty string"] });
+  });
+
+  it.each(["source", "public"])("rejects %s own undefined required audit memoryId", (surface) => {
+    const input = {
+      ...happyAuditRecord(),
+      action: {
+        kind: "accepted",
+        proposalId: "prop-1",
+        memoryId: undefined,
+        scope: happyScopeUser(),
+      },
+    };
+    const result =
+      surface === "source"
+        ? validateMemoryAuditRecord(input)
+        : publicMemory.validateMemoryAuditRecord(input);
+    expect(result).toEqual({ ok: false, errors: ["action.memoryId must be a non-empty string"] });
+  });
+
+  it.each(["source", "public"])(
+    "refuses %s malformed physical retrieval scope hidden by iterator",
+    (surface) => {
+      const scopes: unknown[] = [{}];
+      Object.defineProperty(scopes, Symbol.iterator, {
+        value: function* (): Generator {
+          yield happyScopeUser();
+        },
+      });
+      const input = { schemaVersion: "1", requestedAt: 0, scopes };
+      const result =
+        surface === "source"
+          ? validateMemoryRetrievalRequest(input)
+          : publicMemory.validateMemoryRetrievalRequest(input);
+      expect(result.ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses %s malformed physical retrieved audit scope hidden by iterator",
+    (surface) => {
+      const scopes: unknown[] = [{}];
+      Object.defineProperty(scopes, Symbol.iterator, {
+        value: function* (): Generator {
+          yield happyScopeUser();
+        },
+      });
+      const input = {
+        ...happyAuditRecord(),
+        actionKind: "retrieved",
+        action: { kind: "retrieved", scopes, matchedMemoryIds: ["mem-1"] },
+      };
+      const result =
+        surface === "source"
+          ? validateMemoryAuditRecord(input)
+          : publicMemory.validateMemoryAuditRecord(input);
+      expect(result.ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])("refuses %s physical type filter hidden by iterator", (surface) => {
+    const typeFilter = ["not-a-memory-type"];
+    Object.defineProperty(typeFilter, Symbol.iterator, {
+      value: function* (): Generator {
+        yield "preference";
+      },
+    });
+    const input = { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()], typeFilter };
+    const result =
+      surface === "source"
+        ? validateMemoryRetrievalRequest(input)
+        : publicMemory.validateMemoryRetrievalRequest(input);
+    expect(result).toEqual({
+      ok: false,
+      errors: [`retrieval.typeFilter entry must be one of ${MEMORY_TYPES.join("|")}`],
+    });
+  });
+
+  it.each(["source", "public"])(
+    "refuses %s physical numeric tag hidden by every and iterator",
+    (surface) => {
+      const tags: unknown[] = [5];
+      Object.defineProperty(tags, "every", {
+        value(): boolean {
+          return true;
+        },
+      });
+      Object.defineProperty(tags, Symbol.iterator, {
+        value: function* (): Generator {
+          yield "healthy";
+        },
+      });
+      const input = { ...happyProposal(), tags };
+      const result =
+        surface === "source"
+          ? validateMemoryProposal(input)
+          : publicMemory.validateMemoryProposal(input);
+      expect(result).toEqual({ ok: false, errors: ["proposal.tags must be a string array"] });
+    },
+  );
+});
+
+it.each(["source", "public"])(
+  "preserves %s omitted and own-undefined proposal options",
+  (surface) => {
+    const omitted = happyProposal();
+    const explicit = {
+      ...happyProposal(),
+      payload: undefined,
+      retentionHint: undefined,
+      captureReason: undefined,
+    };
+    const validate =
+      surface === "source" ? validateMemoryProposal : publicMemory.validateMemoryProposal;
+    const first = validate(omitted);
+    const second = validate(explicit);
+    expect(first.ok).toBe(true);
+    if (first.ok) expect(first.value).toBe(omitted);
+    expect(second.ok).toBe(true);
+    if (second.ok) expect(second.value).toBe(explicit);
+    expect(Object.hasOwn(omitted, "captureReason")).toBe(false);
+    expect(Object.hasOwn(explicit, "captureReason")).toBe(true);
+  },
+);

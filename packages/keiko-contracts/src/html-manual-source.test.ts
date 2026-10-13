@@ -25,7 +25,11 @@ import {
   type HtmlManualSource,
 } from "./html-manual-source.js";
 
-import { validateHtmlManualScopeLimits as publicManualLimitDiagnostics } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import {
+  validateHtmlManualScopeLimits as publicManualLimitDiagnostics,
+  validateHtmlManualCrawlScope as responsibilityPublicScope,
+  validateHtmlManualSource as responsibilityPublicSource,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 
 export function countPublicManualLimitDiagnostics(input: unknown): number {
   const diagnostics = publicManualLimitDiagnostics(input);
@@ -464,5 +468,62 @@ describe("manual source preservation", () => {
       expect(result.value.entryPath).toBeUndefined();
     }
     expect(JSON.stringify(input)).toBe(before);
+  });
+});
+
+describe("shipped manual source responsibility output", () => {
+  it("binds actual public admitted scope into the same source and rejects a bad scope", () => {
+    const input = sourceFixture();
+    const scope = responsibilityPublicScope(input.scope);
+    if (!scope.ok) throw new TypeError("healthy public scope refused");
+    expect(scope.value).toBe(input.scope);
+    const kind: ResponsibilityValue<
+      typeof scope.value.kind,
+      "html-manual-local" | "html-manual-http"
+    > = scope.value.kind;
+    expect(kind).toBe("html-manual-http");
+    if (scope.value.kind !== "html-manual-http")
+      throw new TypeError("healthy http scope changed kind");
+    const origin: ResponsibilityValue<typeof scope.value.origin, string> = scope.value.origin;
+    const prefix: ResponsibilityValue<typeof scope.value.pathPrefix, string | null> =
+      scope.value.pathPrefix;
+    expect(origin).toBe("https://docs.internal");
+    expect(prefix).toBe("/docs");
+    const result = responsibilityPublicSource(input);
+    if (!result.ok) throw new TypeError("healthy public source refused");
+    expect(result.value).toBe(input);
+    expect(result.value.scope).toBe(scope.value);
+    expect(result.value.limits).toBe(input.limits);
+    expect(result.value.sourceFingerprint).toBe("fp-abc123");
+    expect(responsibilityPublicScope(httpScope({ origin: "ftp://invalid" })).ok).toBe(false);
+    expect(
+      responsibilityPublicSource({ ...input, scope: httpScope({ origin: "ftp://invalid" }) }).ok,
+    ).toBe(false);
+  });
+});
+
+type ResponsibilityValue<T, Expected> = 0 extends 1 & T ? never : Expected;
+
+describe("shipped manual diagnostic type evidence", () => {
+  it("admits the actual diagnostic element without unknown or any erasure", () => {
+    const result = publicManualLimitDiagnostics(null);
+    const diagnostic: ResponsibilityValue<(typeof result)[number], string> = result[0] ?? "missing";
+    expect(diagnostic).toBe("limits must be an object");
+  });
+});
+
+describe("shipped manual local scope type evidence", () => {
+  it("retains actual local primitives and omitted entryPath", () => {
+    const input = { kind: "html-manual-local", rootPath: "docs" };
+    const result = responsibilityPublicScope(input);
+    if (!result.ok || result.value.kind !== "html-manual-local")
+      throw new TypeError("healthy local scope refused");
+    const root: ResponsibilityValue<typeof result.value.rootPath, string> = result.value.rootPath;
+    const entry: ResponsibilityValue<typeof result.value.entryPath, string | undefined> =
+      result.value.entryPath;
+    expect(root).toBe("docs");
+    expect(entry).toBeUndefined();
+    expect(result.value).toBe(input);
+    expect(Object.hasOwn(result.value, "entryPath")).toBe(false);
   });
 });

@@ -157,7 +157,7 @@ summary UPDATE, and the public limit diagnostic checker. Each selects only
 `anti-slop/no-unknown-parameters` for its observed canonical unknown input parameter 0. Input,
 transform and output refer to that same validator; the consumer has its separate canonical owner.
 No new rule scope is activated. Other raw-helper, dictionary, return or body slots are not granted
-by these records. Proof paths bind owning sources and remain unexecuted in the CLI.
+by these records. Proof paths bind owning sources. Default CLI assessment leaves them unexecuted; an explicit qualification phase can execute the declared exact assertions.
 
 Responsibility assessment is global on every CLI invocation, against the complete inventory and
 all registered records. A local `--scope` still selects only Native parser input and raw diagnostic
@@ -182,9 +182,7 @@ or its consumer. Structural redaction truthfully returns unknown and preserves s
 not establish domain validity or persistence safety.
 
 The intermediate evaluator reports structural `ready`, `incomplete` or `invalid` separately from
-semantic `pending` or `rejected`. No runtime proof execution mechanism is authorized by this
-interface, so `qualified` remains zero. Even a present proof file and separately passing owning
-Vitest tests cannot qualify CLI semantics. The combined v2 `outcome` remains failed while any
+semantic `pending` or `rejected` by default, with `qualified` zero. A present proof file or separately passing old Vitest result does not qualify CLI semantics. Only the explicitly selected fresh execution phase below may change those semantic fields. The combined v2 `outcome` remains failed while any
 responsibility remains unqualified, or no semantic subjects have been assessed. Valid empty v2
 records request no adaptations: static enforcement can pass with exit 0 while combined qualification
 remains failed, with qualified and pending counts both zero. Empty records do not certify migration
@@ -308,11 +306,11 @@ producer must match the proof checker's source identity. This proves declaration
 binding, not arbitrary JavaScript semantics. Ordinary owning Vitest tests execute the shipped
 public runtime with healthy and malformed controls separately.
 
-CLI proof facts remain `executed: false`, semantic `qualified` remains zero, and combined
+Default static CLI proof facts remain `executed: false`, semantic `qualified` remains zero, and combined
 qualification stays incomplete while proofs are pending. Separate static enforcement and
 actual owning tests/current CI/independent audits retain their existing meanings. Production
 policy version 1, activation inventory, legacy selectors and historical obligations are
-unchanged. There is no new proof runner, pre-PR wrapper or source-hash trust certificate.
+unchanged. The optional current-subject phase below reuses this evaluator; there is no pre-PR wrapper or source-hash trust certificate.
 
 ### Closed public parser proof
 
@@ -333,8 +331,22 @@ recursive named outputs and nested unknown fields are not recursively certified 
 this deliberately shallow participation check leaves semantics pending.
 
 All body/domain findings remain enforced. Exact raw-origin parameter/helper slots are reused without
-new output exemptions. CLI proofs still report `executed: false`, qualified remains zero and combined
+new output exemptions. Default static CLI proofs still report `executed: false`, qualified remains zero and combined
 qualification remains failed. Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require
-distinct runtime and typed failures. There is no new execution runner, receipt or semantic cache.
+distinct runtime and typed failures. The optional current-subject phase below does not import receipts or use a semantic cache.
+
+### Explicit current-subject responsibility qualification
+
+`npm run check:code-quality-policy -- --qualify-responsibilities --json` selects an optional phase; default static invocations and the existing enforcing owner do not execute business proof suites or change their180000ms/195000ms limits. Qualification is enforce-only. V1, empty records and missing registered exact selectors fail closed when selected. No active rule scope or existing responsibility identity is changed.
+
+Each v2 responsibility may add closed `proofAssertions` entries containing only an already declared proof `path` and exact Vitest `testName` (fullName including describe ancestors). Duplicates, foreign paths, missing names and unknown command/authorization fields refuse. Existing selector history is monotonic: removal or rebinding fails. Shared actual assertions may support multiple records but execute once in the single whole ten-owner Vitest invocation for the current cohort.
+
+The selected phase builds packages through the canonical wrapper, captures the current subject and real installed tools, retains the existing evaluator/resolver and all currentness checks across await, and binds actual producer JS/declaration outputs. Actual proof-context compilation checks the owning public typed consumers. Then genuine installed npm/Vitest runs the declared existing suites once. Every exact selected assertion must occur exactly once with passed status; missing/skipped/todo/duplicate/failed assertions and absent proof files never qualify. Whole-suite exit0 or imported/cached results alone are insufficient. Actual proof facts change only after current tool/source/runtime/declaration/policy/membership checks pass again.
+
+The same-library child helper uses the existing180000ms/SIGKILL/32MiB owner bounds and POSIX detached group. Timeout/output overflow kills the owned group and destroys its owned pipe readers before awaiting actual direct close and observing group absence; the failure remains failed. Unsupported/incomplete drain fails closed; no Windows taskkill or new dependency is introduced. This does not promise containment of a deliberately escaped descendant. Default static platform support is unchanged. Structured process/report failures remain body-free and explicit selected-phase failure exits nonzero even when static enforcement passed. No automatic retries, arbitrary policy commands, extra CLI-owner loop or performance qualification are supplied.
+
+Qualified records prove only their reviewed exact runtime/consumer assertions on this assessed subject. Injected route services prove admission/checked forwarding, actual SQLite tests prove physical refusal, and registered physical writer/analyzer scenarios supply their separate evidence. Declaration/body counterfactual controls and independent review remain acceptance obligations; qualified current8 is not completion of the170-owner/domain migration. Ordinary local scope contracts do not create a mounted server local-manual feature. Optional workspace prototype hardening stays deferred.
+
+The actual JSON reporter file is fresh in an owner-private temporary directory and is admitted only after the child closes. The report and captured pipe bytes together must fit the existing32MiB bound. This is post-close report admission, not an instantaneous disk quota. Successful phase output carries actual direct-close/group-absence facts; no arbitrary report body is printed or attached. Installed tool entrypoints and their package/lock identities are checked before and after; this does not attest every transitive npm/Vitest implementation file.

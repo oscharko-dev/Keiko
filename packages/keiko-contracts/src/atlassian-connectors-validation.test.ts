@@ -1292,3 +1292,263 @@ describe("activity live-result fields (Issue #2248 D6 extension)", () => {
     ).toContain("activity.resultIssueKeys must be a bounded array of identifier tokens");
   });
 });
+
+describe("remaining Atlassian DTO physical admission (#3918)", () => {
+  it.each(["source", "public"])("retains %s healthy original DTO references", async (surface) => {
+    const shipped =
+      await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+    const input = descriptor();
+    const result =
+      surface === "source"
+        ? validateAtlassianConnectorDescriptor(input)
+        : shipped.validateAtlassianConnectorDescriptor(input);
+    expect(expectOk(result)).toBe(input);
+    const healthy = liveResult();
+    const live =
+      surface === "source"
+        ? validateJiraLiveSearchResult(healthy)
+        : shipped.validateJiraLiveSearchResult(healthy);
+    expect(expectOk(live)).toBe(healthy);
+    const scope = confluenceScope();
+    const scoped =
+      surface === "source"
+        ? validateAtlassianSyncScope(scope)
+        : shipped.validateAtlassianSyncScope(scope);
+    expect(expectOk(scoped)).toBe(scope);
+    const partial = job("partial");
+    const terminal =
+      surface === "source"
+        ? validateAtlassianSyncJobState(partial)
+        : shipped.validateAtlassianSyncJobState(partial);
+    expect(expectOk(terminal)).toBe(partial);
+    const attempt = activity({
+      actionType: "search-issues-live",
+      actionClass: "connector-access",
+      provider: "jira",
+      resultCount: 1,
+      resultIssueKeys: ["PROJ-1"],
+    });
+    const attempted =
+      surface === "source"
+        ? validateAtlassianConnectorActivityRecord(attempt)
+        : shipped.validateAtlassianConnectorActivityRecord(attempt);
+    expect(expectOk(attempted)).toBe(attempt);
+  });
+
+  it.each(["source", "public"])(
+    "refuses %s physical scope key hidden by iterator",
+    async (surface) => {
+      const shipped =
+        await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+      const spaceKeys = ["../bad"];
+      Object.defineProperty(spaceKeys, Symbol.iterator, {
+        value: function* (): Generator {
+          yield "ENG";
+        },
+      });
+      const input = confluenceScope({ spaceKeys });
+      const result =
+        surface === "source"
+          ? validateAtlassianSyncScope(input)
+          : shipped.validateAtlassianSyncScope(input);
+      expect(result).toEqual({ ok: false, errors: ["scope.spaceKeys entries must be valid keys"] });
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses %s physical live issue hidden by forEach",
+    async (surface) => {
+      const shipped =
+        await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+      const issues: unknown[] = [{}];
+      Object.defineProperty(issues, "forEach", {
+        value(): void {
+          return;
+        },
+      });
+      const input = liveResult({ issues });
+      const result =
+        surface === "source"
+          ? validateJiraLiveSearchResult(input)
+          : shipped.validateJiraLiveSearchResult(input);
+      expect(result).toEqual({
+        ok: false,
+        errors: ["liveResult.issues[0].key must be a bounded identifier token"],
+      });
+    },
+  );
+
+  it.each(["source", "public"])("refuses %s absent physical live issue", async (surface) => {
+    const shipped =
+      await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+    const input = liveResult({ issues: Array(1) });
+    const result =
+      surface === "source"
+        ? validateJiraLiveSearchResult(input)
+        : shipped.validateJiraLiveSearchResult(input);
+    expect(result).toEqual({ ok: false, errors: ["liveResult.issues[0] must be an object"] });
+  });
+
+  it.each(["source", "public"])(
+    "refuses %s physical activity issue key hidden by every",
+    async (surface) => {
+      const shipped =
+        await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+      const resultIssueKeys = ["../bad"];
+      Object.defineProperty(resultIssueKeys, "every", {
+        value(): boolean {
+          return true;
+        },
+      });
+      const input = activity({
+        actionType: "search-issues-live",
+        actionClass: "connector-access",
+        provider: "jira",
+        resultCount: 1,
+        resultIssueKeys,
+      });
+      const result =
+        surface === "source"
+          ? validateAtlassianConnectorActivityRecord(input)
+          : shipped.validateAtlassianConnectorActivityRecord(input);
+      expect(result).toEqual({
+        ok: false,
+        errors: ["activity.resultIssueKeys must be a bounded array of identifier tokens"],
+      });
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses %s physical failure reason hidden by iterator",
+    async (surface) => {
+      const shipped =
+        await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+      const { ATLASSIAN_SYNC_FAILURE_REASONS } = await import("./atlassian-connectors.js");
+      const failureReasons = ["not-a-sync-reason"];
+      Object.defineProperty(failureReasons, Symbol.iterator, {
+        value: function* (): Generator {
+          yield "rate-limited";
+        },
+      });
+      const input = job("partial", { failureReasons });
+      const result =
+        surface === "source"
+          ? validateAtlassianSyncJobState(input)
+          : shipped.validateAtlassianSyncJobState(input);
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          `syncJob.failureReasons entries must be one of ${ATLASSIAN_SYNC_FAILURE_REASONS.join("|")}`,
+        ],
+      });
+    },
+  );
+});
+
+it.each(["source", "public"])(
+  "refuses the %s captured second sync status without throwing",
+  async (surface) => {
+    const shipped =
+      await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+    const input = job("pending");
+    let reads = 0;
+    Object.defineProperty(input, "status", {
+      enumerable: true,
+      get(): unknown {
+        reads += 1;
+        return reads === 1 ? "pending" : "not-a-sync-status";
+      },
+    });
+    const validate =
+      surface === "source" ? validateAtlassianSyncJobState : shipped.validateAtlassianSyncJobState;
+    let result: ReturnType<typeof validate> | undefined;
+    expect(() => {
+      result = validate(input);
+    }).not.toThrow();
+    expect(result).toEqual({ ok: false, errors: ["syncJob.status is invalid"] });
+    expect(reads).toBe(2);
+  },
+);
+
+it.each(["source", "public"])(
+  "refuses the %s unadmitted mapped activity action",
+  async (surface) => {
+    const shipped =
+      await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+    const validate =
+      surface === "source"
+        ? validateAtlassianConnectorActivityRecord
+        : shipped.validateAtlassianConnectorActivityRecord;
+    const healthy = activity();
+    const control = validate(healthy);
+    expect(expectOk(control)).toBe(healthy);
+    const input = activity({ actionClass: undefined, provider: undefined });
+    let reads = 0;
+    Object.defineProperty(input, "actionType", {
+      enumerable: true,
+      get(): unknown {
+        reads += 1;
+        return reads === 1 ? "add-issue-comment" : "not-an-action";
+      },
+    });
+    expect(validate(input)).toEqual({
+      ok: false,
+      errors: [
+        "activity.actionClass must match the D4 table for the action type",
+        "activity.provider must match the D4 table for the action type",
+      ],
+    });
+    expect(reads).toBe(3);
+  },
+);
+
+it.each(["source", "public"])(
+  "refuses the %s unadmitted captured approval action",
+  async (surface) => {
+    const shipped =
+      await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation");
+    const { decideAtlassianConnectorAction, ATLASSIAN_CONNECTOR_ACTION_PROVIDER } =
+      await import("./atlassian-connectors.js");
+    const decision = decideAtlassianConnectorAction("create-issue", "governed-assist", [
+      "issue-tracker.write",
+    ]);
+    expect(decision.disposition).toBe("review-required");
+    const healthy = {
+      schemaVersion: "1",
+      approvalId: "approval-1",
+      connectorId: "conn-jira-prod",
+      actionType: decision.actionType,
+      actionClass: decision.actionClass,
+      provider: ATLASSIAN_CONNECTOR_ACTION_PROVIDER[decision.actionType],
+      requiredScope: decision.requiredScope,
+      risk: decision.risk,
+      reviewReason: decision.reviewReason,
+      correlationId: "corr-1",
+      requestedAt: 0,
+      expiresAt: 1,
+    };
+    const validate =
+      surface === "source"
+        ? validateAtlassianConnectorPendingApproval
+        : shipped.validateAtlassianConnectorPendingApproval;
+    const control = validate(healthy);
+    expect(expectOk(control)).toBe(healthy);
+    const input = {
+      ...healthy,
+      actionClass: undefined,
+      provider: undefined,
+      requiredScope: undefined,
+      risk: undefined,
+    };
+    let reads = 0;
+    Object.defineProperty(input, "actionType", {
+      enumerable: true,
+      get(): unknown {
+        reads += 1;
+        return reads === 1 ? "create-issue" : "not-an-action";
+      },
+    });
+    expect(validate(input)).toEqual({ ok: false, errors: ["approval.actionType is invalid"] });
+    expect(reads).toBe(2);
+  },
+);

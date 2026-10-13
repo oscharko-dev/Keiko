@@ -154,3 +154,16 @@ it("keeps primitive observation results independent of a fixture-owned diagnosti
   expect(validateOptionalReference("reference", "healthy", errors)).toBe(true);
   expect(errors).toEqual([]);
 });
+
+it("returns canonical ID facts independently of diagnostic accumulation", () => {
+  const errors: string[] = [];
+  Object.defineProperty(errors, "push", {
+    value(): number {
+      return 0;
+    },
+  });
+  expect(validateMemoryIdString("id", "mem-1", errors)).toBe(true);
+  expect(validateMemoryIdString("id", undefined, errors)).toBe(false);
+  expect(validateMemoryIdString("id", "../bad", errors)).toBe(false);
+  expect(errors).toEqual([]);
+});

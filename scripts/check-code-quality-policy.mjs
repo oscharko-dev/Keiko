@@ -14,8 +14,11 @@ import { assessPolicyDiagnostics, validatePolicy } from "./lib/code-quality-poli
 import {
   adaptResponsibilityDiagnostics,
   assessPolicyResponsibilities,
+  qualifyPolicyResponsibilities,
 } from "./lib/code-quality-responsibilities.mjs";
 import { runnerIdentity, runNativePolicy } from "./lib/code-quality-runner.mjs";
+
+import { buildResponsibilityProofPackages } from "./lib/code-quality-responsibility-proofs.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FAILURE_REASONS = new Set([
@@ -67,6 +70,18 @@ const FAILURE_REASONS = new Set([
   "source-argument-too-long",
   "subject-changed-during-scan",
   "incomplete-policy-history",
+  "semantic-proof-assertion-missing",
+  "semantic-proof-build-failed",
+  "semantic-proof-tool-unavailable",
+  "semantic-proof-runtime-unavailable",
+  "semantic-proof-report-invalid",
+  "semantic-proof-execution-failed",
+  "semantic-proof-timeout",
+  "semantic-proof-output-limit",
+  "semantic-proof-spawn-failed",
+  "semantic-proof-process-not-drained",
+  "semantic-proof-drain-unavailable",
+  "semantic-proof-subject-changed",
 ]);
 
 export function parsePolicyArguments(args, ci = process.env.CI === "true") {
@@ -77,14 +92,21 @@ export function parsePolicyArguments(args, ci = process.env.CI === "true") {
     if (supplied.has(key)) throw new TypeError("invalid-arguments");
     supplied.add(key);
     if (key === "--json") options.json = true;
+    else if (key === "--qualify-responsibilities") options.qualifyResponsibilities = true;
     else {
       applyPolicyOption(options, key, args[++index]);
     }
   }
+  validatePolicyOptions(options, ci);
+  return options;
+}
+
+function validatePolicyOptions(options, ci) {
   if (!["enforce", "census"].includes(options.mode)) throw new TypeError("invalid-mode");
+  if (options.qualifyResponsibilities === true && options.mode !== "enforce")
+    throw new TypeError("invalid-mode");
   if (ci && (options.scope !== "repository" || options.mode !== "enforce"))
     throw new TypeError("partial-ci-verdict");
-  return options;
 }
 
 function applyPolicyOption(options, key, value) {
@@ -99,6 +121,8 @@ export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
   const policy = JSON.parse(source);
   const errors = validatePolicy(policy, readPreviousPolicies(repositoryRoot));
   if (errors.length > 0) throw new TypeError(errors[0]);
+  if (options.qualifyResponsibilities === true)
+    await buildSemanticPolicyPackages(options, policy, repositoryRoot, source);
   const tools = runnerIdentity();
   const subject = await collectPolicySubject(repositoryRoot);
   const { inventory } = subject;
@@ -108,8 +132,13 @@ export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
   const scan = runNativePolicy(repositoryRoot, scope.files);
   const inventorySha256 = policyDigest(JSON.stringify(inventory));
   const rawAssessment = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
-  const responsibilities =
-    policy.version === 2 ? assessPolicyResponsibilities(subject, policy) : null;
+  let responsibilities = null;
+  if (policy.version === 2) {
+    responsibilities =
+      options.qualifyResponsibilities === true
+        ? await qualifyPolicyResponsibilities(subject, policy)
+        : assessPolicyResponsibilities(subject, policy);
+  }
   const assessed = responsibilities
     ? adaptResponsibilityDiagnostics(rawAssessment, responsibilities)
     : rawAssessment;
@@ -124,6 +153,31 @@ export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
     tools,
     configSha256: scan.configSha256,
     inventorySha256,
+    ...policyScanSummary(policy, inventory, scope, scan, assessed),
+    ...assessed,
+    inventory,
+    pack,
+    ...(responsibilities
+      ? { responsibilities, enforcementOutcome: enforcementOutcome(assessed, responsibilities) }
+      : {}),
+  };
+}
+
+async function buildSemanticPolicyPackages(options, policy, repositoryRoot, source) {
+  if (options.mode !== "enforce") throw new TypeError("invalid-mode");
+  if (
+    policy.version !== 2 ||
+    !policy.responsibilities.length ||
+    policy.responsibilities.some((record) => !record.proofAssertions?.length)
+  )
+    throw new TypeError("semantic-proof-assertion-missing");
+  const beforeBuild = policyDigest(JSON.stringify(await collectPolicyInventory(repositoryRoot)));
+  await buildResponsibilityProofPackages(repositoryRoot);
+  await assertPolicySubjectCurrent(repositoryRoot, source, beforeBuild);
+}
+
+function policyScanSummary(policy, inventory, scope, scan, assessed) {
+  return {
     counts: {
       expected: scope.files.length,
       visited: scan.visited,
@@ -136,12 +190,6 @@ export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
       ...rule,
       findings: scan.diagnostics.filter((entry) => entry.rule === rule.id).length,
     })),
-    ...assessed,
-    inventory,
-    pack,
-    ...(responsibilities
-      ? { responsibilities, enforcementOutcome: enforcementOutcome(assessed, responsibilities) }
-      : {}),
   };
 }
 
@@ -177,6 +225,7 @@ function reportVerdict(report) {
 }
 
 function policyExitCode(report) {
+  if (report.responsibilities?.execution && report.outcome !== "passed") return 1;
   if (report.mode === "census") return 0;
   return (report.enforcementOutcome ?? report.outcome) === "passed" ? 0 : 1;
 }
