@@ -374,3 +374,109 @@ describe("parseGitEditorBlameResponse", () => {
     expect(parseGitEditorBlameResponse(cyclic)).toMatchObject({ ok: false });
   });
 });
+
+import {
+  parseGitEditorDiffResponse as publicDiffResponse,
+  parseGitEditorBlameResponse as publicBlameResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+
+describe("G1 physical Git read collections", () => {
+  for (const [name, parseDiff, parseBlame] of [
+    ["source", parseGitEditorDiffResponse, parseGitEditorBlameResponse],
+    ["public", publicDiffResponse, publicBlameResponse],
+  ] as const) {
+    it(`${name} preserves healthy original diff and blame references`, () => {
+      const diff = diffResponse();
+      const blame = blameResponse();
+      const diffResult = parseDiff(diff);
+      const blameResult = parseBlame(blame);
+      expect(diffResult.ok).toBe(true);
+      expect(blameResult.ok).toBe(true);
+      if (!diffResult.ok || !blameResult.ok) throw new Error("healthy read fixture was refused");
+      expect(diffResult.value).toBe(diff);
+      expect(blameResult.value).toBe(blame);
+    });
+    it(`${name} preserves an inherited present line and its original array reference`, () => {
+      const lines = new Array<GitEditorDiffLine>(1);
+      Object.setPrototypeOf(lines, [diffLine()]);
+      const input = diffResponse({ files: [diffFile({ hunks: [diffHunk({ lines })] })] });
+      const result = parseDiff(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy inherited line was refused");
+      expect(result.value.files[0]?.hunks[0]?.lines).toBe(lines);
+    });
+    it(`${name} refuses an absent file`, () => {
+      expect(parseDiff(diffResponse({ files: new Array<unknown>(1) }))).toEqual({
+        ok: false,
+        errors: ["files contain an invalid entry"],
+      });
+    });
+    it(`${name} refuses an absent nested hunk`, () => {
+      expect(
+        parseDiff(diffResponse({ files: [diffFile({ hunks: new Array<GitEditorDiffHunk>(1) })] })),
+      ).toEqual({ ok: false, errors: ["files contain an invalid entry"] });
+    });
+    it(`${name} refuses an absent nested line`, () => {
+      expect(
+        parseDiff(
+          diffResponse({
+            files: [diffFile({ hunks: [diffHunk({ lines: new Array<GitEditorDiffLine>(1) })] })],
+          }),
+        ),
+      ).toEqual({ ok: false, errors: ["files contain an invalid entry"] });
+    });
+    it(`${name} refuses an absent blame line`, () => {
+      expect(parseBlame(blameResponse({ lines: new Array<unknown>(1) }))).toEqual({
+        ok: false,
+        errors: ["lines contain an invalid entry"],
+      });
+    });
+    it(`${name} refuses a physical malformed file even with overridden every`, () => {
+      const files = [{}];
+      Object.defineProperty(files, "every", { value: (): boolean => true });
+      expect(parseDiff(diffResponse({ files }))).toEqual({
+        ok: false,
+        errors: ["files contain an invalid entry"],
+      });
+    });
+  }
+});
+
+describe("G1 final Editor collection observation", () => {
+  for (const [name, parse] of [
+    ["source", parseGitEditorDiffResponse],
+    ["public", publicDiffResponse],
+  ] as const) {
+    it(`${name} preserves healthy changing final files observation and input reference`, () => {
+      const input = diffResponse();
+      if (typeof input !== "object" || input === null)
+        throw new TypeError("fixture is not an object");
+      const original = [diffFile()];
+      const later = [diffFile({ path: "src/later.ts" })];
+      let reads = 0;
+      Object.defineProperty(input, "files", {
+        enumerable: true,
+        get: (): unknown => (++reads === 4 ? later : original),
+      });
+      const result = parse(input);
+      expect(reads).toBe(6);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy changing files were refused");
+      expect(result.value).toBe(input);
+    });
+    it(`${name} refuses incomplete member at the final files observation`, () => {
+      const input = diffResponse();
+      if (typeof input !== "object" || input === null)
+        throw new TypeError("fixture is not an object");
+      const original = [diffFile()];
+      let reads = 0;
+      Object.defineProperty(input, "files", {
+        enumerable: true,
+        get: (): unknown => (++reads === 4 ? [{ layer: "staged" }] : original),
+      });
+      const result = parse(input);
+      expect(reads).toBe(6);
+      expect(result).toEqual({ ok: false, errors: ["files contain an invalid entry"] });
+    });
+  }
+});

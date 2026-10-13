@@ -60,6 +60,8 @@ export function isGitObjectId(value: unknown): value is string {
 }
 
 export const GIT_REPOSITORY_STATES = ["available", "unavailable", "unsafe", "error"] as const;
+const GIT_REPOSITORY_STATES_VALUES: readonly unknown[] = GIT_REPOSITORY_STATES;
+
 export type GitRepositoryState = (typeof GIT_REPOSITORY_STATES)[number];
 
 export const GIT_UNAVAILABLE_REASONS = [
@@ -125,7 +127,8 @@ export const GIT_STATUS_CODES: readonly GitStatusCode[] = [
 ] as const;
 
 function isGitStatusCode(value: unknown): value is GitStatusCode {
-  return typeof value === "string" && (GIT_STATUS_CODES as readonly string[]).includes(value);
+  const codes: readonly string[] = GIT_STATUS_CODES;
+  return typeof value === "string" && codes.includes(value);
 }
 
 export interface GitChangedFile {
@@ -320,7 +323,7 @@ export function validateGitRepositoryStatusResponse(input: unknown): GitReposito
   if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
   if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
+  if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
     reasons.push("state invalid");
   }
   validateWireEnvelopeOptionals(input, reasons);
@@ -399,7 +402,7 @@ export function validateGitRepositoryDiffResponse(input: unknown): GitRepository
   if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
   if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
+  if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
     reasons.push("state invalid");
   }
   validateDiffEnvelopeFields(input, reasons);

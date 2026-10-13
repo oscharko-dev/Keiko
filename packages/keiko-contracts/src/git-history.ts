@@ -40,6 +40,8 @@ export interface GitHistoryResponse {
   readonly truncated: boolean;
 }
 
+const GIT_REPOSITORY_STATES_VALUES: readonly unknown[] = GIT_REPOSITORY_STATES;
+
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
@@ -138,7 +140,7 @@ function validateHistoryIdentity(
 ): void {
   if (input.schemaVersion !== GIT_HISTORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
+  if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
     reasons.push("state invalid");
   }
 }

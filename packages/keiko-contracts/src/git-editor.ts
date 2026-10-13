@@ -142,6 +142,11 @@ export interface GitEditorParseFail {
 
 export type GitEditorParseResult<T> = GitEditorParseOk<T> | GitEditorParseFail;
 
+const GIT_EDITOR_DIFF_FILE_STATUSES_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_FILE_STATUSES;
+const GIT_EDITOR_DIFF_LAYERS_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_LAYERS;
+const GIT_EDITOR_DIFF_LINE_KINDS_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_LINE_KINDS;
+const GIT_EDITOR_DIFF_SCOPES_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_SCOPES;
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -175,24 +180,19 @@ function isWorkspacePath(value: unknown): value is string {
 }
 
 export function isGitEditorDiffScope(value: unknown): value is GitEditorDiffScope {
-  return typeof value === "string" && GIT_EDITOR_DIFF_SCOPES.includes(value as GitEditorDiffScope);
+  return typeof value === "string" && GIT_EDITOR_DIFF_SCOPES_VALUES.includes(value);
 }
 
 export function isGitEditorDiffLayer(value: unknown): value is GitEditorDiffLayer {
-  return typeof value === "string" && GIT_EDITOR_DIFF_LAYERS.includes(value as GitEditorDiffLayer);
+  return typeof value === "string" && GIT_EDITOR_DIFF_LAYERS_VALUES.includes(value);
 }
 
 export function isGitEditorDiffLineKind(value: unknown): value is GitEditorDiffLineKind {
-  return (
-    typeof value === "string" && GIT_EDITOR_DIFF_LINE_KINDS.includes(value as GitEditorDiffLineKind)
-  );
+  return typeof value === "string" && GIT_EDITOR_DIFF_LINE_KINDS_VALUES.includes(value);
 }
 
 export function isGitEditorDiffFileStatus(value: unknown): value is GitEditorDiffFileStatus {
-  return (
-    typeof value === "string" &&
-    GIT_EDITOR_DIFF_FILE_STATUSES.includes(value as GitEditorDiffFileStatus)
-  );
+  return typeof value === "string" && GIT_EDITOR_DIFF_FILE_STATUSES_VALUES.includes(value);
 }
 
 function hasValidLineCoordinates(value: Readonly<Record<string, unknown>>): boolean {
@@ -239,7 +239,7 @@ export function isGitEditorDiffHunk(value: unknown): value is GitEditorDiffHunk 
     hasValidHunkCoordinates(value) &&
     Array.isArray(value.lines) &&
     value.lines.length <= GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK &&
-    value.lines.every(isGitEditorDiffLine) &&
+    isDiffLineCollection(value.lines) &&
     typeof value.truncated === "boolean"
   );
 }
@@ -255,7 +255,7 @@ function hasValidDiffHunks(value: Readonly<Record<string, unknown>>): boolean {
   return (
     Array.isArray(value.hunks) &&
     value.hunks.length <= GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE &&
-    value.hunks.every(isGitEditorDiffHunk)
+    isDiffHunkCollection(value.hunks)
   );
 }
 
@@ -334,18 +334,86 @@ function parseSafely<T>(parser: () => GitEditorParseResult<T>): GitEditorParseRe
   }
 }
 
+function isDiffLineCollection(value: readonly unknown[]): value is readonly GitEditorDiffLine[] {
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isGitEditorDiffLine(value[index])) return false;
+  }
+  return true;
+}
+
+function isDiffHunkCollection(value: readonly unknown[]): value is readonly GitEditorDiffHunk[] {
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isGitEditorDiffHunk(value[index])) return false;
+  }
+  return true;
+}
+
+function isDiffFileCollection(value: readonly unknown[]): value is readonly GitEditorDiffFile[] {
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isGitEditorDiffFile(value[index])) return false;
+  }
+  return true;
+}
+
+function isBlameLineCollection(value: readonly unknown[]): value is readonly GitEditorBlameLine[] {
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isGitEditorBlameLine(value[index])) return false;
+  }
+  return true;
+}
+
+function validateResponseFileLayers(
+  input: Readonly<Record<string, unknown>>,
+  errors: string[],
+): boolean {
+  const files = input.files;
+  if (!Array.isArray(files))
+    return rejectEditorField(errors, "file layers must match the response scope");
+  const extent = files.length;
+  for (let index = 0; index < extent; index += 1) {
+    const file: unknown = files[index];
+    if (!(index in files) || !isGitEditorDiffFile(file))
+      return rejectEditorField(errors, "files contain an invalid entry");
+    if (file.layer !== (input.scope === "staged" ? "staged" : "worktree"))
+      return rejectEditorField(errors, "file layers must match the response scope");
+  }
+  return true;
+}
+
+function rejectEditorField(errors: string[], message: string): false {
+  errors.push(message);
+  return false;
+}
+
+function validateDiffRequestFields(
+  input: Readonly<Record<string, unknown>>,
+  errors: string[],
+): input is Readonly<Record<string, unknown>> & GitEditorDiffRequest {
+  let valid = true;
+  if (!hasOnlyKeys(input, ["schemaVersion", "scope", "path"]))
+    valid = rejectEditorField(errors, "request has unknown fields");
+  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION)
+    valid = rejectEditorField(errors, "schemaVersion invalid");
+  if (!isGitEditorDiffScope(input.scope))
+    valid = rejectEditorField(errors, "scope must be staged or unstaged");
+  if (input.path !== undefined && !isWorkspacePath(input.path)) {
+    valid = rejectEditorField(
+      errors,
+      "path must be a bounded workspace-relative path when present",
+    );
+  }
+  return valid;
+}
+
 function parseDiffRequestUnsafe(input: unknown): GitEditorParseResult<GitEditorDiffRequest> {
   if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
   const errors: string[] = [];
-  if (!hasOnlyKeys(input, ["schemaVersion", "scope", "path"]))
-    errors.push("request has unknown fields");
-  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION) errors.push("schemaVersion invalid");
-  if (!isGitEditorDiffScope(input.scope)) errors.push("scope must be staged or unstaged");
-  if (input.path !== undefined && !isWorkspacePath(input.path)) {
-    errors.push("path must be a bounded workspace-relative path when present");
-  }
-  return errors.length === 0
-    ? { ok: true, value: input as unknown as GitEditorDiffRequest }
+  return validateDiffRequestFields(input, errors)
+    ? { ok: true, value: input }
     : { ok: false, errors };
 }
 
@@ -358,7 +426,8 @@ export function parseGitEditorDiffRequest(
 function validateDiffResponseShape(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     !hasOnlyKeys(input, [
       "schemaVersion",
@@ -371,76 +440,90 @@ function validateDiffResponseShape(
       "maxFiles",
     ])
   ) {
-    errors.push("response has unknown fields");
+    valid = rejectEditorField(errors, "response has unknown fields");
   }
-  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION) errors.push("schemaVersion invalid");
-  if (!isGitEditorDiffScope(input.scope)) errors.push("scope must be staged or unstaged");
+  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION)
+    valid = rejectEditorField(errors, "schemaVersion invalid");
+  if (!isGitEditorDiffScope(input.scope))
+    valid = rejectEditorField(errors, "scope must be staged or unstaged");
+  return valid;
 }
 
 function validateDiffResponseFiles(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (!Array.isArray(input.files) || input.files.length > GIT_EDITOR_DIFF_MAX_FILES) {
-    errors.push(`files must be an array of at most ${String(GIT_EDITOR_DIFF_MAX_FILES)} entries`);
-  } else if (!input.files.every(isGitEditorDiffFile)) errors.push("files contain an invalid entry");
-  else if (
-    isGitEditorDiffScope(input.scope) &&
-    !input.files.every((file) => file.layer === (input.scope === "staged" ? "staged" : "worktree"))
-  ) {
-    errors.push("file layers must match the response scope");
+    valid = rejectEditorField(
+      errors,
+      `files must be an array of at most ${String(GIT_EDITOR_DIFF_MAX_FILES)} entries`,
+    );
+  } else if (!isDiffFileCollection(input.files))
+    valid = rejectEditorField(errors, "files contain an invalid entry");
+  else if (isGitEditorDiffScope(input.scope)) {
+    valid = validateResponseFileLayers(input, errors) && valid;
   }
+  return valid;
 }
 
 function validateDiffResponseTotals(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
-  if (typeof input.truncated !== "boolean") errors.push("truncated must be a boolean");
+): boolean {
+  let valid = true;
+  if (typeof input.truncated !== "boolean")
+    valid = rejectEditorField(errors, "truncated must be a boolean");
   if (!isIntegerAtLeast(input.totalFiles, 0))
-    errors.push("totalFiles must be a non-negative integer");
+    valid = rejectEditorField(errors, "totalFiles must be a non-negative integer");
   if (!isIntegerAtLeast(input.totalBytes, 0))
-    errors.push("totalBytes must be a non-negative integer");
-  if (input.maxBytes !== GIT_EDITOR_DIFF_MAX_BYTES) errors.push("maxBytes invalid");
-  if (input.maxFiles !== GIT_EDITOR_DIFF_MAX_FILES) errors.push("maxFiles invalid");
-  validateDiffResponseConsistency(input, errors);
+    valid = rejectEditorField(errors, "totalBytes must be a non-negative integer");
+  if (input.maxBytes !== GIT_EDITOR_DIFF_MAX_BYTES)
+    valid = rejectEditorField(errors, "maxBytes invalid");
+  if (input.maxFiles !== GIT_EDITOR_DIFF_MAX_FILES)
+    valid = rejectEditorField(errors, "maxFiles invalid");
+  valid = validateDiffResponseConsistency(input, errors) && valid;
+  return valid;
 }
 
 function validateDiffResponseConsistency(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     Array.isArray(input.files) &&
     isIntegerAtLeast(input.totalFiles, 0) &&
     input.totalFiles < input.files.length
   ) {
-    errors.push("totalFiles must not be smaller than files.length");
+    valid = rejectEditorField(errors, "totalFiles must not be smaller than files.length");
   }
   if (
     isIntegerAtLeast(input.totalBytes, 0) &&
     input.totalBytes > GIT_EDITOR_DIFF_MAX_BYTES &&
     input.truncated !== true
   ) {
-    errors.push("truncated must be true when totalBytes exceeds maxBytes");
+    valid = rejectEditorField(errors, "truncated must be true when totalBytes exceeds maxBytes");
   }
+  return valid;
 }
 
 function validateDiffResponseFields(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
-  validateDiffResponseShape(input, errors);
-  validateDiffResponseFiles(input, errors);
-  validateDiffResponseTotals(input, errors);
+): input is Readonly<Record<string, unknown>> & GitEditorDiffResponse {
+  let valid = true;
+  valid = validateDiffResponseShape(input, errors) && valid;
+  valid = validateDiffResponseFiles(input, errors) && valid;
+  valid = validateDiffResponseTotals(input, errors) && valid;
+  return valid;
 }
 
 function parseDiffResponseUnsafe(input: unknown): GitEditorParseResult<GitEditorDiffResponse> {
   if (!isRecord(input)) return { ok: false, errors: ["response must be an object"] };
   const errors: string[] = [];
-  validateDiffResponseFields(input, errors);
-  return errors.length === 0
-    ? { ok: true, value: input as unknown as GitEditorDiffResponse }
+  return validateDiffResponseFields(input, errors)
+    ? { ok: true, value: input }
     : { ok: false, errors };
 }
 
@@ -450,23 +533,37 @@ export function parseGitEditorDiffResponse(
   return parseSafely(() => parseDiffResponseUnsafe(input));
 }
 
-function parseBlameRequestUnsafe(input: unknown): GitEditorParseResult<GitEditorBlameRequest> {
-  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
-  const errors: string[] = [];
+function validateBlameRequestFields(
+  input: Readonly<Record<string, unknown>>,
+  errors: string[],
+): input is Readonly<Record<string, unknown>> & GitEditorBlameRequest {
+  let valid = true;
   if (!hasOnlyKeys(input, ["schemaVersion", "path", "startLine", "maxLines"])) {
-    errors.push("request has unknown fields");
+    valid = rejectEditorField(errors, "request has unknown fields");
   }
-  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION) errors.push("schemaVersion invalid");
-  if (!isWorkspacePath(input.path)) errors.push("path must be a bounded workspace-relative path");
-  if (!isIntegerAtLeast(input.startLine, 1)) errors.push("startLine must be a positive integer");
+  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION)
+    valid = rejectEditorField(errors, "schemaVersion invalid");
+  if (!isWorkspacePath(input.path))
+    valid = rejectEditorField(errors, "path must be a bounded workspace-relative path");
+  if (!isIntegerAtLeast(input.startLine, 1))
+    valid = rejectEditorField(errors, "startLine must be a positive integer");
   if (
     !isIntegerAtLeast(input.maxLines, 1) ||
     (typeof input.maxLines === "number" && input.maxLines > GIT_EDITOR_BLAME_MAX_LINES)
   ) {
-    errors.push(`maxLines must be between 1 and ${String(GIT_EDITOR_BLAME_MAX_LINES)}`);
+    valid = rejectEditorField(
+      errors,
+      `maxLines must be between 1 and ${String(GIT_EDITOR_BLAME_MAX_LINES)}`,
+    );
   }
-  return errors.length === 0
-    ? { ok: true, value: input as unknown as GitEditorBlameRequest }
+  return valid;
+}
+
+function parseBlameRequestUnsafe(input: unknown): GitEditorParseResult<GitEditorBlameRequest> {
+  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
+  const errors: string[] = [];
+  return validateBlameRequestFields(input, errors)
+    ? { ok: true, value: input }
     : { ok: false, errors };
 }
 
@@ -479,7 +576,8 @@ export function parseGitEditorBlameRequest(
 function validateBlameResponseShape(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     !hasOnlyKeys(input, [
       "schemaVersion",
@@ -493,72 +591,89 @@ function validateBlameResponseShape(
       "maxLines",
     ])
   ) {
-    errors.push("response has unknown fields");
+    valid = rejectEditorField(errors, "response has unknown fields");
   }
-  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION) errors.push("schemaVersion invalid");
-  if (!isWorkspacePath(input.path)) errors.push("path must be a bounded workspace-relative path");
-  if (!isIntegerAtLeast(input.startLine, 1)) errors.push("startLine must be a positive integer");
+  if (input.schemaVersion !== GIT_EDITOR_SCHEMA_VERSION)
+    valid = rejectEditorField(errors, "schemaVersion invalid");
+  if (!isWorkspacePath(input.path))
+    valid = rejectEditorField(errors, "path must be a bounded workspace-relative path");
+  if (!isIntegerAtLeast(input.startLine, 1))
+    valid = rejectEditorField(errors, "startLine must be a positive integer");
+  return valid;
 }
 
 function validateBlameResponseLines(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (!Array.isArray(input.lines) || input.lines.length > GIT_EDITOR_BLAME_MAX_LINES) {
-    errors.push(`lines must be an array of at most ${String(GIT_EDITOR_BLAME_MAX_LINES)} entries`);
-  } else if (!input.lines.every(isGitEditorBlameLine))
-    errors.push("lines contain an invalid entry");
+    valid = rejectEditorField(
+      errors,
+      `lines must be an array of at most ${String(GIT_EDITOR_BLAME_MAX_LINES)} entries`,
+    );
+  } else if (!isBlameLineCollection(input.lines))
+    valid = rejectEditorField(errors, "lines contain an invalid entry");
+  return valid;
 }
 
 function validateBlameResponseTotals(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
-  if (typeof input.truncated !== "boolean") errors.push("truncated must be a boolean");
+): boolean {
+  let valid = true;
+  if (typeof input.truncated !== "boolean")
+    valid = rejectEditorField(errors, "truncated must be a boolean");
   if (!isIntegerAtLeast(input.totalLines, 0))
-    errors.push("totalLines must be a non-negative integer");
+    valid = rejectEditorField(errors, "totalLines must be a non-negative integer");
   if (!isIntegerAtLeast(input.totalBytes, 0))
-    errors.push("totalBytes must be a non-negative integer");
-  if (input.maxBytes !== GIT_EDITOR_BLAME_MAX_BYTES) errors.push("maxBytes invalid");
-  if (input.maxLines !== GIT_EDITOR_BLAME_MAX_LINES) errors.push("maxLines invalid");
-  validateBlameResponseConsistency(input, errors);
+    valid = rejectEditorField(errors, "totalBytes must be a non-negative integer");
+  if (input.maxBytes !== GIT_EDITOR_BLAME_MAX_BYTES)
+    valid = rejectEditorField(errors, "maxBytes invalid");
+  if (input.maxLines !== GIT_EDITOR_BLAME_MAX_LINES)
+    valid = rejectEditorField(errors, "maxLines invalid");
+  valid = validateBlameResponseConsistency(input, errors) && valid;
+  return valid;
 }
 
 function validateBlameResponseConsistency(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     Array.isArray(input.lines) &&
     isIntegerAtLeast(input.totalLines, 0) &&
     input.totalLines < input.lines.length
   ) {
-    errors.push("totalLines must not be smaller than lines.length");
+    valid = rejectEditorField(errors, "totalLines must not be smaller than lines.length");
   }
   if (
     isIntegerAtLeast(input.totalBytes, 0) &&
     input.totalBytes > GIT_EDITOR_BLAME_MAX_BYTES &&
     input.truncated !== true
   ) {
-    errors.push("truncated must be true when totalBytes exceeds maxBytes");
+    valid = rejectEditorField(errors, "truncated must be true when totalBytes exceeds maxBytes");
   }
+  return valid;
 }
 
 function validateBlameResponseFields(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
-): void {
-  validateBlameResponseShape(input, errors);
-  validateBlameResponseLines(input, errors);
-  validateBlameResponseTotals(input, errors);
+): input is Readonly<Record<string, unknown>> & GitEditorBlameResponse {
+  let valid = true;
+  valid = validateBlameResponseShape(input, errors) && valid;
+  valid = validateBlameResponseLines(input, errors) && valid;
+  valid = validateBlameResponseTotals(input, errors) && valid;
+  return valid;
 }
 
 function parseBlameResponseUnsafe(input: unknown): GitEditorParseResult<GitEditorBlameResponse> {
   if (!isRecord(input)) return { ok: false, errors: ["response must be an object"] };
   const errors: string[] = [];
-  validateBlameResponseFields(input, errors);
-  return errors.length === 0
-    ? { ok: true, value: input as unknown as GitEditorBlameResponse }
+  return validateBlameResponseFields(input, errors)
+    ? { ok: true, value: input }
     : { ok: false, errors };
 }
 

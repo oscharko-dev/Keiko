@@ -792,3 +792,176 @@ describe("#3386 AC11 — validateGitChangeSnapshotResult rejects a well-formed V
     expect(validateGitChangeSnapshotResult(verifiedCommitResult)).toMatchObject({ ok: false });
   });
 });
+
+import { validateGitChangeSnapshotResult as publicSnapshotResult } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
+
+describe("G1 physical snapshot members", () => {
+  for (const [name, parse] of [
+    ["source", validateGitChangeSnapshotResult],
+    ["public", publicSnapshotResult],
+  ] as const) {
+    it(`${name} keeps canonical completeness and the original success references`, () => {
+      const input = snapshot();
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy snapshot fixture was refused");
+      expect(result.value).toBe(input);
+      if (result.value.outcome !== "complete" && result.value.outcome !== "partial") {
+        throw new Error("healthy snapshot changed arm");
+      }
+      expect(result.value.entries).toBe(input.entries);
+    });
+    it(`${name} preserves an inherited present hunk and its original references`, () => {
+      const hunks = new Array<GitChangeSnapshotHunk>(1);
+      Object.setPrototypeOf(hunks, [hunk("inherited-hunk")]);
+      const entry = { ...textual("modify", "inherited-entry"), hunks };
+      const input = snapshot([entry]);
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (
+        !result.ok ||
+        (result.value.outcome !== "complete" && result.value.outcome !== "partial")
+      ) {
+        throw new Error("healthy inherited hunk was refused");
+      }
+      expect(result.value.entries[0]).toBe(entry);
+      expect(result.value.entries[0]?.hunks).toBe(hunks);
+    });
+    it(`${name} refuses a physically absent hunk member`, () => {
+      const entry = textual("modify", "finite-hole");
+      const input = snapshot([entry]);
+      input.entries = [{ ...entry, hunks: new Array<unknown>(1) }];
+      const result = parse(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("absent hunk was admitted");
+      expect(result.reasons).toContain("entries[0].hunks[0] must be an object");
+    });
+    it(`${name} validates the physical entry instead of a forEach substitute`, () => {
+      const healthy = textual("modify", "physical-entry");
+      const input = snapshot([healthy]);
+      const entries = [{ ...healthy, pathDigest: 42 }];
+      Object.defineProperty(entries, "forEach", {
+        value: (callback: (entry: unknown, index: number) => void): void => {
+          callback(healthy, 0);
+        },
+      });
+      input.entries = entries;
+      const result = parse(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("substituted entry was admitted");
+      expect(result.reasons).toContain("entries[0].pathDigest must be a sha256 hex digest");
+    });
+  }
+});
+
+describe("G1 later snapshot observations", () => {
+  for (const [name, parse] of [
+    ["source", validateGitChangeSnapshotResult],
+    ["public", publicSnapshotResult],
+  ] as const) {
+    for (const [fieldName, healthyValues, invalidValues, expectedReads, diagnostic] of [
+      [
+        "capturedAt",
+        [CAPTURED_AT, "2026-09-04T10:01:00.000Z"],
+        [CAPTURED_AT, undefined],
+        2,
+        "capturedAt must be a UTC ISO-8601 instant",
+      ],
+      [
+        "expiresAt",
+        [EXPIRES_AT, "2026-09-04T10:14:00.000Z"],
+        [EXPIRES_AT, undefined],
+        2,
+        "expiresAt must be a UTC ISO-8601 instant",
+      ],
+    ] as const) {
+      it(`${name} preserves healthy changing ${fieldName} observations and input reference`, () => {
+        const input = snapshot();
+        let reads = 0;
+        Object.defineProperty(input, fieldName, {
+          enumerable: true,
+          get: (): unknown => healthyValues[Math.min(reads++, healthyValues.length - 1)],
+        });
+        const result = parse(input);
+        expect(reads).toBe(expectedReads);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error("healthy snapshot observation was refused");
+        expect(result.value).toBe(input);
+      });
+      it(`${name} refuses invalid later ${fieldName} with its existing diagnostic`, () => {
+        const input = snapshot();
+        let reads = 0;
+        Object.defineProperty(input, fieldName, {
+          enumerable: true,
+          get: (): unknown => invalidValues[Math.min(reads++, invalidValues.length - 1)],
+        });
+        const result = parse(input);
+        expect(reads).toBe(expectedReads);
+        expect(result).toEqual({ ok: false, reasons: [diagnostic] });
+      });
+      it(`${name} keeps stable invalid ${fieldName} diagnostic single`, () => {
+        expect(parse(snapshot(undefined, { [fieldName]: undefined }))).toEqual({
+          ok: false,
+          reasons: [diagnostic],
+        });
+      });
+    }
+    for (const [fieldName, expectedReads] of [
+      ["totalFiles", 2],
+      ["bytes", 3],
+    ] as const) {
+      it(`${name} preserves healthy ${fieldName} observations and canonical completeness`, () => {
+        const input = snapshot();
+        const completeness = input.completeness;
+        if (typeof completeness !== "object" || completeness === null) {
+          throw new TypeError("canonical fixture lacks completeness");
+        }
+        const value = fieldName === "totalFiles" ? everyKind().length : 512;
+        let reads = 0;
+        Object.defineProperty(completeness, fieldName, {
+          enumerable: true,
+          get: (): unknown => {
+            reads += 1;
+            return value;
+          },
+        });
+        const result = parse(input);
+        expect(reads).toBe(expectedReads);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error("healthy completeness observation was refused");
+        expect(result.value).toBe(input);
+      });
+      it(`${name} keeps stable invalid ${fieldName} count diagnostic single`, () => {
+        const input = snapshot();
+        const completeness = input.completeness;
+        if (typeof completeness !== "object" || completeness === null) {
+          throw new TypeError("canonical fixture lacks completeness");
+        }
+        Object.defineProperty(completeness, fieldName, { enumerable: true, value: undefined });
+        expect(parse(input)).toEqual({
+          ok: false,
+          reasons: [`completeness.${fieldName} must be a non-negative safe integer`],
+        });
+      });
+      it(`${name} refuses invalid final ${fieldName} with its existing count diagnostic`, () => {
+        const input = snapshot();
+        const completeness = input.completeness;
+        if (typeof completeness !== "object" || completeness === null) {
+          throw new TypeError("canonical fixture lacks completeness");
+        }
+        const value = fieldName === "totalFiles" ? everyKind().length : 512;
+        let reads = 0;
+        Object.defineProperty(completeness, fieldName, {
+          enumerable: true,
+          get: (): unknown => (++reads === expectedReads ? undefined : value),
+        });
+        const result = parse(input);
+        expect(reads).toBe(expectedReads);
+        expect(result).toEqual({
+          ok: false,
+          reasons: [`completeness.${fieldName} must be a non-negative safe integer`],
+        });
+      });
+    }
+  }
+});

@@ -115,6 +115,10 @@ export interface GitSyncExecuteResponse {
   readonly truncated: boolean;
 }
 
+const GIT_REPOSITORY_STATES_VALUES: readonly unknown[] = GIT_REPOSITORY_STATES;
+const GIT_SYNC_BLOCK_REASONS_VALUES: readonly unknown[] = GIT_SYNC_BLOCK_REASONS;
+const GIT_SYNC_OUTCOMES_VALUES: readonly unknown[] = GIT_SYNC_OUTCOMES;
+
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
@@ -136,7 +140,7 @@ export function isGitSyncOperation(v: unknown): v is GitSyncOperation {
 }
 
 export function isGitSyncOutcome(v: unknown): v is GitSyncOutcome {
-  return typeof v === "string" && GIT_SYNC_OUTCOMES.includes(v as GitSyncOutcome);
+  return typeof v === "string" && GIT_SYNC_OUTCOMES_VALUES.includes(v);
 }
 
 function validateSyncPreviewIdentity(
@@ -145,7 +149,7 @@ function validateSyncPreviewIdentity(
 ): void {
   if (input.schemaVersion !== GIT_SYNC_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isGitSyncOperation(input.operation)) reasons.push("operation invalid");
-  if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
+  if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
     reasons.push("state invalid");
   }
   if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
@@ -195,7 +199,7 @@ function validateSyncPreviewExecutableGate(
 ): void {
   if (
     input.blockReason !== undefined &&
-    !GIT_SYNC_BLOCK_REASONS.includes(input.blockReason as GitSyncBlockReason)
+    !GIT_SYNC_BLOCK_REASONS_VALUES.includes(input.blockReason)
   ) {
     reasons.push("blockReason invalid");
   }
