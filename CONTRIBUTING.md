@@ -313,6 +313,29 @@ first, followed by existing definition context windows overlapping an original o
 the independent ordinary remainder and the existing fallback. These opportunities do not certify
 declaration ownership or invocation.
 
+Natural-language ordinary reads reuse the canonical query term groups on the current guarded,
+redacted source. Only already proposed ranges can receive separate bounded opportunities for
+those groups; repeated stronger matches cannot consume every opportunity before another requested
+aspect is considered. Existing order within each group, full-range admission, deduplication,
+source currentness and every byte, file and deadline grant still apply. Explicit selected line windows,
+funded definition windows and trace priorities retain their existing behavior. File-pattern, regular-expression
+and exact-symbol queries do not use this scheduling. A matched term group is lexical
+coverage, not proof of a complete implementation or a supported answer.
+The existing completion-details event records planned and served canonical query-group counts
+for these ordinary reads. Counts are summed per path and describe actual reader coverage before
+final prompt fitting; no source or query text enters the Activity Log.
+
+Already admitted named source files are prioritized before the shared code index applies its
+existing source-file ceiling; resolver metadata remains reserved within that same ceiling. The
+request fixes that preference before its first index build and reuses the same canonical index.
+For contextual whole-file questions, fresh callable evidence is observed through the existing
+batched reader within the existing aggregate discovery-byte capacity. The reader derives window
+capacity from finite requested ranges and remaining bytes, with the existing deadline and cancellation
+guards. Current callable ownership and actual code matches precede root selection; contextual roots
+use the existing query and certified-definition capacity. Explicit selected lines, non-addressed
+discovery and route tracing keep their own rules.
+Lexical query-group coverage alone never certifies the requested implementation or an answer.
+
 The governed request's existing document collector checks the original remaining file and
 excerpt-byte grant before each extraction. It bounds the redacted logical projection, including
 UTF-8 separator bytes, within that capacity and discloses exhausted or truncated evidence. All positive returned document

@@ -907,7 +907,7 @@
   "actualA535NativeRepairReplay": {
     "producerHead": "a535fae06f6b26f278614cc049a67e02caef5aa2",
     "disposition": "failed-before-repair-provider-dispatch",
-    "correlationId": "71fb9af0-67bb-46ac-9a83-8d3eeeb12998",
+    "correlationIdentitySha256": "df357b2135068aa4882a230b211dfb8f93f2b91a8fee2d0d2f91cba5fcebe1ae",
     "failureKind": "ConversationModelNotReadyError",
     "firstGatewayCompletion": {
       "atUTC": "2026-10-13T07:45:39.495Z",

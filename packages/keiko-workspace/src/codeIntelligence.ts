@@ -269,6 +269,7 @@ interface BuildDeps {
 }
 
 interface InternalBuildDeps extends BuildDeps {
+  readonly preferredSourcePaths?: readonly string[] | undefined;
   readonly readSource?: ((scopePath: string, maxBytes: number) => string) | undefined;
   readonly assertSourceAllowed?: ((scopePath: string) => void) | undefined;
 }
@@ -5574,6 +5575,24 @@ export function buildCodeIntelligenceIndex(
   );
 }
 
+function preferredCodeSources<T extends { readonly relativePath: string }>(
+  files: readonly T[],
+  preferences: readonly string[] | undefined,
+): readonly T[] {
+  const available = new Set(files.map((file) => file.relativePath));
+  const priority = new Map(
+    [...new Set(preferences)]
+      .filter((path) => available.has(path))
+      .map((path, index) => [path, index]),
+  );
+  if (priority.size === 0) return files;
+  return [...files].sort(
+    (left, right) =>
+      (priority.get(left.relativePath) ?? priority.size) -
+      (priority.get(right.relativePath) ?? priority.size),
+  );
+}
+
 // Internal owning-layer entry point for one request-scoped structural inventory. The public
 // builder above deliberately keeps its established cold-call behaviour; the structural adapter
 // request context calls this variant so concurrent adapter queries do not rediscover the same
@@ -5594,7 +5613,10 @@ export function buildCodeIntelligenceIndexFromCandidates(
   // otherwise resolvable workspace edges into heuristics. Rank that reservation by the nearest
   // ancestor of a source guaranteed to remain inside the same cap, so unrelated manifests cannot
   // crowd out the selected source tree's resolver configuration.
-  const sourceInputs = candidateSet.files.filter((file) => isIndexable(file.relativePath));
+  const sourceInputs = preferredCodeSources(
+    candidateSet.files.filter((file) => isIndexable(file.relativePath)),
+    deps?.preferredSourcePaths,
+  );
   const metadataInputs = candidateSet.files.filter(
     (file) => !isIndexable(file.relativePath) && isImportResolverMetadataPath(file.relativePath),
   );

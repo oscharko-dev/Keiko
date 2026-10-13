@@ -260,6 +260,85 @@ async function runAdapters(useContext: boolean): Promise<RunAllResult> {
 }
 
 describe("StructuralAdapterRequestContext", () => {
+  it("keeps an admitted late source inside the shared code-index file ceiling", async () => {
+    const sourcePaths = Array.from({ length: 8 }, (_, index) => `src/early-${String(index)}.ts`);
+    const selectedPath = "src/zz-addressed.ts";
+    const files = Object.fromEntries<string>([
+      ...sourcePaths.map((path, index): readonly [string, string] => [
+        path,
+        `export const early${String(index)} = 1;`,
+      ]),
+      [
+        selectedPath,
+        "export function remainingAllowance(limit: number, used: number) { return limit - used; }",
+      ],
+    ]);
+    const limits = { ...BOUNDED_REQUEST_LIMITS, maxFilesScanned: 4 };
+    const baseline = createStructuralAdapterRequestContext(scope(), limits, memFs(ROOT, files));
+    expect(
+      (await baseline.codeIntelligenceIndex()).symbols.some(
+        (symbol) => symbol.scopePath === selectedPath,
+      ),
+    ).toBe(false);
+    const deps = { nowMs: FIXED_NOW, preferredCodeIntelligenceSourcePaths: [selectedPath] };
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      limits,
+      memFs(ROOT, files),
+      deps,
+    );
+    const first = context.codeIntelligenceIndex();
+    expect(context.codeIntelligenceIndex()).toBe(first);
+    const index = await first;
+    expect(index.symbols).toContainEqual(
+      expect.objectContaining({
+        name: "remainingAllowance",
+        scopePath: selectedPath,
+        parser: "typescript-compiler-ast",
+      }),
+    );
+    expect(index.filesIndexed).toBe(4);
+    expect(index.candidateLimitReached).toBe(true);
+    expect(context.isCodeIntelligenceSourceCurrent(selectedPath)).toBe(true);
+    expect(context.diagnostics().codeIndexBuildCount).toBe(1);
+    expect(context.diagnostics().candidateInventoryBuildCount).toBe(1);
+  });
+
+  it("fixes admitted-source preferences when the shared index is first requested", async () => {
+    const preferred = ["src/api/client.ts"];
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      { ...BOUNDED_REQUEST_LIMITS, maxFilesScanned: 1 },
+      memFs(ROOT, FILES),
+      { nowMs: FIXED_NOW, preferredCodeIntelligenceSourcePaths: preferred },
+    );
+    const first = context.codeIntelligenceIndex();
+    preferred.splice(0, 1, "src/math.ts");
+    expect(context.codeIntelligenceIndex()).toBe(first);
+    const index = await first;
+    expect(index.symbols.map((symbol) => symbol.scopePath)).toEqual(["src/api/client.ts"]);
+    expect(context.isCodeIntelligenceSourceCurrent("src/math.ts")).toBe(false);
+    expect(context.diagnostics().codeIndexBuildCount).toBe(1);
+  });
+
+  it("does not admit a preferred source outside the context candidate policy", async () => {
+    const selectedPath = "src/api/client.ts";
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      { ...BOUNDED_REQUEST_LIMITS, maxFilesScanned: 1 },
+      memFs(ROOT, FILES),
+      {
+        nowMs: FIXED_NOW,
+        preferredCodeIntelligenceSourcePaths: [selectedPath, "../outside.ts"],
+        isCandidateAllowed: (path) => path !== selectedPath,
+      },
+    );
+    const index = await context.codeIntelligenceIndex();
+    expect(index.symbols.some((symbol) => symbol.scopePath === selectedPath)).toBe(false);
+    expect(index.filesIndexed).toBe(1);
+    expect(context.isCodeIntelligenceSourceCurrent(selectedPath)).toBe(false);
+  });
+
   it("shares one promise per structural product and one candidate inventory across products", async () => {
     const searchScope = scope();
     const baseline = countingFs();

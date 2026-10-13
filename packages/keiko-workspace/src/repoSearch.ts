@@ -185,6 +185,8 @@ export interface SearchResult {
 }
 
 export interface ReadExcerptRequest {
+  // Ordinary source facets reuse canonical natural-language matching on proposed current ranges.
+  readonly query?: RetrievalQuery | undefined;
   // Trusted batched ranges share one fresh, classified and redacted source snapshot.
   readonly ranges?: readonly { readonly startLine: number; readonly endLine: number }[] | undefined;
   readonly rangeQueues?:
@@ -217,6 +219,9 @@ interface ReadExcerptWindowResult {
 }
 
 export interface ReadExcerptResult extends ReadExcerptWindowResult {
+  readonly queryFacetObservation?:
+    | { readonly plannedGroups: readonly number[]; readonly servedGroups: readonly number[] }
+    | undefined;
   readonly windows?: readonly ReadExcerptWindowResult[] | undefined;
   readonly omittedRangeCount?: number | undefined;
   readonly unavailableRangeCount?: number | undefined;
@@ -3795,7 +3800,15 @@ function assertExcerptWindowLimits(request: ReadExcerptRequest): void {
   }
 }
 
+function assertExcerptFacetQuery(query: RetrievalQuery | undefined): void {
+  if (query === undefined) return;
+  assertQuery(query);
+  if (query.kind !== "natural-language")
+    throw new RepoSearchInvalidRangeError("excerpt facet query must be natural-language");
+}
+
 function assertExcerptRange(request: ReadExcerptRequest): void {
+  assertExcerptFacetQuery(request.query);
   assertExcerptAnchors(request);
   assertExcerptWindowLimits(request);
   if (
@@ -4155,6 +4168,7 @@ function excerptResultForWindow(
 }
 
 interface BatchedExcerptResults {
+  readonly queryFacetObservation?: ReadExcerptResult["queryFacetObservation"];
   readonly results: readonly ReadExcerptWindowResult[];
   readonly omittedRangeCount: number;
   readonly outsideRangeCount: number;
@@ -4418,6 +4432,95 @@ function pendingExcerptQueues(
     .filter((queue) => queue.ranges.length > 0);
 }
 
+interface QueryFacetQueuePlan {
+  readonly queues: ExcerptQueue[];
+  readonly matcher?: ReturnType<typeof buildMatcher> | undefined;
+  readonly plannedGroups?: readonly number[] | undefined;
+}
+
+interface QueryFacetLineCache {
+  readonly groups: Map<number, readonly number[]>;
+  scannedLines: number;
+}
+
+function queryFacetMatcher(
+  request: ReadExcerptRequest,
+): ReturnType<typeof buildMatcher> | undefined {
+  if (request.query === undefined || request.rangeQueues?.length !== 1) return undefined;
+  const matcher = buildMatcher(request.query);
+  return matcher.matchedQueryGroups !== undefined && (matcher.queryGroupCount ?? 0) >= 2
+    ? matcher
+    : undefined;
+}
+
+async function queryFacetRangeGroups(
+  range: ExcerptRange,
+  lines: readonly string[],
+  matcher: ReturnType<typeof buildMatcher>,
+  control: StructuralExecutionControl,
+  cached: QueryFacetLineCache,
+): Promise<ReadonlySet<number>> {
+  const groups = new Set<number>();
+  for (let line = range.startLine; line <= Math.min(range.endLine, lines.length); line += 1) {
+    if (cached.scannedLines > 0 && cached.scannedLines % SCAN_YIELD_INTERVAL === 0)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    cached.scannedLines += 1;
+    assertStructuralExecutionActive(control);
+    let matched = cached.groups.get(line);
+    if (matched === undefined) {
+      matched = matcher.matchedQueryGroups?.(lines[line - 1] ?? "") ?? [];
+      cached.groups.set(line, matched);
+    }
+    for (const group of matched) groups.add(group);
+  }
+  return groups;
+}
+
+async function ordinaryQueryFacetQueues(
+  request: ReadExcerptRequest,
+  lines: readonly string[],
+  queues: ExcerptQueue[],
+  control: StructuralExecutionControl,
+): Promise<QueryFacetQueuePlan> {
+  const matcher = queryFacetMatcher(request);
+  if (matcher === undefined) return { queues };
+  const facets = Array.from({ length: matcher.queryGroupCount ?? 0 }, (): ExcerptQueue => ({
+    ranges: [],
+    served: false,
+  }));
+  const unmatched: ExcerptQueue = { ranges: [], served: false };
+  const planned = new Set<number>();
+  const cached: QueryFacetLineCache = { groups: new Map(), scannedLines: 0 };
+  for (const range of queues[0]?.ranges ?? []) {
+    const groups = await queryFacetRangeGroups(range, lines, matcher, control, cached);
+    if (groups.size === 0) unmatched.ranges.push(range);
+    for (const group of groups) {
+      facets[group]?.ranges.push(range);
+      planned.add(group);
+    }
+  }
+  return {
+    queues: [...facets, unmatched].filter((queue) => queue.ranges.length > 0),
+    matcher,
+    plannedGroups: [...planned],
+  };
+}
+
+function returnedQueryFacetObservation(
+  plan: QueryFacetQueuePlan,
+  results: readonly ReadExcerptWindowResult[],
+  control: StructuralExecutionControl,
+): ReadExcerptResult["queryFacetObservation"] {
+  if (plan.plannedGroups === undefined) return undefined;
+  const served = new Set<number>();
+  for (const result of results)
+    for (const line of result.content.split("\n")) {
+      assertStructuralExecutionActive(control);
+      for (const group of plan.matcher?.matchedQueryGroups?.(line) ?? []) served.add(group);
+    }
+  return { plannedGroups: plan.plannedGroups, servedGroups: [...served] };
+}
+
 async function queuedExcerptResults(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -4438,14 +4541,23 @@ async function queuedExcerptResults(
     if (batch.remainingBytes <= 0 || batch.remainingWindows <= 0) break;
     await appendQueuedExcerptRange(state, range, batch.remainingBytes);
   }
-  const queues = pendingExcerptQueues(request, previous);
+  const plan = await ordinaryQueryFacetQueues(
+    request,
+    lines,
+    pendingExcerptQueues(request, previous),
+    control,
+  );
+  const { queues } = plan;
   const share = Math.floor(batch.remainingBytes / Math.max(1, queues.length));
   const remainder = batch.remainingBytes % Math.max(1, queues.length);
   for (const [index, queue] of queues.entries())
     await initialExcerptQueue(state, queue, share + Number(index < remainder));
   await retryUnservedExcerptQueues(state, queues);
   if (request.firstRoundOnly !== true) await expandExcerptQueues(state, queues);
-  return completedQueuedExcerptResults(state, allRanges, previous);
+  return {
+    ...completedQueuedExcerptResults(state, allRanges, previous),
+    queryFacetObservation: returnedQueryFacetObservation(plan, state.results, control),
+  };
 }
 
 function completedQueuedExcerptResults(
@@ -4558,6 +4670,7 @@ function excerptResultWithSourceFingerprint(
         processedRanges: batch.processedRanges,
         completedRanges: batch.completedRanges,
         unavailableRangeCount: batch.unavailableRangeCount,
+        queryFacetObservation: batch.queryFacetObservation,
       };
 }
 

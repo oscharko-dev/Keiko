@@ -489,17 +489,28 @@ async function discoveredHandlerSymbols(
   ].slice(0, MAX_DISCOVERED_SYMBOLS);
 }
 
+function addressedContextualPaths(input: DiscoveredSymbolTraceEvidenceInput): ReadonlySet<string> {
+  return new Set(
+    input.atoms
+      .filter(
+        (atom) => atom.provenance.tool === "repo.selectedFile" && atom.lineRange === undefined,
+      )
+      .map((atom) => atom.scopePath),
+  );
+}
+
 function contextualDiscoveryAtoms(
   input: DiscoveredSymbolTraceEvidenceInput,
 ): readonly EvidenceAtom[] {
-  return discoveryAtoms(
-    input.atoms.filter(
-      (atom) =>
-        atom.provenance.kind === "lexical-search" &&
-        atom.provenance.tool === "repo.searchText" &&
-        candidateBucketForPath(atom.scopePath) === "source",
-    ),
+  const atoms = input.atoms.filter(
+    (atom) =>
+      atom.provenance.kind === "lexical-search" &&
+      atom.provenance.tool === "repo.searchText" &&
+      candidateBucketForPath(atom.scopePath) === "source",
   );
+  const addressed = addressedContextualPaths(input);
+  const primary = atoms.filter((atom) => addressed.has(atom.scopePath));
+  return primary.length === 0 ? discoveryAtoms(atoms) : eligibleDiscoveryAtoms(primary);
 }
 
 function indexedCallableOwners(
@@ -583,28 +594,182 @@ function currentCallableOwner(
     : definition;
 }
 
+interface ObservedContextualTarget {
+  readonly target: RouteHandlerTarget;
+  readonly groups: readonly number[];
+}
+
+interface ContextualCallableContext {
+  readonly index: CodeIntelligenceIndex;
+  readonly owners: readonly CodeCallEdge["callerDefinition"][];
+}
+
+function contextualCallableContext(
+  index: CodeIntelligenceIndex,
+  path: string,
+): ContextualCallableContext {
+  return {
+    index: { ...index, symbols: index.symbols.filter((symbol) => symbol.scopePath === path) },
+    owners: indexedCallableOwners(index, path),
+  };
+}
+
 function contextualCallableTargets(
   input: DiscoveredSymbolTraceEvidenceInput,
   observation: DiscoveryExcerptObservation,
-  index: CodeIntelligenceIndex,
-): readonly RouteHandlerTarget[] {
+  context: ContextualCallableContext,
+): readonly ObservedContextualTarget[] {
   const startLine = observation.lineRange?.startLine;
   if (startLine === undefined) return [];
   const matcher = buildMatcher(input.query);
-  const owners = indexedCallableOwners(index, observation.scopePath);
   return repositorySourceLines(observation.content, observation.scopePath).flatMap(
     (line, offset) => {
       if (line.structural.trim().length === 0 || matcher.match(line.code, line) <= 0) return [];
       const definition = currentCallableOwner(
         input,
-        index,
-        owners,
+        context.index,
+        context.owners,
         observation.scopePath,
         startLine + offset,
       );
-      return definition === undefined ? [] : [{ symbol: definition.name, definition }];
+      return definition === undefined
+        ? []
+        : [
+            {
+              target: { symbol: definition.name, definition },
+              groups: matcher.matchedQueryGroups?.(line.code) ?? [],
+            },
+          ];
     },
   );
+}
+
+function contextualTargetSelection(
+  observations: readonly ObservedContextualTarget[],
+  limit: number,
+): readonly RouteHandlerTarget[] {
+  const unique = new Map<string, { target: RouteHandlerTarget; groups: Set<number> }>();
+  for (const observed of observations) {
+    const id = definitionIdentity(observed.target.definition);
+    const value = unique.get(id) ?? { target: observed.target, groups: new Set<number>() };
+    for (const group of observed.groups) value.groups.add(group);
+    unique.set(id, value);
+  }
+  const pending = [...unique.values()];
+  const covered = new Set<number>();
+  const selected: RouteHandlerTarget[] = [];
+  while (pending.length > 0 && selected.length < limit) {
+    const novelty = (groups: ReadonlySet<number>): number =>
+      [...groups].filter((group) => !covered.has(group)).length;
+    const best = pending.reduce(
+      (chosen, value, index) =>
+        novelty(value.groups) > novelty(pending[chosen]?.groups ?? new Set()) ? index : chosen,
+      0,
+    );
+    const value = pending.splice(best, 1)[0];
+    if (value === undefined) break;
+    selected.push(value.target);
+    for (const group of value.groups) covered.add(group);
+  }
+  return selected;
+}
+
+function currentCallableRanges(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  index: CodeIntelligenceIndex,
+  path: string,
+  atoms: readonly EvidenceAtom[],
+): readonly NonNullable<EvidenceAtom["lineRange"]>[] {
+  if (input.requestContext?.isCodeIntelligenceSourceCurrent(path) !== true) return [];
+  const owners = indexedCallableOwners(index, path);
+  const symbols = index.symbols.filter(
+    (symbol) =>
+      symbol.scopePath === path &&
+      symbol.parser === "typescript-compiler-ast" &&
+      symbol.declarationSpan !== undefined &&
+      certifiedCallableDefinition(symbol, owners),
+  );
+  return [...atoms]
+    .sort((left, right) => right.score - left.score)
+    .flatMap((atom) => {
+      const range = atom.lineRange;
+      return range !== undefined &&
+        symbols.some(
+          (symbol) =>
+            symbol.lineRange.startLine <= range.endLine &&
+            symbol.lineRange.endLine >= range.startLine,
+        )
+        ? [range]
+        : [];
+    });
+}
+
+async function addressedContextualObservations(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  index: CodeIntelligenceIndex,
+  candidates: readonly EvidenceAtom[],
+): Promise<readonly DiscoveryExcerptObservation[]> {
+  const paths = [...new Set(candidates.map((atom) => atom.scopePath))].slice(
+    0,
+    MAX_DISCOVERY_ATOMS,
+  );
+  const totalBytes = MAX_DISCOVERY_ATOMS * MAX_DISCOVERY_EXCERPT_BYTES;
+  const observations: DiscoveryExcerptObservation[] = [];
+  for (const path of paths) {
+    if (traceWorkStopped(input)) break;
+    const pathAtoms = candidates.filter((atom) => atom.scopePath === path);
+    const ranges = currentCallableRanges(input, index, path, pathAtoms);
+    if (ranges.length === 0) continue;
+    const result = await contextualBatchObservation(
+      input,
+      path,
+      ranges,
+      Math.floor(totalBytes / paths.length),
+      pathAtoms.map((atom) => atom.stableId),
+    );
+    observations.push(...result);
+  }
+  return observations;
+}
+
+async function contextualBatchObservation(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  path: string,
+  ranges: readonly NonNullable<EvidenceAtom["lineRange"]>[],
+  bytes: number,
+  impactedAtomIds: readonly string[],
+): Promise<readonly DiscoveryExcerptObservation[]> {
+  try {
+    const result = await readExcerpt(
+      input.searchScope,
+      {
+        scopePath: path,
+        query: input.query,
+        startLine: Math.min(...ranges.map((range) => range.startLine)),
+        endLine: Math.max(...ranges.map((range) => range.endLine)),
+        ranges: [],
+        rangeQueues: [ranges],
+        maxBytes: MAX_DISCOVERY_EXCERPT_BYTES,
+        maxTotalBytes: bytes,
+      },
+      {
+        fs: input.fs,
+        nowMs: input.nowMs,
+        ...(input.deadlineAtMs === undefined ? {} : { deadlineAtMs: input.deadlineAtMs }),
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      },
+    );
+    if (input.requestContext?.isCodeIntelligenceSourceCurrent(path) !== true) return [];
+    return (result.windows ?? [result]).map((window) => ({
+      content: window.content,
+      scopePath: path,
+      lineRange: window.atom.lineRange,
+      truncated: window.truncated,
+      anchoredWindowApplied: window.anchoredWindowApplied,
+    }));
+  } catch (error) {
+    return contextualUnavailableObservation(input, error, impactedAtomIds);
+  }
 }
 
 async function discoveredContextualSymbols(
@@ -613,18 +778,33 @@ async function discoveredContextualSymbols(
   const candidates = contextualDiscoveryAtoms(input);
   const index = await admittedDefinitionIndex(input, candidates);
   if (index === undefined) return [];
+  const addressed = addressedContextualPaths(input);
   const continuationPaths = contextualContinuationPaths(index);
-  const observations = await Promise.all(
-    candidates
-      .filter((atom) => continuationPaths.has(atom.scopePath))
-      .map((atom) => contextualExcerptObservation(input, atom)),
-  );
-  const targets = observations
-    .flat()
-    .flatMap((observation) => contextualCallableTargets(input, observation, index));
-  return [
-    ...new Map(targets.map((target) => [definitionIdentity(target.definition), target])).values(),
-  ].slice(0, MAX_DISCOVERED_SYMBOLS);
+  const primary = candidates.some((atom) => addressed.has(atom.scopePath));
+  const observations = primary
+    ? await addressedContextualObservations(input, index, candidates)
+    : (
+        await Promise.all(
+          candidates
+            .filter((atom) => continuationPaths.has(atom.scopePath))
+            .map((atom) => contextualExcerptObservation(input, atom)),
+        )
+      ).flat();
+  const contexts = new Map<string, ContextualCallableContext>();
+  const targets = observations.flatMap((observation) => {
+    const context =
+      contexts.get(observation.scopePath) ??
+      contextualCallableContext(index, observation.scopePath);
+    contexts.set(observation.scopePath, context);
+    return contextualCallableTargets(input, observation, context);
+  });
+  return primary
+    ? contextualTargetSelection(targets, certifiedTargetCapacity(index, input.query))
+    : [
+        ...new Map(
+          targets.map(({ target }) => [definitionIdentity(target.definition), target]),
+        ).values(),
+      ].slice(0, MAX_DISCOVERED_SYMBOLS);
 }
 
 async function contextualExcerptObservation(
@@ -634,21 +814,27 @@ async function contextualExcerptObservation(
   try {
     return [await discoveryExcerptObservation(input, atom)];
   } catch (error) {
-    if (
-      !(error instanceof RepoSearchUnsupportedFileError) ||
-      (error.reason !== "file-unreadable" &&
-        error.reason !== "io-error" &&
-        error.reason !== "binary")
-    )
-      throw error;
-    input.contextualReadFailures?.push({
-      kind: "tool-unavailable",
-      claim: "Contextual source definition evidence is unavailable during excerpt reading.",
-      impactedAtomIds: [atom.stableId],
-      emittedAtMs: input.nowMs(),
-    });
-    return [];
+    return contextualUnavailableObservation(input, error, [atom.stableId]);
   }
+}
+
+function contextualUnavailableObservation(
+  input: DiscoveredSymbolTraceEvidenceInput,
+  error: unknown,
+  impactedAtomIds: readonly string[] = [],
+): readonly DiscoveryExcerptObservation[] {
+  if (
+    !(error instanceof RepoSearchUnsupportedFileError) ||
+    (error.reason !== "file-unreadable" && error.reason !== "io-error" && error.reason !== "binary")
+  )
+    throw error;
+  input.contextualReadFailures?.push({
+    kind: "tool-unavailable",
+    claim: "Contextual source definition evidence is unavailable during excerpt reading.",
+    impactedAtomIds,
+    emittedAtMs: input.nowMs(),
+  });
+  return [];
 }
 
 function contextualContinuationPaths(index: CodeIntelligenceIndex): ReadonlySet<string> {

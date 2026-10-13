@@ -658,6 +658,13 @@ configuration disposition. Each joins the original correlation and source/query 
 erase the first declaration. Assembled file reads remain audit and physical-usage facts and must
 not be presented as proof that every excerpt reached the model.
 
+The same `completion-details` event optionally records `excerptPlannedQueryFacetCount` and
+`excerptServedQueryFacetCount`: per-path totals of canonical query groups present in proposed
+ordinary ranges and in actual nonempty returned source views. No query terms, source text or paths
+are recorded. These counts describe reader coverage before final prompt fitting; they do not
+certify complete functions, answer quality or model-sent membership. Absence means the ordinary
+natural-language scheduling did not report that observation, not a measured zero.
+
 Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
 optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
 `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity

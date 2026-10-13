@@ -28,6 +28,8 @@ import {
 } from "./repoSearchSourceClassification.js";
 
 export interface LineMatcher {
+  readonly queryGroupCount?: number | undefined;
+  readonly matchedQueryGroups?: ((line: string) => readonly number[]) | undefined;
   readonly citationDirectiveClauseCount?: number | undefined;
   /** Only explicit false skips structural preparation; unknown injected matchers stay conservative. */
   readonly requiresSourceClassification?: boolean | undefined;
@@ -725,6 +727,17 @@ function adjustedVersionDeclarationScore(
   return baseScore;
 }
 
+function matchedNaturalLanguageGroups(
+  line: string,
+  tokenGroups: readonly (readonly string[])[],
+  caseSensitive: boolean,
+): readonly number[] {
+  const haystack = caseSensitive ? line : line.toLowerCase();
+  return tokenGroups.flatMap((group, index) =>
+    group.some((token) => haystack.includes(token)) ? [index] : [],
+  );
+}
+
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   const { text: subjectText, citationDirectiveClauseCount } = naturalLanguageSubject(query.text);
   const intentTokens = expandedQueryTerms(subjectText, true);
@@ -742,6 +755,9 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   const total = tokenGroups.length;
   return {
     citationDirectiveClauseCount,
+    queryGroupCount: total,
+    matchedQueryGroups: (line: string): readonly number[] =>
+      matchedNaturalLanguageGroups(line, tokenGroups, query.caseSensitive),
     match: (line: string, providedSourceLine?: RepositorySourceLine): number => {
       if (total === 0) {
         return 0;

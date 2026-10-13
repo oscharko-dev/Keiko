@@ -48,7 +48,7 @@ export interface DiagnosticReferenceInputs {
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
   readonly structuralFs: WorkspaceFs;
-  readonly requestContext: () => StructuralAdapterRequestContext;
+  readonly requestContext: (preferredPaths: readonly string[]) => StructuralAdapterRequestContext;
   readonly nowMs: () => number;
   readonly deadlineAtMs: number;
   readonly signal: AbortSignal | undefined;
@@ -89,6 +89,7 @@ function mergedAdmission(
 function primaryDiagnosticPair(
   inputs: DiagnosticReferenceInputs,
   primary: SearchReference | undefined,
+  admittedPaths: readonly string[],
 ): Promise<readonly EvidenceAtom[]> {
   if (primary === undefined || !inputs.tryReserveSearchCall()) return Promise.resolve([]);
   return testSourcePairingAdapter.lookup(
@@ -104,7 +105,7 @@ function primaryDiagnosticPair(
     {
       nowMs: inputs.nowMs,
       deadlineAtMs: inputs.deadlineAtMs,
-      requestContext: inputs.requestContext(),
+      requestContext: inputs.requestContext(admittedPaths),
       ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     },
   );
@@ -129,7 +130,11 @@ export async function admitDiagnosticReferences(inputs: DiagnosticReferenceInput
 }> {
   const admission = await admitExplicitPaths({ ...inputs, references: inputs.plan.references });
   const diagnostic = admission.selections.filter((reference) => reference.origin === "diagnostic");
-  const pairs = await primaryDiagnosticPair(inputs, diagnostic[0]);
+  const pairs = await primaryDiagnosticPair(
+    inputs,
+    diagnostic[0],
+    admission.selections.map((selection) => selection.path),
+  );
   const existing = new Set(admission.selections.map((reference) => reference.path));
   const paired = await admitExplicitPaths({
     ...inputs,

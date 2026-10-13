@@ -214,7 +214,151 @@ async function contextualReadFailureTrace(
   });
 }
 
+function contextualOwnerDecoys(): Record<string, string> {
+  const source = [
+    'import { adaptRecord } from "../lib/encoding.js";',
+    ...Array.from({ length: 32 }, (_, index) =>
+      [
+        `interface ReadElapsedBudget${String(index)} {`,
+        "  read: number; elapsed: number; budgets: number;",
+        "}",
+        ...Array.from({ length: 12 }, () => "// Independent declaration boundary."),
+      ].join("\n"),
+    ),
+    ...Array.from({ length: 20 }, (_, index) =>
+      [
+        `export function repeatedReadElapsed${String(index)}(read: number, elapsed: number) {`,
+        "  const budgets = read + elapsed;",
+        "  return budgets;",
+        "}",
+        ...Array.from({ length: 12 }, () => "// Independent callable boundary."),
+      ].join("\n"),
+    ),
+    "export function applyQuota(value: string, token: string): Uint8Array {",
+    "  return adaptRecord(value + token);",
+    "}",
+  ].join("\n");
+  return {
+    "src/limits.ts": source,
+    "lib/encoding.ts": [
+      "export function adaptRecord(value: string): Uint8Array {",
+      '  return new TextEncoder().encode(value.normalize("NFD"));',
+      "}",
+    ].join("\n"),
+    ...Object.fromEntries(
+      Array.from({ length: 24 }, (_, index) => [
+        `src/telemetry-${String(index)}.ts`,
+        "export function readTokenElapsedBudgets(read: number, token: number, elapsed: number) { return read + token + elapsed; }",
+      ]),
+    ),
+  };
+}
+
+function contextualWindowPressureFiles(): Record<string, string> {
+  return {
+    "src/markers.ts": [
+      'import { transformValue } from "../lib/transform.js";',
+      ...Array.from({ length: 56 }, (_, index) =>
+        [
+          `export function formatStage${String(index)}(value: string): string {`,
+          '  const prefix = "cobalt-marker:";',
+          index === 55 ? "  return transformValue(prefix + value);" : "  return prefix + value;",
+          "}",
+          ...Array.from({ length: 12 }, () => "// Independent callable boundary."),
+        ].join("\n"),
+      ),
+    ].join("\n"),
+    "lib/transform.ts": [
+      "export function transformValue(value: string): string {",
+      '  return value.normalize("NFC");',
+      "}",
+    ].join("\n"),
+  };
+}
+
 describe("contextual source-definition discovery", () => {
+  it("nominates the addressed current callable before stronger unrelated telemetry and declaration decoys", async () => {
+    const query: RetrievalQuery = {
+      ...routeQuery(),
+      maxResults: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+      text: "Explain src/limits.ts and how it preserves read, token and elapsed budgets.",
+    };
+    const log = createBufferedServerLogSink();
+    const { pack } = await retrieveConnectedContextPack(
+      {
+        scope: selectedScope(),
+        query,
+        workspaceRoot: WORKSPACE_ROOT,
+        budget: DEFAULT_EXPLORATION_BUDGET,
+      },
+      {
+        fs: memFs(WORKSPACE_ROOT, contextualOwnerDecoys()),
+        nowMs: () => NOW,
+        detectWorkspace: workspaceInfo,
+        activityLog: log,
+        correlationId: "contextual-owner-decoys",
+        answerer: { answer: () => Promise.reject(new TypeError("No synthesis is permitted.")) },
+      },
+    );
+    const expected = 'new TextEncoder().encode(value.normalize("NFD"))';
+    expect(
+      pack.files.flatMap((file) => file.excerpts).some((view) => view.content.includes(expected)),
+    ).toBe(true);
+    expect(
+      buildGroundedGatewayMessages(query.text, pack, (value) => value).some((message) =>
+        message.content.includes(expected),
+      ),
+    ).toBe(true);
+    const selection = log.events.find(
+      (event) => event.op === "search.connected-context.selection-details",
+    );
+    expect(selection?.extra?.contextualDefinitionSeedCount).toBeGreaterThan(0);
+    expect(selection?.extra?.contextualDefinitionSeedCount).toBeLessThanOrEqual(query.maxResults);
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(DEFAULT_EXPLORATION_BUDGET.excerptBytesMax);
+  });
+
+  it("continues distinct addressed callable windows within the original discovery byte grant", async () => {
+    const query: RetrievalQuery = {
+      ...routeQuery(),
+      maxResults: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+      text: "Explain src/markers.ts and its cobalt marker handling pipeline.",
+    };
+    const log = createBufferedServerLogSink();
+    const { pack } = await retrieveConnectedContextPack(
+      {
+        scope: selectedScope(),
+        query,
+        workspaceRoot: WORKSPACE_ROOT,
+        budget: DEFAULT_EXPLORATION_BUDGET,
+      },
+      {
+        fs: memFs(WORKSPACE_ROOT, contextualWindowPressureFiles()),
+        nowMs: () => NOW,
+        detectWorkspace: workspaceInfo,
+        activityLog: log,
+        correlationId: "contextual-window-pressure",
+        answerer: { answer: () => Promise.reject(new TypeError("No synthesis is permitted.")) },
+      },
+    );
+    const expected = 'return value.normalize("NFC");';
+    expect(
+      pack.files
+        .flatMap((file) => file.excerpts)
+        .map((view) => view.content)
+        .join("\n"),
+    ).toContain(expected);
+    expect(
+      buildGroundedGatewayMessages(query.text, pack, (value) => value)
+        .map((message) => message.content)
+        .join("\n"),
+    ).toContain(`2 |   ${expected}`);
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.selection-details")?.extra
+        ?.contextualDefinitionSeedCount,
+    ).toBeGreaterThan(48);
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(DEFAULT_EXPLORATION_BUDGET.excerptBytesMax);
+  });
+
   it("follows a converter from a literal-only contextual source hit in the public pack and numbered prompt", async () => {
     const query = contextualLiteralQuery();
     const log = createBufferedServerLogSink();

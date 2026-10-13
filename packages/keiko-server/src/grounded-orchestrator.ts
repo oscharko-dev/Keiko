@@ -562,6 +562,8 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     excerptOmittedRangeCount: { type: "integer", dataClass: "count", required: false },
     excerptTruncatedWindowCount: { type: "integer", dataClass: "count", required: false },
     excerptUnreadFileCount: { type: "integer", dataClass: "count", required: false },
+    excerptPlannedQueryFacetCount: { type: "integer", dataClass: "count", required: false },
+    excerptServedQueryFacetCount: { type: "integer", dataClass: "count", required: false },
     excerptStopReasons: {
       type: "string-array",
       dataClass: "closed-enum",
@@ -1365,6 +1367,7 @@ interface StructuralRequestContextPoolDiagnostics extends StructuralRequestConte
 }
 
 interface StructuralRequestContextPool {
+  readonly preferCodeIntelligenceSources: (paths: readonly string[]) => void;
   readonly forLimits: (limits: SearchLimits) => StructuralAdapterRequestContext;
   readonly diagnostics: () => StructuralRequestContextPoolDiagnostics;
 }
@@ -1693,13 +1696,20 @@ function createStructuralRequestContextPool(
   isCandidateAllowed?: (scopePath: string) => boolean,
 ): StructuralRequestContextPool {
   const contexts = new Map<string, StructuralAdapterRequestContext>();
+  const preferredSourcePaths: string[] = [];
   return {
+    preferCodeIntelligenceSources: (paths): void => {
+      for (const path of paths) {
+        if (!preferredSourcePaths.includes(path)) preferredSourcePaths.push(path);
+      }
+    },
     forLimits: (limits): StructuralAdapterRequestContext => {
       const key = searchLimitsKey(limits);
       const existing = contexts.get(key);
       if (existing !== undefined) return existing;
       const created = observedStructuralContext(
         createStructuralAdapterRequestContext(scope, limits, fs, {
+          preferredCodeIntelligenceSourcePaths: preferredSourcePaths,
           nowMs,
           deadlineAtMs,
           ...(signal === undefined ? {} : { signal }),
@@ -3514,6 +3524,8 @@ export interface ExcerptInputs {
 
 type ExcerptStopReason = "file-grant" | "byte-grant" | "deadline";
 interface ExcerptReadObservation {
+  readonly plannedQueryFacetCount?: number | undefined;
+  readonly servedQueryFacetCount?: number | undefined;
   readonly requestedStaticCallCycleCount?: number | undefined;
   readonly plannedStaticCallCycleCount?: number | undefined;
   readonly omittedRangeCount: number;
@@ -7744,6 +7756,7 @@ function exhaustedDimensions(remainingFiles: number, remainingBytes: number): st
 }
 
 interface ReadPathExcerptWindowsResult {
+  readonly queryFacetObservation?: ReadExcerptResult["queryFacetObservation"];
   readonly anchoredWindowCount: number;
   readonly windows: readonly ExcerptWindow[];
   readonly bytesConsumed: number;
@@ -7900,6 +7913,7 @@ function pathExcerptRequest(
   const previous = inputs.previousExcerptResults?.get(scopePath);
   return {
     scopePath,
+    query: ordinaryExcerptFacetQuery(scopePath, inputs, selection),
     ...containingExcerptRange(selection.windows),
     ranges: selection.fundedWindows ?? [],
     rangeQueues:
@@ -7918,6 +7932,24 @@ function pathExcerptRequest(
     maxTotalBytes: remainingBytes,
     maxWindows: Math.max(1, remainingBytes),
   };
+}
+
+function ordinaryExcerptFacetQuery(
+  scopePath: string,
+  inputs: ExcerptInputs,
+  selection: ExcerptWindowSelection,
+): RetrievalQuery | undefined {
+  if (
+    inputs.query?.kind !== "natural-language" ||
+    selection.coverageApplied === true ||
+    (inputs.atomsByPath.get(scopePath) ?? []).some(
+      (atom) =>
+        (atom.provenance.tool === "repo.selectedFile" && atom.lineRange !== undefined) ||
+        (atom.provenance.tool !== "repo.selectedFile" && tracePriority(atom) > 0),
+    )
+  )
+    return undefined;
+  return inputs.query;
 }
 
 function preferCompleteDocumentExcerpt(
@@ -7945,6 +7977,7 @@ function readPathExcerptResult(
   const appended = appendReadExcerptWindows(result, windows, true);
   return {
     windows,
+    queryFacetObservation: result.queryFacetObservation,
     processedRanges: result.processedRanges,
     completedRanges: result.completedRanges,
     sourceFingerprint: result.sourceFingerprint,
@@ -8406,6 +8439,7 @@ function completedExcerptSummary(
         state.elapsedBudgetBlocked,
       ),
       ...excerptQueueObservationSummary(state),
+      ...queryFacetObservationSummary(state.pathResults),
     },
     omitted: [
       ...state.omitted,
@@ -8453,6 +8487,25 @@ function excerptQueueObservationSummary(
     ordinaryRangeCount: state.ordinaryRangeCount,
     ordinaryServedRangeCount: state.ordinaryServedRangeCount ?? 0,
     deferredDefinitionRangeCount: state.deferredDefinitionRangeCount ?? 0,
+  };
+}
+
+function queryFacetObservationSummary(
+  paths: ReadonlyMap<string, ReadPathExcerptWindowsResult>,
+): Pick<ExcerptReadObservation, "plannedQueryFacetCount" | "servedQueryFacetCount"> {
+  const observations = [...paths.values()].flatMap((result) =>
+    result.queryFacetObservation === undefined ? [] : [result.queryFacetObservation],
+  );
+  if (observations.length === 0) return {};
+  return {
+    plannedQueryFacetCount: observations.reduce(
+      (sum, observed) => sum + observed.plannedGroups.length,
+      0,
+    ),
+    servedQueryFacetCount: observations.reduce(
+      (sum, observed) => sum + observed.servedGroups.length,
+      0,
+    ),
   };
 }
 
@@ -8588,6 +8641,21 @@ function mergeExcerptResult(
     unavailableRangeCount:
       (previous.unavailableRangeCount ?? 0) + (result.unavailableRangeCount ?? 0),
     ordinaryServedRangeCount: servedOrdinaryExcerptRanges(result, windows),
+    queryFacetObservation: mergeQueryFacetObservation(previous, result),
+  };
+}
+
+function mergeQueryFacetObservation(
+  previous: ReadPathExcerptWindowsResult,
+  result: ReadPathExcerptWindowsResult,
+): ReadExcerptResult["queryFacetObservation"] {
+  const observations = [previous.queryFacetObservation, result.queryFacetObservation].filter(
+    (observation) => observation !== undefined,
+  );
+  if (observations.length === 0) return undefined;
+  return {
+    plannedGroups: [...new Set(observations.flatMap((observation) => observation.plannedGroups))],
+    servedGroups: [...new Set(observations.flatMap((observation) => observation.servedGroups))],
   };
 }
 
@@ -10431,6 +10499,12 @@ function retrievalLossActivityExtra(
           excerptTruncatedWindowCount: excerpt.truncatedWindowCount,
           excerptUnreadFileCount: excerpt.unreadFileCount,
           excerptStopReasons: excerpt.stopReasons,
+          ...(excerpt.plannedQueryFacetCount === undefined
+            ? {}
+            : {
+                excerptPlannedQueryFacetCount: excerpt.plannedQueryFacetCount,
+                excerptServedQueryFacetCount: excerpt.servedQueryFacetCount ?? 0,
+              }),
         }),
   };
 }
@@ -11795,6 +11869,9 @@ async function retrieveAdmittedLiveRings(
 ): Promise<{ readonly context: LiveRetrievalContext; readonly rings: RingRunSummary }> {
   const admitted = await liveExplicitPathAdmission(input, deps, plan, governor, runtime, context);
   const focused = focusedFileContext(input, deps, runtime, context, plan, admitted.admission);
+  focused.structuralContexts.preferCodeIntelligenceSources(
+    admitted.admission.selections.map((selection) => selection.path),
+  );
   const unavailable = unavailableFileTargetSummary(
     input,
     plan,
@@ -11989,7 +12066,10 @@ async function liveExplicitPathAdmission(
     assistantReferents: input.assistantReferents,
     continuityReferentSource: input.continuityReferentSource,
     structuralFs: context.ringFs,
-    requestContext: () => context.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS),
+    requestContext: (preferredPaths) => {
+      context.structuralContexts.preferCodeIntelligenceSources(preferredPaths);
+      return context.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS);
+    },
     metadataInjectionReason: metadataInjectionReason(input, plan),
     scope: input.scope,
     query: input.query,

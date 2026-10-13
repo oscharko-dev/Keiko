@@ -60,7 +60,7 @@
         }
       ],
       "limits": [
-        "2genuine ordering failures+2healthy→4qualifiedassertionsPASS; the fifth newly extracted helper unavailable onoldowner is excluded, not historicalRED.",
+        "2genuine ordering failures+2healthy\u21924qualifiedassertionsPASS; the fifth newly extracted helper unavailable onoldowner is excluded, not historicalRED.",
         "Compatible current dependencies; not an original whole historical product invocation."
       ]
     },
@@ -90,7 +90,7 @@
         }
       ],
       "limits": [
-        "2genuine lost ordinary-candidate assertions→2PASS. Producer-derived depth6 requirement3887.2 is not silently substituted by these assigned candidate fixtures.",
+        "2genuine lost ordinary-candidate assertions\u21922PASS. Producer-derived depth6 requirement3887.2 is not silently substituted by these assigned candidate fixtures.",
         "Compatible current dependencies; not an original whole historical product invocation."
       ]
     },
@@ -120,7 +120,7 @@
         }
       ],
       "limits": [
-        "3genuine actualproducer/port-boundary failures→3PASS; unchanged query/corpus/grants; no live reranker/time measurement.",
+        "3genuine actualproducer/port-boundary failures\u21923PASS; unchanged query/corpus/grants; no live reranker/time measurement.",
         "Compatible current dependencies; not an original whole historical product invocation."
       ]
     },
@@ -150,7 +150,7 @@
         }
       ],
       "limits": [
-        "9genuine runtime assertions→9PASS. Includes actual canary leakage and1vs2call failure. Pure clarification/neverrepair oldmissingdisposition is observable rule projection, not invented extra modelcall. QA-facade-only r2 variant was excluded as nonowning. Single-path proof does not byitself certify plural/hybrid clause3888.4.",
+        "9genuine runtime assertions\u21929PASS. Includes actual canary leakage and1vs2call failure. Pure clarification/neverrepair oldmissingdisposition is observable rule projection, not invented extra modelcall. QA-facade-only r2 variant was excluded as nonowning. Single-path proof does not byitself certify plural/hybrid clause3888.4.",
         "Compatible current dependencies; not an original whole historical product invocation."
       ]
     },
@@ -180,7 +180,7 @@
         }
       ],
       "limits": [
-        "Authentic first execution-introducerca1d parent5FAIL+4healthy→9PASS. Later63bc-label parent alreadycorrect9PASS→9PASS retained.4denied/unverified cases are accepted unchangedhealthy controls; no newthirdcall/refund.",
+        "Authentic first execution-introducerca1d parent5FAIL+4healthy\u21929PASS. Later63bc-label parent alreadycorrect9PASS\u21929PASS retained.4denied/unverified cases are accepted unchangedhealthy controls; no newthirdcall/refund.",
         "Compatible current dependencies; not an original whole historical product invocation."
       ]
     },
@@ -214,7 +214,7 @@
         }
       ],
       "limits": [
-        "2genuine EN/DE repository-overview misclassification→PASS;6healthy controlsPASS both. Four absent-new-normalizer API failures are excluded, so frame/cap/Object.get criteria remain unqualified by this variant.",
+        "2genuine EN/DE repository-overview misclassification\u2192PASS;6healthy controlsPASS both. Four absent-new-normalizer API failures are excluded, so frame/cap/Object.get criteria remain unqualified by this variant.",
         "Compatible current dependencies; not an original whole historical product invocation."
       ]
     },
@@ -248,7 +248,7 @@
         }
       ],
       "limits": [
-        "19failed+4healthy→23PASS, one requestcontext ABI mismatch excluded. Ignored file wrongly admitted is actual body behavior; other failures qualify new missing closed-reason/count/line-hint projections. Earlier matching assertion prevents inference that allold neverread/body guards failed; those later invariants remain currenthealthy controls.",
+        "19failed+4healthy\u219223PASS, one requestcontext ABI mismatch excluded. Ignored file wrongly admitted is actual body behavior; other failures qualify new missing closed-reason/count/line-hint projections. Earlier matching assertion prevents inference that allold neverread/body guards failed; those later invariants remain currenthealthy controls.",
         "Compatible current dependencies; not an original whole historical product invocation."
       ]
     },
@@ -1402,7 +1402,7 @@
       "id": "3881.1",
       "sourceIssue": 3881,
       "section": "Definition of Done",
-      "requirement": "The integration branch is green on the required checks **before** any closeout evidence document is written. Evidence composed over a red branch is void — it describes a state the repository never reached. Fix the branch, then write the evidence; do not write it now and annotate it later.",
+      "requirement": "The integration branch is green on the required checks **before** any closeout evidence document is written. Evidence composed over a red branch is void \u2014 it describes a state the repository never reached. Fix the branch, then write the evidence; do not write it now and annotate it later.",
       "auditDisposition": "outside-review-scope",
       "historicalReviewedSha": "a29866f9a38c4addac415801a575e4db2027b353",
       "implementationPaths": [
@@ -2873,7 +2873,7 @@
       "id": "3886.8",
       "sourceIssue": 3886,
       "section": "Acceptance Criteria",
-      "requirement": "`npm run check:activity-log` green; vocabulary change reflected in the op catalog and AGENTS.md §8.",
+      "requirement": "`npm run check:activity-log` green; vocabulary change reflected in the op catalog and AGENTS.md \u00a78.",
       "auditDisposition": "supported",
       "historicalReviewedSha": "a29866f9a38c4addac415801a575e4db2027b353",
       "implementationPaths": [
@@ -4702,7 +4702,7 @@
       "id": "3893.4",
       "sourceIssue": 3893,
       "section": "Acceptance Criteria",
-      "requirement": "AGENTS.md §8 and CONTRIBUTING.md converge; the final child flags no drift.",
+      "requirement": "AGENTS.md \u00a78 and CONTRIBUTING.md converge; the final child flags no drift.",
       "auditDisposition": "supported",
       "historicalReviewedSha": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
       "implementationPaths": [
@@ -5084,5 +5084,518 @@
     "Current implementation hashes bind committed a535 bytes; they are not new test or native execution results.",
     "Whole 3881.2/3882.1 mappings await Auditor review. Latency numbers, correlated docs timeline, exact-head CI/release gates and authorized integration remain separate pending obligations."
   ],
-  "cohortReferenceSemantics": "Each criterion points to the single cohort dictionary for actual owning fixtures, producer commits, artifact basenames/SHA and qualified failure/control scope. Per-row implementation paths/SHA bind the committed source snapshot; they do not relabel historical executions."
+  "cohortReferenceSemantics": "Each criterion points to the single cohort dictionary for actual owning fixtures, producer commits, artifact basenames/SHA and qualified failure/control scope. Per-row implementation paths/SHA bind the committed source snapshot; they do not relabel historical executions.",
+  "subsequentProofAddendum": {
+    "scope": "Subsequent owning-boundary proof only. This supplements the preserved a535 snapshot; it does not relabel any historical execution or complete an aggregate acceptance criterion.",
+    "recordedAt": "2026-10-13T09:46:34.731326+00:00",
+    "preservedLedgerSnapshotSha256": "9ce0000ed7d33372e6edae28923a2d6a6e9e8120d7c66e11a04fff3cde4c9994",
+    "reviewedPublishedHead": "480aca7e47837a8b3860a274fd60010b1bb8fe29",
+    "stateBoundary": {
+      "preservedSnapshotAuditCounts": {
+        "outside-review-scope": 23,
+        "unverified": 5,
+        "supported": 68
+      },
+      "preservedSnapshotFormalOpenCount": 10,
+      "currentRootReportedFormalOpenCount": 7,
+      "currentRootReportedAuditCounts": {
+        "supported": 71,
+        "unverified": 2,
+        "outside-review-scope": 23
+      },
+      "currentUnverifiedAggregateCriteria": ["3881.2", "3882.1"],
+      "formalCheckmarksChangedByThisAddendum": false,
+      "source": "Current Root-reported state, separate from the unchanged original snapshot. Auditor customer-timeline and latency dispositions are referenced without rewriting the historical rows."
+    },
+    "criterionMapping": [
+      {
+        "criterionId": "3881.2",
+        "subsequentCohortRefs": [
+          "bounded-completed-turn-readiness",
+          "undispatched-readiness-accounting",
+          "unsuccessful-terminal-does-not-grant-continuation",
+          "ordinary-query-facet-opportunities",
+          "admitted-named-source-index-priority",
+          "addressed-callable-context-under-original-grants",
+          "prepared-runtime-refusal-and-source-identity-controls"
+        ],
+        "disposition": "Additional defect-specific failure/control provenance; criterion-wide mapping still awaits final independent disposition."
+      },
+      {
+        "criterionId": "3882.1",
+        "subsequentCohortRefs": [
+          "bounded-completed-turn-readiness",
+          "undispatched-readiness-accounting",
+          "unsuccessful-terminal-does-not-grant-continuation",
+          "ordinary-query-facet-opportunities",
+          "admitted-named-source-index-priority",
+          "addressed-callable-context-under-original-grants"
+        ],
+        "disposition": "Additional grounded-turn defects have qualified owning regressions; existing incident (a)-(g), healthy exceptions and unchanged thresholds are preserved, with no new whole-gate execution claimed."
+      }
+    ],
+    "cohorts": {
+      "bounded-completed-turn-readiness": {
+        "behavior": "A genuinely completed same-model turn spanning readiness freshness may perform its bounded repair; new wrappers and revoked, replaced, invalid, aborted or incomplete states still refuse.",
+        "authenticOldOwnerCommit": "a535fae06f6b26f278614cc049a67e02caef5aa2",
+        "owningRuntimeFixCommit": "da296903fb58872c274f984191c9e40b9cec54e9",
+        "ownerPaths": ["packages/keiko-server/src/conversation-readiness-admission.ts"],
+        "owningFixtures": [
+          "packages/keiko-server/src/conversation-readiness-admission.test.ts",
+          "packages/keiko-server/src/grounded-general-knowledge.public-handler.test.ts"
+        ],
+        "wrapperPair": {
+          "sameFixtureSha256": "f190c9aa727b59ef41653dd4fa7a8f7d7b7f823b79cd96612c439c785eb2c43a",
+          "parentPid": 35445,
+          "parentPassedHealthyControls": 19,
+          "parentFailed": 5,
+          "candidatePid": 35508,
+          "candidatePassed": 24,
+          "candidateFailed": 0,
+          "failureScopes": [
+            "Expired positive observation after a successful buffered response",
+            "Expired positive observation after a fully exhausted done stream",
+            "Request-model mismatch",
+            "Already-cancelled request before delegation",
+            "Correlated fresh/continuation/refusal log proof"
+          ],
+          "limits": "The last three failures are separate safety/logging controls, not invented causes of the native a535 incident. Registered formatter and reader reconstruction concern actual scripted wrapper events."
+        },
+        "publicTopologyPair": {
+          "sameFixtureSha256": "5b90e22d056dbfba4b68e0533ded91e2ef8489cbd5eb69ac15f9835ae97c9e14",
+          "parentPid": 36174,
+          "parentSelectedFailed": 4,
+          "parentUnselected": 39,
+          "candidatePid": 36199,
+          "candidateWholePassed": 43,
+          "candidateFailed": 0,
+          "readinessAgingFailures": 3,
+          "topologies": ["single", "plural", "hybrid"],
+          "firstParentPortCallsPerAgingCase": 1,
+          "candidatePortCallsPerAgingCase": 2,
+          "validatedSourceMarkerUnchangedProseAndPersistence": true,
+          "fourthFailure": "Explicit-not-ready pre-dispatch accounting; scoped separately below.",
+          "limits": "Authentic old owner modules in compatible current dependencies; not a historical whole binary. The executed candidate admission wrapper preceded the later finish-reason hardening. No byte-equivalence or native-provider claim for that later wrapper is made.",
+          "observedClockAdvanceMs": 300001,
+          "clock": "Date-only fake clock. This establishes the freshness boundary; it is not a wall-clock or native latency measurement."
+        },
+        "healthyControls": "Nineteen wrapper controls were already healthy and remain healthy: fresh first-call refusal, separate-wrapper freshness, generation/model/observation revocation, timestamp and completion-witness validity, original receiver binding, failed or cancelled first-call rejection, and failed or unfinished streams. These are not counted as historical failures; the newly denied pre-cancelled request is listed separately among the five failures.",
+        "artifacts": [
+          {
+            "artifact": "resume-ui-a535-readiness-final-r3-qualified.json",
+            "sha256": "f9ffc55a94ad27aa8ae34ed4d16e0021d497d3aa047989b7c498e1cfa0ff08f4"
+          },
+          {
+            "artifact": "resume-ui-a535-readiness-final-parent-r3-execution.json",
+            "sha256": "99db8542fb5b4f4d9f69c8321529120761e356ecd9fee5029dfddee52d057496"
+          },
+          {
+            "artifact": "resume-ui-a535-readiness-final-candidate-r3-execution.json",
+            "sha256": "038199e43f411c0702b232761225c240f2ed8130017aa321014e9419cbbf67f6"
+          },
+          {
+            "artifact": "core-public-repair-aging-final-r6-handoff.json",
+            "sha256": "4a2dd6e39e065e448ee12119aed9eaec6de421ad2ff42513b108e5976aaa7607"
+          },
+          {
+            "artifact": "core-public-repair-aging-parent-r6-execution.json",
+            "sha256": "bb148104b42d37fd6c2a15f85f421932c47a461cab4377c7720f27eafaa115b0"
+          },
+          {
+            "artifact": "core-public-repair-aging-whole-r6-execution.json",
+            "sha256": "1357d2200c3daa8eff43a8a65798f4889bb95c1844837f0545619d7209aaae30"
+          }
+        ]
+      },
+      "undispatched-readiness-accounting": {
+        "behavior": "A trusted local readiness refusal before the ModelPort delegate does not charge a second prompt, reserve uncertain output or invent a physical synthesis call. Dispatched opaque failures retain conservative accounting.",
+        "authenticOldOwnerCommit": "a535fae06f6b26f278614cc049a67e02caef5aa2",
+        "owningRuntimeFixCommit": "da296903fb58872c274f984191c9e40b9cec54e9",
+        "ownerPath": "packages/keiko-server/src/grounded-answer.ts",
+        "currentOwnerSha256": "4ce6bde8e17ef945c8d8824bcbefc6c03487d570d24e434d23ea432824cc25ad",
+        "owningFixtures": [
+          "packages/keiko-server/src/grounded-synthesis-call-budget.test.ts",
+          "packages/keiko-server/src/grounded-general-knowledge.public-handler.test.ts"
+        ],
+        "unitPair": {
+          "parentPassedHealthyControls": 9,
+          "parentFailed": 1,
+          "candidatePassed": 10,
+          "candidateFailed": 0
+        },
+        "publicPair": {
+          "oldChargedInput": 2409,
+          "actualPromptTokens": 1152,
+          "currentChargedInput": 1152,
+          "currentChargedOutput": 1,
+          "physicalSynthesisCalls": 1,
+          "completedSynthesisCalls": 1,
+          "reservedOutputTokens": 0,
+          "parentAssertion": "failed",
+          "currentAssertion": "passed"
+        },
+        "publicParentPid": 36174,
+        "publicCandidatePid": 36199,
+        "currentPublicOwningSuite": {
+          "passed": 43,
+          "failed": 0,
+          "skipped": 0
+        },
+        "independentDisposition": "source-fixed",
+        "findingUrl": "https://github.com/oscharko-dev/Keiko/pull/3913#discussion_r4256210273",
+        "healthyControls": "The nine existing allowance controls remain healthy, including conservative injected CallerAttemptAdmissionError exposure, gateway-owned settlement, unknown and partial output, unchanged two-attempt grants, and undispatched spend release. Their pass-to-pass behavior is preserved.",
+        "limits": [
+          "Authentic old owner loaded into compatible current dependencies, not an original historical whole binary.",
+          "Earlier executed readiness wrapper differs from final finish-reason hardening; this disposition concerns the exact current accounting owner and public fixture.",
+          "No successful native source-budget replay, quality-gate verification or whole-head approval is implied.",
+          "The native a535 response remains failed. Its exact readiness holder subtype was not retained, and no successful native repair is inferred from the scripted pair."
+        ],
+        "artifacts": [
+          {
+            "artifact": "984e76-accounting-p2-independent-qualification.json",
+            "sha256": "b38d5abb8c49f538241703eb9c9892cae160fdb003bd93a5cf76863a29941eb0"
+          },
+          {
+            "artifact": "resume-root-readiness-budget-red-r1.json",
+            "sha256": "e203178dd96928507e0213d9359fce4c58aad46b8422a78cb3aae701c93f3377"
+          },
+          {
+            "artifact": "resume-root-readiness-budget-green-r1.json",
+            "sha256": "7c2d1c30a8c641ce5da50193c1f06f999cbbcb5796a1855a2cf17d48b2a20edc"
+          },
+          {
+            "artifact": "core-public-repair-aging-parent-r6-execution.json",
+            "sha256": "bb148104b42d37fd6c2a15f85f421932c47a461cab4377c7720f27eafaa115b0"
+          },
+          {
+            "artifact": "core-public-repair-aging-whole-r6-execution.json",
+            "sha256": "1357d2200c3daa8eff43a8a65798f4889bb95c1844837f0545619d7209aaae30"
+          },
+          {
+            "artifact": "core-public-repair-aging-parent-r6-loaded-owner-sealed.jsonl",
+            "sha256": "6b54c7baa865e94cea31d7ef7cf2481f9bb83dfa6fcfa912b6a3d4bf5f4e72ce"
+          },
+          {
+            "artifact": "core-public-repair-aging-final-r6-fixture.ts",
+            "sha256": "5b90e22d056dbfba4b68e0533ded91e2ef8489cbd5eb69ac15f9835ae97c9e14"
+          }
+        ]
+      },
+      "unsuccessful-terminal-does-not-grant-continuation": {
+        "behavior": "A returned error, cancelled or content_filter response cannot renew the private readiness witness, including a done stream that fully exhausts. Successful stop/tool_calls/length completion remains eligible under unchanged guards.",
+        "authenticDefectiveOwnerCommit": "da296903fb58872c274f984191c9e40b9cec54e9",
+        "owningRuntimeFixCommit": "3a989fd0ad34bd4c6bae44025a3787f67eca1856",
+        "ownerPath": "packages/keiko-server/src/conversation-readiness-admission.ts",
+        "currentOwnerSha256": "df4938222f10f6349767fbb96c2c538f0e609a2eab39b3da1f4dc89d1c7757a1",
+        "owningFixture": {
+          "path": "packages/keiko-server/src/conversation-readiness-admission.test.ts",
+          "sha256": "35fef3c4ec238251f3c9d7839a768337017d9f50f389c88c1f55e3bfba0d31b3"
+        },
+        "sameFinalPair": {
+          "parentPid": 37535,
+          "parentPassedHealthyControls": 24,
+          "parentFailed": 6,
+          "candidatePid": 37799,
+          "candidatePassed": 30,
+          "candidateFailed": 0,
+          "skipped": 0
+        },
+        "sameFileQualifiedCaseNames": [
+          "bounded readiness continuation after successful completion does not renew continuation after a completed buffered response marked error",
+          "bounded readiness continuation after successful completion does not renew continuation after a completed buffered response marked cancelled",
+          "bounded readiness continuation after successful completion does not renew continuation after a completed buffered response marked content_filter",
+          "bounded readiness continuation after successful completion does not renew continuation after a completed streamed response marked error",
+          "bounded readiness continuation after successful completion does not renew continuation after a completed streamed response marked cancelled",
+          "bounded readiness continuation after successful completion does not renew continuation after a completed streamed response marked content_filter"
+        ],
+        "healthyHistoricalSubset": {
+          "authenticOwnerCommit": "a535fae06f6b26f278614cc049a67e02caef5aa2",
+          "pid": 37903,
+          "selectedPassed": 6,
+          "failed": 0,
+          "unselected": 24,
+          "disposition": "Already-correct historical negative controls; no a535 RED is manufactured or claimed."
+        },
+        "limits": [
+          "The first result and expired global-readiness premises are asserted before the second-call refusal. Exactly one scripted ModelPort invocation remains; no native provider dispatch is inferred.",
+          "The failed response does not earn a completion witness merely by yielding done or fulfilling a promise. Existing fully-exhausted-stream boundaries and original receiver binding are retained.",
+          "This is an additional defect introduced by da296, not a reconstructed cause of the earlier native a535 refusal."
+        ],
+        "artifacts": [
+          {
+            "artifact": "resume-ui-da296-unsuccessful-completion-r2-qualified-v2.json",
+            "sha256": "d83a27a028ca31601b62d1d2870f6b3b97015222f6cc24a110c579493ca62f1f"
+          },
+          {
+            "artifact": "resume-ui-da296-unsuccessful-completion-parent-r1-execution.json",
+            "sha256": "e7a07aa4d1d6a5a9cf08ac2c1d466dc7c3279b94d88a89174fec2ad41ca602f7"
+          },
+          {
+            "artifact": "resume-ui-da296-unsuccessful-completion-candidate-r2-execution.json",
+            "sha256": "92a3939e6109bbd0978d154232fa9d860a9a181e0a586c5a9dca7ed0c7fd890b"
+          },
+          {
+            "artifact": "resume-ui-a535-unsuccessful-completion-healthy-parent-r1-execution.json",
+            "sha256": "fb1b574115a050acc2f8a4099974ad0a52218fa52c8713e33f29495327f897f8"
+          }
+        ]
+      },
+      "ordinary-query-facet-opportunities": {
+        "behavior": "Ordinary natural-language ranges receive bounded opportunities using the existing canonical term groups, guarded reader and actual redacted source; explicit lines, funded windows and trace priorities retain their selection.",
+        "parentPid": 39872,
+        "candidatePid": 40804,
+        "sameInitialFixtureSha256": "d43101c8437c9d9827b4493c02f05f2c71c56cfa99e076caa40aa6ad80d78023",
+        "outcome": "The identical generic late token-subtraction body/prompt fixture fails on captured old owners and passes on the initial candidate.",
+        "limits": [
+          "These are initial candidate owners bound by their receipts, not a relabeling as the final source bytes.",
+          "Canonical term coverage alone does not prove complete implementation evidence; the original frozen corpus still failed after this isolated correction."
+        ],
+        "artifacts": [
+          {
+            "artifact": "core-query-facet-parent-r1-execution.json",
+            "sha256": "273597a376d7cea60c13d0f2cccba593b845315ef471fab618fcd75c271dfc9f"
+          },
+          {
+            "artifact": "core-query-facet-candidate-r3-execution.json",
+            "sha256": "3bef81b36d06a0a792b540fd067d9816c69372256502f45f3ddb730716147e7f"
+          }
+        ]
+      },
+      "admitted-named-source-index-priority": {
+        "behavior": "Already admitted named code sources precede the shared code-index file ceiling. Candidate policy, resolver reservation, first-build preference snapshot and memoized index remain enforced.",
+        "parentPid": 46091,
+        "candidatePid": 46259,
+        "fileCeiling": 4,
+        "outcome": "The old index excludes the late admitted source; the candidate includes its current compiler-AST callable under the same cap.",
+        "owningControls": {
+          "workspacePassed": 220,
+          "workspaceSkipped": 0,
+          "selectedCallerPassed": 9,
+          "callerUnselected": 286
+        },
+        "limits": [
+          "Selected caller tests are nine passes, not all 295 tests.",
+          "Final erased fixture typing and comment relocation are joined by the retained runtime-AST equality proof.",
+          "This is an index-admission regression; it alone does not establish final model context or answer quality."
+        ],
+        "artifacts": [
+          {
+            "artifact": "resume-runtime-index-addressed-final-release-r1.json",
+            "sha256": "8f0d27583cd319833bce6a8ec27b197de93a7632ba20834e6e43505c71dc1507"
+          }
+        ]
+      },
+      "addressed-callable-context-under-original-grants": {
+        "behavior": "Current callable matches are nominated from the guarded batch under its original aggregate byte capacity. Finite range/byte/deadline guards replace the unrelated route-window cutoff; existing query/certified-definition capacity bounds contextual roots.",
+        "originalSourceSha256": "cf42e5eadea9fcb582ec11e68311ab269576fe367562a42e4c5578e280637cd7",
+        "originalQuerySha256": "57d6a3d6705b648cb3ce233bddcc904707fda32f9be5ff06e6ccbcdb21737f19",
+        "requiredOwningRanges": [
+          {
+            "startLine": 10178,
+            "endLine": 10182
+          },
+          {
+            "startLine": 10218,
+            "endLine": 10229
+          }
+        ],
+        "retainedOriginalProbeOutcomes": [
+          {
+            "probe": "r1",
+            "pid": 44097,
+            "packAndNumberedPrompt": [false, false],
+            "contextualSeeds": 0
+          },
+          {
+            "probe": "r2",
+            "pid": 45484,
+            "packAndNumberedPrompt": [false, false],
+            "contextualSeeds": 0
+          },
+          {
+            "probe": "r3",
+            "pid": 47327,
+            "packAndNumberedPrompt": [true, false],
+            "contextualSeeds": 44,
+            "observedWindows": 48,
+            "discoveryBytes": 38024
+          },
+          {
+            "probe": "r4",
+            "pid": 47819,
+            "packAndNumberedPrompt": [true, true],
+            "contextualSeeds": 58,
+            "observedWindows": 62,
+            "discoveryBytes": 49152
+          }
+        ],
+        "originalGrants": {
+          "discoveryAggregateBytes": 49152,
+          "discoveryWindowBytes": 4096,
+          "excerptBytes": 131072,
+          "modelInputTokens": 118784,
+          "modelOutputTokens": 8192
+        },
+        "successfulActualUsage": {
+          "searchCalls": 10,
+          "filesRead": 383,
+          "excerptBytes": 131072,
+          "rerankCalls": 0,
+          "modelCalls": 0
+        },
+        "genericDistinctCallablePair": {
+          "parentPid": 47994,
+          "candidatePid": 48020,
+          "scope": "The old 48-root cutoff fails the observed-root count assertion. Converter body and prompt already passed on the parent; no semantic RED is attributed to that generic control."
+        },
+        "healthyExcerptGrantControls": {
+          "pid": 47909,
+          "files": 8,
+          "passed": 47,
+          "failed": 0,
+          "skipped": 0
+        },
+        "limits": [
+          "This is the exact retained corpus and question through the current public retrieval/numbered-prompt producer, not a native model answer.",
+          "Private observers return canonical results unchanged; their overhead receives no latency qualification.",
+          "The additional observed windows and current callable roots increase bounded work; original grants do not change.",
+          "Native answer semantics, valid citations, persistence, final gates, review settlement and merge remain pending."
+        ],
+        "artifacts": [
+          {
+            "artifact": "core-query-facet-full-source-r3-execution.json",
+            "sha256": "5b7650245ade729b3851f780b307a5c4466ede611cc00686d8aa07f8cf1923fa"
+          },
+          {
+            "artifact": "core-query-facet-full-source-r3.json",
+            "sha256": "4b4cfe042799aee5c08b54a4297dbedee5dd58d966088a48bbc85cff30fc2898"
+          },
+          {
+            "artifact": "core-query-facet-full-source-r4-execution.json",
+            "sha256": "553f6323c56b64686303757014c1c97c2ef9b23eb27fe8f2ff1b110f7ca5f1e4"
+          },
+          {
+            "artifact": "core-query-facet-full-source-r4.json",
+            "sha256": "4cbf7b8b1238081404dbab229362895a24a64169574b4a1b979743b4e5ddea68"
+          },
+          {
+            "artifact": "core-query-facet-full-source-r4-loaded-modules.jsonl",
+            "sha256": "7d484b7f9c9902975e5b3025e23417ee11f55de59ec0c9cf62a48eb8f6fd041c"
+          },
+          {
+            "artifact": "core-contextual-window-parent-r1-execution.json",
+            "sha256": "ebb292d93f9ca64065c4109c74680fc5c8d09495e8469b753fa02cbd2d541c9b"
+          },
+          {
+            "artifact": "core-contextual-window-candidate-r1-execution.json",
+            "sha256": "4cdd0090ac9ac77dbceb53f85d6eff33500934e2434acbe6fd530cb3652b9bf1"
+          },
+          {
+            "artifact": "resume-root-integrated-excerpt-guards-r1-execution.json",
+            "sha256": "c77a5381277677e33a0d08a1a2a98a29d9a2cc12dd7e145a853c04ddf7a673cf"
+          },
+          {
+            "artifact": "core-query-facet-full-source-r1-execution.json",
+            "sha256": "1a7c357557670072eb2f9fa907e737a019391ca14ed5a85917fb338fd9a7ab06"
+          },
+          {
+            "artifact": "core-query-facet-full-source-r2-execution.json",
+            "sha256": "c7cc97591f9469db20d0ef32af67e2f8dc0e8ef82ae331a5e7ed35d51adc7cb6"
+          },
+          {
+            "artifact": "core-contextual-facet-final-source-release-r1.json",
+            "sha256": "7cdcd34970fa2e2ab4662f63607a3c1a5995e68206ed0a32188a449da806a264"
+          },
+          {
+            "artifact": "resume-root-integrated-scoped-types-r3-execution.json",
+            "sha256": "89ed4a639e1f37fe241ca6fa7281a741bab6cedfa36d28854e8908a662e8c93b"
+          }
+        ],
+        "finalOwningControls": {
+          "pid": 48065,
+          "passed": 129,
+          "failed": 0,
+          "skipped": 0
+        }
+      },
+      "prepared-runtime-refusal-and-source-identity-controls": {
+        "owningRuntimeFixCommit": "21260181e75de415d1c4f5bc70642ca6e4bdef54",
+        "behavior": "A successful lifecycle preparation is disposed through the existing bounded cleanup when launch is refused before spawn. Original refusal codes remain primary; no unspawned process is reaped or released.",
+        "sourcePaths": [
+          "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
+          "packages/keiko-server/src/grounded-structured-folder-referents.native-http.test.ts"
+        ],
+        "finalFixtureParent": {
+          "pid": 48337,
+          "healthyPassed": 3,
+          "failed": 1,
+          "failure": "Prepared run directory survives the pre-spawn deadline, after zero spawn and stopped-manager premises pass."
+        },
+        "candidateSelected": {
+          "pid": 48379,
+          "passed": 4,
+          "failed": 0
+        },
+        "finalOwning": {
+          "pid": 48460,
+          "passed": 364,
+          "failed": 0,
+          "skipped": 0
+        },
+        "testObservationRepairs": [
+          "Concurrent folder selection events are joined to the started source identity and correlation, preserving source-content and citation checks regardless of completion order.",
+          "Late-handshake timeout waits for the real handshake entry before advancing the existing deterministic timer."
+        ],
+        "limits": [
+          "The two original current-480 CI titles passed in the targeted local run; their original CI failures remain preserved.",
+          "The deterministic prepared-state leak is a distinct genuine product failure, not a claim that the old CI failure proved the same branch.",
+          "The final candidate preserves synchronous refusal behavior for legacy/unprepared launches; all three owning suites executed this final source.",
+          "This supplement does not assert current-head full CI or native model success."
+        ],
+        "artifacts": [
+          {
+            "artifact": "resume-ui-480-ci-deterministic-parent-r1-execution.json",
+            "sha256": "63f16e2106b66372d5dee6d12725093333c71eddf0e1539e6034c1e56d628bde"
+          },
+          {
+            "artifact": "resume-ui-480-ci-final-fixture-parent-r2-execution.json",
+            "sha256": "dca039d85f3cfc2b6271d5cd17843d52dec6558b1dd5e2adcd36295bfa6870a7"
+          },
+          {
+            "artifact": "resume-ui-480-ci-final-fixture-candidate-r2-execution.json",
+            "sha256": "02002e1a1b6062db28ca588fb8554caeabaa6eff2a9ad8807465885fbe8d679b"
+          },
+          {
+            "artifact": "resume-ui-480-ci-three-owning-candidate-r3-execution.json",
+            "sha256": "4aee6ee67a7a66dea675d47feae2c7d2b7602fad1c6f823c1325507adff0e071"
+          },
+          {
+            "artifact": "resume-ui-480-ci-final-types-r3-execution.json",
+            "sha256": "c21fb9526b1863f433a0486d8e6c85faba060b118b13c9fa864d6e3ffd127cd1"
+          },
+          {
+            "artifact": "resume-ui-480-ci-final-eslint-r3-execution.json",
+            "sha256": "9c50fe6e2c5307c39bb5cc5b3dc087b14dfde54376fdc84263cd3aac3808f7e0"
+          }
+        ]
+      }
+    },
+    "currentStateDispositionReferences": [
+      {
+        "artifact": "984e76-epic-customer-timeline-independent-qualification.json",
+        "sha256": "56ea57c497b67f70de7436217ca3cac23ca4fe6aff4eaa97902b5386fe28657a"
+      },
+      {
+        "artifact": "984e76-latency-two-criteria-independent-qualification.json",
+        "sha256": "53974d4b015d432f6b7d70cdb9b9b1ce3bad3ef5b1508ed771674cadb1943cc2"
+      }
+    ],
+    "qualificationLimits": [
+      "Every original requirement, cohort, outcome, snapshot binding and historical control is preserved. This addendum does not overwrite prior audit/formal counts.",
+      "Pending source-facet omission diagnosis and candidate receive no qualification credit here. No pending facet source, unexecuted fixture or proposed outcome is included.",
+      "No new model, build, test, gate, review resolution, issue closure or final closeout is performed or claimed by this metadata edit."
+    ],
+    "lastSupplementedAt": "2026-10-13T11:06:42.940955+00:00"
+  }
 }

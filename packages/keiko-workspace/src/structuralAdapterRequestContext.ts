@@ -101,6 +101,7 @@ export interface StructuralRequestSearchDeps {
 }
 
 export interface StructuralAdapterRequestContextDeps {
+  readonly preferredCodeIntelligenceSourcePaths?: readonly string[] | undefined;
   readonly nowMs?: (() => number) | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly deadlineAtMs?: number | undefined;
@@ -242,6 +243,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private readonly executionControl: StructuralExecutionControl;
   private readonly executionFs: WorkspaceFs;
   private readonly isCandidateAllowed: ((scopePath: string) => boolean) | undefined;
+  private readonly preferredCodeIntelligenceSourcePaths: readonly string[];
   private candidateState: CandidateInventoryState = { status: "empty" };
   private readonly queryCandidateStates = new Map<string, CandidateInventoryState>();
   private readonly contentPreviews = new Map<string, CachedCandidateContentPreview>();
@@ -287,6 +289,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     );
     this.executionFs = executionControlledWorkspaceFs(this.fs, this.executionControl);
     this.isCandidateAllowed = deps.isCandidateAllowed;
+    this.preferredCodeIntelligenceSourcePaths = deps.preferredCodeIntelligenceSourcePaths ?? [];
   }
 
   private candidateSet(): CandidateSet {
@@ -671,6 +674,9 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   }
 
   public codeIntelligenceIndex(): Promise<CodeIntelligenceIndex> {
+    // Fix source priority when the shared build is first requested; later registrations cannot
+    // relabel or rebuild the already memoized graph.
+    const preferredSourcePaths = [...this.preferredCodeIntelligenceSourcePaths];
     this.codeIndexPromise ??= Promise.resolve().then(() => {
       this.codeIndexBuildCount += 1;
       const candidates = this.candidateSet();
@@ -684,6 +690,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         this.executionFs,
         candidates,
         {
+          preferredSourcePaths,
           executionControl: this.executionControl,
           disableCache: true,
           readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),

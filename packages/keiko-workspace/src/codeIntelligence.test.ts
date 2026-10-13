@@ -1035,6 +1035,38 @@ describe("buildCodeIntelligenceIndex", () => {
     );
   });
 
+  it("reserves resolver metadata for preferred late sources within the same file ceiling", () => {
+    const { scope, fs } = makeScope({
+      "src/early.ts": "export const early = 1;",
+      "decoys/package.json": JSON.stringify({ name: "@decoy/package" }),
+      "apps/api/src/consumer.ts": 'import { target } from "@local/service";',
+      "apps/api/src/target.ts": "export const target = 1;",
+      "apps/api/tsconfig.json": JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@local/service": ["src/target"] } },
+      }),
+    });
+    const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const index = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 3 },
+      fs,
+      candidates,
+      {
+        disableCache: true,
+        preferredSourcePaths: ["apps/api/src/consumer.ts", "apps/api/src/target.ts"],
+      },
+    );
+    expect(index.filesIndexed).toBe(2);
+    expect(index.candidateLimitReached).toBe(true);
+    expect(index.imports).toContainEqual(
+      expect.objectContaining({
+        importerPath: "apps/api/src/consumer.ts",
+        targetPath: "apps/api/src/target.ts",
+        confidence: "resolved",
+      }),
+    );
+  });
+
   it("returns unused metadata capacity to sources on cold and warm builds", () => {
     const sourcePaths = Array.from({ length: 6 }, (_, index) => `src/source-${String(index)}.ts`);
     const decoyPaths = Array.from(
