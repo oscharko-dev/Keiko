@@ -10,7 +10,11 @@ import {
   createScriptedGatewayFetch,
   type GatewayReplayScriptEntry,
 } from "./replay.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type {
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import type { GatewayConfig, GatewayRequest, ModelProviderConfig } from "./types.js";
 import type { GatewayCallRequest } from "./gateway.js";
 
@@ -40,15 +44,18 @@ const REQUEST: GatewayRequest = {
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
 }
 
 function recorder(): Recorder {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return { events, sink: { write: (event): void => void events.push(event) } };
 }
 
-function eventFor(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent {
+function eventFor(
+  events: readonly ModelGatewayLogTransport[],
+  op: string,
+): ModelGatewayLogTransport {
   const found = events.find((event) => event.op === op);
   if (found === undefined) {
     throw new Error(
@@ -242,12 +249,24 @@ describe("Gateway replay integration (ADR-0173 §7.3)", () => {
     expect(
       transportEvents
         .filter((event) => event.op === "http.gateway.fetch.completed")
-        .map((event) => event.status),
+        .map((event) => normalFixtureEvent(event).status),
     ).toEqual([500, 200]);
     const scheduled = eventFor(log.events, "gateway.retry.scheduled");
     expect(scheduled.correlationId).toBe("replay-correlation-1");
-    expect(scheduled.extra?.httpStatus).toBe(500);
+    expect(normalFixtureEvent(scheduled).extra?.httpStatus).toBe(500);
     const completed = eventFor(log.events, "gateway.chat.completed");
     expect(completed.correlationId).toBe("replay-correlation-1");
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

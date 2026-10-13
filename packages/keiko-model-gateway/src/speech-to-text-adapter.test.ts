@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { classifyDispatchError, requestSpeechToText } from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -91,7 +91,7 @@ describe("requestSpeechToText", () => {
   it("supports a custom apiKeyHeaderName (Azure api-key) and an optional language field", async () => {
     let header: string | null = null;
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl = mockFetch(async (_url, init) => {
       header = (init.headers as Record<string, string>)["api-key"] ?? null;
       body = await bodyToText(init);
@@ -156,7 +156,7 @@ describe("requestSpeechToText", () => {
       },
     });
     expect(events[2]?.extra).not.toHaveProperty("failureKind");
-    expect(events[2]?.errorKind).toBeUndefined();
+    expect(normalFixtureEvent(events[2])?.errorKind).toBeUndefined();
 
     // Activity Log proof (#3532): the normalization line as the production file sink would
     // persist it.
@@ -194,7 +194,7 @@ describe("requestSpeechToText", () => {
 
   it("preserves a primary language tag without emitting a normalization event", async () => {
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -225,7 +225,7 @@ describe("requestSpeechToText", () => {
 
   it("omits an empty language hint without emitting a normalization event", async () => {
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -252,7 +252,7 @@ describe("requestSpeechToText", () => {
 
   it("normalizes a maximum-length validated language hint and logs the boundary", async () => {
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -565,7 +565,7 @@ describe("requestSpeechToText", () => {
   // rate limit, and an invalid response indistinguishable from a still-running call). Proves the
   // timeout path specifically, since that is the scenario the finding names.
   it("logs the completed line with a timeout failureKind and errorKind on a timeout outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -597,7 +597,7 @@ describe("requestSpeechToText", () => {
   // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate
   // limit from a timeout instead of collapsing every failure into one shape.
   it("logs the completed line with a rate-limited failureKind and errorKind on a 429 outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -698,3 +698,15 @@ describe("requestSpeechToText", () => {
     expect(seenUrl).toBe("https://stt.example.invalid/v1/audio/transcriptions");
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

@@ -13,7 +13,11 @@ import {
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { Gateway, type GatewaySpendReservation } from "./gateway.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type {
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import { GATEWAY_SILENCE_FLOOR_MS, providerRequestBudgetMs } from "./resilience.js";
 import type {
@@ -122,13 +126,13 @@ function streamingFake(failures: readonly Error[] = []): StreamingFake {
 }
 
 function recorder(): {
-  readonly events: ModelGatewayLogEvent[];
-  readonly write: (event: ModelGatewayLogEvent) => void;
+  readonly events: ModelGatewayLogTransport[];
+  readonly write: (event: ModelGatewayLogTransport) => void;
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
-    write: (event: ModelGatewayLogEvent): void => {
+    write: (event: ModelGatewayLogTransport): void => {
       events.push(event);
     },
   };
@@ -347,7 +351,7 @@ describe("Gateway.chatStream bounds a real provider stream by the floors (#3591)
 
   it("fails as a TimeoutError once the stream stalls past the silence floor, reported body-free", async () => {
     vi.useFakeTimers();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const log: ModelGatewayLogSink = { write: (event): void => void events.push(event) };
     const provider = drivenStream();
     const adapter = new OpenAiAdapter({
@@ -371,7 +375,7 @@ describe("Gateway.chatStream bounds a real provider stream by the floors (#3591)
       extra: { outcome: "stalled", silenceMs: GATEWAY_SILENCE_FLOOR_MS },
     });
     const failed = events.find((event) => event.op === "gateway.stream.failed");
-    expect(failed?.errorKind).toBe("timeout");
+    expect(normalFixtureEvent(failed)?.errorKind).toBe("timeout");
   });
 });
 
@@ -417,7 +421,7 @@ describe("a completed but empty model answer (#3610)", () => {
   ] as const)(
     "is reported as an empty answer and never opens the breaker (%s)",
     async (_label, answer, answerRepair, expectedRequests) => {
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const log: ModelGatewayLogSink = { write: (event): void => void events.push(event) };
       let calls = 0;
       const adapter = new OpenAiAdapter({
@@ -528,9 +532,10 @@ describe("stream startup resilience", () => {
         retryAfterMs: 120_000,
       },
     );
-    expect(log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra?.delayMs).toBe(
-      120_000 + PROVIDER.retryBaseDelayMs,
-    );
+    expect(
+      normalFixtureEvent(log.events.find((event) => event.op === "gateway.retry.scheduled"))?.extra
+        ?.delayMs,
+    ).toBe(120_000 + PROVIDER.retryBaseDelayMs);
     expect(JSON.stringify(log.events)).not.toContain("recovered once");
   });
 
@@ -935,3 +940,15 @@ it("does not retry a failed half-open probe reached during startup backoff", asy
     expect.objectContaining({ extra: expect.objectContaining({ reason: "terminal" }) as unknown }),
   ]);
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

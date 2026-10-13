@@ -34,13 +34,19 @@ only whole-repository enforcement. Source, parser, plugin, scope and inventory f
 
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
-APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in
+APIs in `keiko-contracts`. Event construction returns the registration-derived event or a closed
+rejection arm; injected ports retain that distinction and the physical writer rejects the latter.
+The checked-in
 `docs/observability/op-catalog.generated.json` is generated from those canonical declarations and
 emitters. Its typed registry is authoritative; the legacy literal scan is migration input only.
 Adapters rebind events with `withActivityLogCorrelation` or `withActivityLogParentCorrelation`,
 preserving producer-owned ids and the non-enumerable registration/rejection markers. Test the
 forwarded event through the real registered formatter: a buffer alone cannot detect a marker
 lost by an object spread.
+For other forwarding copies, use `copyActivityLogEventMetadata` to preserve both raw registration
+and closed rejection markers. `activityLogEventRegistration` admits complete structural metadata
+and preserves its reference; it does not grant canonical write authority. Keep malformed raw
+attachments until the physical writer can report their existing closed rejection reason.
 
 Each registration owns exact fields, bounds, data classes and vocabularies, causal and lifecycle
 semantics, analyzer projection, failure classes, proof ids, and release impact. Unknown or dynamic

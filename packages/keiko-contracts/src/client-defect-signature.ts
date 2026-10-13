@@ -53,7 +53,14 @@ export function clientDefectContext(facts: ClientDefectContextFacts): readonly s
 }
 
 export function isClientDefectContext(value: readonly string[]): boolean {
-  return value.length <= 4 && value.every((token) => CLIENT_CONTEXT_VALUES.has(token));
+  const withinLimit = value.length <= 4;
+  if (!withinLimit) return false;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > 4) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !CLIENT_CONTEXT_VALUES.has(value[index] ?? "")) return false;
+  }
+  return true;
 }
 
 /** Browser frames are already reduced to shipped chunk digests before they reach this layer. */

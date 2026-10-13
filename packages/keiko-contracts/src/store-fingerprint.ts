@@ -105,11 +105,21 @@ function isOptionalStoreFingerprintKeySource(
   return typeof value === "string" && STORE_FINGERPRINT_KEY_SOURCE_SET.has(value);
 }
 
+function migrationsHavePhysicalMembers(value: readonly unknown[]): boolean {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > STORE_FINGERPRINT_MAX_MIGRATIONS)
+    return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isBoundedIdentifier(value[index])) return false;
+  }
+  return true;
+}
+
 function isMigrationsApplied(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) &&
     value.length <= STORE_FINGERPRINT_MAX_MIGRATIONS &&
-    value.every((entry) => isBoundedIdentifier(entry))
+    migrationsHavePhysicalMembers(value)
   );
 }
 

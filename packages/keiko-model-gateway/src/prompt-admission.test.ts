@@ -3,7 +3,11 @@ import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contract
 import { admitGatewayPrompt } from "./prompt-admission.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
-import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
+import type {
+  GatewayFailureEvidence,
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+} from "./observability.js";
 import type { GatewayCallRequest } from "./gateway.js";
 import {
   expectActivityLogProof,
@@ -18,10 +22,10 @@ const capability = {
 const request = { modelId: "fixture", messages: [{ role: "user" as const, content: "question" }] };
 
 function recorder(): {
-  events: ModelGatewayLogEvent[];
-  write: (event: ModelGatewayLogEvent) => void;
+  events: ModelGatewayLogTransport[];
+  write: (event: ModelGatewayLogTransport) => void;
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     write: (event): void => {
@@ -39,7 +43,9 @@ describe("complete prompt admission", () => {
         admitGatewayPrompt({ ...request, maxOutputTokens }, capability, log, "fixture"),
       ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
       expect(log.events[0]?.extra).toMatchObject({ state: "overflow" });
-      expect(Number.isSafeInteger(log.events[0]?.extra?.outputBudget)).toBe(true);
+      expect(Number.isSafeInteger(normalFixtureEvent(log.events[0])?.extra?.outputBudget)).toBe(
+        true,
+      );
     },
   );
 
@@ -107,7 +113,7 @@ it("retains schema cost when the remote message count wins", () => {
       tokens: remote,
     }),
   ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
-  expect(log.events[0]?.extra?.promptTokens).toBe(remote + schemaCost);
+  expect(normalFixtureEvent(log.events[0])?.extra?.promptTokens).toBe(remote + schemaCost);
 });
 
 it("classifies overflow refusals with structured evidence before throwing", () => {
@@ -256,3 +262,15 @@ describe("independent model input ceiling admission", () => {
     },
   );
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

@@ -27,6 +27,7 @@ import {
   classifyErrorKind,
   defineActivityLogOperation,
   recordActivityLogLoss,
+  type RejectedActivityLogEvent,
   withActivityLogCorrelation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -48,6 +49,9 @@ export interface ModelGatewayLogEvent {
   readonly errorKind?: string | undefined;
   readonly extra?: Readonly<Record<string, unknown>> | undefined;
 }
+
+/** Normal producer vocabulary plus the exact rejected transport arm. */
+export type ModelGatewayLogTransport = ModelGatewayLogEvent | RejectedActivityLogEvent;
 
 export interface GatewayFailureEvidence {
   readonly frames: readonly string[];
@@ -86,7 +90,7 @@ export function gatewayFailureEvidence(
 export interface ModelGatewayLogSink {
   /** The composition root supplies the existing body-free stack/cause reducers. */
   readonly errorEvidence?: ((error: unknown) => GatewayFailureEvidence) | undefined;
-  readonly write: (event: ModelGatewayLogEvent) => void;
+  readonly write: (event: ModelGatewayLogTransport) => void;
   readonly correlationId?: string | undefined;
   // Cheap level predicate — the ONLY way a below-threshold event can cost nothing here.
   //
@@ -117,7 +121,7 @@ export function logLevelEnabled(sink: ModelGatewayLogSink, level: ModelGatewayLo
 // call site allocates nothing beyond the event it is about to discard. Its predicate refuses every
 // level, so a gated site wired to no sink at all does not even build the event it would discard.
 export const nullModelGatewayLogSink: ModelGatewayLogSink = Object.freeze({
-  write(_event: ModelGatewayLogEvent): void {
+  write(_event: ModelGatewayLogTransport): void {
     // The default for every unwired call site: the event is lost, and counted as such (#3532).
     recordActivityLogLoss("port-unwired");
   },
@@ -168,7 +172,7 @@ const GATEWAY_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
 
 function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
   return {
-    write(event: ModelGatewayLogEvent): void {
+    write(event: ModelGatewayLogTransport): void {
       try {
         sink.write(event);
       } catch (cause) {
@@ -195,7 +199,7 @@ function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
 
 function reportFailedLogSink(
   sink: ModelGatewayLogSink,
-  droppedEvent: ModelGatewayLogEvent,
+  droppedEvent: ModelGatewayLogTransport,
   cause: unknown,
 ): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;
@@ -269,7 +273,7 @@ export function withCorrelationId(
     return sink;
   }
   return {
-    write(event: ModelGatewayLogEvent): void {
+    write(event: ModelGatewayLogTransport): void {
       sink.write(event.correlationId === undefined ? correlatedEvent(event, correlationId) : event);
     },
     enabled(level: ModelGatewayLogLevel): boolean {
@@ -284,7 +288,10 @@ export function logCorrelationId(sink: ModelGatewayLogSink): string | undefined 
   return sink.correlationId;
 }
 
-function correlatedEvent(event: ModelGatewayLogEvent, correlationId: string): ModelGatewayLogEvent {
+function correlatedEvent(
+  event: ModelGatewayLogTransport,
+  correlationId: string,
+): ModelGatewayLogTransport {
   return withActivityLogCorrelation(event, correlationId);
 }
 
@@ -315,7 +322,7 @@ export function logTimer(): () => number {
 function errorKindProperty(error: object, key: string): string | undefined {
   let value: unknown;
   try {
-    value = (error as Record<string, unknown>)[key];
+    value = Reflect.get(error, key);
   } catch {
     return undefined;
   }

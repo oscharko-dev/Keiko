@@ -478,12 +478,27 @@ function unsupportedStartFields(input: Record<string, unknown>): string[] {
     .map((key) => `request contains unsupported field: ${key}`);
 }
 
+function recordInvalidRequestId(
+  input: Record<string, unknown>,
+  observed: unknown,
+  admitted: string | undefined,
+  errors: string[],
+): void {
+  if (
+    (input.requestId !== undefined && admitted === undefined) ||
+    (observed !== undefined && admitted === undefined)
+  ) {
+    errors.push(`requestId must be a token of 1-${String(MAX_REQUEST_ID_LENGTH)} characters`);
+  }
+}
+
 export function parseUpdateSessionStartRequest(input: unknown): UpdateSessionStartRequestParse {
   if (!isRecord(input)) {
     return { ok: false, errors: ["request must be an object"] };
   }
   const errors = unsupportedStartFields(input);
-  const requestId = validRequestId(input.requestId) ? input.requestId : undefined;
+  const observedRequestId = validRequestId(input.requestId) ? input.requestId : undefined;
+  const requestId = validRequestId(observedRequestId) ? observedRequestId : undefined;
   const candidateId = parsedRequiredToken(
     input,
     "candidateId",
@@ -505,9 +520,7 @@ export function parseUpdateSessionStartRequest(input: unknown): UpdateSessionSta
     "executionToken must be a 256-bit token",
     errors,
   );
-  if (input.requestId !== undefined && requestId === undefined) {
-    errors.push(`requestId must be a token of 1-${String(MAX_REQUEST_ID_LENGTH)} characters`);
-  }
+  recordInvalidRequestId(input, observedRequestId, requestId, errors);
   if (
     errors.length > 0 ||
     candidateId === undefined ||
@@ -536,8 +549,10 @@ export function parseUpdateRestartVerificationRequest(
   if (input.targetVersion !== undefined && !validTargetVersion(input.targetVersion)) {
     return { ok: false, errors: ["targetVersion must be a stable semver version"] };
   }
-  return {
-    ok: true,
-    value: input.targetVersion === undefined ? {} : { targetVersion: input.targetVersion },
-  };
+  if (input.targetVersion === undefined) return { ok: true, value: {} };
+  const targetVersion = input.targetVersion;
+  if (!validTargetVersion(targetVersion)) {
+    return { ok: false, errors: ["targetVersion must be a stable semver version"] };
+  }
+  return { ok: true, value: { targetVersion } };
 }

@@ -489,3 +489,124 @@ describe("process-wide server logger", () => {
     expect(getServerLogger()).toBe(replacement);
   });
 });
+
+import * as publicActivityLogOwner from "@oscharko-dev/keiko-activity-log";
+import {
+  ACTIVITY_LOG_EVENT_REGISTRATION,
+  ActivityLogEventValidationError,
+  activityLogOperationSchema,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { formatActivityLogProofLine } from "../../../tests/support/activity-log-proof.js";
+
+describe("Support logger raw metadata preservation", () => {
+  beforeEach(() => {
+    resetActivityLogLossCountersForTests();
+  });
+  afterEach(() => {
+    resetActivityLogLossCountersForTests();
+  });
+  for (const [surface, buildLogger] of [
+    ["source", createServerLogger],
+    ["public", publicActivityLogOwner.createServerLogger],
+  ] as const) {
+    function operation(): NonNullable<ReturnType<typeof activityLogOperationSchema>> {
+      const registration = activityLogOperationSchema("gateway.instance.reused");
+      if (registration === undefined) throw new TypeError("canonical operation required");
+      return registration;
+    }
+    function recordEvent(input: ServerLogEvent): ServerLogEvent {
+      const events: ServerLogEvent[] = [];
+      const logger = buildLogger({
+        sink: {
+          write(event): void {
+            events.push(event);
+          },
+        },
+        level: "debug",
+      }).child({ correlationId: "fixture-correlation" });
+      logger.info(input);
+      const event = events[0];
+      if (event === undefined) throw new TypeError("recorded event required");
+      return event;
+    }
+    it(`${surface}: preserves healthy metadata, correlation and real formatter admission`, () => {
+      const registration = operation();
+      const input: unknown = Reflect.apply(activityLogEvent, undefined, [
+        registration,
+        {},
+        { generation: 1 },
+      ]);
+      if (typeof input !== "object" || input === null) throw new TypeError("event object required");
+      // Offer the actual producer to the logger rather than certifying a forged plain event.
+      const producerEvents: ServerLogEvent[] = [];
+      const logger = buildLogger({
+        sink: {
+          write(value): void {
+            producerEvents.push(value);
+          },
+        },
+        level: "debug",
+      }).child({ correlationId: "fixture-correlation" });
+      Reflect.apply(logger.info, logger, [input]);
+      const produced = producerEvents[0];
+      if (produced === undefined) throw new TypeError("producer event required");
+      expect(produced.correlationId).toBe("fixture-correlation");
+      expect(activityLogEventRegistration(produced)).toBe(registration);
+      expect(formatActivityLogProofLine(produced)).toContain('"generation":1');
+      expect(activityLogLossCounters()["schema-rejected"]).toBe(0);
+    });
+    it(`${surface}: preserves malformed raw metadata and the existing final mismatch`, () => {
+      const raw = { ...operation(), owner: 42, fields: {} };
+      const input: ServerLogEvent = {
+        category: "gateway",
+        op: "gateway.instance.reused",
+        extra: { generation: 1 },
+      };
+      Object.defineProperty(input, ACTIVITY_LOG_EVENT_REGISTRATION, { value: raw });
+      const event = recordEvent(input);
+      expect(Object.getOwnPropertyDescriptor(event, ACTIVITY_LOG_EVENT_REGISTRATION)?.value).toBe(
+        raw,
+      );
+      expect(() => formatActivityLogProofLine(event)).toThrow(
+        new ActivityLogEventValidationError("registration-mismatch"),
+      );
+      expect(activityLogLossCounters()["schema-rejected"]).toBe(0);
+    });
+    it(`${surface}: preserves a genuine refusal kind and one buffered-logger schema-loss count`, () => {
+      const input: unknown = Reflect.apply(activityLogEvent, undefined, [
+        operation(),
+        {},
+        { generation: "invalid" },
+      ]);
+      if (typeof input !== "object" || input === null) throw new TypeError("event object required");
+      const events: ServerLogEvent[] = [];
+      const logger = buildLogger({
+        sink: {
+          write(event): void {
+            events.push(event);
+          },
+        },
+        level: "debug",
+      }).child({ correlationId: "fixture-correlation" });
+      Reflect.apply(logger.info, logger, [input]);
+      const event = events[0];
+      if (event === undefined) throw new TypeError("refused event required");
+      expect(event.correlationId).toBe("fixture-correlation");
+      expect(
+        Object.getOwnPropertyDescriptor(
+          event,
+          Symbol.for("@oscharko-dev/keiko-contracts/activity-log-event-rejection"),
+        ),
+      ).toEqual({
+        value: "invalid-field-type",
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+      expect(() => formatActivityLogProofLine(event)).toThrow(
+        new ActivityLogEventValidationError("invalid-field-type"),
+      );
+      expect(activityLogLossCounters()["schema-rejected"]).toBe(1);
+    });
+  }
+});

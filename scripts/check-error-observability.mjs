@@ -149,6 +149,14 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
   ],
   [
+    "packages/keiko-contracts/src/observability.ts:completeRegistrationShape",
+    "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
+  ],
+  [
+    "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind",
+    "An unreadable error kind becomes the closed registration-mismatch refusal carried by the rejection sentinel to the physical writer.",
+  ],
+  [
     "packages/keiko-contracts/src/opencode-service-host.ts:dataRecord",
     "Pure supplemental metadata validation maps hostile or revoked proxies to absent approval; no host selection, installation or launch is performed.",
   ],
@@ -444,8 +452,21 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   ],
 ]);
 
-function isReviewedFailurePath(path, owner) {
-  return REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`);
+function isReviewedFailurePath(path, owner, node) {
+  if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`)) return false;
+  if (path !== "packages/keiko-contracts/src/observability.ts") return true;
+  if (owner === "completeRegistrationShape") return exactFailureFallback(node, false);
+  if (owner === "rejectedActivityLogEventKind")
+    return exactFailureFallback(node, "registration-mismatch");
+  return true;
+}
+
+function exactFailureFallback(node, value) {
+  if (node.block.statements.length !== 1) return false;
+  const statement = node.block.statements[0];
+  if (!ts.isReturnStatement(statement) || statement.expression === undefined) return false;
+  if (value === false) return statement.expression.kind === ts.SyntaxKind.FalseKeyword;
+  return ts.isStringLiteral(statement.expression) && statement.expression.text === value;
 }
 
 function hasRawConsoleCall(node) {
@@ -755,7 +776,7 @@ function failurePathFinding(sourceFile, node, path) {
   const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const owner = catchFunctionName(node);
   if (hasRawConsoleCall(node)) return { path, line, owner, kind: "raw-console-catch" };
-  if (!hasEvidenceOrPropagation(node) && !isReviewedFailurePath(path, owner)) {
+  if (!hasEvidenceOrPropagation(node) && !isReviewedFailurePath(path, owner, node)) {
     return { path, line, owner, kind: "unregistered-catch" };
   }
   return undefined;

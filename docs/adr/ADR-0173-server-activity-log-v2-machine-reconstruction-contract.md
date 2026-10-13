@@ -418,6 +418,14 @@ check closes post-construction mutation and protects JavaScript callers that did
 the TypeScript checker. A rejection produces only a closed body-free rejection kind; it never
 echoes the rejected operation, field, or value and cannot recursively enter the failed sink.
 
+The constructor's public type preserves that distinction: a valid registration-derived event or
+a closed rejected-event arm, carried through the existing injected ports. Malformed or unreadable
+error-kind observations become the existing `registration-mismatch` refusal, never an unchecked
+marker value. The metadata reader admits complete structural declarations and preserves their
+reference, including declarations not yet generated into the registry; this grants no canonical
+write authority. Forwarding copies preserve raw attachments even when that checked reader refuses
+them, so final validation retains the existing rejection classification.
+
 Every generated operation schema includes required `completeness` and `loss` contracts. The event
 constructor supplies the safe defaults `complete` and `none`, while a producer that observed
 partial evidence or known loss overrides those values explicitly. Central ownership makes the two
@@ -476,7 +484,8 @@ production sink refused.
 
 Adapters preserve the event's non-enumerable registration and rejection markers when adding
 correlation context. `withActivityLogCorrelation` and `withActivityLogParentCorrelation` share one
-copying implementation; producer-owned ids remain authoritative. A plain spread is not a valid
+copying implementation through `copyActivityLogEventMetadata`, also used by ordinary logger
+forwarding copies; producer-owned ids remain authoritative. A plain spread is not a valid
 forwarding operation. Readiness initialization forwards both its own lifecycle events and nested
 HTTP transport events through this path. Its regression validates the forwarded events with the
 real registered formatter, and the installed Workbench journey requires complete exported and

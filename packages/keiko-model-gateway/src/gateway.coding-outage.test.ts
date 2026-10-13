@@ -25,7 +25,11 @@ import type {
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type {
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+  ModelGatewayLogSink,
+} from "./observability.js";
 
 // #3873: at peak load a customer's LiteLLM gateway sheds load for minutes. An autonomous coding
 // turn keeps retrying a transiently unavailable provider and waits through an open breaker for an
@@ -203,7 +207,7 @@ function toolCallingCapability(): ModelCapability {
   };
 }
 
-function recordingLog(events: ModelGatewayLogEvent[]): ModelGatewayLogSink {
+function recordingLog(events: ModelGatewayLogTransport[]): ModelGatewayLogSink {
   return {
     write: (event): void => {
       events.push(event);
@@ -215,7 +219,7 @@ function gatewayFor(
   provider: ProviderAdapter["call"],
   clock: Clock,
   gatewayConfig: GatewayConfig = config(),
-  events: ModelGatewayLogEvent[] = [],
+  events: ModelGatewayLogTransport[] = [],
 ): Gateway {
   return new Gateway(gatewayConfig, {
     adapter: { call: provider },
@@ -230,7 +234,7 @@ function streamingGatewayFor(
   callStream: ProviderStream,
   clock: Clock,
   gatewayConfig: GatewayConfig = config(),
-  events: ModelGatewayLogEvent[] = [],
+  events: ModelGatewayLogTransport[] = [],
 ): Gateway {
   return new Gateway(gatewayConfig, {
     adapter: {
@@ -252,7 +256,10 @@ async function streamedContent(stream: AsyncIterable<GatewayStreamChunk>): Promi
   return content;
 }
 
-function linesOf(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent[] {
+function linesOf(
+  events: readonly ModelGatewayLogTransport[],
+  op: string,
+): ModelGatewayLogTransport[] {
   return events.filter((event) => event.op === op);
 }
 
@@ -278,7 +285,7 @@ describe("coding-workbench outage tolerance", () => {
   // #3873 review: the commit draft borrows the coding-workbench timeout floors (#3591) but a person
   // waits on it, so the latency profile alone must never select the outage window.
   it("keeps the attempt count for a commit draft that borrows the coding latency profile", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringProvider(8);
 
     await expect(
@@ -304,7 +311,7 @@ describe("coding-workbench outage tolerance", () => {
 
   it("stops once the outage window cannot hold another retry", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringProvider(Number.POSITIVE_INFINITY);
 
     await expect(
@@ -322,7 +329,7 @@ describe("coding-workbench outage tolerance", () => {
   // model that keeps answering with an invalid tool-call shape gets the configured attempts and its
   // schema-repair corrections, then the turn ends with the invalid-shape rejection, as without it.
   it("keeps the attempt count for a model that keeps returning an invalid tool-call shape", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let calls = 0;
     const gateway = new Gateway(
       { ...config(), capabilities: [toolCallingCapability()] },
@@ -356,7 +363,10 @@ describe("coding-workbench outage tolerance", () => {
     });
     expect(linesOf(events, "gateway.tool-catalog.repair")).toHaveLength(2);
     const scheduled = linesOf(events, "gateway.retry.scheduled");
-    expect(scheduled.map((line) => line.extra?.retryPolicy)).toEqual(["attempts", "attempts"]);
+    expect(scheduled.map((line) => normalFixtureEvent(line).extra?.retryPolicy)).toEqual([
+      "attempts",
+      "attempts",
+    ]);
     const exhausted = linesOf(events, "gateway.retry.exhausted");
     expect(exhausted).toHaveLength(1);
     expect(exhausted[0]?.extra).toMatchObject({ reason: "max-retries", retryPolicy: "attempts" });
@@ -364,7 +374,7 @@ describe("coding-workbench outage tolerance", () => {
 
   it("still retries a provider that keeps timing out through the window", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringProvider(Number.POSITIVE_INFINITY, SILENT);
 
     await expect(
@@ -445,7 +455,7 @@ describe("coding-workbench outage tolerance", () => {
   // to the window plus the one attempt it admits last, read through the real adapter here.
   it("keeps retrying a refused connection past 600 s under a 30-minute window at maxRetries 0", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let calls = 0;
     const gatewayConfig = windowConfig(1_800_000);
     const gateway = new Gateway(gatewayConfig, {
@@ -467,9 +477,9 @@ describe("coding-workbench outage tolerance", () => {
     const provider = gatewayConfig.providers[0];
     if (provider === undefined) throw new TypeError("expected the configured provider");
     const raised = { ...provider, timeoutMs: codingWorkbenchProviderTimeoutMs(provider.timeoutMs) };
-    expect(linesOf(events, "gateway.chat.started")[0]?.extra?.requestBudgetMs).toBe(
-      bufferedCallBudgetMs(raised, 1_800_000),
-    );
+    expect(
+      normalFixtureEvent(linesOf(events, "gateway.chat.started")[0])?.extra?.requestBudgetMs,
+    ).toBe(bufferedCallBudgetMs(raised, 1_800_000));
     const exhausted = linesOf(events, "gateway.retry.exhausted");
     expect(exhausted).toHaveLength(1);
     expect(exhausted[0]?.extra).toMatchObject({ reason: "budget", retryPolicy: "outage-window" });
@@ -486,7 +496,7 @@ describe("coding-workbench outage tolerance", () => {
     "retries a silent attempt only while a %i ms window has room for it",
     async (windowMs, attempts) => {
       const clock = simulatedClock();
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       let calls = 0;
       const silent: ProviderAdapter["call"] = (_request, provider) => {
         calls += 1;
@@ -573,7 +583,7 @@ describe("coding-workbench outage tolerance (streamed)", () => {
 
   it("stops once the outage window cannot hold another retry", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringStream(Number.POSITIVE_INFINITY);
 
     await expect(
@@ -589,7 +599,9 @@ describe("coding-workbench outage tolerance (streamed)", () => {
     expect(provider.calls()).toBeGreaterThan(3);
     const scheduled = linesOf(events, "gateway.retry.scheduled");
     expect(scheduled.length).toBeGreaterThan(2);
-    expect(scheduled.every((line) => line.extra?.retryPolicy === "outage-window")).toBe(true);
+    expect(
+      scheduled.every((line) => normalFixtureEvent(line).extra?.retryPolicy === "outage-window"),
+    ).toBe(true);
     const exhausted = linesOf(events, "gateway.retry.exhausted");
     expect(exhausted).toHaveLength(1);
     expect(exhausted[0]?.extra).toMatchObject({ reason: "budget", retryPolicy: "outage-window" });
@@ -598,7 +610,7 @@ describe("coding-workbench outage tolerance (streamed)", () => {
   // A stream never replays a rejected tool-call shape (that needs the buffered path's repair), and
   // the window does not change it: one call, ended under the attempt policy.
   it("ends a rejected tool-call shape at once instead of retrying it through the window", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringStream(
       Number.POSITIVE_INFINITY,
       () => new GatewayToolCatalogError("invalid-arguments", undefined, true),
@@ -621,7 +633,7 @@ describe("coding-workbench outage tolerance (streamed)", () => {
   // #3873 review: the stream's own 30-minute budget no longer clips a longer configured window.
   it("keeps retrying a refused connection past the stream budget under a one-hour window", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringStream(Number.POSITIVE_INFINITY, REFUSED);
 
     await expect(
@@ -642,7 +654,7 @@ describe("coding-workbench outage tolerance (streamed)", () => {
 
   it("still retries a provider that keeps timing out through the window", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringStream(Number.POSITIVE_INFINITY, SILENT);
 
     await expect(
@@ -665,7 +677,7 @@ describe("coding-workbench outage tolerance (streamed)", () => {
   // instead of ending on the probe's failure, exactly as the buffered turn does.
   it("waits through an open breaker instead of refusing the call", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const breaker = { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 };
     const provider = recoveringStream(3);
 
@@ -681,12 +693,14 @@ describe("coding-workbench outage tolerance (streamed)", () => {
     expect(clock.elapsed()).toBeLessThan(GATEWAY_CODING_OUTAGE_WINDOW_MS);
     const waits = linesOf(events, "gateway.circuit.wait");
     expect(waits.length).toBeGreaterThan(0);
-    expect(waits.every((line) => line.extra?.retryPolicy === "outage-window")).toBe(true);
+    expect(
+      waits.every((line) => normalFixtureEvent(line).extra?.retryPolicy === "outage-window"),
+    ).toBe(true);
   });
 
   it("bounds a wait on a saturated probe slot by the outage window", async () => {
     const clock = simulatedClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const breaker = { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 };
     let calls = 0;
     let releaseProbe: (() => void) | undefined;
@@ -716,7 +730,7 @@ describe("coding-workbench outage tolerance (streamed)", () => {
 
     expect(clock.elapsed() - waitingSince).toBeLessThanOrEqual(GATEWAY_CODING_OUTAGE_WINDOW_MS);
     const refused = linesOf(events, "gateway.circuit.wait").find(
-      (line) => line.extra?.outcome === "budget-refused",
+      (line) => normalFixtureEvent(line).extra?.outcome === "budget-refused",
     );
     expect(refused?.extra).toMatchObject({
       reason: "probe-saturated",
@@ -783,7 +797,7 @@ describe("coding-workbench retry observer", () => {
   // 503 is scheduled as attempt 2 and announced as the retry that follows provider attempt 1.
   it("numbers a retry by the provider attempt it follows, apart from the scheduled line's ladder", async () => {
     const { notices, retryObserver } = listening();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const failures = [
       new ProviderOutputExhaustedError(MODEL),
       new ProviderError("Synthetic 503", 503),
@@ -858,11 +872,13 @@ describe("coding-workbench retry observer", () => {
     const throwing: GatewayRetryObserver = (): void => {
       throw new Error("observer exploded with key sk-ABCDEFGHIJKLMNOPQRSTUV");
     };
-    const thrown = (events: readonly ModelGatewayLogEvent[]): unknown[] =>
-      linesOf(events, "gateway.retry.observer-failed").map((line) => line.extra?.notice);
+    const thrown = (events: readonly ModelGatewayLogTransport[]): unknown[] =>
+      linesOf(events, "gateway.retry.observer-failed").map(
+        (line) => normalFixtureEvent(line).extra?.notice,
+      );
 
     it("still answers a buffered coding turn that meets an unavailable provider", async () => {
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const provider = recoveringProvider(2);
 
       const result = await gatewayFor(provider.call, simulatedClock(), config(), events).chat({
@@ -885,7 +901,7 @@ describe("coding-workbench retry observer", () => {
     });
 
     it("still opens a streamed coding turn that meets an unavailable provider", async () => {
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const provider = recoveringStream(2, REFUSED);
 
       const content = await streamedContent(
@@ -902,7 +918,7 @@ describe("coding-workbench retry observer", () => {
     });
 
     it("still fails a coding turn that outlives its window with the provider's own error", async () => {
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const provider = recoveringProvider(Number.POSITIVE_INFINITY);
 
       await expect(
@@ -951,9 +967,9 @@ describe("coding-workbench retry observer (admission waits)", () => {
   async function openedBuffered(): Promise<{
     readonly gateway: Gateway;
     readonly provider: { readonly calls: () => number };
-    readonly events: ModelGatewayLogEvent[];
+    readonly events: ModelGatewayLogTransport[];
   }> {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringProvider(2);
     const gateway = gatewayFor(provider.call, simulatedClock(), config(BREAKER), events);
     await expect(gateway.chat(request("commit-draft"))).rejects.toBeInstanceOf(CircuitOpenError);
@@ -964,9 +980,9 @@ describe("coding-workbench retry observer (admission waits)", () => {
   async function openedStreamed(): Promise<{
     readonly gateway: Gateway;
     readonly provider: { readonly calls: () => number };
-    readonly events: ModelGatewayLogEvent[];
+    readonly events: ModelGatewayLogTransport[];
   }> {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringStream(2);
     const gateway = streamingGatewayFor(
       provider.callStream,
@@ -1016,7 +1032,10 @@ describe("coding-workbench retry observer (admission waits)", () => {
     expect(provider.calls()).toBe(3);
     expect(notices).toEqual([CIRCUIT_WAIT, ANSWERED]);
     const waits = linesOf(events, "gateway.circuit.wait");
-    expect(waits.map((line) => line.extra?.outcome)).toEqual(["started", "timer"]);
+    expect(waits.map((line) => normalFixtureEvent(line).extra?.outcome)).toEqual([
+      "started",
+      "timer",
+    ]);
     expect(waits[0]?.extra).toMatchObject({
       reason: "circuit-cooldown",
       retryPolicy: "outage-window",
@@ -1179,7 +1198,7 @@ describe("coding-workbench retry observer (admission waits)", () => {
   // record of that refusal, and the turn-failure frame follows it.
   it("stays silent for a call whose window cannot hold the wait at all", async () => {
     const { notices, retryObserver } = listening();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const provider = recoveringProvider(2);
     const gateway = gatewayFor(
       provider.call,
@@ -1195,9 +1214,11 @@ describe("coding-workbench retry observer (admission waits)", () => {
 
     expect(provider.calls()).toBe(2);
     expect(notices).toEqual([]);
-    expect(linesOf(events, "gateway.circuit.wait").map((line) => line.extra?.outcome)).toEqual([
-      "budget-refused",
-    ]);
+    expect(
+      linesOf(events, "gateway.circuit.wait").map(
+        (line) => normalFixtureEvent(line).extra?.outcome,
+      ),
+    ).toEqual(["budget-refused"]);
   });
 
   // The observer itself cancels the call while its admission waits: a cancellation exactly during
@@ -1272,12 +1293,16 @@ describe("coding-workbench retry observer (admission waits)", () => {
       }
 
       expect(provider.calls()).toBe(3);
-      expect(linesOf(events, "gateway.circuit.wait").map((line) => line.extra?.outcome)).toEqual([
-        "started",
-        "timer",
-      ]);
+      expect(
+        linesOf(events, "gateway.circuit.wait").map(
+          (line) => normalFixtureEvent(line).extra?.outcome,
+        ),
+      ).toEqual(["started", "timer"]);
       const thrown = linesOf(events, "gateway.retry.observer-failed");
-      expect(thrown.map((line) => line.extra?.notice)).toEqual(["admission-wait", "settled"]);
+      expect(thrown.map((line) => normalFixtureEvent(line).extra?.notice)).toEqual([
+        "admission-wait",
+        "settled",
+      ]);
       expect(thrown.every((line) => line.correlationId === "corr-wait-observer-throws")).toBe(true);
     },
   );
@@ -1310,3 +1335,15 @@ describe("coding-workbench retry observer (admission waits)", () => {
     },
   );
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

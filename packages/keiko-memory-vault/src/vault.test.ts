@@ -34,7 +34,11 @@ import {
   type MemoryEvent,
   type MemoryVaultStore,
 } from "./index.js";
-import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import type {
+  MemoryVaultLogEvent,
+  MemoryVaultLogTransport,
+  MemoryVaultLogSink,
+} from "./vault-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -1292,8 +1296,8 @@ describe("replaceAllEmbeddings concurrent-write detection", () => {
 // key-resolution tier an operator needs to tell "opened via KEIKO_MEMORY_KEY" from "fell through
 // to the weaker keyfile tier" was computed and then thrown away.
 describe("activity-log seam: memory-vault.store.opened retains the key-resolution tier", () => {
-  function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogEvent[] } {
-    const events: MemoryVaultLogEvent[] = [];
+  function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogTransport[] } {
+    const events: MemoryVaultLogTransport[] = [];
     return {
       sink: {
         write: (event): void => {
@@ -1325,7 +1329,7 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
       keySource: "env",
       loss: "none",
     });
-    expect(typeof opened[0]?.durationMs).toBe("number");
+    expect(typeof normalFixtureEvent(opened[0])?.durationMs).toBe("number");
     const persisted = expectActivityLogProof(
       "memory-vault.store.opened.key-source",
       formatActivityLogProofLine(opened[0] ?? {}),
@@ -1397,3 +1401,15 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
     expect(opened).toHaveLength(0);
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: MemoryVaultLogTransport): MemoryVaultLogEvent;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

@@ -322,6 +322,15 @@ the physical sink validates the same contract again immediately before serializa
 therefore cannot add arbitrary metadata, widen a field after construction, or use an unregistered
 operation as an escape hatch.
 
+`activityLogEvent` returns either the requested event or a closed construction refusal. Keep both
+arms on the existing injected ports: a refused construction never acquires the requested operation's
+type or write authority. `activityLogEventRegistration` checks complete structural metadata and
+preserves its reference, while canonical registration and fields remain the physical writer's
+decision. Correlation wrappers and other forwarding copies use `copyActivityLogEventMetadata` to
+retain raw registration and closed rejection markers; dropping malformed attachments would erase
+the writer's existing rejection reason. Buffered logger loss counts are separate from the physical
+writer's rejection accounting.
+
 The generated contracts runtime exports those complete safe operation schemas and the derived
 failure-class coverage alongside the identity digests. Every schema receives mandatory
 `completeness` and `loss` fields centrally; emitters get the safe defaults `complete` and `none` and

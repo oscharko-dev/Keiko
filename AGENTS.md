@@ -472,6 +472,11 @@ system that exists, never beside it:
   `withActivityLogParentCorrelation`; a plain object spread drops its non-enumerable registration
   and rejection markers. Preserve producer-owned ids and prove forwarded events through the real
   registered formatter, not only a buffered event assertion.
+  Other forwarding copies use `copyActivityLogEventMetadata`, which retains raw registration and
+  closed rejection markers without granting write authority. The checked metadata reader admits
+  complete structure; only the physical writer admits canonical operations and fields. Injected
+  ports retain the constructor's normal-event/rejection union rather than asserting a refused
+  construction is the requested operation.
   Repository-add dialogs mint that id before clone/register, validate it with the canonical Activity Log correlation guard, pass it to the request, and report
   the attempt and settlement even when dismissed; effect replay is not a human dismissal.
 - **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and

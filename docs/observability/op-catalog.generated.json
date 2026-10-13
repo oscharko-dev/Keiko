@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7921705b07710325de05e787d74969db02b75903e7c88f509ac510e918ba4430",
+    "catalogDigest": "61961d54c17d2929f00106283f09f0e4ab36e36d8b8bad9ef420e3e6b73a0f56",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2149,8 +2149,8 @@
         "failureClasses": ["cli-install-layout-normalization"],
         "proofIds": ["cli.install-layout.normalized.before-support-snapshot"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/install-layout.ts:33",
-        "emitterSites": ["packages/keiko-cli/src/install-layout.ts:108"]
+        "registrationSite": "packages/keiko-cli/src/install-layout.ts:34",
+        "emitterSites": ["packages/keiko-cli/src/install-layout.ts:112"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16215,8 +16215,8 @@
         "failureClasses": ["activity-log-sink-failure"],
         "proofIds": ["gateway.log.sink-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/observability.ts:146",
-        "emitterSites": ["packages/keiko-model-gateway/src/observability.ts:206"]
+        "registrationSite": "packages/keiko-model-gateway/src/observability.ts:150",
+        "emitterSites": ["packages/keiko-model-gateway/src/observability.ts:210"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -25788,8 +25788,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["memory-vault.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:165",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:218"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:169",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:222"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27444,8 +27444,8 @@
         "failureClasses": ["shutdown-hook-failed", "process-shutdown"],
         "proofIds": ["process.exiting.reason", "process.exiting.uptime"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/process-activity-log.ts:119",
-        "emitterSites": ["packages/keiko-cli/src/process-activity-log.ts:175"]
+        "registrationSite": "packages/keiko-cli/src/process-activity-log.ts:120",
+        "emitterSites": ["packages/keiko-cli/src/process-activity-log.ts:176"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27516,8 +27516,8 @@
         "failureClasses": ["process-fatal", "startup-recovery-failed"],
         "proofIds": ["process.fatal.body-free", "process.fatal.stack-context"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/process-activity-log.ts:12",
-        "emitterSites": ["packages/keiko-cli/src/process-activity-log.ts:191"]
+        "registrationSite": "packages/keiko-cli/src/process-activity-log.ts:13",
+        "emitterSites": ["packages/keiko-cli/src/process-activity-log.ts:194"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -87382,7 +87382,7 @@
     {
       "op": "cli.install-layout.normalized",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/install-layout.ts:36",
+      "site": "packages/keiko-cli/src/install-layout.ts:37",
       "package": "keiko-cli"
     },
     {
@@ -87448,13 +87448,13 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/process-activity-log.ts:122",
+      "site": "packages/keiko-cli/src/process-activity-log.ts:123",
       "package": "keiko-cli"
     },
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/process-activity-log.ts:15",
+      "site": "packages/keiko-cli/src/process-activity-log.ts:16",
       "package": "keiko-cli"
     },
     {
@@ -87586,19 +87586,19 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-contracts/src/support-incident.ts:690",
+      "site": "packages/keiko-contracts/src/support-incident.ts:722",
       "package": "keiko-contracts"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-contracts/src/support-incident.ts:763",
+      "site": "packages/keiko-contracts/src/support-incident.ts:795",
       "package": "keiko-contracts"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1325",
+      "site": "packages/keiko-contracts/src/observability.ts:1516",
       "package": "keiko-contracts"
     },
     {
@@ -88204,7 +88204,7 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:168",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:172",
       "package": "keiko-memory-vault"
     },
     {
@@ -88432,7 +88432,7 @@
     {
       "op": "gateway.log.sink-failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/observability.ts:149",
+      "site": "packages/keiko-model-gateway/src/observability.ts:153",
       "package": "keiko-model-gateway"
     },
     {
