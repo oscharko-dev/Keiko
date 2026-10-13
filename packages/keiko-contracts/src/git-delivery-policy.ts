@@ -25,6 +25,7 @@ import {
   gitDeliveryTargetIsProtectedBranch,
   isGitDeliveryActionKind,
   isGitDeliveryNonEmptyConstraints,
+  isGitDeliveryConstraint,
 } from "./git-delivery.js";
 export { isGitDeliveryConstraint, isGitDeliveryProviderCapability } from "./git-delivery.js";
 
@@ -312,7 +313,12 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || typeof value[index] !== "string") return false;
+  }
+  return true;
 }
 
 function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
@@ -320,9 +326,8 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
 }
 
 function isRuleDecision(value: unknown): value is GitDeliveryRuleDecision {
-  return (
-    typeof value === "string" && (GIT_DELIVERY_RULE_DECISIONS as readonly string[]).includes(value)
-  );
+  const gitDeliveryRuleDecisionsValues: readonly string[] = GIT_DELIVERY_RULE_DECISIONS;
+  return typeof value === "string" && gitDeliveryRuleDecisionsValues.includes(value);
 }
 
 // ─── Guards ──────────────────────────────────────────────────────────────────────
@@ -331,17 +336,40 @@ function isActionKind(value: unknown): boolean {
   return isGitDeliveryActionKind(value);
 }
 
+function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitDeliveryConstraint(value[index])) return false;
+  }
+  return true;
+}
+
 // A decision's per-decision required fields must validate. approval-gated requires a string-array
 // (possibly empty); constrained requires at least one valid constraint. An empty constrained rule
 // would otherwise resolve to allowed after its no-op constraint list was evaluated.
 function decisionShapeValid(value: Record<string, unknown>): boolean {
-  if (value.decision === "approval-gated") {
-    return isUndefinedOr(isStringArray)(value.requiredApprovers);
+  const approvalDecision = value.decision;
+  if (!isRuleDecision(approvalDecision)) return false;
+  if (approvalDecision === "approval-gated") {
+    return (
+      isUndefinedOr(isStringArray)(value.requiredApprovers) &&
+      isUndefinedOr(isConstraintArray)(value.constraints)
+    );
   }
-  if (value.decision === "constrained") {
-    return isGitDeliveryNonEmptyConstraints(value.constraints);
+  const constrainedDecision = value.decision;
+  if (!isRuleDecision(constrainedDecision)) return false;
+  if (constrainedDecision === "constrained") {
+    return (
+      isGitDeliveryNonEmptyConstraints(value.constraints) &&
+      isUndefinedOr(isStringArray)(value.requiredApprovers)
+    );
   }
-  return true;
+  return (
+    isUndefinedOr(isStringArray)(value.requiredApprovers) &&
+    isUndefinedOr(isConstraintArray)(value.constraints)
+  );
 }
 
 export function isGitDeliveryPolicyRule(value: unknown): value is GitDeliveryPolicyRule {
@@ -359,33 +387,60 @@ function isDefaultRule(value: unknown): value is GitDeliveryDefaultRule {
 
 // ─── Parse functions (return the shared GitDeliveryParseResult) ──────────────────
 
-function ruleErrors(rules: unknown, field: "rules"): readonly string[] {
+function validRules(rules: unknown, errors: string[]): rules is readonly GitDeliveryPolicyRule[] {
   if (!Array.isArray(rules)) {
-    return [`pack.${field} must be an array`];
+    errors.push("pack.rules must be an array");
+    return false;
   }
-  if (!rules.every(isGitDeliveryPolicyRule)) {
-    return [`pack.${field} contains an invalid GitDeliveryPolicyRule`];
+  const extent = rules.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in rules) || !isGitDeliveryPolicyRule(rules[index])) {
+      errors.push("pack.rules contains an invalid GitDeliveryPolicyRule");
+      return false;
+    }
   }
-  return [];
+  return true;
 }
 
-function defaultRuleErrors(defaultRule: unknown): readonly string[] {
-  if (defaultRule === undefined) {
-    return [];
-  }
-  if (!isDefaultRule(defaultRule)) {
-    return ["pack.defaultRule is not a valid GitDeliveryDefaultRule"];
-  }
-  return [];
+function validDefaultRule(
+  defaultRule: unknown,
+  errors: string[],
+): defaultRule is GitDeliveryDefaultRule | undefined {
+  if (defaultRule === undefined || isDefaultRule(defaultRule)) return true;
+  errors.push("pack.defaultRule is not a valid GitDeliveryDefaultRule");
+  return false;
 }
 
-function commonPackErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [];
-  if (value.schemaVersion !== GIT_DELIVERY_POLICY_SCHEMA_VERSION) {
+type CommonPackFields = Pick<GitDeliveryRepoPolicyPack, "schemaVersion" | "rules" | "defaultRule">;
+
+function validCommonPack(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CommonPackFields {
+  const schema = value.schemaVersion === GIT_DELIVERY_POLICY_SCHEMA_VERSION;
+  if (!schema)
     errors.push("pack.schemaVersion must equal the GIT_DELIVERY_POLICY_SCHEMA_VERSION literal");
-  }
-  errors.push(...ruleErrors(value.rules, "rules"), ...defaultRuleErrors(value.defaultRule));
-  return errors;
+  const rules = validRules(value.rules, errors);
+  const defaultRule = validDefaultRule(value.defaultRule, errors);
+  return [schema, rules, defaultRule].every(Boolean);
+}
+
+function validRepoId(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & Pick<GitDeliveryRepoPolicyPack, "repoId"> {
+  if (isNonEmptyString(value.repoId)) return true;
+  errors.push("repo policy pack.repoId must be a non-empty string");
+  return false;
+}
+
+function validOrgId(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & Pick<GitDeliveryOrgPolicyPack, "orgId"> {
+  if (isNonEmptyString(value.orgId)) return true;
+  errors.push("org policy pack.orgId must be a non-empty string");
+  return false;
 }
 
 export function parseGitRepoPolicyPack(
@@ -394,14 +449,11 @@ export function parseGitRepoPolicyPack(
   if (!isRecord(value)) {
     return { ok: false, errors: ["repo policy pack must be an object"] };
   }
-  const errors = [...commonPackErrors(value)];
-  if (!isNonEmptyString(value.repoId)) {
-    errors.push("repo policy pack.repoId must be a non-empty string");
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: value as unknown as GitDeliveryRepoPolicyPack };
+  const errors: string[] = [];
+  const common = validCommonPack(value, errors);
+  const identity = validRepoId(value, errors);
+  if (!common || !identity) return { ok: false, errors };
+  return { ok: true, value };
 }
 
 export function parseGitOrgPolicyPack(
@@ -410,14 +462,11 @@ export function parseGitOrgPolicyPack(
   if (!isRecord(value)) {
     return { ok: false, errors: ["org policy pack must be an object"] };
   }
-  const errors = [...commonPackErrors(value)];
-  if (!isNonEmptyString(value.orgId)) {
-    errors.push("org policy pack.orgId must be a non-empty string");
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: value as unknown as GitDeliveryOrgPolicyPack };
+  const errors: string[] = [];
+  const common = validCommonPack(value, errors);
+  const identity = validOrgId(value, errors);
+  if (!common || !identity) return { ok: false, errors };
+  return { ok: true, value };
 }
 
 // Discriminates a pack by the presence of repoId vs orgId.

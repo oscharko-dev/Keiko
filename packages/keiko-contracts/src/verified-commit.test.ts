@@ -240,3 +240,94 @@ describe("#3386 AC11 — a PR snapshot never satisfies a commit-review validator
     expect(validateGitChangeSnapshotResult(receipt)).toMatchObject({ ok: false });
   });
 });
+
+import * as g2PublicVerified from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+
+describe("G2 final verified commit status lookup", () => {
+  for (const [surface, validate] of [
+    ["source", isVerifiedCommitResult],
+    ["public", g2PublicVerified.isVerifiedCommitResult],
+  ] as const) {
+    it(`${surface} retains a healthy verified commit receipt`, () => {
+      expect(validate(receipt)).toBe(true);
+    });
+    it(`${surface} refuses an unknown fifth status observation at its reason lookup`, () => {
+      let reads = 0;
+      const input = {
+        ...receipt,
+        get status(): unknown {
+          reads += 1;
+          return reads < 5 ? "approval-required" : "not-a-status";
+        },
+      };
+      let admitted: unknown;
+      expect(() => {
+        admitted = validate(input);
+      }).not.toThrow();
+      expect(admitted).toBe(false);
+      // Refusal completes the original eager conditions, including the later result-state read.
+      expect(reads).toBe(6);
+    });
+    it(`${surface} refuses absent physical message violations`, () => {
+      expect(
+        validate({ ...receipt, status: "blocked", reason: "message-policy", violations: Array(1) }),
+      ).toBe(false);
+    });
+  }
+});
+
+describe("G2 healthy inherited violation members", () => {
+  for (const [surface, validate] of [
+    ["source", isVerifiedCommitResult],
+    ["public", g2PublicVerified.isVerifiedCommitResult],
+  ] as const) {
+    it(`${surface} preserves inherited-present closed message violations`, () => {
+      const violations = ["empty-subject"];
+      Reflect.deleteProperty(violations, "0");
+      Object.setPrototypeOf(violations, ["empty-subject"]);
+      expect(
+        validate({ ...receipt, status: "blocked", reason: "message-policy", violations }),
+      ).toBe(true);
+    });
+  }
+});
+
+describe("G2 actual preflight finding member admission", () => {
+  for (const [surface, validate] of [
+    ["source", isVerifiedCommitResult],
+    ["public", g2PublicVerified.isVerifiedCommitResult],
+  ] as const) {
+    it(`${surface} preserves a healthy closed preflight finding`, () => {
+      const finding = {
+        code: "detached-head",
+        phase: "preflight",
+        severity: "blocking",
+        remediation: "user-actionable",
+      };
+      const input = {
+        ...receipt,
+        status: "blocked",
+        reason: "preflight-block",
+        preflightFindings: [finding],
+      };
+      expect(validate(input)).toBe(true);
+      expect(input.preflightFindings[0]).toBe(finding);
+    });
+    it(`${surface} refuses an unknown preflight finding code`, () => {
+      const finding = {
+        code: "unknown-code",
+        phase: "preflight",
+        severity: "blocking",
+        remediation: "user-actionable",
+      };
+      expect(
+        validate({
+          ...receipt,
+          status: "blocked",
+          reason: "preflight-block",
+          preflightFindings: [finding],
+        }),
+      ).toBe(false);
+    });
+  }
+});

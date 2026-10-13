@@ -346,3 +346,52 @@ describe("isGitDeliveryRemoteTargetPolicy", () => {
     expect(isGitDeliveryRemoteTargetPolicy("policy")).toBe(false);
   });
 });
+
+import * as g2PublicProvider from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+
+describe("G2 physical provider collections", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryProviderDescriptor],
+    ["public", g2PublicProvider.isGitDeliveryProviderDescriptor],
+  ] as const) {
+    it(`${surface} retains a healthy capability record`, () => {
+      const input = {
+        schemaVersion: "1",
+        providerInstanceId: "fixture",
+        capabilities: ["draft-pr"],
+      };
+      expect(validate(input)).toBe(true);
+    });
+    it(`${surface} refuses a physically missing capability`, () => {
+      expect(
+        validate({ schemaVersion: "1", providerInstanceId: "fixture", capabilities: Array(1) }),
+      ).toBe(false);
+    });
+    it(`${surface} refuses an invalid capability concealed by every`, () => {
+      const capabilities = [42];
+      Object.defineProperty(capabilities, "every", { value: () => true });
+      expect(validate({ schemaVersion: "1", providerInstanceId: "fixture", capabilities })).toBe(
+        false,
+      );
+    });
+  }
+});
+
+describe("G2 healthy inherited provider members", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryProviderDescriptor],
+    ["public", g2PublicProvider.isGitDeliveryProviderDescriptor],
+  ] as const) {
+    it(`${surface} preserves inherited-present capabilities and an empty collection`, () => {
+      const capabilities = ["draft-pr"];
+      Reflect.deleteProperty(capabilities, "0");
+      Object.setPrototypeOf(capabilities, ["draft-pr"]);
+      expect(validate({ schemaVersion: "1", providerInstanceId: "fixture", capabilities })).toBe(
+        true,
+      );
+      expect(
+        validate({ schemaVersion: "1", providerInstanceId: "fixture", capabilities: [] }),
+      ).toBe(true);
+    });
+  }
+});

@@ -126,13 +126,15 @@ const STATUS_REASONS: Readonly<Record<VerifiedCommitStatus, readonly VerifiedCom
 };
 function validStatusReason(value: Record<string, unknown>): boolean {
   if (typeof value.status !== "string" || !STATUSES.has(value.status)) return false;
-  return (
-    typeof value.reason === "string" &&
-    REASONS.has(value.reason) &&
-    STATUS_REASONS[value.status as VerifiedCommitStatus].includes(
-      value.reason as VerifiedCommitReason,
-    )
-  );
+  const statusReasons: Readonly<Partial<Record<string, readonly string[]>>> = STATUS_REASONS;
+  const reasonIsKnown = typeof value.reason === "string" && REASONS.has(value.reason);
+  if (!reasonIsKnown) return false;
+  const status = value.status;
+  if (typeof status !== "string" || !STATUSES.has(status)) return false;
+  const reasons = statusReasons[status];
+  if (reasons === undefined) return false;
+  const reason = value.reason;
+  return typeof reason === "string" && reasons.includes(reason);
 }
 function validRecordedAt(value: unknown): boolean {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value))
@@ -171,9 +173,13 @@ function validResultState(value: Record<string, unknown>): boolean {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function validFinding(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const finding = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const finding = value;
   return [
     Object.keys(finding).length === 4,
     isGitPreflightFindingCode(finding.code),
@@ -182,12 +188,32 @@ function validFinding(value: unknown): boolean {
     finding.remediation === "user-actionable" || finding.remediation === "internal",
   ].every(Boolean);
 }
+function validViolationMembers(value: unknown): value is readonly GitCommitMessageViolationCode[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitCommitMessageViolationCode(value[index])) return false;
+  }
+  return true;
+}
+
+function validFindingMembers(value: unknown): value is readonly GitPreflightFinding[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!validFinding(value[index])) return false;
+  }
+  return true;
+}
+
 function validMessagePolicyViolations(value: unknown): boolean {
   return (
     Array.isArray(value) &&
     value.length > 0 &&
     value.length <= GIT_COMMIT_MESSAGE_VIOLATION_CODES.length &&
-    value.every(isGitCommitMessageViolationCode)
+    validViolationMembers(value)
   );
 }
 
@@ -205,7 +231,7 @@ function validPreflightBlock(value: Record<string, unknown>): boolean {
     Array.isArray(value.preflightFindings) &&
     value.preflightFindings.length > 0 &&
     value.preflightFindings.length <= 32 &&
-    value.preflightFindings.every(validFinding) &&
+    validFindingMembers(value.preflightFindings) &&
     value.violations === undefined
   );
 }
@@ -238,8 +264,8 @@ function validBlockedDetails(value: Record<string, unknown>): boolean {
 
 /** Strict persisted/wire validator: unknown fields (including live claims) fail closed. */
 export function isVerifiedCommitResult(value: unknown): value is VerifiedCommitResult {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   const conditions = [
     Object.keys(record).every((key) => KEYS.has(key)),
     record.schemaVersion === "1",

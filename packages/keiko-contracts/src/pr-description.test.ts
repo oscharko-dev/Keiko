@@ -199,3 +199,99 @@ describe("PR description candidate boundary", () => {
     expect(evidence).not.toHaveProperty("candidate");
   });
 });
+
+import * as g2PublicDescription from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+
+describe("G2 physical narrative candidate admission", () => {
+  for (const [surface, validate] of [
+    ["source", validatePrDescriptionCandidate],
+    ["public", g2PublicDescription.validatePrDescriptionCandidate],
+  ] as const) {
+    it(`${surface} preserves the healthy narrative and section references`, () => {
+      const result = validate(candidate, [ID]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy narrative refused");
+      expect(result.value).toBe(candidate);
+      expect(result.value.summary).toBe(candidate.summary);
+      expect(result.value.summary[0]?.evidenceIds).toBe(statement.evidenceIds);
+    });
+    it(`${surface} refuses a malformed physical statement hidden by an iterator`, () => {
+      const summary = [{}];
+      Object.defineProperty(summary, Symbol.iterator, {
+        value: function* () {
+          yield statement;
+        },
+      });
+      expect(validate({ ...candidate, summary }, [ID])).toEqual({
+        ok: false,
+        reason: "invalid-model-output",
+      });
+    });
+    it(`${surface} refuses a malformed physical reference hidden by an iterator`, () => {
+      const evidenceIds = [42];
+      Object.defineProperty(evidenceIds, Symbol.iterator, {
+        value: function* () {
+          yield ID;
+        },
+      });
+      expect(validate({ ...candidate, summary: [{ ...statement, evidenceIds }] }, [ID])).toEqual({
+        ok: false,
+        reason: "invalid-model-output",
+      });
+    });
+  }
+});
+
+describe("G2 healthy inherited narrative members", () => {
+  for (const [surface, validate] of [
+    ["source", validatePrDescriptionCandidate],
+    ["public", g2PublicDescription.validatePrDescriptionCandidate],
+  ] as const) {
+    it(`${surface} preserves inherited-present statements and reference members`, () => {
+      const evidenceIds = [ID];
+      Reflect.deleteProperty(evidenceIds, "0");
+      Object.setPrototypeOf(evidenceIds, [ID]);
+      const entry = { ...statement, evidenceIds };
+      const summary = [entry];
+      Reflect.deleteProperty(summary, "0");
+      Object.setPrototypeOf(summary, [entry]);
+      const input = { ...candidate, summary };
+      const result = validate(input, [ID]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy inherited narrative refused");
+      expect(result.value).toBe(input);
+    });
+  }
+});
+
+describe("G2 original positive reference extent condition", () => {
+  for (const [surface, validate] of [
+    ["source", validatePrDescriptionCandidate],
+    ["public", g2PublicDescription.validatePrDescriptionCandidate],
+  ] as const) {
+    it(`${surface} preserves the actual healthy narrative reference`, () => {
+      const result = validate(candidate, [ID]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy narrative refused");
+      expect(result.value).toBe(candidate);
+    });
+    it(`${surface} refuses a negative first observed reference extent`, () => {
+      let reads = 0;
+      const evidenceIds = new Proxy([ID], {
+        get(target, key, receiver): unknown {
+          if (key === "length") {
+            reads += 1;
+            return reads === 1 ? -1 : 0;
+          }
+          const value: unknown = Reflect.get(target, key, receiver);
+          return value;
+        },
+      });
+      expect(validate({ ...candidate, summary: [{ ...statement, evidenceIds }] }, [ID])).toEqual({
+        ok: false,
+        reason: "invalid-model-output",
+      });
+      expect(reads).toBe(1);
+    });
+  }
+});

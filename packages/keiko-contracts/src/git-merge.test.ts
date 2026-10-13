@@ -526,3 +526,53 @@ describe("guards + parse", () => {
     expect(parsed.ok).toBe(false);
   });
 });
+
+import * as g2PublicMerge from "@oscharko-dev/keiko-contracts/runtime/git-merge";
+
+describe("G2 physical merge readiness blockers", () => {
+  for (const [surface, validate] of [
+    ["source", isGitMergeReadinessSummary],
+    ["public", g2PublicMerge.isGitMergeReadinessSummary],
+  ] as const) {
+    it(`${surface} admits the actual readiness producer`, () => {
+      const summary = gitMergeReadinessFor({
+        pullRequest: pullRequest(),
+        checks: checks("passing"),
+      });
+      expect(validate(summary)).toBe(true);
+      expect(summary.mergeable).toBe(true);
+      expect(summary.blockers).toEqual([]);
+    });
+    it(`${surface} refuses a malformed physical blocker hidden by every`, () => {
+      const summary = gitMergeReadinessFor({
+        pullRequest: pullRequest(),
+        checks: checks("passing"),
+      });
+      const blockers = [{}];
+      Object.defineProperty(blockers, "every", { value: () => true });
+      expect(validate({ ...summary, blockers })).toBe(false);
+    });
+    it(`${surface} does not trust some to hide an actual blocking entry`, () => {
+      const blocked = gitMergeReadinessFor({ providerError: true });
+      const blockers = [...blocked.blockers];
+      Object.defineProperty(blockers, "some", { value: () => false });
+      expect(validate({ ...blocked, mergeable: true, blockers })).toBe(false);
+    });
+  }
+});
+
+describe("G2 healthy inherited readiness blockers", () => {
+  for (const [surface, validate] of [
+    ["source", isGitMergeReadinessSummary],
+    ["public", g2PublicMerge.isGitMergeReadinessSummary],
+  ] as const) {
+    it(`${surface} preserves an inherited-present actual producer blocker`, () => {
+      const blocked = gitMergeReadinessFor({ providerError: true });
+      const blockers = [...blocked.blockers];
+      expect(blockers.length).toBeGreaterThan(0);
+      Reflect.deleteProperty(blockers, "0");
+      Object.setPrototypeOf(blockers, [...blocked.blockers]);
+      expect(validate({ ...blocked, blockers })).toBe(true);
+    });
+  }
+});

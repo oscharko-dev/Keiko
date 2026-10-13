@@ -239,43 +239,84 @@ export function isSafePrDescriptionText(text: string): boolean {
   );
 }
 
-function validReferences(value: unknown, known: ReadonlySet<string>): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.length <= PR_DESCRIPTION_REFERENCE_MAX_ITEMS &&
-    Array.from(value).every(
-      (id: unknown) => typeof id === "string" && /^[a-f0-9]{64}$/u.test(id) && known.has(id),
-    ) &&
-    new Set(value).size === value.length
-  );
+function validReferenceMember(value: unknown, known: ReadonlySet<string>): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value) && known.has(value);
 }
 
-function statementFailure(
+function validReferences(value: unknown, known: ReadonlySet<string>): value is readonly string[] {
+  if (!Array.isArray(value)) return false;
+  const nonEmpty = value.length > 0;
+  if (!nonEmpty || value.length > PR_DESCRIPTION_REFERENCE_MAX_ITEMS) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !validReferenceMember(value[index], known)) return false;
+  }
+  const observed = new Set<string>();
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const id: unknown = value[index];
+    if (!validReferenceMember(id, known)) return false;
+    observed.add(id);
+  }
+  return observed.size === value.length;
+}
+
+function validStatement(
   value: unknown,
   known: ReadonlySet<string>,
-): PrDescriptionReason | undefined {
-  if (!isPlainRecord(value) || !exactKeys(value, ["text", "evidenceIds"]))
-    return "invalid-model-output";
-  if (typeof value.text !== "string" || !validReferences(value.evidenceIds, known))
-    return "invalid-model-output";
-  return isSafePrDescriptionText(value.text) ? undefined : "unsafe-model-output";
+  failures: ("invalid-model-output" | "unsafe-model-output")[],
+): value is PrDescriptionStatement {
+  if (!isPlainRecord(value) || !exactKeys(value, ["text", "evidenceIds"])) {
+    failures.push("invalid-model-output");
+    return false;
+  }
+  if (typeof value.text !== "string" || !validReferences(value.evidenceIds, known)) {
+    failures.push("invalid-model-output");
+    return false;
+  }
+  if (!isSafePrDescriptionText(value.text)) {
+    failures.push("unsafe-model-output");
+    return false;
+  }
+  return true;
 }
 
-function sectionFailure(
+function validSection(
   value: unknown,
   key: PrDescriptionSection,
   known: ReadonlySet<string>,
-): PrDescriptionReason | undefined {
-  if (!Array.isArray(value) || value.length > PR_DESCRIPTION_SECTION_MAX_ITEMS)
-    return "invalid-model-output";
-  if ((key === "summary" || key === "keyChanges") && value.length === 0)
-    return "invalid-model-output";
-  for (const statement of value) {
-    const failure = statementFailure(statement, known);
-    if (failure !== undefined) return failure;
+  failures: ("invalid-model-output" | "unsafe-model-output")[],
+): value is readonly PrDescriptionStatement[] {
+  if (!Array.isArray(value) || value.length > PR_DESCRIPTION_SECTION_MAX_ITEMS) {
+    failures.push("invalid-model-output");
+    return false;
   }
-  return undefined;
+  if ((key === "summary" || key === "keyChanges") && value.length === 0) {
+    failures.push("invalid-model-output");
+    return false;
+  }
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) {
+      failures.push("invalid-model-output");
+      return false;
+    }
+    if (!validStatement(value[index], known, failures)) return false;
+  }
+  return true;
+}
+
+function validCandidateSections(
+  value: Record<string, unknown>,
+  known: ReadonlySet<string>,
+  failures: ("invalid-model-output" | "unsafe-model-output")[],
+): value is Record<string, unknown> & PrDescriptionCandidate {
+  return (
+    validSection(value.summary, "summary", known, failures) &&
+    validSection(value.keyChanges, "keyChanges", known, failures) &&
+    validSection(value.risks, "risks", known, failures) &&
+    validSection(value.reviewerFocus, "reviewerFocus", known, failures)
+  );
 }
 
 export function validatePrDescriptionCandidate(
@@ -285,15 +326,10 @@ export function validatePrDescriptionCandidate(
   if (!isPlainRecord(value) || !exactKeys(value, PR_DESCRIPTION_SECTION_KEYS))
     return { ok: false, reason: "invalid-model-output" };
   const known = new Set(evidenceIds);
-  for (const key of PR_DESCRIPTION_SECTION_KEYS) {
-    const reason = sectionFailure(value[key], key, known);
-    if (reason !== undefined)
-      return {
-        ok: false,
-        reason: reason === "unsafe-model-output" ? reason : "invalid-model-output",
-      };
-  }
-  return { ok: true, value: value as PrDescriptionCandidate };
+  const failures: ("invalid-model-output" | "unsafe-model-output")[] = [];
+  if (!validCandidateSections(value, known, failures))
+    return { ok: false, reason: failures[0] ?? "invalid-model-output" };
+  return { ok: true, value };
 }
 
 const ARTIFACT_KEYS = [
@@ -379,10 +415,12 @@ function validDescriptionBinding(input: unknown): boolean {
 }
 
 function validDescriptionOmission(value: unknown): boolean {
+  const gitChangeSnapshotOmissionReasonsValues: readonly string[] =
+    GIT_CHANGE_SNAPSHOT_OMISSION_REASONS;
   if (!isPlainRecord(value) || !exactKeys(value, ["reason", "files", "hunks"])) return false;
   return (
     typeof value.reason === "string" &&
-    (GIT_CHANGE_SNAPSHOT_OMISSION_REASONS as readonly string[]).includes(value.reason) &&
+    gitChangeSnapshotOmissionReasonsValues.includes(value.reason) &&
     nonNegativeInteger(value.files) &&
     nonNegativeInteger(value.hunks)
   );
@@ -431,15 +469,18 @@ function candidateEvidenceIds(value: unknown): readonly string[] {
 }
 
 function validArtifactVocabulary(value: Record<string, unknown>): boolean {
+  const languages: readonly string[] = PR_DESCRIPTION_LANGUAGES;
+  const outcomes: readonly string[] = PR_DESCRIPTION_OUTCOMES;
+  const reasons: readonly string[] = PR_DESCRIPTION_REASONS;
   return (
     value.schemaVersion === PR_DESCRIPTION_SCHEMA_VERSION &&
     value.renderingVersion === PR_DESCRIPTION_RENDERING_VERSION &&
     typeof value.language === "string" &&
-    (PR_DESCRIPTION_LANGUAGES as readonly string[]).includes(value.language) &&
+    languages.includes(value.language) &&
     typeof value.outcome === "string" &&
-    (PR_DESCRIPTION_OUTCOMES as readonly string[]).includes(value.outcome) &&
+    outcomes.includes(value.outcome) &&
     typeof value.reason === "string" &&
-    (PR_DESCRIPTION_REASONS as readonly string[]).includes(value.reason)
+    reasons.includes(value.reason)
   );
 }
 

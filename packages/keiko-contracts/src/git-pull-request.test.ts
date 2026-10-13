@@ -484,3 +484,47 @@ describe("guards and parse", () => {
     expect(GIT_PR_RECOMMENDATIONS).toContain("create-as-draft");
   });
 });
+
+import { isGitPullRequestMetadataDraft as sourceMetadataGuard } from "./git-pull-request.js";
+import {
+  isGitPullRequestMetadataDraft as publicMetadataGuard,
+  synthesizePullRequestMetadata as publicMetadataProducer,
+} from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+
+const metadataSectionCases: readonly [string, string, unknown][] = [
+  ["summarySection", "commitCount", "three"],
+  ["summarySection", "fileCount", -1],
+  ["summarySection", "areaCount", Number.NaN],
+  ["summarySection", "changeType", "unsupported"],
+  ["summarySection", "primaryArea", 7],
+  ["riskSection", "riskClass", "unsupported"],
+  ["riskSection", "policyOutcome", "unsupported"],
+  ["riskSection", "requiresApproval", "yes"],
+  ["changeNarrativeSection", "touchesTests", "yes"],
+  ["changeNarrativeSection", "areas", [7]],
+  ["changeNarrativeSection", "changeType", "unsupported"],
+];
+
+for (const [surface, guard, producer] of [
+  ["source", sourceMetadataGuard, synthesizePullRequestMetadata],
+  ["published", publicMetadataGuard, publicMetadataProducer],
+] as const) {
+  describe(`${surface} PR metadata section admission (#3918)`, () => {
+    it("admits the actual synthesized draft with its original references", () => {
+      const draft = producer(NARRATIVE, RISK_READY, "codex/metadata-proof");
+      expect(guard(draft)).toBe(true);
+      expect(draft.changeNarrativeSection.areas).toBe(NARRATIVE.areas);
+    });
+    it.each(metadataSectionCases)("refuses malformed %s.%s", (section, field, invalid) => {
+      const draft = producer(NARRATIVE, RISK_READY, "codex/metadata-proof");
+      const sectionValue =
+        section === "summarySection"
+          ? draft.summarySection
+          : section === "riskSection"
+            ? draft.riskSection
+            : draft.changeNarrativeSection;
+      const malformed: unknown = { ...draft, [section]: { ...sectionValue, [field]: invalid } };
+      expect(guard(malformed)).toBe(false);
+    });
+  });
+}
