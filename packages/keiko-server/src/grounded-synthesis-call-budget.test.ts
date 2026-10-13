@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CallerAttemptAdmissionError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ConversationModelNotReadyError,
+  withConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 import {
   createGroundedSynthesisCallBudget,
   createGroundedSynthesisAttemptAdmission,
@@ -8,6 +12,37 @@ import {
 } from "./grounded-answer.js";
 
 describe("factory-owned physical synthesis allowance", () => {
+  it("does not charge provider usage for a readiness refusal before dispatch", async () => {
+    const budget = createGroundedSynthesisCallBudget();
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 220,
+      outputTokensMax: 80,
+    });
+    const providerCall = vi.fn(() => {
+      throw new Error("The refused request must not reach the provider");
+    });
+    const model = withConversationReadinessAdmission(
+      { call: providerCall },
+      "changed-model",
+      { modelId: "admitted-model" },
+      {},
+    );
+    const failure: unknown = await Promise.resolve()
+      .then(() =>
+        model.call(
+          { modelId: "changed-model", messages: [], attemptAdmission: tracker.admission },
+          new AbortController().signal,
+        ),
+      )
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ConversationModelNotReadyError);
+    tracker.settleFallbackFailure(100, failure);
+    expect(providerCall).not.toHaveBeenCalled();
+    expect(budget.pendingUsage()).toEqual({ promptTokens: 0, completionTokens: 0 });
+    expect(budget.reservedOutputTokens()).toBe(0);
+    expect(budget.remaining()).toBe(2);
+  });
+
   it("keeps dispatched injected caller failures conservatively unknown", () => {
     const budget = createGroundedSynthesisCallBudget();
     const tracker = createGroundedSynthesisAttemptAdmission(budget, {

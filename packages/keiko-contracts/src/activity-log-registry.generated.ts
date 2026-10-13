@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "88209593743531daa11a52f123d0ebcf6247e6a0767856c770b53229114737e4" as const;
+  "8954b36c7f5b839d3dd56acafeb28ac1b81f7dc7f0dd320791be10ffce670307" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -20158,12 +20158,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "start", "state"],
       lifecycleOperations: {
         start: ["gateway.readiness.automatic.started", "gateway.readiness.started"],
-        state: ["gateway.readiness.automatic.joined"],
+        state: ["gateway.conversation.admission", "gateway.readiness.automatic.joined"],
         end: ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "gateway.conversation.admission",
+          mode: "correlation",
+        },
         {
           op: "gateway.readiness.automatic.completed",
           mode: "correlation",
@@ -20187,6 +20191,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
+        "gateway.conversation.admission",
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
@@ -20195,6 +20200,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "gateway.conversation.admission",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "admittedGeneration",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "currentGeneration",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "disposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.conversation.admission.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "gateway.readiness.automatic.completed",
           owner: "keiko-server",
@@ -41645,6 +41686,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.context-window.adoption": "model-gateway",
     "gateway.context-window.probe": "model-gateway",
     "gateway.context-window.retry": "model-gateway",
+    "gateway.conversation.admission": "model-gateway",
     "gateway.discovery.alias-intersection": "model-gateway",
     "gateway.instance.bound": "model-gateway",
     "gateway.instance.reset": "model-gateway",

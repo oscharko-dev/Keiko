@@ -1,7 +1,17 @@
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayCallRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 
-import { currentConversationReady, type UiHandlerDeps } from "./deps.js";
+import {
+  CONVERSATION_READINESS_MAX_AGE_MS,
+  conversationReadinessAgeMs,
+  currentConversationReady,
+  type UiHandlerDeps,
+  type VerifiedModelCapabilityObservation,
+} from "./deps.js";
+import {
+  logConversationAdmission,
+  type ConversationAdmissionDisposition,
+} from "./conversation-readiness-log.js";
 import { errorBody, type RouteResult } from "./routes.js";
 
 export interface ConversationReadinessAdmission {
@@ -55,16 +65,74 @@ export function validateConversationReadinessAdmission(
   admission: ConversationReadinessAdmission,
   modelId: string,
 ): RouteResult | undefined {
+  return admissionDisposition(deps, admission, modelId).startsWith("allowed-")
+    ? undefined
+    : conversationModelNotReadyResult();
+}
+
+function admissionDisposition(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  admission: ConversationReadinessAdmission,
+  modelId: string,
+  completedAt?: number,
+): ConversationAdmissionDisposition {
+  if (modelId !== admission.modelId) return "model-changed";
   const holder = deps.gatewayConfig;
-  if (
-    modelId !== admission.modelId ||
-    (holder !== undefined &&
-      (holder.generation() !== admission.gatewayConfigGeneration ||
-        !currentConversationReady(deps, modelId)))
-  ) {
-    return conversationModelNotReadyResult();
-  }
-  return undefined;
+  if (holder === undefined) return "allowed-untracked";
+  if (holder.generation() !== admission.gatewayConfigGeneration) return "generation-changed";
+  const observation = holder.verifiedCapability(modelId);
+  if (observation?.generation !== holder.generation() || observation.modelId !== modelId)
+    return "observation-unavailable";
+  return observationDisposition(observation, completedAt);
+}
+
+function observationDisposition(
+  observation: VerifiedModelCapabilityObservation,
+  completedAt: number | undefined,
+): ConversationAdmissionDisposition {
+  if (observation.fields.conversationReady !== true)
+    return observation.fields.conversationReady === false
+      ? "probe-failed"
+      : "observation-unavailable";
+  const ageMs = conversationReadinessAgeMs(observation);
+  if (!Number.isFinite(ageMs) || ageMs < 0) return "timestamp-invalid";
+  if (ageMs < CONVERSATION_READINESS_MAX_AGE_MS) return "allowed-fresh";
+  const completionAgeMs = completedAt === undefined ? Number.NaN : Date.now() - completedAt;
+  return completionAgeMs >= 0 && completionAgeMs < CONVERSATION_READINESS_MAX_AGE_MS
+    ? "allowed-continuation"
+    : "expired";
+}
+
+interface ConversationCallGuard {
+  assert(request: GatewayCallRequest, signal: AbortSignal): void;
+  complete(responseModelId: string, signal: AbortSignal): void;
+}
+
+function conversationCallGuard(
+  modelId: string,
+  admission: ConversationReadinessAdmission,
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+): ConversationCallGuard {
+  let completedAt: number | undefined;
+  return {
+    assert(request, signal): void {
+      signal.throwIfAborted();
+      const disposition =
+        request.modelId === modelId
+          ? admissionDisposition(deps, admission, modelId, completedAt)
+          : "model-changed";
+      logConversationAdmission(
+        disposition,
+        request.logContext?.correlationId,
+        admission.gatewayConfigGeneration,
+        deps.gatewayConfig?.generation(),
+      );
+      if (!disposition.startsWith("allowed-")) throw new ConversationModelNotReadyError();
+    },
+    complete(responseModelId, signal): void {
+      if (!signal.aborted && responseModelId === modelId) completedAt = Date.now();
+    },
+  };
 }
 
 export function withConversationReadinessAdmission(
@@ -73,9 +141,12 @@ export function withConversationReadinessAdmission(
   admission: ConversationReadinessAdmission,
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
 ): ModelPort {
-  const call: ModelPort["call"] = (request, signal) => {
-    assertConversationReadinessAdmission(deps, admission, modelId);
-    return model.call(request, signal);
+  const guard = conversationCallGuard(modelId, admission, deps);
+  const call: ModelPort["call"] = async (request, signal) => {
+    guard.assert(request, signal);
+    const response = await model.call(request, signal);
+    guard.complete(response.modelId, signal);
+    return response;
   };
   if (model.callStream === undefined) return { call };
   // Bind the receiver: GatewayModelPort.callStream is a prototype method reading
@@ -85,8 +156,13 @@ export function withConversationReadinessAdmission(
   return {
     call,
     callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {
-      assertConversationReadinessAdmission(deps, admission, modelId);
-      yield* callStream(request, signal);
+      guard.assert(request, signal);
+      let completedModelId: string | undefined;
+      for await (const chunk of callStream(request, signal)) {
+        if (chunk.type === "done") completedModelId = chunk.response.modelId;
+        yield chunk;
+      }
+      if (completedModelId !== undefined) guard.complete(completedModelId, signal);
     },
   };
 }

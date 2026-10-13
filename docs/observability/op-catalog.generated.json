@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "88209593743531daa11a52f123d0ebcf6247e6a0767856c770b53229114737e4",
+    "catalogDigest": "8954b36c7f5b839d3dd56acafeb28ac1b81f7dc7f0dd320791be10ffce670307",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16085,6 +16085,60 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gateway-context-window.ts:108",
         "emitterSites": ["packages/keiko-server/src/gateway-context-window.ts:582"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "gateway.conversation.admission",
+        "owner": "keiko-server",
+        "category": "gateway",
+        "emitter": "conversation-readiness-log.logConversationAdmission",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "disposition": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "allowed-untracked",
+              "allowed-fresh",
+              "allowed-continuation",
+              "model-changed",
+              "generation-changed",
+              "observation-unavailable",
+              "probe-failed",
+              "timestamp-invalid",
+              "expired"
+            ]
+          },
+          "admittedGeneration": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "currentGeneration": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["gateway-readiness"],
+        "proofIds": ["gateway.conversation.admission.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/conversation-readiness-log.ts:19",
+        "emitterSites": ["packages/keiko-server/src/conversation-readiness-log.ts:63"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -41473,12 +41527,13 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": ["gateway.readiness.automatic.started", "gateway.readiness.started"],
-          "state": ["gateway.readiness.automatic.joined"],
+          "state": ["gateway.conversation.admission", "gateway.readiness.automatic.joined"],
           "end": ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
           "failure": [],
           "loss": []
         },
         "requiredCausalOperations": [
+          "gateway.conversation.admission",
           "gateway.readiness.automatic.completed",
           "gateway.readiness.automatic.joined",
           "gateway.readiness.automatic.started",
@@ -41487,6 +41542,7 @@
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
+          "gateway.conversation.admission",
           "gateway.readiness.automatic.completed",
           "gateway.readiness.automatic.joined",
           "gateway.readiness.automatic.started",
@@ -41495,6 +41551,7 @@
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
+          "gateway.conversation.admission",
           "gateway.readiness.automatic.completed",
           "gateway.readiness.automatic.joined",
           "gateway.readiness.automatic.started",
@@ -67270,12 +67327,16 @@
           "lifecycleTransitions": ["end", "start", "state"],
           "lifecycleOperations": {
             "start": ["gateway.readiness.automatic.started", "gateway.readiness.started"],
-            "state": ["gateway.readiness.automatic.joined"],
+            "state": ["gateway.conversation.admission", "gateway.readiness.automatic.joined"],
             "end": ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
             "failure": [],
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "gateway.conversation.admission",
+              "mode": "correlation"
+            },
             {
               "op": "gateway.readiness.automatic.completed",
               "mode": "correlation"
@@ -67299,6 +67360,7 @@
           ],
           "lossSignals": [],
           "resourceSignals": [
+            "gateway.conversation.admission",
             "gateway.readiness.automatic.completed",
             "gateway.readiness.automatic.joined",
             "gateway.readiness.automatic.started",
@@ -67307,6 +67369,42 @@
           ],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "gateway.conversation.admission",
+              "owner": "keiko-server",
+              "category": "gateway",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "admittedGeneration",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "currentGeneration",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "disposition",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["gateway.conversation.admission.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "gateway.readiness.automatic.completed",
               "owner": "keiko-server",
@@ -92268,6 +92366,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "gateway.conversation.admission",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/conversation-readiness-log.ts:22",
+      "package": "keiko-server"
+    },
+    {
       "op": "gateway.discovery.alias-intersection",
       "category": "gateway",
       "site": "packages/keiko-server/src/gateway-discovery-log.ts:12",
@@ -94375,6 +94479,7 @@
     "gateway.context-window.adoption",
     "gateway.context-window.probe",
     "gateway.context-window.retry",
+    "gateway.conversation.admission",
     "gateway.discovery.alias-intersection",
     "gateway.instance.bound",
     "gateway.instance.reset",

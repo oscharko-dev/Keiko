@@ -926,6 +926,14 @@ messages cut to the per-message bound and `historyTruncated` says Coding History
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
 truncated.". Counts only — never a message, path or run name.
 
+`gateway.conversation.admission` records the closed decision before a conversation model call,
+with admitted and current configuration generations and the request correlation. A fresh probe
+and a turn-local completed-call continuation remain distinct. Refusals distinguish model or
+generation replacement, absent observations, failed probes, invalid timestamps and expiry without
+recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
+attempt or uncertain output reservation; actual interrupted provider calls retain conservative
+accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
 `resultScopeDigest`, and connected/local-knowledge/Git-change source counts. Send and PATCH

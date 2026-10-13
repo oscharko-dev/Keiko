@@ -3075,7 +3075,7 @@ describe("multi-source bounded citation repair", () => {
       expect(answer.content).toBe("The implementation works [source:2|src/beta.ts:1-5].");
       expect(answer.citationBehaviour).toBe("cites-after-repair");
       expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("uncited-answer");
-      expect(answer.citations.length).toBe(1);
+      expect(answer.citations).toHaveLength(1);
       expect(citationBehaviourFor(configured, CHAT_MODEL)).toBeUndefined();
     } finally {
       await configured.dispose?.();

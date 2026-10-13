@@ -14,6 +14,7 @@ import {
   ProviderError,
   type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
+import { ConversationModelNotReadyError } from "./conversation-readiness-admission.js";
 
 export interface GroundedAnswerUsage {
   readonly promptTokens: number;
@@ -141,6 +142,9 @@ export function createGroundedSynthesisAttemptAdmission(
     admission,
     settleFallback,
     settleFallbackFailure(promptTokens, failure): void {
+      // The admission wrapper throws before invoking the port: no physical attempt or
+      // uncertain output exists. Gateway-owned attempts keep their own settlement.
+      if (failure instanceof ConversationModelNotReadyError) return;
       settleFallback(
         promptTokens,
         failure instanceof GatewayError ? failure.partialUsage : undefined,

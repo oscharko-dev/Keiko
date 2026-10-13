@@ -18,7 +18,13 @@ import {
   parseGatewayConfig,
   type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  currentConversationReady,
+  type UiHandlerDeps,
+} from "./deps.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -589,4 +595,117 @@ describe("learned knowledge uses the existing assessment authority across connec
       expect(splitOwnAssessment(answer.content).assessment).toBeUndefined();
     },
   );
+});
+
+function trueFolderResponse(topology: Topology): ScriptedAnswer {
+  const cited = sourcedFolderResponse(topology);
+  return (request): string => {
+    const content = typeof cited === "string" ? cited : cited(request);
+    return content.replace("Feature is false", "Feature is true");
+  };
+}
+
+function withReadinessOwner(setup: Fixture): { setup: Fixture; owner: UiHandlerDeps } {
+  const owner = buildUiHandlerDeps({
+    configPath: join(setup.directory, "readiness/gateway.json"),
+    evidenceDir: join(setup.directory, "readiness/evidence"),
+    uiDbPath: join(setup.directory, "readiness/ui.db"),
+    env: {},
+  });
+  const holder = owner.gatewayConfig;
+  if (holder === undefined || setup.deps.config === undefined)
+    throw new TypeError("Missing canonical readiness holder");
+  holder.set(setup.deps.config, true);
+  return { setup: { ...setup, deps: { ...setup.deps, gatewayConfig: holder } }, owner };
+}
+
+function recordReadiness(setup: Fixture, ready: boolean): void {
+  const holder = setup.deps.gatewayConfig;
+  if (holder === undefined) throw new TypeError("Missing canonical readiness holder");
+  holder.recordVerifiedCapability(
+    MODEL,
+    { conversationReady: ready },
+    new Date().toISOString(),
+    holder.generation(),
+  );
+}
+
+describe("an admitted source answer retains its bounded citation repair", () => {
+  it.each(["single", "plural", "hybrid"] as const)(
+    "completes one repair after a successful first synthesis exceeds five minutes in %s",
+    async (topology) => {
+      const startedAt = Date.now();
+      const setup = await fixture(topology, [
+        (): string => {
+          vi.setSystemTime(startedAt + 300_001);
+          return "Feature is true.";
+        },
+        trueFolderResponse(topology),
+      ]);
+      const admitted = withReadinessOwner(setup);
+      try {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(startedAt);
+        recordReadiness(admitted.setup, true);
+        expect(currentConversationReady(admitted.setup.deps, MODEL)).toBe(true);
+        const answer = await ask(admitted.setup, "Explain src/Feature.ts");
+        if (answer.groundingKind === "local-knowledge")
+          throw new TypeError("Expected connected source answer");
+        expect(Date.now() - startedAt).toBe(300_001);
+        expect(currentConversationReady(admitted.setup.deps, MODEL)).toBe(false);
+        expect(synthesisCalls(admitted.setup)).toHaveLength(2);
+        expect(answer.content.replace(/\s*\[[^\]]+\]/gu, "").trim()).toBe("Feature is true.");
+        expect(sourceCitationCount(answer)).toBe(1);
+        expect(answer.citationBehaviour).toBe("cites-after-repair");
+        expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
+        expect(admitted.setup.deps.store.listMessages(setup.chatId).at(-1)?.groundedAnswer).toEqual(
+          answer,
+        );
+      } finally {
+        vi.useRealTimers();
+        await admitted.owner.dispose?.();
+      }
+    },
+  );
+
+  it("refuses repair after an explicit not-ready observation without charging another dispatch", async () => {
+    const setup = await fixture("single", [
+      (): string => {
+        recordReadiness(admitted.setup, false);
+        return "Feature is true.";
+      },
+    ]);
+    const admitted = withReadinessOwner(setup);
+    const current = admitted.setup;
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      recordReadiness(current, true);
+      expect(currentConversationReady(current.deps, MODEL)).toBe(true);
+      const answer = await ask(current, "Explain src/Feature.ts");
+      expect(currentConversationReady(current.deps, MODEL)).toBe(false);
+      expect(synthesisCalls(current)).toHaveLength(1);
+      expect(answer.content).toBe("Feature is true.");
+      expect(answer.groundingKind).toBe("connected-context");
+      if (answer.groundingKind !== "connected-context")
+        throw new TypeError("Missing folder answer");
+      const first = synthesisCalls(current)[0];
+      if (first === undefined) throw new TypeError("Missing successful synthesis request");
+      expect(answer.contextPack.usage.modelInputTokens).toBe(countGatewayPromptTokens(first));
+      expect(answer.contextPack.usage.modelOutputTokens).toBe(1);
+      expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(true);
+      expect(current.deps.store.listMessages(setup.chatId).at(-1)?.groundedAnswer).toEqual(answer);
+      const details = sink.events.find(
+        (event) => event.op === "search.connected-context.answer-details",
+      );
+      expect(details).toBeDefined();
+      expect(details?.extra).toMatchObject({
+        synthesisCallCount: 1,
+        completedSynthesisCallCount: 1,
+        synthesisReservedOutputTokens: 0,
+      });
+    } finally {
+      await admitted.owner.dispose?.();
+    }
+  });
 });

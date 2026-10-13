@@ -4170,12 +4170,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: ["gateway.readiness.automatic.started", "gateway.readiness.started"],
-      state: ["gateway.readiness.automatic.joined"],
+      state: ["gateway.conversation.admission", "gateway.readiness.automatic.joined"],
       end: ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
+      "gateway.conversation.admission",
       "gateway.readiness.automatic.completed",
       "gateway.readiness.automatic.joined",
       "gateway.readiness.automatic.started",
@@ -4184,6 +4185,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "gateway.conversation.admission",
       "gateway.readiness.automatic.completed",
       "gateway.readiness.automatic.joined",
       "gateway.readiness.automatic.started",
@@ -4192,6 +4194,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "gateway.conversation.admission",
       "gateway.readiness.automatic.completed",
       "gateway.readiness.automatic.joined",
       "gateway.readiness.automatic.started",

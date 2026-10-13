@@ -591,6 +591,14 @@ A registration never declares `frames` or `causeChain` required. Redaction omits
 a required one would reject the ordinary failure without Keiko frames or a cause. The generator
 reports that declaration as `registration-omitted-field-required`.
 
+`gateway.conversation.admission` records the closed decision before a conversation model call,
+with admitted and current configuration generations and the request correlation. A fresh probe
+and a turn-local completed-call continuation remain distinct. Refusals distinguish model or
+generation replacement, absent observations, failed probes, invalid timestamps and expiry without
+recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
+attempt or uncertain output reservation; actual interrupted provider calls retain conservative
+accounting. See [ADR-0171](ADR-0171-gateway-readiness-capability-reconciliation.md).
+
 Grounded diagnostics use the same registry and request correlation. `search.citations.reconciled`
 covers numeric references and file locations for Knowledge Pod, folder, multi-source and hybrid
 answers. `citationKind` identifies `numeric` or `file`; hybrid may emit one of each. Required
@@ -1486,9 +1494,9 @@ client failure incident; their owning lifecycle evidence remains.
     repair request itself (the local-session ensure) mints its id before it is sent, so
     a failure that never reached the server is still recorded under that id with its closed
     class, which a message report may now carry as `errorKind`.
-  Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
-  budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
-  sliding window), so it can never starve a failure report. Every drop is still counted as loss.
+    Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
+    budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
+    sliding window), so it can never starve a failure report. Every drop is still counted as loss.
 
 The agent-reading step this adds: **for a failed request**, read `routeTemplate`,
 `queryParamNames`, `responseBytes`, `aborted` and — for a stream — the `sse.stream.closed` line's
@@ -1652,7 +1660,7 @@ reader import it; nothing restates it.
 | `activity-<start>-<pid>-<instance>-<index>.jsonl`        | A sealed segment: read-only (`0400`), never rewritten.                 |
 | `server-YYYY-MM-DD.log`, `server.log`                    | Legacy files of the retired daily rotation. Read-only.                 |
 | `pin-<24 hex>.json`                                      | A retention-pin record.                                                |
-| `store-policy.json`                                      | The store's one governing policy record (#3554); never log content.   |
+| `store-policy.json`                                      | The store's one governing policy record (#3554); never log content.    |
 
 `<start>` is the segment's UTC start time (`YYYYMMDDTHHMMSSmmmZ`), `<pid>` and `<instance>` are the
 envelope's process identity, and `<index>` counts that instance's segments from `000001`. Sealing

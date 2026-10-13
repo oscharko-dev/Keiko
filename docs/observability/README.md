@@ -701,6 +701,14 @@ fields remain unknown. Explicit source demand, rejected paths, unread declaratio
 follow-up remain retrieval-miss evidence even when the delivered response also contains learned
 knowledge.
 
+`gateway.conversation.admission` records the closed decision before a conversation model call,
+with admitted and current configuration generations and the request correlation. A fresh probe
+and a turn-local completed-call continuation remain distinct. Refusals distinguish model or
+generation replacement, absent observations, failed probes, invalid timestamps and expiry without
+recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
+attempt or uncertain output reservation; actual interrupted provider calls retain conservative
+accounting. See [ADR-0171](../adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
