@@ -366,9 +366,26 @@ unresolved or untyped counts are not cleared. This kind certifies no complete do
 closure and introduces no semantic cache. Owning runtime, public type, declaration/body
 counterfactual and restoration proofs remain separate acceptance obligations.
 
+### Serial complete-repository static smoke
+
+`npm run check:code-quality-policy:repository` runs the real enforcing CLI with `--json` and checks
+its full repository scope, complete inventory visitation, package/rule counts, zero active
+violations, eight ready/pending responsibilities with zero qualified records and unexecuted proof
+facts, and complete package inventory. It retains the 180000ms/SIGKILL/32MiB child allowance and
+195000ms whole-test watchdog. These are finite integration allowances, not a product latency SLA.
+
+Required Core quality invokes this checked smoke once before root/UI lint, replacing the previous
+bare policy invocation. Required Node 26 compatibility invokes it after the ordinary test shard has
+settled. The smoke uses the existing direct-script pattern, is outside Vitest's `*.test.mjs`
+collection, and shares the actual closed child-error helper with the retained wiring fixture
+checks. No test is conditionally skipped, imported receipt reused, worker count changed, report
+assertion removed or compiler/currentness check bypassed. Native120s, declaration10s and explicit
+semantic-proof180s bounds are independent and unchanged. The canonical public
+`npm run check:code-quality-policy` command remains available unchanged.
+
 ### Explicit current-subject responsibility qualification
 
-`npm run check:code-quality-policy -- --qualify-responsibilities --json` selects an optional phase; default static invocations and the existing enforcing owner do not execute business proof suites or change their180000ms/195000ms limits. Qualification is enforce-only. V1, empty records and missing registered exact selectors fail closed when selected. No active rule scope or existing responsibility identity is changed.
+`npm run check:code-quality-policy -- --qualify-responsibilities --json` selects an optional phase; default static invocations and the serial enforcing smoke do not execute business proof suites or change their180000ms/195000ms limits. Qualification is enforce-only. V1, empty records and missing registered exact selectors fail closed when selected. No active rule scope or existing responsibility identity is changed.
 
 Each v2 responsibility may add closed `proofAssertions` entries containing only an already declared proof `path` and exact Vitest `testName` (fullName including describe ancestors). Duplicates, foreign paths, missing names and unknown command/authorization fields refuse. Existing selector history is monotonic: removal or rebinding fails. Shared actual assertions may support multiple records but execute once in the single whole ten-owner Vitest invocation for the current cohort.
 

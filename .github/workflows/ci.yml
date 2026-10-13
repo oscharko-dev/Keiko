@@ -1525,6 +1525,8 @@ jobs:
         run: npm run typecheck
       - name: Run this shard of the complete hermetic test suite
         run: npm test -- --shard=${{ matrix.shard }}/2
+      - name: Run the complete static policy report smoke serially
+        run: npm run check:code-quality-policy:repository
       - name: Prepare packaged CLI
         run: npm run prepare:bin
       - name: Build UI (static export)

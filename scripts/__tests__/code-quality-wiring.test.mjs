@@ -1,8 +1,6 @@
-import { Buffer } from "node:buffer";
-import { execFile, execFileSync } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, globSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parse } from "yaml";
@@ -10,6 +8,12 @@ import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
 import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
+import {
+  capturedByteCount,
+  closedChildStatus,
+  executePolicyWithDiagnostics,
+  isolatedPolicyReport,
+} from "./code-quality-wiring-smoke.mjs";
 import {
   configureEnforcingPolicyFixture,
   createPolicyFixtureRepository,
@@ -31,54 +35,6 @@ function enforcingFixture() {
   mkdirSync(join(root, "packages/alpha/dist"));
   writeFileSync(join(root, "packages/alpha/dist/index.js"), "export const value = 1;");
   return root;
-}
-
-const executePolicy = promisify(execFile);
-function closedChildStatus(value) {
-  if (value === null || (typeof value === "number" && Number.isInteger(value))) return value;
-  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(value) ? value : "unavailable";
-}
-function capturedByteCount(value) {
-  return typeof value === "string" ? Buffer.byteLength(value, "utf8") : "unavailable";
-}
-// Convert the actual child failure to closed causal facts before it can be printed.
-function policyChildFailure(error) {
-  const details = typeof error === "object" && error !== null ? error : {};
-  const status = {
-    code: closedChildStatus(details.code),
-    signal: closedChildStatus(details.signal),
-    killed: typeof details.killed === "boolean" ? details.killed : "unavailable",
-    stdoutBytes: capturedByteCount(details.stdout),
-    stderrBytes: capturedByteCount(details.stderr),
-  };
-  return new Error(`policy child failed: ${JSON.stringify(status)}`, { cause: status });
-}
-async function executePolicyWithDiagnostics(args, options) {
-  try {
-    return await executePolicy(process.execPath, args, options);
-  } catch (error) {
-    throw policyChildFailure(error);
-  }
-}
-
-async function isolatedPolicyReport(repositoryRoot, timeout = 180_000) {
-  const entry = new URL("../check-code-quality-policy.mjs", import.meta.url);
-  const args =
-    repositoryRoot === undefined
-      ? [fileURLToPath(entry), "--json"]
-      : [
-          "--input-type=module",
-          "-e",
-          `const { codeQualityPolicyMain } = await import(${JSON.stringify(entry.href)}); process.exitCode = await codeQualityPolicyMain(["--json"], ${JSON.stringify(repositoryRoot)});`,
-        ];
-  const { stdout } = await executePolicyWithDiagnostics(args, {
-    cwd: new URL("../../", import.meta.url),
-    encoding: "utf8",
-    timeout,
-    killSignal: "SIGKILL",
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  return JSON.parse(stdout);
 }
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
@@ -157,27 +113,6 @@ describe("production code-quality invocation wiring (#3915)", () => {
       "unpacked-export-target",
     );
   });
-
-  it("reports a full actual candidate verdict through the enforcing CLI owner", async () => {
-    const report = await isolatedPolicyReport();
-    expect(report).toMatchObject({
-      outcome: "failed",
-      enforcementOutcome: "passed",
-      mode: "enforce",
-      scope: { id: "repository", partial: false },
-    });
-    expect(report.counts.expected).toBe(report.counts.visited);
-    expect(report.counts.packages).toBe(27);
-    expect(report.counts.violations).toBe(0);
-    expect(report.rules).toHaveLength(22);
-    expect(report.responsibilities.counts).toMatchObject({ ready: 8, pending: 8, qualified: 0 });
-    expect(
-      report.responsibilities.assessments.every(({ proofs }) =>
-        proofs.every(({ executed }) => executed === false),
-      ),
-    ).toBe(true);
-    expect(report.pack).toHaveLength(27);
-  }, 195_000);
 
   it("isolates a real completed policy receipt from a later parent console capture", async () => {
     const root = createRuntimePolicyFixture("testing/logic.ts", "test-only");
@@ -351,7 +286,13 @@ describe("production code-quality invocation wiring (#3915)", () => {
       "node scripts/check-code-quality-policy.mjs",
     );
     const commands = manifest.scripts.lint.split(" && ");
-    expect(commands.indexOf("npm run check:code-quality-policy")).toBe(1);
+    expect(manifest.scripts["check:code-quality-policy:repository"]).toBe(
+      "node --test scripts/__tests__/code-quality-wiring-smoke.mjs",
+    );
+    expect(commands.indexOf("npm run check:code-quality-policy:repository")).toBe(1);
+    expect(
+      commands.filter((command) => command === "npm run check:code-quality-policy"),
+    ).toHaveLength(0);
     expect(commands[0]).toBe("npm run build:packages");
     expect(commands.slice(2).join(" && ")).toContain("eslint/bin/eslint.js . --max-warnings=0");
     expect(commands.slice(2).join(" && ")).toContain(
@@ -360,6 +301,36 @@ describe("production code-quality invocation wiring (#3915)", () => {
     const workflow = parse(read(".github/workflows/ci.yml"));
     const core = Object.values(workflow.jobs).find((job) => job.name === "Core quality");
     expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(1);
+  });
+
+  it("runs the same uncollected repository smoke serially in required Node 26", async () => {
+    const workflow = parse(read(".github/workflows/ci.yml"));
+    const compatibility = workflow.jobs["node-26-compatibility"];
+    const runs = compatibility.steps.map((step) => step.run);
+    const ordinary = runs.indexOf("npm test -- --shard=${{ matrix.shard }}/2");
+    const smoke = runs.indexOf("npm run check:code-quality-policy:repository");
+    expect(ordinary).toBeGreaterThanOrEqual(0);
+    expect(smoke).toBe(ordinary + 1);
+    expect(
+      runs.filter((run) => run === "npm run check:code-quality-policy:repository"),
+    ).toHaveLength(1);
+    expect(compatibility.steps[smoke].if).toBeUndefined();
+    const cwd = fileURLToPath(new URL("../../", import.meta.url));
+    for (const name of [
+      "vitest.config.ts",
+      "vitest.coverage.packages.config.ts",
+      "vitest.coverage.scripts.config.ts",
+    ]) {
+      const loaded = await import(join(cwd, name));
+      const config =
+        typeof loaded.default === "function" ? await loaded.default({}) : loaded.default;
+      const included = config.test.include.flatMap((pattern) =>
+        globSync(pattern, { cwd, exclude: config.test.exclude }),
+      );
+      expect(included.map((path) => path.replaceAll("\\", "/"))).not.toContain(
+        "scripts/__tests__/code-quality-wiring-smoke.mjs",
+      );
+    }
   });
 });
 

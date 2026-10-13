@@ -310,6 +310,7 @@ describe("complete Node 26 qualification shards", () => {
       "npm run provision:usearch",
       "npm run typecheck",
       "npm test -- --shard=${{ matrix.shard }}/2",
+      "npm run check:code-quality-policy:repository",
       "npm run prepare:bin",
       "npm run build:ui",
       expect.stringContaining("npm run provision:smoke"),

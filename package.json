@@ -41,7 +41,7 @@
     "keiko:start": "node dist/cli/index.js start",
     "keiko:stop": "node dist/cli/index.js stop",
     "typecheck": "npm run build:packages && npm run check:package-graph && node node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit",
-    "lint": "npm run build:packages && npm run check:code-quality-policy && node --max-old-space-size=12288 ./node_modules/eslint/bin/eslint.js . --max-warnings=0 && npm --workspace @oscharko-dev/keiko-ui run lint",
+    "lint": "npm run build:packages && npm run check:code-quality-policy:repository && node --max-old-space-size=12288 ./node_modules/eslint/bin/eslint.js . --max-warnings=0 && npm --workspace @oscharko-dev/keiko-ui run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run build && vitest run",
@@ -254,6 +254,7 @@
     "test:e2e:coding-issue-journey:live": "playwright test --config tests/e2e/config/playwright.coding-issue-journey.config.ts --project=chromium",
     "test:e2e:coding-issue-handoff": "playwright test --config tests/e2e/config/playwright.coding-issue-handoff.config.ts --project=chromium",
     "check:code-quality-policy": "node scripts/check-code-quality-policy.mjs",
+    "check:code-quality-policy:repository": "node --test scripts/__tests__/code-quality-wiring-smoke.mjs",
     "check:native-host-code-quality": "node scripts/check-native-host-code-quality.mjs"
   },
   "overrides": {
