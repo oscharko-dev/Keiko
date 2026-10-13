@@ -937,7 +937,8 @@ async function startBridgeFixture(
       args: [],
       inheritedEnvAllowlist: [],
       shutdownTimeoutMs: fixtureShutdownTimeout(control),
-      startTimeoutMs: control?.startTimeoutMs ?? 100,
+      // Ordinary tests exercise live filesystem setup; deadline tests pass their own short bound.
+      startTimeoutMs: control?.startTimeoutMs ?? 5_000,
       signal: fixtureSignal(control),
       confinement: {
         platform: "darwin",
@@ -3854,6 +3855,28 @@ describe("private OpenCode tool bridge", () => {
 });
 
 describe("production OpenCode pending-spawn guard wiring", () => {
+  it("allows ordinary fixture startup across a short scheduling delay", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        canSpawnRuntime: (): boolean => {
+          vi.setSystemTime(Date.now() + 150);
+          return true;
+        },
+      },
+    );
+    try {
+      expect(fixture.runtime.manager.health()).toMatchObject({
+        status: "ready",
+        activeRunId: FIXTURE_RUN_ID,
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("clears prepared state when the deadline expires before native spawn", async () => {
     vi.useFakeTimers();
     try {
