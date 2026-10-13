@@ -1395,6 +1395,1051 @@
         "No gate result, nativea535 rerun, PR closure, merge or issue closure claimed.",
         "Reviewer read source/results/artifacts only; no new tests/models/gates/browser actions or product edits."
       ]
+    },
+    "retained-reviewer-supported-mapping-completion": {
+      "behavior": "Specific retained support for previously empty criterion references",
+      "disposition": "metadata-only mapping completion; accepted healthy, source, document/history and measured scopes remain distinct",
+      "records": {
+        "3881.6": {
+          "kind": "documented-reuse-decisions",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3881.6"
+          },
+          "artifacts": [
+            {
+              "artifact": "resume-root-per-child-canonical-reuse-inventory-3e9c.json",
+              "sha256": "b720ce047dc8b623d400fc2ef7a4206a848c039c661a2cea4af77175b51297e7",
+              "bytes": 13898
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "3e9c2b2c69b7487944f9f8a27c76e1ba6e6fc0e9",
+            "children": 13,
+            "existingFileReferences": 43,
+            "pid": null
+          },
+          "limits": [
+            "Source-only decision inventory; no runtime failure/pass or gate result inferred."
+          ]
+        },
+        "3881.8": {
+          "kind": "documented-limitations",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3881.8"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-acceptance.json",
+              "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+              "bytes": 942466
+            },
+            {
+              "artifact": "core-8249607-writer-96-criterion-ledger-v5.READONLY.json",
+              "sha256": "a07c610273796daa916a5227ac064868a895323dc0d9b683231b1218138dc000",
+              "bytes": 2242589
+            }
+          ],
+          "observedEvidence": {
+            "pid": null,
+            "reviewerAssessment": "PR explicitly records pending qualification, Knowledge timeout, scope limits and final verification; published code defects are separately tracked."
+          },
+          "limits": [
+            "Accepted PR/source limitation record; no execution claim. Existing cohort limits and formal-state boundary remain unchanged."
+          ]
+        },
+        "3882.6": {
+          "kind": "documented-fixture-catalog",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3882.6"
+          },
+          "artifacts": [],
+          "observedEvidence": {
+            "pid": null,
+            "sourceReference": {
+              "artifact": "grounded-certification-baseline.md",
+              "sha256": "0fc9a8f716d007ff6321783b246a8545cae9dcf6fff0f8a428809edb85e1a792"
+            }
+          },
+          "limits": [
+            "Certification document and incident catalog support; no invented behavioral RED."
+          ]
+        },
+        "3889.1": {
+          "kind": "owner-decision-and-git-history",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3889.1"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-followup-decision-provenance.json",
+              "sha256": "7aa00fbae5798875a1ec0b144c518cfdee6621d12eb49fcc00a941acefff3957",
+              "bytes": 872
+            }
+          ],
+          "observedEvidence": {
+            "pid": null,
+            "reviewedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "ownerDecisionBeforeImplementation": true
+          },
+          "limits": [
+            "Owner decision and immutable authored-time ordering; no test run is needed for this historical ordering obligation."
+          ]
+        },
+        "3882.5": {
+          "kind": "accepted-source-budget-or-scenario-contract",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3882.5"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-acceptance.json",
+              "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+              "bytes": 942466
+            }
+          ],
+          "observedEvidence": {
+            "pid": null,
+            "reviewerAssessment": "Historical numeric exploration dimensions are unchanged; only the owner-authorized follow-up cap is added. Lexical budget file has no base-to-head diff.",
+            "sourceContracts": [
+              {
+                "path": "scripts/check-retrieval-quality.budget.json",
+                "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+                "sha256": "e008052e110f430f3b9d41d4f26410629f014a7bc85bf68a81c124eeca722d54"
+              },
+              {
+                "path": "packages/keiko-server/src/grounded-retrieval-eval.ts",
+                "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+                "sha256": "06b64e97d0301302aaec1f4dd9d684e816317e72491767443da5186fc986ed7c"
+              }
+            ]
+          },
+          "limits": [
+            "Unchanged numbers/scenario source support only. Historical pending canonical command fields are preserved; this record does not assert a newly executed gate."
+          ]
+        },
+        "3883.8": {
+          "kind": "accepted-source-budget-or-scenario-contract",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3883.8"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-acceptance.json",
+              "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+              "bytes": 942466
+            }
+          ],
+          "observedEvidence": {
+            "pid": null,
+            "reviewerAssessment": "Existing latency ceiling numbers remain unchanged in committed budget sources; no latency qualification claimed.",
+            "sourceContracts": [
+              {
+                "path": "scripts/check-retrieval-latency.budget.json",
+                "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+                "sha256": "cb99c92d673194189ee51b3f31fa9dd805316e667f594e2cdac05377406db85f"
+              },
+              {
+                "path": "scripts/check-grounded-retrieval-latency.budget.json",
+                "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+                "sha256": "82a32fab8ae090069a4f5ed70da4bca51369852b11024c9305ca283c1235d226"
+              }
+            ]
+          },
+          "limits": [
+            "Unchanged numbers/scenario source support only. Historical pending canonical command fields are preserved; this record does not assert a newly executed gate."
+          ]
+        },
+        "3889.6": {
+          "kind": "accepted-source-budget-or-scenario-contract",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3889.6"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-acceptance.json",
+              "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+              "bytes": 942466
+            }
+          ],
+          "observedEvidence": {
+            "pid": null,
+            "reviewerAssessment": "A separate bounded-follow-up scenario is added; existing latency ceilings and default scenarios are unchanged in committed source.",
+            "sourceContracts": [
+              {
+                "path": "scripts/check-grounded-retrieval-latency.budget.json",
+                "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+                "sha256": "82a32fab8ae090069a4f5ed70da4bca51369852b11024c9305ca283c1235d226"
+              }
+            ]
+          },
+          "limits": [
+            "Unchanged numbers/scenario source support only. Historical pending canonical command fields are preserved; this record does not assert a newly executed gate."
+          ]
+        },
+        "3882.2": {
+          "kind": "accepted-healthy-source-and-assertion-baseline",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3882.2"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-acceptance.json",
+              "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+              "bytes": 942466
+            },
+            {
+              "artifact": "core-8249607-writer-96-criterion-ledger-v5.READONLY.json",
+              "sha256": "a07c610273796daa916a5227ac064868a895323dc0d9b683231b1218138dc000",
+              "bytes": 2242589
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "pid": null,
+            "executedCaseCount": null,
+            "fixture": {
+              "path": "scripts/__tests__/check-retrieval-quality.test.mjs",
+              "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+              "sha256": "f3e9918176ae4223b65cfb20beb6e1ddd6b68f486dfbe5c6879c17a291350be7"
+            }
+          },
+          "limits": [
+            "Reviewer accepted the existing source/assertion baseline. A criterion-specific process receipt is not retained here, so no PID, new run or original RED is invented."
+          ],
+          "selectors": ["preserves the historical lexical behavior when history is absent or empty"]
+        },
+        "3883.4": {
+          "kind": "accepted-explicit-floor-baseline",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3883.4"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-acceptance.json",
+              "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+              "bytes": 942466
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1.json",
+              "sha256": "84af5b20d93a99d52a00d731d0c78c7c5f96749c54d4cbf063e2693f10c174c5",
+              "bytes": 6790
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1-execution.json",
+              "sha256": "bc5d11317ac3d0ee03b41eef125ff71dc2e7bba0aac9d16c7d91bb84968a391e",
+              "bytes": 3093
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "incidentPid": 7904,
+            "incidentCases": 13,
+            "unitPid": null,
+            "fixture": {
+              "path": "packages/keiko-server/src/grounded-evidence-selection.test.ts",
+              "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+              "sha256": "87d724b9d04d16b0dd1e062652a224d39fd83d1112cd92df07c1c4ad6cbe2e6e"
+            },
+            "reviewerAssessment": "Explicit priority/protected content paths are excluded from ordinary floor reference and survive both cuts; outlier assertions inspected."
+          },
+          "limits": [
+            "Existing explicit-floor assertions and accepted source inspection are baseline support; the incident outlier controls are execution support. No new criterion-specific unit run or historical failure is inferred."
+          ],
+          "selectors": [
+            "does not relative-score-filter files the user selected explicitly",
+            "floor-outlier-explicit-file-en",
+            "floor-outlier-explicit-file-de"
+          ]
+        },
+        "3882.4": {
+          "kind": "accepted-canonical-producer-writer-reader-join",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3882.4"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-current-support-joined-proof.json",
+              "sha256": "20b39306a7b2386560764c8cf484b1ec0885de41ca868072d486d1ac89af9d72",
+              "bytes": 13315
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "runs": [
+              {
+                "allowance": 0,
+                "writerPid": 80130,
+                "records": 46,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 2,
+                "joinedFollowUpRecords": 6
+              },
+              {
+                "allowance": 1,
+                "writerPid": 80130,
+                "records": 52,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 0,
+                "joinedFollowUpRecords": 9
+              }
+            ]
+          },
+          "limits": [
+            "Allowance1 healthy report has complete analysis and no retrieval findings; incident selection truthfully remains no-registered-failure. Roots are rematerialized evaluation roots, not a one-root native lab. Full check:activity-log is not inferred from this scoped join."
+          ]
+        },
+        "3883.6": {
+          "kind": "accepted-canonical-producer-writer-reader-join",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3883.6"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-current-support-joined-proof.json",
+              "sha256": "20b39306a7b2386560764c8cf484b1ec0885de41ca868072d486d1ac89af9d72",
+              "bytes": 13315
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "runs": [
+              {
+                "allowance": 0,
+                "writerPid": 80130,
+                "records": 46,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 2,
+                "joinedFollowUpRecords": 6
+              },
+              {
+                "allowance": 1,
+                "writerPid": 80130,
+                "records": 52,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 0,
+                "joinedFollowUpRecords": 9
+              }
+            ]
+          },
+          "limits": [
+            "Allowance1 healthy report has complete analysis and no retrieval findings; incident selection truthfully remains no-registered-failure. Roots are rematerialized evaluation roots, not a one-root native lab. Full check:activity-log is not inferred from this scoped join."
+          ]
+        },
+        "3884.6": {
+          "kind": "accepted-canonical-producer-writer-reader-join",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3884.6"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-current-support-joined-proof.json",
+              "sha256": "20b39306a7b2386560764c8cf484b1ec0885de41ca868072d486d1ac89af9d72",
+              "bytes": 13315
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "runs": [
+              {
+                "allowance": 0,
+                "writerPid": 80130,
+                "records": 46,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 2,
+                "joinedFollowUpRecords": 6
+              },
+              {
+                "allowance": 1,
+                "writerPid": 80130,
+                "records": 52,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 0,
+                "joinedFollowUpRecords": 9
+              }
+            ]
+          },
+          "limits": [
+            "Allowance1 healthy report has complete analysis and no retrieval findings; incident selection truthfully remains no-registered-failure. Roots are rematerialized evaluation roots, not a one-root native lab. Full check:activity-log is not inferred from this scoped join."
+          ]
+        },
+        "3889.7": {
+          "kind": "accepted-canonical-producer-writer-reader-join",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3889.7"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-current-support-joined-proof.json",
+              "sha256": "20b39306a7b2386560764c8cf484b1ec0885de41ca868072d486d1ac89af9d72",
+              "bytes": 13315
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "runs": [
+              {
+                "allowance": 0,
+                "writerPid": 80130,
+                "records": 46,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 2,
+                "joinedFollowUpRecords": 6
+              },
+              {
+                "allowance": 1,
+                "writerPid": 80130,
+                "records": 52,
+                "registryClassification": "supported",
+                "analysisSufficiency": "complete",
+                "reportSelectionStatus": "insufficient",
+                "reportSelectionReasons": ["no-registered-failure"],
+                "retrievalFindings": 0,
+                "joinedFollowUpRecords": 9
+              }
+            ]
+          },
+          "limits": [
+            "Allowance1 healthy report has complete analysis and no retrieval findings; incident selection truthfully remains no-registered-failure. Roots are rematerialized evaluation roots, not a one-root native lab. Full check:activity-log is not inferred from this scoped join."
+          ]
+        },
+        "3883.1": {
+          "kind": "accepted-original-incident-and-current-healthy-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3883.1"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-incident-production-observations.json",
+              "sha256": "82d1501e3dd7b67f532de4a1537db78e0c7c52b80934e63150f218b7675817c4",
+              "bytes": 51414
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1-execution.json",
+              "sha256": "bc5d11317ac3d0ee03b41eef125ff71dc2e7bba0aac9d16c7d91bb84968a391e",
+              "bytes": 3093
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1.json",
+              "sha256": "84af5b20d93a99d52a00d731d0c78c7c5f96749c54d4cbf063e2693f10c174c5",
+              "bytes": 6790
+            }
+          ],
+          "observedEvidence": {
+            "historicalObservedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "historicalCases": 13,
+            "historicalProcessPid": null,
+            "currentControlProducerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "currentControlPid": 7904,
+            "currentControlCases": 13,
+            "currentControlExitCode": 0
+          },
+          "limits": [
+            "Original healthy a/b/c/f/g cases remain healthy controls; eligible d/e failure pair stays in its existing cohort. Case observations and later actual control execution keep their own producer identities."
+          ],
+          "selectors": ["explicit-relative-path-en", "explicit-relative-path-de"]
+        },
+        "3884.1": {
+          "kind": "accepted-original-incident-and-current-healthy-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3884.1"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-incident-production-observations.json",
+              "sha256": "82d1501e3dd7b67f532de4a1537db78e0c7c52b80934e63150f218b7675817c4",
+              "bytes": 51414
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1-execution.json",
+              "sha256": "bc5d11317ac3d0ee03b41eef125ff71dc2e7bba0aac9d16c7d91bb84968a391e",
+              "bytes": 3093
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1.json",
+              "sha256": "84af5b20d93a99d52a00d731d0c78c7c5f96749c54d4cbf063e2693f10c174c5",
+              "bytes": 6790
+            }
+          ],
+          "observedEvidence": {
+            "historicalObservedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "historicalCases": 13,
+            "historicalProcessPid": null,
+            "currentControlProducerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "currentControlPid": 7904,
+            "currentControlCases": 13,
+            "currentControlExitCode": 0
+          },
+          "limits": [
+            "Original healthy a/b/c/f/g cases remain healthy controls; eligible d/e failure pair stays in its existing cohort. Case observations and later actual control execution keep their own producer identities."
+          ],
+          "selectors": [
+            "path-only-in-previous-assistant-answer-en",
+            "path-only-in-previous-assistant-answer-de"
+          ]
+        },
+        "3885.1": {
+          "kind": "accepted-original-incident-and-current-healthy-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3885.1"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-incident-production-observations.json",
+              "sha256": "82d1501e3dd7b67f532de4a1537db78e0c7c52b80934e63150f218b7675817c4",
+              "bytes": 51414
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1-execution.json",
+              "sha256": "bc5d11317ac3d0ee03b41eef125ff71dc2e7bba0aac9d16c7d91bb84968a391e",
+              "bytes": 3093
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1.json",
+              "sha256": "84af5b20d93a99d52a00d731d0c78c7c5f96749c54d4cbf063e2693f10c174c5",
+              "bytes": 6790
+            },
+            {
+              "artifact": "Keiko-3913-factory-score-observations.json",
+              "sha256": "58a27c25eec62c33e24f4fb51d979c6b6a0ca3889b051bc77a11370a31d583c8",
+              "bytes": 1739
+            }
+          ],
+          "observedEvidence": {
+            "historicalObservedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "historicalCases": 13,
+            "historicalProcessPid": null,
+            "currentControlProducerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "currentControlPid": 7904,
+            "currentControlCases": 13,
+            "currentControlExitCode": 0,
+            "factoryCorpusInversions": {
+              "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+              "observations": 4,
+              "allFeatureTop1": true,
+              "allStrongBeforeWeak": true,
+              "pid": null
+            }
+          },
+          "limits": [
+            "Original healthy a/b/c/f/g cases remain healthy controls; eligible d/e failure pair stays in its existing cohort. Case observations and later actual control execution keep their own producer identities.",
+            "Factory inversion scores are observed producer results; their process PID is not retained in this artifact."
+          ],
+          "selectors": ["bare-basename-collision-en", "bare-basename-collision-de"]
+        },
+        "3886.1": {
+          "kind": "accepted-original-incident-and-current-healthy-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3886.1"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-incident-production-observations.json",
+              "sha256": "82d1501e3dd7b67f532de4a1537db78e0c7c52b80934e63150f218b7675817c4",
+              "bytes": 51414
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1-execution.json",
+              "sha256": "bc5d11317ac3d0ee03b41eef125ff71dc2e7bba0aac9d16c7d91bb84968a391e",
+              "bytes": 3093
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1.json",
+              "sha256": "84af5b20d93a99d52a00d731d0c78c7c5f96749c54d4cbf063e2693f10c174c5",
+              "bytes": 6790
+            }
+          ],
+          "observedEvidence": {
+            "historicalObservedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "historicalCases": 13,
+            "historicalProcessPid": null,
+            "currentControlProducerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "currentControlPid": 7904,
+            "currentControlCases": 13,
+            "currentControlExitCode": 0
+          },
+          "limits": [
+            "Original healthy a/b/c/f/g cases remain healthy controls; eligible d/e failure pair stays in its existing cohort. Case observations and later actual control execution keep their own producer identities."
+          ],
+          "selectors": ["vitest-stack-trace-node-modules-en", "vitest-stack-trace-node-modules-de"]
+        },
+        "3886.2": {
+          "kind": "accepted-original-incident-and-current-healthy-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3886.2"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-incident-production-observations.json",
+              "sha256": "82d1501e3dd7b67f532de4a1537db78e0c7c52b80934e63150f218b7675817c4",
+              "bytes": 51414
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1-execution.json",
+              "sha256": "bc5d11317ac3d0ee03b41eef125ff71dc2e7bba0aac9d16c7d91bb84968a391e",
+              "bytes": 3093
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1.json",
+              "sha256": "84af5b20d93a99d52a00d731d0c78c7c5f96749c54d4cbf063e2693f10c174c5",
+              "bytes": 6790
+            }
+          ],
+          "observedEvidence": {
+            "historicalObservedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "historicalCases": 13,
+            "historicalProcessPid": null,
+            "currentControlProducerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "currentControlPid": 7904,
+            "currentControlCases": 13,
+            "currentControlExitCode": 0
+          },
+          "limits": [
+            "Original healthy a/b/c/f/g cases remain healthy controls; eligible d/e failure pair stays in its existing cohort. Case observations and later actual control execution keep their own producer identities."
+          ],
+          "selectors": [
+            "conversational-orientation-follow-up-en",
+            "conversational-orientation-follow-up-de"
+          ]
+        },
+        "3887.1": {
+          "kind": "accepted-original-incident-and-current-healthy-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3887.1"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-incident-production-observations.json",
+              "sha256": "82d1501e3dd7b67f532de4a1537db78e0c7c52b80934e63150f218b7675817c4",
+              "bytes": 51414
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1-execution.json",
+              "sha256": "bc5d11317ac3d0ee03b41eef125ff71dc2e7bba0aac9d16c7d91bb84968a391e",
+              "bytes": 3093
+            },
+            {
+              "artifact": "resume-root-5fcbbbf-incident-case-details-r1.json",
+              "sha256": "84af5b20d93a99d52a00d731d0c78c7c5f96749c54d4cbf063e2693f10c174c5",
+              "bytes": 6790
+            }
+          ],
+          "observedEvidence": {
+            "historicalObservedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "historicalCases": 13,
+            "historicalProcessPid": null,
+            "currentControlProducerHead": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+            "currentControlPid": 7904,
+            "currentControlCases": 13,
+            "currentControlExitCode": 0
+          },
+          "limits": [
+            "Original healthy a/b/c/f/g cases remain healthy controls; eligible d/e failure pair stays in its existing cohort. Case observations and later actual control execution keep their own producer identities."
+          ],
+          "selectors": ["floor-outlier-explicit-file-en", "floor-outlier-explicit-file-de"]
+        },
+        "3884.4": {
+          "kind": "accepted-body-free-healthy-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3884.4"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-acceptance-continuity-focused.log",
+              "sha256": "227b8a16f13bb13798ddf570ef8d1190f88cc1ae2ba3ee666b31dcd7b460ceaf",
+              "bytes": 4589
+            },
+            {
+              "artifact": "Keiko-3913-current-support-joined-proof.json",
+              "sha256": "20b39306a7b2386560764c8cf484b1ec0885de41ca868072d486d1ac89af9d72",
+              "bytes": 13315
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "focusedTestsPassed": 25,
+            "owningBodyFreeReferentAssertionsPassed": 3,
+            "testPid": null,
+            "fixture": {
+              "path": "packages/keiko-server/src/grounded-conversation-referents.activity-log.test.ts",
+              "atCommit": "5fcbbbf1bc429e77f4ecb597aa762ccdd3f18769",
+              "sha256": "a1f90e8661d28019267db548e33cd082ad24dbe039e145c25982b30d4e53e552"
+            }
+          },
+          "limits": [
+            "The three existing owning assertions check closed origin/counts and absence of path/function canaries in actual formatted lines. Retained output/source-review support has no loaded-parent byte or original wrong-target failure claim. Test PID is not retained in the log."
+          ]
+        },
+        "3886.8": {
+          "kind": "accepted-registered-vocabulary-source-contract",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3886.8"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-vocabulary-source-comparison.json",
+              "sha256": "64b213332f2c0b95a1bf2988c7e03d0aee8538d849d60b6152ec0f740b09f038",
+              "bytes": 2599
+            },
+            {
+              "artifact": "Keiko-3913-acceptance-continuity-focused.log",
+              "sha256": "227b8a16f13bb13798ddf570ef8d1190f88cc1ae2ba3ee666b31dcd7b460ceaf",
+              "bytes": 4589
+            },
+            {
+              "artifact": "Keiko-3913-acceptance-pairing-focused.log",
+              "sha256": "c979e3e50fd4d12ccc28317c4952812977b98cbbe27cbffcb42c7bb171d52a15",
+              "bytes": 4273
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "pid": null,
+            "vocabularyRows": 4,
+            "continuityTestsPassed": 25,
+            "pairingTestsPassed": 30
+          },
+          "limits": [
+            "Typed source, generated catalog and analyzer vocabulary comparison. Existing check:activity-log pending scope remains; no complete gate result is manufactured."
+          ]
+        },
+        "3888.8": {
+          "kind": "accepted-public-source-claim-and-general-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3888.8"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-published-739b-consumer-proof.json",
+              "sha256": "45a22d44702f4a574938ef5ce55fa4d412fb51a9cfa009933fc7fda3085c0b30",
+              "bytes": 2155
+            },
+            {
+              "artifact": "Keiko-3913-published-09aba-consumer-proof.json",
+              "sha256": "657d95d2134d50218fe0dc7d50aa62f8699f54075d18e0a35e3cce908777323a",
+              "bytes": 2630
+            },
+            {
+              "artifact": "resume-root-public-clarification-owning-qualification-r1.json",
+              "sha256": "c37724d69a4ecf59ea8fe5dec0c26b803825431ac8b2b0323b2c26b714964188",
+              "bytes": 2618
+            }
+          ],
+          "observedEvidence": {
+            "published739ProducerHead": "739b380afbabd01c69c9812595dc62226b4d1fef",
+            "published739SelectedPassed": 7,
+            "published09abaProducerHead": "09aba6a4ab39021d35801353d6f5cacfb670532f",
+            "published09abaPassed": 7,
+            "currentHealthyControlHead": "824960728d583c5d002f0884dffe6f77bb9ef470",
+            "currentHealthyTestsPassed": 39,
+            "pid": null
+          },
+          "limits": [
+            "Actual public/store/scripted transport consumers and general/source-claim healthy controls. Current pure clarification is not a source-marker repair and no extra native/general-model sequence is claimed. Original archived native conversation is separately recorded under3894.5."
+          ]
+        },
+        "3890.2": {
+          "kind": "accepted-focused-browser-journey",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3890.2"
+          },
+          "artifacts": [
+            {
+              "artifact": "playwright-targeted.log",
+              "sha256": "088922235259a9250769bc633175bb2c8866c2bcc0d8cb7d7bd87cde42c7c62d",
+              "bytes": 4481
+            },
+            {
+              "artifact": "Keiko-3913-acceptance.json",
+              "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+              "bytes": 942466
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "testsPassed": 21,
+            "pid": null,
+            "fixture": {
+              "path": "tests/e2e/chat-scope-narrowing.smoke.spec.ts",
+              "atCommit": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+              "sha256": "6fcf2dbb80ebf0d62d514cd232a2febfd27c3de0337d8764dc7d137ab9748552"
+            }
+          },
+          "limits": [
+            "Retained original focused browser execution, not a new/current native campaign. Process PID is not retained in the accepted result."
+          ],
+          "selectors": [
+            "Files navigation announces narrowing and keeps the folder on later previews @smoke"
+          ]
+        },
+        "3891.3": {
+          "kind": "accepted-mounted-component-and-activation-controls",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3891.3"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-published-52ba-ui-consumer-proof.json",
+              "sha256": "672ab0eeb87f806022bbb9cbe42edc760345dab13a3c80f004122bd2a994674a",
+              "bytes": 1542
+            },
+            {
+              "artifact": "Keiko-3913-prose-link-parser-observations.json",
+              "sha256": "70325bd82dca555accdbbcfebb11ceb6c1816e92a284135fc936c064ad3f2847",
+              "bytes": 4105
+            },
+            {
+              "artifact": "ui-published-52ba-focused.log",
+              "sha256": "02e4db7fe72f25be206500d00502be945570b9a9c17cfcd685f0f2bce3df2a08",
+              "bytes": 22157
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "52ba3ca820b3b93aa35bb50f28b098364c520883",
+            "testsPassed": 11,
+            "unselected": 103,
+            "pid": null
+          },
+          "limits": [
+            "Actual mounted SafeMarkdown jsdom consumer, three accessible states/snapshots, source-aware path activation and diagnostics. This is not the original browser/native journey or an invented historical UI RED. Loaded-source hashes are owned by the retained reviewer proof."
+          ]
+        },
+        "3892.4": {
+          "kind": "accepted-measured-status-owner-with-gate-scope-limit",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3892.4"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-status-cost-observations.json",
+              "sha256": "356b2ee4ef169a9f37ab4febe1f1ec4637d29ad126ee413e128ca13a73ab2729",
+              "bytes": 14950
+            },
+            {
+              "artifact": "Keiko-3913-current-status-cost-independent-artifact-inspection.json",
+              "sha256": "56019402799c7f21b18ca4ebc43ba29f08311e70112c27475d8e530d95e5ca82",
+              "bytes": 1916
+            }
+          ],
+          "observedEvidence": {
+            "producerHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "fixtureCohorts": 3,
+            "samplesPerCohort": [5, 5, 5],
+            "pid": null
+          },
+          "limits": [
+            "Actual retained status-only and complete-observer numbers/environment. No new current wall-clock run or final latency gate is claimed; unchanged budget source and historical pending commands remain."
+          ]
+        },
+        "3894.5": {
+          "kind": "accepted-archived-natural-model-conversation",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3894.5"
+          },
+          "artifacts": [
+            {
+              "artifact": "Keiko-3913-model-sequence-verification.json",
+              "sha256": "22be54c937a78119a2fcc50ac210345d5eaccfc4ccf8d693841805d6ab43629c",
+              "bytes": 6262
+            }
+          ],
+          "observedEvidence": {
+            "reviewedHead": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+            "originalPublicProofSha256": "e6b92c49c0947c9618c28a2fc023500982f6beaaff3944be74b00aa164569750",
+            "observations": 6,
+            "immutableObjectsVerified": 12,
+            "sameConversationAndCheckpoint": true,
+            "cases": [
+              {
+                "caseId": "compaction-source-before",
+                "actualTestedSha": "3ffbbcd4a4c0535725549b91ace7abee9e38e49e",
+                "status": 200,
+                "uncitedWarningCount": 0
+              },
+              {
+                "caseId": "compaction-setup-note-1",
+                "actualTestedSha": "3ffbbcd4a4c0535725549b91ace7abee9e38e49e",
+                "status": 200,
+                "uncitedWarningCount": 0
+              },
+              {
+                "caseId": "compaction-setup-note-2",
+                "actualTestedSha": "3ffbbcd4a4c0535725549b91ace7abee9e38e49e",
+                "status": 200,
+                "uncitedWarningCount": 0
+              },
+              {
+                "caseId": "compaction-general-after",
+                "actualTestedSha": "3ffbbcd4a4c0535725549b91ace7abee9e38e49e",
+                "status": 200,
+                "uncitedWarningCount": 0
+              },
+              {
+                "caseId": "compaction-mixed-after",
+                "actualTestedSha": "aaeb2a5055a7cdd505826ee91c7e382bd29ae2ec",
+                "status": 200,
+                "uncitedWarningCount": 0
+              },
+              {
+                "caseId": "compaction-source-return",
+                "actualTestedSha": "4ef5560d457e56e10a51e24b589db650fc3e6760",
+                "status": 200,
+                "uncitedWarningCount": 0
+              }
+            ],
+            "pid": null
+          },
+          "limits": [
+            "Six authentic prior natural-model observations retain their original tested heads and answer/timeline/semantic hashes. This is not a new model run, remaining Knowledge/Manual campaign or universal source-attribution signoff."
+          ],
+          "selectors": ["https://github.com/oscharko-dev/Keiko/pull/3913#issuecomment-6096677076"]
+        },
+        "3885.6": {
+          "kind": "subsequent-independent-latency-support",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3885.6"
+          },
+          "artifacts": [
+            {
+              "artifact": "984e76-latency-two-criteria-independent-qualification.json",
+              "sha256": "53974d4b015d432f6b7d70cdb9b9b1ce3bad3ef5b1508ed771674cadb1943cc2",
+              "bytes": 4188
+            },
+            {
+              "artifact": "resume-runtime-reranker-stage-cost-v3-quiet-window-3a989fd0-20261013-0853.json",
+              "sha256": "4a1a9973b8793c9510652c2f3b0cbe679f501ad3262fefa2e7a164a93f3f19ad",
+              "bytes": 1441378
+            },
+            {
+              "artifact": "core-latency-3a989fd-linux-r1-completed.json",
+              "sha256": "d5c9da895f793ef31cb215f42d4dbf745b8c26bff2132bc5de332293823e10e7",
+              "bytes": 5793
+            }
+          ],
+          "observedEvidence": {
+            "reviewedHead": "984e76d42f7f2632d5eecb1cdb7e497dd496c317",
+            "rerankerPid": 38416,
+            "measuredSamples": 72,
+            "warmups": 18
+          },
+          "limits": [
+            "This is later independently supported evidence. Historical row auditDisposition remains unverified as part of the immutable snapshot. Existing scripted/environment and source-attribution limits remain; no native saturation or new gate claim."
+          ]
+        },
+        "3887.7": {
+          "kind": "subsequent-independent-latency-support",
+          "acceptedReviewReference": {
+            "artifact": "Keiko-3913-acceptance.json",
+            "sha256": "c8b8cf30def69eee69701d22c9fdb8652a67d32825726e503e7451dba020c5ff",
+            "criterionId": "3887.7"
+          },
+          "artifacts": [
+            {
+              "artifact": "984e76-latency-two-criteria-independent-qualification.json",
+              "sha256": "53974d4b015d432f6b7d70cdb9b9b1ce3bad3ef5b1508ed771674cadb1943cc2",
+              "bytes": 4188
+            },
+            {
+              "artifact": "resume-runtime-reranker-stage-cost-v3-quiet-window-3a989fd0-20261013-0853.json",
+              "sha256": "4a1a9973b8793c9510652c2f3b0cbe679f501ad3262fefa2e7a164a93f3f19ad",
+              "bytes": 1441378
+            },
+            {
+              "artifact": "core-latency-3a989fd-linux-r1-completed.json",
+              "sha256": "d5c9da895f793ef31cb215f42d4dbf745b8c26bff2132bc5de332293823e10e7",
+              "bytes": 5793
+            }
+          ],
+          "observedEvidence": {
+            "reviewedHead": "984e76d42f7f2632d5eecb1cdb7e497dd496c317",
+            "rerankerPid": 38416,
+            "measuredSamples": 72,
+            "warmups": 18
+          },
+          "limits": [
+            "This is later independently supported evidence. Historical row auditDisposition remains unverified as part of the immutable snapshot. Existing scripted/environment and source-attribution limits remain; no native saturation or new gate claim."
+          ]
+        }
+      },
+      "limits": [
+        "No new execution, source change, original chronology or failure is manufactured. All existing cohorts and outcomes are retained.",
+        "A null process field means the retained artifact does not contain that process identifier; observed writer identities and test/observation counts are named separately.",
+        "Historical sourceSnapshot/auditCounts/dispositions remain unchanged, including the two later-supported latency rows."
+      ]
     }
   },
   "criteria": [
@@ -1612,10 +2657,11 @@
           "sha256": "92588de2a72d98ed07adfc66df5795d1e49195dcc8b0eb65bd7e613125af52b5"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
       "causalDisposition": ["document-or-history"],
-      "nonExecutableCriterion": true
+      "nonExecutableCriterion": true,
+      "cohortRecordSelector": "3881.6"
     },
     {
       "id": "3881.7",
@@ -1672,10 +2718,11 @@
           "sha256": "92588de2a72d98ed07adfc66df5795d1e49195dcc8b0eb65bd7e613125af52b5"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
       "causalDisposition": ["document-or-history"],
-      "nonExecutableCriterion": true
+      "nonExecutableCriterion": true,
+      "cohortRecordSelector": "3881.8"
     },
     {
       "id": "3881.9",
@@ -1833,9 +2880,10 @@
           "sha256": "0fc9a8f716d007ff6321783b246a8545cae9dcf6fff0f8a428809edb85e1a792"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3882.2"
     },
     {
       "id": "3882.3",
@@ -1891,9 +2939,10 @@
           "sha256": "0fc9a8f716d007ff6321783b246a8545cae9dcf6fff0f8a428809edb85e1a792"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3882.4"
     },
     {
       "id": "3882.5",
@@ -1920,9 +2969,10 @@
           "sha256": "0fc9a8f716d007ff6321783b246a8545cae9dcf6fff0f8a428809edb85e1a792"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3882.5"
     },
     {
       "id": "3882.6",
@@ -1949,10 +2999,11 @@
           "sha256": "0fc9a8f716d007ff6321783b246a8545cae9dcf6fff0f8a428809edb85e1a792"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
       "causalDisposition": ["document-or-history"],
-      "nonExecutableCriterion": true
+      "nonExecutableCriterion": true,
+      "cohortRecordSelector": "3882.6"
     },
     {
       "id": "3882.7",
@@ -2008,9 +3059,10 @@
           "sha256": "e3b9994694b8034340c05bb0acb35441186b3ea300e5ae67b61b169812c9db24"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3883.1"
     },
     {
       "id": "3883.2",
@@ -2095,9 +3147,10 @@
           "sha256": "e3b9994694b8034340c05bb0acb35441186b3ea300e5ae67b61b169812c9db24"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3883.4"
     },
     {
       "id": "3883.5",
@@ -2153,9 +3206,10 @@
           "sha256": "e3b9994694b8034340c05bb0acb35441186b3ea300e5ae67b61b169812c9db24"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": ["npm run check:activity-log"],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3883.6"
     },
     {
       "id": "3883.7",
@@ -2212,12 +3266,13 @@
           "sha256": "e3b9994694b8034340c05bb0acb35441186b3ea300e5ae67b61b169812c9db24"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [
         "npm run check:retrieval-latency",
         "npm run check:grounded-retrieval-latency"
       ],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3883.8"
     },
     {
       "id": "3884.1",
@@ -2240,9 +3295,10 @@
           "sha256": "9779f9bdd10d02dccb82e78e413b71fe64c48e0ea60d40616cb5c819f1263268"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3884.1"
     },
     {
       "id": "3884.2",
@@ -2317,10 +3373,11 @@
           "sha256": "9779f9bdd10d02dccb82e78e413b71fe64c48e0ea60d40616cb5c819f1263268"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
       "causalDisposition": ["source-and-assertion-support-only"],
-      "causalScopeLimit": "Metadata projection failures do not prove old wrong-target reads. Existing named-path/source-root protections are healthy baseline controls; preserve the narrower output/current-control evidence."
+      "causalScopeLimit": "Metadata projection failures do not prove old wrong-target reads. Existing named-path/source-root protections are healthy baseline controls; preserve the narrower output/current-control evidence.",
+      "cohortRecordSelector": "3884.4"
     },
     {
       "id": "3884.5",
@@ -2369,9 +3426,10 @@
           "sha256": "9779f9bdd10d02dccb82e78e413b71fe64c48e0ea60d40616cb5c819f1263268"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": ["npm run check:activity-log"],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3884.6"
     },
     {
       "id": "3885.1",
@@ -2402,9 +3460,10 @@
           "sha256": "f97f22b5a7fce15e8ccd681b206c650a23ed295100441d06113cb0438e59d579"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3885.1"
     },
     {
       "id": "3885.2",
@@ -2568,12 +3627,13 @@
           "sha256": "f97f22b5a7fce15e8ccd681b206c650a23ed295100441d06113cb0438e59d579"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [
         "npm run check:retrieval-latency",
         "npm run check:grounded-retrieval-latency"
       ],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3885.6"
     },
     {
       "id": "3885.7",
@@ -2641,9 +3701,10 @@
           "sha256": "e60cb0600dc1af9cd98dd03e793d54881b0843e69ac0a11933b5cfb76ce17a84"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3886.1"
     },
     {
       "id": "3886.2",
@@ -2678,9 +3739,10 @@
           "sha256": "e60cb0600dc1af9cd98dd03e793d54881b0843e69ac0a11933b5cfb76ce17a84"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3886.2"
     },
     {
       "id": "3886.3",
@@ -2902,9 +3964,10 @@
           "sha256": "e60cb0600dc1af9cd98dd03e793d54881b0843e69ac0a11933b5cfb76ce17a84"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": ["npm run check:activity-log"],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3886.8"
     },
     {
       "id": "3887.1",
@@ -2939,9 +4002,10 @@
           "sha256": "0b6354d6eb7a406a593797cf66892f582163cba201a510e7dccc9609e96a5739"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3887.1"
     },
     {
       "id": "3887.2",
@@ -3165,12 +4229,13 @@
           "sha256": "0b6354d6eb7a406a593797cf66892f582163cba201a510e7dccc9609e96a5739"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [
         "npm run check:retrieval-latency",
         "npm run check:grounded-retrieval-latency"
       ],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3887.7"
     },
     {
       "id": "3887.8",
@@ -3584,9 +4649,10 @@
           "sha256": "edd3c2c4e2261577c84bc9b49ab77743a5f4628a3065c5adbcbb5db50a478f94"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3888.8"
     },
     {
       "id": "3889.1",
@@ -3621,10 +4687,11 @@
           "sha256": "82a32fab8ae090069a4f5ed70da4bca51369852b11024c9305ca283c1235d226"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
       "causalDisposition": ["document-or-history"],
-      "nonExecutableCriterion": true
+      "nonExecutableCriterion": true,
+      "cohortRecordSelector": "3889.1"
     },
     {
       "id": "3889.2",
@@ -3811,12 +4878,13 @@
           "sha256": "82a32fab8ae090069a4f5ed70da4bca51369852b11024c9305ca283c1235d226"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [
         "npm run check:retrieval-latency",
         "npm run check:grounded-retrieval-latency"
       ],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3889.6"
     },
     {
       "id": "3889.7",
@@ -3851,9 +4919,10 @@
           "sha256": "82a32fab8ae090069a4f5ed70da4bca51369852b11024c9305ca283c1235d226"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": ["npm run check:activity-log"],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3889.7"
     },
     {
       "id": "3890.1",
@@ -3941,9 +5010,10 @@
           "sha256": "6fcf2dbb80ebf0d62d514cd232a2febfd27c3de0337d8764dc7d137ab9748552"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3890.2"
     },
     {
       "id": "3890.3",
@@ -4293,9 +5363,10 @@
           "sha256": "20bdbd1fd069a17bf041ee9b0a22b9efc7188073264427cfceecb2cbdd28f0c9"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3891.3"
     },
     {
       "id": "3891.4",
@@ -4556,12 +5627,13 @@
           "sha256": "e60cb0600dc1af9cd98dd03e793d54881b0843e69ac0a11933b5cfb76ce17a84"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [
         "npm run check:retrieval-latency",
         "npm run check:grounded-retrieval-latency"
       ],
-      "causalDisposition": ["gate-pending"]
+      "causalDisposition": ["gate-pending"],
+      "cohortRecordSelector": "3892.4"
     },
     {
       "id": "3892.5",
@@ -4922,9 +5994,10 @@
           "sha256": "6fcf2dbb80ebf0d62d514cd232a2febfd27c3de0337d8764dc7d137ab9748552"
         }
       ],
-      "cohortRefs": [],
+      "cohortRefs": ["retained-reviewer-supported-mapping-completion"],
       "pendingCanonicalCommands": [],
-      "causalDisposition": ["source-and-assertion-support-only"]
+      "causalDisposition": ["source-and-assertion-support-only"],
+      "cohortRecordSelector": "3894.5"
     }
   ],
   "retainedHistory": [
