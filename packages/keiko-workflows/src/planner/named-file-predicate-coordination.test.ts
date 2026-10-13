@@ -11,6 +11,8 @@ function decision(text: string): ReturnType<typeof resolveQueryTargetDecision> {
 describe("one named file owns its explanatory predicate and coordinated objects", () => {
   it.each([
     "Explain src/session.ts and how it preserves elapsed limits.",
+    "Please\t explain src/session.ts and how it preserves read, token\t and   elapsed budgets.",
+    "Bitte erkläre lib/konto.ts und wie es Eingaben, Ausgaben   und\t Laufzeiten prüft.",
     "Explain src/channel.ts and how it preserves the original read, token and elapsed limits. Cite implementation lines. Keep the answer under 200 words.",
     "Explain how src/cache.ts preserves reads, tokens and elapsed limits.",
     "Explain how src/quota.ts preserves read, token and elapsed budgets.",
@@ -40,6 +42,8 @@ describe("one named file owns its explanatory predicate and coordinated objects"
     "Explain elapsed limits in another folder in src/cache.ts.",
     "Erkläre wie lib/konto.ts Werte innerhalb anderer Arbeitsbereiche prüft.",
     "Explain how src/session.ts preserves elapsed limits, describe pump delays.",
+    "Please explain src/session.ts and how it preserves read, token\t and   read another file.",
+    "Bitte erkläre lib/konto.ts und wie es Eingaben, Ausgaben   und\t die Steuerung Ausgänge prüft.",
     "Explain how src/session.ts preserves elapsed limits, find unrelated implementations.",
     "Explain how src/session.ts works, explain pump reset delays.",
     "Explain how src/quota.ts preserves timeouts, pump reset delays.",

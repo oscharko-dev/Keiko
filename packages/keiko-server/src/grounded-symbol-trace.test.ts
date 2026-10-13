@@ -22,6 +22,7 @@ import {
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import {
   endpointContractAdapter,
+  searchText,
   evidenceAtomStableId,
   PathDeniedError,
 } from "@oscharko-dev/keiko-workspace";
@@ -83,6 +84,7 @@ async function contextualTraceFixture(
   query: RetrievalQuery = contextualReceiptQuery(),
   projection?: (index: CodeIntelligenceIndex) => CodeIntelligenceIndex,
   stalePath?: string,
+  admittedAtoms: readonly EvidenceAtom[] = [],
 ): Promise<Awaited<ReturnType<typeof collectDiscoveredSymbolTraceEvidence>>> {
   const fs = memFs(WORKSPACE_ROOT, files);
   const searchScope = { workspace: workspaceInfo(), scopeId: "scope-route", relativePaths: [] };
@@ -90,7 +92,10 @@ async function contextualTraceFixture(
     searchScope,
     GROUNDED_TRACE_SEARCH_LIMITS,
     fs,
-    { nowMs: () => NOW },
+    {
+      nowMs: () => NOW,
+      preferredCodeIntelligenceSourcePaths: admittedAtoms.map((atom) => atom.scopePath),
+    },
   );
   if (projection !== undefined) {
     const index = requestContext.codeIntelligenceIndex.bind(requestContext);
@@ -98,7 +103,15 @@ async function contextualTraceFixture(
       projection(await index()),
     );
   }
-  const observed = await requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS);
+  const observed =
+    admittedAtoms.length === 0
+      ? await requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS)
+      : await searchText(
+          searchScope,
+          query,
+          { ...GROUNDED_TRACE_SEARCH_LIMITS, maxMatchesReturned: query.maxResults },
+          { fs, nowMs: () => NOW },
+        );
   if (stalePath !== undefined) {
     const current = requestContext.isCodeIntelligenceSourceCurrent.bind(requestContext);
     vi.spyOn(requestContext, "isCodeIntelligenceSourceCurrent").mockImplementation(
@@ -113,7 +126,7 @@ async function contextualTraceFixture(
     searchScope,
     fs,
     nowMs: () => NOW,
-    atoms: observed.atoms,
+    atoms: [...admittedAtoms, ...observed.atoms],
     requestContext,
   });
 }
@@ -277,11 +290,93 @@ function contextualWindowPressureFiles(): Record<string, string> {
 }
 
 describe("contextual source-definition discovery", () => {
-  it("nominates the addressed current callable before stronger unrelated telemetry and declaration decoys", async () => {
+  it("preserves original-question callable nomination in the authorized trace scope", async () => {
     const query: RetrievalQuery = {
       ...routeQuery(),
       maxResults: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
       text: "Explain src/limits.ts and how it preserves read, token and elapsed budgets.",
+    };
+    const admitted: EvidenceAtom = {
+      ...routeAtom(),
+      scopePath: "src/limits.ts",
+      lineRange: undefined,
+      stableId: evidenceAtomStableId({
+        scopeId: selectedScope().scopeId,
+        scopePath: "src/limits.ts",
+        lineRange: undefined,
+        provenanceKind: "file-listing",
+        provenanceTool: "repo.selectedFile",
+        queryFingerprint: "contextual-owner",
+      }),
+      provenance: {
+        kind: "file-listing",
+        tool: "repo.selectedFile",
+        queryFingerprint: "contextual-owner",
+      },
+    };
+    const result = await contextualTraceFixture(
+      contextualOwnerDecoys(),
+      query,
+      undefined,
+      undefined,
+      [admitted],
+    );
+    const entries = result.routeCoverage?.entries ?? [];
+    const owner = entries.find(
+      (entry) =>
+        entry.atom.scopePath === "src/limits.ts" &&
+        entry.definitionIdentity.includes('"applyQuota"'),
+    );
+    expect(owner).toBeDefined();
+    expect(owner?.observedBytes).toBeGreaterThan(0);
+    expect(entries.slice(0, 2)).toContain(owner);
+    expect(entries.every((entry) => !entry.atom.scopePath.startsWith("src/telemetry-"))).toBe(true);
+    expect(result.contextualDefinitionSeedCount).toBeGreaterThan(0);
+    expect(result.contextualDefinitionSeedCount).toBeLessThanOrEqual(query.maxResults);
+  });
+
+  it("keeps the original file-only owner question inside its named source", async () => {
+    const query: RetrievalQuery = {
+      ...routeQuery(),
+      maxResults: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+      text: "Explain src/limits.ts and how it preserves read, token and elapsed budgets.",
+    };
+    const { pack } = await retrieveConnectedContextPack(
+      {
+        scope: selectedScope(),
+        query,
+        workspaceRoot: WORKSPACE_ROOT,
+        budget: DEFAULT_EXPLORATION_BUDGET,
+      },
+      {
+        fs: memFs(WORKSPACE_ROOT, contextualOwnerDecoys()),
+        nowMs: () => NOW,
+        detectWorkspace: workspaceInfo,
+        activityLog: createBufferedServerLogSink(),
+        correlationId: "contextual-file-only-owner",
+        answerer: { answer: () => Promise.reject(new TypeError("No synthesis is permitted.")) },
+      },
+    );
+    expect(pack.files.map((file) => file.scopePath)).toEqual(["src/limits.ts"]);
+    const expected = "return adaptRecord(value + token)";
+    expect(
+      pack.files.flatMap((file) => file.excerpts).some((view) => view.content.includes(expected)),
+    ).toBe(true);
+    expect(
+      buildGroundedGatewayMessages(query.text, pack, (value) => value).some((message) =>
+        message.content.includes(expected),
+      ),
+    ).toBe(true);
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(DEFAULT_EXPLORATION_BUDGET.excerptBytesMax);
+  });
+
+  it("nominates the addressed current callable before stronger unrelated telemetry and declaration decoys when following calls", async () => {
+    // ADR-0022 narrows file-only questions. Request the call relationship explicitly so this
+    // regression continues to exercise addressed callable selection in an authorized graph scope.
+    const query: RetrievalQuery = {
+      ...routeQuery(),
+      maxResults: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+      text: "Explain src/limits.ts and how it preserves read, token and elapsed budgets. Follow its calls.",
     };
     const log = createBufferedServerLogSink();
     const { pack } = await retrieveConnectedContextPack(

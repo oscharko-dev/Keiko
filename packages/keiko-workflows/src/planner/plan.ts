@@ -406,7 +406,8 @@ const SOURCE_SCOPE_ELSEWHERE_RE = /^(?:elsewhere|everywhere|anderswo|woanders|ü
 const SOURCE_SCOPE_NOUN_PATTERNS = [
   /^(?:repos?|repositor(?:y|ies)|workspaces?|projects?|scopes?)$/iu,
   /^(?:files?|folders?|director(?:y|ies)|manuals?|documents?|sources)$/iu,
-  /^(?:projekte?|arbeitsbereiche?|datei(?:en)?|ordner[sn]?|verzeichnis(?:se|sen)?|dokumente?)$/iu,
+  /^(?:projekte?|arbeitsbereiche?|datei(?:en)?)$/iu,
+  /^(?:ordner[sn]?|verzeichnis(?:se|sen)?|dokumente?)$/iu,
   /^(?:handbuch(?:e?s)?|handbüchern?)$/iu,
 ];
 const NAMED_FILE_CONTAINED_REQUEST_RE =
@@ -415,9 +416,12 @@ const NAMED_FILE_SUBJECT_REQUEST_RE =
   /^(?:please |bitte )?(?:explain|describe|erkläre|beschreibe) (?:how|wie) \0 (.+)$/iu;
 const NAMED_FILE_ANAPHORIC_REQUEST_RE =
   /^(?:please |bitte )?(?:explain|describe|erkläre|beschreibe) \0 (?:and how it|und wie (?:es|sie)) (.+)$/iu;
-const COORDINATED_OBJECT_SEPARATOR_RE = /,|\s+(?:and|or|und|oder)\s+/u;
-const COORDINATED_SUBJECT_HEAD_RE =
-  /^(?:i|we|you|he|she|it|they|a|an|the|this|that|these|those|ich|wir|du|er|sie|es|ein|eine|der|die|das)$/iu;
+// Explanatory clauses reach this parser with whitespace normalized to single spaces.
+const COORDINATED_OBJECT_SEPARATOR_RE = /,| (?:and|or|und|oder) /u;
+const COORDINATED_SUBJECT_HEAD_PATTERNS = [
+  /^(?:i|we|you|he|she|it|they|a|an|the|this|that|these|those)$/iu,
+  /^(?:ich|wir|du|er|sie|es|ein|eine|der|die|das)$/iu,
+];
 const INDEPENDENT_REQUEST_GRAMMAR_PATTERNS = [
   /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus)\b/iu,
   /\b(?:then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während)\b/iu,
@@ -528,7 +532,7 @@ function coordinatedObjectPart(text: string): boolean {
   const head = words[0];
   return (
     head !== undefined &&
-    !COORDINATED_SUBJECT_HEAD_RE.test(head) &&
+    !matchesQueryPattern(head, COORDINATED_SUBJECT_HEAD_PATTERNS) &&
     /^(?:[\p{L}\p{N}_$-]+|[\p{L}\p{N}_$-]+(?:ed|ing) [\p{L}\p{N}_$-]+)$/u.test(text) &&
     !matchesQueryPattern(text, INDEPENDENT_REQUEST_GRAMMAR_PATTERNS) &&
     (text === "reads" || !matchesQueryPattern(text, REQUEST_COMMAND_PATTERNS)) &&
@@ -547,7 +551,8 @@ function coordinatedPredicateHead(head: string, objects: readonly string[]): boo
 }
 
 function coordinatedNamedPredicate(text: string, verbLast: boolean): boolean {
-  if (text.includes(",") && !/\s+(?:and|or|und|oder)\s+[^,]+$/u.test(text)) return false;
+  const finalClause = text.slice(text.lastIndexOf(",") + 1);
+  if (text.includes(",") && !/ (?:and|or|und|oder) [^,]/u.test(finalClause)) return false;
   const [head, ...objects] = text.split(COORDINATED_OBJECT_SEPARATOR_RE).map((part) => part.trim());
   if (head === undefined || objects.length === 0) return false;
   if (verbLast) return coordinatedGermanObjects([head, ...objects]);
