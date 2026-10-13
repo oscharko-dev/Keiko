@@ -136,8 +136,18 @@ function validPublicParserRules(record) {
   );
 }
 
+function validRawReaderRules(record) {
+  return (
+    record.kind !== "raw-own-property-reader" ||
+    (record.rules.length === 1 &&
+      record.rules[0] === "anti-slop/no-unknown-returns" &&
+      record.input?.parameterIndex === 0 &&
+      record.proofAssertions?.length > 0)
+  );
+}
+
 function validResponsibilityConsumer(record) {
-  return ["diagnostic-checker", "public-parser"].includes(record.kind)
+  return ["diagnostic-checker", "public-parser", "raw-own-property-reader"].includes(record.kind)
     ? validDiagnosticConsumer(record.consumer)
     : validConsumerSelector(record.consumer);
 }
@@ -163,11 +173,16 @@ function validResponsibilityIdentity(record) {
   return (
     boundedText(record.id, 128) &&
     boundedText(record.owner, 256) &&
-    ["validator", "structural-redactor", "diagnostic-checker", "public-parser"].includes(
-      record.kind,
-    ) &&
+    [
+      "validator",
+      "structural-redactor",
+      "diagnostic-checker",
+      "public-parser",
+      "raw-own-property-reader",
+    ].includes(record.kind) &&
     validResponsibilityRules(record.rules) &&
-    validPublicParserRules(record)
+    validPublicParserRules(record) &&
+    validRawReaderRules(record)
   );
 }
 

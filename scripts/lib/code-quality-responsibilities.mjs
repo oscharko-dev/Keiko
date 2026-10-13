@@ -10,7 +10,7 @@ function inventoryFile(subject, path) {
 }
 
 function proofConsumerKind(record) {
-  return ["diagnostic-checker", "public-parser"].includes(record.kind);
+  return ["diagnostic-checker", "public-parser", "raw-own-property-reader"].includes(record.kind);
 }
 
 function resolveRoles(resolver, record) {
@@ -53,7 +53,7 @@ function ownershipReasons(subject, record, roles) {
 }
 
 function diagnosticIdentityReasons(record, roles, reasons) {
-  if (proofConsumerKind(record)) {
+  if (proofConsumerKind(record) && record.kind !== "raw-own-property-reader") {
     const producer = JSON.stringify(
       roles.input.identities.map(({ owner, producer }) => ({ owner, producer })),
     );
@@ -73,9 +73,19 @@ function diagnosticIdentityReasons(record, roles, reasons) {
   }
 }
 
+function rawReaderIdentityReasons(record, roles, reasons) {
+  if (record.kind !== "raw-own-property-reader") return;
+  const identity = (role) =>
+    JSON.stringify(roles[role].identities.map(({ owner, producer }) => ({ owner, producer })));
+  if (identity("input") !== identity("transform")) reasons.push("mismatched-raw-reader-producer");
+  if (record.consumer.owner !== record.owner) reasons.push("foreign-responsibility-owner");
+  if (roles.input.signatures[0]?.result.kind !== "unknown") reasons.push("nonraw-reader-output");
+}
+
 function signatureReasons(record, roles) {
   const reasons = [];
   diagnosticIdentityReasons(record, roles, reasons);
+  rawReaderIdentityReasons(record, roles, reasons);
   const output = roles.output.signatures[0]?.result.kind;
   if (record.kind === "validator" && ["unknown", "any"].includes(output))
     reasons.push("unchecked-validator-output");
@@ -118,6 +128,8 @@ function proofFacts(subject, resolver, record) {
 function responsibilitySlots(resolver, record, roles) {
   if (roles.input.identities.length !== 1 || roles.output.identities.length !== 1)
     throw new TypeError("ambiguous-responsibility-producer");
+  if (record.kind === "raw-own-property-reader")
+    return [resolver.rawReaderFacts(roles.input.identities[0]).slot];
   const input = resolver.callableSlots(roles.input.identities[0]);
   const parameter = input.parameters[record.input.parameterIndex];
   if (parameter?.type.kind !== "unknown")
@@ -138,8 +150,26 @@ function publicParserConsumer(resolver, record, roles, reasons) {
   return binding;
 }
 
+function rawReaderConsumer(resolver, record, roles, reasons) {
+  const witness = resolver.consumerCalls(
+    roles.output.identities[0],
+    roles.input.identities[0],
+    record.owner,
+  );
+  const binding = resolver.parserBinding(record.consumer, roles.output.identities[0]);
+  if (binding.status === "invalid") reasons.push("unchecked-raw-reader-validator-output");
+  return {
+    ...binding,
+    bound: binding.bound && witness.bound,
+    status: binding.status === "ready" && !witness.bound ? "incomplete" : binding.status,
+    readerWitness: witness,
+  };
+}
+
 function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   if (consumerReason || reasons.length) return null;
+  if (record.kind === "raw-own-property-reader")
+    return rawReaderConsumer(resolver, record, roles, reasons);
   if (record.kind === "public-parser")
     return publicParserConsumer(resolver, record, roles, reasons);
   const binding =
@@ -155,9 +185,19 @@ function bindConsumer(resolver, record, roles, consumerReason, reasons) {
 }
 
 function bindingConsumerReason(record, binding, consumerReason) {
+  if (record.kind === "raw-own-property-reader" && binding?.status === "incomplete")
+    return binding.readerWitness.bound
+      ? "unsupported-raw-reader-public-proof-binding"
+      : "unsupported-raw-reader-validator-witness";
   return record.kind === "public-parser" && binding?.status === "incomplete"
     ? "unsupported-public-parser-binding"
     : consumerReason;
+}
+
+function proofScopeIdentities(record, roles) {
+  return record.kind === "raw-own-property-reader"
+    ? [...roles.input.identities, ...roles.output.identities]
+    : roles.input.identities;
 }
 
 function assessRecord(subject, resolver, record, files) {
@@ -171,7 +211,7 @@ function assessRecord(subject, resolver, record, files) {
     const roles = resolveRoles(resolver, record);
     if (
       proofConsumerKind(record) &&
-      !roles.input.identities.every((identity) => selected.has(identity.producer.path))
+      !proofScopeIdentities(record, roles).every((identity) => selected.has(identity.producer.path))
     )
       return pendingRecord(record, "incomplete", ["partial-responsibility-scope"]);
     const reasons = [
@@ -204,6 +244,8 @@ function assessRecord(subject, resolver, record, files) {
 function adaptedFinding(finding, assessments) {
   for (const assessment of assessments) {
     if (assessment.structural !== "ready") continue;
+    if (assessment.kind === "raw-own-property-reader" && assessment.semantic !== "qualified")
+      continue;
     const slot = assessment.slots.find(
       (candidate) =>
         candidate.path === finding.path &&
@@ -310,7 +352,10 @@ export function assessPolicyResponsibilities(subject, policy, files = subject.in
 function proofRuntimeWitness(subject, resolver, assessments) {
   const producers = new Set(
     assessments.flatMap((record) =>
-      record.roles.input.identities.map((identity) => identity.producer.path),
+      (record.kind === "raw-own-property-reader"
+        ? [...record.roles.input.identities, ...record.roles.output.identities]
+        : record.roles.input.identities
+      ).map((identity) => identity.producer.path),
     ),
   );
   if (producers.size === 0) throw new TypeError("semantic-proof-runtime-unavailable");

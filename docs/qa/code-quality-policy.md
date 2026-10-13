@@ -337,6 +337,35 @@ declaration-only nested unknown/any mutants), current-head required CI and indep
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require
 distinct runtime and typed failures. The optional current-subject phase below does not import receipts or use a semantic cache.
 
+### Truthful raw own-property readers
+
+The v2 `raw-own-property-reader` kind supports a named public helper whose result is
+deliberately unknown. It never promises a typed domain value. Its only adapted obligation is the exact
+`anti-slop/no-unknown-returns` annotation of that reader, with the existing input selector at
+parameter 0. Supporting this kind does not register a production responsibility or activate a
+rule scope.
+
+The canonical reader has two required identifier parameters: intrinsic `Record<string, unknown>`
+and `string`, an explicit `unknown` result, and one return of
+`Object.hasOwn(record, key) ? record[key] : undefined`. The reader's Object/hasOwn symbols must
+belong to the actual standard library; receiver and key bind to those parameters. Different
+bodies, shadows, assertions, callbacks, aliases or signature shapes cannot supply this witness.
+The existing public source/declaration/runtime mappings and cumulative resource guards apply.
+
+Input and transform select that reader. Output selects its complete owning validator; the public
+proof consumer calls that validator and returns its actual public result unchanged, under the
+existing closed parser binding. Both producer sources must belong to the selected scope and their
+runtime/declaration outputs must join the fresh proof witness. Missing or unsupported facts stay
+incomplete; an explicitly unsafe parser envelope is invalid. Neither can adapt a finding.
+
+Only fresh semantic qualification can adapt the reader's exact RETURN coordinate. Structural
+readiness with pending, missing, stale or failed proofs leaves that finding in enforcement. The
+native census itself does not change. Caller results, body findings, parameters, dictionaries,
+widenings, assertions and other RETURN coordinates retain their own obligations; incoming-use
+unresolved or untyped counts are not cleared. This kind certifies no complete downstream-use
+closure and introduces no semantic cache. Owning runtime, public type, declaration/body
+counterfactual and restoration proofs remain separate acceptance obligations.
+
 ### Explicit current-subject responsibility qualification
 
 `npm run check:code-quality-policy -- --qualify-responsibilities --json` selects an optional phase; default static invocations and the existing enforcing owner do not execute business proof suites or change their180000ms/195000ms limits. Qualification is enforce-only. V1, empty records and missing registered exact selectors fail closed when selected. No active rule scope or existing responsibility identity is changed.

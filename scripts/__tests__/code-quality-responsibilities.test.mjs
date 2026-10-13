@@ -1970,3 +1970,385 @@ describe("explicit semantic CLI build and admission", () => {
     195_000,
   );
 });
+
+describe("raw own-property reader RETURN only (#3918)", () => {
+  it.each(["pending", "rejected", undefined])("keeps %s semantics unadapted", async (semantic) => {
+    const { adaptResponsibilityDiagnostics } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const finding = { path: "owner.ts", rule: "anti-slop/no-unknown-returns", line: 1, column: 1 };
+    const assessments = [
+      {
+        id: "reader",
+        kind: "raw-own-property-reader",
+        structural: "ready",
+        semantic,
+        slots: [finding],
+      },
+    ];
+    expect(
+      adaptResponsibilityDiagnostics({ census: [finding], violations: [finding] }, { assessments })
+        .violations,
+    ).toEqual([finding]);
+  });
+
+  it("adapts the qualified reader coordinate while retaining every caller coordinate", async () => {
+    const { adaptResponsibilityDiagnostics } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const reader = { path: "owner.ts", rule: "anti-slop/no-unknown-returns", line: 1, column: 1 };
+    const caller = { ...reader, line: 2 };
+    const parameter = { ...reader, rule: "anti-slop/no-unknown-parameters" };
+    const census = [reader, caller, parameter];
+    const assessments = [
+      {
+        id: "reader",
+        kind: "raw-own-property-reader",
+        structural: "ready",
+        semantic: "qualified",
+        slots: [reader],
+      },
+    ];
+    const result = adaptResponsibilityDiagnostics({ census, violations: census }, { assessments });
+    expect(result.census).toEqual(census);
+    expect(result.violations).toEqual([caller, parameter]);
+    expect(result.adaptations).toHaveLength(1);
+  });
+});
+
+function minimalRawReaderFixture(
+  body = "return Object.hasOwn(record, key) ? record[key] : undefined;",
+  prefix = "",
+  result = "unknown",
+) {
+  const own = createPublicParserFixture();
+  roots.push(own.root);
+  const path = own.record.consumer.consumerPath;
+  own.put(
+    "packages/alpha/src/owner.ts",
+    `${prefix}
+export function ownField(record: Record<string, unknown>, key: string): ${result} { ${body} }
+export type ParseResult = { ok: true; value: number } | { ok: false; errors: readonly string[] };
+export function validate(input: unknown): ParseResult {
+  if (typeof input !== "object" || input === null) return { ok: false, errors: ["invalid"] };
+  const value = ownField(input as Record<string, unknown>, "value");
+  return typeof value === "number" ? { ok: true, value } : { ok: false, errors: ["invalid"] };
+}
+`,
+  );
+  const proof = readFileSync(join(own.root, path), "utf8");
+  const publicImport = 'import { validate as parse, type ParseResult } from "alpha/runtime";';
+  expect(proof).toContain(publicImport);
+  own.put(
+    path,
+    proof.replace(
+      publicImport,
+      'import { ownField, validate as parse, type ParseResult } from "alpha/runtime";',
+    ),
+  );
+  const selector = { consumerPath: path, specifier: "alpha/runtime", exportName: "ownField" };
+  Object.assign(own.record, {
+    kind: "raw-own-property-reader",
+    input: { ...selector, parameterIndex: 0 },
+    transform: selector,
+    rules: ["anti-slop/no-unknown-returns"],
+    proofAssertions: [{ path, testName: "reader control" }],
+  });
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+describe("exact canonical raw reader body controls (#3918)", () => {
+  it("binds an actual public reader and complete owning parser witness without qualification", async () => {
+    const own = minimalRawReaderFixture();
+    expect(validatePolicy(own.policy)).toEqual([]);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("ready");
+    expect(report.assessments[0].consumerBinding.readerWitness.bound).toBe(true);
+    expect(report.assessments[0].slots).toHaveLength(1);
+    expect(report.assessments[0].slots[0].kind).toBe("return");
+    expect(report.counts.qualified).toBe(0);
+  });
+
+  it.each([
+    ["inherited", "return record[key];", "", "unknown"],
+    [
+      "different key",
+      "return Object.hasOwn(record, key) ? record['other'] : undefined;",
+      "",
+      "unknown",
+    ],
+    [
+      "asserted",
+      "return (Object.hasOwn(record, key) ? record[key] : undefined) as unknown;",
+      "",
+      "unknown",
+    ],
+    [
+      "mutated body",
+      "key = 'other'; return Object.hasOwn(record, key) ? record[key] : undefined;",
+      "",
+      "unknown",
+    ],
+    [
+      "fake Object",
+      "return Object.hasOwn(record, key) ? record[key] : undefined;",
+      "const Object = { hasOwn: (_record: object, _key: string): boolean => true };",
+      "unknown",
+    ],
+    [
+      "domain declaration",
+      "return Object.hasOwn(record, key) ? String(record[key]) : '';",
+      "",
+      "string",
+    ],
+  ])("refuses %s reader", async (_name, body, prefix, result) => {
+    const own = minimalRawReaderFixture(body, prefix, result);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).not.toBe("ready");
+    expect(report.assessments[0].slots ?? []).toEqual([]);
+    expect(report.counts.qualified).toBe(0);
+  });
+});
+
+describe("unsupported raw reader public proof flow (#3918)", () => {
+  it("remains incomplete without qualification or RETURN adaptation", async () => {
+    const own = minimalRawReaderFixture();
+    const path = own.record.consumer.consumerPath;
+    const proof = readFileSync(join(own.root, path), "utf8");
+    expect(proof).toContain("return result;");
+    own.put(path, proof.replace("return result;", "return parse(input);"));
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].consumerBinding.readerWitness.bound).toBe(true);
+    expect(report.assessments[0].structural).toBe("incomplete");
+    expect(report.assessments[0].reasons).toEqual(["unsupported-raw-reader-public-proof-binding"]);
+    expect(report.assessments[0].slots).toEqual([]);
+    expect(report.counts.qualified).toBe(0);
+    const { adaptResponsibilityDiagnostics } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const reader = {
+      path: "packages/alpha/src/owner.ts",
+      rule: "anti-slop/no-unknown-returns",
+      line: 2,
+      column: 1,
+    };
+    const result = adaptResponsibilityDiagnostics(
+      { census: [reader], violations: [reader] },
+      report,
+    );
+    expect(result.violations).toEqual([reader]);
+    expect(result.adaptations).toEqual([]);
+  });
+});
+
+const ACTUAL_RAW_READER_PROOF = "packages/keiko-contracts/src/code-task-acceptance.test.ts";
+const ACTUAL_RAW_READER_SOURCE = "packages/keiko-contracts/src/code-task-acceptance.ts";
+const ACTUAL_RAW_READER_RULE = "anti-slop/no-unknown-returns";
+
+function actualRawReaderAssertions() {
+  const reader = "raw own-property reader public contract (#3918)";
+  const inherited =
+    "ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)";
+  const collected =
+    "factErrors collects every violation instead of stopping at the first (KfQ 3789542365)";
+  const members = "C1A concrete acceptance member admission";
+  const names = [
+    `${reader} preserves unknown without any at the actual built public reader`,
+    `${reader} reads own values and refuses inherited and absent values`,
+    `${reader} propagates an own getter failure and never invokes an inherited getter`,
+    `${reader} checks the complete actual owning validator on healthy and malformed facts`,
+    "keeps the source reader aligned with the actual public raw observations (#3918)",
+    `${inherited} rejects a fact's inherited non-enumerable value on the known branch`,
+    `${inherited} rejects a fact's inherited non-enumerable outcome discriminator on an empty object`,
+    `${inherited} rejects an inherited non-enumerable top-level header field`,
+    `${inherited} still accepts a legitimate contribution once Object.prototype is restored`,
+    `${collected} reports both the disallowed value and the unrelated extra key on a non-known outcome`,
+    `${collected} reports both the invalid value and the unrelated extra key on a known outcome`,
+    `${members} refuses skipped contribution members case 1 through source`,
+    `${members} refuses skipped contribution members case 1 through public`,
+    `${members} refuses skipped contribution members case 2 through source`,
+    `${members} refuses skipped contribution members case 2 through public`,
+  ];
+  return names.map((testName) => ({ path: ACTUAL_RAW_READER_PROOF, testName }));
+}
+
+function actualRawReaderRecord() {
+  const selector = (exportName) => ({
+    consumerPath: ACTUAL_RAW_READER_PROOF,
+    specifier: "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+    exportName,
+  });
+  return {
+    id: "actual-code-task-acceptance-raw-reader-return",
+    owner: "@oscharko-dev/keiko-contracts",
+    kind: "raw-own-property-reader",
+    rules: [ACTUAL_RAW_READER_RULE],
+    input: { ...selector("ownField"), parameterIndex: 0 },
+    transform: selector("ownField"),
+    output: selector("validateCodeTaskAcceptanceContribution"),
+    consumer: {
+      ...selector("rawReaderAcceptanceWitness"),
+      kind: "public-api-proof",
+      owner: "@oscharko-dev/keiko-contracts",
+    },
+    proofs: [ACTUAL_RAW_READER_PROOF],
+    proofAssertions: actualRawReaderAssertions(),
+  };
+}
+
+async function actualRawReaderSubject() {
+  const { fileURLToPath } = await import("node:url");
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const current = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
+  const record = actualRawReaderRecord();
+  const policy = { ...current, responsibilities: [...current.responsibilities, record] };
+  expect(validatePolicy(policy, [current])).toEqual([]);
+  expect(policy.responsibilities.slice(0, -1)).toEqual(current.responsibilities);
+  expect(policy.rules).toEqual(current.rules);
+  expect(policy.responsibilities.flatMap((entry) => entry.proofs)).not.toContain(
+    "scripts/__tests__/code-quality-responsibilities.test.mjs",
+  );
+  const subject = await collectPolicySubject(root);
+  const file = subject.inventory.files.find((entry) => entry.path === ACTUAL_RAW_READER_SOURCE);
+  expect(file?.production).toBe(true);
+  return { root, current, policy, record, subject, file };
+}
+
+async function actualRawReaderCensus(own) {
+  const { runNativePolicy } = await import("../lib/code-quality-runner.mjs");
+  const scan = runNativePolicy(own.root, [own.file]);
+  expect(scan.visited).toBe(1);
+  const returns = scan.diagnostics.filter((finding) => finding.rule === ACTUAL_RAW_READER_RULE);
+  expect(returns).toHaveLength(1);
+  expect(returns[0]).toEqual({
+    path: ACTUAL_RAW_READER_SOURCE,
+    rule: ACTUAL_RAW_READER_RULE,
+    line: 284,
+    column: 73,
+  });
+  return scan;
+}
+
+function assertActualRawReaderPending(own, scan, pending, adapt) {
+  const reader = pending.assessments.find((entry) => entry.id === own.record.id);
+  expect(reader.structural).toBe("ready");
+  expect(reader.semantic).toBe("pending");
+  expect(reader.consumerBinding.readerWitness.bound).toBe(true);
+  expect(reader.slots).toHaveLength(1);
+  expect(reader.proofs.every((proof) => !proof.executed)).toBe(true);
+  const native = { census: scan.diagnostics, violations: scan.diagnostics };
+  const result = adapt(native, pending);
+  expect(result.census).toEqual(scan.diagnostics);
+  expect(result.violations).toEqual(scan.diagnostics);
+  expect(result.adaptations).toEqual([]);
+}
+
+async function assertActualRawReaderQualified(own, scan, qualified, adapt) {
+  const reader = qualified.assessments.find((entry) => entry.id === own.record.id);
+  expect(qualified.execution.status).toBe("passed");
+  expect(qualified.counts.qualified).toBe(1);
+  expect(qualified.assessments.map((entry) => entry.id)).toEqual([own.record.id]);
+  expect(reader.semantic).toBe("qualified");
+  expect(reader.proofAssertions).toEqual(
+    actualRawReaderAssertions().map((selector) => ({ ...selector, status: "passed" })),
+  );
+  const result = adapt({ census: scan.diagnostics, violations: scan.diagnostics }, qualified);
+  expect(result.census).toEqual(scan.diagnostics);
+  expect(result.adaptations).toHaveLength(1);
+  expect(result.adaptations[0].responsibilityId).toBe(own.record.id);
+  expect(result.adaptations[0].finding).toEqual(
+    scan.diagnostics.find((finding) => finding.rule === ACTUAL_RAW_READER_RULE),
+  );
+  expect(result.violations).toEqual(
+    scan.diagnostics.filter((finding) => finding.rule !== ACTUAL_RAW_READER_RULE),
+  );
+  const fresh = { ...own, subject: await collectPolicySubject(own.root) };
+  const after = await actualRawReaderCensus(fresh);
+  expect(after.configSha256).toBe(scan.configSha256);
+  expect(after.diagnostics).toEqual(scan.diagnostics);
+  expect(fresh.subject.inventory).toEqual(own.subject.inventory);
+  const reread = JSON.parse(
+    readFileSync(join(own.root, "scripts/code-quality-policy.json"), "utf8"),
+  );
+  expect(reread).toEqual(own.current);
+  const again = assessPolicyResponsibilities(fresh.subject, rawReaderStaticPolicy(own));
+  assertActualRawReaderPending(fresh, after, again, adapt);
+}
+
+// This scoped regression targets the new RETURN and preserves the current policy cohort below.
+function rawReaderStaticPolicy(own) {
+  expect(own.policy.responsibilities.slice(0, -1)).toEqual(own.current.responsibilities);
+  expect(own.policy.rules).toEqual(own.current.rules);
+  return { ...own.policy, responsibilities: [own.record] };
+}
+
+describe("actual canonical reader fresh qualification (#3918)", () => {
+  it("retains native RETURN while pending and adapts exactly it after actual selected proofs", async () => {
+    const { adaptResponsibilityDiagnostics, qualifyPolicyResponsibilities } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const own = await actualRawReaderSubject();
+    const scan = await actualRawReaderCensus(own);
+    const pending = assessPolicyResponsibilities(own.subject, rawReaderStaticPolicy(own));
+    assertActualRawReaderPending(own, scan, pending, adaptResponsibilityDiagnostics);
+    const qualified = await qualifyPolicyResponsibilities(own.subject, rawReaderStaticPolicy(own));
+    await assertActualRawReaderQualified(own, scan, qualified, adaptResponsibilityDiagnostics);
+  }, 195_000);
+});
+
+function rewriteMinimalRawReader(own, before, after) {
+  const path = "packages/alpha/src/owner.ts";
+  const source = readFileSync(join(own.root, path), "utf8");
+  expect(source).toContain(before);
+  own.put(path, source.replace(before, after));
+  emitSymbolFixture(own.root);
+}
+
+describe("bounded raw reader signature and witness controls (#3918)", () => {
+  it.each([
+    ["Record shadow", "", "type Record<K extends string, V> = { [P in K]: V };\n"],
+    ["any dictionary", "record: Record<string, unknown>", "record: Record<string, any>"],
+    ["optional key", "key: string", "key: string = 'value'"],
+    ["different receiver", "Object.hasOwn(record, key)", "Object.hasOwn({}, key)"],
+    [
+      "callback body",
+      "return Object.hasOwn(record, key) ? record[key] : undefined;",
+      "return (() => Object.hasOwn(record, key) ? record[key] : undefined)();",
+    ],
+    [
+      "receiver alias",
+      "return Object.hasOwn(record, key) ? record[key] : undefined;",
+      "const receiver = record; return Object.hasOwn(receiver, key) ? receiver[key] : undefined;",
+    ],
+  ])("refuses %s without qualification", async (_name, before, after) => {
+    const own = minimalRawReaderFixture();
+    rewriteMinimalRawReader(own, before, after);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).not.toBe("ready");
+    expect(report.assessments[0].slots ?? []).toEqual([]);
+    expect(report.counts.qualified).toBe(0);
+  });
+
+  it("keeps a missing actual validator witness incomplete", async () => {
+    const own = minimalRawReaderFixture();
+    rewriteMinimalRawReader(
+      own,
+      'ownField(input as Record<string, unknown>, "value")',
+      '(input as Record<string, unknown>)["value"]',
+    );
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("incomplete");
+    expect(report.assessments[0].reasons).toEqual(["unsupported-raw-reader-validator-witness"]);
+    expect(report.assessments[0].consumerBinding.bound).toBe(false);
+    expect(report.assessments[0].slots).toEqual([]);
+    expect(report.counts.qualified).toBe(0);
+  });
+
+  it("rejects an explicit unsafe owning-parser envelope", async () => {
+    const own = minimalRawReaderFixture();
+    rewriteMinimalRawReader(own, "value: number", "value: unknown");
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("invalid");
+    expect(report.assessments[0].reasons).toContain("unchecked-raw-reader-validator-output");
+    expect(report.assessments[0].slots).toEqual([]);
+    expect(report.counts.qualified).toBe(0);
+  });
+});

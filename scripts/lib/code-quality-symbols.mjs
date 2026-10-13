@@ -1485,6 +1485,141 @@ function callableSlots(compiler, identity) {
   return facts;
 }
 
+function rawReaderParameter(state, index, kind) {
+  const parameter = state.callable.parameters[index];
+  return (
+    parameter &&
+    ts.isIdentifier(parameter.name) &&
+    !parameter.initializer &&
+    !parameter.questionToken &&
+    !parameter.dotDotDotToken &&
+    (kind === "record"
+      ? intrinsicReaderRecord(state, parameter.type)
+      : parameter.type?.kind === ts.SyntaxKind.StringKeyword)
+  );
+}
+
+function sameReaderParameter(state, expression, index) {
+  return (
+    ts.isIdentifier(expression) &&
+    state.context.checker.getSymbolAtLocation(expression) ===
+      state.context.checker.getSymbolAtLocation(state.callable.parameters[index].name)
+  );
+}
+
+function defaultLibrarySymbol(context, symbol) {
+  return (
+    Boolean(symbol?.declarations?.length) &&
+    symbol.declarations.every((declaration) =>
+      context.program.isSourceFileDefaultLibrary(declaration.getSourceFile()),
+    )
+  );
+}
+
+function rawReaderCondition(state, expression) {
+  if (
+    !ts.isCallExpression(expression) ||
+    expression.typeArguments?.length ||
+    expression.arguments.length !== 2 ||
+    !ts.isPropertyAccessExpression(expression.expression)
+  )
+    return false;
+  return (
+    rawReaderTarget(state, expression.expression) &&
+    expression.arguments.every((argument, index) => sameReaderParameter(state, argument, index))
+  );
+}
+
+function rawReaderTarget(state, target) {
+  return (
+    target.name.text === "hasOwn" &&
+    ts.isIdentifier(target.expression) &&
+    target.expression.text === "Object" &&
+    defaultLibrarySymbol(state.context, expressionSymbol(state.compiler, state.context, target)) &&
+    defaultLibrarySymbol(
+      state.context,
+      state.context.checker.getSymbolAtLocation(target.expression),
+    )
+  );
+}
+
+function rawReaderExpression(state, expression) {
+  if (
+    !expression ||
+    !ts.isConditionalExpression(expression) ||
+    !rawReaderCondition(state, expression.condition)
+  )
+    return false;
+  const present = expression.whenTrue;
+  return (
+    ts.isElementAccessExpression(present) &&
+    sameReaderParameter(state, present.expression, 0) &&
+    sameReaderParameter(state, present.argumentExpression, 1) &&
+    rawReaderAbsent(state, expression.whenFalse)
+  );
+}
+
+function rawReaderAbsent(state, absent) {
+  const symbol = state.context.checker.getSymbolAtLocation(absent);
+  return (
+    ts.isIdentifier(absent) &&
+    absent.text === "undefined" &&
+    Boolean(state.context.checker.getTypeAtLocation(absent).flags & ts.TypeFlags.Undefined) &&
+    (!symbol?.declarations?.length || defaultLibrarySymbol(state.context, symbol))
+  );
+}
+
+function rawReaderSignature(state) {
+  const { callable } = state;
+  return (
+    ts.isFunctionDeclaration(callable) &&
+    callable.name &&
+    !callable.typeParameters?.length &&
+    callable.parameters.length === 2 &&
+    rawReaderParameter(state, 0, "record") &&
+    rawReaderParameter(state, 1, "key") &&
+    callable.type?.kind === ts.SyntaxKind.UnknownKeyword
+  );
+}
+
+function singleReaderReturn(callable) {
+  if (!ts.isBlock(callable.body) || callable.body.statements.length !== 1) return null;
+  const statement = callable.body.statements[0];
+  return ts.isReturnStatement(statement) ? statement : null;
+}
+
+function rawReaderFacts(compiler, identity) {
+  const implementation = declarationCallable(compiler, identity);
+  const state = { ...implementation, compiler };
+  const statement = singleReaderReturn(state.callable);
+  if (!rawReaderSignature(state) || !statement || !rawReaderExpression(state, statement.expression))
+    throw new TypeError("unsupported-raw-own-property-reader");
+  compiler.assertCurrent();
+  return {
+    identity,
+    slot: { ...callableSlots(compiler, identity).result, rule: "anti-slop/no-unknown-returns" },
+  };
+}
+
+function intrinsicReaderRecord(state, annotation) {
+  if (
+    !annotation ||
+    !ts.isTypeReferenceNode(annotation) ||
+    !ts.isIdentifier(annotation.typeName) ||
+    annotation.typeName.text !== "Record" ||
+    annotation.typeArguments?.length !== 2
+  )
+    return false;
+  return (
+    annotation.typeArguments[0].kind === ts.SyntaxKind.StringKeyword &&
+    annotation.typeArguments[1].kind === ts.SyntaxKind.UnknownKeyword &&
+    defaultLibrarySymbol(
+      state.context,
+      state.context.checker.getSymbolAtLocation(annotation.typeName),
+    )
+  );
+}
+
 function expressionFactsAt(compiler, request) {
   const { context, source } = ownedSource(compiler, request.path);
   let node = compilerNodeAt(compiler, source, request.offset);
@@ -1563,6 +1698,7 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     parserBinding: (request, producer) => parserBinding(compiler, request, producer),
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
+    rawReaderFacts: (identity) => rawReaderFacts(compiler, identity),
     callableSlots: (identity) => callableSlots(compiler, identity),
     rawCheckingSlots: (identity, index) => {
       compiler.assertCurrent();

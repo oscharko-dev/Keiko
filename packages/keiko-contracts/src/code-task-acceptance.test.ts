@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND,
@@ -2021,4 +2021,71 @@ describe("C1A acceptance preservation", () => {
       );
     },
   );
+});
+
+import {
+  ownField as publicOwnField,
+  validateCodeTaskAcceptanceContribution as publicAcceptanceValidator,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+import type {
+  CodingWorkbenchValidationResult,
+  CodeTaskAcceptanceContributionV1 as PublicCodeTaskAcceptanceContributionV1,
+} from "@oscharko-dev/keiko-contracts";
+
+export function rawReaderAcceptanceWitness(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicCodeTaskAcceptanceContributionV1> {
+  const result = publicAcceptanceValidator(input);
+  return result;
+}
+
+// The raw result has no domain guarantee. The complete owning validator supplies admission.
+describe("raw own-property reader public contract (#3918)", () => {
+  it("preserves unknown without any at the actual built public reader", () => {
+    expectTypeOf(publicOwnField).returns.toBeUnknown();
+    expectTypeOf(publicOwnField).returns.not.toBeAny();
+    const value = { accepted: false };
+    expect(publicOwnField({ value }, "value")).toBe(value);
+  });
+
+  it("reads own values and refuses inherited and absent values", () => {
+    const record: Record<string, unknown> = { value: 7 };
+    Object.setPrototypeOf(record, { inherited: 9 });
+    expect(publicOwnField(record, "value")).toBe(7);
+    expect(publicOwnField(record, "inherited")).toBeUndefined();
+    expect(publicOwnField(record, "absent")).toBeUndefined();
+  });
+
+  it("propagates an own getter failure and never invokes an inherited getter", () => {
+    const failure = new TypeError("reader fixture");
+    const record: Record<string, unknown> = {};
+    Object.defineProperty(record, "value", {
+      get: (): never => {
+        throw failure;
+      },
+    });
+    expect(() => publicOwnField(record, "value")).toThrow(failure);
+    const inherited: Record<string, unknown> = {};
+    Object.setPrototypeOf(inherited, record);
+    expect(publicOwnField(inherited, "value")).toBeUndefined();
+  });
+
+  it("checks the complete actual owning validator on healthy and malformed facts", () => {
+    expect(rawReaderAcceptanceWitness(validContribution()).ok).toBe(true);
+    expect(rawReaderAcceptanceWitness(withReceiptDigest({ outcome: "known", value: 7 })).ok).toBe(
+      false,
+    );
+    expect(rawReaderAcceptanceWitness(withReceiptDigest({ outcome: "known" })).ok).toBe(false);
+    expect(rawReaderAcceptanceWitness(null).ok).toBe(false);
+  });
+});
+
+import { ownField as sourceOwnField } from "./code-task-acceptance.js";
+
+it("keeps the source reader aligned with the actual public raw observations (#3918)", () => {
+  const record: Record<string, unknown> = { value: { raw: true } };
+  Object.setPrototypeOf(record, { inherited: 1 });
+  expect(sourceOwnField(record, "value")).toBe(record.value);
+  expect(sourceOwnField(record, "inherited")).toBeUndefined();
+  expect(sourceOwnField(record, "absent")).toBeUndefined();
 });
