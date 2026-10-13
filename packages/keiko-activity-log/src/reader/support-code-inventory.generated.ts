@@ -1182,6 +1182,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/conversation-gateway",
   "keiko-server/conversation-prompt",
   "keiko-server/conversation-readiness-admission",
+  "keiko-server/conversation-readiness-log",
   "keiko-server/conversation-validation",
   "keiko-server/correlation",
   "keiko-server/credentialPersistence",
