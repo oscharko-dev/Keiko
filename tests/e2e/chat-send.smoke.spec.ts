@@ -361,6 +361,7 @@ test("applies a selected private skill once across compaction and reload, then r
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = readFileSync(new URL("./fixtures/private-markdown-skill.md", import.meta.url));
+  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
   const chooser = page.waitForEvent("filechooser");
   await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
   await (await chooser).setFiles({ name: "synthetic.md", mimeType: "text/markdown", buffer: body });
@@ -446,6 +447,7 @@ test("creates, reviews, exports and reimports a private skill without automatic 
   await preview.getByRole("button", { name: "Delete", exact: true }).click();
   await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
   await expect(preview).toHaveCount(0);
+  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
   await dialog.getByLabel(/Upload Markdown/).setInputFiles(saved);
   await expect(
     dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
