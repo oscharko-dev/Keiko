@@ -39,6 +39,14 @@ module interception belongs to the test-seam migration, Effect rules apply only 
 native host, and array fusion/omission/growing-copy diagnostics require their accepted targeted
 review. A raw match is a diagnostic, not a proven defect or a count-based waiver.
 
+The contracts production scope (`package:@oscharko-dev/keiko-contracts`) also enforces
+`no-chained-type-assertions` and `require-safety-comment-for-type-assertion` after its assertion
+migration. This includes generated production members and newly added files in that package;
+other owners retain their separate migration obligations. A safety comment explains an existing
+justified representation boundary, such as attaching a nominal brand after structural admission;
+it neither validates hostile input nor authorizes a chained assertion. These two syntax rules do
+not establish boundary/domain qualification or complete #3918.
+
 Policy validation retains the initial guards and rejects any activation shrink against the
 complete reachable policy history. Shallow history fails; a second unrelated commit cannot hide
 a removed scope. Existing and newly added files inside an active scope are

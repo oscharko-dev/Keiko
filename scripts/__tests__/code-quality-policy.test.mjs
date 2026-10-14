@@ -13,6 +13,11 @@ const files = [
   { path: "packages/example/src/main.test.ts", scope: "tests", production: false },
 ];
 const diagnostic = (path, rule) => ({ path, rule, line: 1, column: 1 });
+const CONTRACTS_SCOPE = "package:@oscharko-dev/keiko-contracts";
+const ASSERTION_RULES = [
+  "anti-slop/no-chained-type-assertions",
+  "anti-slop/require-safety-comment-for-type-assertion",
+];
 
 describe("code-quality policy fail-closed contract (#3915)", () => {
   it("activates the qualified Effect rules only for the exact native host owner (#3988)", () => {
@@ -46,7 +51,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     }
   });
 
-  it("registers eight exact manual ingress obligations without activating more rules", () => {
+  it("retains the eight manual ingress obligations and exact ninth observation record", () => {
     expect(policy.version).toBe(2);
     expect(policy.responsibilities.map(({ id }) => id)).toEqual([
       "manual-job-create-route-handler",
@@ -57,8 +62,9 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "manual-source-scope-composition",
       "manual-summary-projection",
       "manual-limit-diagnostic-public-proof",
+      "support-raw-property-observation",
     ]);
-    for (const record of policy.responsibilities) {
+    for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
       expect(record.transform).toEqual(record.output);
@@ -79,6 +85,71 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     expect(validatePolicy(legacy, [policy])).toContain("responsibility-downgrade");
   });
 
+  it("pins the ninth observation owner, selectors and public proof shape", () => {
+    const record = policy.responsibilities[8];
+    expect(record.kind).toBe("raw-property-observation");
+    expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+    expect(record.rules).toEqual([
+      "anti-slop/no-object-parameters",
+      "anti-slop/no-unknown-returns",
+      "anti-slop/no-reflect-get",
+    ]);
+    const selector = {
+      consumerPath: "packages/keiko-contracts/src/observability.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/observability",
+      exportName: "validateRegisteredActivityLogEvent",
+    };
+    expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
+    expect(record.transform).toEqual(selector);
+    expect(record.output).toEqual(selector);
+    expect(record.consumer).toEqual({
+      ...selector,
+      exportName: "validatePublicObservation",
+      kind: "public-api-proof",
+      owner: record.owner,
+    });
+    expect(record.proofs).toEqual([selector.consumerPath]);
+    expect(record.proofAssertions).toHaveLength(15);
+    expect(record.proofAssertions.every((proof) => proof.path === selector.consumerPath)).toBe(
+      true,
+    );
+    for (const variant of ["removed", "rebound"]) {
+      const changed = structuredClone(policy);
+      if (variant === "removed") changed.responsibilities.pop();
+      else changed.responsibilities[8].consumer.exportName = "unreviewedConsumer";
+      expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
+    }
+  });
+
+  it.each(ASSERTION_RULES)("enforces %s only on all current and future contracts members", (id) => {
+    const packages = [{ directory: "packages/contracts", name: "@oscharko-dev/keiko-contracts" }];
+    const owners = [
+      ...files,
+      ...["src/owner.ts", "src/future.generated.ts", "src/owner.test.ts"].map((suffix) => {
+        const path = `packages/contracts/${suffix}`;
+        return { path, ...classifyPolicyPath(path, packages) };
+      }),
+    ];
+    expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
+    const result = assessPolicyDiagnostics(
+      owners.map(({ path }) => diagnostic(path, id)),
+      owners,
+      policy,
+    );
+    expect(result.violations.map(({ path }) => path)).toEqual([
+      "packages/contracts/src/owner.ts",
+      "packages/contracts/src/future.generated.ts",
+    ]);
+    expect(result.census).toHaveLength(owners.length);
+    const removed = structuredClone(policy);
+    removed.rules.find((rule) => rule.id === id).activeScopes = [];
+    expect(validatePolicy(removed, [policy])).toContain("activation-shrank");
+    const broader = structuredClone(policy);
+    broader.rules.find((rule) => rule.id === id).activeScopes.push("production");
+    expect(validatePolicy(broader, [policy])).toEqual([]);
+    expect(validatePolicy(policy, [broader])).toContain("activation-shrank");
+  });
+
   it("rejects missing, duplicated, unknown, cosmetic and malformed rule policies", () => {
     const altered = [
       { ...policy, rules: policy.rules.slice(1) },
@@ -92,8 +163,9 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
 
   it("does not shrink a previously activated assertion scope", () => {
     const previous = structuredClone(policy);
-    previous.rules.find((rule) => rule.id === "anti-slop/no-chained-type-assertions").activeScopes =
-      ["production"];
+    previous.rules
+      .find((rule) => rule.id === "anti-slop/no-chained-type-assertions")
+      .activeScopes.push("production");
     expect(validatePolicy(policy, [previous])).toContain("activation-shrank");
     expect(validatePolicy(previous, [policy])).toEqual([]);
   });

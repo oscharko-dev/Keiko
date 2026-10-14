@@ -22,7 +22,7 @@
       "disposition": "production-required",
       "migrationIssue": 3991,
       "reason": "Activate all production owners after their ordered assertion migration; a comment never replaces validation.",
-      "activeScopes": []
+      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
     },
     {
       "id": "anti-slop/no-conditional-empty-object-spread",
@@ -113,7 +113,7 @@
       "disposition": "production-required",
       "migrationIssue": 3991,
       "reason": "Activate all production owners after their ordered assertion migration; a comment never replaces validation.",
-      "activeScopes": []
+      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
     },
     {
       "id": "anti-slop-effect/no-manual-effect-error-tag",

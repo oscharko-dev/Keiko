@@ -271,14 +271,17 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     expect(history.some(({ responsibilities }) => responsibilities?.length === 1)).toBe(true);
   });
 
-  it("rejects an activation removed two commits earlier", () => {
+  it.each([
+    ["anti-slop/no-chained-type-assertions", "production"],
+    ["anti-slop/no-chained-type-assertions", "package:alpha"],
+    ["anti-slop/require-safety-comment-for-type-assertion", "production"],
+    ["anti-slop/require-safety-comment-for-type-assertion", "package:alpha"],
+  ])("rejects %s %s activation removed two commits earlier", (id, scope) => {
     const root = trackedRepository();
     const policy = fixtureOwnedPolicy();
     mkdirSync(join(root, "scripts"));
     const active = structuredClone(policy);
-    active.rules.find((rule) => rule.id === "anti-slop/no-chained-type-assertions").activeScopes = [
-      "production",
-    ];
+    active.rules.find((rule) => rule.id === id).activeScopes = [scope];
     const commit = (value) => {
       writeFileSync(join(root, "scripts/code-quality-policy.json"), JSON.stringify(value));
       execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });

@@ -11,6 +11,9 @@ import {
 import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
 import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
+import { collectPolicyInventory, selectPolicyScope } from "../lib/code-quality-inventory.mjs";
+import { assessPolicyDiagnostics } from "../lib/code-quality-policy.mjs";
+import { runNativePolicy } from "../lib/code-quality-runner.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
 import {
   capturedByteCount,
@@ -22,6 +25,7 @@ import {
   configureEnforcingPolicyFixture,
   createPolicyFixtureRepository,
   createRuntimePolicyFixture,
+  fixtureOwnedPolicy,
 } from "./support/code-quality-fixture.mjs";
 
 const roots = [];
@@ -42,7 +46,82 @@ function enforcingFixture() {
 }
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+const CONTRACTS_SCOPE = "package:@oscharko-dev/keiko-contracts";
+
+function contractsAssertionFixture() {
+  const root = enforcingFixture();
+  const path = join(root, "packages/alpha/package.json");
+  const manifest = JSON.parse(readFileSync(path, "utf8"));
+  manifest.name = "@oscharko-dev/keiko-contracts";
+  writeFileSync(path, JSON.stringify(manifest));
+  configureEnforcingPolicyFixture(root);
+  return root;
+}
+
 describe("production code-quality invocation wiring (#3915)", () => {
+  it("keeps synthetic fixture scope projection separate from the real contracts policy", () => {
+    const production = JSON.parse(read("scripts/code-quality-policy.json"));
+    const synthetic = fixtureOwnedPolicy();
+    expect(synthetic.rules).toEqual(
+      production.rules.map((rule) => ({
+        ...rule,
+        activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
+      })),
+    );
+    expect(production.responsibilities).toHaveLength(9);
+    expect(
+      production.rules
+        .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
+        .map((rule) => rule.id),
+    ).toEqual([
+      "anti-slop/no-chained-type-assertions",
+      "anti-slop/require-safety-comment-for-type-assertion",
+    ]);
+  });
+
+  it.each([
+    [
+      "anti-slop/no-chained-type-assertions",
+      (source) => source.replace('"u-1" as UserId', '("u-1" as UserId) as UserId'),
+    ],
+    [
+      "anti-slop/require-safety-comment-for-type-assertion",
+      (source) =>
+        source.replace(
+          "// SAFETY: This bounded ID literal supplies an erased brand; defaults are validated.\n",
+          "",
+        ),
+    ],
+  ])("actually rejects %s and admits restored justified source", async (id, mutate) => {
+    const root = contractsAssertionFixture();
+    const path = "packages/alpha/src/index.ts";
+    const original = read("packages/keiko-contracts/src/memory-fixtures.ts");
+    writeFileSync(join(root, path), original);
+    const inventory = await collectPolicyInventory(root);
+    const scope = selectPolicyScope(inventory.files, CONTRACTS_SCOPE, false);
+    const policy = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
+    expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
+    const assess = () => {
+      const scan = runNativePolicy(root, scope.files);
+      expect(scan.visited).toBe(scope.files.length);
+      return { scan, result: assessPolicyDiagnostics(scan.diagnostics, scope.files, policy) };
+    };
+    writeFileSync(join(root, path), mutate(original));
+    const bad = assess();
+    expect(
+      bad.result.violations.some((finding) => finding.rule === id && finding.path === path),
+    ).toBe(true);
+    const inactive = structuredClone(policy);
+    inactive.rules.find((rule) => rule.id === id).activeScopes = [];
+    expect(
+      assessPolicyDiagnostics(bad.scan.diagnostics, scope.files, inactive).violations.some(
+        (finding) => finding.rule === id,
+      ),
+    ).toBe(false);
+    writeFileSync(join(root, path), original);
+    expect(assess().result.violations).toEqual([]);
+  });
+
   it("retains genuine finite child failures with body-free status", async () => {
     const options = { encoding: "utf8", timeout: 1000, killSignal: "SIGKILL", maxBuffer: 1024 };
     const failure = executePolicyWithDiagnostics(
