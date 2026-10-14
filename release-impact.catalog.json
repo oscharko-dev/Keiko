@@ -3268,6 +3268,76 @@
         "warningText": "Review custom support scripts when upgrading from before 1.2.0: use the canonical private report, a directory for export output and the versioned analysis envelope. Regenerate retired legacy bundles at their originating installation. Restart after installation; automatic carry-forward of these workflows is not provided.",
         "verifiedCarryForward": false
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-14-keiko-1.2.2-private-chat-skills",
+      "packageVersion": "1.2.2",
+      "releaseTag": "v1.2.2",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Import a private Markdown skill, select it in Chat and see the active method beside the Composer. Its complete instructions count toward the context budget and survive conversation compaction. Prepare reviewable skill drafts from documents or text through the configured model gateway.",
+      "affectedStateStores": ["ui-store-schema", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "Forward-only SQLite migrations V42 and V43 extend the v1.2.1 schema V41 with the private skill library, immutable revisions, per-chat selection and accepted-turn bindings. Existing chats begin with no skill selected. Skill bodies remain in the local application store; they are sent to the configured gateway only when explicitly selected or when the user requests drafting. Normal application startup applies the migration; no customer workspace files are changed. Back up local state before changing versions; older binaries cannot read the newer schema.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Registered body-free skill import, selection, access refusal and authoring events extend the catalog identity. Skill names, documents and instruction bodies are excluded from diagnostics. Existing logs remain unchanged; the release generator retains historical registry and producing-code inventories.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "releaseNoteBullets": [
+        "Chat skills: upload a Markdown file, preview it and select it for the current chat. The Composer shows the active skill; deselection, version replacement, private download and deletion remain explicit.",
+        "Protected context: the complete selected skill counts toward the context meter and remains unchanged when conversation history is compacted. An unavailable revision or a skill that cannot fit stops the turn with a correction path instead of silently dropping its instructions.",
+        "Skill authoring: prepare a Markdown draft from a complete document or pasted text using the selected gateway model, review and edit it, then explicitly save or download it. A repository is not required.",
+        "Privacy: skills are stored locally and require the authenticated application session. They do not grant tool, file or network authority, and their contents are excluded from activity logs and support evidence."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-14",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/4029#issuecomment-6175243126",
+        "rationale": "The repository owner explicitly selected 1.2.2 and authorized autonomous release after complete epic acceptance, exact-head checks and review settlement, owner-authorized integration into dev, and a repeated real local LiteLLM/Gemma Chat check on dev. The referenced comment records that direct instruction; it does not claim a separate GitHub approval review. This entry covers the private Chat skill increment in #4022 and PR #4029 since v1.2.1. OpenCode integration remains in #4025 under #3897; no Coding parity or universal model accuracy is claimed. Publication still requires the governed owner release workflow, signed portable assets and artifact alignment. Published catalog entries remain unchanged."
+      },
+      "breakingException": {
+        "rationale": "This patch retains the existing manual-update eligibility for earlier support workflows without verified automatic conversion, and does not claim native cross-platform N-1 to N updater canaries. The new local schema migrations are forward-only. No new emergency compatibility exception is introduced.",
+        "warningText": "Restart after installation. Review custom support scripts when upgrading from before 1.2.0: use canonical private reports, a directory for export output and the versioned analysis envelope. Preserve a backup of local application state before changing versions; older binaries cannot read the updated skill schema.",
+        "verifiedCarryForward": false
+      }
     }
   ]
 }

@@ -102,6 +102,9 @@ import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.j
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import { mockRequest, mockResponse } from "./_support.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -3647,6 +3650,22 @@ describe("AC5 routing — folders-only must not invoke hybrid.answer", () => {
 
 // ─── Case 4b: Single connector (no folders) routes to local-knowledge, not hybrid ──
 
+function skillRoutingSession(paired: boolean): {
+  channel: NonNullable<UiHandlerDeps["codingAppSessionChannel"]>;
+  context: (body: string) => RouteContext;
+} {
+  const registry = createSessionRegistry();
+  const session = registry.mint("knowledge-skill-routing");
+  return {
+    channel: createCodingAppSessionChannel({ registry }),
+    context: (body): RouteContext => {
+      const ctx = routeCtx(body);
+      if (paired) ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${session.cookieToken}`;
+      return ctx;
+    },
+  };
+}
+
 function assertKnowledgeSkill(
   answer: GroundedAnswer,
   modelPrompts: readonly string[],
@@ -3666,6 +3685,7 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
   it.each([false, true])(
     "routes a single-localKnowledgeScope chat with protected skill %s",
     async (selectedSkill) => {
+      const session = skillRoutingSession(selectedSkill);
       // Arrange: exactly 1 connector, 0 folders.
       // handleGroundedAsk dispatches to handleLocalKnowledgeGroundedAsk (folderScopes.length===0 + connectorCount===1).
       const { capsuleId: capId } = await seedReadyCapsule("Solo Docs");
@@ -3753,6 +3773,7 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
           ],
         },
         configPresent: true,
+        codingAppSessionChannel: session.channel,
         modelPortFactory: () => fakeModelPort,
       };
 
@@ -3766,7 +3787,7 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
       if (selectedSkill) store.markdownSkills.select(chatId, skill, 0);
       const followUp = "Erkläre das.";
       const result = await handleGroundedAsk(
-        routeCtx(JSON.stringify({ chatId, content: followUp, modelId: CHAT_MODEL })),
+        session.context(JSON.stringify({ chatId, content: followUp, modelId: CHAT_MODEL })),
         configuredDeps,
         undefined,
         undefined,
@@ -3805,7 +3826,7 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
       expect(firstCheckpoint?.conversationCoverage?.contextWindowTokens).toBe(8000);
       expect(firstCheckpoint?.itemsBefore).toBeGreaterThan(0);
       const repeated = await handleGroundedAsk(
-        routeCtx(
+        session.context(
           JSON.stringify({ chatId, content: "Bitte erkläre das nochmal.", modelId: CHAT_MODEL }),
         ),
         configuredDeps,
@@ -3830,7 +3851,7 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
       expect(store.chatHistoryRevision(chatId)).toBeGreaterThan(previousRevision);
       modelPrompts.length = 0;
       const revised = await handleGroundedAsk(
-        routeCtx(
+        session.context(
           JSON.stringify({ chatId, content: "Welches Budget ist gültig?", modelId: CHAT_MODEL }),
         ),
         configuredDeps,

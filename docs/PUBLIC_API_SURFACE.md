@@ -1,4 +1,4 @@
-# Public API surface — 1.2.1
+# Public API surface — 1.2.2
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.2.2: the root runtime/declaration export contract and CLI entrypoints are unchanged from
+  v1.2.1. Private Markdown skills extend authenticated local Chat routes and the existing UI
+  store, including explicit per-chat selection and protected context accounting. Document-to-skill
+  drafting is an optional output kind of the existing Prompt Enhancer. These local application
+  contracts do not add a public root package entrypoint or an OpenCode skill API. SQLite migrations
+  V42 and V43 are forward-only; existing chats initially have no selected skill.
 - 1.2.1: relative to the actual v1.2.0 export contract, the root adds
   `CallerAttemptAdmissionError`, `StructuralExecutionStoppedError`,
   `WORKSPACE_PATH_DISCOVERY_LIMITS`, `WORKSPACE_PATH_DISCOVERY_MODES`,
