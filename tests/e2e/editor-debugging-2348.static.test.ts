@@ -53,6 +53,14 @@ describe("#2348 D12 cap evidence harness", () => {
     expect(spec).toContain("CAP_SAMPLE_COUNT");
   });
 
+  it("requires the completed stop response independently of driver assertion polling", () => {
+    const spec = readFileSync(SPEC_PATH, "utf8");
+    expect(spec).toContain("expect(await completed.finished()).toBeNull()");
+    expect(spec).not.toContain(
+      "await stopFromDebugPanel(page, panel);\n  await page.evaluate(() => {\n    const probe = window.__keikoD12StopProbe;",
+    );
+  });
+
   it("keeps forced heap collection outside the output-flood long-task window", () => {
     const spec = readFileSync(SPEC_PATH, "utf8");
     const start = spec.indexOf("async function measureOutputFloodEvidence(");

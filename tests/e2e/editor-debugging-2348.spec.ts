@@ -1288,18 +1288,40 @@ async function detachHeapClient(page: Page, client: CDPSession): Promise<void> {
   }
 }
 
+async function captureCompletedStopResponse(
+  page: Page,
+  response: Promise<PlaywrightResponse>,
+): Promise<void> {
+  const completed = await response;
+  expect(completed.status()).toBe(200);
+  expect(await completed.finished()).toBeNull();
+  await page.evaluate(() => {
+    const probe = window.__keikoD12StopProbe;
+    if (probe === undefined) throw new Error("D12_STOP_PROBE_NOT_ARMED");
+    probe.controlCompleted = true;
+  });
+}
+
 async function stopFloodNearBoundary(page: Page, panel: Locator): Promise<number> {
   await clearCapturedEvents(page);
   const session = await startFromDebugPanel(page, panel);
   const sampleCount = await page.evaluate(() => window.__keikoD12StopSamples?.length ?? 0);
   await page.evaluate((sessionId) => window.__keikoArmD12Stop?.(sessionId), session.sessionId);
   await waitForAdapterBytes(page, session.sessionId, 896 * 1_024);
-  await stopFromDebugPanel(page, panel);
-  await page.evaluate(() => {
-    const probe = window.__keikoD12StopProbe;
-    if (probe === undefined) throw new Error("D12_STOP_PROBE_NOT_ARMED");
-    probe.controlCompleted = true;
+  // Bind the measurement to the completed stop response, independently of the host-side
+  // assertion polling below. Waiting for that poll before arming controlCompleted charges
+  // Playwright's polling delay to the product even after HTTP, SSE and the DOM are terminal.
+  const response = page.waitForResponse((candidate) => {
+    if (!candidate.url().endsWith("/api/editor/debug/control")) return false;
+    const request = candidate.request();
+    if (request.method() !== "POST") return false;
+    const body = request.postDataJSON() as { sessionId?: string; action?: string } | null;
+    return body?.sessionId === session.sessionId && body.action === "stop";
   });
+  await Promise.all([
+    stopFromDebugPanel(page, panel),
+    captureCompletedStopResponse(page, response),
+  ]);
   await expect
     .poll(() => page.evaluate(() => window.__keikoD12StopSamples?.length ?? 0))
     .toBe(sampleCount + 1);

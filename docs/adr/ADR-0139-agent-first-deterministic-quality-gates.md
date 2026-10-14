@@ -56,7 +56,11 @@ assertions (caps, counts, markers, redaction), and validation of committed evide
 Authoritative wall-clock verdicts (latency percentiles, long-task ceilings, memory-over-time) are
 enforced only against controlled measurement evidence. The official D12 producer records the full
 samples and the evidence gate judges their budgets; ADR-0156 D1/D6 supersedes the former producer
-assertions and scheduled measurement. The scheduled workflow checks drift, not a hosted clock.
+assertions and scheduled measurement. The scheduled workflow checks drift, not a hosted clock. Stop latency begins at the actual pointer
+activation and ends after the successful stop response is complete, terminal SSE has arrived, and
+the terminal UI has painted. The response witness runs independently of the test driver's terminal
+state assertion polling; that polling delay is test overhead, not product latency. All three
+completion conditions and the 200 ms budget remain mandatory.
 In required-runner context the same specs still verify their bounded-cap composition (byte,
 marker, retained-entry, and variable caps) but reduce the repeated latency-sampling loops that feed
 percentiles — a full ten-sample stop/flood loop can exceed the E2E timeout on a shared two-core
