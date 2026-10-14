@@ -151,7 +151,7 @@ export function UpdateStartupNotice({
         <strong>{noticeTitle(state.report, critical, t)}</strong>
         <span>{noticeBody(state.report, targetVersion, t)}</span>
       </div>
-      <div className={`update-notice-actions ${styles.noticeActions}`}>
+      <div className={`update-notice-actions ${styles.cmpNoticeActions}`}>
         <button
           type="button"
           className="update-notice-primary"

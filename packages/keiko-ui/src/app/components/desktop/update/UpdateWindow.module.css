@@ -48,7 +48,7 @@
 
 @media (forced-colors: active) {
   /* Preserve the native palette in both painted and computed button text colors. */
-  .noticeActions button {
+  .cmpNoticeActions button {
     color: ButtonText;
   }
 }
