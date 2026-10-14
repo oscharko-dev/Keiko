@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 
 async function dropFirstWorkbenchLauncherClick(page: Page): Promise<void> {

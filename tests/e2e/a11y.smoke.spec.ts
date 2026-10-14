@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -80,7 +81,7 @@ const EDITOR_WINDOW_ID = "e2e-a11y-editor-window";
 const tempRoots: string[] = [];
 
 // Give the seeded floating windows room to render fully inside the viewport for the axe scan.
-test.use({ viewport: { width: 1280, height: 960 } });
+test.use({ viewport: { width: 1280, height: 960 }, startupUpdate: "available" });
 
 interface ChatResponse {
   readonly chat: { readonly id: string; readonly title: string };
@@ -170,6 +171,14 @@ async function shellReady(page: Page, theme: A11yTheme): Promise<void> {
   await page.goto("/");
   // The launcher/taskbar shell header is always present; wait for it before scanning.
   await expect(page.locator("header.header")).toBeVisible();
+  const notice = page.locator(".update-notice");
+  await expect(notice).toBeVisible();
+  // Scan the settled notice, not an arbitrary low-opacity frame of its entrance animation.
+  await notice.evaluate(async (element): Promise<void> => {
+    await Promise.all(
+      element.getAnimations({ subtree: true }).map((animation) => animation.finished),
+    );
+  });
 }
 
 const openLauncher: SurfaceOpener = async (page, _request, theme) => {

@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

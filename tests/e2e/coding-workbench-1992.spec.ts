@@ -1,4 +1,5 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 
 test("live pending approval exposes bounded facts and one-time decision controls @smoke", async ({

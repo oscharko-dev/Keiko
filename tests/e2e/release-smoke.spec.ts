@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page, type Response } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -909,4 +910,58 @@ test("editor edits and saves a known-empty governed file on every engine @smoke"
   await expect(editorWindow.locator('[data-field="save"]')).toHaveText("Saved");
 
   assertNoPageErrors();
+});
+
+async function openWithStartupReport(page: Page): Promise<Response> {
+  const report = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/update/preflight" &&
+      response.request().method() === "GET",
+  );
+  await page.goto("/");
+  await expect(page.locator("header.header")).toBeVisible();
+  return await report;
+}
+
+test("startup fixture covers the first and secondary page without live release metadata @smoke", async ({
+  page,
+  context,
+}) => {
+  const secondPage = await context.newPage();
+  for (const target of [page, secondPage]) {
+    const report = await openWithStartupReport(target);
+    expect(report.status()).toBe(200);
+    expect(await report.json()).toMatchObject({
+      status: "current",
+      updateAvailable: false,
+      manualUpdateRequired: false,
+      userActionRequired: false,
+    });
+    await expect(target.locator(".update-notice")).toHaveCount(0);
+  }
+});
+
+test("startup fixture preserves an explicit unavailable-service override @smoke", async ({
+  page,
+}) => {
+  await page.route("**/api/update/preflight", async (route): Promise<void> => {
+    await route.fulfill({ status: 503, json: { code: "INTERNAL" } });
+  });
+  expect((await openWithStartupReport(page)).status()).toBe(503);
+  await expect(page.locator(".update-notice")).toHaveCount(0);
+});
+
+test.describe("available startup fixture", () => {
+  test.use({ startupUpdate: "available" });
+  test("renders the real notice and retains its dismissal action @smoke", async ({ page }) => {
+    const report = await openWithStartupReport(page);
+    expect(await report.json()).toMatchObject({
+      status: "update-available",
+      updateAvailable: true,
+    });
+    const notice = page.locator(".update-notice");
+    await expect(notice).toBeVisible();
+    await notice.getByRole("button", { name: "Not now" }).click();
+    await expect(notice).toHaveCount(0);
+  });
 });

@@ -448,6 +448,6 @@ export async function installRuntimeRoutes(
     } else if (route.request().method() === "POST") {
       if (await handleRuntimePost(route, pathname, fixture)) return;
     }
-    await route.continue();
+    await route.fallback();
   });
 }

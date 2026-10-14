@@ -9,7 +9,8 @@
 // client-side integration in the current tree (ADR-0109 keeps the route dormant pending
 // re-activation), so this smoke asserts only what the browser can actually observe today.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
