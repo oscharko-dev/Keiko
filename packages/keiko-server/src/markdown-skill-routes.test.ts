@@ -20,7 +20,11 @@ import {
 } from "./coding-app-session/_support.js";
 import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  resetServerLogger,
+  resetServerLogFailureNotices,
+} from "../../../tests/support/activity-log-test-support.js";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
@@ -68,6 +72,7 @@ function context(cookie: string, body: unknown = {}, id = "", revision?: number)
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   resetServerLogger();
+  resetServerLogFailureNotices();
   vi.restoreAllMocks();
 });
 
@@ -197,5 +202,47 @@ describe("private Markdown skill routes (#4023)", () => {
       sink.events.filter((event) => event.op === "skills.library.operation").at(-1)?.extra,
     ).toMatchObject({ phase: "failed", httpStatus: 500 });
     expect(JSON.stringify(sink.events)).not.toContain("private storage detail");
+  });
+
+  it("retains committed state and reports evidence loss when the log sink fails", async () => {
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const before = activityLogLossCounters()["logger-write-failed"];
+    setServerLogger(
+      createServerLogger({
+        level: "debug",
+        sink: {
+          write(): void {
+            throw new Error("Synthetic unavailable sink");
+          },
+        },
+      }),
+    );
+    const { deps, cookie } = fixture();
+    expect((await handleImportMarkdownSkill(context(cookie, UPLOAD), deps)).status).toBe(201);
+    expect(deps.store.markdownSkills.list()).toHaveLength(1);
+    expect(activityLogLossCounters()["logger-write-failed"]).toBeGreaterThan(before);
+  });
+
+  it("refuses malformed revision queries and over-limit mutation bodies", async () => {
+    const { deps, cookie } = fixture();
+    const skill = deps.store.markdownSkills.import(UPLOAD);
+    const invalidQuery = context(cookie, {}, skill.id);
+    invalidQuery.url.searchParams.set("revision", "1e2");
+    expect((await handleReadMarkdownSkill(invalidQuery, deps)).status).toBe(400);
+    for (const expectedRevision of [0, -1, 1.5, "1"]) {
+      expect(
+        (await handleDeleteMarkdownSkill(context(cookie, { expectedRevision }, skill.id), deps))
+          .status,
+      ).toBe(400);
+    }
+    const oversized = { expectedRevision: 1, extra: "x".repeat(200_000) };
+    for (const handler of [
+      handleImportMarkdownSkill,
+      handleReplaceMarkdownSkill,
+      handleDeleteMarkdownSkill,
+    ]) {
+      expect((await handler(context(cookie, oversized, skill.id), deps)).status).toBe(413);
+    }
+    expect(deps.store.markdownSkills.get(skill.id)).toEqual(skill);
   });
 });

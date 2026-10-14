@@ -87,6 +87,8 @@ describe("private Markdown skill library (#4023)", () => {
     upload("body", "../method.md"),
     upload("body", "method.zip"),
     upload("body", "C:\\method.md"),
+    upload("body", " .md"),
+    upload("body", "x".repeat(MARKDOWN_SKILL_LIMITS.fileNameChars) + ".md"),
     { fileName: "method.md", contentBase64: "/w==" },
     { fileName: "method.md", contentBase64: "not base64!" },
   ])("refuses malformed input atomically", (input) => {
@@ -117,6 +119,41 @@ describe("private Markdown skill library (#4023)", () => {
     expect(library.import(upload("Method 0")).revision).toBe(1);
     expect(() => library.import(upload("One more"))).toThrow(/library is full/u);
     expect(library.list()).toHaveLength(MARKDOWN_SKILL_LIMITS.skills);
+  });
+
+  it("rejects invalid identities and unavailable revisions without mutating the library", () => {
+    const library = memoryStore().markdownSkills;
+    const skill = library.import(upload("Plain instructions"));
+    expect(skill.name).toBe("method");
+    expect(() => library.get("invalid")).toThrow(/identity/u);
+    expect(() => library.get(skill.id, 0)).toThrow(/revision/u);
+    expect(() => library.get(skill.id, 1.5)).toThrow(/revision/u);
+    library.delete(skill.id, 1);
+    expect(() => library.replace(skill.id, 1, upload())).toThrow(/not found/iu);
+    expect(library.list()).toEqual([]);
+  });
+
+  it("charges retained revisions to library bytes without discarding committed versions", () => {
+    const library = memoryStore().markdownSkills;
+    const skill = library.import(upload("x".repeat(MARKDOWN_SKILL_LIMITS.importBytes)));
+    let revision = 1;
+    for (
+      let bytes = skill.byteCount;
+      bytes < MARKDOWN_SKILL_LIMITS.libraryBytes;
+      bytes += skill.byteCount
+    ) {
+      const prefix = String(revision);
+      revision = library.replace(
+        skill.id,
+        revision,
+        upload(prefix.padEnd(skill.byteCount, "x")),
+      ).revision;
+    }
+    expect(() => library.replace(skill.id, revision, upload("One more byte"))).toThrow(
+      /library is full/u,
+    );
+    expect(library.get(skill.id, 1)).toEqual(skill);
+    expect(library.get(skill.id)?.revision).toBe(revision);
   });
 
   it("rolls back a failed write and refuses corrupt stored content", () => {

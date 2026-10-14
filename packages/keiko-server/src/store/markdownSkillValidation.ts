@@ -27,6 +27,7 @@ function validateFileName(name: string): void {
   if (
     name.length > MARKDOWN_SKILL_LIMITS.fileNameChars ||
     !/^[^/\\\p{Cc}]+\.md$/iu.test(name) ||
+    name.slice(0, -3).trim().length === 0 ||
     name.startsWith(".") ||
     name.includes(":")
   )
