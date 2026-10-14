@@ -1633,7 +1633,7 @@ function expressionFactsAt(compiler, request) {
   return facts;
 }
 
-function exportFactKey(request, proof) {
+export function exportFactKey(request, proof) {
   if (
     request === null ||
     (typeof request !== "object" && typeof request !== "function") ||

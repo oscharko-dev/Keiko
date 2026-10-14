@@ -6,7 +6,10 @@ import { URL, pathToFileURL } from "node:url";
 import { codeQualityPolicyMain, executeCodeQualityPolicy } from "../check-code-quality-policy.mjs";
 import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
-import { assessPolicyResponsibilities } from "../lib/code-quality-responsibilities.mjs";
+import {
+  assessPolicyResponsibilities,
+  resolveRoles,
+} from "../lib/code-quality-responsibilities.mjs";
 import {
   createPublicParserFixture,
   emitSymbolFixture,
@@ -2196,5 +2199,108 @@ describe("bounded raw reader signature and witness controls (#3918)", () => {
     expect(report.assessments[0].reasons).toContain("unchecked-raw-reader-validator-output");
     expect(report.assessments[0].slots).toEqual([]);
     expect(report.counts.qualified).toBe(0);
+  });
+});
+
+describe("within-call role resolution deduplication", () => {
+  it("resolves repeated export selectors once through the actual compiler resolver", async () => {
+    const own = createResponsibilityFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const resolver = createSymbolResolver(subject);
+    try {
+      const resolve = vi.spyOn(resolver, "resolveExport");
+      const roles = resolveRoles(resolver, responsibilityRecord());
+      expect(resolve).toHaveBeenCalledTimes(2);
+      expect(roles.input).toEqual(roles.transform);
+      expect(roles.input).toEqual(roles.output);
+      expect(roles.input).not.toBe(roles.transform);
+      roles.input.identities[0].owner = "modified";
+      expect(roles.transform.identities[0].owner).toBe("alpha");
+      expect(roles.output.identities[0].owner).toBe("alpha");
+      resolveRoles(resolver, responsibilityRecord());
+      expect(resolve).toHaveBeenCalledTimes(4);
+      const sameConsumer = responsibilityRecord();
+      sameConsumer.consumer = { ...sameConsumer.transform, owner: "alpha" };
+      const independent = resolveRoles(resolver, sameConsumer);
+      expect(resolve).toHaveBeenCalledTimes(6);
+      expect(independent.consumer).toEqual(independent.transform);
+      expect(independent.consumer).not.toBe(independent.transform);
+    } finally {
+      resolver.close();
+    }
+  });
+  it.each(["proxy", "accessor", "inherited"])(
+    "keeps %s selectors on the actual cold path",
+    async (kind) => {
+      const own = createResponsibilityFixture();
+      roots.push(own.root);
+      const subject = await collectPolicySubject(own.root);
+      const record = responsibilityRecord();
+      const original = record.transform;
+      let selector;
+      if (kind === "proxy") selector = new Proxy(original, {});
+      if (kind === "accessor") {
+        selector = { ...original };
+        Object.defineProperty(selector, "exportName", { get: () => original.exportName });
+      }
+      if (kind === "inherited") selector = Object.create(original);
+      record.input = selector;
+      record.transform = selector;
+      record.output = selector;
+      const resolver = createSymbolResolver(subject);
+      try {
+        const resolve = vi.spyOn(resolver, "resolveExport");
+        const roles = resolveRoles(resolver, record);
+        expect(resolve).toHaveBeenCalledTimes(4);
+        expect(roles.input).toEqual(roles.transform);
+        expect(roles.transform).toEqual(roles.output);
+      } finally {
+        resolver.close();
+      }
+    },
+  );
+  it("keeps proof consumers separate and normal-mode selectors cold across calls", async () => {
+    const own = createDiagnosticFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    try {
+      const proof = vi.spyOn(resolver, "resolveProofExport");
+      const consumer = vi.spyOn(resolver, "resolveProofConsumer");
+      const normal = vi.spyOn(resolver, "resolveExport");
+      const roles = resolveRoles(resolver, own.record);
+      expect(proof).toHaveBeenCalledTimes(1);
+      expect(consumer).toHaveBeenCalledTimes(1);
+      expect(normal).not.toHaveBeenCalled();
+      expect(roles.input).toEqual(roles.output);
+      expect(() => resolveRoles(resolver, { ...own.record, kind: "validator" })).toThrow();
+      expect(normal).toHaveBeenCalledTimes(1);
+      expect(proof).toHaveBeenCalledTimes(1);
+    } finally {
+      resolver.close();
+    }
+  });
+  it("refuses changed source and missing exports after a successful role resolution", async () => {
+    const own = createResponsibilityFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const resolver = createSymbolResolver(subject);
+    try {
+      const record = responsibilityRecord();
+      resolveRoles(resolver, record);
+      const missing = { ...record, output: { ...record.output, exportName: "missing" } };
+      expect(() => resolveRoles(resolver, missing)).toThrow("unresolved-owner-symbol");
+      const path = "packages/alpha/src/owner.ts";
+      own.put(
+        path,
+        readFileSync(join(own.root, path), "utf8") + "\nexport const changed = true;\n",
+      );
+      expect(() => resolveRoles(resolver, record)).toThrow("symbol-subject-changed");
+    } finally {
+      resolver.close();
+    }
   });
 });

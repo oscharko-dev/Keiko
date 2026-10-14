@@ -2,7 +2,7 @@ import {
   executeResponsibilityProofs,
   responsibilityProofToolIdentity,
 } from "./code-quality-responsibility-proofs.mjs";
-import { createSymbolResolver } from "./code-quality-symbols.mjs";
+import { createSymbolResolver, exportFactKey } from "./code-quality-symbols.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 
 function inventoryFile(subject, path) {
@@ -13,21 +13,25 @@ function proofConsumerKind(record) {
   return ["diagnostic-checker", "public-parser", "raw-own-property-reader"].includes(record.kind);
 }
 
-function resolveRoles(resolver, record) {
-  if (!proofConsumerKind(record))
-    return Object.fromEntries(
-      ["input", "transform", "output", "consumer"].map((role) => [
-        role,
-        resolver.resolveExport(record[role]),
-      ]),
-    );
+export function resolveRoles(resolver, record) {
+  const proof = proofConsumerKind(record);
+  const exports = new Map();
   return Object.fromEntries(
-    ["input", "transform", "output", "consumer"].map((role) => [
-      role,
-      role === "consumer"
-        ? resolver.resolveProofConsumer(record[role])
-        : resolver.resolveProofExport(record[role]),
-    ]),
+    ["input", "transform", "output", "consumer"].map((role) => {
+      const selector = record[role];
+      if (role === "consumer")
+        return [
+          role,
+          proof ? resolver.resolveProofConsumer(selector) : resolver.resolveExport(selector),
+        ];
+      const key = exportFactKey(selector, proof);
+      if (key !== undefined && exports.has(key)) return [role, structuredClone(exports.get(key))];
+      const facts = proof
+        ? resolver.resolveProofExport(selector)
+        : resolver.resolveExport(selector);
+      if (key !== undefined) exports.set(key, structuredClone(facts));
+      return [role, structuredClone(facts)];
+    }),
   );
 }
 
