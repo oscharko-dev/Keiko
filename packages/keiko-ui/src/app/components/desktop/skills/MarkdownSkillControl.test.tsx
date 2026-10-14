@@ -97,7 +97,7 @@ describe("Chat Markdown skill controls", () => {
     expect(dialog.querySelector("img")).toBeNull();
     vi.mocked(api.changeMarkdownSkillSelection).mockResolvedValue(SELECTED);
     fireEvent.click(within(dialog).getByRole("button", { name: "Select" }));
-    await screen.findByRole("button", { name: "Selected for next message" });
+    await screen.findByRole("button", { name: "Active in this chat" });
     expect(api.changeMarkdownSkillSelection).toHaveBeenCalledWith(
       "chat-a",
       SELECTED.selection.skill,

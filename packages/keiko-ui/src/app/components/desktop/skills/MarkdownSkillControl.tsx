@@ -60,7 +60,11 @@ function SelectedSkillChip({
   return (
     <span className={styles.cmpChip}>
       <button type="button" onClick={onOpen} title={t("chat.skills.protected")}>
-        {skill.view?.availability === "available" ? skill.view.name : t("chat.skills.unavailable")}
+        <span className={styles.cmpChipName}>
+          {skill.view?.availability === "available"
+            ? skill.view.name
+            : t("chat.skills.unavailable")}
+        </span>
         <span className={styles.cmpRevision}> · v{selected.revision}</span>
       </button>
       <button

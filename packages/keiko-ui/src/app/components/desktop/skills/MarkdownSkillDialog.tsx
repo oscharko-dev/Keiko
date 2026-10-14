@@ -8,9 +8,12 @@ import { useDialogTabTrap } from "../hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../hooks/useModalInteractionLock";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { SafeMarkdown } from "../SafeMarkdown";
+import { Icons } from "../Icons";
 import { useMarkdownSkillLibrary, type MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import { MarkdownSkillAuthor } from "./MarkdownSkillAuthor";
 import styles from "./MarkdownSkillControl.module.css";
+
+const FileIcon = Icons.file;
 
 interface DialogProps {
   readonly modelId: string | undefined;
@@ -59,7 +62,6 @@ export function MarkdownSkillDialog({ skill, disabled, onClose, modelId }: Dialo
         </header>
         <p>{t("chat.skills.description")}</p>
         <SkillUpload library={library} />
-        <MarkdownSkillAuthor key={modelId} modelId={modelId} library={library} />
         <SkillLibraryStatus library={library} skill={skill} />
         <ul className={styles.cmpList}>
           {library.skills.map((item) => (
@@ -73,6 +75,7 @@ export function MarkdownSkillDialog({ skill, disabled, onClose, modelId }: Dialo
           ))}
         </ul>
         {library.preview ? <SkillPreview library={library} /> : null}
+        <MarkdownSkillAuthor key={modelId} modelId={modelId} library={library} />
         <p className={styles.cmpHint}>{t("chat.skills.protected")}</p>
       </dialog>
     </div>,
@@ -89,10 +92,12 @@ function SkillUpload({
 }): ReactNode {
   const t = useTranslate();
   return (
-    <label className={styles.cmpUpload}>
-      {t(previous === undefined ? "chat.skills.upload" : "chat.skills.replace")}
+    <label className={styles.cmpFilePicker} data-disabled={library.busy}>
+      <FileIcon size={18} />
+      <span>{t(previous === undefined ? "chat.skills.upload" : "chat.skills.replace")}</span>
       <input
         type="file"
+        className="visually-hidden"
         accept=".md,text/markdown"
         disabled={library.busy}
         onChange={(event) => {
@@ -149,7 +154,7 @@ function SkillRow({
   const selected = skill.view?.selection.skill;
   const active = selected?.id === item.id && selected.revision === item.revision;
   return (
-    <li>
+    <li data-selected={active}>
       <button
         type="button"
         className={styles.cmpName}

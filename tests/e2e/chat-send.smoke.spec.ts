@@ -325,15 +325,15 @@ test("applies a selected private skill once across compaction and reload, then r
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = readFileSync(new URL("./fixtures/private-markdown-skill.md", import.meta.url));
-  await dialog
-    .getByLabel(/Upload Markdown/)
-    .setInputFiles({ name: "synthetic.md", mimeType: "text/markdown", buffer: body });
+  const chooser = page.waitForEvent("filechooser");
+  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await (await chooser).setFiles({ name: "synthetic.md", mimeType: "text/markdown", buffer: body });
   await expect(
     dialog.getByRole("heading", { name: "Synthetic boundary method · v1" }),
   ).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Select", exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "Select", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close skills" }).click();
   const chip = page.getByRole("button", { name: /Synthetic boundary method.*v1/ });
   await expect(chip).toBeVisible();
@@ -390,13 +390,13 @@ test("creates, reviews, exports and reimports a private skill without automatic 
   await dialog.getByRole("button", { name: "Prepare draft" }).click();
   const draft = dialog.getByLabel("Skill draft (Markdown)");
   await expect(draft).toHaveValue(/Weekly calibration is proposed, not approved/);
-  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
   await draft.fill(`${await draft.inputValue()}\nReviewed by the local operator.`);
   await dialog.getByRole("button", { name: "Save reviewed skill" }).click();
   await expect(
     dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
   ).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
   const downloaded = page.waitForEvent("download");
   const preview = dialog.getByRole("region", { name: "Skill preview" });
   await preview.getByRole("button", { name: "Download Markdown" }).click();
@@ -415,7 +415,7 @@ test("creates, reviews, exports and reimports a private skill without automatic 
     .filter({ hasText: "Garden calibration review" })
     .getByRole("button", { name: "Select", exact: true })
     .click();
-  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close skills" }).click();
   await expect(page.getByRole("button", { name: /Garden calibration review.*v1/ })).toBeVisible();
 });

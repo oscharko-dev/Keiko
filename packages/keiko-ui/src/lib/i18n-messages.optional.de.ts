@@ -36,7 +36,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.loading": "Skills werden geladen…",
   "chat.skills.empty": "Noch keine Skills. Lade deinen ersten Markdown-Skill hoch.",
   "chat.skills.fileError": "Wähle eine nicht leere .md-Datei mit maximal 128 KiB.",
-  "chat.skills.selected": "Für nächste Nachricht ausgewählt",
+  "chat.skills.selected": "In diesem Chat aktiv",
   "chat.skills.select": "Auswählen",
   "chat.skills.preview": "Skill-Vorschau",
   "chat.skills.export": "Markdown herunterladen",

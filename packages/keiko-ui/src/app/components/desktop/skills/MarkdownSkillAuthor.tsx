@@ -81,10 +81,11 @@ function SkillSource({ author }: { readonly author: MarkdownSkillAuthorState }):
   const t = useTranslate();
   return (
     <>
-      <label className={styles.cmpUpload}>
+      <label className={styles.cmpFilePicker} data-disabled={author.busy}>
         {t("chat.skills.author.file")}
         <input
           type="file"
+          className="visually-hidden"
           accept=".md,.txt,text/plain,text/markdown"
           disabled={author.busy}
           onChange={(event) => {
