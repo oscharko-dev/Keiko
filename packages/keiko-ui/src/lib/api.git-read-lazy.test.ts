@@ -61,3 +61,36 @@ it("keeps ordinary Git validator imports out of the eager API module", () => {
   });
   expect(eagerGitImports.map((statement) => statement.getText(source))).toEqual([]);
 });
+
+it("ordinary status and diff select typed parsers in the existing deferred module", () => {
+  const directory = dirname(fileURLToPath(import.meta.url));
+  const source = ts.createSourceFile(
+    "coding-workbench-lazy-fetchers.ts",
+    readFileSync(resolve(directory, "coding-workbench-lazy-fetchers.ts"), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  for (const [name, parser] of [
+    ["fetchGitStatus", "parseGitRepositoryStatusResponse"],
+    ["fetchGitDiff", "parseGitRepositoryDiffResponse"],
+  ]) {
+    const fn = source.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+    );
+    expect(fn).toBeDefined();
+    if (fn === undefined || !ts.isFunctionDeclaration(fn)) throw new TypeError("fetcher absent");
+    const calls: string[] = [];
+    function visit(node: ts.Node): void {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "fetchJson"
+      ) {
+        calls.push(node.arguments[2]?.getText(source) ?? "missing");
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(fn);
+    expect(calls).toEqual([parser]);
+  }
+});

@@ -1629,6 +1629,8 @@ export type {
   GitRepositoryValidationOk,
   GitRepositoryValidationFail,
   GitRepositoryValidation,
+  GitRepositoryParseOk,
+  GitRepositoryParseResult,
 } from "./git-repository.js";
 export type {
   GIT_REPOSITORY_SCHEMA_VERSION,
@@ -1637,6 +1639,8 @@ export type {
   GIT_STATUS_CODES,
   validateGitRepositoryStatusResponse,
   validateGitRepositoryDiffResponse,
+  parseGitRepositoryStatusResponse,
+  parseGitRepositoryDiffResponse,
 } from "./git-repository.js";
 
 // ─── Immutable base-to-head Git change snapshot (Issue #3397, Epic #3384, ADR-0174) ───

@@ -119,6 +119,7 @@ import type {
   PdfCitationPreviewStatusResponse,
   VoicePersona,
   GitRepositoryValidation,
+  GitRepositoryParseResult,
   WorkspaceSearchRequest,
   WorkspaceSearchResponse,
   WorkspaceReplaceApplyRequest,
@@ -218,6 +219,7 @@ export { SHA256_HEX } from "./api-shared-primitives";
 // ---------------------------------------------------------------------------
 
 type ResponseValidator = (value: unknown) => GitRepositoryValidation;
+type ResponseParser<T> = (value: unknown) => GitRepositoryParseResult<T>;
 
 function validateBffResponse<T>(
   path: string,
@@ -227,7 +229,15 @@ function validateBffResponse<T>(
 ): T {
   const validation = validator(value);
   if (validation.ok) return value as T;
-  const reason = validation.reasons[0] ?? "unknown validation failure";
+  return failBffResponse(path, validation.reasons, correlationId);
+}
+
+function failBffResponse(
+  path: string,
+  reasons: readonly string[],
+  correlationId: string | null,
+): never {
+  const reason = reasons[0] ?? "unknown validation failure";
   const error = new ApiError(
     "CONTRACT_VALIDATION_FAILED",
     `BFF response for ${path} failed contract validation: ${reason}`,
@@ -241,6 +251,16 @@ function validateBffResponse<T>(
     errorEvidence: clientErrorEvidence(error),
   });
   throw error;
+}
+
+function parseBffResponse<T>(
+  path: string,
+  value: unknown,
+  parser: ResponseParser<T>,
+  correlationId: string | null,
+): T {
+  const parsed = parser(value);
+  return parsed.ok ? parsed.value : failBffResponse(path, parsed.reasons, correlationId);
 }
 
 // GEN-RES-FETCH-001 — reads against the loopback BFF must not hang the UI when the BFF
@@ -320,6 +340,7 @@ async function fetchJson<T>(
   init?: RequestInit,
   validator?: ResponseValidator,
   correlationId?: string,
+  parser?: ResponseParser<T>,
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isStateChanging = method !== "GET" && method !== "HEAD";
@@ -332,15 +353,29 @@ async function fetchJson<T>(
   if (!res.ok) throw await bffFailure(res);
 
   if (res.status === 204) {
+    if (parser !== undefined)
+      return parseBffResponse(path, undefined, parser, res.headers.get(CORRELATION_HEADER));
     return undefined as T;
   }
 
   const value = (await res.json()) as unknown;
   const responseCorrelationId = res.headers.get(CORRELATION_HEADER);
   recordResponseCorrelationId(value, responseCorrelationId);
+  if (parser !== undefined) return parseBffResponse(path, value, parser, responseCorrelationId);
   return validator === undefined
     ? (value as T)
     : validateBffResponse<T>(path, value, validator, responseCorrelationId);
+}
+
+// Select the typed result inside the same response/header context; the transport remains owned
+// by fetchJson, including deadlines, CSRF and correlation for primitive or empty responses.
+async function fetchParsedJson<T>(
+  path: string,
+  init: RequestInit | undefined,
+  parser: ResponseParser<T>,
+  correlationId?: string,
+): Promise<T> {
+  return fetchJson(path, init, undefined, correlationId, parser);
 }
 
 // The `ApiError` for a non-2xx BFF response: code and message from the `{ error }` envelope when it
@@ -2057,7 +2092,7 @@ export async function fetchGitStatus(
   options?: GitReadRequestOptions & { readonly includeIgnored?: boolean },
 ): Promise<GitRepositoryStatusResponse> {
   const api = await loadGitWorkbenchApi("git-read", options?.correlationId);
-  return api.fetchGitStatus(fetchJson, root, options);
+  return api.fetchGitStatus(fetchParsedJson, root, options);
 }
 
 // #2906 review (comment 3865167732): KEIKO-0897 threaded an AbortSignal through
@@ -2173,7 +2208,7 @@ export async function fetchGitDiff(input: {
   readonly scope?: GitDiffScope;
 }): Promise<GitRepositoryDiffResponse> {
   const api = await loadGitWorkbenchApi("git-read");
-  return api.fetchGitDiff(fetchJson, input);
+  return api.fetchGitDiff(fetchParsedJson, input);
 }
 
 // Issue #1199 — governed editor completion gateway. Posts the overlay buffer + cursor to the BFF,

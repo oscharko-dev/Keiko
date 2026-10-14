@@ -1519,3 +1519,17 @@ it("actual public preview subpath preserves closed marker parsing", () => {
   expect(publicPreviewMarker("[2】")).toBeUndefined();
   expect(publicPreviewMarker(0)).toBeUndefined();
 });
+
+it("exports the additive Git parse types through the existing root type surface", () => {
+  const ok: import("./index.js").GitRepositoryParseOk<string> = { ok: true, value: "checked" };
+  const parsed: import("./index.js").GitRepositoryParseResult<string> = ok;
+  expect(parsed.value).toBe("checked");
+  const status: typeof import("./index.js").parseGitRepositoryStatusResponse = (
+    input: unknown,
+  ): import("./index.js").GitRepositoryParseResult<
+    import("./index.js").GitRepositoryStatusResponse
+  > => parsePublicGitStatusForIndex(input);
+  expect(status(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+
+import { parseGitRepositoryStatusResponse as parsePublicGitStatusForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-repository";

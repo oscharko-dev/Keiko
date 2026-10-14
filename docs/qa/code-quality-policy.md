@@ -47,6 +47,14 @@ justified representation boundary, such as attaching a nominal brand after struc
 it neither validates hostile input nor authorizes a chained assertion. These two syntax rules do
 not establish boundary/domain qualification or complete #3918.
 
+Git status and diff parsing reuse concrete admission in the owning contracts module. The typed
+parsers return the original accepted value; legacy validators retain their result shapes and
+diagnostics. Status arrays validate each indexed member, including sparse positions, without
+trusting caller-supplied iteration methods. The lazy browser consumers carry the parser's value
+through the existing fetch scaffold. An empty 204 on either typed read is a contract refusal with
+the response correlation and existing body-free diagnostic; ordinary no-content mutation routes
+retain their behavior. Other legacy response paths remain separate migration obligations.
+
 Policy validation retains the initial guards and rejects any activation shrink against the
 complete reachable policy history. Shallow history fails; a second unrelated commit cannot hide
 a removed scope. Existing and newly added files inside an active scope are

@@ -43,6 +43,7 @@ import type {
   GitSyncPreview,
   GitSyncExecuteResponse,
   GitRepositoryValidation,
+  GitRepositoryParseResult,
 } from "@oscharko-dev/keiko-contracts";
 import { validateGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
@@ -55,8 +56,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
 import {
   isSafeGitRefName,
-  validateGitRepositoryDiffResponse,
-  validateGitRepositoryStatusResponse,
+  parseGitRepositoryDiffResponse,
+  parseGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
   CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
@@ -103,6 +104,13 @@ export type ApiFetchJson = <T>(
   path: string,
   init?: RequestInit,
   validator?: (value: unknown) => GitRepositoryValidation,
+  correlationId?: string,
+) => Promise<T>;
+
+export type ApiFetchParsedJson = <T>(
+  path: string,
+  init: RequestInit | undefined,
+  parser: (value: unknown) => GitRepositoryParseResult<T>,
   correlationId?: string,
 ) => Promise<T>;
 
@@ -557,7 +565,7 @@ export async function fetchGitHistory(
 }
 
 export async function fetchGitStatus(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   root: string,
   options?: Parameters<typeof import("./api").fetchGitStatus>[1],
 ): Promise<GitRepositoryStatusResponse> {
@@ -567,7 +575,7 @@ export async function fetchGitStatus(
   return fetchJson(
     `/api/git/status?${params.toString()}`,
     undefined,
-    validateGitRepositoryStatusResponse,
+    parseGitRepositoryStatusResponse,
     options?.correlationId,
   );
 }
@@ -597,7 +605,7 @@ export async function fetchGitRemotes(
 }
 
 export async function fetchGitDiff(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   input: {
     readonly root: string;
     readonly path?: string;
@@ -608,11 +616,7 @@ export async function fetchGitDiff(
   params.set("root", input.root);
   if (input.path !== undefined && input.path.length > 0) params.set("path", input.path);
   if (input.scope !== undefined) params.set("scope", input.scope);
-  return fetchJson(
-    `/api/git/diff?${params.toString()}`,
-    undefined,
-    validateGitRepositoryDiffResponse,
-  );
+  return fetchJson(`/api/git/diff?${params.toString()}`, undefined, parseGitRepositoryDiffResponse);
 }
 
 // Git-to-Chat comparison connections use the same deferred, validated request boundary.

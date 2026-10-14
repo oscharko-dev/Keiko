@@ -192,6 +192,18 @@ export interface GitRepositoryValidationFail {
 
 export type GitRepositoryValidation = GitRepositoryValidationOk | GitRepositoryValidationFail;
 
+export interface GitRepositoryParseOk<T> {
+  readonly ok: true;
+  readonly value: T;
+}
+
+export type GitRepositoryParseResult<T> = GitRepositoryParseOk<T> | GitRepositoryValidationFail;
+
+function rejectGitField(reasons: string[], reason: string): false {
+  reasons.push(reason);
+  return false;
+}
+
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
@@ -229,23 +241,32 @@ const MIN_INCOMPLETE_UTF8_SEQUENCE_BYTES = 1;
 export const GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES =
   UTF8_REPLACEMENT_CHARACTER_BYTES - MIN_INCOMPLETE_UTF8_SEQUENCE_BYTES;
 
-function validateChange(input: unknown, reasons: string[], index: number): void {
+function validateChange(input: unknown, reasons: string[], index: number): input is GitChangedFile {
   if (!isRecord(input)) {
-    reasons.push(`changes[${String(index)}] must be an object`);
-    return;
+    return rejectGitField(reasons, `changes[${String(index)}] must be an object`);
   }
-  if (!isString(input.path)) reasons.push(`changes[${String(index)}].path must be a string`);
+  let valid = true;
+  if (!isString(input.path))
+    valid = rejectGitField(reasons, `changes[${String(index)}].path must be a string`);
   for (const key of ["indexStatus", "worktreeStatus"] as const) {
     if (!isGitStatusCode(input[key])) {
-      reasons.push(`changes[${String(index)}].${key} must be one of the closed git status codes`);
+      valid = rejectGitField(
+        reasons,
+        `changes[${String(index)}].${key} must be one of the closed git status codes`,
+      );
     }
   }
   for (const key of ["staged", "unstaged", "untracked", "conflicted"] as const) {
-    if (!isBoolean(input[key])) reasons.push(`changes[${String(index)}].${key} must be a boolean`);
+    if (!isBoolean(input[key]))
+      valid = rejectGitField(reasons, `changes[${String(index)}].${key} must be a boolean`);
   }
   if (input.oldPath !== undefined && !isString(input.oldPath)) {
-    reasons.push(`changes[${String(index)}].oldPath must be a string when present`);
+    valid = rejectGitField(
+      reasons,
+      `changes[${String(index)}].oldPath must be a string when present`,
+    );
   }
+  return valid;
 }
 
 // Fields every unavailable/available envelope in this file's territory shares: a closed-union
@@ -253,22 +274,28 @@ function validateChange(input: unknown, reasons: string[], index: number): void 
 function validateWireEnvelopeOptionals(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    reasons.push("reason invalid");
+    valid = rejectGitField(reasons, "reason invalid");
   }
   if (input.message !== undefined && !isBoundedGitMessage(input.message)) {
-    reasons.push("message must be a bounded string when present");
+    valid = rejectGitField(reasons, "message must be a bounded string when present");
   }
   if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    reasons.push("repositoryRoot must be a string when present");
+    valid = rejectGitField(reasons, "repositoryRoot must be a string when present");
   }
+  return valid;
 }
 
-function validateStatusCounters(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
-  if (!isBoolean(input.available)) reasons.push("available must be a boolean");
-  if (!isBoolean(input.detached)) reasons.push("detached must be a boolean");
-  if (!isBoolean(input.clean)) reasons.push("clean must be a boolean");
+function validateStatusCounters(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): boolean {
+  let valid = true;
+  if (!isBoolean(input.available)) valid = rejectGitField(reasons, "available must be a boolean");
+  if (!isBoolean(input.detached)) valid = rejectGitField(reasons, "detached must be a boolean");
+  if (!isBoolean(input.clean)) valid = rejectGitField(reasons, "clean must be a boolean");
   for (const key of [
     "stagedCount",
     "unstagedCount",
@@ -276,9 +303,11 @@ function validateStatusCounters(input: Readonly<Record<string, unknown>>, reason
     "conflictedCount",
     "maxChanges",
   ] as const) {
-    if (!isNonNegativeInteger(input[key])) reasons.push(`${key} must be a non-negative integer`);
+    if (!isNonNegativeInteger(input[key]))
+      valid = rejectGitField(reasons, `${key} must be a non-negative integer`);
   }
-  if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
+  if (!isBoolean(input.truncated)) valid = rejectGitField(reasons, "truncated must be a boolean");
+  return valid;
 }
 
 // The producer (keiko-server gitRoutes.ts collectStatusChanges) never pushes past maxChanges --
@@ -288,55 +317,87 @@ function validateStatusCounters(input: Readonly<Record<string, unknown>>, reason
 // (which over-counts by one extra record per rename/copy entry) against maxChanges, so a status with
 // exactly maxChanges real changes and zero renames legitimately reports `truncated: false`. Only the
 // one-directional bound is safe to enforce here.
-function validateChangesArray(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
-  if (!Array.isArray(input.changes)) {
-    reasons.push("changes must be an array");
-    return;
+function validateChangesArray(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): boolean {
+  if (!Array.isArray(input.changes)) return rejectGitField(reasons, "changes must be an array");
+  const changes: readonly unknown[] = input.changes;
+  const length = changes.length;
+  let valid = true;
+  // Inspect each position, including holes; caller-owned forEach cannot authorize unchecked items.
+  for (let index = 0; index < length; index += 1) {
+    valid = validateChange(changes[index], reasons, index) && valid;
   }
-  input.changes.forEach((change, index) => {
-    validateChange(change, reasons, index);
-  });
   if (isNonNegativeInteger(input.maxChanges) && input.changes.length > input.maxChanges) {
-    reasons.push("changes.length must not exceed maxChanges");
+    valid = rejectGitField(reasons, "changes.length must not exceed maxChanges");
   }
+  return valid;
+}
+
+function areGitDirectories(input: readonly unknown[]): input is readonly string[] {
+  const length = input.length;
+  for (let index = 0; index < length; index += 1) {
+    if (!isString(input[index])) return false;
+  }
+  return true;
 }
 
 function validateStatusPresentation(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   if (input.selectedRootIgnored !== undefined && !isBoolean(input.selectedRootIgnored)) {
-    reasons.push("selectedRootIgnored must be a boolean when present");
+    valid = rejectGitField(reasons, "selectedRootIgnored must be a boolean when present");
   }
   if (
     input.untrackedDirectories !== undefined &&
     (!Array.isArray(input.untrackedDirectories) ||
-      !input.untrackedDirectories.every(isString) ||
+      !areGitDirectories(input.untrackedDirectories) ||
       (isNonNegativeInteger(input.maxChanges) &&
         input.untrackedDirectories.length > input.maxChanges))
   ) {
-    reasons.push("untrackedDirectories must be a bounded string array when present");
+    valid = rejectGitField(
+      reasons,
+      "untrackedDirectories must be a bounded string array when present",
+    );
   }
+  return valid;
 }
 
-// Git status is a compact wire envelope with several required counters and flags; keeping the
-// validator in one place makes failure messages predictable for tests and callers.
-export function validateGitRepositoryStatusResponse(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
-  if (!isString(input.root)) reasons.push("root must be a string");
-  if (!isGitRepositoryState(input.state)) {
-    reasons.push("state invalid");
-  }
-  validateWireEnvelopeOptionals(input, reasons);
+function admitGitStatusResponse(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitRepositoryStatusResponse {
+  let valid = true;
+  if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION)
+    valid = rejectGitField(reasons, "schemaVersion invalid");
+  if (!isString(input.root)) valid = rejectGitField(reasons, "root must be a string");
+  if (!isGitRepositoryState(input.state)) valid = rejectGitField(reasons, "state invalid");
+  valid = validateWireEnvelopeOptionals(input, reasons) && valid;
   if (input.branch !== undefined && !isString(input.branch)) {
-    reasons.push("branch must be a string when present");
+    valid = rejectGitField(reasons, "branch must be a string when present");
   }
-  validateStatusCounters(input, reasons);
-  validateChangesArray(input, reasons);
-  validateStatusPresentation(input, reasons);
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  valid = validateStatusCounters(input, reasons) && valid;
+  valid = validateChangesArray(input, reasons) && valid;
+  return validateStatusPresentation(input, reasons) && valid;
+}
+
+export function parseGitRepositoryStatusResponse(
+  input: unknown,
+): GitRepositoryParseResult<GitRepositoryStatusResponse> {
+  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+  const reasons: string[] = [];
+  return admitGitStatusResponse(input, reasons)
+    ? { ok: true, value: input }
+    : { ok: false, reasons };
+}
+
+// Keep the existing verdict-only API while both public paths share the same concrete admission.
+export function validateGitRepositoryStatusResponse(input: unknown): GitRepositoryValidation {
+  const parsed = parseGitRepositoryStatusResponse(input);
+  return parsed.ok ? { ok: true } : parsed;
 }
 
 // The producer (keiko-server gitRoutes.ts handleGitDiff) always pre-clamps `diff` to at most
@@ -349,11 +410,12 @@ export function validateGitRepositoryStatusResponse(input: unknown): GitReposito
 function validateDiffTruncationConsistency(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  if (!isString(input.diff) || !isNonNegativeInteger(input.maxBytes)) return;
+): boolean {
+  if (!isString(input.diff) || !isNonNegativeInteger(input.maxBytes)) return true;
+  let valid = true;
   const actualBytes = TEXT_ENCODER.encode(input.diff).length;
   if (actualBytes > input.maxBytes && input.truncated !== true) {
-    reasons.push("truncated must be true when diff exceeds maxBytes");
+    valid = rejectGitField(reasons, "truncated must be true when diff exceeds maxBytes");
   }
   // `truncated: true` describes that the SOURCE was cut, not a waiver on the OUTPUT bound: a
   // hostile response could otherwise claim truncated: true and carry a diff of any size. The
@@ -361,23 +423,28 @@ function validateDiffTruncationConsistency(
   // GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES (see its derivation above); anything past that is not a
   // truncation artifact.
   if (actualBytes > input.maxBytes + GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES) {
-    reasons.push(
+    valid = rejectGitField(
+      reasons,
       `diff must not exceed maxBytes by more than ${String(GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES)} bytes`,
     );
   }
+  return valid;
 }
 
 function validateDiffOptionalEnvelope(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    reasons.push("reason invalid");
+    valid = rejectGitField(reasons, "reason invalid");
   }
   if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    reasons.push("repositoryRoot must be a string when present");
+    valid = rejectGitField(reasons, "repositoryRoot must be a string when present");
   }
-  if (input.path !== undefined && !isString(input.path)) reasons.push("path must be a string");
+  if (input.path !== undefined && !isString(input.path))
+    valid = rejectGitField(reasons, "path must be a string");
+  return valid;
 }
 
 function isGitDiffScope(input: unknown): input is GitDiffScope {
@@ -387,32 +454,47 @@ function isGitDiffScope(input: unknown): input is GitDiffScope {
 function validateDiffRequiredFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  if (!isBoolean(input.available)) reasons.push("available must be a boolean");
-  if (!isGitDiffScope(input.scope)) reasons.push("scope invalid");
-  if (!isString(input.diff)) reasons.push("diff must be a string");
-  if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
+): boolean {
+  let valid = true;
+  if (!isBoolean(input.available)) valid = rejectGitField(reasons, "available must be a boolean");
+  if (!isGitDiffScope(input.scope)) valid = rejectGitField(reasons, "scope invalid");
+  if (!isString(input.diff)) valid = rejectGitField(reasons, "diff must be a string");
+  if (!isBoolean(input.truncated)) valid = rejectGitField(reasons, "truncated must be a boolean");
   if (!isNonNegativeInteger(input.maxBytes))
-    reasons.push("maxBytes must be a non-negative integer");
+    valid = rejectGitField(reasons, "maxBytes must be a non-negative integer");
+  return valid;
 }
 
 function validateDiffEnvelopeFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  validateDiffOptionalEnvelope(input, reasons);
-  validateDiffRequiredFields(input, reasons);
+): boolean {
+  const optional = validateDiffOptionalEnvelope(input, reasons);
+  return validateDiffRequiredFields(input, reasons) && optional;
+}
+
+function admitGitDiffResponse(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitRepositoryDiffResponse {
+  let valid = true;
+  if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION)
+    valid = rejectGitField(reasons, "schemaVersion invalid");
+  if (!isString(input.root)) valid = rejectGitField(reasons, "root must be a string");
+  if (!isGitRepositoryState(input.state)) valid = rejectGitField(reasons, "state invalid");
+  valid = validateDiffEnvelopeFields(input, reasons) && valid;
+  return validateDiffTruncationConsistency(input, reasons) && valid;
+}
+
+export function parseGitRepositoryDiffResponse(
+  input: unknown,
+): GitRepositoryParseResult<GitRepositoryDiffResponse> {
+  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+  const reasons: string[] = [];
+  return admitGitDiffResponse(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
 }
 
 export function validateGitRepositoryDiffResponse(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
-  if (!isString(input.root)) reasons.push("root must be a string");
-  if (!isGitRepositoryState(input.state)) {
-    reasons.push("state invalid");
-  }
-  validateDiffEnvelopeFields(input, reasons);
-  validateDiffTruncationConsistency(input, reasons);
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  const parsed = parseGitRepositoryDiffResponse(input);
+  return parsed.ok ? { ok: true } : parsed;
 }
