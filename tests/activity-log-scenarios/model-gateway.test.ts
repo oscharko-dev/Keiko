@@ -24,6 +24,7 @@ import {
   type ProviderAdapter,
 } from "@oscharko-dev/keiko-model-gateway";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { withActivityLogParentCorrelation } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   type ServerLogEvent,
@@ -86,6 +87,25 @@ function persistedLine(raw: string, op: string, occurrence = 0): Record<string, 
     );
   }
   return JSON.parse(line) as Record<string, unknown>;
+}
+
+async function persistedGatewayParent(
+  stateDir: string,
+  sink: ProcessServerLogSink,
+): Promise<string> {
+  const adapter: ProviderAdapter = {
+    call: (): Promise<NormalizedResponse> => Promise.resolve(okResponse("example-chat-model")),
+  };
+  const gateway = new Gateway(config([provider()]), {
+    adapter,
+    clock: createScriptedGatewayClock(),
+    log: sink,
+  });
+  await gateway.chat(REQUEST);
+  const completed = persistedLine(readPersistedActivityLog(stateDir), "gateway.chat.completed");
+  if (typeof completed.correlationId !== "string")
+    throw new TypeError("parent correlation required");
+  return completed.correlationId;
 }
 
 describe("Activity Log scenario: model-gateway", () => {
@@ -172,6 +192,51 @@ describe("Activity Log scenario: model-gateway", () => {
     const fetchFailed = persistedLine(raw, "http.gateway.fetch.failed");
     expect(failed.correlationId).toBe(started.correlationId);
     expect(fetchFailed.correlationId).toBe(started.correlationId);
+  });
+
+  it("persists parent transport without changing the producer lifecycle or registration", async () => {
+    const startedAtMs = Date.now();
+    const clock = createScriptedGatewayClock();
+    const fetchImpl = createScriptedGatewayFetch([{ networkError: true }], clock);
+    const sink = processServerLogSink();
+    const parent = await persistedGatewayParent(stateDir, sink);
+    const gateway = new Gateway(config([provider()]), {
+      clock,
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          const child = withActivityLogParentCorrelation(event, parent);
+          const retained = withActivityLogParentCorrelation(child, "parent-not-selected-00000002");
+          expect(retained).toBe(child);
+          sink.write(retained);
+        },
+      },
+    });
+
+    await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
+    const trace = await expectActivityLogScenario("model-gateway.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: [
+        "gateway.chat.started",
+        "chat.request.dispatch",
+        "http.gateway.fetch.started",
+        "http.gateway.fetch.failed",
+        "gateway.chat.failed",
+      ],
+    });
+    expect(trace.failureClasses).toEqual(
+      expect.arrayContaining(["gateway-chat-call", "gateway-http-fetch"]),
+    );
+    const raw = readPersistedActivityLog(stateDir);
+    const started = persistedLine(raw, "gateway.chat.started", 1);
+    for (const op of ["http.gateway.fetch.failed", "gateway.chat.failed"]) {
+      expect(persistedLine(raw, op)).toMatchObject({
+        correlationId: started.correlationId,
+        parentCorrelationId: parent,
+      });
+    }
+    expect(raw).not.toContain("parent-not-selected-00000002");
   });
 
   it("reconstructs a circuit-breaker rejection to a complete rejection lifecycle", async () => {

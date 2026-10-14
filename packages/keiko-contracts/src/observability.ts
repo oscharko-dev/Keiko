@@ -1170,7 +1170,7 @@ export function withActivityLogParentCorrelation<Event extends object>(
   event: Event,
   parentCorrelationId: string,
 ): Event {
-  const own: unknown = Reflect.get(event, "parentCorrelationId");
+  const own: unknown = runtimeProperty(event, "parentCorrelationId");
   if (typeof own === "string") return event;
   return reboundActivityLogEvent(event, { ...event, parentCorrelationId });
 }
