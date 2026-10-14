@@ -1,4 +1,5 @@
 import { withImmediateTransaction } from "./transaction.js";
+import { createMarkdownSkillStore } from "./markdownSkills.js";
 import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
 // `node:sqlite` DatabaseSync drives both factories; the node adapter adds directory creation,
@@ -666,6 +667,7 @@ function createMessageBatch(
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
   const store: UiStore = {
+    markdownSkills: createMarkdownSkillStore(db, options.now),
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string): Project =>
       createProjectRecord(db, options, path, name),

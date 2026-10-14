@@ -326,6 +326,38 @@ response, derived from that check. Missing paths remain listed as `available: fa
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
 
+#### Private Markdown instruction library (issue #4023)
+
+Schema v42 adds `markdown_skills` and `markdown_skill_revisions` to this same private UI
+database. The library is installation-local, independent of projects, and uses the existing
+database permissions, transactional migration runner and `BEGIN IMMEDIATE` write boundary.
+It adds no database engine, vector index or filesystem import path.
+
+A plain UTF-8 `.md` upload is sufficient. The server validates the original bytes, removes an
+optional UTF-8 BOM and normalizes CRLF/CR to LF once. It otherwise preserves the complete text;
+frontmatter is ordinary text and confers no authority. A server-generated identity, immutable
+revision, SHA-256 digest and byte count identify the saved body. Imported instructions are private
+content, never public catalog metadata or Activity Log fields, and are not redacted into a
+different instruction file. This database remains permission-protected plaintext, not encrypted
+storage. Skill files must not be used as a credential store.
+
+The bounded library accepts 128 KiB per file, 128 current skills, 16 MiB of retained revision
+bodies and 10,000 revisions in total. Limits come from the shared Markdown skill contract.
+Importing identical current content returns its existing identity; a different body with the
+same display name creates a separate skill. Explicit replacement checks the current revision
+and creates a new immutable revision. Old revisions remain readable until the skill is deleted;
+deletion removes every revision and makes existing references unavailable. Deletion also checks
+the current revision. SQLite transactions prevent stale updates and partial writes. Reads verify
+the stored body's digest and byte count before returning it.
+
+The additive `/api/skills` list/import, `/api/skills/:id` read/replace/delete and
+`/api/skills/:id/export` routes require the existing paired app session. Mutations revalidate the
+session after reading their bounded JSON upload; existing transport/CSRF gates still apply.
+List responses contain metadata only. Explicit export returns a standalone `skill.md` download
+payload with the saved normalized text. No import or export invokes a model, fetches a remote
+resource or executes the document. `skills.library.operation` records action, lifecycle phase
+and HTTP status on the existing Activity Log, without names, filenames or bodies.
+
 ### D6 — Path validation policy (fail-closed)
 
 All path validation for project paths is centralized in `src/ui/store/validation.ts`. No path

@@ -65,6 +65,14 @@ import {
   type ContextLaneId,
 } from "./context-engineering.js";
 
+export { MARKDOWN_SKILL_LIMITS } from "./markdown-skills.js";
+export type {
+  MarkdownSkillReference,
+  MarkdownSkillMetadata,
+  MarkdownSkillDocument,
+  MarkdownSkillUpload,
+} from "./markdown-skills.js";
+
 export interface Project {
   readonly path: string;
   readonly name: string;

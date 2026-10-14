@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4750b7232a1fdb20d8c5c6660c97232ab9870a8814becf1863f69ac73325ab5f" as const;
+  "820db45f37a0f28ed63ae0c05e591cffb22ca6c994af15a385cbf8998308d7ac" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 345,
-  completeClassCount: 345,
+  supportedClassCount: 346,
+  completeClassCount: 346,
   completeness: "complete",
   classes: [
     {
@@ -30165,6 +30165,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "markdown-skill-library",
+      requirementContract: "markdown-skill-library",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["skills.library.operation"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "skills.library.operation",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["skills.library.operation"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "skills.library.operation",
+          owner: "keiko-server",
+          category: "setup",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "action",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "httpStatus",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["skills.library.operation.lifecycle"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "memory-audit-state-cache",
       requirementContract: "memory-audit-state-cache",
       productSurfaces: ["keiko-server"],
@@ -41935,6 +41997,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "server-log.write-failed": "lifecycle-crash",
     "server.diagnostic.failure": "bff",
     "server.runtime.shutdown": "lifecycle-crash",
+    "skills.library.operation": "bff",
     "speech.stt.language.normalized": "model-gateway",
     "speech.stt.request.completed": "model-gateway",
     "speech.stt.request.dispatch": "model-gateway",

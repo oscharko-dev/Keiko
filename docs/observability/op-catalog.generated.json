@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4750b7232a1fdb20d8c5c6660c97232ab9870a8814becf1863f69ac73325ab5f",
+    "catalogDigest": "820db45f37a0f28ed63ae0c05e591cffb22ca6c994af15a385cbf8998308d7ac",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32533,6 +32533,51 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "skills.library.operation",
+        "category": "setup",
+        "owner": "keiko-server",
+        "emitter": "markdown-skill-log.logMarkdownSkillOperation",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "action": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["list", "read", "import", "replace", "delete", "export"]
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["started", "completed", "rejected", "failed"]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["markdown-skill-library"],
+        "proofIds": ["skills.library.operation.lifecycle"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:8",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:49"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "speech.stt.language.normalized",
         "category": "gateway",
         "owner": "keiko-model-gateway",
@@ -33220,8 +33265,8 @@
         "failureClasses": ["ui-store-open"],
         "proofIds": ["store.opened.identity"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/db.ts:134",
-        "emitterSites": ["packages/keiko-server/src/store/db.ts:909"]
+        "registrationSite": "packages/keiko-server/src/store/db.ts:135",
+        "emitterSites": ["packages/keiko-server/src/store/db.ts:911"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37192,6 +37237,27 @@
     },
     "exemptions": [],
     "failureClassContracts": [
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "markdown-skill-library",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["skills.library.operation"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["skills.library.operation"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["skills.library.operation"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["skills.library.operation"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
@@ -46911,8 +46977,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 345,
-      "completeClassCount": 345,
+      "supportedClassCount": 346,
+      "completeClassCount": 346,
       "completeness": "complete",
       "classes": [
         {
@@ -77410,6 +77476,68 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "markdown-skill-library",
+          "requirementContract": "markdown-skill-library",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["skills.library.operation"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "skills.library.operation",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["skills.library.operation"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "skills.library.operation",
+              "owner": "keiko-server",
+              "category": "setup",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "action",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "httpStatus",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["skills.library.operation.lifecycle"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "memory-audit-state-cache",
           "requirementContract": "memory-audit-state-cache",
           "productSurfaces": ["keiko-server"],
@@ -93638,6 +93766,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "skills.library.operation",
+      "category": "setup",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:11",
+      "package": "keiko-server"
+    },
+    {
       "op": "sse.run-events.resume",
       "category": "http",
       "site": "packages/keiko-server/src/run-handlers.ts:59",
@@ -93683,7 +93817,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:137",
+      "site": "packages/keiko-server/src/store/db.ts:138",
       "package": "keiko-server"
     },
     {
@@ -94765,6 +94899,7 @@
     "server.diagnostic.failure",
     "server.request",
     "server.runtime.shutdown",
+    "skills.library.operation",
     "speech.stt.language.normalized",
     "speech.stt.request.completed",
     "speech.stt.request.dispatch",

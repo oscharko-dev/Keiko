@@ -26,6 +26,7 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  { version: 42, sql: "DROP TABLE markdown_skill_revisions; DROP TABLE markdown_skills;" },
   {
     version: 39,
     sql: `

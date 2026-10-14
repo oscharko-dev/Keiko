@@ -6,6 +6,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "markdown-skill-library",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["skills.library.operation"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["skills.library.operation"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["skills.library.operation"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["skills.library.operation"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-scope-notice",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

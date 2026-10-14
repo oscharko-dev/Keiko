@@ -1,4 +1,12 @@
 import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
+import {
+  handleListMarkdownSkills,
+  handleReadMarkdownSkill,
+  handleImportMarkdownSkill,
+  handleReplaceMarkdownSkill,
+  handleDeleteMarkdownSkill,
+  handleExportMarkdownSkill,
+} from "./markdown-skill-routes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
 // request context AND the per-server handler dependencies (resolved config, evidence store, run
@@ -617,6 +625,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
   { method: "GET", pattern: "/api/chats/context", handler: handleChatContextStatus },
+  { method: "GET", pattern: "/api/skills", handler: handleListMarkdownSkills },
+  { method: "POST", pattern: "/api/skills", handler: handleImportMarkdownSkill },
+  { method: "GET", pattern: "/api/skills/:id", handler: handleReadMarkdownSkill },
+  { method: "PUT", pattern: "/api/skills/:id", handler: handleReplaceMarkdownSkill },
+  { method: "DELETE", pattern: "/api/skills/:id", handler: handleDeleteMarkdownSkill },
+  { method: "GET", pattern: "/api/skills/:id/export", handler: handleExportMarkdownSkill },
   { method: "POST", pattern: "/api/chats/context/compact", handler: handleCompactChatContext },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
