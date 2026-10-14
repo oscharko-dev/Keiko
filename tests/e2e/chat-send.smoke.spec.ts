@@ -340,6 +340,10 @@ test("keeps a long private skill preview keyboard-scrollable and accessible @smo
   await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   const violations = await runAxe(page, "dialog");
   expect(violations, formatViolations(violations)).toEqual([]);
+  const preview = dialog.getByRole("region", { name: "Skill preview", exact: true });
+  await preview.getByRole("button", { name: "Delete", exact: true }).click();
+  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(preview).toHaveCount(0);
 });
 
 test("applies a selected private skill once across compaction and reload, then removes it @smoke", async ({
@@ -358,8 +362,12 @@ test("applies a selected private skill once across compaction and reload, then r
   await expect(
     dialog.getByRole("heading", { name: "Synthetic boundary method · v1" }),
   ).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Select", exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: "Select", exact: true }).click();
+  const selection = dialog
+    .getByRole("listitem")
+    .filter({ hasText: "Synthetic boundary method" })
+    .getByRole("button", { name: "Select", exact: true });
+  await expect(selection).toBeVisible();
+  await selection.click();
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close skills" }).click();
   const chip = page.getByRole("button", { name: /Synthetic boundary method.*v1/ });

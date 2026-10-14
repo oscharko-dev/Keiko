@@ -362,7 +362,12 @@ export async function startRuntime(
   });
   observeProxy(proxy, physical, () => scope);
   await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
-  const { project, env, bff, close } = await startObservedBff(dir, proxy, provider, contextWindow);
+  const { project, env, bff, close } = await startObservedBff(
+    realpathSync(dir),
+    proxy,
+    provider,
+    contextWindow,
+  );
   return {
     model: MODEL,
     physical,

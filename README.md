@@ -96,7 +96,7 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - **Instructions that survive compaction.** The complete selected revision counts toward the context budget and remains intact when conversation history is summarized. If it cannot fit or its revision is unavailable, Chat explains the correction instead of silently dropping it.
 - **Create a skill from a concept.** Paste text or select a document, prepare a draft through your configured gateway, review and edit it, then explicitly save or download it. A repository is not required. Skills remain local and grant no additional execution or network permissions.
 
-See the [private Chat skills guide](docs/prompt-enhancer/user-guide.md#private-markdown-skills-in-chat) for import limits, selection, privacy and context handling. OpenCode/Coding Workbench skill integration is separate work; this release adds skills to Keiko Chat.
+See the [private Chat skills guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/prompt-enhancer/user-guide.md#private-markdown-skills-in-chat) for import limits, selection, privacy and context handling. OpenCode/Coding Workbench skill integration is separate work; this release adds skills to Keiko Chat.
 
 ## Previous improvements in 1.2.1
 
