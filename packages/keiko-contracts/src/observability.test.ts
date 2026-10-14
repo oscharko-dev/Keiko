@@ -908,6 +908,187 @@ describe("Support public registration shape admission", () => {
       Object.defineProperty(copy, ACTIVITY_LOG_EVENT_REGISTRATION, { value: registration });
       return copy;
     }
+    // Preservation proofs: structural observation is not canonical write admission.
+    it(`${surface}: observes inherited registration values and hidden symbol attachments`, () => {
+      const { event, operation } = fixtureEvent();
+      const inherited = {};
+      Object.setPrototypeOf(inherited, operation);
+      const observed = attachRaw(event, inherited);
+      expect(Object.getOwnPropertyDescriptor(observed, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
+        value: inherited,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+      expect(api.activityLogEventRegistration(observed)).toBe(inherited);
+      expect(() => api.validateRegisteredActivityLogEvent(observed)).toThrow(
+        new api.ActivityLogEventValidationError("registration-mismatch"),
+      );
+      const inheritedAttachment = {};
+      Object.setPrototypeOf(inheritedAttachment, event);
+      expect(api.activityLogEventRegistration(inheritedAttachment)).toBe(operation);
+    });
+    it(`${surface}: retains own and inherited parent identity with the accessor receiver`, () => {
+      for (const inherited of [false, true]) {
+        const { event } = fixtureEvent();
+        const holder = inherited ? {} : event;
+        const receivers: unknown[] = [];
+        Object.defineProperty(holder, "parentCorrelationId", {
+          get(this: object): string {
+            receivers.push(this);
+            return "fixture-existing-parent";
+          },
+          configurable: true,
+        });
+        if (inherited) Object.setPrototypeOf(event, holder);
+        expect(api.withActivityLogParentCorrelation(event, "fixture-new-parent")).toBe(event);
+        expect(receivers).toEqual([event]);
+      }
+    });
+    it(`${surface}: rebinds absent and explicitly undefined parents without losing the marker`, () => {
+      for (const present of [false, true]) {
+        const { event, operation } = fixtureEvent();
+        if (present) Object.defineProperty(event, "parentCorrelationId", { value: undefined });
+        expect(Object.hasOwn(event, "parentCorrelationId")).toBe(present);
+        const rebound = api.withActivityLogParentCorrelation(event, "fixture-new-parent");
+        expect(rebound).not.toBe(event);
+        expect(Reflect.get(rebound, "parentCorrelationId")).toBe("fixture-new-parent");
+        expect(Object.getOwnPropertyDescriptor(rebound, ACTIVITY_LOG_EVENT_REGISTRATION)).toEqual({
+          value: operation,
+          enumerable: false,
+          configurable: false,
+          writable: false,
+        });
+        expect(api.validateRegisteredActivityLogEvent(rebound)).toBe(operation);
+      }
+    });
+    it(`${surface}: keeps registration proxy observations ordered and receiver-bound`, () => {
+      const { event, operation } = fixtureEvent();
+      const trace: PropertyKey[] = [];
+      const receivers: unknown[] = [];
+      const observed = new Proxy(
+        { ...operation },
+        {
+          get(target, key, receiver): unknown {
+            trace.push(key);
+            receivers.push(receiver);
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      expect(api.activityLogEventRegistration(attachRaw(event, observed))).toBe(observed);
+      expect(trace).toEqual([
+        "fields",
+        "contractKind",
+        "schemaVersion",
+        "op",
+        "category",
+        "owner",
+        "emitter",
+        "diagnosticWhen",
+        "causal",
+        "lifecycle",
+        "analyzerProjection",
+        "failureClasses",
+        "proofIds",
+        "releaseImpact",
+      ]);
+      expect(receivers).toEqual(trace.map(() => observed));
+    });
+    it(`${surface}: reads an existing proxy parent once before any copying or marker reads`, () => {
+      const { event } = fixtureEvent();
+      Object.setPrototypeOf(event, { parentCorrelationId: "fixture-existing-parent" });
+      const trace: PropertyKey[] = [];
+      const observed = new Proxy(event, {
+        get(target, key, receiver): unknown {
+          trace.push(key);
+          expect(receiver).toBe(observed);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(api.withActivityLogParentCorrelation(observed, "fixture-new-parent")).toBe(observed);
+      expect(trace).toEqual(["parentCorrelationId"]);
+    });
+    it(`${surface}: observes a missing proxy parent before copying fields and hidden markers`, () => {
+      const { event, operation } = fixtureEvent();
+      const trace: PropertyKey[] = [];
+      const observed = new Proxy(event, {
+        get(target, key, receiver): unknown {
+          trace.push(key);
+          expect(receiver).toBe(observed);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const rebound = api.withActivityLogParentCorrelation(observed, "fixture-new-parent");
+      expect(trace).toEqual([
+        "parentCorrelationId",
+        "category",
+        "op",
+        "extra",
+        ACTIVITY_LOG_EVENT_REGISTRATION,
+        Symbol.for("@oscharko-dev/keiko-contracts/activity-log-event-rejection"),
+      ]);
+      expect(api.validateRegisteredActivityLogEvent(rebound)).toBe(operation);
+    });
+    it.each(["getter", "proxy"])(
+      `${surface}: closes unreadable registration %s at each owning refusal boundary`,
+      (transport) => {
+        const { event, operation } = fixtureEvent();
+        const failure = new TypeError("fixture observation failure");
+        const raw = { ...operation };
+        Object.defineProperty(raw, "fields", {
+          get(): never {
+            throw failure;
+          },
+        });
+        const observed =
+          transport === "getter"
+            ? raw
+            : new Proxy(
+                { ...operation },
+                {
+                  get(target, key, receiver): unknown {
+                    if (key === "fields") throw failure;
+                    return Reflect.get(target, key, receiver);
+                  },
+                },
+              );
+        const candidate = attachRaw(event, observed);
+        expect(api.activityLogEventRegistration(candidate)).toBeUndefined();
+        expect(() => api.validateRegisteredActivityLogEvent(candidate)).toThrow(
+          new api.ActivityLogEventValidationError("registration-mismatch"),
+        );
+      },
+    );
+    it.each(["getter", "proxy"])(
+      `${surface}: propagates unreadable direct parent and symbol %s observations`,
+      (transport) => {
+        const failure = new TypeError("fixture direct observation failure");
+        for (const key of ["parentCorrelationId", ACTIVITY_LOG_EVENT_REGISTRATION]) {
+          const { event } = fixtureEvent();
+          const raw = { ...event };
+          Object.defineProperty(raw, key, {
+            get(): never {
+              throw failure;
+            },
+          });
+          const observed =
+            transport === "getter"
+              ? raw
+              : new Proxy(event, {
+                  get(target, property, receiver): unknown {
+                    if (property === key) throw failure;
+                    return Reflect.get(target, property, receiver);
+                  },
+                });
+          const read =
+            key === "parentCorrelationId"
+              ? (): object => api.withActivityLogParentCorrelation(observed, "fixture-new-parent")
+              : (): unknown => api.activityLogEventRegistration(observed);
+          expect(read).toThrow(failure);
+        }
+      },
+    );
     it(`${surface}: preserves healthy original and complete cloned registration identity`, () => {
       const { event, operation } = fixtureEvent();
       expect(api.activityLogEventRegistration(event)).toBe(operation);
