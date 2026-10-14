@@ -518,9 +518,12 @@ function parserArm(context, type, call) {
   const ok = parserProperty(context, type, "ok", call);
   if (!ok || (ok.flags & ts.TypeFlags.BooleanLiteral) === 0) return null;
   if (ok.intrinsicName === "true" && requiredParserFields(type, ["ok", "value"])) return "success";
-  if (ok.intrinsicName === "false" && requiredParserFields(type, ["ok", "errors"]))
-    return "failure";
+  if (ok.intrinsicName === "false" && parserFailureField(type) !== null) return "failure";
   return null;
+}
+
+function parserFailureField(type) {
+  return ["errors", "reasons"].find((name) => requiredParserFields(type, ["ok", name])) ?? null;
 }
 
 function intrinsicParserErrors(context, type) {
@@ -535,15 +538,19 @@ function intrinsicParserErrors(context, type) {
   return args.length === 1 && (args[0].flags & ts.TypeFlags.String) !== 0;
 }
 
+function validParserFailure(context, failure, call) {
+  if (!failure) return false;
+  const field = parserFailureField(failure);
+  return (
+    field !== null && intrinsicParserErrors(context, parserProperty(context, failure, field, call))
+  );
+}
+
 function parserEnvelope(context, type, call) {
   if (!type.isUnion() || type.types.length !== 2) return { status: "incomplete" };
   const success = type.types.find((arm) => parserArm(context, arm, call) === "success");
   const failure = type.types.find((arm) => parserArm(context, arm, call) === "failure");
-  if (
-    !success ||
-    !failure ||
-    !intrinsicParserErrors(context, parserProperty(context, failure, "errors", call))
-  )
+  if (!success || !failure || !validParserFailure(context, failure, call))
     return { status: "incomplete" };
   const value = typeFacts(parserProperty(context, success, "value", call));
   const unsafe =

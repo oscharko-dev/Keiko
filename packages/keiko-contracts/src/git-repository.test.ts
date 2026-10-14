@@ -599,7 +599,8 @@ export function parsePublicGitStatus(
 ): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
   import("@oscharko-dev/keiko-contracts").GitRepositoryStatusResponse
 > {
-  return parsePublicGitStatusResponse(input);
+  const result = parsePublicGitStatusResponse(input);
+  return result;
 }
 
 export function parsePublicGitDiff(
@@ -607,7 +608,8 @@ export function parsePublicGitDiff(
 ): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
   import("@oscharko-dev/keiko-contracts").GitRepositoryDiffResponse
 > {
-  return parsePublicGitDiffResponse(input);
+  const result = parsePublicGitDiffResponse(input);
+  return result;
 }
 
 describe("Git typed owning and public parsers (#3918)", () => {

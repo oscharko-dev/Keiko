@@ -342,15 +342,25 @@ supporting this kind.
 The proof consumer makes exactly one named public import call with its unchanged unknown parameter,
 binds the result to an unannotated immutable identifier and returns that identifier unchanged. Its
 explicit return type is the actual producer-owned result in the same checker and instantiation.
-The supported envelope has exactly required `ok: true`/`value` and `ok: false`/`errors` arms; errors
-use the intrinsic readonly string array. Unsupported binding or envelope facts remain incomplete.
+The supported envelope has exactly required `ok: true`/`value` and a closed failure arm containing
+`ok: false` with either `errors` or `reasons`. The selected failure field must be the intrinsic
+readonly string array. Both fields together, optional fields, extra fields, mutable arrays and
+array-like substitutes remain unsupported. Unsupported binding or envelope facts remain incomplete.
 Immediate unknown/any payloads and direct unknown/any-valued indexes are rejected. Typed indexes,
 recursive named outputs and nested unknown fields are not recursively certified or blanket banned:
 this deliberately shallow participation check leaves semantics pending.
 
 All body/domain findings remain enforced. Exact raw-origin parameter/helper slots are reused without
 new output exemptions. Default static CLI proofs still report `executed: false`, qualified remains zero and combined
-qualification remains failed. Actual owning runtime tests, strict typed consumer pins (including
+qualification remains failed. The production Git status and diff records select the required
+unknown ingress parameter of each named parser through its existing runtime subpath and owning
+public proof. The existing raw-origin call closure also selects the unknown parameter of the private
+`isGitDiffScope` checking helper reached by the diff parser: three parameter slots in total. Its
+strict primitive comparisons and the public malformed-scope refusal proof support that participation.
+Other helpers, legacy validators, the UI's injected callback chain and unrelated response casts
+remain unclassified by these records. Qualification requires fresh execution of the declared public
+identity, typed-result and malformed-input proofs in the current-subject phase below.
+Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require
 distinct runtime and typed failures. The optional current-subject phase below does not import receipts or use a semantic cache.

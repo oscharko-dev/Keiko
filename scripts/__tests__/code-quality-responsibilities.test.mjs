@@ -1418,6 +1418,8 @@ describe("closed public parser responsibility (#3918)", () => {
     "recursive",
     "nested-unknown",
     "instantiated-result",
+    "reasons",
+    "instantiated-reasons",
     "result-alias",
   ])("keeps %s shallow facts structural-ready and semantics pending", async (variant) => {
     const own = createPublicParserFixture(variant);
@@ -1438,16 +1440,25 @@ describe("closed public parser responsibility (#3918)", () => {
       expect(report.counts.rejected).toBe(1);
     },
   );
-  it.each(["optional-value", "extra-envelope", "mutable-errors"])(
-    "keeps unsupported %s envelope incomplete",
-    async (variant) => {
-      const own = createPublicParserFixture(variant);
-      roots.push(own.root);
-      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
-      expect(report.assessments[0].structural).toBe("incomplete");
-      expect(report.counts.pending).toBe(1);
-    },
-  );
+  it.each([
+    "optional-value",
+    "extra-envelope",
+    "mutable-errors",
+    "mutable-reasons",
+    "unknown-reasons",
+    "any-reasons",
+    "optional-reasons",
+    "extra-reasons",
+    "both-failure-fields",
+    "string-reasons",
+    "array-like-reasons",
+  ])("keeps unsupported %s envelope incomplete", async (variant) => {
+    const own = createPublicParserFixture(variant);
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("incomplete");
+    expect(report.counts.pending).toBe(1);
+  });
   it.each([
     "constant",
     "discarded",

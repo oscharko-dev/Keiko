@@ -63,6 +63,8 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "manual-summary-projection",
       "manual-limit-diagnostic-public-proof",
       "support-raw-property-observation",
+      "git-status-public-parser",
+      "git-diff-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -115,11 +117,47 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     );
     for (const variant of ["removed", "rebound"]) {
       const changed = structuredClone(policy);
-      if (variant === "removed") changed.responsibilities.pop();
+      if (variant === "removed") changed.responsibilities.splice(8, 1);
       else changed.responsibilities[8].consumer.exportName = "unreviewedConsumer";
       expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
     }
   });
+
+  it.each(["Status", "Diff"])(
+    "pins the exact Git %s public parser without broader activation",
+    (kind) => {
+      const index = kind === "Status" ? 9 : 10;
+      const record = policy.responsibilities[index];
+      const path = "packages/keiko-contracts/src/git-repository.test.ts";
+      const selector = {
+        consumerPath: path,
+        specifier: "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        exportName: `parseGitRepository${kind}Response`,
+      };
+      expect(record.id).toBe(`git-${kind.toLowerCase()}-public-parser`);
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
+      expect(record.transform).toEqual(selector);
+      expect(record.output).toEqual(selector);
+      expect(record.consumer).toEqual({
+        ...selector,
+        kind: "public-api-proof",
+        owner: record.owner,
+        exportName: `parsePublicGit${kind}`,
+      });
+      expect(record.proofs).toEqual([path]);
+      expect(record.proofAssertions).toHaveLength(kind === "Status" ? 6 : 3);
+      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
+      for (const variant of ["removed", "rebound"]) {
+        const changed = structuredClone(policy);
+        if (variant === "removed") changed.responsibilities.splice(index, 1);
+        else changed.responsibilities[index].consumer.exportName = "unreviewedParser";
+        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
+      }
+    },
+  );
 
   it.each(ASSERTION_RULES)("enforces %s only on all current and future contracts members", (id) => {
     const packages = [{ directory: "packages/contracts", name: "@oscharko-dev/keiko-contracts" }];

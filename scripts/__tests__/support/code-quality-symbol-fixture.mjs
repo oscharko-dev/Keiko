@@ -211,21 +211,56 @@ function publicParserOwner(variant) {
   const extra = variant === "extra-envelope" ? "; extra?: number" : "";
   const optional = variant === "optional-value" ? "?" : "";
   const result = publicParserResultType(variant, payload, extra, optional, failure);
-  const resultName = variant === "instantiated-result" ? "ParseResult<number>" : "ParseResult";
+  const resultName = variant.startsWith("instantiated-") ? "ParseResult<number>" : "ParseResult";
   const parameters =
     variant === "explicit-this" ? "this: unknown, input: unknown" : "input: unknown";
   const generics = variant === "generic" ? "<T = number>" : "";
   return (
     prefix +
     result +
-    `export function validate${generics}(${parameters}): ${resultName} { return typeof input === "number" ? { ok: true, value: ${value} } : { ok: false, errors: ["invalid"] }; }\n`
+    `export function validate${generics}(${parameters}): ${resultName} { return typeof input === "number" ? { ok: true, value: ${value} } : ${publicParserFailureValue(variant)}; }\n`
   );
 }
 
+function publicParserFailureType(variant, fallback) {
+  const types = {
+    "mutable-reasons": "string[]",
+    "unknown-reasons": "readonly unknown[]",
+    "any-reasons": "readonly any[]",
+    "string-reasons": "string",
+    "array-like-reasons": "{ readonly length: number; readonly [index: number]: string }",
+  };
+  return types[variant] ?? fallback;
+}
+
+function publicParserFailureField(variant) {
+  return variant.endsWith("reasons") || variant === "both-failure-fields" ? "reasons" : "errors";
+}
+
+function publicParserFailureValue(variant) {
+  const value =
+    variant === "string-reasons"
+      ? '"invalid"'
+      : variant === "array-like-reasons"
+        ? '{ 0: "invalid", length: 1 }'
+        : '["invalid"]';
+  const extra = variant === "both-failure-fields" ? ', errors: ["invalid"]' : "";
+  return `{ ok: false, ${publicParserFailureField(variant)}: ${value}${extra} }`;
+}
+
 function publicParserResultType(variant, payload, extra, optional, failure) {
-  if (variant === "instantiated-result")
-    return "export type ParseResult<T> = { ok: true; value: T } | { ok: false; errors: readonly string[] };\n";
-  return `export type ParseResult = { ok: true; value${optional}: ${payload}${extra} } | { ok: false; errors: ${failure} };\n`;
+  const field = publicParserFailureField(variant);
+  const optionalFailure = variant === "optional-reasons" ? "?" : "";
+  const extraFailure =
+    variant === "extra-reasons"
+      ? "; extra?: number"
+      : variant === "both-failure-fields"
+        ? "; errors: readonly string[]"
+        : "";
+  const failureType = publicParserFailureType(variant, failure);
+  const generic = variant.startsWith("instantiated-") ? "<T>" : "";
+  const output = generic ? "T" : payload;
+  return `export type ParseResult${generic} = { ok: true; value${optional}: ${output}${extra} } | { ok: false; ${field}${optionalFailure}: ${failureType}${extraFailure} };\n`;
 }
 
 function publicParserProof(variant) {
@@ -270,7 +305,7 @@ function publicParserProof(variant) {
 
 function publicParserReturnType(variant) {
   if (variant === "counterfeit-type") return "Counterfeit";
-  if (variant === "instantiated-result") return "ParseResult<number>";
+  if (variant.startsWith("instantiated-")) return "ParseResult<number>";
   if (variant === "result-alias") return "Forwarded";
   return "ParseResult";
 }

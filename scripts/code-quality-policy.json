@@ -647,6 +647,106 @@
           "testName": "public observation consumer preserves canonical validator identity and refusal"
         }
       ]
+    },
+    {
+      "id": "git-status-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parseGitRepositoryStatusResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parseGitRepositoryStatusResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parseGitRepositoryStatusResponse"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parsePublicGitStatus"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-repository.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git typed owning and public parsers (#3918) public: retains original values, nested references and omitted versus own undefined"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git typed owning and public parsers (#3918) public: checks later fields eagerly and retains ordered legacy reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git typed owning and public parsers (#3918) public: refuses primitive input and the actual malformed array bypasses"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git status actual array element admission (#3918) public: rejects changes holes and caller-controlled traversal bypasses"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git status actual array element admission (#3918) public: rejects directory holes and caller-controlled traversal bypasses"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "public Git parser results carry distinct closed domain types without assertions"
+        }
+      ]
+    },
+    {
+      "id": "git-diff-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parseGitRepositoryDiffResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parseGitRepositoryDiffResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parseGitRepositoryDiffResponse"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/git-repository.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository",
+        "exportName": "parsePublicGitDiff"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-repository.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git typed owning and public parsers (#3918) public: retains original values, nested references and omitted versus own undefined"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git typed owning and public parsers (#3918) public: checks later fields eagerly and retains ordered legacy reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository.test.ts",
+          "testName": "Git typed owning and public parsers (#3918) public: refuses primitive input and the actual malformed array bypasses"
+        }
+      ]
     }
   ]
 }
