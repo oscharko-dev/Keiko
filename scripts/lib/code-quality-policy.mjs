@@ -146,8 +146,28 @@ function validRawReaderRules(record) {
   );
 }
 
+function validObservationRules(record) {
+  const rules = [
+    "anti-slop/no-object-parameters",
+    "anti-slop/no-unknown-returns",
+    "anti-slop/no-reflect-get",
+  ];
+  return (
+    record.kind !== "raw-property-observation" ||
+    (record.input?.parameterIndex === 0 &&
+      record.proofAssertions?.length > 0 &&
+      record.rules.length === rules.length &&
+      rules.every((rule) => record.rules.includes(rule)))
+  );
+}
+
 function validResponsibilityConsumer(record) {
-  return ["diagnostic-checker", "public-parser", "raw-own-property-reader"].includes(record.kind)
+  return [
+    "diagnostic-checker",
+    "public-parser",
+    "raw-own-property-reader",
+    "raw-property-observation",
+  ].includes(record.kind)
     ? validDiagnosticConsumer(record.consumer)
     : validConsumerSelector(record.consumer);
 }
@@ -179,10 +199,12 @@ function validResponsibilityIdentity(record) {
       "diagnostic-checker",
       "public-parser",
       "raw-own-property-reader",
+      "raw-property-observation",
     ].includes(record.kind) &&
     validResponsibilityRules(record.rules) &&
     validPublicParserRules(record) &&
-    validRawReaderRules(record)
+    validRawReaderRules(record) &&
+    validObservationRules(record)
   );
 }
 

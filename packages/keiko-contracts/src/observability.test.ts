@@ -739,7 +739,27 @@ describe("canonical Activity Log event validation", () => {
   });
 });
 
-import * as publicSupportAdmission from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  ActivityLogEventValidationError as publicActivityLogEventValidationError,
+  activityLogEvent as publicActivityLogEvent,
+  activityLogEventRegistration as publicActivityLogEventRegistration,
+  activityLogOperationSchema as publicActivityLogOperationSchema,
+  isActivityLogDiagnosticWhen as publicIsActivityLogDiagnosticWhen,
+  validateRegisteredActivityLogEvent as validatePublicObservedEvent,
+  withActivityLogCorrelation as publicWithActivityLogCorrelation,
+  withActivityLogParentCorrelation as publicWithActivityLogParentCorrelation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+const publicSupportAdmission = {
+  ActivityLogEventValidationError: publicActivityLogEventValidationError,
+  activityLogEvent: publicActivityLogEvent,
+  activityLogEventRegistration: publicActivityLogEventRegistration,
+  activityLogOperationSchema: publicActivityLogOperationSchema,
+  isActivityLogDiagnosticWhen: publicIsActivityLogDiagnosticWhen,
+  validateRegisteredActivityLogEvent: validatePublicObservedEvent,
+  withActivityLogCorrelation: publicWithActivityLogCorrelation,
+  withActivityLogParentCorrelation: publicWithActivityLogParentCorrelation,
+};
 
 describe("Support owned refusal and field observation admission", () => {
   for (const [surface, api] of [
@@ -1391,4 +1411,24 @@ describe("Support registration structural field variants", () => {
       expect(read(event)).toBeUndefined();
     });
   }
+});
+
+export function validatePublicObservation(event: object): ActivityLogOperationRegistration {
+  const registration = validatePublicObservedEvent(event);
+  return registration;
+}
+
+it("public observation consumer preserves canonical validator identity and refusal", () => {
+  const operation = publicSupportAdmission.activityLogOperationSchema("gateway.instance.reused");
+  if (operation === undefined) throw new TypeError("canonical operation required");
+  const event: unknown = Reflect.apply(publicSupportAdmission.activityLogEvent, undefined, [
+    operation,
+    {},
+    { generation: 1 },
+  ]);
+  if (typeof event !== "object" || event === null) throw new TypeError("event object required");
+  expect(validatePublicObservation(event)).toBe(operation);
+  expect(() => validatePublicObservation({ ...event })).toThrow(
+    new publicSupportAdmission.ActivityLogEventValidationError("unregistered-operation"),
+  );
 });

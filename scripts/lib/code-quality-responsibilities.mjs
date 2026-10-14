@@ -10,7 +10,12 @@ function inventoryFile(subject, path) {
 }
 
 function proofConsumerKind(record) {
-  return ["diagnostic-checker", "public-parser", "raw-own-property-reader"].includes(record.kind);
+  return [
+    "diagnostic-checker",
+    "public-parser",
+    "raw-own-property-reader",
+    "raw-property-observation",
+  ].includes(record.kind);
 }
 
 export function resolveRoles(resolver, record) {
@@ -134,6 +139,8 @@ function responsibilitySlots(resolver, record, roles) {
     throw new TypeError("ambiguous-responsibility-producer");
   if (record.kind === "raw-own-property-reader")
     return [resolver.rawReaderFacts(roles.input.identities[0]).slot];
+  if (record.kind === "raw-property-observation")
+    return resolver.propertyObservationFacts(roles.input.identities[0]).slots;
   const input = resolver.callableSlots(roles.input.identities[0]);
   const parameter = input.parameters[record.input.parameterIndex];
   if (parameter?.type.kind !== "unknown")
@@ -174,6 +181,11 @@ function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   if (consumerReason || reasons.length) return null;
   if (record.kind === "raw-own-property-reader")
     return rawReaderConsumer(resolver, record, roles, reasons);
+  if (record.kind === "raw-property-observation") {
+    const binding = resolver.observationBinding(record.consumer, roles.transform.identities[0]);
+    if (!binding.bound) reasons.push("unsupported-property-observation-consumer");
+    return binding;
+  }
   if (record.kind === "public-parser")
     return publicParserConsumer(resolver, record, roles, reasons);
   const binding =
@@ -248,7 +260,10 @@ function assessRecord(subject, resolver, record, files) {
 function adaptedFinding(finding, assessments) {
   for (const assessment of assessments) {
     if (assessment.structural !== "ready") continue;
-    if (assessment.kind === "raw-own-property-reader" && assessment.semantic !== "qualified")
+    if (
+      ["raw-own-property-reader", "raw-property-observation"].includes(assessment.kind) &&
+      assessment.semantic !== "qualified"
+    )
       continue;
     const slot = assessment.slots.find(
       (candidate) =>

@@ -372,7 +372,7 @@ counterfactual and restoration proofs remain separate acceptance obligations.
 
 `npm run check:code-quality-policy:repository` runs the real enforcing CLI with `--json` and checks
 its full repository scope, complete inventory visitation, package/rule counts, zero active
-violations, eight ready/pending responsibilities with zero qualified records and unexecuted proof
+violations, nine ready/pending responsibilities with zero qualified records and unexecuted proof
 facts, and complete package inventory. This complete-repository invocation uses a
 360000ms/SIGKILL/32MiB child allowance and 375000ms whole-test watchdog. The prior 180000ms
 allowance killed the correct full evaluation on both hosted ARM Node lines and in a local
@@ -394,7 +394,7 @@ retain their existing platforms. Both legs then unconditionally run `check:code-
 raw-reader semantic qualification previously embedded in the parallel responsibility suite. Its
 assertions and 195s watchdog remain unchanged; the other responsibility fixtures remain in Vitest.
 Local `npm run lint` executes the whole policy and that qualification before typed lint. This does
-not substitute for full eight-record semantic qualification. Hosted ARM results are required; a
+not substitute for full nine-record semantic qualification. Hosted ARM results are required; a
 local ARM completion is not a hosted verdict. The smoke uses the existing direct-script pattern, is outside Vitest's `*.test.mjs`
 collection, and shares the actual closed child-error helper with the retained wiring fixture
 checks. No test is conditionally skipped, imported receipt reused, worker count changed, report
@@ -411,12 +411,43 @@ proof-child bound below. Qualification is enforce-only. V1, empty records and mi
 exact selectors fail closed when selected. No active rule scope or existing responsibility identity
 is changed.
 
-Each v2 responsibility may add closed `proofAssertions` entries containing only an already declared proof `path` and exact Vitest `testName` (fullName including describe ancestors). Duplicates, foreign paths, missing names and unknown command/authorization fields refuse. Existing selector history is monotonic: removal or rebinding fails. Shared actual assertions may support multiple records but execute once in the single whole ten-owner Vitest invocation for the current cohort.
+Each v2 responsibility may add closed `proofAssertions` entries containing only an already declared proof `path` and exact Vitest `testName` (fullName including describe ancestors). Duplicates, foreign paths, missing names and unknown command/authorization fields refuse. Existing selector history is monotonic: removal or rebinding fails. Shared actual assertions may support multiple records but execute once in a single Vitest invocation of all declared owning suites.
 
 The selected phase builds packages through the canonical wrapper, captures the current subject and real installed tools, retains the existing evaluator/resolver and all currentness checks across await, and binds actual producer JS/declaration outputs. Actual proof-context compilation checks the owning public typed consumers. Then genuine installed npm/Vitest runs the declared existing suites once. Every exact selected assertion must occur exactly once with passed status; missing/skipped/todo/duplicate/failed assertions and absent proof files never qualify. Whole-suite exit0 or imported/cached results alone are insufficient. Actual proof facts change only after current tool/source/runtime/declaration/policy/membership checks pass again.
 
 The same-library child helper uses the existing180000ms/SIGKILL/32MiB owner bounds and POSIX detached group. Timeout/output overflow kills the owned group and destroys its owned pipe readers before awaiting actual direct close and observing group absence; the failure remains failed. Unsupported/incomplete drain fails closed; no Windows taskkill or new dependency is introduced. This does not promise containment of a deliberately escaped descendant. Default static platform support is unchanged. Structured process/report failures remain body-free and explicit selected-phase failure exits nonzero even when static enforcement passed. No automatic retries, arbitrary policy commands, extra CLI-owner loop or performance qualification are supplied.
 
-Qualified records prove only their reviewed exact runtime/consumer assertions on this assessed subject. Injected route services prove admission/checked forwarding, actual SQLite tests prove physical refusal, and registered physical writer/analyzer scenarios supply their separate evidence. Declaration/body counterfactual controls and independent review remain acceptance obligations; qualified current8 is not completion of the170-owner/domain migration. Ordinary local scope contracts do not create a mounted server local-manual feature. Optional workspace prototype hardening stays deferred.
+Qualified records prove only their reviewed exact runtime/consumer assertions on this assessed subject. Injected route services prove admission/checked forwarding, actual SQLite tests prove physical refusal, and registered physical writer/analyzer scenarios supply their separate evidence. Declaration/body counterfactual controls and independent review remain acceptance obligations; qualified current9 is not completion of the170-owner/domain migration. Ordinary local scope contracts do not create a mounted server local-manual feature. Optional workspace prototype hardening stays deferred.
 
 The actual JSON reporter file is fresh in an owner-private temporary directory and is admitted only after the child closes. The report and captured pipe bytes together must fit the existing32MiB bound. This is post-close report admission, not an instantaneous disk quota. Successful phase output carries actual direct-close/group-absence facts; no arbitrary report body is printed or attached. Installed tool entrypoints and their package/lock identities are checked before and after; this does not attest every transitive npm/Vitest implementation file.
+
+### Private raw property observation
+
+The v2 `raw-property-observation` kind records ordinary property observation, not validation or
+canonical write authority. Its public input, transform and output selectors identify the same
+owning validator. A compiler-owned, bounded traversal of participating same-source private calls
+must reach exactly one supported helper. Unused nested callable bodies are not participation.
+The private helper remains private; no product API or autonomy behavior changes.
+
+The closed shape is two required identifier parameters, `object` and intrinsic `PropertyKey`,
+an explicit `unknown` return, and exactly `const property: unknown = Reflect.get(value, key);`
+followed by `return property;`. Parameter/local names bind through compiler symbols, not spelling.
+Reflect/get and PropertyKey must belong to the actual standard library. Third receiver arguments,
+shadowing, casts, aliases of the arguments, changed bodies and ambiguous helpers are unsupported.
+The private symbol may participate only in direct calls: export lists, aliases that escape the
+function value and container/callback exposure do not supply a private observation witness.
+Ordinary inherited, symbol, missing/undefined, accessor receiver and proxy observations retain their
+existing order and exception behavior; this is not an own-property reader or a snapshot.
+
+The owning public proof consumer passes its required object parameter to the exact named public
+validator, binds the result to an unannotated const and returns that identifier unchanged. Its
+explicit result annotation must be the same actual producer-owned type. This reuses the existing
+public import, source/declaration/runtime and strict proof joins without asserting a parser envelope
+or recursively certifying the result's domain.
+
+Only fresh executed semantic qualification adapts the exact private helper object-parameter,
+unknown-return and Reflect.get operation coordinates. Pending, missing, stale or failed proof
+adapts nothing. The raw census does not change. Other object parameters, returns, direct reflection,
+assertions, caller/domain findings and unresolved incoming uses retain their obligations. In
+particular the direct parent-correlation reflection is outside this helper shape. Existing
+resource, currentness, two-pass and proof-process limits remain unchanged. No rule scope is activated.

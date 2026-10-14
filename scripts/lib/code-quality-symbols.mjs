@@ -1601,6 +1601,229 @@ function rawReaderFacts(compiler, identity) {
   };
 }
 
+function observationParameter(parameter, kind) {
+  return (
+    parameter &&
+    ts.isIdentifier(parameter.name) &&
+    !parameter.initializer &&
+    !parameter.questionToken &&
+    !parameter.dotDotDotToken &&
+    parameter.type?.kind === kind
+  );
+}
+
+function observationKey(context, key) {
+  if (!observationParameter(key, ts.SyntaxKind.TypeReference)) return false;
+  const annotation = key.type;
+  return (
+    ts.isIdentifier(annotation.typeName) &&
+    annotation.typeName.text === "PropertyKey" &&
+    !annotation.typeArguments?.length &&
+    defaultLibrarySymbol(context, context.checker.getSymbolAtLocation(annotation.typeName))
+  );
+}
+
+function privateObservationCallable(callable) {
+  return (
+    ts.isFunctionDeclaration(callable) &&
+    !exportedDeclaration(callable) &&
+    !callable.typeParameters?.length &&
+    !callable.asteriskToken &&
+    !callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
+    callable.parameters.length === 2 &&
+    callable.type?.kind === ts.SyntaxKind.UnknownKeyword
+  );
+}
+
+function observationSignature(state) {
+  return (
+    privateObservationCallable(state.callable) &&
+    observationParameter(state.callable.parameters[0], ts.SyntaxKind.ObjectKeyword) &&
+    observationKey(state.context, state.callable.parameters[1])
+  );
+}
+
+function observationTarget(state, target) {
+  return (
+    target.name.text === "get" &&
+    ts.isIdentifier(target.expression) &&
+    target.expression.text === "Reflect" &&
+    defaultLibrarySymbol(state.context, expressionSymbol(state.compiler, state.context, target)) &&
+    defaultLibrarySymbol(
+      state.context,
+      state.context.checker.getSymbolAtLocation(target.expression),
+    )
+  );
+}
+
+function observationCall(state, call) {
+  if (
+    !call ||
+    !ts.isCallExpression(call) ||
+    call.typeArguments?.length ||
+    call.arguments.length !== 2 ||
+    !ts.isPropertyAccessExpression(call.expression)
+  )
+    return false;
+  return (
+    observationTarget(state, call.expression) &&
+    call.arguments.every((argument, index) => sameReaderParameter(state, argument, index))
+  );
+}
+
+function observationAssignment(assignment, returned) {
+  return (
+    ts.isVariableStatement(assignment) &&
+    assignment.declarationList.flags === ts.NodeFlags.Const &&
+    assignment.declarationList.declarations.length === 1 &&
+    ts.isReturnStatement(returned) &&
+    returned.expression &&
+    ts.isIdentifier(returned.expression)
+  );
+}
+
+function observationBody(state) {
+  if (state.callable.body?.statements.length !== 2) return null;
+  const [assignment, returned] = state.callable.body.statements;
+  if (!observationAssignment(assignment, returned)) return null;
+  const local = assignment.declarationList.declarations[0];
+  if (
+    !ts.isIdentifier(local.name) ||
+    local.type?.kind !== ts.SyntaxKind.UnknownKeyword ||
+    !observationCall(state, local.initializer) ||
+    state.context.checker.getSymbolAtLocation(local.name) !==
+      state.context.checker.getSymbolAtLocation(returned.expression)
+  )
+    return null;
+  return local.initializer;
+}
+
+function reachedObservationCallables(compiler, identity) {
+  const root = declarationCallable(compiler, identity);
+  const states = new Map([[identity.producer.start, { ...root, identity, compiler }]]);
+  for (const state of states.values()) {
+    for (const call of consumerParticipatingCalls(compiler, state)) {
+      const target = localRawCallable(compiler, state.context, state.source, call.expression);
+      if (
+        !target ||
+        exportedDeclaration(target.declaration) ||
+        states.has(target.identity.producer.start)
+      )
+        continue;
+      if (states.size >= compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+      states.set(target.identity.producer.start, { ...state, ...target });
+    }
+  }
+  return [...states.values()].filter((state) => observationSignature(state));
+}
+
+function privateObservationReferences(state) {
+  return !sourceNodes(state.compiler, state.source).some(
+    (node) => helperReference(state, node) && !referenceCall(node),
+  );
+}
+
+function propertyObservationFacts(compiler, identity) {
+  const candidates = reachedObservationCallables(compiler, identity);
+  if (candidates.length !== 1) throw new TypeError("unsupported-property-observation-helper");
+  const state = candidates[0];
+  if (!privateObservationReferences(state))
+    throw new TypeError("unsupported-property-observation-exposure");
+  const call = observationBody(state);
+  if (!call) throw new TypeError("unsupported-property-observation-body");
+  const slots = [
+    {
+      ...annotationSlot(
+        state.context,
+        state.source,
+        state.callable.parameters[0].type,
+        state.identity,
+        "parameter",
+        0,
+      ),
+      rule: "anti-slop/no-object-parameters",
+    },
+    {
+      ...annotationSlot(state.context, state.source, state.callable.type, state.identity, "return"),
+      rule: "anti-slop/no-unknown-returns",
+    },
+    {
+      kind: "operation",
+      path: state.identity.producer.path,
+      ...nativeDiagnosticPosition(state.source, call.expression.getStart(state.source)),
+      start: call.expression.getStart(state.source),
+      end: call.expression.end,
+      rule: "anti-slop/no-reflect-get",
+    },
+  ];
+  compiler.assertCurrent();
+  return { identity: state.identity, root: identity, slots };
+}
+
+function observationConsumer(context, source, name) {
+  const module = context.checker.getSymbolAtLocation(source);
+  const declarations = context.checker
+    .getExportsOfModule(module)
+    .find((entry) => entry.name === name)?.declarations;
+  if (declarations?.length !== 1 || !ts.isFunctionDeclaration(declarations[0])) return null;
+  const callable = declarations[0];
+  return directDiagnosticCallable(callable) &&
+    callable.type &&
+    !callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
+    observationParameter(callable.parameters[0], ts.SyntaxKind.ObjectKeyword)
+    ? callable
+    : null;
+}
+
+function observationOwnedResult(compiler, type, producer) {
+  const declarations = (type.aliasSymbol ?? type.symbol)?.declarations;
+  if (declarations?.length !== 1) return false;
+  const identity = canonicalDeclaration(compiler, declarations[0], null);
+  return (
+    identity.owner === producer.owner &&
+    compiler.state.subject.inventory.files.some(
+      (file) => file.path === identity.producer.path && file.production,
+    )
+  );
+}
+
+function observationResultOwner(compiler, context, callable, signature, producer) {
+  if (!signature || signature.typeParameters?.length || signature.parameters.length !== 1)
+    return false;
+  const parameter = signature.parameters[0].valueDeclaration;
+  if (!observationParameter(parameter, ts.SyntaxKind.ObjectKeyword)) return false;
+  const type = context.checker.getReturnTypeOfSignature(signature);
+  return (
+    context.checker.getTypeAtLocation(callable.type) === type &&
+    observationOwnedResult(compiler, type, producer)
+  );
+}
+
+function observationBinding(compiler, request, producer) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+  const callable = observationConsumer(context, source, request.exportName);
+  const result = callable && parserResult(callable);
+  if (
+    !result ||
+    !parserImport(context, result.call, request.specifier) ||
+    !directDiagnosticProducer(compiler, context, result.call, producer) ||
+    !sameParserFlow(context, callable, result)
+  )
+    return { bound: false, status: "incomplete" };
+  const signatures = context.checker.getTypeAtLocation(result.call.expression).getCallSignatures();
+  const signature = context.checker.getResolvedSignature(result.call);
+  const bound =
+    signatures.length === 1 &&
+    observationResultOwner(compiler, context, callable, signature, producer);
+  compiler.assertCurrent();
+  return {
+    bound,
+    status: bound ? "ready" : "incomplete",
+    implementation: canonicalDeclaration(compiler, callable, null),
+    calls: [{ path: request.consumerPath, start: result.call.getStart(), end: result.call.end }],
+  };
+}
+
 function intrinsicReaderRecord(state, annotation) {
   if (
     !annotation ||
@@ -1699,6 +1922,8 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
     rawReaderFacts: (identity) => rawReaderFacts(compiler, identity),
+    propertyObservationFacts: (identity) => propertyObservationFacts(compiler, identity),
+    observationBinding: (request, producer) => observationBinding(compiler, request, producer),
     callableSlots: (identity) => callableSlots(compiler, identity),
     rawCheckingSlots: (identity, index) => {
       compiler.assertCurrent();

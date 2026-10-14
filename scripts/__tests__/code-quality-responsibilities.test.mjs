@@ -2304,3 +2304,233 @@ describe("within-call role resolution deduplication", () => {
     }
   });
 });
+
+function reflectionObservationFixture(
+  body = "const property: unknown = Reflect.get(value, key); return property;",
+  prefix = "",
+) {
+  const own = createResponsibilityFixture();
+  roots.push(own.root);
+  own.put(
+    "packages/alpha/src/owner.ts",
+    `${prefix}
+function runtimeProperty(value: object, key: PropertyKey): unknown { ${body} }
+export interface Observation { readonly admitted: boolean; }
+export function validate(event: object): Observation { return { admitted: runtimeProperty(event, "value") === 1 }; }
+`,
+  );
+  own.put(
+    "src/consumer.ts",
+    'import { validate } from "alpha/runtime"; export const result = validate({value:1});',
+  );
+  const path = "packages/alpha/src/proof.test.ts";
+  own.put(
+    path,
+    `import { validate, type Observation } from "alpha/runtime";
+export function observe(event: object): Observation { const result = validate(event); return result; }
+`,
+  );
+  const selector = { consumerPath: path, specifier: "alpha/runtime", exportName: "validate" };
+  own.record = {
+    ...responsibilityRecord(),
+    kind: "raw-property-observation",
+    input: { ...selector, parameterIndex: 0 },
+    transform: selector,
+    output: selector,
+    consumer: { kind: "public-api-proof", owner: "alpha", ...selector, exportName: "observe" },
+    rules: [
+      "anti-slop/no-object-parameters",
+      "anti-slop/no-unknown-returns",
+      "anti-slop/no-reflect-get",
+    ],
+    proofs: [path],
+    proofAssertions: [{ path, testName: "observation preservation" }],
+  };
+  own.policy = responsibilityPolicy([own.record]);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+function mutateObservationSource(own, variant) {
+  const sourcePath = "packages/alpha/src/owner.ts";
+  const source = readFileSync(join(own.root, sourcePath), "utf8");
+  const exposure = {
+    "export-list": "export { runtimeProperty };",
+    "alias-export-list": "export { runtimeProperty as exposedProperty };",
+    "container-escape": "export const exposedProperty = [runtimeProperty];",
+  }[variant];
+  if (exposure) own.put(sourcePath, source + "\n" + exposure);
+
+  if (variant === "unused-nested")
+    own.put(
+      sourcePath,
+      source.replace(
+        'return { admitted: runtimeProperty(event, "value") === 1 };',
+        'const unused = (): unknown => runtimeProperty(event, "value"); return { admitted: true };',
+      ),
+    );
+  if (variant === "absent-key-annotation")
+    own.put(sourcePath, source.replace("key: PropertyKey", 'key = "value"'));
+  if (variant === "typed-return")
+    own.put(
+      sourcePath,
+      source
+        .replace("key: PropertyKey): unknown", "key: PropertyKey): number")
+        .replace("const property: unknown", "const property: number"),
+    );
+  if (variant === "unreached")
+    own.put(sourcePath, source.replace('runtimeProperty(event, "value") === 1', "true"));
+  if (variant === "ambiguous")
+    own.put(
+      sourcePath,
+      source +
+        source.split("export interface")[0].replaceAll("runtimeProperty", "otherProperty") +
+        "export const unrelated = 1;",
+    );
+  if (variant === "ambiguous")
+    own.put(
+      sourcePath,
+      readFileSync(join(own.root, sourcePath), "utf8").replace(
+        'runtimeProperty(event, "value") === 1',
+        'runtimeProperty(event, "value") === otherProperty(event, "value")',
+      ),
+    );
+}
+
+function mutateObservationConsumer(own, variant) {
+  if (variant === "asserted-consumer")
+    own.put(
+      own.record.proofs[0],
+      readFileSync(join(own.root, own.record.proofs[0]), "utf8").replace(
+        "return result;",
+        "return result as Observation;",
+      ),
+    );
+  if (variant === "foreign-result")
+    own.put(
+      own.record.proofs[0],
+      readFileSync(join(own.root, own.record.proofs[0]), "utf8").replace(
+        "event: object): Observation",
+        "event: object): {readonly admitted: boolean}",
+      ),
+    );
+}
+
+describe("private raw property observation witness", () => {
+  it("binds exact private reflection through the public owning validator without domain clearance", async () => {
+    const own = reflectionObservationFixture();
+    expect(validatePolicy(own.policy)).toEqual([]);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).toBe("ready");
+    expect(report.assessments[0].slots.map(({ rule }) => rule).sort()).toEqual(
+      own.record.rules.toSorted(),
+    );
+    expect(report.assessments[0].consumerBinding.bound).toBe(true);
+    expect(report.counts.qualified).toBe(0);
+  });
+  it.each([
+    [
+      "third receiver",
+      "const property: unknown = Reflect.get(value, key, value); return property;",
+      "",
+    ],
+    ["literal key", 'const property: unknown = Reflect.get(value, "other"); return property;', ""],
+    ["other receiver", "const property: unknown = Reflect.get({}, key); return property;", ""],
+    [
+      "aliased receiver",
+      "const receiver = value; const property: unknown = Reflect.get(receiver, key); return property;",
+      "",
+    ],
+    [
+      "asserted result",
+      "const property: unknown = Reflect.get(value, key) as unknown; return property;",
+      "",
+    ],
+    ["changed return", "const property: unknown = Reflect.get(value, key); return 42;", ""],
+    ["mutable local", "let property: unknown = Reflect.get(value, key); return property;", ""],
+    [
+      "extra statement",
+      "const property: unknown = Reflect.get(value, key); void value; return property;",
+      "",
+    ],
+    [
+      "shadowed Reflect",
+      "const property: unknown = Reflect.get(value, key); return property;",
+      "const Reflect = {get: (_value: object, _key: PropertyKey): unknown => 1};",
+    ],
+    [
+      "shadowed PropertyKey",
+      "const property: unknown = Reflect.get(value, key); return property;",
+      "type PropertyKey = string;",
+    ],
+  ])("refuses %s without adapting helper or caller findings", async (_name, body, prefix) => {
+    const own = reflectionObservationFixture(body, prefix);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].structural).not.toBe("ready");
+    expect(report.assessments[0].slots ?? []).toEqual([]);
+    expect(report.counts.qualified).toBe(0);
+  });
+  it.each([
+    "unreached",
+    "export-list",
+    "alias-export-list",
+    "container-escape",
+    "unused-nested",
+    "absent-key-annotation",
+    "typed-return",
+    "ambiguous",
+    "asserted-consumer",
+    "foreign-result",
+    "broadened-rules",
+    "missing-assertion",
+  ])("refuses %s observation participation", async (variant) => {
+    const own = reflectionObservationFixture();
+    mutateObservationSource(own, variant);
+    mutateObservationConsumer(own, variant);
+    if (variant === "broadened-rules") own.record.rules.push("anti-slop/no-runtime-typeof");
+    if (variant === "missing-assertion") own.record.proofAssertions = [];
+    emitSymbolFixture(own.root);
+    if (["broadened-rules", "missing-assertion"].includes(variant))
+      expect(validatePolicy(own.policy)).toContain("invalid-responsibilities");
+    else {
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.assessments[0].structural).not.toBe("ready");
+      expect(report.assessments[0].slots ?? []).toEqual([]);
+    }
+  });
+  it("keeps pending slots and unrelated coordinates in enforcement", async () => {
+    const own = reflectionObservationFixture();
+    const report = await executeCodeQualityPolicy(
+      { mode: "enforce", scope: "repository" },
+      own.root,
+    );
+    const { adaptResponsibilityDiagnostics } =
+      await import("../lib/code-quality-responsibilities.mjs");
+    const assessment = report.responsibilities.assessments[0];
+    expect(assessment.structural).toBe("ready");
+    for (const slot of assessment.slots)
+      expect(report.census).toContainEqual(
+        expect.objectContaining({
+          path: slot.path,
+          rule: slot.rule,
+          line: slot.line,
+          column: slot.column,
+        }),
+      );
+    const census = report.census.filter((finding) => own.record.rules.includes(finding.rule));
+    const pending = adaptResponsibilityDiagnostics(
+      { census, violations: census },
+      { assessments: [assessment] },
+    );
+    expect(pending.adaptations).toEqual([]);
+    const qualified = adaptResponsibilityDiagnostics(
+      { census, violations: census },
+      { assessments: [{ ...assessment, semantic: "qualified" }] },
+    );
+    expect(qualified.adaptations).toHaveLength(3);
+    expect(
+      qualified.violations.some((finding) => finding.rule === "anti-slop/no-object-parameters"),
+    ).toBe(true);
+  });
+});

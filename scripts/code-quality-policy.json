@@ -551,6 +551,102 @@
           "testName": "shipped manual diagnostic type evidence admits the actual diagnostic element without unknown or any erasure"
         }
       ]
+    },
+    {
+      "id": "support-raw-property-observation",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "raw-property-observation",
+      "rules": [
+        "anti-slop/no-object-parameters",
+        "anti-slop/no-unknown-returns",
+        "anti-slop/no-reflect-get"
+      ],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "validateRegisteredActivityLogEvent",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "validateRegisteredActivityLogEvent"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "validateRegisteredActivityLogEvent"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/observability.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "validatePublicObservation",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/observability.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support owned refusal and field observation admission source: preserves the fourth healthy extra observation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support owned refusal and field observation admission source: refuses malformed fourth extra with its closed field diagnostic"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support owned refusal and field observation admission public: preserves the fourth healthy extra observation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support owned refusal and field observation admission public: refuses malformed fourth extra with its closed field diagnostic"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: observes inherited registration values and hidden symbol attachments"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: retains own and inherited parent identity with the accessor receiver"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: rebinds absent and explicitly undefined parents without losing the marker"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: keeps registration proxy observations ordered and receiver-bound"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: reads an existing proxy parent once before any copying or marker reads"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: observes a missing proxy parent before copying fields and hidden markers"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: closes unreadable registration getter at each owning refusal boundary"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: closes unreadable registration proxy at each owning refusal boundary"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: propagates unreadable direct parent and symbol getter observations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "Support public registration shape admission public: propagates unreadable direct parent and symbol proxy observations"
+        },
+        {
+          "path": "packages/keiko-contracts/src/observability.test.ts",
+          "testName": "public observation consumer preserves canonical validator identity and refusal"
+        }
+      ]
     }
   ]
 }
