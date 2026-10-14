@@ -26,6 +26,7 @@ export function assertMarkdownSkillIdentity(id: string, revision?: number): void
 function validateFileName(name: string): void {
   if (
     name.length > MARKDOWN_SKILL_LIMITS.fileNameChars ||
+    /\p{Cs}/u.test(name) ||
     !/^[^/\\\p{Cc}]+\.md$/iu.test(name) ||
     name.slice(0, -3).trim().length === 0 ||
     name.startsWith(".") ||
@@ -56,6 +57,11 @@ function firstHeading(body: string): string | undefined {
   return undefined;
 }
 
+function boundedDisplayName(value: string): string {
+  const bounded = value.slice(0, MARKDOWN_SKILL_LIMITS.nameChars);
+  return /\p{Cs}/u.test(bounded) ? bounded.slice(0, -1) : bounded;
+}
+
 export function validateMarkdownSkillUpload(input: MarkdownSkillUpload): ValidatedMarkdownSkill {
   validateFileName(input.fileName);
   if (input.contentBase64.length > Math.ceil(MARKDOWN_SKILL_LIMITS.importBytes / 3) * 4) {
@@ -66,6 +72,6 @@ export function validateMarkdownSkillUpload(input: MarkdownSkillUpload): Validat
     throw invalidRequest("Skill file must contain nonempty Markdown text.");
   }
   const heading = firstHeading(body);
-  const name = (heading ?? input.fileName.slice(0, -3)).slice(0, MARKDOWN_SKILL_LIMITS.nameChars);
+  const name = boundedDisplayName(heading ?? input.fileName.slice(0, -3));
   return { name, body, digest: markdownSkillDigest(body), byteCount: Buffer.byteLength(body) };
 }

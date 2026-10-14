@@ -33,6 +33,50 @@ afterEach(() => {
 });
 
 describe("private Markdown skill library (#4023)", () => {
+  it.each(["heading", "filename"])(
+    "preserves valid Unicode metadata at the %s length boundary across reopen",
+    (source) => {
+      const directory = mkdtempSync(join(tmpdir(), "keiko-skill-unicode-"));
+      directories.push(directory);
+      const path = join(directory, "ui.sqlite");
+      const name = "a".repeat(MARKDOWN_SKILL_LIMITS.nameChars - 1) + "😀";
+      const body =
+        source === "heading" ? `# ${name}\nSynthetic instructions.` : "Synthetic instructions.";
+      const first = createNodeUiStore(path);
+      const imported = first.markdownSkills.import(
+        upload(body, source === "filename" ? `${name}.md` : "method.md"),
+      );
+      first.close();
+      const reopened = createNodeUiStore(path);
+      stores.push(reopened);
+      expect(imported.name).not.toMatch(/\p{Cs}/u);
+      expect(imported.name.length).toBeLessThanOrEqual(MARKDOWN_SKILL_LIMITS.nameChars);
+      expect(reopened.markdownSkills.get(imported.id)?.name).toBe(imported.name);
+      expect(reopened.markdownSkills.list()[0]?.name).toBe(imported.name);
+      expect(reopened.markdownSkills.get(imported.id)?.body).toBe(body);
+    },
+  );
+
+  it("allows explicit corrupt-body deletion while keeping reads and stale deletion closed", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const store = buildUiStoreOverDatabase(db);
+    stores.push(store);
+    const original = store.markdownSkills.import(upload());
+    const current = store.markdownSkills.replace(original.id, 1, upload("Replacement"));
+    db.prepare(
+      "UPDATE markdown_skill_revisions SET body = ? WHERE skill_id = ? AND revision = ?",
+    ).run("Corrupt", current.id, current.revision);
+    expect(() => store.markdownSkills.get(current.id)).toThrow(/integrity/u);
+    expect(() => {
+      store.markdownSkills.delete(current.id, 1);
+    }).toThrow(/stale/u);
+    expect(store.markdownSkills.list()).toHaveLength(1);
+    store.markdownSkills.delete(current.id, current.revision);
+    expect(store.markdownSkills.get(current.id, 1)).toBeUndefined();
+    expect(store.markdownSkills.get(current.id, 2)).toBeUndefined();
+  });
   it("imports plain Markdown without a project and lists metadata without bodies", () => {
     const library = memoryStore().markdownSkills;
     const skill = library.import(upload());

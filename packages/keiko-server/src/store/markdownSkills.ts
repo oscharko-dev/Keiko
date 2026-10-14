@@ -112,9 +112,9 @@ function importSkill(
   return document;
 }
 
-function requireCurrent(db: DatabaseSync, id: string, revision: number): MarkdownSkillDocument {
+function requireCurrentRevision(db: DatabaseSync, id: string, revision: number): void {
   assertMarkdownSkillIdentity(id, revision);
-  const current = readSkill(db, id);
+  const current = db.prepare("SELECT revision FROM markdown_skills WHERE id = ?").get(id);
   if (current === undefined) throw notFound("Skill");
   if (current.revision !== revision) {
     throw new UiStoreError(
@@ -123,7 +123,6 @@ function requireCurrent(db: DatabaseSync, id: string, revision: number): Markdow
       409,
     );
   }
-  return current;
 }
 
 function replaceSkill(
@@ -133,7 +132,9 @@ function replaceSkill(
   input: ValidatedMarkdownSkill,
   now: number,
 ): MarkdownSkillDocument {
-  const current = requireCurrent(db, id, revision);
+  requireCurrentRevision(db, id, revision);
+  const current = readSkill(db, id);
+  if (current === undefined) throw notFound("Skill");
   if (current.digest === input.digest) return current;
   assertCapacity(db, input.byteCount, false);
   const document = { ...input, id, revision: revision + 1, createdAt: now };
@@ -162,7 +163,7 @@ export function createMarkdownSkillStore(db: DatabaseSync, now: () => number): M
     },
     delete: (id, revision): void => {
       withImmediateTransaction(db, () => {
-        requireCurrent(db, id, revision);
+        requireCurrentRevision(db, id, revision);
         db.prepare("DELETE FROM markdown_skills WHERE id = ?").run(id);
       });
     },
