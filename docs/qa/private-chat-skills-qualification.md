@@ -218,6 +218,14 @@ made no model dispatch. Both interruption attempts retained the complete selecte
   README, missing explicit lab entry points in unused-code analysis, and an ambiguous browser
   selection after a fixture left another library item. Each was reproduced locally and repaired.
   Infrastructure-only runner network failures remain distinct from product regressions.
+- A later complete UI lane passed all three Chat browser runs but exposed a D12 stop-measurement
+  wait for an HTTP response that the terminal session event can legitimately abort. A real-BFF
+  regression forwards the stop to the server, verifies HTTP 200, and aborts only its browser
+  response. It reproduced the wait before the repair. The witness now observes request settlement,
+  accepts only the explicit browser abort, and still requires the authoritative terminal server
+  projection, terminal stream event and painted terminal UI. The focused regression and normal
+  output-cap scenario both pass; the 200 ms budget and all bounded-cap assertions remain unchanged.
+  The changed measurement toolchain requires fresh reference evidence before the next push.
 
 ### Gate boundary
 

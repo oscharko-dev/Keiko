@@ -170,7 +170,7 @@ interface OutputFloodEvidence {
 interface D12StopProbe {
   readonly sessionId: string;
   activatedAt?: number;
-  controlCompleted: boolean;
+  controlSettled: boolean;
   terminalSseObserved: boolean;
   finishing: boolean;
 }
@@ -255,7 +255,7 @@ async function installStopProbeInitializer(page: Page): Promise<void> {
     window.__keikoArmD12Stop = (sessionId): void => {
       window.__keikoD12StopProbe = {
         sessionId,
-        controlCompleted: false,
+        controlSettled: false,
         terminalSseObserved: false,
         finishing: false,
       };
@@ -278,7 +278,7 @@ async function installStopDomLatencyCapture(page: Page): Promise<void> {
       if (probe === undefined) return;
       if (
         probe.activatedAt === undefined ||
-        !probe.controlCompleted ||
+        !probe.controlSettled ||
         !probe.terminalSseObserved ||
         !terminalDomReady()
       )
@@ -1288,17 +1288,24 @@ async function detachHeapClient(page: Page, client: CDPSession): Promise<void> {
   }
 }
 
-async function captureCompletedStopResponse(
+async function captureSettledStopRequest(
   page: Page,
-  response: Promise<PlaywrightResponse>,
+  pendingRequest: Promise<Request>,
 ): Promise<void> {
-  const completed = await response;
-  expect(completed.status()).toBe(200);
-  expect(await completed.finished()).toBeNull();
+  const request = await pendingRequest;
+  const response = await request.response();
+  if (response === null) {
+    expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
+  } else {
+    expect(response.status()).toBe(200);
+    if ((await response.finished()) !== null) {
+      expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
+    }
+  }
   await page.evaluate(() => {
     const probe = window.__keikoD12StopProbe;
     if (probe === undefined) throw new Error("D12_STOP_PROBE_NOT_ARMED");
-    probe.controlCompleted = true;
+    probe.controlSettled = true;
   });
 }
 
@@ -1308,20 +1315,16 @@ async function stopFloodNearBoundary(page: Page, panel: Locator): Promise<number
   const sampleCount = await page.evaluate(() => window.__keikoD12StopSamples?.length ?? 0);
   await page.evaluate((sessionId) => window.__keikoArmD12Stop?.(sessionId), session.sessionId);
   await waitForAdapterBytes(page, session.sessionId, 896 * 1_024);
-  // Bind the measurement to the completed stop response, independently of the host-side
-  // assertion polling below. Waiting for that poll before arming controlCompleted charges
-  // Playwright's polling delay to the product even after HTTP, SSE and the DOM are terminal.
-  const response = page.waitForResponse((candidate) => {
-    if (!candidate.url().endsWith("/api/editor/debug/control")) return false;
-    const request = candidate.request();
+  // The terminal SSE can invalidate and abort the control request before a response arrives.
+  // Observe that request's actual settlement; the existing server-state assertion, terminal SSE
+  // and painted terminal DOM still independently prove completion without charging poll delay.
+  const request = page.waitForRequest((request) => {
+    if (!request.url().endsWith("/api/editor/debug/control")) return false;
     if (request.method() !== "POST") return false;
     const body = request.postDataJSON() as { sessionId?: string; action?: string } | null;
     return body?.sessionId === session.sessionId && body.action === "stop";
   });
-  await Promise.all([
-    stopFromDebugPanel(page, panel),
-    captureCompletedStopResponse(page, response),
-  ]);
+  await Promise.all([stopFromDebugPanel(page, panel), captureSettledStopRequest(page, request)]);
   await expect
     .poll(() => page.evaluate(() => window.__keikoD12StopSamples?.length ?? 0))
     .toBe(sampleCount + 1);
@@ -1726,4 +1729,27 @@ test("#2348 D12 composes the real output limit with bounded browser state and te
   } finally {
     await detachHeapClient(page, heapClient);
   }
+});
+
+test("#2348 stop measurement observes a completed server stop when its response is aborted", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
+  let serverCompleted = false;
+  await page.route("**/api/editor/debug/control", async (route) => {
+    const body = route.request().postDataJSON() as { action?: string };
+    if (body.action !== "stop") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    serverCompleted = true;
+    await route.abort("aborted");
+  });
+  const latency = await stopFloodNearBoundary(page, panel);
+  expect(serverCompleted).toBe(true);
+  expect(Number.isFinite(latency)).toBe(true);
+  expect(latency).toBeGreaterThanOrEqual(0);
 });

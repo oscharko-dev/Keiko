@@ -45,7 +45,7 @@ describe("#2348 D12 cap evidence harness", () => {
     expect(spec).not.toContain("EventDispatch");
     expect(spec).toContain('event.kind !== "stopped"');
     expect(spec).toContain('"pointerdown"');
-    expect(spec).toContain("probe.controlCompleted = true");
+    expect(spec).toContain("probe.controlSettled = true");
     expect(spec).toContain("probe.terminalSseObserved = true");
     expect(spec).toContain('panel?.textContent.includes("No active debug session.")');
     expect(spec).toContain("__keikoD12AfterNextPaint");
@@ -53,9 +53,20 @@ describe("#2348 D12 cap evidence harness", () => {
     expect(spec).toContain("CAP_SAMPLE_COUNT");
   });
 
-  it("requires the completed stop response independently of driver assertion polling", () => {
+  it("requires exact stop settlement and terminal proof independently of driver polling", () => {
     const spec = readFileSync(SPEC_PATH, "utf8");
-    expect(spec).toContain("expect(await completed.finished()).toBeNull()");
+    expect(spec).toContain("const response = await request.response()");
+    expect(spec).toContain("expect(response.status()).toBe(200)");
+    expect(spec).toContain("await response.finished()");
+    expect(spec).toContain('expect(request.failure()?.errorText).toBe("net::ERR_ABORTED")');
+    expect(spec).toContain(
+      "if (sessionId !== undefined) await expectServerStopped(page, sessionId)",
+    );
+    expect(spec).toContain(
+      "Promise.all([stopFromDebugPanel(page, panel), captureSettledStopRequest(page, request)])",
+    );
+    expect(spec).toContain('await route.abort("aborted")');
+    expect(spec).toContain("expect(serverCompleted).toBe(true)");
     expect(spec).not.toContain(
       "await stopFromDebugPanel(page, panel);\n  await page.evaluate(() => {\n    const probe = window.__keikoD12StopProbe;",
     );
