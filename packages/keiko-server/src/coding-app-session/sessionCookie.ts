@@ -35,6 +35,7 @@ export const APP_SESSION_SUPPORT_REPORT_COOKIE_PATH = "/api/diagnostics/report";
 export const APP_SESSION_GROUNDED_SEND_COOKIE_PATH = "/api/chats/messages/grounded";
 /** Private library and per-chat selection require the existing paired app-session bearer. */
 export const APP_SESSION_SKILLS_COOKIE_PATH = "/api/skills";
+export const APP_SESSION_SKILL_DRAFT_COOKIE_PATH = "/api/prompt-enhancement";
 export const APP_SESSION_CHATS_COOKIE_PATH = "/api/chats";
 
 // Issuance and revocation use one list so a new consuming route cannot retain a stale bearer.
@@ -52,6 +53,7 @@ const APP_SESSION_ACTIVE_COOKIE_PATHS = [
   APP_SESSION_CLONE_COOKIE_PATH,
   APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
   APP_SESSION_SKILLS_COOKIE_PATH,
+  APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
 ] as const;
 

@@ -17,7 +17,8 @@
 }
 .cmpControls button:focus-visible,
 .cmpDialog button:focus-visible,
-.cmpDialog input:focus-visible {
+.cmpDialog input:focus-visible,
+.cmpDialog textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -130,4 +131,24 @@
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+
+.cmpAuthor {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-default);
+  padding-top: 12px;
+}
+.cmpAuthor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-overlay);
+  color: var(--fg);
+  padding: 8px;
+  font: inherit;
+}
+.cmpAuthor label {
+  margin: 12px 0;
 }

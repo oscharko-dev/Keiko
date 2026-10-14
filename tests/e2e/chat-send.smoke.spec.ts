@@ -370,6 +370,56 @@ test("applies a selected private skill once across compaction and reload, then r
   );
 });
 
+test("creates, reviews, exports and reimports a private skill without automatic activation @smoke", async ({
+  page,
+  request,
+}, testInfo) => {
+  await openFixtureComposer(page, request);
+  await page.goto(`/${editorM11PairingFragment("skill-authoring")}`);
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
+  await dialog.getByRole("button", { name: "Create from document or text" }).click();
+  await dialog.getByLabel("Source file (.md or .txt)").setInputFiles({
+    name: "concept.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(
+      "Synthetic garden concept: confirmed missing readings; weekly calibration is proposed. Final section: calibration ownership is undecided. SYNTHETIC_GARDEN_SOURCE_COMPLETE",
+    ),
+  });
+  await expect(dialog.getByLabel("Source text")).toHaveValue(/SYNTHETIC_GARDEN_SOURCE_COMPLETE/);
+  await dialog.getByRole("button", { name: "Prepare draft" }).click();
+  const draft = dialog.getByLabel("Skill draft (Markdown)");
+  await expect(draft).toHaveValue(/Weekly calibration is proposed, not approved/);
+  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toHaveCount(0);
+  await draft.fill(`${await draft.inputValue()}\nReviewed by the local operator.`);
+  await dialog.getByRole("button", { name: "Save reviewed skill" }).click();
+  await expect(
+    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+  ).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toHaveCount(0);
+  const downloaded = page.waitForEvent("download");
+  const preview = dialog.getByRole("region", { name: "Skill preview" });
+  await preview.getByRole("button", { name: "Download Markdown" }).click();
+  const saved = testInfo.outputPath("reviewed-skill.md");
+  await (await downloaded).saveAs(saved);
+  expect(readFileSync(saved, "utf8")).toContain("Reviewed by the local operator.");
+  await preview.getByRole("button", { name: "Delete", exact: true }).click();
+  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  await dialog.getByLabel(/Upload Markdown/).setInputFiles(saved);
+  await expect(
+    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+  ).toBeVisible();
+  await dialog
+    .getByRole("listitem")
+    .filter({ hasText: "Garden calibration review" })
+    .getByRole("button", { name: "Select", exact: true })
+    .click();
+  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Close skills" }).click();
+  await expect(page.getByRole("button", { name: /Garden calibration review.*v1/ })).toBeVisible();
+});
+
 async function openFixtureComposer(
   page: Page,
   request: APIRequestContext,

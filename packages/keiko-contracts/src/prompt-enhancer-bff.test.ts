@@ -218,3 +218,19 @@ describe("prompt enhancer wire constants", () => {
     ]);
   });
 });
+
+describe("private skill output kind", () => {
+  it("preserves the opt-in document-to-skill mode", () => {
+    expect(
+      validatePromptEnhancementWireRequest({
+        text: "Complete source",
+        outputKind: "markdown-skill",
+      }),
+    ).toEqual({ ok: true, value: { text: "Complete source", outputKind: "markdown-skill" } });
+  });
+  it.each([null, "code", 1, {}])("rejects unsupported output modes: %j", (outputKind) => {
+    expect(validatePromptEnhancementWireRequest({ text: "Complete source", outputKind }).ok).toBe(
+      false,
+    );
+  });
+});

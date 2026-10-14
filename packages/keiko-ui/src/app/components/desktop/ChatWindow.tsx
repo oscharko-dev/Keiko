@@ -2210,6 +2210,7 @@ function ChatSkillControl({ session }: { readonly session: ChatSessionApi }): Re
     <MarkdownSkillControl
       key={session.activeChat?.id}
       skill={session.markdownSkill}
+      modelId={session.selectedModel}
       disabled={session.sending || session.regeneratingMessageId !== undefined}
     />
   );

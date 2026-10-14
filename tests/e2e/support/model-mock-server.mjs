@@ -41,6 +41,10 @@ const MARKDOWN_SKILL_BODY = readFileSync(
   new URL("../fixtures/private-markdown-skill.md", import.meta.url),
   "utf8",
 );
+const MARKDOWN_SKILL_DRAFT = readFileSync(
+  new URL("../fixtures/private-skill-draft.md", import.meta.url),
+  "utf8",
+);
 // Code points per streamed delta of any answer other than the reply.
 const STREAM_SLICE_LENGTH = 16;
 
@@ -113,6 +117,11 @@ function streamCompletion(res, rawRequest) {
 }
 
 function completionContent(rawRequest) {
+  if (
+    rawRequest.includes("Prepare one standalone Markdown skill") &&
+    rawRequest.includes("SYNTHETIC_GARDEN_SOURCE_COMPLETE")
+  )
+    return MARKDOWN_SKILL_DRAFT;
   const skill = markdownSkillWitness(rawRequest);
   if (skill !== undefined) return skill;
   const description = prDescriptionCandidate(rawRequest);

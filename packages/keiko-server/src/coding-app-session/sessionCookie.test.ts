@@ -17,6 +17,7 @@ import {
   APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
   APP_SESSION_SKILLS_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
+  APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
   clearSessionCookie,
   clearSessionCookies,
   readSessionCookie,
@@ -40,6 +41,7 @@ const activeCookiePaths = [
   APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
   APP_SESSION_SKILLS_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
+  APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
 ];
 const retiredCookiePaths = ["/api/editor/local-history", "/api"];
 

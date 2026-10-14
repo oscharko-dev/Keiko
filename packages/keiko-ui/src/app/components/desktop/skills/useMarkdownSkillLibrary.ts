@@ -31,7 +31,7 @@ export interface MarkdownSkillLibrary {
   readonly download: (skill: MarkdownSkillMetadata) => Promise<void>;
 }
 
-function download(content: string, name: string): void {
+export function downloadSkillMarkdown(content: string, name: string): void {
   const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -146,7 +146,7 @@ function libraryActions({
     download: (skill) =>
       run(async () => {
         const result = await exportMarkdownSkill(skill);
-        if (active.current) download(result.content, result.fileName);
+        if (active.current) downloadSkillMarkdown(result.content, result.fileName);
       }),
   };
 }

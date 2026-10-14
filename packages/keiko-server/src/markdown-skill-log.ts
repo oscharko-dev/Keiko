@@ -24,6 +24,7 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
         "replace",
         "delete",
         "export",
+        "generate",
         "selection-read",
         "selection-change",
       ],
@@ -53,6 +54,7 @@ export type MarkdownSkillAction =
   | "replace"
   | "delete"
   | "export"
+  | "generate"
   | "selection-read"
   | "selection-change";
 

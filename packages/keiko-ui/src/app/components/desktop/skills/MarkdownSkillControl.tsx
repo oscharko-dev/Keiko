@@ -15,9 +15,11 @@ const MarkdownSkillDialog = dynamic(
 export function MarkdownSkillControl({
   skill,
   disabled,
+  modelId,
 }: {
   readonly skill: ChatMarkdownSkill | undefined;
   readonly disabled: boolean;
+  readonly modelId?: string | undefined;
 }): ReactNode {
   const t = useTranslate();
   const [open, setOpen] = useState(false);
@@ -32,7 +34,12 @@ export function MarkdownSkillControl({
         <span role="alert">{t("chat.skills.requestError")}</span>
       ) : null}
       {open ? (
-        <MarkdownSkillDialog skill={skill} disabled={disabled} onClose={() => setOpen(false)} />
+        <MarkdownSkillDialog
+          modelId={modelId}
+          skill={skill}
+          disabled={disabled}
+          onClose={() => setOpen(false)}
+        />
       ) : null}
     </div>
   );

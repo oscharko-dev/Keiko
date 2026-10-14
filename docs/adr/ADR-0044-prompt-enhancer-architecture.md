@@ -155,6 +155,33 @@ need and routes through the gateway with a capability-gated profile. Enhanced pr
 provider-neutral by construction; any model-specific optimisation is opt-in and governed by
 capability metadata, never hard-coded model names.
 
+### 3a. Private Markdown skill drafting reuses the enhancer (#4027)
+
+Keiko Chat's skill dialog accepts complete Markdown/plain UTF-8 text (at most 100,000 characters
+and 128 KiB), either pasted or read locally from one `.md`/`.txt` file. The existing enhancer route
+accepts an explicit `outputKind: markdown-skill`, uses the selected chat model through its existing
+ModelPort/Gateway, and requires the existing paired app session. No repository is required. This
+mode sends the complete admitted source in the user/data channel, separate from the fixed authoring
+instructions. It rejects unsafe format characters and context overflow before dispatch instead of
+normalizing or truncating the source. The canonical capability-derived context profile reserves
+output tokens and accounts for the complete request. It grants no tools or external fetching.
+
+The draft requires purpose, applicability, scope, steps, quality criteria, output, open decisions
+and bounded source references. Confirmed rules, proposals, examples, conflicts and unknowns remain
+explicit. Structural checks reject incomplete, empty-section, unsafe and oversized output; a
+non-stop completion or unavailable/failed model produces an actionable refusal, never the normal
+enhancer's deterministic fallback. Structural checks do not certify semantic faithfulness. The
+user reviews and edits the complete draft; save, download and chat selection remain separate actions.
+Saving uses the existing private Markdown library and never activates the skill.
+
+Private drafting is an exception to ordinary prompt-enhancement evidence persistence: neither
+source nor draft enters its evidence store, even when configured. The existing record builder
+rejects private-draft results as defense in depth. Activity Log carries only the typed generation
+lifecycle and status, correlated with the Gateway call. Cancellation, session revocation and model
+failure cannot save a partial result. The client aborts on cancellation, close or model change and
+discards late responses. This path is Chat-only; OpenCode integration is tracked separately in #4025
+under #3897.
+
 ### 4. The Orchestrator/workflow is the authority; the enhancer never self-authorizes
 
 The `analyze → plan → generate → score → validate` lifecycle is a governed workflow under

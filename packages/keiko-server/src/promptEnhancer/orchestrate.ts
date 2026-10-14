@@ -6,6 +6,7 @@
 export {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
+  PromptEnhancementSkillDraftError,
   buildPromptEnhancementRecordInput,
   promptEnhancementGatewayRoutingConfig,
   runPromptEnhancement,

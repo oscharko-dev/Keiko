@@ -139,7 +139,9 @@ describe("Chat Markdown skill controls", () => {
     const dialog = await open();
     await waitFor(() => expect(dialog).toHaveFocus());
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(within(dialog).getByLabelText(/Upload Markdown/)).toHaveFocus();
+    expect(
+      within(dialog).getByRole("button", { name: "Create from document or text" }),
+    ).toHaveFocus();
     expect((await axe(dialog)).violations).toEqual([]);
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();

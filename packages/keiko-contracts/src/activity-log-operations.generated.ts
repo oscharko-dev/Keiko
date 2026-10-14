@@ -31202,6 +31202,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "replace",
           "delete",
           "export",
+          "generate",
           "selection-read",
           "selection-change",
         ],

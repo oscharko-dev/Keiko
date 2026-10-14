@@ -341,7 +341,10 @@ existing-session activity on admitted normal grounded sends. Plaintext `/api/des
 their existing projection. Neither path grants new authority or requires pairing for ordinary Chat;
 image attachment authority remains separately enforced. Private Markdown skills (#4022) add
 `/api/skills` for the private library and `/api/chats` for revision-pinned selections at
-`/api/chats/:id/skill`. Both consume the existing paired session; they cannot mint or widen its
+`/api/chats/:id/skill`. The private document-to-skill variant of the existing Prompt Enhancer
+adds `/api/prompt-enhancement` for its authenticated model request (#4027). The ordinary enhancer
+retains its existing access contract; only `outputKind: markdown-skill` requires pairing, revalidated
+before dispatch and after completion. All three projections consume the existing paired session; they cannot mint or widen its
 authority. Issuance, confirmation, and revocation use the same projection inventory. Other Chat
 routes retain their existing authorization requirements even though the browser carries the bearer.
 

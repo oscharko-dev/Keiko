@@ -1,6 +1,23 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "chat.skills.author.title": "Aus Dokument oder Text erstellen",
+  "chat.skills.author.description":
+    "Füge das vollständige Konzept ein oder lade eine Textdatei. Keiko erstellt mit dem ausgewählten Chat-Modell einen privaten, bearbeitbaren Entwurf.",
+  "chat.skills.author.file": "Quelldatei (.md oder .txt)",
+  "chat.skills.author.source": "Quelltext",
+  "chat.skills.author.generate": "Entwurf erstellen",
+  "chat.skills.author.generating": "Entwurf wird erstellt…",
+  "chat.skills.author.modelRequired": "Wähle zuerst ein Chat-Modell aus.",
+  "chat.skills.author.sourceError":
+    "Verwende vollständigen UTF-8-Text mit höchstens 100.000 Zeichen und 128 KiB. Dateien müssen .md oder .txt sein.",
+  "chat.skills.author.generationError":
+    "Es wurde kein vollständiger Skill-Entwurf geliefert. Prüfe das gewählte Modell und den Gateway, kürze bei Bedarf den Quelltext und versuche es erneut.",
+  "chat.skills.author.review":
+    "Prüfe den vollständigen Entwurf, besonders Vorschläge, Widersprüche und offene Entscheidungen. Speichern oder Herunterladen aktiviert den Skill noch nicht.",
+  "chat.skills.author.draft": "Skill-Entwurf (Markdown)",
+  "chat.skills.author.save": "Geprüften Skill speichern",
+
   "chat.skills.title": "Skills",
   "chat.skills.sessionRequired":
     "Öffne Keiko über den Launcher, um private Skills zu verwalten. Chat bleibt ohne Skill verfügbar.",

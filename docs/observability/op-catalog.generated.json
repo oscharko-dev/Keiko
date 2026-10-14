@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1e5b591f5eb2df13542426911dbeb0db23ef99d76f9ff94411b4d7899507eb11",
+    "catalogDigest": "b9a5527331fb004fcdafe1c639ed3ccc27c7a1f319597e47f2b8e86c0bbae369",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32581,6 +32581,7 @@
               "replace",
               "delete",
               "export",
+              "generate",
               "selection-read",
               "selection-change"
             ]
@@ -32604,7 +32605,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:8",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:66"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:68"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -93614,6 +93615,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "prompt.enhancement",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/promptEnhancer/routes.ts:259",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "quality-intelligence.capsule-source",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/qualityIntelligence/capsuleAdapter.ts:68",
@@ -94908,6 +94916,7 @@
     "process.started",
     "project.create.trust.grant",
     "project.workspace.reconnect",
+    "prompt.enhancement",
     "quality-intelligence.capsule-source",
     "reference-id.exhausted",
     "reference-id.issued",

@@ -9,9 +9,11 @@ import { useModalInteractionLock } from "../hooks/useModalInteractionLock";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { SafeMarkdown } from "../SafeMarkdown";
 import { useMarkdownSkillLibrary, type MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import { MarkdownSkillAuthor } from "./MarkdownSkillAuthor";
 import styles from "./MarkdownSkillControl.module.css";
 
 interface DialogProps {
+  readonly modelId: string | undefined;
   readonly skill: ChatMarkdownSkill;
   readonly disabled: boolean;
   readonly onClose: () => void;
@@ -31,7 +33,7 @@ function useCloseOnEscape(dialog: { current: HTMLElement | null }, onClose: () =
   }, [dialog, onClose]);
 }
 
-export function MarkdownSkillDialog({ skill, disabled, onClose }: DialogProps): ReactNode {
+export function MarkdownSkillDialog({ skill, disabled, onClose, modelId }: DialogProps): ReactNode {
   const t = useTranslate();
   const titleId = useId();
   const dialog = useRef<HTMLDialogElement>(null);
@@ -57,6 +59,7 @@ export function MarkdownSkillDialog({ skill, disabled, onClose }: DialogProps): 
         </header>
         <p>{t("chat.skills.description")}</p>
         <SkillUpload library={library} />
+        <MarkdownSkillAuthor key={modelId} modelId={modelId} library={library} />
         <SkillLibraryStatus library={library} skill={skill} />
         <ul className={styles.cmpList}>
           {library.skills.map((item) => (
