@@ -5,9 +5,16 @@ import {
   type MarkdownSkillDocument,
   type MarkdownSkillMetadata,
   type MarkdownSkillUpload,
+  type MarkdownSkillReference,
+  type MarkdownSkillSelection,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { UiStoreError, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
+import {
+  readMarkdownSkillSelection,
+  selectMarkdownSkill,
+  readMarkdownSkillForTurn,
+} from "./markdownSkillSelections.js";
 import {
   assertMarkdownSkillIdentity,
   markdownSkillDigest,
@@ -16,6 +23,14 @@ import {
 } from "./markdownSkillValidation.js";
 
 export interface MarkdownSkillStore {
+  readonly selection: (chatId: string) => MarkdownSkillSelection;
+  readonly select: (
+    chatId: string,
+    skill: MarkdownSkillReference | null,
+    expectedRevision: number,
+  ) => MarkdownSkillSelection;
+  readonly resolve: (skill: MarkdownSkillReference) => MarkdownSkillDocument;
+  readonly forTurn: (messageId: string) => MarkdownSkillDocument | undefined;
   readonly list: () => readonly MarkdownSkillMetadata[];
   readonly get: (id: string, revision?: number) => MarkdownSkillDocument | undefined;
   readonly import: (input: MarkdownSkillUpload) => MarkdownSkillDocument;
@@ -144,7 +159,22 @@ function replaceSkill(
 }
 
 export function createMarkdownSkillStore(db: DatabaseSync, now: () => number): MarkdownSkillStore {
+  const resolve = (reference: MarkdownSkillReference): MarkdownSkillDocument => {
+    const skill = readSkill(db, reference.id, reference.revision);
+    if (skill?.digest !== reference.digest) {
+      throw new UiStoreError(
+        "INVALID_REQUEST",
+        "Selected skill is unavailable. Select an available skill or remove it.",
+        409,
+      );
+    }
+    return skill;
+  };
   return {
+    selection: (chatId) => readMarkdownSkillSelection(db, chatId),
+    select: (chatId, skill, revision) => selectMarkdownSkill(db, resolve, chatId, skill, revision),
+    resolve,
+    forTurn: (messageId) => readMarkdownSkillForTurn(db, resolve, messageId),
     list: () =>
       db
         .prepare(

@@ -1705,6 +1705,63 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it.each(["single", "multiple"] as const)(
+    "applies the pinned skill once at the actual %s-folder synthesis boundary",
+    async (topology) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      if (topology === "multiple") {
+        const second = join(tmp, "second-synthetic-root");
+        mkdirSync(second);
+        seedScopedRepo(second);
+        store.updateChat(chatId, {
+          connectedScopes: [projectPath, second].map((root) => ({
+            kind: "workspace-root",
+            root,
+            relativePaths: [],
+            connectedAtMs: NOW,
+          })),
+        });
+      }
+      const body = "# Synthetic review\nExplain a boundary condition before examples. Grüße 😀.\n";
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from(body).toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const seen: GatewayRequest[] = [];
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+        deps(
+          fakeModel(
+            topology === "single"
+              ? "MyClass is implemented [src/foo.ts:1-3]."
+              : "MyClass is implemented [source:1|src/foo.ts:1-3].",
+            seen,
+          ),
+        ),
+      );
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(seen.length).toBeGreaterThan(0);
+      for (const request of seen) {
+        expect(
+          request.messages
+            .map((message) => message.content)
+            .join("\n")
+            .split(body),
+        ).toHaveLength(2);
+      }
+      const answer = result.body as GroundedAnswer;
+      expect(answer.promptContext?.protectedSkill?.reference).toMatchObject({
+        id: skill.id,
+        revision: 1,
+      });
+      expect(store.markdownSkills.forTurn(answer.userMessageId)?.digest).toBe(skill.digest);
+      expect(store.listMessages(chatId).some((message) => message.content.includes(body))).toBe(
+        false,
+      );
+    },
+  );
   it.each(["ENOTCONN", "EHOSTDOWN", "ENXIO", "EMFILE", "ETIMEDOUT"])(
     "keeps a healthy connected root when a sibling fails with %s",
     async (code) => {
@@ -5792,6 +5849,7 @@ describe("actual fitted repository evidence authority", () => {
       expect(factory.mock.calls[0]?.[5]).toEqual({
         currentQuestion: "Explain Feature",
         answerOnlyContextAvailable: false,
+        userMessageId: (result.body as GroundedAnswer).userMessageId,
       });
     } finally {
       factory.mockRestore();

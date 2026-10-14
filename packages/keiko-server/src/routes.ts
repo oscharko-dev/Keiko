@@ -6,6 +6,8 @@ import {
   handleReplaceMarkdownSkill,
   handleDeleteMarkdownSkill,
   handleExportMarkdownSkill,
+  handleReadMarkdownSkillSelection,
+  handleSelectMarkdownSkill,
 } from "./markdown-skill-routes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
@@ -631,6 +633,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PUT", pattern: "/api/skills/:id", handler: handleReplaceMarkdownSkill },
   { method: "DELETE", pattern: "/api/skills/:id", handler: handleDeleteMarkdownSkill },
   { method: "GET", pattern: "/api/skills/:id/export", handler: handleExportMarkdownSkill },
+  { method: "GET", pattern: "/api/chats/:id/skill", handler: handleReadMarkdownSkillSelection },
+  { method: "PUT", pattern: "/api/chats/:id/skill", handler: handleSelectMarkdownSkill },
   { method: "POST", pattern: "/api/chats/context/compact", handler: handleCompactChatContext },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },

@@ -113,6 +113,51 @@ function currentMessage(deps: UiHandlerDeps, chatId: string, content: string): C
   });
 }
 
+describe("protected skill context status (#4024)", () => {
+  it("counts the selected revision and retains its full body through manual compaction", () => {
+    const { deps, chatId, projectPath } = fixture();
+    const body = "# Synthetic review method\nAlways identify a boundary and a counterexample.\n";
+    const skill = deps.store.markdownSkills.import({
+      fileName: "method.md",
+      contentBase64: Buffer.from(body).toString("base64"),
+    });
+    deps.store.markdownSkills.select(chatId, skill, 0);
+    const before = readChatContextStatus(deps, chatId, "fixture");
+    expect(before.protectedSkill?.reference.digest).toBe(skill.digest);
+    expect(before.protectedSkill?.estimatedTokens).toBeGreaterThan(0);
+    const after = compactChatContext(deps, chatId, "fixture", "protected-skill-compact");
+    expect(after.protectedSkill).toEqual(before.protectedSkill);
+    expect(after.segments?.find((segment) => segment.id === "skill")?.tokens).toBe(
+      before.protectedSkill?.estimatedTokens,
+    );
+    const user = currentMessage(deps, chatId, "Review the synthetic example.");
+    const request = {
+      chatId,
+      projectPath,
+      content: user.content,
+      modelId: "fixture",
+      documentContext: [],
+      attachments: [],
+      memory: undefined,
+      discussionMode: undefined,
+    };
+    const snapshot = captureGatewayTurnSnapshot(deps, request, user, "protected-skill-turn");
+    const assembly = buildGatewayAssembly(
+      deps,
+      request,
+      emptyMemoryResult(false),
+      "fixture",
+      snapshot,
+      "protected-skill-turn",
+    );
+    expect(assembly.messages.at(-1)?.content).toContain(body);
+    expect(assembly.messages.filter((message) => message.content.includes(body))).toHaveLength(1);
+    expect(deps.store.listMessages(chatId).some((message) => message.content.includes(body))).toBe(
+      false,
+    );
+  });
+});
+
 function segmentOf(
   status: ReturnType<typeof readChatContextStatus>,
   id: ChatContextSegmentId,

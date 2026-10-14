@@ -1,3 +1,8 @@
+import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
+import {
+  markdownSkillPromptUsage,
+  withMarkdownSkillInstructions,
+} from "./markdown-skill-prompt.js";
 import { assistantReferenceExcerptIds } from "./grounded-assistant-referents.js";
 import {
   withSentEvidenceInventory,
@@ -50,6 +55,7 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  type MarkdownSkillDocument,
   buildGroundedAnswerContextPackSummary,
   chatConnectedScopeFingerprintInput,
   type ChatConnectedScope,
@@ -511,6 +517,7 @@ function buildRawMultiSourceGatewayMessages(
   redactor: Redactor,
   omissionPathBytes?: number,
   ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
+  protectedSkill?: MarkdownSkillDocument,
 ): readonly GatewayChatMessage[] {
   const sections = labeledPacks.flatMap((entry, index) =>
     sourceSection(entry, index, redactor, omissionPathBytes),
@@ -526,7 +533,7 @@ function buildRawMultiSourceGatewayMessages(
   ].join("\n");
   return [
     { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
-    { role: "user", content: userContent },
+    { role: "user", content: withMarkdownSkillInstructions(userContent, protectedSkill) },
   ];
 }
 
@@ -644,6 +651,7 @@ function multiSourcePromptRenderer(
       redactor,
       bytes,
       options.ownAssessmentPolicy,
+      options.protectedSkill,
     );
 }
 
@@ -740,6 +748,7 @@ function loggedMultiSourceFit(
           redactor,
           0,
           options.ownAssessmentPolicy,
+          options.protectedSkill,
         ),
       );
       const fit = { referenceCount, sentReferenceCount: 0, promptTokens, inputBudget };
@@ -771,12 +780,20 @@ export function fittedMultiSourcePrompt(
   return {
     packs: fitted.packs,
     messages: fitted.messages,
+    protectedSkill:
+      options.protectedSkill === undefined
+        ? undefined
+        : markdownSkillPromptUsage(options.protectedSkill, {
+            tokenAccounting: options.tokenAccounting,
+            maxInputTokens: multiSourceInputTokens(labeledPacks, options),
+          }),
     withoutSources: buildRawMultiSourceGatewayMessages(
       question,
       fitted.packs.map((entry) => ({ ...entry, pack: { ...entry.pack, files: [] } })),
       redactor,
       -1,
       options.ownAssessmentPolicy,
+      options.protectedSkill,
     ),
     sentReferenceCount: promptExcerptCount(fitted.packs.map((entry) => entry.pack)),
     availableReferenceCount: promptExcerptCount(labeledPacks.map((entry) => entry.pack)),
@@ -853,7 +870,7 @@ interface MultiSourceGatewayContext {
   readonly answerOptions: Pick<
     GroundedAnswerOptions,
     "answerOnlyContextAvailable" | "currentQuestion"
-  >;
+  > & { readonly userMessageId?: string };
   sent?: ReturnType<typeof fittedMultiSourcePrompt>;
 }
 
@@ -866,14 +883,20 @@ export function createMultiSourceAnswerer(
   modelId: string,
   signal: AbortSignal,
   correlationId: string | undefined,
-  answerOptions: Pick<GroundedAnswerOptions, "answerOnlyContextAvailable" | "currentQuestion"> = {},
+  answerOptions: Pick<GroundedAnswerOptions, "answerOnlyContextAvailable" | "currentQuestion"> & {
+    readonly userMessageId?: string;
+  } = {},
 ): MultiSourceAnswerer {
   const ctx: MultiSourceGatewayContext = {
     synthesisBudget: createGroundedSynthesisCallBudget(),
     originalBudget: modelWindowAwareBudget(deps, modelId),
     startedAtMs: Date.now(),
     deps,
-    model,
+    model: withMarkdownSkillAdmission(
+      model,
+      deps.store.markdownSkills,
+      answerOptions.userMessageId,
+    ),
     modelId,
     signal,
     correlationId,
@@ -1018,6 +1041,10 @@ function multiSourceRemainingPromptOptions(
   const options = groundedPromptOptions(ctx.deps, ctx.modelId, accounting);
   return {
     ...options,
+    protectedSkill:
+      ctx.answerOptions.userMessageId === undefined
+        ? undefined
+        : ctx.deps.store.markdownSkills.forTurn(ctx.answerOptions.userMessageId),
     ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
     callerInputTokensMax: Math.max(
       0,
@@ -1044,6 +1071,10 @@ function multiSourceRepairPrompt(
       ctx.deps.redactor,
       {
         ...promptOptions,
+        protectedSkill:
+          ctx.answerOptions.userMessageId === undefined
+            ? undefined
+            : ctx.deps.store.markdownSkills.forTurn(ctx.answerOptions.userMessageId),
         ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
         callerInputTokensMax: options.modelInputTokensMax ?? 0,
       },

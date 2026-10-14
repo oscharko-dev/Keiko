@@ -1,3 +1,8 @@
+import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
+import {
+  markdownSkillPromptUsage,
+  withMarkdownSkillInstructions,
+} from "./markdown-skill-prompt.js";
 import { assistantReferenceExcerptIds } from "./grounded-assistant-referents.js";
 import { mapWithConcurrency } from "./bounded-concurrency.js";
 import {
@@ -63,6 +68,7 @@ import {
   type ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  type MarkdownSkillDocument,
   buildGroundedAnswerContextPackSummary,
   type ChatConnectedScope,
   type ChatLocalKnowledgeScope,
@@ -997,6 +1003,40 @@ function buildRerankedHybridUserMessage(
   }
   lines.push("User question:", redactString(redactor, question), "");
   return lines.join("\n");
+}
+
+function hybridProtectedSkill(ctx: HybridGroundedAskCtx): MarkdownSkillDocument | undefined {
+  return ctx.userMessage === undefined
+    ? undefined
+    : ctx.deps.store.markdownSkills.forTurn(ctx.userMessage.id);
+}
+
+function hybridUserMessage(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): string {
+  return withMarkdownSkillInstructions(
+    buildRerankedHybridUserMessage(
+      ctx.answerContent ?? ctx.content,
+      selected,
+      ctx.deps.redactor,
+      ctx.folderOmissionMetadata,
+    ),
+    hybridProtectedSkill(ctx),
+  );
+}
+
+function hybridSkillUsage(
+  ctx: HybridGroundedAskCtx,
+): import("./markdown-skill-prompt.js").MarkdownSkillPromptUsage | undefined {
+  const skill = hybridProtectedSkill(ctx);
+  const profile = hybridSynthesisProfile(ctx);
+  return skill === undefined
+    ? undefined
+    : markdownSkillPromptUsage(skill, {
+        tokenAccounting: profile?.tokenAccounting,
+        maxInputTokens: profile?.maxInputTokens ?? DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+      });
 }
 
 function numericEntailmentEvidence(
@@ -2150,8 +2190,6 @@ function hybridPromptContext(
   assistant: GroundedAnswerResult,
   availableReferenceCount: number,
 ): GroundedPromptContextWire {
-  const question = ctx.answerContent ?? ctx.content;
-  const { redactor } = ctx.deps;
   const system = { role: "system" as const, content: hybridSystemPrompt(ctx.deps) };
   return sentPromptContext(
     {
@@ -2159,28 +2197,19 @@ function hybridPromptContext(
         system,
         {
           role: "user",
-          content: buildRerankedHybridUserMessage(
-            question,
-            selected,
-            redactor,
-            ctx.folderOmissionMetadata,
-          ),
+          content: hybridUserMessage(ctx, selected),
         },
       ],
       withoutSources: [
         system,
         {
           role: "user",
-          content: buildRerankedHybridUserMessage(
-            question,
-            [],
-            redactor,
-            ctx.folderOmissionMetadata,
-          ),
+          content: hybridUserMessage(ctx, []),
         },
       ],
       sentReferenceCount: selected.length,
       availableReferenceCount,
+      protectedSkill: hybridSkillUsage(ctx),
     },
     assistant.usage.promptTokens,
     currentContextProfileForModel(ctx.deps, ctx.modelId),
@@ -2287,7 +2316,13 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     ctx.deps,
   );
   return {
-    answer: createHybridAnswerer(model, ctx.modelId, ctx.signal, ctx.correlationId, ctx.deps),
+    answer: createHybridAnswerer(
+      withMarkdownSkillAdmission(model, ctx.deps.store.markdownSkills, ctx.userMessage?.id),
+      ctx.modelId,
+      ctx.signal,
+      ctx.correlationId,
+      ctx.deps,
+    ),
   };
 }
 
@@ -2753,12 +2788,7 @@ function hybridPromptMessages(
     { role: "system", content: hybridSystemPrompt(ctx.deps) },
     {
       role: "user",
-      content: buildRerankedHybridUserMessage(
-        ctx.answerContent ?? ctx.content,
-        selected,
-        ctx.deps.redactor,
-        ctx.folderOmissionMetadata,
-      ),
+      content: hybridUserMessage(ctx, selected),
     },
   ];
 }
@@ -2806,18 +2836,12 @@ function hybridCandidatesWithinWindow(
   ctx: HybridGroundedAskCtx,
   selected: readonly SelectedCandidate<HybridPayload>[],
 ): readonly SelectedCandidate<HybridPayload>[] {
-  const question = ctx.answerContent ?? ctx.content;
   const render = (count: number): GatewayPromptTokenInput => ({
     messages: [
       { role: "system", content: hybridSystemPrompt(ctx.deps) },
       {
         role: "user",
-        content: buildRerankedHybridUserMessage(
-          question,
-          selected.slice(0, count),
-          ctx.deps.redactor,
-          ctx.folderOmissionMetadata,
-        ),
+        content: hybridUserMessage(ctx, selected.slice(0, count)),
       },
     ],
   });
@@ -2914,12 +2938,7 @@ async function hybridAnswerAttempt(
     selected,
   );
   const sent = hybridCandidatesWithinWindow(promptCtx, selected);
-  const user = buildRerankedHybridUserMessage(
-    ctx.answerContent ?? ctx.content,
-    sent,
-    ctx.deps.redactor,
-    promptCtx.folderOmissionMetadata,
-  );
+  const user = hybridUserMessage(promptCtx, sent);
   const system = hybridSystemPrompt(ctx.deps);
   logFittedHybridSelection(promptCtx, sent, system, user);
   const assistant = normalizeGroundedAnswerPayload(
@@ -2949,6 +2968,7 @@ function logFittedHybridSelection(
         { role: "user", content: user },
       ],
       sentEvidencePacks: sentFolderPacks(ctx.folderOmissionPacks ?? [], selected),
+      protectedSkill: hybridSkillUsage(ctx),
     },
     profile?.effectiveInputBudget ?? 0,
     profile?.tokenAccounting,

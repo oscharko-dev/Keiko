@@ -1,3 +1,6 @@
+import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
+import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { hasGroundingScope } from "./chat-grounding.js";
 import {
@@ -1851,6 +1854,7 @@ export function buildGatewayAssembly(
   }
   const historyPrefix = gatewayHistoryPrefix(snapshot);
   const selected = selectGatewayPromptAssembly({
+    protectedSkill: deps.store.markdownSkills.forTurn(snapshot.currentUserMessageId),
     proactiveCompaction: true,
     historyPrefix,
     historyTurnCount: usableGatewayMessages(historyPrefix).length,
@@ -2166,6 +2170,24 @@ function bufferedModelAtProviderBoundary(
   );
 }
 
+function desktopSkillCompactionReserve(
+  deps: UiHandlerDeps,
+  modelId: string,
+  messageId: string | undefined,
+): number {
+  const skill = messageId === undefined ? undefined : deps.store.markdownSkills.forTurn(messageId);
+  return markdownSkillCompactionReserve(
+    skill,
+    currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    CONVERSATION_SYSTEM_PROMPT,
+  );
+}
+
+interface DesktopChatPromptPreparation {
+  readonly operation?: "chat.send.rejected" | "chat.regeneration.rejected";
+  readonly userMessageId?: string;
+}
+
 export async function prepareDesktopChatPrompt(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -2173,9 +2195,11 @@ export async function prepareDesktopChatPrompt(
   admission: DesktopChatExecutionAdmission,
   signal: AbortSignal,
   correlationId: string | undefined,
-  operation: "chat.send.rejected" | "chat.regeneration.rejected" = "chat.send.rejected",
+  options: DesktopChatPromptPreparation = {},
 ): Promise<SendDesktopChatRequest> {
+  const operation = options.operation ?? "chat.send.rejected";
   const content = await compactCurrentChatPrompt({
+    protectedInstructionTokens: desktopSkillCompactionReserve(deps, modelId, options.userMessageId),
     content: request.content,
     modelId,
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
@@ -2191,7 +2215,11 @@ export async function prepareDesktopChatPrompt(
         operation,
       );
       if (isRouteResult(model)) throw new ChatPromptPreparationRejection(model);
-      return model.call(summaryRequest, summarySignal);
+      return withMarkdownSkillAdmission(
+        model,
+        deps.store.markdownSkills,
+        options.userMessageId,
+      ).call(summaryRequest, summarySignal);
     },
   });
   signal.throwIfAborted();
@@ -2393,6 +2421,7 @@ async function prepareBufferedGatewayAssembly(
       executionAdmission,
       signal,
       correlationId,
+      { userMessageId: gatewayTurn.currentUserMessageId },
     );
     return buildBufferedGatewayAssembly(
       deps,
@@ -2464,7 +2493,18 @@ async function assembleAndCallBuffered(
     settleRejectedDesktopChatTurn(deps, prepared, admission.admitted);
     return model;
   }
-  const response = await callPreparedAssembly(model, modelId, assembly, abortSignal, correlationId);
+  const guarded = withMarkdownSkillAdmission(
+    model,
+    deps.store.markdownSkills,
+    snapshot.currentUserMessageId,
+  );
+  const response = await callPreparedAssembly(
+    guarded,
+    modelId,
+    assembly,
+    abortSignal,
+    correlationId,
+  );
   return { assembly, response };
 }
 
@@ -4118,7 +4158,7 @@ async function buildRegenerateContext(
     prepared.executionAdmission,
     signal,
     correlationId,
-    "chat.regeneration.rejected",
+    { operation: "chat.regeneration.rejected", userMessageId: turn.user.id },
   );
   const assembly = buildRegenerateGatewayAssembly(
     deps,
@@ -4209,7 +4249,7 @@ async function assembleAndCallRegeneration(
     "chat.regeneration.rejected",
   );
   if (isRouteResult(model)) return model;
-  return model.call(
+  return withMarkdownSkillAdmission(model, deps.store.markdownSkills, prepared.turn.user.id).call(
     {
       modelId,
       messages,

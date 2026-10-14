@@ -680,6 +680,75 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it.each(["buffered", "streamed"] as const)(
+    "pins selected skills across %s send and regeneration",
+    async (transport) => {
+      const chatId = seedChat();
+      const body = "# Synthetic method\nCheck boundary inputs before examples. Grüße 😀.\n";
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from(body).toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const requests: GatewayCallRequest[] = [];
+      const model: ModelPort = {
+        call: (request) => {
+          requests.push(request);
+          return Promise.resolve(normalizedResponse("Synthetic answer."));
+        },
+        callStream: async function* (request): AsyncGenerator<GatewayStreamChunk> {
+          requests.push(request);
+          yield {
+            type: "done",
+            response: await Promise.resolve(normalizedResponse("Synthetic answer.")),
+          };
+        },
+      };
+      const shared = deps(model);
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const result = await handlers[transport](
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: "Review this.",
+            modelId: CHAT_MODEL,
+          }),
+          captureResWithEvents().res,
+        ),
+        shared,
+      );
+      expect(result === STREAMING || result.status === 200).toBe(true);
+      const assistant = store.listMessages(chatId).find((message) => message.role === "assistant");
+      expect(assistant).toBeDefined();
+      store.markdownSkills.select(chatId, null, 1);
+      const regeneration = (): Promise<Awaited<ReturnType<typeof handleRegenerateDesktopChat>>> =>
+        handleRegenerateDesktopChat(
+          routeContext(
+            makeReq({
+              chatId,
+              projectPath: projectDir,
+              assistantMessageId: assistant?.id,
+              modelId: CHAT_MODEL,
+            }),
+            captureResWithEvents().res,
+          ),
+          shared,
+        );
+      expect((await regeneration()).status).toBe(200);
+      expect(requests).toHaveLength(2);
+      for (const request of requests)
+        expect(
+          request.messages
+            .map((message) => message.content)
+            .join("\n")
+            .split(body),
+        ).toHaveLength(2);
+      store.markdownSkills.delete(skill.id, skill.revision);
+      expect((await regeneration()).status).toBe(409);
+      expect(requests).toHaveLength(2);
+    },
+  );
   it.each([
     ["buffered", "unknown-chat"],
     ["streamed", "unknown-chat"],

@@ -358,6 +358,37 @@ payload with the saved normalized text. No import or export invokes a model, fet
 resource or executes the document. `skills.library.operation` records action, lifecycle phase
 and HTTP status on the existing Activity Log, without names, filenames or bodies.
 
+### Protected skill selection and accepted turns (schema 43, #4024)
+
+The same private store holds `markdown_skill_selections` (one explicit selection and optimistic
+revision per chat) and `markdown_skill_turn_bindings` (the immutable revision accepted with a user
+message). Binding and user-message insertion share a transaction. Neither table stores instruction
+bodies. Legacy and unselected turns stay unselected after a later selection; retries resolve their
+original revision. Replacing a library entry never upgrades an existing selection automatically.
+
+Chat/message foreign keys cascade normal ownership cleanup. Skill references deliberately do not
+cascade on library deletion: the historical identity remains and subsequent resolution refuses the
+unavailable revision, rather than silently executing without the selected method. Selection changes
+use the existing authenticated app session and body-free library lifecycle operation.
+
+Canonical instructions remain in the library, outside compactable conversation history. Ordinary
+Chat assembly reserves the complete prepared instructions in the existing non-evictable user-task
+lane before fitting history. They count in the canonical final prompt estimate and are never traded
+for output reserve. The existing context meter identifies their protected contribution separately;
+that contribution is never scaled down to disguise an input-budget overflow. Context evidence
+records only identity, revision, digest and estimated contribution. Folder, multiple-folder,
+Knowledge Pod and mixed-source synthesis include the same complete instructions before their
+existing prompt fitters allocate excerpts. The body does not enter retrieval queries, citations,
+history summaries or evidence packs. Grounded prompt observations retain the protected share so the
+context meter subtracts it from the already counted instruction share before displaying it.
+
+Buffered, streaming and regeneration calls resolve the original turn binding. The existing Gateway
+attempt-admission callback revalidates availability on physical retries without widening an
+existing caller grant. Prompt preparation refuses an impossible protected scaffold before making a
+compaction model call; compaction targets reserve the skill's share while compacting only task text.
+Coding and workflow integration reuse this canonical library and must retain the same invariants
+through their own final prompt owners before feature closeout.
+
 ### D6 — Path validation policy (fail-closed)
 
 All path validation for project paths is centralized in `src/ui/store/validation.ts`. No path

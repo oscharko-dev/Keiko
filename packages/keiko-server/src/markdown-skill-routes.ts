@@ -2,6 +2,8 @@ import {
   MARKDOWN_SKILL_LIMITS,
   type MarkdownSkillUpload,
   type MarkdownSkillDocument,
+  type MarkdownSkillReference,
+  type MarkdownSkillSelectionView,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
@@ -62,11 +64,11 @@ function uploadInput(body: Record<string, unknown>): MarkdownSkillUpload {
   return { fileName: body.fileName, contentBase64: body.contentBase64 };
 }
 
-function expectedRevision(body: Record<string, unknown>): number {
+function expectedRevision(body: Record<string, unknown>, minimum = 1): number {
   if (
     typeof body.expectedRevision !== "number" ||
     !Number.isSafeInteger(body.expectedRevision) ||
-    body.expectedRevision < 1
+    body.expectedRevision < minimum
   ) {
     throw invalidRequest("Provide the current skill revision.");
   }
@@ -154,5 +156,58 @@ export function handleDeleteMarkdownSkill(
     if (body.kind === "rejected") return body.response;
     deps.store.markdownSkills.delete(ctx.params.id ?? "", expectedRevision(body.value));
     return { status: 204, body: null };
+  });
+}
+
+function selectionReference(value: unknown): MarkdownSkillReference | null {
+  if (value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("Provide a skill revision or explicitly remove the selection.");
+  }
+  const ref = value as Record<string, unknown>;
+  if (
+    typeof ref.id !== "string" ||
+    typeof ref.revision !== "number" ||
+    typeof ref.digest !== "string"
+  ) {
+    throw invalidRequest("Provide a skill identity, revision and digest.");
+  }
+  return { id: ref.id, revision: ref.revision, digest: ref.digest };
+}
+
+function selectedSkillState(chatId: string, deps: SkillRouteDeps): MarkdownSkillSelectionView {
+  const selection = deps.store.markdownSkills.selection(chatId);
+  if (selection.skill === null) return { selection, availability: "none" };
+  const skill = deps.store.markdownSkills.get(selection.skill.id, selection.skill.revision);
+  if (skill?.digest !== selection.skill.digest) {
+    return { selection, availability: "unavailable" };
+  }
+  return { selection, availability: "available", name: skill.name };
+}
+
+export function handleReadMarkdownSkillSelection(
+  ctx: RouteContext,
+  deps: SkillRouteDeps,
+): Promise<RouteResult> {
+  return withSkillAccess(ctx, deps, "selection-read", () => ({
+    status: 200,
+    body: selectedSkillState(ctx.params.id ?? "", deps),
+  }));
+}
+
+export function handleSelectMarkdownSkill(
+  ctx: RouteContext,
+  deps: SkillRouteDeps,
+): Promise<RouteResult> {
+  return withSkillAccess(ctx, deps, "selection-change", async () => {
+    const body = await readMutation(ctx, deps, 1024);
+    if (body.kind === "rejected") return body.response;
+    const chatId = ctx.params.id ?? "";
+    deps.store.markdownSkills.select(
+      chatId,
+      selectionReference(body.value.skill),
+      expectedRevision(body.value, 0),
+    );
+    return { status: 200, body: selectedSkillState(chatId, deps) };
   });
 }

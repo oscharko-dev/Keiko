@@ -68,6 +68,8 @@ import {
 export { MARKDOWN_SKILL_LIMITS } from "./markdown-skills.js";
 export type {
   MarkdownSkillReference,
+  MarkdownSkillSelection,
+  MarkdownSkillSelectionView,
   MarkdownSkillMetadata,
   MarkdownSkillDocument,
   MarkdownSkillUpload,
@@ -516,6 +518,7 @@ export interface ChatsResponse {
  *   safety-margin     — estimation headroom that is never planned for input
  */
 export type ChatContextSegmentId =
+  | "skill"
   | "system"
   | "summary"
   | "messages"
@@ -535,6 +538,13 @@ export interface ChatContextSegmentWire {
 }
 
 export interface ChatContextStatusWire {
+  readonly protectedSkill?:
+    | {
+        readonly reference: import("./markdown-skills.js").MarkdownSkillReference;
+        readonly selectionRevision: number;
+        readonly estimatedTokens: number;
+      }
+    | undefined;
   readonly modelId: string;
   readonly contextWindowTokens: number;
   /** Optional independently declared input ceiling of the selected model. */
@@ -1781,6 +1791,12 @@ export interface HybridGroundedAnswer extends GroundedAnswerEvidenceDeclaration 
  * window. The context meter shows this and plans the next grounded question with it.
  */
 export interface GroundedPromptContextWire {
+  readonly protectedSkill?:
+    | {
+        readonly reference: import("./markdown-skills.js").MarkdownSkillReference;
+        readonly estimatedTokens: number;
+      }
+    | undefined;
   /** Answering model identity; older persisted answers may not carry it. */
   readonly modelId?: string | undefined;
   readonly promptTokens: number;

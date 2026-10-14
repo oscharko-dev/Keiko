@@ -1306,6 +1306,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
   "chat.context.total": "{used} von {usable} nutzbaren Eingabe-Tokens · Kontextfenster {window}",
   "chat.context.breakdown": "Aufteilung des Kontextfensters",
+  "chat.context.segment.skill": "Skill-Anweisungen (geschützt)",
   "chat.context.segment.system": "Systemanweisungen",
   "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
   "chat.context.segment.messages": "Nachrichten",

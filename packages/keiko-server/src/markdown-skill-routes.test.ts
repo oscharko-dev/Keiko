@@ -11,6 +11,8 @@ import {
   handleReplaceMarkdownSkill,
   handleDeleteMarkdownSkill,
   handleExportMarkdownSkill,
+  handleReadMarkdownSkillSelection,
+  handleSelectMarkdownSkill,
 } from "./markdown-skill-routes.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
@@ -77,6 +79,23 @@ afterEach(() => {
 });
 
 describe("private Markdown skill routes (#4023)", () => {
+  it.each([undefined, [], "skill", {}, { id: 1, revision: 1, digest: "digest" }])(
+    "rejects malformed selection references without changing the selection: %j",
+    async (skill) => {
+      const { deps, cookie } = fixture();
+      const project = deps.store.createProject(process.cwd());
+      const chat = deps.store.createChat(project.path, "Selection validation", "test-model");
+      const result = await handleSelectMarkdownSkill(
+        {
+          ...context(cookie, { skill, expectedRevision: 0 }, chat.id),
+          correlationId: undefined,
+        },
+        deps,
+      );
+      expect(result.status).toBe(400);
+      expect(deps.store.markdownSkills.selection(chat.id)).toEqual({ revision: 0, skill: null });
+    },
+  );
   it("refuses a mutation when the session is revoked while its body is being read", async () => {
     const { deps, cookie } = fixture();
     const pending = handleImportMarkdownSkill(context(cookie, UPLOAD), deps);
@@ -84,7 +103,7 @@ describe("private Markdown skill routes (#4023)", () => {
     expect((await pending).status).toBe(404);
     expect(deps.store.markdownSkills.list()).toEqual([]);
   });
-  it("mounts all six library operations in the actual dispatcher", () => {
+  it("mounts library and explicit selection operations in the actual dispatcher", () => {
     const handlers = [
       handleListMarkdownSkills,
       handleReadMarkdownSkill,
@@ -92,6 +111,8 @@ describe("private Markdown skill routes (#4023)", () => {
       handleReplaceMarkdownSkill,
       handleDeleteMarkdownSkill,
       handleExportMarkdownSkill,
+      handleReadMarkdownSkillSelection,
+      handleSelectMarkdownSkill,
     ];
     for (const handler of handlers)
       expect(API_ROUTES.some((route) => route.handler === handler)).toBe(true);
@@ -109,6 +130,8 @@ describe("private Markdown skill routes (#4023)", () => {
       handleReplaceMarkdownSkill,
       handleDeleteMarkdownSkill,
       handleExportMarkdownSkill,
+      handleReadMarkdownSkillSelection,
+      handleSelectMarkdownSkill,
     ]) {
       expect((await handler(context("", UPLOAD), deps)).status).toBe(404);
     }
@@ -130,6 +153,43 @@ describe("private Markdown skill routes (#4023)", () => {
     const listed = await handleListMarkdownSkills(context(cookie), deps);
     expect(listed.headers?.["Cache-Control"]).toBe("no-store");
     expect(JSON.stringify(listed.body)).not.toContain("missing assumptions");
+  });
+
+  it("persists explicit selection with optimistic concurrency and truthful unavailable state", async () => {
+    const { deps, cookie } = fixture();
+    const project = deps.store.createProject(process.cwd());
+    const chat = deps.store.createChat(project.path, "Selection check", "test-model");
+    const skill = deps.store.markdownSkills.import(UPLOAD);
+    const chosen = await handleSelectMarkdownSkill(
+      context(cookie, { skill, expectedRevision: 0 }, chat.id),
+      deps,
+    );
+    expect(chosen.status).toBe(200);
+    expect(chosen.body).toMatchObject({
+      availability: "available",
+      selection: { revision: 1, skill: { id: skill.id } },
+    });
+    expect(JSON.stringify(chosen.body)).not.toContain(BODY);
+    expect(
+      (
+        await handleSelectMarkdownSkill(
+          context(cookie, { skill: null, expectedRevision: 0 }, chat.id),
+          deps,
+        )
+      ).status,
+    ).toBe(409);
+    deps.store.markdownSkills.delete(skill.id, 1);
+    expect(
+      (await handleReadMarkdownSkillSelection(context(cookie, {}, chat.id), deps)).body,
+    ).toMatchObject({ availability: "unavailable" });
+    expect(
+      (
+        await handleSelectMarkdownSkill(
+          context(cookie, { skill: null, expectedRevision: 1 }, chat.id),
+          deps,
+        )
+      ).body,
+    ).toEqual({ availability: "none", selection: { revision: 2, skill: null } });
   });
 
   it("rejects stale writes, malformed requests and missing revisions without losing data", async () => {

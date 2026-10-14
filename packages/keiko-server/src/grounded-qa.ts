@@ -1,3 +1,9 @@
+import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
+import {
+  markdownSkillPromptUsage,
+  markdownSkillCompactionReserve,
+  withMarkdownSkillInstructions,
+} from "./markdown-skill-prompt.js";
 import { connectedFollowUpConfiguration } from "./grounded-answer-activity.js";
 import { withContextualHintConfidence } from "./grounded-selection-quality.js";
 import {
@@ -101,6 +107,7 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  type MarkdownSkillDocument,
   buildGroundedAnswerContextPackSummary,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
@@ -904,6 +911,7 @@ export function groundedPromptInputTokensForCapability(
 }
 
 export interface GroundedGatewayPromptOptions {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
   readonly modelInputTokensMax?: number | undefined;
   readonly callerInputTokensMax?: number | undefined;
@@ -1390,6 +1398,13 @@ export function fittedGroundedGatewayPrompt(
   );
   return {
     messages: fitted.messages,
+    protectedSkill:
+      options?.protectedSkill === undefined
+        ? undefined
+        : markdownSkillPromptUsage(options.protectedSkill, {
+            tokenAccounting: options.tokenAccounting,
+            maxInputTokens: options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
+          }),
     sentEvidencePacks: [fitted.pack],
     withoutSources: buildRawGroundedGatewayMessages(
       question,
@@ -1397,6 +1412,7 @@ export function fittedGroundedGatewayPrompt(
       redactor,
       -1,
       options?.ownAssessmentPolicy,
+      options?.protectedSkill,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -1578,6 +1594,7 @@ function buildRawGroundedGatewayMessages(
   redactor: Redactor,
   omissionPathBytes?: number,
   ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
+  protectedSkill?: MarkdownSkillDocument,
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
@@ -1602,7 +1619,7 @@ function buildRawGroundedGatewayMessages(
   ].join("\n");
   return [
     { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
-    { role: "user", content: userContent },
+    { role: "user", content: withMarkdownSkillInstructions(userContent, protectedSkill) },
   ];
 }
 
@@ -1623,10 +1640,12 @@ function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): Grounded
       redactor,
       omissionPathBytes,
       options?.ownAssessmentPolicy,
+      options?.protectedSkill,
     );
 }
 
 interface GroundedGatewayAnswerContext {
+  readonly userMessageId: string | undefined;
   readonly assistantReferences: NonNullable<OrchestratorInput["assistantReferents"]>;
   readonly synthesis: GroundedSynthesisCallBudget;
   readonly deps: UiHandlerDeps;
@@ -1644,7 +1663,10 @@ function createGatewayAnswerer(
   signal: AbortSignal,
   correlationId: string | undefined,
   tokenAccounting: ContextProfile["tokenAccounting"],
-  assistantReferences: OrchestratorInput["assistantReferents"],
+  turn: {
+    readonly assistantReferences: OrchestratorInput["assistantReferents"];
+    readonly userMessageId: string | undefined;
+  },
 ): GroundedAnswerer {
   const synthesis = createGroundedSynthesisCallBudget();
   const ctx = {
@@ -1655,7 +1677,8 @@ function createGatewayAnswerer(
     correlationId,
     tokenAccounting,
     synthesis,
-    assistantReferences: assistantReferences ?? [],
+    assistantReferences: turn.assistantReferences ?? [],
+    userMessageId: turn.userMessageId,
   };
   return {
     completedSynthesisCalls: synthesis.completed,
@@ -1774,6 +1797,10 @@ async function groundedGatewayAttempt(
   const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
   const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
     ...promptOptions,
+    protectedSkill:
+      ctx.userMessageId === undefined
+        ? undefined
+        : ctx.deps.store.markdownSkills.forTurn(ctx.userMessageId),
     requiredEvidencePaths: options.requiredEvidencePaths,
     requiredEvidenceAtomIds: assistantReferenceExcerptIds(pack, ctx.assistantReferences),
     callerInputTokensMax: remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
@@ -1891,6 +1918,7 @@ function resolveGroundedAnswerModel(
 }
 
 interface DefaultRunnerContext {
+  readonly userMessageId: string | undefined;
   readonly refreshDocuments: SemanticRefreshDocumentBudget;
   readonly deps: UiHandlerDeps;
   readonly modelId: string;
@@ -1937,7 +1965,7 @@ function runDefaultGroundedExploration(
       signal,
       runnerCtx.correlationId,
       contextProfile?.tokenAccounting,
-      input.assistantReferents,
+      { assistantReferences: input.assistantReferents, userMessageId: runnerCtx.userMessageId },
     ),
     nowMs: Date.now,
     signal,
@@ -1966,6 +1994,7 @@ function defaultRunner(
   signal: AbortSignal,
   contextProfile: UiHandlerDeps["contextProfile"],
   correlationId: string | undefined,
+  userMessageId?: string,
 ): GroundedRunner | RouteResult {
   const model = resolveGroundedAnswerModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
@@ -1986,7 +2015,8 @@ function defaultRunner(
     modelId,
     signal,
     contextProfile,
-    model,
+    model: withMarkdownSkillAdmission(model, deps.store.markdownSkills, userMessageId),
+    userMessageId,
     entailmentStage,
     correlationId,
   };
@@ -2553,11 +2583,8 @@ async function prepareGroundedAsk(
 
 function resolveGroundedRunner(
   deps: UiHandlerDeps,
-  modelId: string,
-  readinessAdmission: ConversationReadinessAdmission,
-  signal: AbortSignal,
+  prepared: PreparedGroundedAsk,
   runner: GroundedRunner | undefined,
-  correlationId: string | undefined,
 ):
   | {
       readonly modelId: string;
@@ -2565,6 +2592,10 @@ function resolveGroundedRunner(
       readonly runner: GroundedRunner;
     }
   | RouteResult {
+  const modelId = groundedModelId(prepared);
+  const readinessAdmission = groundedReadinessAdmission(prepared);
+  const { signal, correlationId } = prepared;
+  const userMessageId = admittedGroundedUser(prepared).id;
   if (runner !== undefined) {
     return {
       modelId,
@@ -2580,6 +2611,7 @@ function resolveGroundedRunner(
     signal,
     contextProfile,
     correlationId,
+    userMessageId,
   );
   if (typeof builtRunner !== "function") return builtRunner;
   return { modelId, contextProfile, runner: builtRunner };
@@ -2603,7 +2635,9 @@ function resolveMultiSourceSeam(
   signal: AbortSignal,
   override: MultiSourceSeam | undefined,
   correlationId: string | undefined,
-  answerOptions: Pick<GroundedAnswerOptions, "currentQuestion" | "answerOnlyContextAvailable">,
+  answerOptions: Pick<GroundedAnswerOptions, "currentQuestion" | "answerOnlyContextAvailable"> & {
+    readonly userMessageId?: string;
+  },
 ): MultiSourceSeam | RouteResult {
   if (override !== undefined) return override;
   const resolvedModel = deps.modelPortFactory(modelId);
@@ -2641,7 +2675,11 @@ async function dispatchMultiSourceAsk(
     signal,
     seamOverride,
     args.correlationId,
-    { currentQuestion: input.content, answerOnlyContextAvailable: hasAnswerOnlyContext(args) },
+    {
+      currentQuestion: input.content,
+      answerOnlyContextAvailable: hasAnswerOnlyContext(args),
+      userMessageId: admittedGroundedUser(args).id,
+    },
   );
   if ("status" in seam) return seam;
   return runMultiSourceAsk({
@@ -2735,14 +2773,7 @@ async function dispatchFolderAsk(
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
   }
-  const resolved = resolveGroundedRunner(
-    deps,
-    groundedModelId(prepared),
-    groundedReadinessAdmission(prepared),
-    signal,
-    runner,
-    prepared.correlationId,
-  );
+  const resolved = resolveGroundedRunner(deps, prepared, runner);
   if ("status" in resolved) return resolved;
   return runAsk({
     ...groundedRetrievalContinuityFields(input),
@@ -2997,10 +3028,18 @@ function compactGroundedCurrentPrompt(
   deps: UiHandlerDeps,
 ): Promise<string> {
   const modelId = groundedModelId(prepared);
+  const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
+  const messageId = admittedGroundedUser(prepared).id;
+  const skill = deps.store.markdownSkills.forTurn(messageId);
   return compactCurrentChatPrompt({
     content: prepared.input.content,
     modelId,
-    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    profile,
+    protectedInstructionTokens: markdownSkillCompactionReserve(
+      skill,
+      profile,
+      groundedSystemPrompt(currentOwnAssessmentPolicy(deps)),
+    ),
     signal: prepared.signal,
     correlationId: prepared.correlationId,
     redact: (value) => redactedString(deps.redactor, value),
@@ -3008,7 +3047,10 @@ function compactGroundedCurrentPrompt(
       const model = resolveGroundedAnswerModel(deps, modelId, groundedReadinessAdmission(prepared));
       if (isRouteResult(model))
         throw new ProviderError("The prompt compaction model is unavailable.", model.status);
-      return model.call(request, signal);
+      return withMarkdownSkillAdmission(model, deps.store.markdownSkills, messageId).call(
+        request,
+        signal,
+      );
     },
   });
 }

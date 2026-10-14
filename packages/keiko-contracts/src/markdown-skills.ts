@@ -14,6 +14,20 @@ export interface MarkdownSkillReference {
   readonly digest: string;
 }
 
+/** Selection concurrency is independent of the immutable skill revision. */
+export interface MarkdownSkillSelection {
+  readonly revision: number;
+  readonly skill: MarkdownSkillReference | null;
+}
+
+export type MarkdownSkillSelectionView =
+  | { readonly selection: MarkdownSkillSelection; readonly availability: "none" | "unavailable" }
+  | {
+      readonly selection: MarkdownSkillSelection;
+      readonly availability: "available";
+      readonly name: string;
+    };
+
 export interface MarkdownSkillMetadata extends MarkdownSkillReference {
   readonly name: string;
   readonly byteCount: number;

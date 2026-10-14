@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 42;
+export const SCHEMA_VERSION = 43;
 
 interface Migration {
   readonly version: number;
@@ -1617,6 +1617,24 @@ CREATE TABLE markdown_skill_revisions (
 CREATE INDEX idx_markdown_skill_digest ON markdown_skill_revisions(digest);
 `;
 
+const V43_SQL = `
+CREATE TABLE markdown_skill_selections (
+  chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  skill_id TEXT,
+  skill_revision INTEGER CHECK (skill_revision >= 1),
+  digest TEXT CHECK (length(digest) = 64),
+  CHECK ((skill_id IS NULL AND skill_revision IS NULL AND digest IS NULL)
+    OR (skill_id IS NOT NULL AND skill_revision IS NOT NULL AND digest IS NOT NULL))
+) STRICT;
+CREATE TABLE markdown_skill_turn_bindings (
+  message_id TEXT PRIMARY KEY REFERENCES chat_messages(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL,
+  skill_revision INTEGER NOT NULL CHECK (skill_revision >= 1),
+  digest TEXT NOT NULL CHECK (length(digest) = 64)
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -1660,6 +1678,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 40, sql: V40_SQL },
   { version: 41, sql: V41_SQL },
   { version: 42, sql: V42_SQL },
+  { version: 43, sql: V43_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

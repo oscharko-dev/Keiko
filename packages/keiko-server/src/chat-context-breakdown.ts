@@ -22,6 +22,7 @@ export interface ConversationShare {
 }
 
 export interface ContextBreakdownInput {
+  readonly protectedSkillTokens?: number | undefined;
   readonly profile: ContextProfile;
   readonly conversation: ConversationShare;
   /** Present while the chat is grounded: the conversation lane cap and the last source share. */
@@ -52,6 +53,17 @@ function groundedConversation(
   };
 }
 
+function skillSegments(tokens = 0): readonly ChatContextSegmentWire[] {
+  return tokens > 0 ? [{ id: "skill", tokens, count: 1 }] : [];
+}
+
+function instructionShare(input: ContextBreakdownInput): number {
+  const prompt = input.grounded?.lastPrompt;
+  return prompt === undefined
+    ? input.conversation.systemTokens
+    : Math.max(0, prompt.instructionTokens - (prompt.protectedSkill?.estimatedTokens ?? 0));
+}
+
 function usedSegments(input: ContextBreakdownInput): readonly ChatContextSegmentWire[] {
   const { conversation, grounded } = input;
   const lastPrompt = grounded?.lastPrompt;
@@ -60,7 +72,11 @@ function usedSegments(input: ContextBreakdownInput): readonly ChatContextSegment
       ? conversation
       : groundedConversation(conversation, grounded.historyLaneTokens);
   return [
-    { id: "system", tokens: lastPrompt?.instructionTokens ?? conversation.systemTokens },
+    {
+      id: "system",
+      tokens: instructionShare(input),
+    },
+    ...skillSegments(input.protectedSkillTokens),
     { id: "summary", tokens: shares.summaryTokens, count: conversation.summaryCount },
     { id: "messages", tokens: shares.messageTokens, count: conversation.messageCount },
     ...(grounded === undefined
@@ -84,7 +100,7 @@ function tokensOf(segments: readonly ChatContextSegmentWire[]): number {
 // question, so a share recorded under a larger window shrinks to what is left beside the exactly
 // known system and conversation shares (PR #3678 review). Only a conversation that alone exceeds
 // the budget, which the compaction projection prevents, falls back to proportional scaling.
-function fittedToBudget(
+function fittedElasticToBudget(
   segments: readonly ChatContextSegmentWire[],
   budget: number,
 ): readonly ChatContextSegmentWire[] {
@@ -107,6 +123,21 @@ function fittedToBudget(
   });
 }
 
+function fittedToBudget(
+  segments: readonly ChatContextSegmentWire[],
+  budget: number,
+): readonly ChatContextSegmentWire[] {
+  const protectedTokens = tokensOf(segments.filter((segment) => segment.id === "skill"));
+  const elastic = fittedElasticToBudget(
+    segments.filter((segment) => segment.id !== "skill"),
+    Math.max(0, budget - protectedTokens),
+  );
+  const fitted = new Map(elastic.map((segment) => [segment.id, segment]));
+  return segments.map((segment) =>
+    segment.id === "skill" ? segment : (fitted.get(segment.id) ?? segment),
+  );
+}
+
 // Automatic compaction watches the conversation. In a grounded question the conversation has its
 // own lane beside the sources, so compaction starts once the conversation reaches the threshold of
 // that lane — not of the whole budget, which the sources may fill without anything to compact.
@@ -117,7 +148,9 @@ function autoCompactionAt(
   const budget = input.profile.effectiveInputBudget;
   if (input.grounded === undefined) return Math.floor(budget * AUTOMATIC_COMPACTION_THRESHOLD);
   const beside = tokensOf(
-    used.filter((segment) => segment.id === "system" || segment.id === "knowledge"),
+    used.filter(
+      (segment) => segment.id === "system" || segment.id === "knowledge" || segment.id === "skill",
+    ),
   );
   const lane = Math.floor(input.grounded.historyLaneTokens * AUTOMATIC_COMPACTION_THRESHOLD);
   return Math.min(budget, beside + lane);
@@ -128,7 +161,7 @@ function availableSegments(
   used: readonly ChatContextSegmentWire[],
   free: number,
 ): readonly ChatContextSegmentWire[] {
-  const remaining = input.profile.effectiveInputBudget - tokensOf(used) - free;
+  const remaining = Math.max(0, input.profile.effectiveInputBudget - tokensOf(used) - free);
   if (input.grounded === undefined) return [{ id: "compaction-buffer", tokens: remaining }];
   const conversation = tokensOf(
     used.filter((segment) => segment.id === "summary" || segment.id === "messages"),

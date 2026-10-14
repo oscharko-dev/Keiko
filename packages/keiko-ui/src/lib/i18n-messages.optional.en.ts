@@ -1255,6 +1255,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.wait": "Available after the current response finishes.",
   "chat.context.total": "{used} of {usable} usable input tokens · context window {window}",
   "chat.context.breakdown": "Context window breakdown",
+  "chat.context.segment.skill": "Skill instructions (protected)",
   "chat.context.segment.system": "System instructions",
   "chat.context.segment.summary": "Summary of earlier messages",
   "chat.context.segment.messages": "Messages",

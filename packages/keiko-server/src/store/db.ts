@@ -1,5 +1,6 @@
 import { withImmediateTransaction } from "./transaction.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
+import { bindMarkdownSkillTurn } from "./markdownSkillSelections.js";
 import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
 // `node:sqlite` DatabaseSync drives both factories; the node adapter adds directory creation,
@@ -238,15 +239,22 @@ function createMessageRecord(
   messageId = options.newId(),
   clientTurnContentDigest?: string,
 ): ChatMessage {
-  return sqlInsertMessage(
-    db,
-    messageId,
-    msg,
-    options.redactString,
-    clientTurnId,
-    clientTurnState,
-    clientTurnContentDigest,
-  );
+  return withImmediateTransaction(db, () => {
+    const library = createMarkdownSkillStore(db, options.now);
+    const selected = msg.role === "user" ? library.selection(msg.chatId).skill : null;
+    if (selected !== null) library.resolve(selected);
+    const message = sqlInsertMessage(
+      db,
+      messageId,
+      msg,
+      options.redactString,
+      clientTurnId,
+      clientTurnState,
+      clientTurnContentDigest,
+    );
+    bindMarkdownSkillTurn(db, message.id, selected);
+    return message;
+  });
 }
 
 interface StagedTurnAssistant {

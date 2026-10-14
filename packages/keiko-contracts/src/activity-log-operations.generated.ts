@@ -1162,6 +1162,28 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      skillId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 64,
+      },
+      skillRevision: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      skillDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      skillInstructionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       inputBudget: {
         type: "integer",
         dataClass: "count",
@@ -31173,7 +31195,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["list", "read", "import", "replace", "delete", "export"],
+        values: [
+          "list",
+          "read",
+          "import",
+          "replace",
+          "delete",
+          "export",
+          "selection-read",
+          "selection-change",
+        ],
       },
       phase: {
         type: "string",

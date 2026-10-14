@@ -17,7 +17,16 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["list", "read", "import", "replace", "delete", "export"],
+      values: [
+        "list",
+        "read",
+        "import",
+        "replace",
+        "delete",
+        "export",
+        "selection-read",
+        "selection-change",
+      ],
     },
     phase: {
       type: "string",
@@ -37,7 +46,15 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
-export type MarkdownSkillAction = "list" | "read" | "import" | "replace" | "delete" | "export";
+export type MarkdownSkillAction =
+  | "list"
+  | "read"
+  | "import"
+  | "replace"
+  | "delete"
+  | "export"
+  | "selection-read"
+  | "selection-change";
 
 export function logMarkdownSkillOperation(
   correlationId: string | undefined,

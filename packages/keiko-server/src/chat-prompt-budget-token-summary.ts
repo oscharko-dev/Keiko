@@ -1,3 +1,4 @@
+import { withMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
 import type {
   ContextProfile,
   ContextTokenAccounting,
@@ -5,7 +6,10 @@ import type {
   DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ConversationMemoryContextEntryWire,
+  MarkdownSkillDocument,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
 import {
   withGatewayConversationImages,
@@ -36,6 +40,7 @@ export function estimateHistoryLaneTokens(input: {
 }
 
 interface TokenSummaryInput {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly historyOutcome: ConversationCompactionOutcome;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
@@ -58,11 +63,9 @@ function userProjectionTokens(input: TokenSummaryInput, includeMemory: boolean):
           ),
         ].join("\n")
       : undefined;
-  const content = composeConversationPrompt(
-    input.request.content,
-    [],
-    memory,
-    input.request.discussionMode,
+  const content = withMarkdownSkillInstructions(
+    composeConversationPrompt(input.request.content, [], memory, input.request.discussionMode),
+    input.protectedSkill,
   );
   const images =
     input.finalMessages.at(-1)?.contentParts?.filter((part) => part.type === "image_url") ?? [];
