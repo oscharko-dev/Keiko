@@ -386,8 +386,18 @@ Buffered, streaming and regeneration calls resolve the original turn binding. Th
 attempt-admission callback revalidates availability on physical retries without widening an
 existing caller grant. Prompt preparation refuses an impossible protected scaffold before making a
 compaction model call; compaction targets reserve the skill's share while compacting only task text.
-Coding and workflow integration reuse this canonical library and must retain the same invariants
-through their own final prompt owners before feature closeout.
+The Chat Composer exposes upload, preview, selection, replacement, export and deletion in its
+existing footer, with a visible selected-revision chip. Saving or replacing a file never activates
+it. Selection changes refresh the context meter. Each send carries the observed selection revision;
+a concurrent change refuses the send before persistence or model dispatch and preserves the draft.
+An unpaired Composer may continue ordinary Chat only with an explicit no-skill precondition, which
+the server checks against current selection. A known selected skill never disappears merely because
+a refresh fails. Private library access still requires the paired session.
+
+OpenCode and separate coding-workflow integration belong to #4025 under epic #3897, independently of
+Chat epic #4022. They must reuse this library and preserve the same invariants through their own
+final prompt owners. Until then the connected Git-description workflow refuses an active skill
+explicitly; ordinary Chat remains available.
 
 ### D6 — Path validation policy (fail-closed)
 

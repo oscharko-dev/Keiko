@@ -1147,6 +1147,8 @@ export interface DesktopChatSendRequestWire {
   // Composer sends may omit it.
   readonly clientTurnId?: string | undefined;
   readonly expectedGroundingScopeIdentity?: string | undefined;
+  /** Observed selection revision; null explicitly requires no active skill. Stale sends are refused. */
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
@@ -1283,6 +1285,8 @@ export interface GroundedAskRequest {
   // different effective model, grounding scope, or memory request fails closed.
   readonly clientTurnId?: string | undefined;
   readonly expectedGroundingScopeIdentity?: string | undefined;
+  /** Observed selection revision; null explicitly requires no active skill. Stale sends are refused. */
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
   // Center model-selection guardrails instead of silently falling back to the chat's stored model.
   readonly modelId?: string | undefined;

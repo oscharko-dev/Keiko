@@ -18,6 +18,7 @@
 // `stream` would test the transport instead of the product.
 
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import { GROUNDED_SYSTEM_PROMPT } from "../../../packages/keiko-server/dist/grounded-prompt.js";
 
 const PORT = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32186");
@@ -36,6 +37,10 @@ const GROUNDING_PARITY_REPLY =
   "repositoryParityStatus is defined in the repository fixture [src/repository-parity.ts:2].";
 const REPLY_TOKENS = [REPLY_MARKER, " deterministic", " provider", " pong", " 4242."];
 const REPLY_TEXT = REPLY_TOKENS.join("");
+const MARKDOWN_SKILL_BODY = readFileSync(
+  new URL("../fixtures/private-markdown-skill.md", import.meta.url),
+  "utf8",
+);
 // Code points per streamed delta of any answer other than the reply.
 const STREAM_SLICE_LENGTH = 16;
 
@@ -108,6 +113,8 @@ function streamCompletion(res, rawRequest) {
 }
 
 function completionContent(rawRequest) {
+  const skill = markdownSkillWitness(rawRequest);
+  if (skill !== undefined) return skill;
   const description = prDescriptionCandidate(rawRequest);
   if (description !== undefined) return description;
   if (
@@ -136,6 +143,17 @@ function completionContent(rawRequest) {
       tags: ["journal-e2e"],
     },
   ]);
+}
+
+function markdownSkillWitness(rawRequest) {
+  const { messages = [] } = JSON.parse(rawRequest);
+  const text = messages
+    .map((message) => (typeof message.content === "string" ? message.content : ""))
+    .join("\n");
+  if (!text.includes("KEIKO_SYNTHETIC_SKILL_COMPLETE")) return undefined;
+  return text.split(MARKDOWN_SKILL_BODY).length === 2
+    ? "KEIKO_SKILL_ONCE_OK"
+    : "KEIKO_SKILL_BODY_INVALID";
 }
 
 function prDescriptionCandidate(rawRequest) {

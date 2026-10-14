@@ -63,6 +63,8 @@ import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { useConnectedEvidenceReferences } from "./hooks/useConnectedEvidenceReferences";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
+import { chatSkillBlocksSend, expectedMarkdownSkillSelection } from "./hooks/useChatMarkdownSkill";
+import { MarkdownSkillControl } from "./skills/MarkdownSkillControl";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
@@ -2203,6 +2205,16 @@ function composerModelSearch(
   return models.length >= 10 ? t("chat.model.search") : undefined;
 }
 
+function ChatSkillControl({ session }: { readonly session: ChatSessionApi }): ReactNode {
+  return (
+    <MarkdownSkillControl
+      key={session.activeChat?.id}
+      skill={session.markdownSkill}
+      disabled={session.sending || session.regeneratingMessageId !== undefined}
+    />
+  );
+}
+
 function ComposerContextControls({
   session,
   selectedModelCapability,
@@ -2256,6 +2268,7 @@ function ComposerContextControls({
         />
       </div>
       <ChatContextMeterContainer session={session} />
+      <ChatSkillControl session={session} />
     </div>
   );
 }
@@ -3285,6 +3298,7 @@ function ComposerCoreImpl({
     onSettled: (assistantMessageId) => batchSpeechSettledRef.current?.(assistantMessageId),
   });
   const primeAudioOutput = playback.primeAudioOutput;
+  const expectedSkillSelectionRevision = expectedMarkdownSkillSelection(session.markdownSkill);
   const commitCanonicalVoiceTurn = useCallback(
     ({ turnId, text, correlationId }: CanonicalVoiceTurnInput): boolean | "accepted-stop" => {
       if (activeChat === undefined || canonicalVoiceTargetModelId === undefined) return false;
@@ -3303,7 +3317,11 @@ function ComposerCoreImpl({
         text,
         clientTurnId: turnId,
         ...(correlationId === undefined ? {} : { correlationId }),
-        target: { chat: activeChat, modelId: canonicalVoiceTargetModelId },
+        target: {
+          chat: activeChat,
+          modelId: canonicalVoiceTargetModelId,
+          expectedSkillSelectionRevision,
+        },
         allowReservedCapacity: true,
       });
       if (enqueueCanonicalVoiceTurn !== undefined && queued === undefined) return false;
@@ -3334,6 +3352,7 @@ function ComposerCoreImpl({
       activeChat,
       canonicalVoiceCaptureMustPause,
       canonicalVoiceTargetModelId,
+      expectedSkillSelectionRevision,
       enqueueCanonicalVoiceTurn,
       sendMessage,
     ],
@@ -5696,6 +5715,7 @@ export function ChatWindow({
   };
   const displayedError = presentChatSessionError(error, optionalT);
   const ready =
+    !chatSkillBlocksSend(session.markdownSkill) &&
     isComposerReadyToSend(draft, sending, loading, noEligibleModels) &&
     canonicalVoiceTurnRequiresRetry !== true;
   const visible = useMemo(() => visibleOnly(messages), [messages]);

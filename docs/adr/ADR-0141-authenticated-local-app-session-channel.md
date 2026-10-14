@@ -339,7 +339,11 @@ support artifact. Other diagnostics routes receive no bearer through this path.
 The exact `/api/chats/messages/grounded` entry point also receives a projection to verify optional
 existing-session activity on admitted normal grounded sends. Plaintext `/api/desktop/chat` sends use
 their existing projection. Neither path grants new authority or requires pairing for ordinary Chat;
-image attachment authority remains separately enforced. Other `/api/chats` routes receive no bearer.
+image attachment authority remains separately enforced. Private Markdown skills (#4022) add
+`/api/skills` for the private library and `/api/chats` for revision-pinned selections at
+`/api/chats/:id/skill`. Both consume the existing paired session; they cannot mint or widen its
+authority. Issuance, confirmation, and revocation use the same projection inventory. Other Chat
+routes retain their existing authorization requirements even though the browser carries the bearer.
 
 No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
 sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains

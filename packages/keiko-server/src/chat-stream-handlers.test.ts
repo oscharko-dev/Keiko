@@ -680,6 +680,48 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it.each([
+    ["buffered", 0],
+    ["streamed", 0],
+    ["buffered", null],
+    ["streamed", null],
+  ] as const)(
+    "refuses a mismatched skill selection before %s dispatch (observed %s)",
+    async (transport, expectedSkillSelectionRevision) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Synthetic\nCheck bounds.\n").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const gateway = streamingModel("Must not dispatch");
+      const bufferedCall = vi.spyOn(gateway.model, "call");
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const result = await handlers[transport](
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: "Review boundary",
+            modelId: CHAT_MODEL,
+            clientTurnId: "stale-skill",
+            expectedSkillSelectionRevision,
+          }),
+          captureResWithEvents().res,
+        ),
+        deps(gateway.model),
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+      });
+      expect(gateway.calls.count).toBe(0);
+      expect(gateway.recorded.request).toBeUndefined();
+      expect(bufferedCall).not.toHaveBeenCalled();
+      expect(store.listMessages(chatId)).toHaveLength(0);
+    },
+  );
+
   it.each(["buffered", "streamed"] as const)(
     "pins selected skills across %s send and regeneration",
     async (transport) => {

@@ -1,4 +1,30 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.skills.title": "Skills",
+  "chat.skills.sessionRequired":
+    "Open Keiko from its launcher to manage private skills. Chat remains available without a skill.",
+  "chat.skills.close": "Close skills",
+  "chat.skills.description":
+    "Upload a Markdown file, then select it for this chat. Uploading alone does not activate a skill.",
+  "chat.skills.protected":
+    "Used for each new message. Skill instructions count toward the context and remain intact when the conversation is compacted.",
+  "chat.skills.remove": "Remove skill from this chat",
+  "chat.skills.unavailable": "Selected skill unavailable",
+  "chat.skills.requestError": "Skills could not be updated. Reload the selection and try again.",
+  "chat.skills.upload": "Upload Markdown (.md, up to 128 KiB)",
+  "chat.skills.replace": "Replace with Markdown",
+  "chat.skills.retry": "Reload",
+  "chat.skills.loading": "Loading skills…",
+  "chat.skills.empty": "No skills yet. Upload your first Markdown skill.",
+  "chat.skills.fileError": "Choose a non-empty .md file up to 128 KiB.",
+  "chat.skills.selected": "Selected for next message",
+  "chat.skills.select": "Select",
+  "chat.skills.preview": "Skill preview",
+  "chat.skills.export": "Download Markdown",
+  "chat.skills.delete": "Delete",
+  "chat.skills.deleteWarning": "Chats using this skill will require a new selection.",
+  "chat.skills.confirmDelete": "Delete skill",
+  "chat.skills.cancel": "Cancel",
+
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} agents",
   "agentLauncher.model": "Model",

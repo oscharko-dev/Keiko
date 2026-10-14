@@ -90791,7 +90791,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1687",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1706",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -90943,14 +90943,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:304",
+      "site": "packages/keiko-server/src/grounded-qa.ts:308",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3202",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3228",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91235,7 +91235,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2036",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2055",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91284,7 +91284,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1382",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1401",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -93257,7 +93257,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3510",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3536",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

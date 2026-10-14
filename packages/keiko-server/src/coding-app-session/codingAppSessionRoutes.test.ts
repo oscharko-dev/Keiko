@@ -25,6 +25,7 @@ import { createCodingAppSessionChannel, type CodingAppSessionChannel } from "./s
 import {
   APP_SESSION_COOKIE_NAME,
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+  APP_SESSION_ACTIVE_COOKIE_COUNT,
   serializeSessionCookies,
 } from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
@@ -386,7 +387,7 @@ describe("app-session lifecycle lines (F65)", () => {
     },
   );
 
-  it("repairs twelve active projections with one complete second remaining", () => {
+  it("repairs the active projections with one complete second remaining", () => {
     let now = 0;
     const registry = createSessionRegistry({ now: () => now, absoluteTtlMs: 10_000 });
     const mint = registry.mint("local");
@@ -402,15 +403,15 @@ describe("app-session lifecycle lines (F65)", () => {
     const cookies = result.headers?.["Set-Cookie"];
     if (cookies === undefined || typeof cookies === "string")
       throw new TypeError("Missing cookie projections");
-    expect(cookies).toHaveLength(14);
-    expect(cookies.slice(0, 12).every((cookie) => cookie.endsWith("Max-Age=1"))).toBe(true);
-    expect(cookies.slice(12).every((cookie) => cookie.endsWith("Max-Age=0"))).toBe(true);
+    expect(cookies).toEqual(
+      serializeSessionCookies(mint.cookieToken, { secure: false, maxAgeSeconds: 1 }),
+    );
     expect(
       expectActivityLogProof(
         "coding-app-session.local-session.confirmed.request",
         formatActivityLogProofLine(events[0] ?? {}),
       ),
-    ).toMatchObject({ cookieMaxAgeSeconds: 1, projectionCount: 12 });
+    ).toMatchObject({ cookieMaxAgeSeconds: 1, projectionCount: APP_SESSION_ACTIVE_COOKIE_COUNT });
     now = 10_001;
     expect(registry.inspect(mint.cookieToken)).toBeUndefined();
   });
@@ -425,7 +426,9 @@ describe("app-session lifecycle lines (F65)", () => {
     const projections = result.headers?.["Set-Cookie"];
     if (typeof projections === "string" || projections === undefined)
       throw new TypeError("Expected repaired cookie projections");
-    expect(projections).toHaveLength(14);
+    expect(projections.filter((cookie) => !cookie.endsWith("Max-Age=0"))).toHaveLength(
+      APP_SESSION_ACTIVE_COOKIE_COUNT,
+    );
     expect(events).toMatchObject([
       {
         level: "info",
@@ -433,7 +436,7 @@ describe("app-session lifecycle lines (F65)", () => {
         op: "coding-app-session.local-session.confirmed",
         correlationId: "local-correlation",
         extra: {
-          projectionCount: 12,
+          projectionCount: APP_SESSION_ACTIVE_COOKIE_COUNT,
           completeness: "complete",
           loss: "none",
         },

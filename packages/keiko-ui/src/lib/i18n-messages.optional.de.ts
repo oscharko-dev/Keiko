@@ -1,6 +1,32 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "chat.skills.title": "Skills",
+  "chat.skills.sessionRequired":
+    "Öffne Keiko über den Launcher, um private Skills zu verwalten. Chat bleibt ohne Skill verfügbar.",
+  "chat.skills.close": "Skills schließen",
+  "chat.skills.description":
+    "Markdown-Datei hochladen und für diesen Chat auswählen. Hochladen allein aktiviert keinen Skill.",
+  "chat.skills.protected":
+    "Gilt für jede neue Nachricht. Skill-Anweisungen zählen zum Kontext und bleiben beim Kompaktieren des Gesprächs vollständig erhalten.",
+  "chat.skills.remove": "Skill aus diesem Chat entfernen",
+  "chat.skills.unavailable": "Ausgewählter Skill nicht verfügbar",
+  "chat.skills.requestError":
+    "Skills konnten nicht aktualisiert werden. Auswahl neu laden und erneut versuchen.",
+  "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
+  "chat.skills.replace": "Durch Markdown ersetzen",
+  "chat.skills.retry": "Neu laden",
+  "chat.skills.loading": "Skills werden geladen…",
+  "chat.skills.empty": "Noch keine Skills. Lade deinen ersten Markdown-Skill hoch.",
+  "chat.skills.fileError": "Wähle eine nicht leere .md-Datei mit maximal 128 KiB.",
+  "chat.skills.selected": "Für nächste Nachricht ausgewählt",
+  "chat.skills.select": "Auswählen",
+  "chat.skills.preview": "Skill-Vorschau",
+  "chat.skills.export": "Markdown herunterladen",
+  "chat.skills.delete": "Löschen",
+  "chat.skills.deleteWarning": "Chats mit diesem Skill benötigen anschließend eine neue Auswahl.",
+  "chat.skills.confirmDelete": "Skill löschen",
+  "chat.skills.cancel": "Abbrechen",
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} Agenten",
   "agentLauncher.model": "Modell",

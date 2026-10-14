@@ -1,9 +1,10 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { editorModifier, selectAllInEditor } from "./support/editor-chord.js";
+import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -313,6 +314,61 @@ async function clearFixtureComposer(page: Page): Promise<void> {
   await composer.press("Backspace");
   await expect(composer).toHaveText("");
 }
+
+test("applies a selected private skill once across compaction and reload, then removes it @smoke", async ({
+  page,
+  request,
+}) => {
+  const fixture = await openFixtureComposer(page, request);
+  await page.goto(`/${editorM11PairingFragment("chat-skills")}`);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
+  const body = readFileSync(new URL("./fixtures/private-markdown-skill.md", import.meta.url));
+  await dialog
+    .getByLabel(/Upload Markdown/)
+    .setInputFiles({ name: "synthetic.md", mimeType: "text/markdown", buffer: body });
+  await expect(
+    dialog.getByRole("heading", { name: "Synthetic boundary method · v1" }),
+  ).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Select", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Select", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Selected for next message" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Close skills" }).click();
+  const chip = page.getByRole("button", { name: /Synthetic boundary method.*v1/ });
+  await expect(chip).toBeVisible();
+  await composer.fill(
+    "Review this synthetic reading. " + "The sensor has a missing value. ".repeat(100),
+  );
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.locator('article[data-role="assistant"]').filter({ hasText: "KEIKO_SKILL_ONCE_OK" }),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: /Conversation context:/ }).click();
+  await expect(page.getByText("Skill instructions (protected)", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Compact context now" }).click();
+  await expect(page.getByText(/tokens saved across/)).toBeVisible();
+  await page.reload();
+  await expect(chip).toBeVisible();
+  await composer.fill("Review another synthetic reading.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.locator('article[data-role="assistant"]').filter({ hasText: "KEIKO_SKILL_ONCE_OK" }),
+  ).toHaveCount(2);
+  await page.getByRole("button", { name: "Remove skill from this chat" }).click();
+  await expect(chip).toHaveCount(0);
+  await composer.fill("Continue without the method.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator('article[data-role="assistant"]').last()).toContainText(REPLY_MARKER);
+  const params = new URLSearchParams({ chatId: fixture.chat.id, projectPath: fixture.projectPath });
+  const messagesResponse = await request.get(`/api/chats/messages?${params.toString()}`);
+  const messages = (await messagesResponse.json()) as {
+    messages: { role: string; content: string }[];
+  };
+  expect(messages.messages.filter((message) => message.role === "user").at(-1)?.content).toBe(
+    "Continue without the method.",
+  );
+});
 
 async function openFixtureComposer(
   page: Page,

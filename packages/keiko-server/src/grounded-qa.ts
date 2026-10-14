@@ -1,3 +1,7 @@
+import {
+  parseExpectedSkillSelectionRevision,
+  markdownSkillSelectionRefusal,
+} from "./markdown-skill-selection-admission.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
   markdownSkillPromptUsage,
@@ -482,6 +486,7 @@ export interface AskInput extends GroundedRetrievalContinuityInput {
   readonly content: string;
   readonly clientTurnId?: string | undefined;
   readonly expectedGroundingScopeIdentity?: string | undefined;
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   readonly answerContent?: string | undefined;
   readonly modelId: string | undefined;
   readonly memory?: ParsedConversationMemoryRequest | undefined;
@@ -517,7 +522,17 @@ function parseOptionalModelId(obj: Record<string, unknown>): ParseResult<string 
 
 function parseGroundedExtras(
   obj: Record<string, unknown>,
-): ParseResult<Pick<AskInput, "clientTurnId" | "expectedGroundingScopeIdentity" | "memory">> {
+): ParseResult<
+  Pick<
+    AskInput,
+    "clientTurnId" | "expectedGroundingScopeIdentity" | "expectedSkillSelectionRevision" | "memory"
+  >
+> {
+  const expectedSkillSelectionRevision = parseExpectedSkillSelectionRevision(
+    obj.expectedSkillSelectionRevision,
+  );
+  if (isRouteResult(expectedSkillSelectionRevision))
+    return { kind: "err", result: expectedSkillSelectionRevision };
   const memory = parseMemoryRequest(obj.memory);
   if (isRouteResult(memory)) return { kind: "err", result: memory };
   const clientTurnId = parseClientTurnId(obj.clientTurnId);
@@ -532,6 +547,7 @@ function parseGroundedExtras(
     kind: "ok",
     value: {
       ...(memory === undefined ? {} : { memory }),
+      ...(expectedSkillSelectionRevision === undefined ? {} : { expectedSkillSelectionRevision }),
       ...(clientTurnId === undefined ? {} : { clientTurnId }),
       ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
     },
@@ -2220,6 +2236,9 @@ function groundedTurnIdentityContent(
   }
   return canonicalChatTurnIdentityContent({
     routeKind: "grounded",
+    ...(input.expectedSkillSelectionRevision === undefined
+      ? {}
+      : { expectedSkillSelectionRevision: input.expectedSkillSelectionRevision }),
     content: input.content,
     modelId: input.modelId,
     groundingScopeIdentity: input.expectedGroundingScopeIdentity ?? scopeIdentity,
@@ -2946,6 +2965,13 @@ function admitGroundedUser(
   deps: UiHandlerDeps,
 ): PreparedGroundedAsk | RouteResult {
   if (prepared.userMessage !== undefined) return prepared;
+  const skillRefusal = markdownSkillSelectionRefusal(
+    deps,
+    prepared.chat.id,
+    prepared.input.expectedSkillSelectionRevision,
+    prepared.correlationId,
+  );
+  if (skillRefusal !== undefined) return skillRefusal;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.chat.id);
   const newUserMessage = {
     chatId: prepared.chat.id,

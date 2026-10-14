@@ -58,6 +58,7 @@ import {
   useConversationMemorySettings,
 } from "./memorySettings";
 import { loadMemoryAutonomyMode } from "@/lib/memory-session-api";
+import { fetchMarkdownSkillSelection } from "@/lib/markdown-skills-api";
 import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
@@ -2106,25 +2107,31 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "recovers an unpersisted scope-refused typed draft (live text: %s)",
-    async (live) => {
-      const { result } = await setupGroundedSession();
-      vi.mocked(askGrounded).mockRejectedValue(
-        new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+  it.each([
+    { live: false, code: "GROUNDING_SCOPE_CHANGED" },
+    { live: true, code: "GROUNDING_SCOPE_CHANGED" },
+    { live: false, code: "SKILL_SELECTION_CHANGED" },
+    { live: true, code: "SKILL_SELECTION_CHANGED" },
+  ])("recovers an unpersisted $code typed draft (live text: $live)", async ({ live, code }) => {
+    const { result } = await setupGroundedSession();
+    vi.mocked(askGrounded).mockRejectedValue(
+      new ApiError(code, "The selected context changed.", 409),
+    );
+    act(() => result.current.setDraft("Original typed question"));
+    await act(async () => {
+      await result.current.sendMessage(
+        live ? { text: "Live typed question", clearDraftOnAdmission: true } : undefined,
       );
-      act(() => result.current.setDraft("Original typed question"));
-      await act(async () => {
-        await result.current.sendMessage(
-          live ? { text: "Live typed question", clearDraftOnAdmission: true } : undefined,
-        );
-      });
-      expect(result.current.draft).toBe(live ? "Live typed question" : "Original typed question");
-      expect(result.current.messages).toHaveLength(0);
-      expect(askGrounded).toHaveBeenCalledOnce();
-      expect(result.current.error).toContain("GROUNDING_SCOPE_CHANGED");
-    },
-  );
+    });
+    expect(result.current.draft).toBe(live ? "Live typed question" : "Original typed question");
+    expect(result.current.messages).toHaveLength(0);
+    expect(askGrounded).toHaveBeenCalledOnce();
+    expect(result.current.error).toContain(code);
+    expect(vi.mocked(askGrounded).mock.calls[0]?.[0]).toMatchObject({
+      expectedSkillSelectionRevision: 0,
+    });
+    expect(fetchMarkdownSkillSelection).toHaveBeenCalledTimes(2);
+  });
 
   it.each(["failed", "cancelled"] as const)(
     "recovers an exact persisted %s scope refusal and refreshes the next send",
@@ -6007,3 +6014,11 @@ describe("actual model selection lifecycle evidence", () => {
     window.removeEventListener("keiko:gateway-model-catalog-updated", updated);
   });
 });
+
+// Existing journeys start with the authoritative empty skill selection.
+vi.mock("@/lib/markdown-skills-api", () => ({
+  fetchMarkdownSkillSelection: vi
+    .fn()
+    .mockResolvedValue({ availability: "none", selection: { revision: 0, skill: null } }),
+  changeMarkdownSkillSelection: vi.fn(),
+}));

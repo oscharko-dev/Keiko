@@ -1,3 +1,8 @@
+import {
+  gitDescriptionSkillRefusal,
+  parseExpectedSkillSelectionRevision,
+  markdownSkillSelectionRefusal,
+} from "./markdown-skill-selection-admission.js";
 import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
@@ -850,6 +855,10 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
       ),
     };
   }
+  const expectedSkillSelectionRevision = parseExpectedSkillSelectionRevision(
+    body.expectedSkillSelectionRevision,
+  );
+  if (isRouteResult(expectedSkillSelectionRevision)) return expectedSkillSelectionRevision;
   const memory = parseMemoryRequest(body.memory);
   if (isRouteResult(memory)) return memory;
   const clientTurnId = parseClientTurnId(body.clientTurnId);
@@ -871,6 +880,7 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
         : undefined,
     memory,
     discussionMode: parseDiscussionMode(body.discussionMode),
+    ...(expectedSkillSelectionRevision === undefined ? {} : { expectedSkillSelectionRevision }),
     ...(clientTurnId === undefined ? {} : { clientTurnId }),
     ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
   };
@@ -1038,6 +1048,9 @@ function desktopChatTurnIdentityContent(
 ): string {
   return canonicalChatTurnIdentityContent({
     routeKind: "plain",
+    ...(request.expectedSkillSelectionRevision === undefined
+      ? {}
+      : { expectedSkillSelectionRevision: request.expectedSkillSelectionRevision }),
     content: request.content,
     modelId,
     groundingScopeIdentity:
@@ -1088,6 +1101,12 @@ export function inspectDesktopChatTurn(
   prepared: PreparedDesktopChatSend,
 ): DesktopChatTurnInspection {
   const { request, chat, turnIdentityContent } = prepared;
+  const skillRefusal = markdownSkillSelectionRefusal(
+    deps,
+    chat.id,
+    request.expectedSkillSelectionRevision,
+  );
+  if (skillRefusal !== undefined) return { kind: "rejected", result: skillRefusal };
   if (request.clientTurnId === undefined) return { kind: "continue" };
   const inspection = deps.store.inspectChatTurn(
     request.chatId,
@@ -2828,7 +2847,9 @@ function gitDescriptionScopeFailure(
   prepared: PreparedDesktopChatSend,
   correlationId: string | undefined,
 ): RouteResult | undefined {
-  const failure = expectedGroundingScopeFailure(prepared.request, prepared.chat);
+  const failure =
+    gitDescriptionSkillRefusal(deps, prepared.chat.id, correlationId) ??
+    expectedGroundingScopeFailure(prepared.request, prepared.chat);
   if (failure !== undefined) {
     logChatRejection(
       "chat.send.rejected",
