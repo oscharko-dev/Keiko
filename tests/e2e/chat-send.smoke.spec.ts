@@ -2,9 +2,11 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { editorModifier, selectAllInEditor } from "./support/editor-chord.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
+import { runAxe, formatViolations } from "./support/axe.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -314,6 +316,31 @@ async function clearFixtureComposer(page: Page): Promise<void> {
   await composer.press("Backspace");
   await expect(composer).toHaveText("");
 }
+
+test("keeps a long private skill preview keyboard-scrollable and accessible @smoke", async ({
+  page,
+  request,
+}) => {
+  await page.addInitScript({ path: createRequire(import.meta.url).resolve("axe-core/axe.min.js") });
+  await openFixtureComposer(page, request);
+  await page.goto(`/${editorM11PairingFragment("skill-preview-keyboard")}`);
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
+  const body = "# Long synthetic method\n\n" + "Review the next boundary.\n\n".repeat(60);
+  await dialog.getByLabel(/Upload Markdown/).setInputFiles({
+    name: "long-synthetic.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from(body),
+  });
+  const content = dialog.getByRole("region", { name: "Long synthetic method · v1" });
+  await expect(content).toBeVisible();
+  await content.focus();
+  await expect(content).toBeFocused();
+  await content.press("PageDown");
+  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  const violations = await runAxe(page, "dialog");
+  expect(violations, formatViolations(violations)).toEqual([]);
+});
 
 test("applies a selected private skill once across compaction and reload, then removes it @smoke", async ({
   page,

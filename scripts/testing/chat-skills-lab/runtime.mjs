@@ -1,6 +1,6 @@
 // Real BFF and Gateway composition with private, isolated state. The existing lab proxy observes
 // serialized provider requests without retaining their contents or changing the configured model.
-import { fork } from "node:child_process";
+import { fork, spawn } from "node:child_process";
 import { writeFileSync, mkdirSync, openSync, closeSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
@@ -14,6 +14,21 @@ import { openApiSession, importBuilt } from "../coding-workbench-lab/lab-common.
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 export const MODEL = "gemma-4-31b-it";
 export const digest = (text) => createHash("sha256").update(text).digest("hex");
+
+export async function workingDiffDigest(cwd) {
+  const hash = createHash("sha256");
+  const child = spawn("git", ["diff", "--no-ext-diff", "HEAD"], {
+    cwd,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  child.stdout.on("data", (chunk) => hash.update(chunk));
+  const code = await new Promise((resolve, reject) => {
+    child.once("error", () => reject(new Error("source-diff-unavailable")));
+    child.once("close", resolve);
+  });
+  if (code !== 0) throw new Error("source-diff-unavailable");
+  return hash.digest("hex");
+}
 
 function providerUrl(address) {
   const url = new URL(address);

@@ -93,6 +93,9 @@ describe("Chat Markdown skill controls", () => {
       target: { files: [new File([DOCUMENT.body], "method.md")] },
     });
     await screen.findByRole("heading", { name: "Boundary review · v1" });
+    const content = within(dialog).getByRole("region", { name: "Boundary review · v1" });
+    content.focus();
+    expect(content).toHaveFocus();
     expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
     expect(dialog.querySelector("img")).toBeNull();
     vi.mocked(api.changeMarkdownSkillSelection).mockResolvedValue(SELECTED);

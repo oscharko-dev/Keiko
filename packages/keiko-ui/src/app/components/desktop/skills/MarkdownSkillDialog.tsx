@@ -2,7 +2,10 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { MarkdownSkillMetadata } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  MarkdownSkillDocument,
+  MarkdownSkillMetadata,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import { useDialogTabTrap } from "../hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../hooks/useModalInteractionLock";
@@ -182,6 +185,19 @@ function SkillRow({
   );
 }
 
+function SkillContent({ item }: { readonly item: MarkdownSkillDocument }): ReactNode {
+  return (
+    <section
+      className={styles.cmpMarkdown}
+      aria-label={`${item.name} · v${String(item.revision)}`}
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- bounded preview must support keyboard scrolling
+      tabIndex={0}
+    >
+      <SafeMarkdown source={item.body} />
+    </section>
+  );
+}
+
 function SkillPreview({ library }: { readonly library: MarkdownSkillLibrary }): ReactNode {
   const t = useTranslate();
   const [confirmDelete, setConfirmDelete] = useState<string>();
@@ -192,9 +208,7 @@ function SkillPreview({ library }: { readonly library: MarkdownSkillLibrary }): 
       <h3>
         {item.name} · v{item.revision}
       </h3>
-      <div className={styles.cmpMarkdown}>
-        <SafeMarkdown source={item.body} />
-      </div>
+      <SkillContent item={item} />
       <div className={styles.cmpActions}>
         <SkillUpload library={library} previous={item} />
         <button

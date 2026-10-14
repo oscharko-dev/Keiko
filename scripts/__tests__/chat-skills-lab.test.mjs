@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { requestObservation, responseObservation } from "../testing/chat-skills-lab/runtime.mjs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import {
+  requestObservation,
+  responseObservation,
+  workingDiffDigest,
+  digest,
+} from "../testing/chat-skills-lab/runtime.mjs";
 import {
   extractGeneratedTest,
   containerArguments,
@@ -14,6 +23,34 @@ const scope = {
   compactionPrompts: new Set([SUMMARY_SYSTEM_PROMPT, PROMPT_COMPACTION_SYSTEM]),
 };
 describe("private Chat skill qualification observations", () => {
+  it("hashes a large release diff completely without retaining it in an error", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "skill-lab-provenance-"));
+    try {
+      const git = (...args) => execFileSync("git", args, { cwd, stdio: "pipe" });
+      git("init");
+      git(
+        "-c",
+        "user.name=Synthetic",
+        "-c",
+        "user.email=synthetic@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Synthetic base",
+      );
+      writeFileSync(join(cwd, "release.txt"), "Synthetic release row.\n".repeat(100_000));
+      git("add", "release.txt");
+      const expected = digest(execFileSync("git", ["diff", "HEAD"], { cwd, maxBuffer: 8_000_000 }));
+      await expect(workingDiffDigest(cwd)).resolves.toBe(expected);
+      await expect(workingDiffDigest(join(cwd, "missing"))).rejects.toThrow(
+        "source-diff-unavailable",
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
   it("distinguishes real synthesis from summaries containing the same question without losing physical attempts", () => {
     const body = "Synthetic request bytes";
     for (const system of scope.compactionPrompts) {

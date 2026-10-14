@@ -4,7 +4,7 @@ import { fileURLToPath, URL, URLSearchParams } from "node:url";
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { startRuntime, MODEL, digest } from "./runtime.mjs";
+import { startRuntime, MODEL, digest, workingDiffDigest } from "./runtime.mjs";
 import { SOURCE, SKILL, APP, CASES } from "./cases.mjs";
 import { contextObservation, expectedSkillTokens, turnObservation } from "./observations.mjs";
 const runDir = process.env.KEIKO_QUALIFICATION_OUTPUT;
@@ -45,7 +45,7 @@ const reasonOf = (error) =>
   error instanceof QualificationError ? error.reason : "operation-failed";
 const ledger = [];
 const sourceHead = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-const sourceDiffDigest = digest(execFileSync("git", ["diff", "HEAD"], { encoding: "utf8" }));
+const sourceDiffDigest = await workingDiffDigest(repositoryRoot);
 const harnessDigests = Object.fromEntries(
   readdirSync(join(repositoryRoot, "scripts/testing/chat-skills-lab"))
     .filter((name) => name.endsWith(".mjs"))
