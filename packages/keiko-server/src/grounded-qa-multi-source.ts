@@ -896,6 +896,7 @@ export function createMultiSourceAnswerer(
       model,
       deps.store.markdownSkills,
       answerOptions.userMessageId,
+      deps.markdownSkillAuthority,
     ),
     modelId,
     signal,

@@ -1705,6 +1705,43 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it("requires live skill authority before grounded turn persistence regardless of client preconditions", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const skill = store.markdownSkills.import({
+      fileName: "method.md",
+      contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+    });
+    store.markdownSkills.select(chatId, skill, 0);
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const pair = channel.pair(fakePairingRequestBody());
+    if (!pair.paired) throw new Error("Expected pairing");
+    channel.signOut(pair.cookieToken);
+    const seen: GatewayRequest[] = [];
+    for (const revision of [undefined, 1, null]) {
+      for (const cookie of [undefined, `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}`]) {
+        const result = await handleGroundedAsk(
+          ctx(
+            JSON.stringify({
+              chatId,
+              content: GROUNDED_FIXTURE_QUESTION,
+              expectedSkillSelectionRevision: revision,
+            }),
+            fakeRes(),
+            cookie,
+          ),
+          deps(fakeModel("Must not dispatch", seen), {}, { codingAppSessionChannel: channel }),
+        );
+        expect(result).toMatchObject({ status: 404 });
+        expect(store.listMessages(chatId)).toHaveLength(0);
+      }
+    }
+    expect(seen).toHaveLength(0);
+  });
+
   it.each(["single", "multiple"] as const)(
     "applies the pinned skill once at the actual %s-folder synthesis boundary",
     async (topology) => {
@@ -1730,8 +1767,13 @@ describe("handleGroundedAsk", () => {
       });
       store.markdownSkills.select(chatId, skill, 0);
       const seen: GatewayRequest[] = [];
+      const paired = pairedReportOwner(tmp);
       const result = await handleGroundedAsk(
-        ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+        ctx(
+          JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION }),
+          fakeRes(),
+          paired.cookie,
+        ),
         deps(
           fakeModel(
             topology === "single"
@@ -1739,6 +1781,8 @@ describe("handleGroundedAsk", () => {
               : "MyClass is implemented [source:1|src/foo.ts:1-3].",
             seen,
           ),
+          {},
+          { codingAppSessionChannel: paired.owner.codingAppSessionChannel },
         ),
       );
       expect(result.status, JSON.stringify(result.body)).toBe(200);
@@ -2289,7 +2333,11 @@ describe("handleGroundedAsk", () => {
         { ...ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })), correlationId },
         sharedDeps,
       );
-      expect(probe).toHaveBeenCalledWith(sharedDeps, CHAT_MODEL, correlationId);
+      expect(probe).toHaveBeenCalledWith(
+        expect.objectContaining(sharedDeps),
+        CHAT_MODEL,
+        correlationId,
+      );
       expect(newProbe).not.toHaveBeenCalled();
       probe.mockRestore();
       newProbe.mockRestore();

@@ -1,3 +1,4 @@
+import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import {
   gitDescriptionSkillRefusal,
   parseExpectedSkillSelectionRevision,
@@ -2238,6 +2239,7 @@ export async function prepareDesktopChatPrompt(
         model,
         deps.store.markdownSkills,
         options.userMessageId,
+        deps.markdownSkillAuthority,
       ).call(summaryRequest, summarySignal);
     },
   });
@@ -2516,6 +2518,7 @@ async function assembleAndCallBuffered(
     model,
     deps.store.markdownSkills,
     snapshot.currentUserMessageId,
+    deps.markdownSkillAuthority,
   );
   const response = await callPreparedAssembly(
     guarded,
@@ -3752,8 +3755,9 @@ async function admitPreparedDesktopChatSend(
 
 export async function handleSendDesktopChat(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
+  requestDeps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
   const cancellation = createRequestCancellation(ctx, "desktop chat request cancelled");
   try {
     const parsed = await parseDesktopChatSend(ctx, deps, cancellation.signal);
@@ -4270,7 +4274,12 @@ async function assembleAndCallRegeneration(
     "chat.regeneration.rejected",
   );
   if (isRouteResult(model)) return model;
-  return withMarkdownSkillAdmission(model, deps.store.markdownSkills, prepared.turn.user.id).call(
+  return withMarkdownSkillAdmission(
+    model,
+    deps.store.markdownSkills,
+    prepared.turn.user.id,
+    deps.markdownSkillAuthority,
+  ).call(
     {
       modelId,
       messages,
@@ -4315,8 +4324,9 @@ async function persistRegeneratedChatTurn(
 
 export async function handleRegenerateDesktopChat(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
+  requestDeps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
   const cancellation = createRequestCancellation(ctx, "desktop regeneration cancelled");
   try {
     const prepared = await parseDesktopChatRegenerate(ctx, deps, cancellation.signal);

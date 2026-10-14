@@ -57,17 +57,23 @@ describe("Composer skill selection preconditions", () => {
     try {
       const project = store.createProject(process.cwd());
       const chat = store.createChat(project.path, "Synthetic", "fixture");
-      expect(markdownSkillSelectionRefusal({ store }, chat.id, null)).toBeUndefined();
+      expect(
+        markdownSkillSelectionRefusal({ store, markdownSkillAuthority: () => true }, chat.id, null),
+      ).toBeUndefined();
       const skill = store.markdownSkills.import({
         fileName: "synthetic.md",
         contentBase64: Buffer.from("# Synthetic\nCheck bounds.").toString("base64"),
       });
       store.markdownSkills.select(chat.id, skill, 0);
-      expect(markdownSkillSelectionRefusal({ store }, chat.id, null)).toMatchObject({
+      expect(
+        markdownSkillSelectionRefusal({ store, markdownSkillAuthority: () => true }, chat.id, null),
+      ).toMatchObject({
         status: 409,
       });
       store.markdownSkills.select(chat.id, null, 1);
-      expect(markdownSkillSelectionRefusal({ store }, chat.id, null)).toBeUndefined();
+      expect(
+        markdownSkillSelectionRefusal({ store, markdownSkillAuthority: () => true }, chat.id, null),
+      ).toBeUndefined();
     } finally {
       store.close();
     }

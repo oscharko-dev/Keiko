@@ -2317,7 +2317,12 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
   );
   return {
     answer: createHybridAnswerer(
-      withMarkdownSkillAdmission(model, ctx.deps.store.markdownSkills, ctx.userMessage?.id),
+      withMarkdownSkillAdmission(
+        model,
+        ctx.deps.store.markdownSkills,
+        ctx.userMessage?.id,
+        ctx.deps.markdownSkillAuthority,
+      ),
       ctx.modelId,
       ctx.signal,
       ctx.correlationId,

@@ -389,6 +389,26 @@ function deps(model: ModelPort, overrides: Partial<UiHandlerDeps> = {}): UiHandl
   };
 }
 
+function pairedSkillFixture(model: ModelPort): {
+  deps: UiHandlerDeps;
+  request: (body: Record<string, unknown>) => IncomingMessage;
+} {
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const pair = channel.pair(fakePairingRequestBody());
+  if (!pair.paired) throw new Error("Expected paired fixture");
+  return {
+    deps: deps(model, { codingAppSessionChannel: channel }),
+    request: (body): IncomingMessage => {
+      const req = makeReq(body);
+      req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}` };
+      return req;
+    },
+  };
+}
+
 function readyRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
   let current = config;
   let generation = 0;
@@ -680,6 +700,94 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it.each(["revoked", "rotated"] as const)(
+    "revalidates %s paired skill authority at a physical retry",
+    async (change) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const channel = createCodingAppSessionChannel({
+        registry: createSessionRegistry(),
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const pair = channel.pair(fakePairingRequestBody());
+      if (!pair.paired) throw new Error("Expected paired fixture");
+      let observed = false;
+      const model: ModelPort = {
+        call: async (request) => {
+          const grant = { promptTokens: 1, maxOutputTokens: 1 };
+          expect(request.attemptAdmission?.(grant)).toBeDefined();
+          if (change === "revoked") channel.signOut(pair.cookieToken);
+          else channel.rotate(pair.cookieToken);
+          observed = true;
+          request.attemptAdmission?.(grant);
+          return Promise.resolve(normalizedResponse("Must not complete"));
+        },
+      };
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        content: "Review",
+        modelId: CHAT_MODEL,
+      });
+      req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}` };
+      const result = await handleSendDesktopChat(
+        routeContext(req, captureResWithEvents().res),
+        deps(model, { codingAppSessionChannel: channel }),
+      );
+      expect(observed).toBe(true);
+      expect(result).toMatchObject({ status: 404 });
+      expect(
+        store.listMessages(chatId).filter((message) => message.role === "assistant"),
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each(["buffered", "streamed"] as const)(
+    "requires live server-owned skill authority for %s regardless of the client precondition",
+    async (transport) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const gateway = streamingModel("Must not dispatch");
+      const buffered = vi.spyOn(gateway.model, "call");
+      const channel = createCodingAppSessionChannel({
+        registry: createSessionRegistry(),
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const pair = channel.pair(fakePairingRequestBody());
+      if (!pair.paired) throw new Error("Expected paired fixture");
+      channel.signOut(pair.cookieToken);
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      for (const revision of [undefined, 1, null]) {
+        for (const cookie of [undefined, `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}`]) {
+          const req = makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: "Review the reading",
+            modelId: CHAT_MODEL,
+            expectedSkillSelectionRevision: revision,
+          });
+          req.headers = cookie === undefined ? {} : { cookie };
+          const result = await handlers[transport](
+            routeContext(req, captureResWithEvents().res),
+            deps(gateway.model, { codingAppSessionChannel: channel }),
+          );
+          expect(result).toMatchObject({ status: 404 });
+          expect(store.listMessages(chatId)).toHaveLength(0);
+        }
+      }
+      expect(buffered).not.toHaveBeenCalled();
+      expect(gateway.calls.count).toBe(0);
+    },
+  );
+
   it.each([
     ["buffered", 0],
     ["streamed", 0],
@@ -696,10 +804,11 @@ describe("desktop chat SSE streaming handler", () => {
       store.markdownSkills.select(chatId, skill, 0);
       const gateway = streamingModel("Must not dispatch");
       const bufferedCall = vi.spyOn(gateway.model, "call");
+      const paired = pairedSkillFixture(gateway.model);
       const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
       const result = await handlers[transport](
         routeContext(
-          makeReq({
+          paired.request({
             chatId,
             projectPath: projectDir,
             content: "Review boundary",
@@ -709,7 +818,7 @@ describe("desktop chat SSE streaming handler", () => {
           }),
           captureResWithEvents().res,
         ),
-        deps(gateway.model),
+        paired.deps,
       );
       expect(result).toMatchObject({
         status: 409,
@@ -746,11 +855,12 @@ describe("desktop chat SSE streaming handler", () => {
           };
         },
       };
-      const shared = deps(model);
+      const paired = pairedSkillFixture(model);
+      const shared = paired.deps;
       const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
       const result = await handlers[transport](
         routeContext(
-          makeReq({
+          paired.request({
             chatId,
             projectPath: projectDir,
             content: "Review this.",
@@ -767,7 +877,7 @@ describe("desktop chat SSE streaming handler", () => {
       const regeneration = (): Promise<Awaited<ReturnType<typeof handleRegenerateDesktopChat>>> =>
         handleRegenerateDesktopChat(
           routeContext(
-            makeReq({
+            paired.request({
               chatId,
               projectPath: projectDir,
               assistantMessageId: assistant?.id,

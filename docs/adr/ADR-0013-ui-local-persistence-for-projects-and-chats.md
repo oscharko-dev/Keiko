@@ -390,9 +390,13 @@ The Chat Composer exposes upload, preview, selection, replacement, export and de
 existing footer, with a visible selected-revision chip. Saving or replacing a file never activates
 it. Selection changes refresh the context meter. Each send carries the observed selection revision;
 a concurrent change refuses the send before persistence or model dispatch and preserves the draft.
-An unpaired Composer may continue ordinary Chat only with an explicit no-skill precondition, which
-the server checks against current selection. A known selected skill never disappears merely because
-a refresh fails. Private library access still requires the paired session.
+An unpaired Composer sends an explicit no-skill precondition. Independently of that client
+precondition, every productive selected-skill turn requires a live paired app session on the server
+before persistence. Missing, numeric and null preconditions cannot grant authority. Buffered,
+streaming, regeneration and grounded physical model attempts revalidate the request-bound session
+identity and rotation through the existing app-session channel, including transport retries. A
+revoked session fails closed. Legacy ordinary Chat without a selected skill retains its existing
+behavior and does not renew a session merely by parsing a rejected request.
 
 OpenCode and separate coding-workflow integration belong to #4025 under epic #3897, independently of
 Chat epic #4022. They must reuse this library and preserve the same invariants through their own

@@ -1,3 +1,4 @@
+import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import {
   parseExpectedSkillSelectionRevision,
   markdownSkillSelectionRefusal,
@@ -2031,7 +2032,12 @@ function defaultRunner(
     modelId,
     signal,
     contextProfile,
-    model: withMarkdownSkillAdmission(model, deps.store.markdownSkills, userMessageId),
+    model: withMarkdownSkillAdmission(
+      model,
+      deps.store.markdownSkills,
+      userMessageId,
+      deps.markdownSkillAuthority,
+    ),
     userMessageId,
     entailmentStage,
     correlationId,
@@ -3073,10 +3079,12 @@ function compactGroundedCurrentPrompt(
       const model = resolveGroundedAnswerModel(deps, modelId, groundedReadinessAdmission(prepared));
       if (isRouteResult(model))
         throw new ProviderError("The prompt compaction model is unavailable.", model.status);
-      return withMarkdownSkillAdmission(model, deps.store.markdownSkills, messageId).call(
-        request,
-        signal,
-      );
+      return withMarkdownSkillAdmission(
+        model,
+        deps.store.markdownSkills,
+        messageId,
+        deps.markdownSkillAuthority,
+      ).call(request, signal);
     },
   });
 }
@@ -3628,11 +3636,12 @@ function finalGroundedMemoryActivity(
 
 export async function handleGroundedAsk(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
+  requestDeps: UiHandlerDeps,
   runner?: GroundedRunner,
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
+  const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
   const cancellation = createRequestCancellation(ctx, "grounded request cancelled");
   try {
     const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);

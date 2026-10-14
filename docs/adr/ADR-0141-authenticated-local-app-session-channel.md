@@ -348,6 +348,13 @@ before dispatch and after completion. All three projections consume the existing
 authority. Issuance, confirmation, and revocation use the same projection inventory. Other Chat
 routes retain their existing authorization requirements even though the browser carries the bearer.
 
+Using a private skill in Chat requires the same live paired authority independently of client
+selection preconditions. Productive selected-skill admission verifies it before persisting a user
+turn. Each buffered, streaming, regeneration and grounded physical model attempt revalidates the
+captured session identity and rotation, including retries. Missing or revoked authority refuses
+without dispatching the skill. Ordinary no-skill Chat remains available without pairing; rejected
+ordinary requests do not extend a session's idle lifetime merely through request parsing.
+
 No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
 sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains
 browser hygiene, not a security boundary. `HttpOnly`, `SameSite=Strict`, loopback host scope, hashed

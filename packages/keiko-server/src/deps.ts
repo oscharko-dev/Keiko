@@ -704,6 +704,8 @@ export type ContextProfileResolver = (modelId: string) => ContextProfile;
 export type CodingSidecarGatewayModelSourceResolver = () => CodingWorkbenchModelSource;
 
 export interface UiHandlerDeps {
+  /** Server-only, request-scoped revalidation of the paired session using a private skill. */
+  readonly markdownSkillAuthority?: (() => boolean) | undefined;
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
   readonly config: GatewayConfig | undefined;
   /** Encrypted, bounded local custody for browser-uploaded conversation images. */

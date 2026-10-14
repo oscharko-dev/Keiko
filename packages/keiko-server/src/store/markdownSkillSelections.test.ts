@@ -75,21 +75,34 @@ describe("protected skill selection and accepted-turn binding (#4024)", () => {
     library.select(chatId, skill, 0);
     const turn = store.createMessage(user(chatId));
     const grant = { promptTokens: 1, maxOutputTokens: 1 };
-    const protectedRequest = protectMarkdownSkillRequest(request, library, turn.id);
+    let authorized = true;
+    const protectedRequest = protectMarkdownSkillRequest(
+      request,
+      library,
+      turn.id,
+      () => authorized,
+    );
+    expect(() => protectMarkdownSkillRequest(request, library, turn.id)).toThrow(/not found/u);
     const admitted = protectedRequest.attemptAdmission?.(grant);
     expect(admitted).toBeDefined();
     admitted?.settle(undefined, false);
+    authorized = false;
+    expect(() => protectedRequest.attemptAdmission?.(grant)).toThrow(/not found/u);
+    authorized = true;
     const refused = protectMarkdownSkillRequest(
       { ...request, attemptAdmission: () => undefined },
       library,
       turn.id,
+      () => true,
     );
     expect(refused.attemptAdmission?.(grant)).toBeUndefined();
     library.select(chatId, null, 1);
     expect(protectedRequest.attemptAdmission?.(grant)).toBeDefined();
     library.delete(skill.id, skill.revision);
     expect(() => protectedRequest.attemptAdmission?.(grant)).toThrow(/unavailable/u);
-    expect(() => protectMarkdownSkillRequest(request, library, turn.id)).toThrow(/unavailable/u);
+    expect(() => protectMarkdownSkillRequest(request, library, turn.id, () => true)).toThrow(
+      /unavailable/u,
+    );
   });
   it("preserves a streaming model receiver and revalidates before lazy iteration", async () => {
     const { store, chatId } = fixture();
@@ -104,7 +117,7 @@ describe("protected skill selection and accepted-turn binding (#4024)", () => {
         yield { type: "delta", token: await Promise.resolve(this.marker) };
       },
     };
-    const guarded = withMarkdownSkillAdmission(model, library, turn.id);
+    const guarded = withMarkdownSkillAdmission(model, library, turn.id, () => true);
     const request: GatewayCallRequest = { modelId: "test-model", messages: [] };
     const chunks: GatewayStreamChunk[] = [];
     for await (const chunk of guarded.callStream?.(request, new AbortController().signal) ?? [])

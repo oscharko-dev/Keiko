@@ -1,3 +1,4 @@
+import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
 import { gatewayAssemblyOutputAllocation } from "./chat-prompt-budget.js";
 import { beginAppSessionOperation } from "./coding-app-session/appSessionReadAuthority.js";
@@ -417,6 +418,7 @@ function streamWithWindowRetry(
         },
         deps.store.markdownSkills,
         admitted.gatewayTurn.currentUserMessageId,
+        deps.markdownSkillAuthority,
       ),
       controller.signal,
     );
@@ -491,8 +493,9 @@ function finalizeStreamedTurn(
 
 export async function handleSendDesktopChatStream(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
+  requestDeps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {
+  const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
   const cancellation = createRequestCancellation(ctx, "desktop chat stream cancelled");
   let releaseSession = (): void => undefined;
   try {

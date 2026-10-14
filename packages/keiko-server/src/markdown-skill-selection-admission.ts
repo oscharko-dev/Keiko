@@ -31,14 +31,17 @@ export function parseExpectedSkillSelectionRevision(
 
 /** Called synchronously with message admission: no asynchronous gap before the pinned binding. */
 export function markdownSkillSelectionRefusal(
-  deps: Pick<UiHandlerDeps, "store">,
+  deps: Pick<UiHandlerDeps, "store" | "markdownSkillAuthority">,
   chatId: string,
   expectedRevision: number | null | undefined,
   correlationId?: string,
 ): RouteResult | undefined {
-  if (expectedRevision === undefined) return undefined;
   const selection = deps.store.markdownSkills.selection(chatId);
-  // An unpaired Composer can retain ordinary Chat only by explicitly requiring no private skill.
+  if (selection.skill !== null && deps.markdownSkillAuthority?.() !== true) {
+    logMarkdownSkillOperation(correlationId, "selection-read", "rejected", 404);
+    return { status: 404, body: errorBody("NOT_FOUND", "Skill not found.", correlationId) };
+  }
+  if (expectedRevision === undefined) return undefined;
   if (
     expectedRevision === null ? selection.skill === null : selection.revision === expectedRevision
   )

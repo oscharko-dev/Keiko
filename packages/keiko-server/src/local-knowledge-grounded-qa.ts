@@ -2634,7 +2634,12 @@ function createScopedAnswerGenerator(
 ): StoreBackedAnswerGenerator {
   const { deps, correlationId, userMessageId } = context;
   return new StoreBackedAnswerGenerator(
-    withMarkdownSkillAdmission(model, deps.store.markdownSkills, userMessageId),
+    withMarkdownSkillAdmission(
+      model,
+      deps.store.markdownSkills,
+      userMessageId,
+      deps.markdownSkillAuthority,
+    ),
     modelId,
     env.store,
     createSqliteAuditSink(env.store),
