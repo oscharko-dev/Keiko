@@ -27,6 +27,7 @@ const ACTION_DIR = join(repoRoot, ".github", "actions");
 const GATE_SCRIPT = "check-runtime-toolchain.mjs";
 const SETUP_NODE = "actions/setup-node@";
 const NODE_26_JOB = ".github/workflows/ci.yml:node-26-compatibility";
+const POLICY_JOB = ".github/workflows/ci.yml:code-quality-policy";
 const APPROVED_NODE_BASELINES = new Set([
   EXPECTED_NODE_BASELINE,
   EXPECTED_NODE_COMPATIBILITY_BASELINE,
@@ -52,10 +53,19 @@ function collectYaml(directory, accumulator = []) {
 
 // A workflow's steps live under `jobs.<id>.steps`; a composite action's under `runs.steps`. Both
 // shapes are collected so a Node setup hidden in a composite action cannot escape the rule.
+function matrixNodeVersions(job) {
+  return job.strategy?.matrix?.node;
+}
+
 function stepGroups(document, label) {
   const groups = [];
   for (const [jobId, job] of Object.entries(document?.jobs ?? {})) {
-    if (Array.isArray(job?.steps)) groups.push({ label: `${label}:${jobId}`, steps: job.steps });
+    if (Array.isArray(job?.steps))
+      groups.push({
+        label: `${label}:${jobId}`,
+        steps: job.steps,
+        nodeVersions: matrixNodeVersions(job),
+      });
   }
   if (Array.isArray(document?.runs?.steps)) {
     groups.push({ label: `${label}:runs`, steps: document.runs.steps });
@@ -101,6 +111,18 @@ function allGroups() {
     groups.push(...stepGroups(parse(readFileSync(path, "utf8")), label));
   }
   return groups;
+}
+
+function selectedNodeVersions(group, index) {
+  const selected = String(group.steps[index]?.with?.["node-version"]);
+  if (
+    selected !== "${{ matrix.node }}" ||
+    group.label !== POLICY_JOB ||
+    !Array.isArray(group.nodeVersions) ||
+    group.nodeVersions.length !== 2
+  )
+    return [selected];
+  return group.nodeVersions;
 }
 
 const groups = allGroups();
@@ -212,30 +234,35 @@ describe("workflow Node toolchain parity", () => {
     // qualification lane added for #3591 brings the setup-node total to 32; its independent
     // macOS 15 pull-request replay brings the total to 33; the Windows gateway proof adds one.
     // The four-target portable secure-read matrix adds one pinned setup-node definition.
-    expect(withSetupNode).toHaveLength(35);
+    // The required static-policy matrix adds one setup definition with two exact runtime legs.
+    expect(withSetupNode).toHaveLength(36);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {
     for (const group of withSetupNode) {
       for (const index of classify(group.steps).setupNode) {
         const step = group.steps[index];
-        expect(
-          APPROVED_NODE_BASELINES.has(String(step.with?.["node-version"])),
-          `${group.label} step ${index}`,
-        ).toBe(true);
+        for (const version of selectedNodeVersions(group, index)) {
+          expect(APPROVED_NODE_BASELINES.has(version), `${group.label} step ${index}`).toBe(true);
+        }
+        if (group.label === POLICY_JOB) {
+          expect(step.with?.["node-version"]).toBe("${{ matrix.node }}");
+          expect(group.nodeVersions).toEqual([
+            EXPECTED_NODE_BASELINE,
+            EXPECTED_NODE_COMPATIBILITY_BASELINE,
+          ]);
+        }
       }
     }
   });
 
-  it("confines the Node 26 compatibility baseline to its dedicated CI job", () => {
+  it("confines Node 26 to the dedicated compatibility and static-policy jobs", () => {
     const node26Groups = withSetupNode.filter((group) =>
-      classify(group.steps).setupNode.some(
-        (index) =>
-          String(group.steps[index]?.with?.["node-version"]) ===
-          EXPECTED_NODE_COMPATIBILITY_BASELINE,
+      classify(group.steps).setupNode.some((index) =>
+        selectedNodeVersions(group, index).includes(EXPECTED_NODE_COMPATIBILITY_BASELINE),
       ),
     );
-    expect(node26Groups.map((group) => group.label)).toEqual([NODE_26_JOB]);
+    expect(node26Groups.map((group) => group.label)).toEqual([POLICY_JOB, NODE_26_JOB]);
   });
 
   it("verifies the governed toolchain after every Node setup and before npm ci", () => {

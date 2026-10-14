@@ -11,9 +11,11 @@ npm run check:code-quality-policy -- --scope production
 npm run check:code-quality-policy -- --scope package:@oscharko-dev/keiko-contracts
 ```
 
-The default is repository-wide enforcement. `npm run lint` builds packages and invokes that
-command before the existing typed ESLint and UI lint lanes. The required Core quality job already
-calls `npm run lint`; there is no second analyzer job or alternate CI policy. Build packages first
+The default is repository-wide enforcement. `npm run lint` builds packages and invokes the full
+policy smoke before the shared `lint:typed` ESLint and UI lint tail. Required CI runs that same
+policy smoke in a dedicated Linux ARM64 Node24/26 matrix; x64 Core quality depends on that matrix
+and runs the shared typed tail after its existing build/typecheck. This is the same policy and
+assertions on a supported native compiler host, not an alternate analyzer. Build packages first
 when invoking the policy command directly on a fresh checkout.
 
 A local scope is explicitly partial. `repository`, `production`, `root-product`, `tooling`,
@@ -374,9 +376,17 @@ violations, eight ready/pending responsibilities with zero qualified records and
 facts, and complete package inventory. It retains the 180000ms/SIGKILL/32MiB child allowance and
 195000ms whole-test watchdog. These are finite integration allowances, not a product latency SLA.
 
-Required Core quality invokes this checked smoke once before root/UI lint, replacing the previous
-bare policy invocation. Required Node 26 compatibility invokes it after the ordinary test shard has
-settled. The smoke uses the existing direct-script pattern, is outside Vitest's `*.test.mjs`
+The required static-policy matrix invokes this checked smoke once on each governed Node line on
+`ubuntu-24.04-arm`, using a fresh full-history checkout of the same immutable merge candidate,
+normal install/provision/build and exact toolchain verification. Both legs must succeed in the
+`ci` aggregate and both exact job names must be proven before tree evidence is reused. Core typed
+quality and Node26 product shards remain on x64; the native-host, Windows and macOS ABI proofs
+retain their existing platforms. Both legs then unconditionally run `check:code-quality-policy:raw-reader`, the actual single-record
+raw-reader semantic qualification previously embedded in the parallel responsibility suite. Its
+assertions and 195s watchdog remain unchanged; the other responsibility fixtures remain in Vitest.
+Local `npm run lint` executes the whole policy and that qualification before typed lint. This does
+not substitute for full eight-record semantic qualification. Hosted ARM results are required; a
+local ARM completion is not a hosted verdict. The smoke uses the existing direct-script pattern, is outside Vitest's `*.test.mjs`
 collection, and shares the actual closed child-error helper with the retained wiring fixture
 checks. No test is conditionally skipped, imported receipt reused, worker count changed, report
 assertion removed or compiler/currentness check bypassed. Native120s, declaration10s and explicit

@@ -21,10 +21,11 @@ function heapCeilings(command) {
 
 describe("lint heap ceiling", () => {
   it("gives the repository lint one heap ceiling, in the script and in CI, that fits the runner", () => {
-    const script = JSON.parse(readFileSync("package.json", "utf8")).scripts.lint;
+    const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+    const script = scripts["lint:typed"];
     const steps = workflowJobs().flatMap(({ file, name, job }) =>
       (job.steps ?? [])
-        .filter((step) => step.run === "npm run lint")
+        .filter((step) => step.run === "npm run lint:typed")
         .map((step) => ({ at: `${file}:${name}`, step })),
     );
 
@@ -32,7 +33,9 @@ describe("lint heap ceiling", () => {
     const [scriptCeiling, ...otherScriptCeilings] = heapCeilings(script);
     const stepCeilings = heapCeilings(steps[0]?.step.env?.NODE_OPTIONS);
 
-    expect(script).toMatch(/^npm run build:packages && /u);
+    expect(scripts.lint).toBe(
+      "npm run build:packages && npm run check:code-quality-policy:repository && npm run check:code-quality-policy:raw-reader && npm run lint:typed",
+    );
     expect(otherScriptCeilings).toStrictEqual([]);
     expect(stepCeilings).toStrictEqual([scriptCeiling]);
     expect(scriptCeiling).toBeLessThanOrEqual(RUNNER_HEAP_LIMIT_MIB);

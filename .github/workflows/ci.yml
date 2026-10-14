@@ -354,9 +354,52 @@ jobs:
           "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
             --log-opts="${QUALITY_BASE_SHA}..${squash}" .
 
+  code-quality-policy:
+    name: Static code-quality policy (Node ${{ matrix.node }})
+    needs: verified-tree
+    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24.18.0", "26.8.1"]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - run: npm ci --ignore-scripts
+      - name: Provision the approved USearch native runtime
+        run: npm run provision:usearch
+      - run: npm run build:packages
+      - name: Run the complete static policy report smoke serially
+        # Preserve Core's Node24 heap and Node26's existing default heap. Product/native
+        # qualification remains on the existing x64, Windows and macOS lanes.
+        env:
+          NODE_OPTIONS: ${{ matrix.node == '24.18.0' && '--max-old-space-size=12288' || '' }}
+        run: npm run check:code-quality-policy:repository
+      - name: Qualify the actual raw-reader responsibility serially
+        run: npm run check:code-quality-policy:raw-reader
+
   core-quality:
     name: Core quality
-    needs: verified-tree
+    needs: [verified-tree, code-quality-policy]
     if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     # Bounded per .coderabbit.yaml's workflow policy. The job has run 11m50s-12m10s across recent
@@ -430,7 +473,7 @@ jobs:
       - run: npm run check:release-required-workflows
       - run: npm run check:portable-approvals
       - run: npm run check:git-client-evidence
-      - run: npm run lint
+      - run: npm run lint:typed
         env:
           NODE_OPTIONS: --max-old-space-size=12288
       - run: npm run check:native-host-code-quality
@@ -1131,6 +1174,7 @@ jobs:
       - verified-tree
       - build-scan-sbom-smoke
       - core-quality
+      - code-quality-policy
       - coverage-sonar
       - cross-platform-smoke
       - node-26-compatibility
@@ -1147,6 +1191,7 @@ jobs:
           BUILD_SCAN_SBOM_SMOKE_RESULT: ${{ needs.build-scan-sbom-smoke.result }}
           CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
+          CODE_QUALITY_POLICY_RESULT: ${{ needs.code-quality-policy.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
@@ -1187,6 +1232,7 @@ jobs:
             # else — failure, cancelled, an empty result, an unknown state — fails closed.
             for named in "CHANGE_SCOPE:${CHANGE_SCOPE_RESULT:-}" "PROTECTED_BRANCH:${PROTECTED_BRANCH_RESULT:-}" \
                          "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
+                         "CODE_QUALITY_POLICY:${CODE_QUALITY_POLICY_RESULT:-}" \
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
                          "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}" \
@@ -1206,7 +1252,7 @@ jobs:
             echo "Trusted push SBOM provenance did not succeed (${SBOM_PROVENANCE_RESULT:-unset})."
             exit 1
           fi
-          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
+          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$CODE_QUALITY_POLICY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
@@ -1525,8 +1571,6 @@ jobs:
         run: npm run typecheck
       - name: Run this shard of the complete hermetic test suite
         run: npm test -- --shard=${{ matrix.shard }}/2
-      - name: Run the complete static policy report smoke serially
-        run: npm run check:code-quality-policy:repository
       - name: Prepare packaged CLI
         run: npm run prepare:bin
       - name: Build UI (static export)

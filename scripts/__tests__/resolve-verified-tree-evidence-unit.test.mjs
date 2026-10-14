@@ -145,6 +145,8 @@ describe("candidateProvedEveryReusedJob", () => {
   const everyJob = [
     "Semantic duplication",
     "Core quality",
+    "Static code-quality policy (Node 24.18.0)",
+    "Static code-quality policy (Node 26.8.1)",
     "Coverage suite (keiko-ui)",
     "Coverage suite (scripts)",
     "Coverage and SonarCloud",
@@ -188,6 +190,19 @@ describe("candidateProvedEveryReusedJob", () => {
       await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
     }
   });
+
+  it.each(["24.18.0", "26.8.1"])(
+    "requires successful exact evidence for static policy Node %s",
+    async (version) => {
+      const name = `Static code-quality policy (Node ${version})`;
+      const missing = everyJob.filter((job) => job.name !== name);
+      for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+        const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+        stubFetch({ "/jobs": { body: { jobs } } });
+        await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+      }
+    },
+  );
 
   it("refuses legacy single-job Node 26 evidence", async () => {
     const jobs = everyJob.filter((job) => !job.name.startsWith("Node 26 compatibility"));

@@ -56,6 +56,7 @@ import { join, resolve } from "node:path";
 
 import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 // The tag shape lives in ONE place, shared with the Release verification workflow that
 // validates the pushed tag — restating it here would let this lane mint a tag the workflow
 // then rejects (review finding on #3043).
@@ -1254,9 +1255,7 @@ function runPublishSteps(input) {
   );
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].replaceAll("\\", "/"));
-if (invokedDirectly) {
+if (isMainModule(import.meta.url)) {
   try {
     runPortablePrerelease(process.argv.slice(2));
   } catch (error) {

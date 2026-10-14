@@ -22,6 +22,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /** The governed beta index: no leading zeros, so every tag has exactly one spelling. */
 export const BETA_INDEX = "(?:0|[1-9][0-9]*)";
@@ -78,8 +79,6 @@ export function runReleaseTagContractCli(argv) {
   process.stdout.write(`release-tag-contract: PASS - ${tag} matches package version ${version}.\n`);
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].replaceAll("\\", "/"));
-if (invokedDirectly) {
+if (isMainModule(import.meta.url)) {
   runReleaseTagContractCli(process.argv.slice(2));
 }

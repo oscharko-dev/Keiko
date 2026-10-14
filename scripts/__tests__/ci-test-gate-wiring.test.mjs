@@ -407,7 +407,7 @@ describe("CI test/gate wiring guard", () => {
     );
     expect(windowsRfc3161QualityProject).not.toContain("<TargetFramework>net8.0</TargetFramework>");
     expect(windowsRfc3161QualityProject).toContain(
-      '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
+      '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />',
     );
   });
 
@@ -490,7 +490,8 @@ describe("CI test/gate wiring guard", () => {
     expect(node24SetupCount).toBe(32);
     expect(node26SetupCount).toBe(1);
     expect(nodeSetupCount).toBe(33);
-    expect(verificationCount).toBe(nodeSetupCount);
+    expect(verificationCount).toBe(nodeSetupCount + 1);
+    expect(ci).toContain("node-version: ${{ matrix.node }}");
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
   });

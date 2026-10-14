@@ -40,6 +40,7 @@ function runCiAggregate(overrides = {}) {
       BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
       CHANGE_SCOPE_RESULT: "success",
       CORE_QUALITY_RESULT: "success",
+      CODE_QUALITY_POLICY_RESULT: "success",
       COVERAGE_SONAR_RESULT: "success",
       CROSS_PLATFORM_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
@@ -276,6 +277,7 @@ describe("dev quality workflows", () => {
   it("binds every full-tree quality lane to the same immutable merge candidate", () => {
     const candidateJobs = [
       "core-quality",
+      "code-quality-policy",
       "coverage-packages",
       "coverage-ui",
       "coverage-scripts",
@@ -551,6 +553,8 @@ describe("dev quality workflows", () => {
     expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
+    expect(aggregateJob).toContain("- code-quality-policy");
+    expect(aggregateJob).toContain("CODE_QUALITY_POLICY_RESULT");
     expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");

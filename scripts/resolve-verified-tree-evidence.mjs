@@ -29,6 +29,8 @@ import { pathToFileURL } from "node:url";
 export const REUSED_JOB_NAMES = Object.freeze([
   "Semantic duplication",
   "Core quality",
+  "Static code-quality policy (Node 24.18.0)",
+  "Static code-quality policy (Node 26.8.1)",
   "Coverage suite (keiko-ui)",
   "Coverage suite (scripts)",
   "Coverage and SonarCloud",

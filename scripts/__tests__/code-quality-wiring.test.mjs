@@ -4,6 +4,10 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, globSync } from "node:f
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parse } from "yaml";
+import {
+  EXPECTED_NODE_BASELINE,
+  EXPECTED_NODE_COMPATIBILITY_BASELINE,
+} from "../check-runtime-toolchain.mjs";
 import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
 import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
@@ -280,7 +284,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     }
   }, 60_000);
 
-  it("executes the whole enforcing policy before typed root/UI lint in required Core quality", () => {
+  it("retains full local lint and requires hosted policy before typed Core lint", () => {
     const manifest = JSON.parse(read("package.json"));
     expect(manifest.scripts["check:code-quality-policy"]).toBe(
       "node scripts/check-code-quality-policy.mjs",
@@ -294,27 +298,46 @@ describe("production code-quality invocation wiring (#3915)", () => {
       commands.filter((command) => command === "npm run check:code-quality-policy"),
     ).toHaveLength(0);
     expect(commands[0]).toBe("npm run build:packages");
-    expect(commands.slice(2).join(" && ")).toContain("eslint/bin/eslint.js . --max-warnings=0");
-    expect(commands.slice(2).join(" && ")).toContain(
+    expect(commands.slice(2)).toEqual([
+      "npm run check:code-quality-policy:raw-reader",
+      "npm run lint:typed",
+    ]);
+    expect(manifest.scripts["check:code-quality-policy:raw-reader"]).toBe(
+      "node --test scripts/__tests__/code-quality-raw-reader-smoke.mjs",
+    );
+    expect(manifest.scripts["lint:typed"]).toContain("eslint/bin/eslint.js . --max-warnings=0");
+    expect(manifest.scripts["lint:typed"]).toContain(
       "npm --workspace @oscharko-dev/keiko-ui run lint",
     );
     const workflow = parse(read(".github/workflows/ci.yml"));
     const core = Object.values(workflow.jobs).find((job) => job.name === "Core quality");
-    expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(1);
+    expect(core.needs).toContain("code-quality-policy");
+    expect(core.steps.filter((step) => step.run === "npm run lint:typed")).toHaveLength(1);
+    expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(0);
   });
 
-  it("runs the same uncollected repository smoke serially in required Node 26", async () => {
+  it("runs the uncollected repository smoke in both required hosted ARM policy legs", async () => {
     const workflow = parse(read(".github/workflows/ci.yml"));
     const compatibility = workflow.jobs["node-26-compatibility"];
     const runs = compatibility.steps.map((step) => step.run);
-    const ordinary = runs.indexOf("npm test -- --shard=${{ matrix.shard }}/2");
-    const smoke = runs.indexOf("npm run check:code-quality-policy:repository");
-    expect(ordinary).toBeGreaterThanOrEqual(0);
-    expect(smoke).toBe(ordinary + 1);
-    expect(
-      runs.filter((run) => run === "npm run check:code-quality-policy:repository"),
-    ).toHaveLength(1);
-    expect(compatibility.steps[smoke].if).toBeUndefined();
+    expect(runs).toContain("npm test -- --shard=${{ matrix.shard }}/2");
+    expect(runs).not.toContain("npm run check:code-quality-policy:repository");
+    const policy = workflow.jobs["code-quality-policy"];
+    expect(policy["runs-on"]).toBe("ubuntu-24.04-arm");
+    expect(policy.strategy.matrix.node).toEqual([
+      EXPECTED_NODE_BASELINE,
+      EXPECTED_NODE_COMPATIBILITY_BASELINE,
+    ]);
+    const smoke = policy.steps.filter(
+      (step) => step.run === "npm run check:code-quality-policy:repository",
+    );
+    expect(smoke).toHaveLength(1);
+    expect(smoke[0].if).toBeUndefined();
+    const policyRuns = policy.steps.map((step) => step.run);
+    const fullIndex = policyRuns.indexOf("npm run check:code-quality-policy:repository");
+    expect(policyRuns[fullIndex + 1]).toBe("npm run check:code-quality-policy:raw-reader");
+    expect(policy.steps[fullIndex + 1].if).toBeUndefined();
+    expect(workflow.jobs.ci.needs).toContain("code-quality-policy");
     const cwd = fileURLToPath(new URL("../../", import.meta.url));
     for (const name of [
       "vitest.config.ts",
@@ -327,9 +350,12 @@ describe("production code-quality invocation wiring (#3915)", () => {
       const included = config.test.include.flatMap((pattern) =>
         globSync(pattern, { cwd, exclude: config.test.exclude }),
       );
-      expect(included.map((path) => path.replaceAll("\\", "/"))).not.toContain(
+      for (const smokePath of [
         "scripts/__tests__/code-quality-wiring-smoke.mjs",
-      );
+        "scripts/__tests__/code-quality-raw-reader-smoke.mjs",
+      ]) {
+        expect(included.map((path) => path.replaceAll("\\", "/"))).not.toContain(smokePath);
+      }
     }
   });
 });
