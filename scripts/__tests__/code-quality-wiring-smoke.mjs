@@ -93,9 +93,10 @@ function assertRepositoryPolicyReport(report) {
 if (isMainModule(import.meta.url)) {
   test(
     "reports a full actual candidate verdict through the enforcing CLI owner",
-    { timeout: 195_000 },
+    { timeout: 375_000 },
     async () => {
-      const report = await isolatedPolicyReport();
+      // Complete four-CPU ARM evaluation measured 249s; retain a finite integration allowance.
+      const report = await isolatedPolicyReport(undefined, 360_000);
       assertRepositoryPolicyReport(report);
     },
   );

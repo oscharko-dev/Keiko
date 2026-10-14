@@ -373,8 +373,17 @@ counterfactual and restoration proofs remain separate acceptance obligations.
 `npm run check:code-quality-policy:repository` runs the real enforcing CLI with `--json` and checks
 its full repository scope, complete inventory visitation, package/rule counts, zero active
 violations, eight ready/pending responsibilities with zero qualified records and unexecuted proof
-facts, and complete package inventory. It retains the 180000ms/SIGKILL/32MiB child allowance and
-195000ms whole-test watchdog. These are finite integration allowances, not a product latency SLA.
+facts, and complete package inventory. This complete-repository invocation uses a
+360000ms/SIGKILL/32MiB child allowance and 375000ms whole-test watchdog. The prior 180000ms
+allowance killed the correct full evaluation on both hosted ARM Node lines and in a local
+four-CPU ARM reproduction. A [separate bounded measurement](https://github.com/oscharko-dev/Keiko/pull/4013#issuecomment-6176738539) on candidate `4887a278` completed the
+report and a fresh inventory comparison in 249s with approximately 2.1GiB peak child RSS:
+6200/6200 files visited, 27 packages, 22 rules, zero active violations and all eight responsibilities
+ready with semantic proofs still pending. The six-minute allowance provides headroom around that
+measured complete operation; it does not establish hosted performance equivalence. These are
+finite integration allowances, not a product latency SLA. The general `isolatedPolicyReport`
+helper default remains 180000ms, and its genuine deadline-kill and output-limit regressions remain
+unchanged. Fresh hosted results are still required after this correction.
 
 The required static-policy matrix invokes this checked smoke once on each governed Node line on
 `ubuntu-24.04-arm`, using a fresh full-history checkout of the same immutable merge candidate,
@@ -395,7 +404,12 @@ semantic-proof180s bounds are independent and unchanged. The canonical public
 
 ### Explicit current-subject responsibility qualification
 
-`npm run check:code-quality-policy -- --qualify-responsibilities --json` selects an optional phase; default static invocations and the serial enforcing smoke do not execute business proof suites or change their180000ms/195000ms limits. Qualification is enforce-only. V1, empty records and missing registered exact selectors fail closed when selected. No active rule scope or existing responsibility identity is changed.
+`npm run check:code-quality-policy -- --qualify-responsibilities --json` selects an optional phase;
+default static invocations and the serial enforcing smoke do not execute business proof suites.
+The full-repository smoke's integration allowance is separate from the unchanged 180000ms semantic
+proof-child bound below. Qualification is enforce-only. V1, empty records and missing registered
+exact selectors fail closed when selected. No active rule scope or existing responsibility identity
+is changed.
 
 Each v2 responsibility may add closed `proofAssertions` entries containing only an already declared proof `path` and exact Vitest `testName` (fullName including describe ancestors). Duplicates, foreign paths, missing names and unknown command/authorization fields refuse. Existing selector history is monotonic: removal or rebinding fails. Shared actual assertions may support multiple records but execute once in the single whole ten-owner Vitest invocation for the current cohort.
 
