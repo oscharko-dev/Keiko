@@ -5661,3 +5661,163 @@ describe("Git typed response transport (#3918)", () => {
     expect(diagnostic).not.toHaveBeenCalled();
   });
 });
+
+describe("Git history summary remotes empty admission (#3918)", () => {
+  beforeEach(() => resetClientDiagnosticWriter());
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+    vi.unstubAllGlobals();
+  });
+  for (const { route, read } of [
+    {
+      route: "history",
+      read: (): Promise<unknown> => fetchGitHistory({ root: "/private-repository" }),
+    },
+    { route: "summary", read: (): Promise<unknown> => fetchGitSummary("/private-repository") },
+    { route: "remotes", read: (): Promise<unknown> => fetchGitRemotes("/private-repository") },
+  ]) {
+    it(`${route}: refuses 204 with one correlated body-free diagnostic`, async () => {
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(null, {
+            status: 204,
+            headers: { "X-Keiko-Correlation-Id": "git-read-empty-test" },
+          }),
+        ),
+      );
+      await expect(read()).rejects.toMatchObject({
+        code: "CONTRACT_VALIDATION_FAILED",
+        status: 502,
+        correlationId: "git-read-empty-test",
+      });
+      expect(diagnostic).toHaveBeenCalledTimes(1);
+      expect(diagnostic).toHaveBeenCalledWith(
+        "bff:contract-validation-failed",
+        expect.objectContaining({
+          errorKind: "validation-failed",
+          correlationId: "git-read-empty-test",
+        }),
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private-repository");
+    });
+  }
+});
+
+function nextGitReadFixture(route: string): Record<string, unknown> {
+  const envelope = {
+    schemaVersion: "1",
+    root: "/private-repository",
+    state: "available",
+    available: true,
+    truncated: false,
+  };
+  if (route === "history") return { ...envelope, entries: [], limit: 50, skip: 0 };
+  if (route === "remotes")
+    return { ...envelope, remotes: [{ name: "origin", fetchUrl: "https://example.invalid/repo" }] };
+  return {
+    ...envelope,
+    detached: false,
+    clean: true,
+    ahead: 0,
+    behind: 0,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    remotes: [{ name: "origin" }],
+  };
+}
+
+describe("Git remaining typed read transport (#3918)", () => {
+  beforeEach(() => resetClientDiagnosticWriter());
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  for (const { route, read } of [
+    {
+      route: "history",
+      read: (): Promise<unknown> =>
+        fetchGitHistory({ root: "/private-repository", limit: 25, skip: 50 }),
+    },
+    {
+      route: "summary",
+      read: (): Promise<unknown> =>
+        fetchGitSummary("/private-repository", { correlationId: "git-summary-request-test" }),
+    },
+    { route: "remotes", read: (): Promise<unknown> => fetchGitRemotes("/private-repository") },
+  ]) {
+    it(`${route}: returns the healthy original object and response correlation`, async () => {
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      const value = nextGitReadFixture(route);
+      const response = new Response("{}", {
+        headers: { "X-Keiko-Correlation-Id": "git-read-result-test" },
+      });
+      vi.spyOn(response, "json").mockResolvedValue(value);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+      const result = await read();
+      expect(result).toBe(value);
+      expect(responseCorrelationIdOf(result)).toBe("git-read-result-test");
+      expect(diagnostic).not.toHaveBeenCalled();
+    });
+    it.each([null, 1, true])(
+      `${route}: rejects primitive %j with one correlated diagnostic`,
+      async (value) => {
+        const diagnostic = vi.fn();
+        setClientDiagnosticWriter(diagnostic);
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(value), {
+              headers: { "X-Keiko-Correlation-Id": "git-read-refusal-test" },
+            }),
+          ),
+        );
+        await expect(read()).rejects.toMatchObject({
+          code: "CONTRACT_VALIDATION_FAILED",
+          status: 502,
+          correlationId: "git-read-refusal-test",
+        });
+        expect(diagnostic).toHaveBeenCalledTimes(1);
+        expect(diagnostic).toHaveBeenCalledWith(
+          "bff:contract-validation-failed",
+          expect.objectContaining({
+            errorKind: "validation-failed",
+            correlationId: "git-read-refusal-test",
+          }),
+        );
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private-repository");
+      },
+    );
+    it(`${route}: rejects malformed physical JSON arrays without recording response contents`, async () => {
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      const value = {
+        ...nextGitReadFixture(route),
+        [route === "history" ? "entries" : "remotes"]: [null],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify(value), {
+            headers: { "X-Keiko-Correlation-Id": "git-read-array-test" },
+          }),
+        ),
+      );
+      await expect(read()).rejects.toMatchObject({
+        code: "CONTRACT_VALIDATION_FAILED",
+        status: 502,
+        correlationId: "git-read-array-test",
+      });
+      expect(diagnostic).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private-repository");
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("example.invalid");
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("must be an object");
+    });
+  }
+});

@@ -2185,7 +2185,7 @@ export async function fetchGitSummary(
   options?: GitReadRequestOptions,
 ): Promise<GitRepositorySummary> {
   const api = await loadGitWorkbenchApi("git-read", options?.correlationId);
-  return api.fetchGitSummary(fetchJson, root, options);
+  return api.fetchGitSummary(fetchParsedJson, root, options);
 }
 
 export async function fetchGitHistory(input: {
@@ -2194,12 +2194,12 @@ export async function fetchGitHistory(input: {
   readonly skip?: number;
 }): Promise<GitHistoryResponse> {
   const api = await loadGitWorkbenchApi("git-history");
-  return api.fetchGitHistory(fetchJson, input);
+  return api.fetchGitHistory(fetchParsedJson, input);
 }
 
 export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
   const api = await loadGitWorkbenchApi("git-read");
-  return api.fetchGitRemotes(fetchJson, root);
+  return api.fetchGitRemotes(fetchParsedJson, root);
 }
 
 export async function fetchGitDiff(input: {

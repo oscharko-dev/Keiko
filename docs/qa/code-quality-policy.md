@@ -47,13 +47,15 @@ justified representation boundary, such as attaching a nominal brand after struc
 it neither validates hostile input nor authorizes a chained assertion. These two syntax rules do
 not establish boundary/domain qualification or complete #3918.
 
-Git status and diff parsing reuse concrete admission in the owning contracts module. The typed
-parsers return the original accepted value; legacy validators retain their result shapes and
-diagnostics. Status arrays validate each indexed member, including sparse positions, without
-trusting caller-supplied iteration methods. The lazy browser consumers carry the parser's value
-through the existing fetch scaffold. An empty 204 on either typed read is a contract refusal with
-the response correlation and existing body-free diagnostic; ordinary no-content mutation routes
-retain their behavior. Other legacy response paths remain separate migration obligations.
+Git status, diff, history, summary and remotes parsing reuse concrete admission in their owning
+contracts modules. The typed parsers return the original accepted value; legacy validators retain
+their result shapes and diagnostics. Status, history-entry, history-ref and remote arrays validate
+each indexed member, including sparse positions, without trusting caller-supplied iteration
+methods. History retains its strict date and pagination bounds; summary and remotes retain their
+distinct URL policies and paired upstream fields. The lazy browser consumers carry the parser's
+value through the existing fetch scaffold. An empty 204 on these typed reads is a contract refusal
+with the response correlation and existing body-free diagnostic; ordinary no-content mutation
+routes retain their behavior. Other legacy response paths remain separate migration obligations.
 
 Policy validation retains the initial guards and rejects any activation shrink against the
 complete reachable policy history. Shallow history fails; a second unrelated commit cannot hide
@@ -360,6 +362,13 @@ strict primitive comparisons and the public malformed-scope refusal proof suppor
 Other helpers, legacy validators, the UI's injected callback chain and unrelated response casts
 remain unclassified by these records. Qualification requires fresh execution of the declared public
 identity, typed-result and malformed-input proofs in the current-subject phase below.
+The history, summary and remotes records add six parameter slots: the three public parser inputs,
+history's private `isGitRepositoryState` and `isString` guards, and summary's private
+`isGitLastSyncMetadata` guard. These are the actual eligible raw-input checking parameters in each
+record's existing closure, not a classification of every helper. Their public proofs preserve
+identity and typed output and reject malformed inputs; the owning suites retain date, pagination,
+URL and upstream checks and prove the sparse/spoofed-array repair. These records do not classify
+the injected UI callback graph or complete the remaining boundary/domain migration.
 Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require

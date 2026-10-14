@@ -1533,3 +1533,17 @@ it("exports the additive Git parse types through the existing root type surface"
 });
 
 import { parseGitRepositoryStatusResponse as parsePublicGitStatusForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+
+import { parseGitHistoryResponse as parsePublicHistoryForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-history";
+import {
+  parseGitRepositorySummary as parsePublicSummaryForIndex,
+  parseGitRemotesResponse as parsePublicRemotesForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
+
+it("exports all three additive Git read parser type identities", () => {
+  const history: typeof import("./index.js").parseGitHistoryResponse = parsePublicHistoryForIndex;
+  const summary: typeof import("./index.js").parseGitRepositorySummary = parsePublicSummaryForIndex;
+  const remotes: typeof import("./index.js").parseGitRemotesResponse = parsePublicRemotesForIndex;
+  for (const parse of [history, summary, remotes])
+    expect(parse(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});

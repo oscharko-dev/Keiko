@@ -6,6 +6,7 @@ import type {
   GitRepositoryState,
   GitUnavailableReason,
   GitRepositoryValidation,
+  GitRepositoryParseResult,
 } from "./git-repository.js";
 import {
   GIT_REPOSITORY_STATES,
@@ -40,7 +41,14 @@ export interface GitHistoryResponse {
   readonly truncated: boolean;
 }
 
-const GIT_REPOSITORY_STATES_VALUES: readonly unknown[] = GIT_REPOSITORY_STATES;
+function rejectHistoryField(reasons: string[], reason: string): false {
+  reasons.push(reason);
+  return false;
+}
+
+function isGitRepositoryState(input: unknown): input is GitRepositoryState {
+  return typeof input === "string" && new Set<string>(GIT_REPOSITORY_STATES).has(input);
+}
 
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
@@ -58,14 +66,19 @@ function isNonNegativeInteger(input: unknown): input is number {
   return typeof input === "number" && Number.isInteger(input) && input >= 0;
 }
 
-function validateRefs(input: unknown, reasons: string[], index: number): void {
-  if (!Array.isArray(input)) {
-    reasons.push(`entries[${String(index)}].refs must be an array`);
-    return;
+function validateRefs(input: unknown, reasons: string[], index: number): boolean {
+  if (!Array.isArray(input))
+    return rejectHistoryField(reasons, `entries[${String(index)}].refs must be an array`);
+  const refs: readonly unknown[] = input;
+  const length = refs.length;
+  for (let position = 0; position < length; position += 1) {
+    if (!isString(refs[position]))
+      return rejectHistoryField(
+        reasons,
+        `entries[${String(index)}].refs must contain only strings`,
+      );
   }
-  if (!input.every(isString)) {
-    reasons.push(`entries[${String(index)}].refs must contain only strings`);
-  }
+  return true;
 }
 
 // `%aI` ("strict ISO 8601", the pretty-format git-history's producer uses for the author date)
@@ -115,65 +128,86 @@ function isStrictIsoAuthorDate(value: unknown): value is string {
   );
 }
 
-function validateEntry(input: unknown, reasons: string[], index: number): void {
+function validateEntry(input: unknown, reasons: string[], index: number): boolean {
+  let valid = true;
   if (!isRecord(input)) {
-    reasons.push(`entries[${String(index)}] must be an object`);
-    return;
+    return rejectHistoryField(reasons, `entries[${String(index)}] must be an object`);
   }
   for (const key of ["sha", "shortSha", "subject", "author"] as const) {
-    if (!isString(input[key])) reasons.push(`entries[${String(index)}].${key} must be a string`);
+    if (!isString(input[key]))
+      valid = rejectHistoryField(reasons, `entries[${String(index)}].${key} must be a string`);
   }
   if (!isStrictIsoAuthorDate(input.date)) {
-    reasons.push(`entries[${String(index)}].date must be a strict ISO 8601 date`);
+    valid = rejectHistoryField(
+      reasons,
+      `entries[${String(index)}].date must be a strict ISO 8601 date`,
+    );
   }
   for (const key of ["parentCount", "changedFileCount"] as const) {
     if (!isNonNegativeInteger(input[key])) {
-      reasons.push(`entries[${String(index)}].${key} must be a non-negative integer`);
+      valid = rejectHistoryField(
+        reasons,
+        `entries[${String(index)}].${key} must be a non-negative integer`,
+      );
     }
   }
-  validateRefs(input.refs, reasons, index);
+  return validateRefs(input.refs, reasons, index) && valid;
 }
 
 function validateHistoryIdentity(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  if (input.schemaVersion !== GIT_HISTORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
-  if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
-    reasons.push("state invalid");
+): boolean {
+  let valid = true;
+  if (input.schemaVersion !== GIT_HISTORY_SCHEMA_VERSION)
+    valid = rejectHistoryField(reasons, "schemaVersion invalid");
+  if (!isString(input.root)) valid = rejectHistoryField(reasons, "root must be a string");
+  if (!isGitRepositoryState(input.state)) {
+    valid = rejectHistoryField(reasons, "state invalid");
   }
+  return valid;
 }
 
 function validateHistoryOptionalEnvelope(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    reasons.push("reason invalid");
+    valid = rejectHistoryField(reasons, "reason invalid");
   }
   if (input.message !== undefined && !isBoundedGitMessage(input.message)) {
-    reasons.push("message must be a bounded string when present");
+    valid = rejectHistoryField(reasons, "message must be a bounded string when present");
   }
   if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    reasons.push("repositoryRoot must be a string when present");
+    valid = rejectHistoryField(reasons, "repositoryRoot must be a string when present");
   }
+  return valid;
 }
 
-function validateHistoryFlags(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
-  if (!isBoolean(input.available)) reasons.push("available must be a boolean");
-  if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
-  if (!isNonNegativeInteger(input.limit)) reasons.push("limit must be a non-negative integer");
-  if (!isNonNegativeInteger(input.skip)) reasons.push("skip must be a non-negative integer");
+function validateHistoryFlags(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): boolean {
+  let valid = true;
+  if (!isBoolean(input.available))
+    valid = rejectHistoryField(reasons, "available must be a boolean");
+  if (!isBoolean(input.truncated))
+    valid = rejectHistoryField(reasons, "truncated must be a boolean");
+  if (!isNonNegativeInteger(input.limit))
+    valid = rejectHistoryField(reasons, "limit must be a non-negative integer");
+  if (!isNonNegativeInteger(input.skip))
+    valid = rejectHistoryField(reasons, "skip must be a non-negative integer");
+  return valid;
 }
 
 function validateHistoryEnvelopeFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  validateHistoryIdentity(input, reasons);
-  validateHistoryOptionalEnvelope(input, reasons);
-  validateHistoryFlags(input, reasons);
+): boolean {
+  const identity = validateHistoryIdentity(input, reasons);
+  const optional = validateHistoryOptionalEnvelope(input, reasons);
+  return validateHistoryFlags(input, reasons) && identity && optional;
 }
 
 // The producer (keiko-server gitRepositoryReads.ts handleGitHistory) runs `git log
@@ -189,32 +223,48 @@ function validateEntriesBoundedByLimit(
   entries: readonly unknown[],
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  if (!isNonNegativeInteger(input.limit) || input.limit <= 0) return;
+): boolean {
+  let valid = true;
+  if (!isNonNegativeInteger(input.limit) || input.limit <= 0) return true;
   if (entries.length > input.limit) {
-    reasons.push("entries.length must not exceed limit");
+    valid = rejectHistoryField(reasons, "entries.length must not exceed limit");
   } else if (entries.length === input.limit && input.truncated !== true) {
-    reasons.push("truncated must be true when entries.length equals limit");
+    valid = rejectHistoryField(reasons, "truncated must be true when entries.length equals limit");
   }
+  return valid;
 }
 
-function validateHistoryEntries(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
-  if (!Array.isArray(input.entries)) {
-    reasons.push("entries must be an array");
-    return;
+function validateHistoryEntries(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): boolean {
+  if (!Array.isArray(input.entries)) return rejectHistoryField(reasons, "entries must be an array");
+  const entries: readonly unknown[] = input.entries;
+  const length = entries.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    valid = validateEntry(entries[index], reasons, index) && valid;
   }
-  input.entries.forEach((entry, index) => {
-    validateEntry(entry, reasons, index);
-  });
-  validateEntriesBoundedByLimit(input.entries, input, reasons);
+  return validateEntriesBoundedByLimit(input.entries, input, reasons) && valid;
 }
 
-// History is a paginated wire envelope (entries + limit/skip/truncated); centralizing the
-// validator keeps per-field failure messages predictable for tests and callers.
-export function validateGitHistoryResponse(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
+function admitGitHistory(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitHistoryResponse {
+  const envelope = validateHistoryEnvelopeFields(input, reasons);
+  return validateHistoryEntries(input, reasons) && envelope;
+}
+
+export function parseGitHistoryResponse(
+  input: unknown,
+): GitRepositoryParseResult<GitHistoryResponse> {
   if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  validateHistoryEnvelopeFields(input, reasons);
-  validateHistoryEntries(input, reasons);
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  const reasons: string[] = [];
+  return admitGitHistory(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+}
+
+export function validateGitHistoryResponse(input: unknown): GitRepositoryValidation {
+  const parsed = parseGitHistoryResponse(input);
+  return parsed.ok ? { ok: true } : parsed;
 }

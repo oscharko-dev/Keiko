@@ -24,6 +24,7 @@ it("loads Git read validators only when a Git read is requested", async () => {
   const fetch = vi.fn().mockRejectedValue(new TypeError("offline"));
   vi.stubGlobal("fetch", fetch);
   for (const read of [
+    (): Promise<unknown> => api.fetchGitHistory({ root: "/repo" }),
     (): Promise<unknown> => api.fetchGitStatus("/repo"),
     (): Promise<unknown> => api.fetchGitSummary("/repo"),
     (): Promise<unknown> => api.fetchGitRemotes("/repo"),
@@ -32,7 +33,7 @@ it("loads Git read validators only when a Git read is requested", async () => {
     await expect(read()).rejects.toBeDefined();
     expect(new Set(imports)).toEqual(new Set(["fetchers", "summary"]));
   }
-  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(fetch).toHaveBeenCalledTimes(5);
 });
 
 function hasRuntimeBinding(clause: ts.ImportClause | undefined): boolean {
@@ -56,13 +57,14 @@ it("keeps ordinary Git validator imports out of the eager API module", () => {
   const eagerGitImports = source.statements.filter((statement) => {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
       return false;
-    if (!/\/git-repository(?:-summary)?$/u.test(statement.moduleSpecifier.text)) return false;
+    if (!/\/git-(?:repository(?:-summary)?|history)$/u.test(statement.moduleSpecifier.text))
+      return false;
     return hasRuntimeBinding(statement.importClause);
   });
   expect(eagerGitImports.map((statement) => statement.getText(source))).toEqual([]);
 });
 
-it("ordinary status and diff select typed parsers in the existing deferred module", () => {
+it("ordinary Git reads select typed parsers in the existing deferred module", () => {
   const directory = dirname(fileURLToPath(import.meta.url));
   const source = ts.createSourceFile(
     "coding-workbench-lazy-fetchers.ts",
@@ -73,6 +75,9 @@ it("ordinary status and diff select typed parsers in the existing deferred modul
   for (const [name, parser] of [
     ["fetchGitStatus", "parseGitRepositoryStatusResponse"],
     ["fetchGitDiff", "parseGitRepositoryDiffResponse"],
+    ["fetchGitHistory", "parseGitHistoryResponse"],
+    ["fetchGitSummary", "parseGitRepositorySummary"],
+    ["fetchGitRemotes", "parseGitRemotesResponse"],
   ]) {
     const fn = source.statements.find(
       (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,

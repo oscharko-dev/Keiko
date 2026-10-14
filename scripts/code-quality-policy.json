@@ -747,6 +747,138 @@
           "testName": "Git typed owning and public parsers (#3918) public: refuses primitive input and the actual malformed array bypasses"
         }
       ]
+    },
+    {
+      "id": "git-history-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-history.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-history",
+        "exportName": "parseGitHistoryResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-history.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-history",
+        "exportName": "parseGitHistoryResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-history.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-history",
+        "exportName": "parseGitHistoryResponse"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/git-history.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-history",
+        "exportName": "parsePublicGitHistory"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-history.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-history.test.ts",
+          "testName": "Git history typed parser (#3918) public: preserves original entries refs and omitted optionals"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-history.test.ts",
+          "testName": "Git history typed parser (#3918) public: refuses primitive and bypass input and retains eager ordered reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-history.test.ts",
+          "testName": "Git history typed parser (#3918) public: retains date and pagination admission"
+        }
+      ]
+    },
+    {
+      "id": "git-summary-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parseGitRepositorySummary",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parseGitRepositorySummary"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parseGitRepositorySummary"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parsePublicGitSummary"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-repository-summary.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+          "testName": "Git summary and remotes typed parsers (#3918) public: preserves original nested values and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+          "testName": "Git summary and remotes typed parsers (#3918) public: refuses primitives sparse and spoofed remotes with eager reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+          "testName": "Git summary and remotes typed parsers (#3918) public: retains URL redaction and upstream pair admission"
+        }
+      ]
+    },
+    {
+      "id": "git-remotes-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parseGitRemotesResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parseGitRemotesResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parseGitRemotesResponse"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-repository-summary",
+        "exportName": "parsePublicGitRemotes"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-repository-summary.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+          "testName": "Git summary and remotes typed parsers (#3918) public: preserves original nested values and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+          "testName": "Git summary and remotes typed parsers (#3918) public: refuses primitives sparse and spoofed remotes with eager reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-repository-summary.test.ts",
+          "testName": "Git summary and remotes typed parsers (#3918) public: retains URL redaction and upstream pair admission"
+        }
+      ]
     }
   ]
 }

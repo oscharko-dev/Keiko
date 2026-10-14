@@ -7,16 +7,16 @@ or contains only a load error. Keyboard modality is established with a real Tab 
 focus; programmatic focus after a pointer click must not steal the foreground.
 
 This set was regenerated on 2026-10-14 UTC from the PR #4013 checkout at signed head
-`1d7626fb3fe943bf93715548ed1128da361d8aab` with the pending typed Git status/diff repair.
+`61222135af527a29fb68d6dcef12ea0b586c31f6` with the pending typed Git history/summary/remotes repair.
 The manifest's source hashes bind the actual measured working-tree bytes, including `api.ts`;
 this is not a claim that the pending repair already existed in that commit. The run used macOS
 arm64, Node 24.18.0, npm 11.16.0, Next.js 16.3.8 and Playwright 1.63.0. The unchanged eight-test
-Chromium suite passed in 1.8 minutes, including the real-BFF outage journey. All eight UI source
+Chromium suite passed in 56.9 seconds, including the real-BFF outage journey. All eight UI source
 hashes and four harness hashes bind the measured source.
 
 The original producer recreated all 17 tracked artifacts: 14 screenshots and three JSON records.
-Twelve screenshots remained byte-identical to the previous committed set; the responsive and
-progress captures were regenerated, and the three JSON records bind the measured sources. The existing native `ButtonText` behavior for both startup-notice
+Thirteen screenshots remained byte-identical to the previous committed set; the progress capture
+was regenerated and visually reviewed, and the three JSON records bind the measured sources. The existing native `ButtonText` behavior for both startup-notice
 actions in forced-colors mode remains unchanged. This is macOS browser and fixture qualification;
 it does not claim Linux updater execution, production update success, native N−1→N replacement,
 or final integrated-head acceptance.
