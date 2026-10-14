@@ -856,18 +856,23 @@ async function startFromDebugPanel(page: Page, panel: Locator): Promise<DebugSes
 }
 
 async function expectServerStopped(page: Page, sessionId: string): Promise<void> {
+  // This observation is inside the D12 Stop interval. The default 100 ms polling gap
+  // measures harness idle time after termination; keep the same terminal assertion at 10 ms.
   await expect
-    .poll(async () => {
-      const value = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/editor/debug/sessions/${encodeURIComponent(id)}`, {
-          headers: { "x-keiko-csrf": "1" },
-        });
-        // A terminated session reports "stopped"; an evicted one is gone. Both are terminal.
-        return response.ok ? ((await response.json()) as unknown) : { status: "gone" };
-      }, sessionId);
-      const record = value as { readonly status?: unknown };
-      return String(record.status);
-    })
+    .poll(
+      async () => {
+        const value = await page.evaluate(async (id) => {
+          const response = await fetch(`/api/editor/debug/sessions/${encodeURIComponent(id)}`, {
+            headers: { "x-keiko-csrf": "1" },
+          });
+          // A terminated session reports "stopped"; an evicted one is gone. Both are terminal.
+          return response.ok ? ((await response.json()) as unknown) : { status: "gone" };
+        }, sessionId);
+        const record = value as { readonly status?: unknown };
+        return String(record.status);
+      },
+      { intervals: [10] },
+    )
     .toMatch(/^(?:stopped|gone)$/u);
 }
 
