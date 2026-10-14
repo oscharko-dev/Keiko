@@ -6,6 +6,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { Icons } from "../Icons";
+import styles from "./UpdateWindow.module.css";
 import {
   hasStartupUpdateSignal,
   isPortableBootstrapSetupRequired,
@@ -150,7 +151,7 @@ export function UpdateStartupNotice({
         <strong>{noticeTitle(state.report, critical, t)}</strong>
         <span>{noticeBody(state.report, targetVersion, t)}</span>
       </div>
-      <div className="update-notice-actions">
+      <div className={`update-notice-actions ${styles.noticeActions}`}>
         <button
           type="button"
           className="update-notice-primary"
