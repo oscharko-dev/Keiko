@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
 import type {
   MarkdownSkillDocument,
   MarkdownSkillSelectionView,
@@ -23,6 +23,7 @@ import {
 } from "../hooks/useChatMarkdownSkill";
 import { ApiError } from "@/lib/api";
 import { MarkdownSkillControl } from "./MarkdownSkillControl";
+import { MarkdownSkillDialog } from "./MarkdownSkillDialog";
 
 vi.mock("@/lib/markdown-skills-api", () => ({
   fetchMarkdownSkills: vi.fn(),
@@ -83,6 +84,28 @@ async function open(): Promise<HTMLElement> {
 }
 
 describe("Chat Markdown skill controls", () => {
+  it("keeps the picker unavailable from first paint until the initial library read completes", async () => {
+    let initiallyDisabled: boolean | undefined;
+    function InitialDialog(): ReactNode {
+      const skill = useChatMarkdownSkill("chat-a");
+      useLayoutEffect(() => {
+        const picker = document.querySelector('input[type="file"]');
+        if (picker instanceof HTMLInputElement) initiallyDisabled = picker.disabled;
+      }, []);
+      return (
+        <MarkdownSkillDialog
+          skill={skill}
+          modelId={undefined}
+          disabled={false}
+          onClose={(): void => undefined}
+        />
+      );
+    }
+    render(<InitialDialog />);
+    expect(initiallyDisabled).toBe(true);
+    await waitFor(() => expect(screen.getByLabelText(/Upload Markdown/)).toBeEnabled());
+  });
+
   it("uploads without activation, previews safely, selects explicitly and removes the chip", async () => {
     render(<Harness />);
     const dialog = await open();

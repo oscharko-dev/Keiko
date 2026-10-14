@@ -48,7 +48,7 @@ function useLibraryRequest(): {
   readonly run: (operation: () => Promise<void>) => Promise<void>;
 } {
   const [error, setError] = useState<MarkdownSkillLibrary["error"]>();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const active = useRef(true);
   const locked = useRef(false);
   useEffect(() => {

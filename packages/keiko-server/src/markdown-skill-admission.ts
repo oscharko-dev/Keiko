@@ -33,13 +33,16 @@ export function withMarkdownSkillAdmission(
   if (messageId === undefined || library.forTurn(messageId) === undefined) return model;
   const protect = (request: GatewayCallRequest): GatewayCallRequest =>
     protectMarkdownSkillRequest(request, library, messageId, authority);
-  const call: ModelPort["call"] = async (request, signal) => model.call(protect(request), signal);
+  const call: ModelPort["call"] = async (request, signal) => {
+    const response = await model.call(protect(request), signal);
+    return response;
+  };
   if (model.callStream === undefined) return { call };
   const stream = model.callStream.bind(model);
   return {
     call,
     callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {
-      yield* stream(protect(request), signal);
+      for await (const chunk of stream(protect(request), signal)) yield chunk;
     },
   };
 }

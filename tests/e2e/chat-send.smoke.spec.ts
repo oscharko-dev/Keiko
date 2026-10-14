@@ -327,7 +327,12 @@ test("keeps a long private skill preview keyboard-scrollable and accessible @smo
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = "# Long synthetic method\n\n" + "Review the next boundary.\n\n".repeat(60);
-  await dialog.getByLabel(/Upload Markdown/).setInputFiles({
+  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  const chooser = page.waitForEvent("filechooser");
+  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({
     name: "long-synthetic.md",
     mimeType: "text/markdown",
     buffer: Buffer.from(body),
