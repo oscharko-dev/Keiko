@@ -148,7 +148,8 @@ describe("candidateProvedEveryReusedJob", () => {
     "Static code-quality policy (Node 24.18.0)",
     "Static code-quality policy (Node 26.8.1)",
     "Coverage suite (keiko-ui)",
-    "Coverage suite (scripts)",
+    "Coverage shard (scripts 1/2)",
+    "Coverage shard (scripts 2/2)",
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
     "Node 26 compatibility (shard 1/2)",
@@ -159,12 +160,24 @@ describe("candidateProvedEveryReusedJob", () => {
     "Portable secure-read smoke (macos-x64)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
-    "Coverage shard (packages 1/3)",
+    ...[1, 2, 3, 4, 5].map((shard) => `Coverage shard (packages ${shard}/5)`),
   ].map((name) => ({ name, conclusion: "success" }));
 
   it("accepts a candidate that executed every reused job", async () => {
     stubFetch({ "/jobs": { body: { jobs: everyJob } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(true);
+  });
+
+  it.each([
+    ...[1, 2, 3, 4, 5].map((shard) => `Coverage shard (packages ${shard}/5)`),
+    ...[1, 2].map((shard) => `Coverage shard (scripts ${shard}/2)`),
+  ])("requires successful exact evidence for %s", async (name) => {
+    const missing = everyJob.filter((job) => job.name !== name);
+    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+      stubFetch({ "/jobs": { body: { jobs } } });
+      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+    }
   });
 
   it("refuses a candidate that SKIPPED one of them", async () => {

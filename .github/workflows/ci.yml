@@ -593,9 +593,9 @@ jobs:
   # heaviest suite split into vitest shards. Every one of them MEASURES and none of them judges
   # (ADR-0156 D1): a shard writes a vitest blob report, and `coverage-sonar` below merges the blobs
   # and evaluates every floor exactly once, against complete coverage. A per-shard verdict would
-  # compare a third of the suite against the whole suite's floors.
+  # compare a partial suite against the whole suite's floors.
   coverage-packages:
-    name: Coverage shard (packages ${{ matrix.shard }}/3)
+    name: Coverage shard (packages ${{ matrix.shard }}/5)
     needs: verified-tree
     # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
     # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
@@ -609,7 +609,7 @@ jobs:
       # One shard's result must never mask another's; `coverage-sonar` fails closed on all of them.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -695,16 +695,16 @@ jobs:
         # before collecting, which increases the pressure that causes the kill.
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
+        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/5 --reporter=github-actions
       - name: Upload package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-blob-packages-${{ matrix.shard }}
-          # Vitest names a sharded blob `blob-<index>-<count>.json`, so the three uploads merge into
+          # Vitest names a sharded blob `blob-<index>-<count>.json`, so the five uploads merge into
           # one directory without collision. That per-shard name is exactly what an explicit
-          # `--outputFile.blob` destroys: a set output path wins verbatim, so all three shards write
-          # the one same file and `merge-multiple` keeps only the last of them -- two thirds of the
+          # `--outputFile.blob` destroys: a set output path wins verbatim, so all five shards write
+          # the one same file and `merge-multiple` keeps only the last of them -- four fifths of the
           # measurement, silently. The shard script therefore passes no output path and this follows
           # the reporter default. Vitest 4 writes `.vitest-reports`; the temporary Vitest 5 line
           # used `.vitest/blob`, so this path is deliberately pinned to the governed major.
@@ -785,7 +785,7 @@ jobs:
           retention-days: 1
 
   coverage-scripts:
-    name: Coverage suite (scripts)
+    name: Coverage shard (scripts ${{ matrix.shard }}/2)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
     if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
@@ -793,6 +793,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -833,17 +837,16 @@ jobs:
       # packages by bare specifier, which resolve to `dist`.
       - name: Build internal packages so workspace dist resolves
         run: npm run build:packages
-      - name: Measure script coverage
+      - name: Measure script coverage shard
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        run: npm run test:coverage:scripts
-      - name: Upload script coverage evidence
+        run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/2 --reporter=github-actions
+      - name: Upload script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-report-scripts
-          path: |
-            coverage/scripts/lcov.info
-            coverage/scripts/coverage-summary.json
+          name: coverage-blob-scripts-${{ matrix.shard }}
+          path: .vitest-reports/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -953,7 +956,7 @@ jobs:
           # The reporter default directory the shard script writes to, so that script followed by
           # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
           # rather than pinned through `--outputFile.blob`: an explicit output path would collapse
-          # the three per-shard blob names into one.
+          # the five per-shard blob names into one.
           path: .vitest-reports
           pattern: coverage-blob-packages-*
           merge-multiple: true
@@ -963,41 +966,69 @@ jobs:
         with:
           name: coverage-report-ui
           path: packages/keiko-ui/coverage
-      - name: Download script coverage evidence
+      - name: Download script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: coverage-report-scripts
-          path: coverage/scripts
+          pattern: coverage-blob-scripts-*
+          path: .vitest-reports-scripts
+          merge-multiple: true
       - name: Verify every package coverage shard delivered its evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # download-artifact's `pattern:` form succeeds silently when nothing matches, so it is the
-        # one fail-open primitive in this chain. Counting the blobs binds the hardcoded `/3` in the
+        # one fail-open primitive in this chain. Counting the blobs and checking native names binds `/5` in the
         # shard command to the matrix: if the two ever drift, a PARTIAL merge would otherwise be
         # judged as if it were complete.
         run: |
           set -euo pipefail
-          expected=3
+          expected=5
           actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected package coverage shard blobs, found $actual."
             echo "A merge over a partial shard set would under-report every per-file floor."
             exit 1
           fi
+          for index in $(seq 1 "$expected"); do
+            if [ ! -f ".vitest-reports/blob-$index-$expected.json" ]; then
+              echo "Missing native package coverage blob $index/$expected."
+              exit 1
+            fi
+          done
           echo "All $expected package coverage shard blobs are present."
+      - name: Verify every script coverage shard delivered its evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: |
+          set -euo pipefail
+          expected=2
+          actual=$(find .vitest-reports-scripts -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
+          if [ "$actual" -ne "$expected" ]; then
+            echo "Expected $expected script coverage shard blobs, found $actual."
+            exit 1
+          fi
+          for index in $(seq 1 "$expected"); do
+            if [ ! -f ".vitest-reports-scripts/blob-$index-$expected.json" ]; then
+              echo "Missing native script coverage blob $index/$expected."
+              exit 1
+            fi
+          done
+          echo "All $expected script coverage shard blobs are present."
       - name: Reassemble merged package coverage
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # Vitest's own blob merge, not a bespoke reassembler: it merges the shards' coverage maps
         # and re-runs the reporters, so `coverage/packages/lcov.info` and `coverage-summary.json`
         # are regenerated rather than concatenated. The summary carries only covered/total counts
-        # with no line identity and is not losslessly concatenable. This run uses the JUDGING
-        # configuration, so the per-file floors are evaluated here, once, on complete coverage.
+        # with no line identity and is not losslessly concatenable. Neither configuration judges;
+        # the subsequent single quality check evaluates the complete reports (ADR-0158).
         # Same bound as the shards, for the same reason. The merge re-runs every reporter over the
-        # reassembled coverage map of all three shards — the largest single object in the lane — in
+        # reassembled coverage map of all five shards — the largest single object in the lane — in
         # a job that also holds the downloaded artifacts.
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:merge
+      - name: Reassemble merged script coverage
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # The same native merge reconstructs the second coverage scope in its own report directory.
+        run: npm run test:coverage:scripts:merge
       - name: Discard the shard blobs now that the merged coverage exists
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
@@ -1007,7 +1038,7 @@ jobs:
         # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
         # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
         # business being there once the merge has run.
-        run: rm -rf .vitest-reports
+        run: rm -rf .vitest-reports .vitest-reports-scripts
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality

@@ -503,11 +503,16 @@ describe("dev quality workflows", () => {
     // If it is dropped, the consolidated evaluation loses its keiko-ui input entirely.
     expect(coverageJob).toContain("Download keiko-ui coverage evidence");
     const mergeAt = coverageJob.indexOf("npm run test:coverage:packages:merge");
+    const scriptMergeAt = coverageJob.indexOf("npm run test:coverage:scripts:merge");
     const judgeAt = coverageJob.indexOf("npm run check:coverage:quality");
     const scanAt = coverageJob.indexOf("SonarCloud CI-based analysis");
     expect(mergeAt).toBeGreaterThan(-1);
+    expect(scriptMergeAt).toBeGreaterThan(-1);
+    expect(coverageJob).toContain("path: .vitest-reports-scripts");
     expect(judgeAt).toBeGreaterThan(mergeAt);
+    expect(judgeAt).toBeGreaterThan(scriptMergeAt);
     expect(scanAt).toBeGreaterThan(mergeAt);
+    expect(scanAt).toBeGreaterThan(scriptMergeAt);
   });
 
   // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
