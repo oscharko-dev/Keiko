@@ -11,7 +11,8 @@
 // Tagged @smoke so the Studio browser quality gate exercises it. The required `ci` check does not run
 // Playwright; the executable AC coverage that runs in `ci` lives in the keiko-ui vitest suites.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";

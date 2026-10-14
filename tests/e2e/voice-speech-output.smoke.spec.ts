@@ -17,7 +17,8 @@
 // audio is persisted), so this browser smoke proves the gated control renders and stays text-capable
 // rather than driving a real synthesized-audio round trip.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";

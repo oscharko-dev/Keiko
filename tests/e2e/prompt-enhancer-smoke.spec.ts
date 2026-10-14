@@ -7,7 +7,8 @@
 // Tagged @smoke so the Studio browser quality gate exercises it. The default path is
 // deterministic-only; model-assisted refinement is covered by package-level tests.
 
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, type Page, type TestInfo } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" } as const;
 

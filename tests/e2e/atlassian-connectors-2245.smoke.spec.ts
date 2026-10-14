@@ -4,7 +4,8 @@
 // status → approval, tagged @smoke so the Studio browser quality gate exercises it. The token is
 // typed into the create form and never asserted back out — the write-only contract is unit-covered.
 
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 
 const DOCS = {
   schemaVersion: "1",
