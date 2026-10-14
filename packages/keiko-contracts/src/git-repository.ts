@@ -60,7 +60,6 @@ export function isGitObjectId(value: unknown): value is string {
 }
 
 export const GIT_REPOSITORY_STATES = ["available", "unavailable", "unsafe", "error"] as const;
-const GIT_REPOSITORY_STATES_VALUES: readonly unknown[] = GIT_REPOSITORY_STATES;
 
 export type GitRepositoryState = (typeof GIT_REPOSITORY_STATES)[number];
 
@@ -197,6 +196,10 @@ function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
+function isGitRepositoryState(input: unknown): input is GitRepositoryState {
+  return typeof input === "string" && new Set<string>(GIT_REPOSITORY_STATES).has(input);
+}
+
 function isString(input: unknown): input is string {
   return typeof input === "string";
 }
@@ -323,7 +326,7 @@ export function validateGitRepositoryStatusResponse(input: unknown): GitReposito
   if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
   if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
+  if (!isGitRepositoryState(input.state)) {
     reasons.push("state invalid");
   }
   validateWireEnvelopeOptionals(input, reasons);
@@ -377,12 +380,16 @@ function validateDiffOptionalEnvelope(
   if (input.path !== undefined && !isString(input.path)) reasons.push("path must be a string");
 }
 
+function isGitDiffScope(input: unknown): input is GitDiffScope {
+  return input === "all" || input === "worktree" || input === "staged";
+}
+
 function validateDiffRequiredFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): void {
   if (!isBoolean(input.available)) reasons.push("available must be a boolean");
-  if (!["all", "worktree", "staged"].includes(String(input.scope))) reasons.push("scope invalid");
+  if (!isGitDiffScope(input.scope)) reasons.push("scope invalid");
   if (!isString(input.diff)) reasons.push("diff must be a string");
   if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
   if (!isNonNegativeInteger(input.maxBytes))
@@ -402,7 +409,7 @@ export function validateGitRepositoryDiffResponse(input: unknown): GitRepository
   if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
   if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isString(input.root)) reasons.push("root must be a string");
-  if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
+  if (!isGitRepositoryState(input.state)) {
     reasons.push("state invalid");
   }
   validateDiffEnvelopeFields(input, reasons);

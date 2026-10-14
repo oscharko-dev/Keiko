@@ -46,6 +46,14 @@ and `reportLoss`. The event's own `completeness: complete` and `loss: none` mean
 was recorded successfully, not that the report contains complete server evidence. Closed
 `evidenceScope` and `availabilityReason` describe that distinction without report contents.
 
+Shared browser BFF response validation reports a refused contract through the existing
+`client.diagnostic` operation before throwing `CONTRACT_VALIDATION_FAILED` (502). The report
+uses `kind: other`, `errorKind: validation-failed`, redacted error evidence and the response
+correlation when available. It never includes the request path, query, response body, diff or
+validation reason. Healthy responses emit no refusal. Delivery retains the existing bounded
+client transport and explicit loss accounting; it does not promise persistence when that
+transport is unavailable.
+
 `client.files-scope.decision` joins source ownership and grounding-queue decisions to their actual
 actions. Current queue/retry records identify `mutationSurface` as `files`, `local-knowledge` or
 `git-change`. The shared closed decision vocabulary covers restoration, release, ambiguity,

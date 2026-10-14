@@ -70,6 +70,113 @@ const PACKAGED_INCIDENTS: ScenarioIncidentRecorders = {
   recordUserReportedIncident,
 };
 
+interface GitApiFixture {
+  readonly fetchGitDiff: (input: { readonly root: string }) => Promise<unknown>;
+}
+interface ClientDiagnosticsFixture {
+  readonly resetClientDiagnosticWriter: () => void;
+  readonly setClientDiagnosticWriter: (writer: (message: string, meta?: unknown) => void) => void;
+}
+interface DiagnosticTransportFixture {
+  readonly fanOutClientDiagnostic: (message: string, meta?: unknown) => void;
+  readonly resetClientDiagnosticPostStateForTests: () => void;
+}
+let resetGitDiagnosticFixture = (): void => undefined;
+
+// The UI is compiled under Next's Bundler resolver. Load its actual modules through Vitest rather
+// than importing that separate compiler graph into the root NodeNext project. These fixture ports
+// promise no response/domain type; the real wire producer and UI's own typed tests remain authoritative.
+async function loadGitDiagnosticFixture(): Promise<{
+  api: GitApiFixture;
+  diagnostics: ClientDiagnosticsFixture;
+  transport: DiagnosticTransportFixture;
+}> {
+  const api = await vi.importActual<GitApiFixture>("../../packages/keiko-ui/src/lib/api.js");
+  const diagnostics = await vi.importActual<ClientDiagnosticsFixture>(
+    "../../packages/keiko-ui/src/lib/client-diagnostics.js",
+  );
+  const transport = await vi.importActual<DiagnosticTransportFixture>(
+    "../../packages/keiko-ui/src/lib/install-client-diagnostics.js",
+  );
+  if (
+    ![
+      api.fetchGitDiff,
+      diagnostics.resetClientDiagnosticWriter,
+      diagnostics.setClientDiagnosticWriter,
+      transport.fanOutClientDiagnostic,
+      transport.resetClientDiagnosticPostStateForTests,
+    ].every((value) => typeof value === "function")
+  )
+    throw new TypeError("actual UI fixture exports required");
+  resetGitDiagnosticFixture = (): void => {
+    diagnostics.resetClientDiagnosticWriter();
+    transport.resetClientDiagnosticPostStateForTests();
+  };
+  return { api, diagnostics, transport };
+}
+
+function gitScopeResponse(malformed: boolean): Response {
+  return new Response(
+    JSON.stringify({
+      schemaVersion: "1",
+      root: "/private-git-root",
+      state: "available",
+      available: true,
+      scope: malformed ? ["all"] : "all",
+      diff: "private git diff body",
+      truncated: false,
+      maxBytes: 128,
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-Correlation-Id": "git-scope-response-scenario",
+      },
+    },
+  );
+}
+
+async function driveGitScopeRefusal(context: (body: string) => RouteContext): Promise<void> {
+  let malformed = false;
+  let delivery: Promise<Response> | undefined;
+  const bodies: string[] = [];
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      if (input.startsWith("/api/git/diff?")) return gitScopeResponse(malformed);
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  await expect(api.fetchGitDiff({ root: "/private-git-root" })).resolves.toMatchObject({
+    scope: "all",
+  });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  await expect(api.fetchGitDiff({ root: "/private-git-root" })).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "git-scope-response-scenario",
+  });
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(bodies[0]).not.toContain("private-git-root");
+  expect(bodies[0]).not.toContain("private git diff body");
+  expect(bodies[0]).not.toContain("scope invalid");
+}
+
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
 function parsedLine(line: string | undefined): Record<string, unknown> {
@@ -106,6 +213,9 @@ describe("Activity Log scenario: client-diagnostics", () => {
     setSupportIncidentTriggerForTests(undefined);
     resetServerLogger();
     resetClientDiagnosticsIngestStateForTests();
+    resetGitDiagnosticFixture();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     rmSync(stateDir, { recursive: true, force: true });
   });
@@ -151,6 +261,31 @@ describe("Activity Log scenario: client-diagnostics", () => {
     });
     expect(activityLogLossCounters()["client-post-failed"]).toBe(1);
     expect(activityLogLossCounters()["client-buffer-evicted"]).toBe(2);
+  });
+
+  it("persists actual Git response contract refusal through the browser transport and analyzer", async () => {
+    const startedAtMs = Date.now();
+    await driveGitScopeRefusal(context);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "client.diagnostic",
+    );
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-scope-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(readPersistedActivityLog(stateDir)).not.toContain("private-git-root");
+    expect(readPersistedActivityLog(stateDir)).not.toContain("private git diff body");
   });
 
   // Fault injection: four refused reports (two sharing a refusal reason within the same throttle

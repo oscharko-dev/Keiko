@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES,
   GIT_REPOSITORY_SCHEMA_VERSION,
+  GIT_REPOSITORY_STATES,
   GIT_STATUS_CODES,
   isSafeGitRefName,
   validateGitRepositoryDiffResponse,
@@ -491,4 +492,67 @@ describe("optional complete Git directory metadata", () => {
   ])("rejects malformed or unbounded metadata %j", (metadata) => {
     expect(validateGitRepositoryStatusResponse(makeValidStatusResponse(metadata)).ok).toBe(false);
   });
+});
+
+import { validateGitRepositoryDiffResponse as validatePublicGitDiffResponse } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+
+describe("Git diff scope primitive admission (#3918)", () => {
+  for (const [surface, validate] of [
+    ["source", validateGitRepositoryDiffResponse],
+    ["public", validatePublicGitDiffResponse],
+  ] as const) {
+    it(`${surface}: refuses an array scope from actual JSON without coercion`, () => {
+      const response: unknown = JSON.parse(
+        JSON.stringify(makeValidDiffResponse({ scope: ["all"] })),
+      );
+      expect(validate(response)).toEqual({ ok: false, reasons: ["scope invalid"] });
+    });
+    it.each(["all", "worktree", "staged"])(`${surface}: admits the primitive %s scope`, (scope) => {
+      expect(validate(makeValidDiffResponse({ scope }))).toEqual({ ok: true });
+    });
+    it.each([null, undefined, 1, true, [], ["worktree"], {}, { toString: (): string => "all" }])(
+      `${surface}: refuses non-primitive scope %j`,
+      (scope) => {
+        expect(validate(makeValidDiffResponse({ scope }))).toEqual({
+          ok: false,
+          reasons: ["scope invalid"],
+        });
+      },
+    );
+    it(`${surface}: never invokes caller-controlled scope coercion`, () => {
+      let calls = 0;
+      const scope = {
+        toString(): never {
+          calls += 1;
+          throw new TypeError("untrusted coercion");
+        },
+      };
+      expect(validate(makeValidDiffResponse({ scope }))).toEqual({
+        ok: false,
+        reasons: ["scope invalid"],
+      });
+      expect(calls).toBe(0);
+    });
+  }
+});
+
+it("preserves exact repository-state vocabulary admission without unknown-valued projection", () => {
+  for (const state of GIT_REPOSITORY_STATES) {
+    expect(validateGitRepositoryStatusResponse(makeValidStatusResponse({ state }))).toEqual({
+      ok: true,
+    });
+    expect(validateGitRepositoryDiffResponse(makeValidDiffResponse({ state }))).toEqual({
+      ok: true,
+    });
+  }
+  for (const state of [undefined, null, ["available"], 1, true, {}, "AVAILABLE", "foreign"]) {
+    expect(validateGitRepositoryStatusResponse(makeValidStatusResponse({ state }))).toEqual({
+      ok: false,
+      reasons: ["state invalid"],
+    });
+    expect(validateGitRepositoryDiffResponse(makeValidDiffResponse({ state }))).toEqual({
+      ok: false,
+      reasons: ["state invalid"],
+    });
+  }
 });

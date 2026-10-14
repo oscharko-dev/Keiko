@@ -561,6 +561,14 @@ system that exists, never beside it:
   names its check, rule, site, and remediation. Run it before every pull request that changes
   product runtime behaviour.
 
+Shared browser BFF response validation reports a refused contract through the existing
+`client.diagnostic` operation before throwing `CONTRACT_VALIDATION_FAILED` (502). The report
+uses `kind: other`, `errorKind: validation-failed`, redacted error evidence and the response
+correlation when available. It never includes the request path, query, response body, diff or
+validation reason. Healthy responses emit no refusal. Delivery retains the existing bounded
+client transport and explicit loss accounting; it does not promise persistence when that
+transport is unavailable.
+
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
 `unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records

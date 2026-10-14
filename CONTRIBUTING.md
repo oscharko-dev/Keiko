@@ -199,6 +199,14 @@ Commit drafts record model-context bounds, compaction, generation count and reus
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
 events. Neither path records customer diffs or generated text.
 
+Shared browser BFF response validation reports a refused contract through the existing
+`client.diagnostic` operation before throwing `CONTRACT_VALIDATION_FAILED` (502). The report
+uses `kind: other`, `errorKind: validation-failed`, redacted error evidence and the response
+correlation when available. It never includes the request path, query, response body, diff or
+validation reason. Healthy responses emit no refusal. Delivery retains the existing bounded
+client transport and explicit loss accounting; it does not promise persistence when that
+transport is unavailable.
+
 Closed failure outcomes and positive failure counters that would otherwise be optional context must
 be declared with the owning operation's exact `diagnosticWhen` condition. Regression proofs exercise
 the actual producer, registered writer and incident query with zero optional context, alongside

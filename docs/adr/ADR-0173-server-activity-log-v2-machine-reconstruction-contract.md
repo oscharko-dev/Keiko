@@ -1364,6 +1364,12 @@ request":
   without making another provider call. Both successful and failed probes remain traceable from create, send and
   regeneration requests. Assistant-response links accept only validated correlation identities;
   malformed response bodies and invalid identities produce no fabricated link.
+  Shared BFF response validation reports contract refusals through this same operation before
+  throwing the existing `CONTRACT_VALIDATION_FAILED` error (502). Its closed fields are
+  `kind: other` and `errorKind: validation-failed`; redacted error evidence and the available
+  response correlation preserve the failure's identity. Request paths, queries, response bodies,
+  diffs and validator reasons never enter the diagnostic. Healthy responses emit no refusal;
+  unavailable delivery retains the existing transport bounds and explicit loss accounting.
   Known browser prerequisite failures use closed structured fields. Git validators record
   `moduleLoadFailure: git-read`, `git-history`, or `git-sync` before any Git request, preserving the
   caller's correlation ID or minting one shared by the UI error and diagnostic. Optional widget

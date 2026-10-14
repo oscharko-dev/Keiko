@@ -234,6 +234,12 @@ function validateBffResponse<T>(
     502,
   );
   if (correlationId !== null) error.correlationId = correlationId;
+  reportClientDiagnostic("bff:contract-validation-failed", {
+    kind: "other",
+    errorKind: "validation-failed",
+    ...(correlationId === null ? {} : { correlationId }),
+    errorEvidence: clientErrorEvidence(error),
+  });
   throw error;
 }
 

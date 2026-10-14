@@ -5454,3 +5454,76 @@ describe("streamAssistantSpeech correlation", () => {
     });
   });
 });
+
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+
+function scopeAdmissionDiff(scope: unknown): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    root: "/private-repository",
+    repositoryRoot: "/private-repository",
+    state: "available",
+    available: true,
+    scope,
+    diff: "private diff content",
+    truncated: false,
+    maxBytes: 128,
+  };
+}
+
+describe("Git diff actual API admission evidence (#3918)", () => {
+  beforeEach(() => resetClientDiagnosticWriter());
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+    vi.unstubAllGlobals();
+  });
+  it("refuses malformed JSON scope and reports body-free evidence under the response correlation", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(scopeAdmissionDiff(["all"])), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Keiko-Correlation-Id": "git-response-admission-test",
+          },
+        }),
+      ),
+    );
+    await expect(fetchGitDiff({ root: "/private-repository" })).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+      correlationId: "git-response-admission-test",
+    });
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(diagnostic).toHaveBeenCalledWith(
+      "bff:contract-validation-failed",
+      expect.objectContaining({
+        kind: "other",
+        errorKind: "validation-failed",
+        correlationId: "git-response-admission-test",
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private-repository");
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private diff content");
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("scope invalid");
+  });
+  it("returns healthy diff responses without reporting contract failures", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const response = scopeAdmissionDiff("all");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    await expect(fetchGitDiff({ root: "/private-repository" })).resolves.toEqual(response);
+    expect(diagnostic).not.toHaveBeenCalled();
+  });
+});
