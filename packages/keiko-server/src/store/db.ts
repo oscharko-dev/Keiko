@@ -1,4 +1,5 @@
 import { withImmediateTransaction } from "./transaction.js";
+import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
 import { bindMarkdownSkillTurn } from "./markdownSkillSelections.js";
 import { isolateCodingHistory } from "./codingHistoryIsolation.js";
@@ -690,6 +691,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         ? sqlListChats(db, projectPath)
         : sqlListChatsLimited(db, projectPath, limit),
     findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
+    readChatDraft: (id) => readChatDraft(db, id),
+    updateChatDraft: (id, update) => updateChatDraft(db, id, update),
     createChat: (
       projectPath: string,
       title: string,

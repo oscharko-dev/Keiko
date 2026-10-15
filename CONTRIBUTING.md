@@ -32,6 +32,10 @@ only whole-repository enforcement. Source, parser, plugin, scope and inventory f
 
 ### Activity Log runtime changes
 
+Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
+The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
+concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
 APIs in `keiko-contracts`. Event construction returns the registration-derived event or a closed
@@ -53,6 +57,10 @@ semantics, analyzer projection, failure classes, proof ids, and release impact. 
 operations, arbitrary metadata, nested objects, missing required fields, unbounded strings, and
 unknown error/loss states fail closed. Persisted v2 records also require the sink-owned version and
 digest dimensions, compatibility/writer state, and complete `(pid, instanceId, seq)` identity.
+STT dispatch evidence includes the sent container class and audio byte count; completion evidence
+includes the provider HTTP status only when a response was received. Browser dictation converts
+completed recordings to PCM16 WAV locally and reports normalization failures through the existing
+client diagnostic sink, without retaining audio or provider error bodies (ADR-0100 D8).
 Tests for changed behavior assert the emitted line and the support-analyzer projection. Regenerate
 the catalog with `npm run generate:op-catalog`, then run `npm run check:activity-log`, the Activity
 Log implementation gate, which required CI runs unchanged. Every run builds the packages and

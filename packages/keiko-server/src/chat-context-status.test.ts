@@ -158,6 +158,73 @@ describe("protected skill context status (#4024)", () => {
   });
 });
 
+describe("single-pass manual context compaction", () => {
+  function completedTurn(deps: UiHandlerDeps, chatId: string, content: string): void {
+    const timestamp = Date.now() + deps.store.countMessages(chatId) * 2;
+    for (const role of ["user", "assistant"] as const) {
+      deps.store.createMessage({
+        chatId,
+        role,
+        content: role === "user" ? content : "Acknowledged.",
+        timestamp: timestamp + (role === "assistant" ? 1 : 0),
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+  }
+
+  it.each([
+    { extra: 2, enabled: false },
+    { extra: 0, enabled: true },
+    { extra: -2, enabled: true },
+  ])("enforces the half-capacity boundary (budget offset: $extra)", ({ extra, enabled }) => {
+    const { deps, chatId } = fixture(4);
+    const tokens = readChatContextStatus(deps, chatId, "fixture").estimatedInputTokens;
+    const bounded = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: tokens * 2 + extra + 2000,
+        reservedOutputTokens: 2000,
+        safetyMarginTokens: 0,
+      }),
+    };
+    expect(readChatContextStatus(bounded, chatId, "fixture").canCompact).toBe(enabled);
+  });
+
+  it.each([false, true])("summarizes all eligible history once (grounded: %s)", (grounded) => {
+    const { deps, chatId } = fixture();
+    if (grounded) deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const original = deps.store.listMessages(chatId, 500);
+    expect(readChatContextStatus(deps, chatId, "fixture").canCompact).toBe(true);
+    const after = compactChatContext(deps, chatId, "fixture", "single-pass");
+    expect(segmentOf(after, "messages").count).toBe(0);
+    expect(after.compaction?.messagesCompacted).toBe(original.length);
+    expect(after.canCompact).toBe(false);
+    for (let click = 0; click < 5; click += 1) {
+      expect(compactChatContext(deps, chatId, "fixture", `repeat-${String(click)}`)).toEqual(after);
+    }
+    expect(readChatContextStatus(deps, chatId, "fixture")).toEqual(after);
+    expect(deps.store.listMessages(chatId, 500)).toEqual(original);
+  });
+
+  it("requires new messages and at least half of the conversation budget", () => {
+    const { deps, chatId } = fixture();
+    compactChatContext(deps, chatId, "fixture", "initial-manual");
+    completedTurn(deps, chatId, "A short follow-up.");
+    const low = readChatContextStatus(deps, chatId, "fixture");
+    expect(low.canCompact).toBe(false);
+    expect(compactChatContext(deps, chatId, "fixture", "below-half")).toEqual(low);
+    completedTurn(deps, chatId, "Additional context for the review. ".repeat(3000));
+    expect(readChatContextStatus(deps, chatId, "fixture").canCompact).toBe(true);
+    const after = compactChatContext(deps, chatId, "fixture", "new-context");
+    expect(after.canCompact).toBe(false);
+    expect(segmentOf(after, "messages").count).toBe(0);
+  });
+});
+
 function segmentOf(
   status: ReturnType<typeof readChatContextStatus>,
   id: ChatContextSegmentId,

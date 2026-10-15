@@ -361,7 +361,6 @@ function DictationControl({
   return controller.dictationVisible ? (
     <VoiceDictationButton
       phase={controller.dictation.phase}
-      audioLevel={controller.dictation.audioLevel}
       onStart={controller.dictation.start}
       onStop={controller.dictation.stop}
       buttonRef={controller.micButtonRef}

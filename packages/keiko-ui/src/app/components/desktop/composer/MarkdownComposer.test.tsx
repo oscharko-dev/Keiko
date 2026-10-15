@@ -563,6 +563,27 @@ describe("Markdown composer editing", () => {
     });
     expect(config.onChange).not.toHaveBeenCalled();
   });
+  it.each(["beforeunload", "pagehide"])(
+    "publishes the final native edit before persistence handles %s",
+    (eventName) => {
+      const config = props();
+      render(<MarkdownComposer {...config} />);
+      const editor = config.inputRef.current;
+      if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+      act(() => type(editor, "Last character ä"));
+      expect(config.onChange).not.toHaveBeenCalled();
+      let publishedAtDeparture: unknown;
+      const persistence = vi.fn(() => {
+        publishedAtDeparture = vi.mocked(config.onChange).mock.lastCall;
+      });
+      window.addEventListener(eventName, persistence);
+      act(() => window.dispatchEvent(new Event(eventName)));
+      window.removeEventListener(eventName, persistence);
+      expect(persistence).toHaveBeenCalledOnce();
+      expect(publishedAtDeparture).toEqual(["Last character ä", 16]);
+    },
+  );
+
   it("passes live text to Enter handling before the deferred draft is published", () => {
     const config = props();
     let draftSeenByKeyDown = "";

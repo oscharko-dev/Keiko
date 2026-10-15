@@ -16,9 +16,12 @@ or permission decision is replaced.
 The driver imports a synthetic skill and creates fresh chats. Manual/automatic compaction cases
 include a real initial model turn and explicitly authored synthetic history through normal message
 APIs. Those history messages are test setup, not claimed model output. The final response comes
-from the real model. The automatic case uses a deliberately smaller configured context window of
-8,192 tokens, below the deployment's verified native 131,072-token limit; other cases use the native
-window. Record both limits. No capacity is widened to make a case pass.
+from the real model. Manual and automatic cases use a deliberately smaller configured context
+window of 8,192 tokens, below the deployment's verified native 131,072-token limit; other cases use
+the native window. Manual maintenance requires at least 50% conversation usage and new eligible
+messages, and completes in one pass. Automatic maintenance starts at 90% before request dispatch.
+Record both limits. No capacity is widened to make a case pass. Historical campaigns below retain
+the window and manual-action policy that applied to their recorded source heads.
 
 Raw answers needed for private semantic review and test execution remain in a new owner-only
 output directory outside the checkout. Do not publish that directory, its SQLite store, private

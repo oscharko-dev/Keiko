@@ -135,7 +135,7 @@ function SkillDraft({
       <div className={styles.cmpActions}>
         <button
           type="button"
-          disabled={disabled}
+          disabled={disabled || !library.available}
           onClick={() => {
             void library.upload(new File([draft], "skill.md", { type: "text/markdown" }));
           }}

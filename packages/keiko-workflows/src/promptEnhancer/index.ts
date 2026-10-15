@@ -496,8 +496,9 @@ function stripOuterMarkdownFence(text: string): string {
   return match?.[1]?.trim() ?? text.trim();
 }
 
-function modelRenderedPrompt(content: string, skillDraft = false): string | undefined {
-  if (skillDraft) return validateMarkdownSkillDraft(stripOuterMarkdownFence(content));
+function modelRenderedPrompt(content: string, skillSource?: string): string | undefined {
+  if (skillSource !== undefined)
+    return validateMarkdownSkillDraft(stripOuterMarkdownFence(content), skillSource);
   const sanitized = stripOuterMarkdownFence(stripUnsafeFormatChars(content).normalize("NFKC"));
   if (sanitized.length === 0) return undefined;
   if (sanitized.length <= MODEL_RENDERED_PROMPT_MAX_CHARS) return sanitized;
@@ -624,14 +625,14 @@ async function callModelForText(options: {
 }
 
 function buildModelRefinement(options: {
-  readonly skillDraft: boolean;
+  readonly skillSource: string | undefined;
   readonly content: string;
   readonly routing: PromptEnhancementModelRouting;
   readonly prepared: PreparedEnhancement;
   readonly deterministicPrompt: EnhancedPrompt;
 }): MaybeModelRefinementOutcome {
   const { content, routing, prepared, deterministicPrompt } = options;
-  const renderedPrompt = modelRenderedPrompt(content, options.skillDraft);
+  const renderedPrompt = modelRenderedPrompt(content, options.skillSource);
   if (renderedPrompt === undefined) {
     return { applied: false, routing: fallbackRouting(routing, "model-empty-response") };
   }
@@ -723,7 +724,7 @@ async function tryModelRefinement(options: {
   // No `selection`: the model refinement's verdict is computed on the text it actually returns, so
   // the winner candidate's assessment is deliberately out of reach here (0.3.0 audit P0, #2802).
   return buildModelRefinement({
-    skillDraft: request.outputKind === "markdown-skill",
+    skillSource: request.outputKind === "markdown-skill" ? request.text : undefined,
     content: content.content,
     routing: execution.context.routing,
     prepared,

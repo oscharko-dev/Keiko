@@ -5,6 +5,7 @@ import { useWorkspace, type UseWorkspaceOptions } from "./useWorkspace";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 import type { AppWindow, Connection } from "../windows/types";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
+import { registerChatWindowRuntime } from "../windows/chatWindowActivity";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-diagnostics", () => ({
@@ -1094,5 +1095,99 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
 
     await waitFor(() => expect(readConns()).toHaveLength(1));
     expect(readConns()[0]).toMatchObject({ id: "files-1~chat-1", a: "files-1", b: "chat-1" });
+  });
+});
+
+describe("private chat draft close ownership", () => {
+  it("waits for the owning draft save before removing an unconnected chat", async () => {
+    let finish!: (value: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => {
+      finish = resolve;
+    });
+    const prepareClose = vi.fn(() => pending);
+    const unregister = registerChatWindowRuntime(
+      "chat-1",
+      {
+        conversationId: "conversation-a",
+        projectPath: "",
+      },
+      prepareClose,
+    );
+    try {
+      persistWorkspace([appWindow()]);
+      render(<Harness />);
+      await waitFor(() => expect(readWins()).toHaveLength(1));
+      fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+      expect(readWins()).toHaveLength(1);
+      expect(prepareClose).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+      expect(prepareClose).toHaveBeenCalledTimes(1);
+      finish(true);
+      await waitFor(() => expect(readWins()).toHaveLength(0));
+    } finally {
+      unregister();
+    }
+  });
+
+  it("keeps new draft edits made during connection teardown and removes only acknowledged edges", async () => {
+    let ready = true;
+    let finish!: (value: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => {
+      finish = resolve;
+    });
+    const onScopeUnbind = vi.fn(() => pending);
+    const unregister = registerChatWindowRuntime(
+      "chat-1",
+      {
+        conversationId: "conversation-a",
+        projectPath: "/repo",
+      },
+      async () => true,
+      () => ready,
+    );
+    try {
+      persistWorkspace([appWindow(), filesWindow()]);
+      render(<Harness onScopeUnbind={onScopeUnbind} />);
+      await waitFor(() => expect(readWins()).toHaveLength(2));
+      fireEvent.click(screen.getByRole("button", { name: "connect" }));
+      await waitFor(() => expect(readConns()).toHaveLength(1));
+      fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+      await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledTimes(1));
+      ready = false;
+      finish(true);
+      await waitFor(() => expect(readConns()).toHaveLength(0));
+      expect(readWins()).toHaveLength(2);
+      ready = true;
+      fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+      await waitFor(() => expect(readWins()).toHaveLength(1));
+      expect(onScopeUnbind).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("leaves a refused chat open and excludes it from the cut result", async () => {
+    const unregister = registerChatWindowRuntime(
+      "chat-1",
+      {
+        conversationId: "conversation-a",
+        projectPath: "",
+      },
+      async () => false,
+    );
+    try {
+      persistWorkspace([appWindow(), filesWindow()]);
+      render(<Harness />);
+      await waitFor(() => expect(readWins()).toHaveLength(2));
+      fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+      fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+      await waitFor(() => expect(readWins()).toHaveLength(1));
+      expect(readWins()[0]?.id).toBe("chat-1");
+      expect(JSON.parse(screen.getByTestId("cut-result").textContent ?? "null")).toMatchObject({
+        captured: 1,
+      });
+    } finally {
+      unregister();
+    }
   });
 });
