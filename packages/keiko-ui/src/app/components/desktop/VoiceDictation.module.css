@@ -1,4 +1,4 @@
-.waveform {
+.cmpWaveform {
   display: flex;
   align-items: center;
   flex: 1 1 0;
@@ -8,7 +8,7 @@
   color: var(--text-secondary);
 }
 
-.waveform svg {
+.cmpWaveform svg {
   display: block;
   width: 100%;
   height: 32px;
@@ -17,20 +17,20 @@
   mask-image: linear-gradient(to right, transparent, #000 33%, #000);
 }
 
-.waveform line {
+.cmpWaveform line {
   stroke: currentColor;
   stroke-width: 3;
   stroke-linecap: round;
 }
 
-.status {
+.cmpStatus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.85rem;
 }
 
-.stop {
+.cmpStop {
   display: block;
   width: 12px;
   height: 12px;

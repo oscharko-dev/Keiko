@@ -302,6 +302,8 @@ describe("POST /api/diagnostics/client", () => {
     "scope-refusal-skipped-owner",
     "scope-refusal-skipped-draft",
     "scope-refusal-skipped-unproven",
+    "dictation-inserted",
+    "dictation-empty",
   ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(

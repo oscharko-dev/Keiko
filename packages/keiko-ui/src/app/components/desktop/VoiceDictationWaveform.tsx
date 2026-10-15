@@ -45,7 +45,7 @@ export function VoiceDictationWaveform({
   const label = captureLabel(controller, t);
   if (!controller.busy) return null;
   return (
-    <div className={styles.waveform} role="status" aria-live="polite">
+    <div className={styles.cmpWaveform} role="status" aria-live="polite">
       {recording ? (
         <>
           <span className="sr-only">{label}</span>
@@ -63,7 +63,7 @@ export function VoiceDictationWaveform({
           </svg>
         </>
       ) : (
-        <span className={styles.status}>{label}</span>
+        <span className={styles.cmpStatus}>{label}</span>
       )}
     </div>
   );

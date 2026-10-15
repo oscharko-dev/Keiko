@@ -101,7 +101,7 @@ export function VoiceDictationButton({
         }
       }}
     >
-      {live ? <span className={styles.stop} aria-hidden="true" /> : <MicIcon size={16} />}
+      {live ? <span className={styles.cmpStop} aria-hidden="true" /> : <MicIcon size={16} />}
       <span id={VOICE_PRIVACY_HINT_ID} className="sr-only">
         {t("voice.dictation.privacy")}
       </span>
