@@ -245,6 +245,56 @@ describe("useDictation — page microphone ownership", () => {
 });
 
 describe("useDictation — enabled happy path (AC2)", () => {
+  it("inserts a completed composer dictation once without a separate preview confirmation", async () => {
+    const recorder = makeRecorder({});
+    const onInsert = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useDictation({
+        onInsert,
+        insertOnComplete: true,
+        createRecorder: () => recorder.recorder,
+        transcribe: async () => ({ transcript: "  dictated text  " }),
+        postRollMs: 0,
+      }),
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    act(() => result.current.stop());
+    await waitFor(() => expect(onInsert).toHaveBeenCalledWith("dictated text"));
+    expect(result.current.phase).toBe("idle");
+    rerender();
+    expect(onInsert).toHaveBeenCalledOnce();
+  });
+
+  it("does not insert a transcription that completes after cancellation", async () => {
+    const recorder = makeRecorder({});
+    const onInsert = vi.fn();
+    let complete!: (result: VoiceTranscriptionResult) => void;
+    const transcribe = vi.fn(
+      () =>
+        new Promise<VoiceTranscriptionResult>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert,
+        insertOnComplete: true,
+        createRecorder: () => recorder.recorder,
+        transcribe,
+        postRollMs: 0,
+      }),
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    act(() => result.current.stop());
+    await waitFor(() => expect(transcribe).toHaveBeenCalledOnce());
+    act(() => result.current.cancel());
+    await act(async () => complete({ transcript: "late text" }));
+    expect(onInsert).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe("idle");
+  });
+
   it("records, transcribes, previews, edits, and inserts the transcript", async () => {
     const recorder = makeRecorder({});
     const { result, onInsert, transcribe } = setup({ recorder, language: "en" });

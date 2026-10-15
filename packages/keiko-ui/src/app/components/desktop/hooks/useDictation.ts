@@ -1,8 +1,8 @@
 // Issue #495, Epic #491 — the controlled composer dictation state machine.
 //
 // `useDictation` orchestrates one short dictation clip: request microphone access, record, transcribe
-// through the local BFF speech-to-text route, then present an editable transcript the user reviews
-// before inserting it into the composer draft. It owns no hardware itself — capture lives behind the
+// through the local BFF speech-to-text route, then insert it into Chat's editable draft or present
+// a preview for consumers that request one. It owns no hardware itself — capture lives behind the
 // injectable `DictationRecorder` seam (dictation-recorder.ts) and transcription behind the
 // `transcribeDictation` client — so the hook and its tests never depend on real media APIs.
 //
@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef } from "react";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError, transcribeDictation } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "@/lib/api";
 import {
   createBrowserDictationRecorder,
@@ -179,6 +180,9 @@ export interface UseDictationOptions {
   // Appends the reviewed transcript into the composer draft. The hook never sends — insertion is the
   // terminal action, after which the user sends through the normal composer flow.
   readonly onInsert: (text: string) => void;
+  // Ordinary Chat inserts the completed transcript directly into its editable draft. Other
+  // consumers retain their explicit preview flow; neither mode sends a message.
+  readonly insertOnComplete?: boolean;
   // Chat-window identity shared with Voice Dialogue. It serializes every microphone capture on the
   // page without coupling the two controllers or leaking capture state between conversations.
   readonly captureOwner?: string | undefined;
@@ -1046,6 +1050,8 @@ export function useDictation(options: UseDictationOptions): DictationController 
     dispatch({ type: "reset" });
   }, [onInsert, state.transcript]);
 
+  useCompletedDictationInsertion(options.insertOnComplete === true, state, insert);
+
   const setTranscript = useCallback((value: string): void => {
     dispatch({ type: "editTranscript", value });
   }, []);
@@ -1104,4 +1110,25 @@ export function useDictation(options: UseDictationOptions): DictationController 
     insert,
     setTranscript,
   };
+}
+
+function useCompletedDictationInsertion(
+  enabled: boolean,
+  state: DictationState,
+  insert: () => void,
+): void {
+  const inserted = useRef(false);
+  useEffect(() => {
+    if (state.phase !== "preview") {
+      inserted.current = false;
+      return;
+    }
+    if (!enabled || inserted.current) return;
+    inserted.current = true;
+    insert();
+    reportClientDiagnostic("Composer dictation completed.", {
+      composerActivity:
+        state.transcript.trim().length > 0 ? "dictation-inserted" : "dictation-empty",
+    });
+  }, [enabled, state.phase, state.transcript, insert]);
 }

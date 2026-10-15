@@ -410,6 +410,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-unlocked",
   "literal-input-preserved",
   "draft-resynchronized",
+  "dictation-inserted",
+  "dictation-empty",
   "scope-refusal-restored",
   "scope-refusal-skipped-owner",
   "scope-refusal-skipped-draft",

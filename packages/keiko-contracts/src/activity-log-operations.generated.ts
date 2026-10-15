@@ -3116,6 +3116,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-layout-unlocked",
           "literal-input-preserved",
           "draft-resynchronized",
+          "dictation-inserted",
+          "dictation-empty",
           "scope-refusal-restored",
           "scope-refusal-skipped-owner",
           "scope-refusal-skipped-draft",

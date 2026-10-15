@@ -121,7 +121,8 @@ import {
 import { useDictation, type DictationController } from "./hooks/useDictation";
 import { dictationCaptureSupported } from "./hooks/dictation-recorder";
 import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
-import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
+import { VoiceDictationButton, VoiceDictationComposerStatus } from "./VoiceDictation";
+import { VoiceDictationWaveform } from "./VoiceDictationWaveform";
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
@@ -2452,6 +2453,9 @@ function ComposerBar({
         onAttachFiles={onAttachFiles}
         controlsNarrow={controlsNarrow}
       />
+      {voiceDictationVisible ? (
+        <VoiceDictationWaveform controller={dictation} />
+      ) : null}
       <div className="cmp-bar-main">
         {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
             speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
@@ -2460,7 +2464,6 @@ function ComposerBar({
         {voiceDictationVisible ? (
           <VoiceDictationButton
             phase={dictation.phase}
-            audioLevel={dictation.audioLevel}
             onStart={dictation.start}
             onStop={dictation.stop}
             buttonRef={micButtonRef}
@@ -2809,29 +2812,23 @@ function composerDictationVisibility(
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer's post-textarea status row:
-// the send-lifecycle announcement (hidden during Voice Dialogue) and the dictation transcript
-// preview (hidden during Voice Dialogue or when dictation isn't available).
+// the send-lifecycle announcement and inline dictation errors (hidden during Voice Dialogue).
 function ComposerStatusRow({
   voiceDialogActive,
   sendStatus,
   voiceDictationVisible,
   dictation,
-  onAfterDictationDiscard,
 }: {
   readonly voiceDialogActive: boolean;
   readonly sendStatus: SendStatus;
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
-  readonly onAfterDictationDiscard: () => void;
 }): ReactNode {
   return (
     <>
       {voiceDialogActive ? null : <SendLifecycleStatus status={sendStatus} />}
       {!voiceDialogActive && voiceDictationVisible ? (
-        <VoiceDictationPreviewFromController
-          controller={dictation}
-          onAfterDiscard={onAfterDictationDiscard}
-        />
+        <VoiceDictationComposerStatus error={dictation.error} />
       ) : null}
     </>
   );
@@ -3204,7 +3201,7 @@ function ComposerCoreImpl({
   const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   const normalVoiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   const voiceCaptureOwner = useId();
-  // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
+  // Stop appends the completed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
     (text: string): void => {
@@ -3218,6 +3215,7 @@ function ComposerCoreImpl({
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
+    insertOnComplete: true,
     captureOwner: voiceCaptureOwner,
     realtime: { enabled: liveDictationEnabled },
   });
@@ -3786,13 +3784,12 @@ function ComposerCoreImpl({
               <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
               {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement next to the textarea so
                 SR users hear the state without losing composer focus. Issue #495 — dictation
-                transcript review / transcribing status / error. */}
+                inline dictation error. */}
               <ComposerStatusRow
                 voiceDialogActive={voiceDialogActive}
                 sendStatus={sendStatus}
                 voiceDictationVisible={voiceDictationVisible}
                 dictation={dictation}
-                onAfterDictationDiscard={() => micButtonRef.current?.focus()}
               />
             </>
           }

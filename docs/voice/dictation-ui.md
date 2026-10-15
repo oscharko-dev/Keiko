@@ -4,7 +4,7 @@ Implemented by Issue [#495](https://github.com/oscharko-dev/Keiko/issues/495) (E
 describes the user-facing speech-to-text dictation experience in the chat composer. It builds on the
 capability metadata from [#493](capability-configuration.md) and the BFF speech-to-text route from
 [#494](dictation-endpoint.md). It is **STT dictation only** — it never offers Twin conversation,
-assistant speech playback, or Realtime transport. Those are a separate surface governed by
+assistant speech playback. Native live transcription, when configured, and Voice Dialogue are governed by
 [ADR-0154](../adr/ADR-0154-canonical-twin-voice-pipeline.md).
 
 ## Capability gating
@@ -28,35 +28,36 @@ browser, the affordance is simply absent — there is no broken or disabled-look
 1. **Start** — the user clicks the microphone button (an explicit gesture; there is never background
    capture, AC3). `getUserMedia` requests microphone access and `MediaRecorder` begins capture using native
    browser APIs only — no third-party recorder package is added.
-2. **Record** — the button flips to a clearly-labelled stop control with a recording indicator. Recording
-   auto-stops at the dictation limit (120 s) so a clip can never exceed the BFF's accepted duration.
-3. **Transcribe** — on stop, the captured audio is base64-encoded and posted to
-   `POST /api/voice/transcribe` inside the standard JSON + CSRF envelope. The audio is held only in memory
-   for the request and is never written to disk or logged on the client.
-4. **Review** — the returned transcript appears in an editable preview with **Insert**, **Re-record**, and
-   **Discard** actions. The user can edit the text before inserting.
-5. **Insert** — inserting appends the reviewed transcript to the composer draft and returns focus to the
-   textarea. Dictation never auto-sends; the user sends through the normal composer flow.
+2. **Record** — the same button becomes a labelled stop square. A waveform displays actual microphone
+   levels in the free space between the model/skill controls and the microphone. New samples enter on
+   the right and move left; the oldest third fades to full transparency before the skill controls.
+   Model selection, Skills, and the selected skill remain visible. Recording auto-stops at 120 s.
+3. **Stop and transcribe** — one click on the square stops capture and uses the configured transcription
+   route. The same control announces finishing/transcribing while the result is pending.
+4. **Edit the draft** — the completed transcript is appended directly to the existing composer draft,
+   once, and focus returns to the composer. There is no separate review panel or Insert/Re-record/Discard
+   step in ordinary Chat. The user can edit, dictate again, or send through the normal composer flow.
+   Dictation never auto-sends. The Coding Workbench retains its explicit preview/insertion flow.
 
 ## Failure handling
 
 Every failure resolves to a non-blocking message that leaves the composer fully usable (AC4):
 
-| Condition                               | UI outcome                                                            |
-| --------------------------------------- | --------------------------------------------------------------------- |
-| Microphone permission denied            | Alert: allow microphone access; retry / dismiss. Composer unaffected. |
-| No microphone device                    | Alert: connect a microphone and try again.                            |
-| Browser cannot capture                  | No microphone affordance is rendered at all.                          |
-| `VOICE_UNAVAILABLE` (503)               | Alert: dictation is not available right now.                          |
-| Provider error / timeout / rate-limited | Alert: dictation could not be completed; retry / dismiss.             |
+| Condition                               | UI outcome                                                          |
+| --------------------------------------- | ------------------------------------------------------------------- |
+| Microphone permission denied            | Alert: allow microphone access, then retry with the microphone.     |
+| No microphone device                    | Alert: connect a microphone and try again.                          |
+| Browser cannot capture                  | No microphone affordance is rendered at all.                        |
+| `VOICE_UNAVAILABLE` (503)               | Alert: dictation is not available right now.                        |
+| Provider error / timeout / rate-limited | Alert: dictation could not be completed; retry with the microphone. |
 
 ## Privacy
 
-The preview surface carries a permanently-visible, screen-reader-discoverable disclosure: **"Audio is sent
-only to your configured speech-to-text endpoint and is not stored."** The transcribe response is content-free
-apart from the transcript and provider-neutral metadata (no base URL, credential, or model id), by
-construction on the BFF side (#494). The edited transcript lives only in component state and is discarded
-without persistence when the user discards the preview.
+The microphone's accessible description explains that audio goes only to the configured speech-to-text
+endpoint. Keiko holds capture audio in memory and does not log it. Once inserted, recognized text is an
+ordinary editable composer draft and follows the existing private draft persistence policy. The existing
+Activity Log records only the closed `dictation-inserted` or `dictation-empty` completion category;
+no audio, transcript, selected-skill content, or endpoint enters this diagnostic.
 
 ## Permissions-Policy scoping
 
@@ -72,10 +73,11 @@ need it (ADR-0100 D6; see [privacy-contract.md](privacy-contract.md)). The direc
 - The microphone button carries a dynamic `aria-label` (start / stop / starting / transcribing), `aria-pressed`
   while recording, and `aria-describedby` the local-only privacy disclosure.
 - State transitions are announced through polite `role="status"` regions; failures use `role="alert"`.
-- Focus moves to the transcript field when the preview appears and to the retry action when an error appears;
-  discarding returns focus to the microphone button.
-- The recording indicator is a solid colour by default and only animates under
-  `prefers-reduced-motion: no-preference` (WCAG 2.3.3); all controls are fully keyboard operable.
+- Focus returns to the editable composer after transcription. Errors leave the same microphone available
+  for retry; there is no additional button row.
+- The waveform reflects measured levels only, uses a bounded history, and clears its timer and samples
+  when capture ends. It does not invent sound activity. Its graphics are hidden from assistive technology;
+  the polite status announces recording/transcription instead. All controls are keyboard operable.
 
 ## Tests and evidence
 

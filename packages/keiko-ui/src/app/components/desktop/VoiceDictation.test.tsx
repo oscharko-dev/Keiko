@@ -2,15 +2,17 @@
 // the transcript preview's review / status / error surfaces, plus keyboard/focus handoff, the
 // discoverable local-only privacy disclosure, and zero axe violations across states.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import {
   VoiceDictationButton,
   VoiceDictationPreview,
   VoiceDictationPreviewFromController,
+  VoiceDictationComposerStatus,
 } from "./VoiceDictation";
+import { VoiceDictationWaveform } from "./VoiceDictationWaveform";
 import type { DictationController } from "./hooks/useDictation";
 
 describe("VoiceDictationButton", () => {
@@ -384,6 +386,7 @@ describe("VoiceDictationPreview", () => {
 });
 
 describe("VoiceDictationPreviewFromController", () => {
+  afterEach(() => vi.useRealTimers());
   function makeController(overrides: Partial<DictationController> = {}): DictationController {
     return {
       phase: "preview",
@@ -406,6 +409,55 @@ describe("VoiceDictationPreviewFromController", () => {
       ...overrides,
     };
   }
+
+  it("moves measured levels from right to left and clears capture history and timers", () => {
+    vi.useFakeTimers();
+    const recording = makeController({
+      phase: "recording",
+      micReady: true,
+      busy: true,
+      audioLevel: 1,
+    });
+    const view = render(<VoiceDictationWaveform controller={recording} />);
+    const lines = (): SVGLineElement[] => Array.from(view.container.querySelectorAll("line"));
+    expect(lines().every((line) => line.getAttribute("y1") === "15")).toBe(true);
+    act(() => vi.advanceTimersByTime(80));
+    expect(lines().at(-1)).toHaveAttribute("y1", "2");
+    view.rerender(<VoiceDictationWaveform controller={{ ...recording, audioLevel: Number.NaN }} />);
+    act(() => vi.advanceTimersByTime(80));
+    expect(lines().at(-1)).toHaveAttribute("y1", "15");
+    expect(lines().at(-2)).toHaveAttribute("y1", "2");
+    view.rerender(<VoiceDictationWaveform controller={makeController()} />);
+    expect(view.container).toBeEmptyDOMElement();
+    expect(vi.getTimerCount()).toBe(0);
+    view.rerender(<VoiceDictationWaveform controller={recording} />);
+    expect(lines().every((line) => line.getAttribute("y1") === "15")).toBe(true);
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["requesting", "Starting microphone…"],
+    ["finalizing", "Finishing dictation…"],
+    ["transcribing", "Transcribing your dictation…"],
+    ["recording", "Preparing mic…"],
+  ] as const)("announces %s without a fake waveform", (phase, label) => {
+    render(<VoiceDictationWaveform controller={makeController({ phase, busy: true })} />);
+    expect(screen.getByRole("status")).toHaveTextContent(label);
+  });
+
+  it("keeps failure recovery on the microphone without additional actions", async () => {
+    const view = render(<VoiceDictationComposerStatus error={undefined} />);
+    expect(view.container).toBeEmptyDOMElement();
+    view.rerender(
+      <VoiceDictationComposerStatus
+        error={{ reason: "transcribe-failed", message: "unused", correlationId: "support-123" }}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Support ID: support-123");
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(await axe(view.container)).toHaveNoViolations();
+  });
 
   it("wires the preview actions to the controller and returns focus after discard", () => {
     const controller = makeController();
