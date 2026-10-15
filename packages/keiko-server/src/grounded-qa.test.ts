@@ -1705,6 +1705,44 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it.each([undefined, 1])(
+    "refuses a deleted selected skill before grounded admission: %j",
+    async (revision) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      store.markdownSkills.delete(skill.id, skill.revision);
+      const paired = pairedReportOwner(tmp);
+      const seen: GatewayRequest[] = [];
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: GROUNDED_FIXTURE_QUESTION,
+            expectedSkillSelectionRevision: revision,
+          }),
+          fakeRes(),
+          paired.cookie,
+        ),
+        deps(
+          fakeModel("Must not dispatch", seen),
+          {},
+          { codingAppSessionChannel: paired.owner.codingAppSessionChannel },
+        ),
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+      });
+      expect(seen).toHaveLength(0);
+      expect(store.listMessages(chatId)).toHaveLength(0);
+    },
+  );
+
   it("requires live skill authority before grounded turn persistence regardless of client preconditions", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);

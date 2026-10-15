@@ -38,26 +38,88 @@ interface RehydrationCandidate {
   readonly order: number;
 }
 
-function matchingExcerpt(
+interface SourceExcerpt {
+  readonly excerpt: string;
+  readonly offset: number;
+  readonly terms: readonly string[];
+}
+
+function matchingExcerpts(
   message: ChatMessage,
   terms: readonly string[],
   secrets: readonly string[],
-): string | undefined {
+): readonly string[] {
   const safe = stripUnsafeFormatChars(redact(message.content, secrets)).normalize("NFKC");
-  const hits = terms.map((term) => lastTermOffset(safe, term)).filter((offset) => offset >= 0);
-  if (hits.length === 0) return undefined;
-  const latestHit = Math.max(...hits);
-  const paragraphStart = safe.lastIndexOf("\n", latestHit) + 1;
-  const start = latestHit - paragraphStart < 480 ? paragraphStart : Math.max(0, latestHit - 360);
-  const excerpt = safe.slice(start, start + 480).replace(/\s+/gu, " ");
-  return containsPseudoRoleMarker(excerpt) || containsAbsolutePath(excerpt) ? undefined : excerpt;
+  const starts = new Set<number>();
+  // queryTerms emits only Unicode letters; offsets remain in the original normalized text.
+  for (const match of safe.matchAll(new RegExp(terms.join("|"), "giu"))) {
+    const paragraphStart = safe.lastIndexOf("\n", match.index) + 1;
+    starts.add(paragraphStart + Math.floor((match.index - paragraphStart) / 360) * 360);
+  }
+  const candidates: SourceExcerpt[] = [];
+  for (const offset of starts) {
+    const source = safe.slice(offset, offset + 480);
+    if (containsPseudoRoleMarker(source) || containsAbsolutePath(source)) continue;
+    const excerpt = source.replace(/\s+/gu, " ");
+    candidates.push({
+      excerpt,
+      offset,
+      terms: terms.filter((term) => excerpt.toLowerCase().includes(term)),
+    });
+  }
+  return complementaryExcerpts(candidates);
 }
 
-function lastTermOffset(source: string, term: string): number {
-  // queryTerms emits only Unicode letters, so these short patterns have no regex operators.
-  let last = -1;
-  for (const match of source.matchAll(new RegExp(term, "giu"))) last = match.index;
-  return last;
+function additionalCoverage(
+  candidate: SourceExcerpt,
+  selected: readonly SourceExcerpt[],
+  covered: ReadonlySet<string>,
+): number {
+  // Do not reintroduce an older overlapping claim to gain an incidental query term.
+  if (
+    selected.some(
+      (later) =>
+        later.offset > candidate.offset &&
+        later.terms.some((term) => candidate.terms.includes(term)),
+    )
+  )
+    return 0;
+  return candidate.terms.filter((term) => !covered.has(term)).length;
+}
+
+function preferExcerpt(
+  candidate: SourceExcerpt,
+  best: SourceExcerpt | undefined,
+  score: number,
+  bestScore: number,
+): boolean {
+  return (
+    score > bestScore ||
+    (score > 0 && score === bestScore && candidate.offset > (best?.offset ?? -1))
+  );
+}
+
+/** Prefer relevant coverage, then the newest equivalent evidence within the same source. */
+function complementaryExcerpts(candidates: readonly SourceExcerpt[]): readonly string[] {
+  const covered = new Set<string>();
+  const selected: SourceExcerpt[] = [];
+  while (selected.length < MAX_REHYDRATED_MESSAGES) {
+    let best: SourceExcerpt | undefined;
+    let bestScore = 0;
+    for (const candidate of candidates) {
+      const score = additionalCoverage(candidate, selected, covered);
+      if (preferExcerpt(candidate, best, score, bestScore)) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+    if (best === undefined) break;
+    selected.push(best);
+    for (const term of best.terms) covered.add(term);
+  }
+  return selected
+    .toSorted((left, right) => right.offset - left.offset)
+    .map(({ excerpt }) => excerpt);
 }
 
 /** Re-read only eligible turns from the same chat. Search cannot widen a connector/workspace scope. */
@@ -148,18 +210,21 @@ function scanMessage(
   const source = { ...message, content: bounded.slice(overlap) };
   if (source.content.normalize("NFKC").replace(/\s+/gu, " ").trim() === input.normalizedQuery)
     return;
-  const excerpt = rehydrateMessage(
-    message.id,
-    {
-      messages: {
-        read: (id) =>
-          id === message.id ? matchingExcerpt(source, input.terms, input.secrets) : undefined,
-      },
-    },
-    2_000,
-  ).content;
-  if (excerpt !== undefined)
-    selectCandidate(state.candidates, message, excerpt, input.terms, state.order);
+  for (const [index, text] of matchingExcerpts(source, input.terms, input.secrets).entries()) {
+    const excerpt = rehydrateMessage(
+      message.id,
+      { messages: { read: (id) => (id === message.id ? text : undefined) } },
+      2_000,
+    ).content;
+    if (excerpt !== undefined)
+      selectCandidate(
+        state.candidates,
+        message,
+        excerpt,
+        input.terms,
+        state.order + index / (MAX_REHYDRATED_MESSAGES + 1),
+      );
+  }
 }
 
 function selectCandidate(

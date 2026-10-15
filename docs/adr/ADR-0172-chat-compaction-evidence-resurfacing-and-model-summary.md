@@ -73,6 +73,17 @@ projection only when no complete-summary candidate fits. Per-turn omissions are 
 text and body-free assembly diagnostics. A later roomy turn can render the full checkpoint again.
 Source messages remain stored; canonical digest and rehydration bounds still apply.
 
+Same-chat conversation recall selects complementary relevant excerpts within a stored message,
+instead of only its final query-term match. Query-term coverage ranks candidates, with later
+positions winning ties. An older overlapping claim is not reintroduced solely for incidental
+additional terms after a newer matching excerpt has been selected. Excerpts retain source order
+and message identity, and remain reference data. The existing eight-excerpt, 800-token,
+1,024-unit, and 1 MiB scan ceilings remain binding. Eligibility, excluded turns, redaction,
+Unicode-safe matching, and unsafe-path/role checks apply before excerpts reach prompt assembly;
+role checks precede whitespace folding. Existing body-free continuity evidence reports the
+resulting candidate/excerpt counts and budget disposition.
+
+
 A checkpoint stamped with a smaller context window must not stop a larger-window history scan,
 even when the complete conversation still exceeds the larger input budget. The visitor rebuilds
 that window's full bounded verbatim tail from canonical messages before folding older units.
