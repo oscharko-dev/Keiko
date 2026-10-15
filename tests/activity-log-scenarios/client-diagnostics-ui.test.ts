@@ -407,6 +407,92 @@ async function driveCatalogRefusals(context: (body: string) => RouteContext): Pr
   expect(bodies.join("\n")).not.toContain("private-catalog");
 }
 
+interface ShellRecoveryFixture {
+  readonly resetPersistedShortcutOverrides: () => Promise<void>;
+}
+
+async function loadShellRecoveryFixture(): Promise<{
+  recovery: ShellRecoveryFixture;
+  diagnostics: ClientDiagnosticsFixture;
+  transport: DiagnosticTransportFixture;
+}> {
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  const summary = await vi.importActual("../../packages/keiko-ui/src/lib/client-error-summary.js");
+  const evidence = await vi.importActual(
+    "../../packages/keiko-ui/src/lib/client-error-evidence.js",
+  );
+  vi.doMock("@/lib/api", () => api);
+  vi.doMock("@/lib/client-diagnostics", () => diagnostics);
+  vi.doMock("@/lib/client-error-summary", () => summary);
+  vi.doMock("@/lib/client-error-evidence", () => evidence);
+  vi.doMock("@oscharko-dev/keiko-contracts/runtime/editor-m7", () => {
+    throw new TypeError("private-shell-module endpoint unavailable");
+  });
+  const recovery = await vi.importActual<ShellRecoveryFixture>(
+    "../../packages/keiko-ui/src/app/components/desktop/shellRecovery.js",
+  );
+  return { recovery, diagnostics, transport };
+}
+
+async function driveShellRecoveryLoadRefusal(
+  context: (body: string) => RouteContext,
+): Promise<readonly string[]> {
+  const { recovery, diagnostics, transport } = await loadShellRecoveryFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  const bodies: string[] = [];
+  const deliveries: Promise<Response>[] = [];
+  const requests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      requests.push(input);
+      if (input === "/api/editor/settings")
+        return new Response(
+          JSON.stringify({ userRevision: 4, workspaceRevision: 7, etag: "etag-1" }),
+        );
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      const delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      deliveries.push(delivery);
+      return delivery;
+    },
+  );
+  try {
+    await expect(recovery.resetPersistedShortcutOverrides()).rejects.toThrow(
+      /refused by 2 setting layers/u,
+    );
+    expect(requests.filter((path) => path !== "/api/diagnostics/client")).toEqual([
+      "/api/editor/settings",
+    ]);
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) {
+      const payload = parsedLine(body);
+      expect(payload.correlationId).toEqual(expect.any(String));
+      expect(payload).toMatchObject({
+        errorKind: "unavailable",
+        errorEvidence: { errorClass: "Error", frames: [], causeChain: ["TypeError"] },
+      });
+    }
+    expect((await Promise.all(deliveries)).map((response) => response.status)).toEqual([204, 204]);
+    expect(bodies.join("\n")).not.toContain("private-shell-module");
+    return bodies;
+  } finally {
+    for (const name of [
+      "@/lib/api",
+      "@/lib/client-diagnostics",
+      "@/lib/client-error-summary",
+      "@/lib/client-error-evidence",
+      "@oscharko-dev/keiko-contracts/runtime/editor-m7",
+    ])
+      vi.doUnmock(name);
+  }
+}
+
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
 function parsedLine(line: string | undefined): Record<string, unknown> {
@@ -645,6 +731,31 @@ describe("Activity Log scenario: client-diagnostics", () => {
     expect(trace.failureClasses).toContain("client-diagnostic");
     expect(log).not.toContain("private-catalog");
     expect(log).not.toContain("/api/local-knowledge/");
+  });
+
+  it("persists each actual shell recovery contract-load refusal without a reset request", async () => {
+    const startedAtMs = Date.now();
+    const bodies = await driveShellRecoveryLoadRefusal(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(2);
+    for (const [index, line] of lines.entries())
+      expect(parsedLine(line)).toMatchObject({
+        correlationId: parsedLine(bodies[index]).correlationId,
+        errorKind: "unavailable",
+        errorClass: "Error",
+        completeness: "complete",
+        loss: "none",
+      });
+    expect(new Set(bodies.map((body) => parsedLine(body).correlationId)).size).toBe(2);
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-shell-module");
+    expect(log).not.toContain("/api/editor/settings");
   });
 
   // Fault injection: four refused reports (two sharing a refusal reason within the same throttle
