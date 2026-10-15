@@ -18,7 +18,10 @@ import {
   AUTOMATIC_COMPACTION_TARGET,
   AUTOMATIC_COMPACTION_THRESHOLD,
 } from "./chat-compaction-thresholds.js";
-import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ConversationMemoryContextEntryWire,
+  MarkdownSkillDocument,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "./store/index.js";
 import {
   usableGatewayMessages,
@@ -42,11 +45,18 @@ import {
   withDeploymentContextProfile,
 } from "./chat-prompt-budget-diagnostics.js";
 import { buildChatCompactionResurfacingContext } from "./chat-compaction-resurfacing.js";
+import {
+  renderMarkdownSkillInstructions,
+  withMarkdownSkillInstructions,
+  markdownSkillPromptUsage,
+  type MarkdownSkillPromptUsage,
+} from "./markdown-skill-prompt.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 
 export type { GatewayConversationMessage } from "./conversation-gateway.js";
 
 export interface GatewayPromptAssembly {
+  readonly protectedSkill?: MarkdownSkillPromptUsage;
   readonly maxOutputTokens?: number;
   readonly messages: import("./conversation-gateway.js").GatewayConversationMessage[];
   readonly compaction: ConversationCompactionOutcome["compaction"];
@@ -54,6 +64,7 @@ export interface GatewayPromptAssembly {
 }
 
 interface PromptAssemblyInput {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly continuityContextText?: string | undefined;
   readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly historyPrefix: readonly ChatMessage[];
@@ -224,6 +235,7 @@ function historyLaneItems(historyPrefix: readonly ChatMessage[]): ContextLaneInp
 }
 
 function buildPromptAllocatorLanes(input: {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly request: PromptAssemblyInput["request"];
   readonly historyPrefix: readonly ChatMessage[];
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
@@ -243,6 +255,15 @@ function buildPromptAllocatorLanes(input: {
           text: allocatorUserTaskText(input),
           score: 1,
         },
+        ...(input.protectedSkill === undefined
+          ? []
+          : [
+              {
+                id: "selected-skill",
+                text: renderMarkdownSkillInstructions(input.protectedSkill),
+                score: 1,
+              },
+            ]),
       ],
     },
     {
@@ -264,6 +285,7 @@ function buildPromptAllocatorLanes(input: {
 }
 
 function selectPromptLanes(input: {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly profile: ContextProfile;
   readonly request: PromptAssemblyInput["request"];
   readonly historyPrefix: readonly ChatMessage[];
@@ -373,11 +395,14 @@ function compactHistoryForBudget(
 }
 
 function buildLatestUserTurn(input: PromptAssemblyInput): string {
-  return composeConversationPrompt(
-    input.request.content,
-    input.documentContext,
-    renderMemoryContextText(input.memoryEntries, undefined),
-    input.request.discussionMode,
+  return withMarkdownSkillInstructions(
+    composeConversationPrompt(
+      input.request.content,
+      input.documentContext,
+      renderMemoryContextText(input.memoryEntries, undefined),
+      input.request.discussionMode,
+    ),
+    input.protectedSkill,
   );
 }
 
@@ -450,19 +475,13 @@ function assembleGatewayPromptCandidate(
   return {
     messages,
     compaction: historyOutcome.compaction,
+    ...(input.protectedSkill === undefined
+      ? {}
+      : { protectedSkill: markdownSkillPromptUsage(input.protectedSkill, input.profile) }),
     diagnostics: buildPromptAssemblyDiagnostics({
-      profile: input.profile,
+      ...input,
       historyOutcome,
-      historyTurnCount: input.historyTurnCount,
-      memoryEntries: input.memoryEntries,
-      totalMemoryEntries: input.totalMemoryEntries,
-      totalCompactionContextItems: input.totalCompactionContextItems,
-      documentContext: input.documentContext,
-      totalDocumentEntries: input.totalDocumentEntries,
-      request: input.request,
       finalMessages: accountedMessages,
-      compactionContextText: input.compactionContextText,
-      allocatorDiagnostics: input.allocatorDiagnostics,
     }),
   };
 }
@@ -498,6 +517,7 @@ function fitHistoryProjection(
 }
 
 function assembleSelectedGatewayPrompt(input: {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly continuityContextText?: string | undefined;
   readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly historyPrefix: readonly ChatMessage[];
@@ -514,6 +534,7 @@ function assembleSelectedGatewayPrompt(input: {
   readonly redactionSecrets: readonly string[];
 }): GatewayPromptAssembly | undefined {
   const baseInput = {
+    protectedSkill: input.protectedSkill,
     continuityContextText: input.continuityContextText,
     earlierCompaction: input.earlierCompaction,
     historyPrefix: input.historyPrefix,
@@ -592,6 +613,7 @@ export function selectGatewayPromptAssembly(
 function adjustLatestPromptOutputBudget<
   T extends Parameters<typeof assembleSelectedGatewayPrompt>[0],
 >(input: T): T {
+  if (input.protectedSkill !== undefined) return input;
   const messages = gatewayConversationImageAccounting(
     [
       { role: "system", content: CONVERSATION_SYSTEM_PROMPT },

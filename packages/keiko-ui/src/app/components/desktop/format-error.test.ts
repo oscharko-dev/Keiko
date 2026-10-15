@@ -9,6 +9,43 @@ import {
 import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
+  it.each(["en", "de"] as const)(
+    "localizes caller admission without claiming context overflow (%s)",
+    async (locale) => {
+      await loadLocaleMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      try {
+        const error = new ApiError(
+          "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+          "Caller synthesis attempt grant exhausted before dispatch",
+          403,
+        );
+        error.correlationId = "caller-admission-support";
+        const notice = toUserErrorNotice(error, "Could not send message.");
+        expect(notice.title).toBe(
+          locale === "de" ? "Versuchsgrenze der Anfrage erreicht" : "Request attempt limit reached",
+        );
+        expect(notice.message).toBe(
+          locale === "de"
+            ? "Keiko hat weitere Modellversuche gestoppt, um die Grenzen dieser Anfrage einzuhalten. Ein früherer Versuch kann Tokens verwendet haben, obwohl keine Antwort empfangen wurde."
+            : "Keiko stopped further model attempts to stay within this request's limits. An earlier attempt may have used tokens even though no answer was received.",
+        );
+        expect(notice.remediation).toBe(
+          translate(locale, "chat.error.attemptAdmission.remediation"),
+        );
+        expect(notice.code).toBe("GATEWAY_ATTEMPT_ADMISSION_DENIED");
+        expect(notice.correlationId).toBe("caller-admission-support");
+        expect(notice.title).not.toBe(translate(locale, "chat.error.contextOverflow.title"));
+        expect(notice.remediation).not.toBe(
+          translate(locale, "chat.error.contextOverflow.remediation"),
+        );
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+        resetLoadedMessageCatalogs();
+      }
+    },
+  );
+
   it("explains changed connected sources in the selected locale and preserves support attribution", async () => {
     await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");

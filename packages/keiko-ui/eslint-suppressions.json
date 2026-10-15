@@ -40,9 +40,6 @@
     }
   },
   "src/app/components/desktop/ConnectedScopePill.tsx": {
-    "complexity": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 2
     }

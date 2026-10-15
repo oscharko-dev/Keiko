@@ -106,6 +106,82 @@ describe("stripTrailingSlashes", () => {
 });
 
 describe("ConnectedScopePill", () => {
+  it("shows a rooted file as a file and includes its complete selection in its accessible name", () => {
+    const scope: ChatConnectedScope = {
+      kind: "files",
+      root: "/repo",
+      relativePaths: ["src/feature/validation.ts"],
+      connectedAtMs: 1,
+    };
+    render(<ConnectedScopePill chat={makeChat({ connectedScopes: [scope] })} />);
+    expect(screen.getByText("File: validation.ts")).toHaveAttribute(
+      "aria-label",
+      "File: validation.ts (/repo/src/feature/validation.ts)",
+    );
+    expect(screen.getByTitle("/repo/src/feature/validation.ts")).toHaveTextContent(
+      "File: validation.ts",
+    );
+    expect(
+      screen.getByText(/Keiko may inspect only the connected file scope/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the selected directory under its root instead of claiming the entire folder", () => {
+    render(
+      <ConnectedScopePill
+        chat={makeChat({
+          connectedScopes: [
+            {
+              kind: "directory",
+              root: "/repo",
+              relativePaths: ["src/feature"],
+              connectedAtMs: 1,
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("Folder: repo/src/feature")).toHaveAttribute(
+      "title",
+      "/repo/src/feature",
+    );
+  });
+
+  it("names the root of a rooted multiple-file selection", () => {
+    render(
+      <ConnectedScopePill
+        chat={makeChat({
+          connectedScopes: [
+            {
+              kind: "files",
+              root: "/repo",
+              relativePaths: ["src/a.ts", "src/b.ts"],
+              connectedAtMs: 1,
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("2 files in repo")).toBeInTheDocument();
+  });
+
+  it("announces a rooted directory-to-file change even when the basename is unchanged", () => {
+    const scope: ChatConnectedScope = {
+      kind: "directory",
+      root: "/repo",
+      relativePaths: ["src/readme.md"],
+      connectedAtMs: 1,
+    };
+    const view = render(<ConnectedScopePill chat={makeChat({ connectedScopes: [scope] })} />);
+    expect(screen.getByTestId("connected-scope-announcer")).toHaveTextContent("");
+    view.rerender(
+      <ConnectedScopePill chat={makeChat({ connectedScopes: [{ ...scope, kind: "files" }] })} />,
+    );
+    expect(screen.getByTestId("connected-scope-announcer")).toHaveTextContent(
+      "Connected scope updated",
+    );
+  });
+
   it("renders nothing when the chat has no connected scope", () => {
     const { container } = render(<ConnectedScopePill chat={makeChat()} updateScopes={vi.fn()} />);
     expect(container.firstChild).toBeNull();

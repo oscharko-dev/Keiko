@@ -259,6 +259,8 @@ export interface StreamReadBounds {
 }
 
 export interface ProviderAdapter {
+  /** Adapter-owned admission immediately before every HTTP synthesis dispatch, including compatibility retry. */
+  readonly attemptAdmissionBoundary?: "transport" | undefined;
   readonly call: (
     request: GatewayRequest,
     config: ModelProviderConfig,

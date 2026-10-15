@@ -4,6 +4,8 @@
 // convention).
 
 export { runLocalKnowledgeRetrieval, type RetrievalDependencies } from "./retrieval-runner.js";
+export { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
+export { scoreVector } from "./vector-scoring.js";
 
 export {
   searchVectorsForScope,

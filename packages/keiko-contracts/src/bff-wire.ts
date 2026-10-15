@@ -17,12 +17,16 @@ import type { ModelCapability } from "./gateway.js";
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
 import {
+  CANDIDATE_OMISSION_REASONS,
   connectedContextOmittedCount,
   connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateOmissionReason,
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
+  type ContextSelectionConfidence,
+  type ContextSemanticProviderDisposition,
+  type ContextScopeState,
   type ExplorationBudget,
   type ExplorationUsage,
   type RetrievalQueryKind,
@@ -60,6 +64,16 @@ import {
   type ContextBudgetPressure,
   type ContextLaneId,
 } from "./context-engineering.js";
+
+export { MARKDOWN_SKILL_LIMITS } from "./markdown-skills.js";
+export type {
+  MarkdownSkillReference,
+  MarkdownSkillSelection,
+  MarkdownSkillSelectionView,
+  MarkdownSkillMetadata,
+  MarkdownSkillDocument,
+  MarkdownSkillUpload,
+} from "./markdown-skills.js";
 
 export interface Project {
   readonly path: string;
@@ -504,6 +518,7 @@ export interface ChatsResponse {
  *   safety-margin     — estimation headroom that is never planned for input
  */
 export type ChatContextSegmentId =
+  | "skill"
   | "system"
   | "summary"
   | "messages"
@@ -523,6 +538,13 @@ export interface ChatContextSegmentWire {
 }
 
 export interface ChatContextStatusWire {
+  readonly protectedSkill?:
+    | {
+        readonly reference: import("./markdown-skills.js").MarkdownSkillReference;
+        readonly selectionRevision: number;
+        readonly estimatedTokens: number;
+      }
+    | undefined;
   readonly modelId: string;
   readonly contextWindowTokens: number;
   /** Optional independently declared input ceiling of the selected model. */
@@ -1125,6 +1147,8 @@ export interface DesktopChatSendRequestWire {
   // Composer sends may omit it.
   readonly clientTurnId?: string | undefined;
   readonly expectedGroundingScopeIdentity?: string | undefined;
+  /** Observed selection revision; null explicitly requires no active skill. Stale sends are refused. */
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
@@ -1261,6 +1285,8 @@ export interface GroundedAskRequest {
   // different effective model, grounding scope, or memory request fails closed.
   readonly clientTurnId?: string | undefined;
   readonly expectedGroundingScopeIdentity?: string | undefined;
+  /** Observed selection revision; null explicitly requires no active skill. Stale sends are refused. */
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
   // Center model-selection guardrails instead of silently falling back to the chat's stored model.
   readonly modelId?: string | undefined;
@@ -1288,6 +1314,8 @@ export interface GroundedEvidenceCitation {
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.
   readonly source?: string;
+  // Original positive canonical source ordinal from the actual sent pack array, never UI order.
+  readonly sourceId?: string;
   // Navigation attribution only, matched against current connected scopes before opening.
   // Missing or ambiguous identity requires the existing explicit source picker.
   readonly sourceScopeFingerprint?: string | undefined;
@@ -1376,7 +1404,38 @@ export interface GroundedAnswerContextSummary {
 // optional `rankingSummary` is likewise path-free (bucket/ecosystem aggregate counts only). The
 // sentinel `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set)
 // from directory/files scopes that always report `relativePaths.length` (>= 1).
-export interface GroundedAnswerContextPackSummary {
+export interface GroundedAnswerRetrievalDiagnostics {
+  readonly filesInPrompt?: number | undefined;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
+  readonly selectionConfidence?: ContextSelectionConfidence | undefined;
+  readonly semanticProviderDisposition?: ContextSemanticProviderDisposition | undefined;
+  readonly scopeContextState?: ContextScopeState | undefined;
+}
+
+export interface GroundedOmissionGroups {
+  readonly ranking: number;
+  readonly eligibility: number;
+}
+
+const RANKING_OMISSION_REASONS: ReadonlySet<CandidateOmissionReason> = new Set([
+  "low-relevance",
+  "budget-exhausted",
+  "near-duplicate",
+]);
+
+export function groupConnectedContextOmissions(
+  counts: Readonly<Record<CandidateOmissionReason, number>>,
+): GroundedOmissionGroups {
+  let ranking = 0;
+  let eligibility = 0;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    if (RANKING_OMISSION_REASONS.has(reason)) ranking += counts[reason];
+    else eligibility += counts[reason];
+  }
+  return { ranking, eligibility };
+}
+
+export interface GroundedAnswerContextPackSummary extends GroundedAnswerRetrievalDiagnostics {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
   // Deterministic display fingerprint, not the raw SelectedScope.scopeId.
   readonly scopeId: string;
@@ -1508,6 +1567,7 @@ export function buildGroundedAnswerContextPackSummary(
   citationCount: number,
   elapsedMs: number,
   assemblyDiagnostics?: ContextAssemblyDiagnostics,
+  retrievalDiagnostics?: GroundedAnswerRetrievalDiagnostics,
 ): GroundedAnswerContextPackSummary {
   const rankingSummary = buildRankingSummary(pack);
   const coverage = pack.diagnostics?.coverage;
@@ -1520,7 +1580,7 @@ export function buildGroundedAnswerContextPackSummary(
     fileCount: pack.scope.kind === "workspace-root" ? -1 : pack.scope.relativePaths.length,
     queryKind: pack.query.kind,
     usage: pack.usage,
-    budget: pack.budget,
+    budget: groundedWireResourceBudget(pack.budget),
     citationCount,
     omittedCount: connectedContextOmittedCount(pack),
     omittedCounts: connectedContextOmittedCounts(pack),
@@ -1529,10 +1589,83 @@ export function buildGroundedAnswerContextPackSummary(
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
     ...(coverage !== undefined ? { coverage } : {}),
     ...(contextSummary !== undefined ? { contextSummary } : {}),
+    ...retrievalDiagnosticSummary(packRetrievalDiagnostics(pack, retrievalDiagnostics)),
   };
 }
 
-export interface ConnectedContextGroundedAnswer {
+function groundedWireResourceBudget(budget: ExplorationBudget): ExplorationBudget {
+  return {
+    searchCallsMax: budget.searchCallsMax,
+    filesReadMax: budget.filesReadMax,
+    excerptBytesMax: budget.excerptBytesMax,
+    modelInputTokensMax: budget.modelInputTokensMax,
+    modelOutputTokensMax: budget.modelOutputTokensMax,
+    elapsedMsMax: budget.elapsedMsMax,
+    rerankCallsMax: budget.rerankCallsMax,
+  };
+}
+
+function packRetrievalDiagnostics(
+  pack: ConnectedContextPack,
+  provided: GroundedAnswerRetrievalDiagnostics | undefined,
+): GroundedAnswerRetrievalDiagnostics {
+  const observed = pack.diagnostics;
+  const selection = observed?.selection;
+  return {
+    semanticProviderDisposition: observed?.semanticProviderDisposition,
+    scopeContextState: observed?.scopeContextState,
+    ...(selection === undefined
+      ? {}
+      : {
+          selectionConfidence: selection.selectionConfidence,
+          reranker: selection.reranker,
+        }),
+    ...provided,
+  };
+}
+
+function retrievalDiagnosticSummary(
+  diagnostics: GroundedAnswerRetrievalDiagnostics,
+): GroundedAnswerRetrievalDiagnostics {
+  return {
+    ...(diagnostics.reranker === undefined ? {} : { reranker: diagnostics.reranker }),
+    ...(diagnostics.selectionConfidence === undefined
+      ? {}
+      : { selectionConfidence: diagnostics.selectionConfidence }),
+    ...(diagnostics.filesInPrompt === undefined
+      ? {}
+      : { filesInPrompt: diagnostics.filesInPrompt }),
+    ...(diagnostics.semanticProviderDisposition === undefined
+      ? {}
+      : { semanticProviderDisposition: diagnostics.semanticProviderDisposition }),
+    ...(diagnostics.scopeContextState === undefined
+      ? {}
+      : { scopeContextState: diagnostics.scopeContextState }),
+  };
+}
+
+export interface GroundedInsufficiencyDeclaration {
+  readonly scopePath: string;
+  readonly state: "read-in-this-turn" | "unread-in-scope";
+}
+
+export type GroundedAnswerKind = "answer" | "refusal" | "clarification" | "insufficiency";
+export type GroundedCitationBehaviour = "cites" | "cites-after-repair" | "never";
+export type CitationRepairDisposition =
+  | "not-needed"
+  | "applied"
+  | "rejected-content-changed"
+  | "failed"
+  | "skipped-budget"
+  | "skipped-capability";
+
+export interface GroundedAnswerEvidenceDeclaration {
+  readonly answerKind?: GroundedAnswerKind | undefined;
+  readonly citationBehaviour?: GroundedCitationBehaviour | undefined;
+  readonly insufficiencyDeclarations?: readonly GroundedInsufficiencyDeclaration[] | undefined;
+}
+
+export interface ConnectedContextGroundedAnswer extends GroundedAnswerEvidenceDeclaration {
   readonly groundingKind: "connected-context";
   readonly userMessageId: string;
   readonly assistantMessageId: string;
@@ -1636,7 +1769,7 @@ export interface HybridGroundedAnswerContextSummary {
   readonly reranker?: GroundedRerankerDiagnostics | undefined;
 }
 
-export interface HybridGroundedAnswer {
+export interface HybridGroundedAnswer extends GroundedAnswerEvidenceDeclaration {
   readonly groundingKind: "hybrid";
   readonly userMessageId: string;
   readonly assistantMessageId: string;
@@ -1662,6 +1795,12 @@ export interface HybridGroundedAnswer {
  * window. The context meter shows this and plans the next grounded question with it.
  */
 export interface GroundedPromptContextWire {
+  readonly protectedSkill?:
+    | {
+        readonly reference: import("./markdown-skills.js").MarkdownSkillReference;
+        readonly estimatedTokens: number;
+      }
+    | undefined;
   /** Answering model identity; older persisted answers may not carry it. */
   readonly modelId?: string | undefined;
   readonly promptTokens: number;

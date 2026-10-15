@@ -14,6 +14,7 @@ import {
   type SearchScope,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { createStructuralAdapterRequestContext } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildRedactor,
@@ -27,7 +28,10 @@ import {
   handleEditorWorkspaceSearch,
   handleEditorWorkspaceSymbols,
 } from "./editor/workspaceSearchRoutes.js";
-import { collectDiscoveredSymbolTraceEvidence } from "./grounded-symbol-trace.js";
+import {
+  collectDiscoveredSymbolTraceEvidence,
+  GROUNDED_TRACE_SEARCH_LIMITS,
+} from "./grounded-symbol-trace.js";
 
 const TARGET_PATH = "zzz/nested/handler.ts";
 const SYMBOL = "handleLateRequest";
@@ -45,7 +49,10 @@ beforeAll(() => {
   mkdirSync(join(root, "zzz", "nested"), { recursive: true });
   writeFileSync(join(root, TARGET_PATH), TARGET_CONTENT);
   mkdirSync(join(root, "src"));
-  writeFileSync(join(root, "src/routes.ts"), `router.post("/api/items", ${SYMBOL});\n`);
+  writeFileSync(
+    join(root, "src/routes.ts"),
+    `router.post("/api/items", ${SYMBOL});\nimport { ${SYMBOL} } from "../zzz/nested/handler.js";\n`,
+  );
 });
 
 afterAll(() => {
@@ -253,6 +260,13 @@ describe("ADR-0022 shared recursive-search consumers", () => {
 
   it("discovers the grounded route handler beyond the former default scan count", async () => {
     const clock = advancingClock();
+    const searchScope = scope();
+    const requestContext = createStructuralAdapterRequestContext(
+      searchScope,
+      GROUNDED_TRACE_SEARCH_LIMITS,
+      nodeWorkspaceFs,
+      { nowMs: clock },
+    );
     const result = await collectDiscoveredSymbolTraceEvidence({
       scope: selectedScope(),
       query: {
@@ -262,10 +276,11 @@ describe("ADR-0022 shared recursive-search consumers", () => {
       },
       anchors: [],
       retrievalIntent: "targeted-code-search",
-      searchScope: scope(),
+      searchScope,
       fs: nodeWorkspaceFs,
       nowMs: clock,
       atoms: [routeAtom()],
+      requestContext,
     });
     expect(result.atoms).toEqual(
       expect.arrayContaining([

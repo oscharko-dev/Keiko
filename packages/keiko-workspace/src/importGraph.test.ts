@@ -7,6 +7,7 @@ import { memFs } from "./_memfs.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { importGraphAdapter } from "./importGraph.js";
+import { buildImportGraph } from "./importGraphEdges.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchLimits, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceInfo } from "./types.js";
 
@@ -43,6 +44,36 @@ function exq(text: string): RetrievalQuery {
 }
 
 describe("importGraphAdapter", () => {
+  it("classifies and parses each complete small source with one physical read", async () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": 'import { foo } from "./bar";',
+      "src/bar.ts": "export const foo = 1;",
+    });
+    const bytes: string[] = [];
+    const descriptors: string[] = [];
+    const measured: WorkspaceFs = {
+      ...fs,
+      readFileBytes: async (absolute, cap, links, expected) => {
+        bytes.push(absolute);
+        const read = fs.readFileBytes;
+        if (read === undefined) throw new TypeError("byte fixture missing");
+        return read(absolute, cap, links, expected);
+      },
+      readFileUtf8SameDescriptor: (absolute, cap, links, expected) => {
+        descriptors.push(absolute);
+        const read = fs.readFileUtf8SameDescriptor;
+        if (read === undefined) throw new TypeError("descriptor fixture missing");
+        return read(absolute, cap, links, expected);
+      },
+    };
+    const graph = await buildImportGraph(scope, DEFAULT_SEARCH_LIMITS, measured);
+    expect(graph.edges).toMatchObject([
+      { importerPath: "src/a.ts", targetPath: "src/bar.ts", resolutionKind: "relative" },
+    ]);
+    expect(bytes.sort()).toEqual(["/ws/src/a.ts", "/ws/src/bar.ts"]);
+    expect(descriptors).toEqual([]);
+  });
+
   it("is always available", async () => {
     const { scope, fs } = makeScope({});
     await expect(importGraphAdapter.isAvailable(scope, fs)).resolves.toBe(true);

@@ -407,7 +407,7 @@ describe("CI test/gate wiring guard", () => {
     );
     expect(windowsRfc3161QualityProject).not.toContain("<TargetFramework>net8.0</TargetFramework>");
     expect(windowsRfc3161QualityProject).toContain(
-      '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
+      '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />',
     );
   });
 

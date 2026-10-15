@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Explicit controlled runner for the consolidated #3347 S8786 wall-clock pin. The ordinary required
-// Vitest path remains behavioral under ADR-0139; this standalone command opts into the 1000 ms
-// assertion and launches Vitest without a shell so the same invocation works on every platform.
+// Controlled local runner for the pattern algorithm and physical-line public-handler pins.
+// Ordinary required Vitest retains their behavior and work assertions under ADR-0139; separate
+// sequential child processes enforce the unchanged 1000 ms and 5000 ms budgets without a shell.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -14,6 +14,8 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const GROUNDED_WORKSPACE_PATTERN_TEST =
   "packages/keiko-server/src/grounded-orchestrator.workspace-pattern.test.ts";
 export const GROUNDED_WORKSPACE_PATTERN_PROCESS_TIMEOUT_MS = 30_000;
+export const GROUNDED_SYMBOL_LINE_TEST =
+  "packages/keiko-server/src/grounded-symbol-line.public-handler.test.ts";
 
 export function resolveInstalledVitestEntry() {
   const packageJsonPath = findPackageJSON("vitest", import.meta.url);
@@ -48,6 +50,25 @@ export function controlledVitestInvocation(vitestEntry, environment = process.en
   };
 }
 
+function controlledLineVitestInvocation(vitestEntry, environment) {
+  const invocation = controlledVitestInvocation(vitestEntry, environment);
+  return {
+    ...invocation,
+    args: [
+      vitestEntry,
+      "run",
+      "--config",
+      "vitest.coverage.packages.config.ts",
+      "--coverage",
+      GROUNDED_SYMBOL_LINE_TEST,
+      "--coverage.reportsDirectory=coverage/grounded-line-performance",
+    ],
+    // Includes setup, the existing 60s operational test timeout and coverage serialization.
+    // The measured handler budget remains exactly 5000 ms.
+    options: { ...invocation.options, timeout: 90_000 },
+  };
+}
+
 function processTimedOut(result) {
   return (
     result.error?.code === "ETIMEDOUT" || (result.signal !== null && result.signal !== undefined)
@@ -61,23 +82,29 @@ function processFailed(result) {
 export function runGroundedWorkspacePatternPerformance(options = {}) {
   const resolveEntry = options.resolveEntry ?? resolveInstalledVitestEntry;
   const execute = options.execute ?? spawnSync;
-  let invocation;
+  let invocations;
   try {
-    invocation = controlledVitestInvocation(resolveEntry(), options.environment);
+    const entry = resolveEntry();
+    invocations = [
+      controlledVitestInvocation(entry, options.environment),
+      controlledLineVitestInvocation(entry, options.environment),
+    ];
   } catch {
     console.error("grounded-workspace-pattern performance check FAIL — Vitest is unavailable.");
     return 1;
   }
-  const result = execute(invocation.command, invocation.args, invocation.options);
-  if (processTimedOut(result)) {
-    console.error("grounded-workspace-pattern performance check FAIL — the focused pin timed out.");
-    return 1;
+  for (const invocation of invocations) {
+    const result = execute(invocation.command, invocation.args, invocation.options);
+    if (processTimedOut(result)) {
+      console.error("grounded local performance check FAIL — the focused pin timed out.");
+      return 1;
+    }
+    if (processFailed(result)) {
+      console.error("grounded local performance check FAIL — the focused pin failed.");
+      return result.status ?? 1;
+    }
   }
-  if (processFailed(result)) {
-    console.error("grounded-workspace-pattern performance check FAIL — the focused pin failed.");
-    return result.status ?? 1;
-  }
-  console.log("grounded-workspace-pattern performance check PASS — 1000 ms pin enforced.");
+  console.log("grounded local performance check PASS — 1000 ms and 5000 ms pins enforced.");
   return 0;
 }
 

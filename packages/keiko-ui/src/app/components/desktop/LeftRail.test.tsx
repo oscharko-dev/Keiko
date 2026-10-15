@@ -5,6 +5,7 @@
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { LeftRail } from "./LeftRail";
 
@@ -21,6 +22,41 @@ function renderRail(openTools: ReadonlySet<string> = new Set()): void {
 }
 
 describe("LeftRail — workspace tool buttons", () => {
+  it("keeps its navigation and controls accessible", async () => {
+    const { container } = render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={vi.fn()}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("preserves keyboard activation of new-chat and chat-history actions", async () => {
+    const onNewChat = vi.fn();
+    const onTool = vi.fn();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={onNewChat}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(onNewChat).toHaveBeenCalledOnce();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Chat History" })).toHaveFocus();
+    await user.keyboard(" ");
+    expect(onTool).toHaveBeenCalledWith("chatHistory");
+  });
+
   it("keeps redundant diagnostic windows out of the normal navigation", () => {
     renderRail(new Set(["diagnostics"]));
     expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();

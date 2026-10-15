@@ -262,6 +262,12 @@ async function awaitTerminal(runId: string): Promise<void> {
   throw new Error("run did not terminate");
 }
 
+async function awaitAcceptedRunTerminal(response: Response): Promise<void> {
+  const created = (await response.json()) as CreateResponse;
+  await awaitTerminal(created.runId);
+  expect(registry.get(created.runId)?.status).not.toBe("running");
+}
+
 beforeEach(() => {
   workspace = mkdtempSync(join(tmpdir(), "keiko-ui-ws-"));
   cpSync(FIXTURE, workspace, { recursive: true });
@@ -1058,6 +1064,7 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
       }),
     });
     expect(res.status).toBe(202);
+    await awaitAcceptedRunTerminal(res);
   });
 
   it("returns 202 for verify with a persisted managed task workspace root", async () => {
@@ -1126,6 +1133,7 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
         }),
       });
       expect(res.status).toBe(202);
+      await awaitAcceptedRunTerminal(res);
     } finally {
       rmSync(managedRoot, { recursive: true, force: true });
       rmSync(repositoryRoot, { recursive: true, force: true });
@@ -1144,6 +1152,7 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
       }),
     });
     expect(res.status).toBe(202);
+    await awaitAcceptedRunTerminal(res);
   });
 
   it("returns 403 WORKSPACE_NOT_REGISTERED for unit-test-generation with an unregistered workspaceRoot", async () => {

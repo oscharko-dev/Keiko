@@ -119,6 +119,8 @@ export function presentChatSessionError(
       return undefined;
     case "attachment-cleanup-deferred":
       return t("attachment.cleanupDeferred");
+    case "skill-selection-unavailable":
+      return t("chat.skills.requestError");
     case "message":
       return presentation.message;
   }

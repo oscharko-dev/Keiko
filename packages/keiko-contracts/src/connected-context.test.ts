@@ -1345,6 +1345,38 @@ describe("validateConnectedContextPack", () => {
     expect(validateConnectedContextPack(happyPack())).toEqual({ ok: true });
   });
 
+  it.each([undefined, "candidate-score", "lexical-producer", "unknown", 1, null])(
+    "validates the optional closed fallback ranking source %s",
+    (fallbackRankingSource) => {
+      const pack = {
+        ...happyPack(),
+        diagnostics: {
+          rankedCandidates: [],
+          selection: {
+            selectionConfidence: "low" as const,
+            keepOneFallbackApplied: true,
+            floorReferenceKind: "ordinary-p75" as const,
+            relativeFloorPermille: 550,
+            absoluteFloorPermille: 92,
+            strongestOrdinaryScorePermille: 50,
+            rerankerDisposition: "unconfigured" as const,
+            reranked: false,
+            rerankFailedCalls: 0,
+          },
+        },
+      };
+      Object.assign(pack.diagnostics.selection, { fallbackRankingSource });
+      const result = validateConnectedContextPack(pack);
+      if (
+        fallbackRankingSource === undefined ||
+        fallbackRankingSource === "candidate-score" ||
+        fallbackRankingSource === "lexical-producer"
+      )
+        expect(result).toEqual({ ok: true });
+      else expectInvalidWithReason(result, "selection.fallbackRankingSource invalid");
+    },
+  );
+
   it("accepts a pack with well-formed ranking diagnostics", () => {
     const pack: ConnectedContextPack = {
       ...happyPack(),
@@ -1637,12 +1669,28 @@ describe("ExplorationBudget shape", () => {
   it("matches usage dimension names", () => {
     const budget: ExplorationBudget = DEFAULT_EXPLORATION_BUDGET;
     const usage: ExplorationUsage = happyUsage();
-    expect(Object.keys(budget).sort()).toEqual(
+    expect(
+      Object.keys(budget)
+        .filter((key) => key !== "followUpPassesMax")
+        .sort(),
+    ).toEqual(
       Object.keys(usage)
         .map((key) => `${key}Max`)
         .sort(),
     );
+    expect(budget.followUpPassesMax).toBe(1);
   });
+
+  it.each([undefined, 0, 1, 2, -1, null, "1", Number.NaN])(
+    "validates untrusted follow-up configuration %s through both budget guards",
+    (value) => {
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET };
+      Reflect.set(budget, "followUpPassesMax", value);
+      const accepted = value === undefined || value === 0 || value === 1;
+      expect(isWithinBudget(happyUsage(), budget)).toBe(accepted);
+      expect(validateConnectedContextPack({ ...happyPack(), budget }).ok).toBe(accepted);
+    },
+  );
 });
 
 // ─── KEIKO-0880: runtime immutability of the frozen contract tables ────────────

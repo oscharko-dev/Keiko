@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCount,
   connectedContextOmittedCounts,
   MAX_OMITTED_CONTEXT_ENTRIES,
   type ConnectedContextPack,
@@ -250,6 +251,42 @@ describe("connected-context evidence", () => {
       });
       expect(budget.limits.filesReadMax).toBe(filesReadMax ?? undefined);
       expect(budget.limits.elapsedMsMax).toBe(elapsedMsMax ?? undefined);
+    },
+  );
+
+  it.each([true, false])(
+    "retains retrieval candidate counts when sent files are trimmed (%s)",
+    (trim) => {
+      const original = pack();
+      const sent = trim ? { ...original, files: [] } : original;
+      const store = createInMemoryEvidenceStore();
+      persistConnectedContextEvidence(
+        {
+          runId: "sent-inventory-count",
+          modelId: "example-chat-model",
+          workspaceRoot: original.scope.workspaceRoot,
+          pack: sent,
+          ...(trim ? { retrievedFileCount: original.files.length } : {}),
+          citationCount: 0,
+          elapsedMs: 42,
+          startedAt: NOW,
+          finishedAt: NOW + 42,
+        },
+        { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+      );
+      const manifest = requireManifest(loadEvidence(store, "sent-inventory-count"));
+      const audit = requireConnectedContext(manifest);
+      expect(manifest.context?.totalCandidates).toBe(
+        original.files.length + connectedContextOmittedCount(original),
+      );
+      expect(manifest.context?.usedBytes).toBe(original.usage.excerptBytes);
+      expect(audit.files).toHaveLength(sent.files.length);
+      expect(audit.budget.usage.filesRead).toBe(original.usage.filesRead);
+      expect(audit.budget.usage.excerptBytes).toBe(original.usage.excerptBytes);
+      expect(audit.summary.omittedCount).toBe(connectedContextOmittedCount(original));
+      expect(audit.omitted).toHaveLength(original.omitted.length);
+      expect(audit.modelRequest.sentToModel).toBe(true);
+      assertNoSensitiveText(manifest);
     },
   );
 
@@ -553,5 +590,62 @@ describe("connected-context evidence", () => {
       loadEvidence(store, "grounded-run-no-token-accounting"),
     );
     expect(manifestWithoutAccounting.contextAssembly?.profile.tokenAccounting).toBeUndefined();
+  });
+});
+
+describe("canonical connected source attribution", () => {
+  it("keeps first-pass validated declarations and the second-pass outcome without source bodies", () => {
+    const store = createInMemoryEvidenceStore();
+    const result = persistConnectedContextEvidence(
+      {
+        runId: "follow-up-audit",
+        modelId: "fixture",
+        workspaceRoot: "/repo",
+        pack: { ...pack(), scope: { ...pack().scope, kind: "workspace-root", relativePaths: [] } },
+        citationCount: 1,
+        elapsedMs: 0,
+        startedAt: NOW,
+        finishedAt: NOW,
+        followUp: {
+          passCount: 1,
+          admittedPathCount: 1,
+          trigger: "insufficiency-declared",
+          outcome: "answered",
+          firstDeclarations: [
+            { scopePath: "src/Companion.ts", state: "unread-in-scope" },
+            { scopePath: "../private.ts", state: "unread-in-scope" },
+          ],
+        },
+      },
+      { store, env: {} },
+    );
+    expect(result.manifest.connectedContext?.followUp).toEqual({
+      passCount: 1,
+      admittedPathCount: 1,
+      trigger: "insufficiency-declared",
+      outcome: "answered",
+      firstDeclarations: [{ scopePath: "src/Companion.ts", state: "unread-in-scope" }],
+    });
+    expect(JSON.stringify(result.manifest)).not.toContain("../private.ts");
+    assertNoSensitiveText(result.manifest);
+  });
+  it("preserves an authoritative fingerprint without reconstructing a root digest", () => {
+    const store = createInMemoryEvidenceStore();
+    const sourceScopeFingerprint = "a".repeat(64);
+    const result = persistConnectedContextEvidence(
+      {
+        runId: "canonical-source-attribution",
+        modelId: "fixture",
+        workspaceRoot: "/repo",
+        pack: pack(),
+        citationCount: 0,
+        elapsedMs: 0,
+        startedAt: NOW,
+        finishedAt: NOW,
+        sourceScopeFingerprint,
+      },
+      { store, env: {} },
+    );
+    expect(result.manifest.connectedContext?.scope).toMatchObject({ sourceScopeFingerprint });
   });
 });

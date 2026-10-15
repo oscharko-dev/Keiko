@@ -750,6 +750,10 @@ re-tuned without a surface change.
 
 ## Related
 
+- [ADR-0180](ADR-0180-bounded-connected-folder-follow-up.md): one server-owned connected-folder
+  follow-up on an admitted unread declaration, sharing the remaining context budgets and one extra
+  synthesis slot with citation-marker repair. This extends the bounded grounded repo-QA path without
+  resetting its allocator or introducing a tool loop.
 - ADR-0019: modular package architecture and the `boundary.test.ts` no-sibling-import rule.
 - ADR-0022: connected-context privacy contract (path-free summaries, counts-only projections).
 - ADR-0034 / ADR-0036: hybrid grounding and the shared evidence pool the `repo-evidence` lane fills.

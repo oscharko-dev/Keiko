@@ -15,6 +15,69 @@ export const SUPPORT_REPORT_KIND = "keiko.support.report";
 /** The default export directory under the state directory. */
 export const SUPPORT_REPORT_DIRECTORY_NAME = "support-reports";
 export const SUPPORT_REPORT_SCHEMA_VERSION = 1;
+
+/** Derived analyzer findings, independent of the retained report's storage schema. */
+export const SUPPORT_RETRIEVAL_MISS_FINDING_SCHEMA_VERSION = 1;
+export const SUPPORT_RETRIEVAL_MISS_REASONS = [
+  "declared-unread-in-scope",
+  "explicit-path-rejected",
+  "low-confidence-selection",
+  "basename-dedup-demoted-explicit",
+  "follow-up-still-insufficient",
+  "semantic-unavailable-with-miss",
+  "intent-overview-on-follow-up",
+] as const;
+export type SupportRetrievalMissReason = (typeof SUPPORT_RETRIEVAL_MISS_REASONS)[number];
+
+/** Only the closed, body-free fields that can establish a retrieval miss. */
+export interface SupportRetrievalMissFields {
+  readonly declaredUnreadInScopeCount?: number;
+  readonly explicitPathRejectedCount?: number;
+  readonly explicitPathRejectionReasons?: readonly (
+    | "outside-scope"
+    | "denied"
+    | "missing"
+    | "ignored"
+    | "generated"
+    | "binary"
+    | "size-exceeded"
+    | "unsupported-format"
+  )[];
+  readonly keepOneFallbackApplied?: boolean;
+  readonly addressedBasenameDedupDemotedCount?: number;
+  readonly followUpPassCount?: number;
+  readonly followUpOutcome?:
+    "answered" | "still-insufficient" | "budget-refused" | "elapsed-refused" | "disabled";
+  readonly semanticProviderDisposition?:
+    "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected";
+  readonly selectedFileCount?: number;
+  readonly retrievalIntent?:
+    | "project-metadata"
+    | "repository-overview"
+    | "targeted-code-search"
+    | "diagnostic-search"
+    | "conversational-follow-up"
+    | "clarification-needed";
+  readonly continuityReferentSource?:
+    | "none"
+    | "previous-user-question"
+    | "assistant-paths"
+    | "assistant-declaration"
+    | "assistant-paths-and-declaration";
+}
+
+export interface SupportRetrievalMissFinding {
+  readonly kind: "retrieval-miss";
+  readonly schemaVersion: typeof SUPPORT_RETRIEVAL_MISS_FINDING_SCHEMA_VERSION;
+  readonly correlationId: string;
+  readonly reason: SupportRetrievalMissReason;
+  readonly process?: { readonly pid: number; readonly instanceId: string };
+  readonly scopeIdentitySha256?: string;
+  readonly queryIdentitySha256?: string;
+  readonly fields: SupportRetrievalMissFields;
+  /** Present only when all canonical per-reason omission counters were observed. */
+  readonly omissionGroups?: { readonly ranking: number; readonly eligibility: number };
+}
 export const MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES = 1024;
 export const MAX_SUPPORT_REPORT_BYTES = 10 * 1024 * 1024;
 export const MAX_SUPPORT_REPORT_EVENT_BYTES = 16 * 1024 * 1024;

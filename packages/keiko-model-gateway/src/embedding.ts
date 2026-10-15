@@ -19,6 +19,7 @@ import type {
   OpenAIEmbeddingRequest,
   OpenAIEmbeddingOutcome,
 } from "./openai-embedding-adapter.js";
+import type { ModelGatewayLogContext } from "./observability.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 // ─── Failure taxonomy ─────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ type EmbeddingFingerprintCheck =
   | { readonly ok: false; readonly reason: EmbeddingFailureReason; readonly safeMessage: string };
 
 export interface EmbeddingProbeOptions {
+  readonly logContext?: ModelGatewayLogContext;
   readonly modelId: string;
   readonly provider: string;
   readonly vectorMetric: EmbeddingVectorMetric;
@@ -253,6 +255,7 @@ async function requestProbeEmbedding(
     ...(options.dimensionsParam !== undefined ? { dimensions: options.dimensionsParam } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options.logContext !== undefined ? { logContext: options.logContext } : {}),
   };
   return adapter.request(request);
 }
@@ -276,6 +279,7 @@ async function requestProbeEmbeddingBatch(
     ...(options.dimensionsParam !== undefined ? { dimensions: options.dimensionsParam } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options.logContext !== undefined ? { logContext: options.logContext } : {}),
   };
   return adapter.requestBatch(request);
 }

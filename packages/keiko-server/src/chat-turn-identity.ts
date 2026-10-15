@@ -20,6 +20,7 @@ export interface CanonicalChatTurnMemorySemantics {
 }
 
 interface CanonicalChatTurnCommonSemantics {
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   readonly content: string;
   readonly modelId: string;
   readonly groundingScopeIdentity: string | null;

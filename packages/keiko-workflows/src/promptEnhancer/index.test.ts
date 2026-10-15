@@ -1118,3 +1118,127 @@ describe("promptEnhancementGatewayRoutingConfig (credential-free routing project
     expect(serialized).not.toContain("provider.example");
   });
 });
+
+const SKILL_SOURCE = [
+  "# Rain barrel inspection concept",
+  "Confirmed: record the valve state before inspecting the level sensor.",
+  "Proposal: inspect twice weekly; approval is pending.",
+  "Example only: a 20 litre vessel.",
+  "Conflict: one note says 20 litres, another says 25; do not choose either.",
+  "Final section: calibration ownership is undecided.",
+].join("\n");
+const SKILL_DRAFT = [
+  "# Rain barrel inspection",
+  "## Purpose\nPrepare an inspection plan from the concept.",
+  "## When to use\nUse for concept-only inspection planning.",
+  "## Scope\nConfirmed: record valve state. No physical actions.",
+  "## Steps\n1. Record the valve state.\n2. Review sensor boundaries.",
+  "## Quality checks\nKeep proposals distinct from confirmed rules.",
+  "## Output\nReturn a plan and unresolved decisions.",
+  "## Open decisions\nTwice-weekly inspection is proposed. Capacity conflicts: 20 or 25 litres. Calibration ownership is unknown.",
+  "## Source references\nRain barrel inspection concept, final section and capacity notes. The 20 litre vessel is only an example.",
+].join("\n\n");
+const SKILL_REQUEST = {
+  text: SKILL_SOURCE,
+  modelId: CHAT_MODEL,
+  outputKind: "markdown-skill",
+} as const;
+
+describe("reviewed Markdown skill authoring", () => {
+  it("sends the whole document as data and returns an unmodified standalone draft", async () => {
+    const model = recordingModelPort(SKILL_DRAFT);
+    const result = await run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory);
+    expect(result.renderedPrompt).toBe(SKILL_DRAFT);
+    expect(result.modelRouting.executionStatus).toBe("model-applied");
+    expect(model.calls[0]?.messages[0]?.content).toContain("standalone Markdown skill");
+    expect(model.calls[0]?.messages[1]?.content).toContain(SKILL_SOURCE);
+    expect(model.calls[0]?.messages[1]?.content).toContain("calibration ownership is undecided");
+    expect(model.calls[0]?.toolCatalog).toBeUndefined();
+    expect(model.calls[0]?.maxOutputTokens).toBeGreaterThan(0);
+  });
+
+  it.each(["length", "tool_calls", "content_filter", "error"] as const)(
+    "refuses %s completion rather than returning a partial skill",
+    async (finishReason) => {
+      await expect(
+        run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), () => ({
+          call: (): Promise<NormalizedResponse> =>
+            Promise.resolve({ ...modelResponse(SKILL_DRAFT), finishReason }),
+        })),
+      ).rejects.toThrow();
+    },
+  );
+
+  it.each(["", "# Missing sections\nA short fragment.", SKILL_DRAFT.repeat(1_000)])(
+    "refuses incomplete or oversized output without truncating or saving it",
+    async (content) => {
+      const model = recordingModelPort(content);
+      await expect(
+        run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("requires an available selected model, with no deterministic fallback", async () => {
+    await expect(run(SKILL_REQUEST)).rejects.toThrow();
+    await expect(run(SKILL_REQUEST, configWithProvider(CHAT_MODEL))).rejects.toThrow();
+  });
+
+  it("refuses a source that cannot fit before any productive model call", async () => {
+    const configured = configWithProvider(CHAT_MODEL);
+    const config = {
+      ...configured,
+      capabilities: configured.capabilities?.map((capability) => ({
+        ...capability,
+        contextWindow: 128,
+        maxOutputTokens: 32,
+      })),
+    };
+    const model = recordingModelPort(SKILL_DRAFT);
+    await expect(run(SKILL_REQUEST, config, model.factory)).rejects.toThrow();
+    expect(model.calls).toHaveLength(0);
+  });
+});
+
+describe("private skill draft persistence and failure boundaries", () => {
+  it("refuses conversion to prompt-enhancement evidence even outside the HTTP route", async () => {
+    const model = recordingModelPort(SKILL_DRAFT);
+    const result = await run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory);
+    expect(() =>
+      buildPromptEnhancementRecordInput({
+        rawInput: SKILL_SOURCE,
+        result,
+        recordedAt: "2026-10-14T00:00:00Z",
+      }),
+    ).toThrow("must not be stored");
+  });
+  it("does not substitute deterministic text after a provider failure", async () => {
+    await expect(
+      run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), () => ({
+        call: (): Promise<NormalizedResponse> =>
+          Promise.reject(new Error("synthetic-provider-secret")),
+      })),
+    ).rejects.toThrow("Check the gateway");
+  });
+  it.each(["é".repeat(70_000), "unsafe\u202Eformat"])(
+    "rejects invalid source bytes before model dispatch",
+    async (text) => {
+      const model = recordingModelPort(SKILL_DRAFT);
+      await expect(
+        run({ ...SKILL_REQUEST, text }, configWithProvider(CHAT_MODEL), model.factory),
+      ).rejects.toThrow();
+      expect(model.calls).toHaveLength(0);
+    },
+  );
+  it("rejects empty required sections even after a stopped completion", async () => {
+    const model = recordingModelPort(
+      SKILL_DRAFT.replace(
+        "## Open decisions\nTwice-weekly inspection is proposed. Capacity conflicts: 20 or 25 litres. Calibration ownership is unknown.",
+        "## Open decisions",
+      ),
+    );
+    await expect(
+      run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory),
+    ).rejects.toThrow();
+  });
+});

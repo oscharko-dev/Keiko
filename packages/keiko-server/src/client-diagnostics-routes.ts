@@ -592,6 +592,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "gateway-catalog-adoption",
   "gateway-profile-refresh",
   "model-selection-availability",
+  "markdown-copy-feedback",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -611,6 +612,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "gateway catalog adoption": "gateway-catalog-adoption",
   "gateway profile refresh": "gateway-profile-refresh",
   "model selection availability": "model-selection-availability",
+  "markdown copy feedback": "markdown-copy-feedback",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -1214,6 +1216,87 @@ const CLIENT_CITATION_ACTIVATED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["client-citation-activation"],
   proofIds: ["client.citation.activated.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_SCOPE_NOTICE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.scope.notice",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientScopeNotice",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "narrowed-to-file",
+        "narrowed-to-directory",
+        "widened",
+        "pinned-folder",
+        "missing-evidence-added",
+      ],
+    },
+    scopeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["workspace-root", "directory", "files"],
+    },
+    pathCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-scope-notice"],
+  proofIds: ["client.scope.notice.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_EVIDENCE_INSPECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.evidence.inspected",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientEvidenceInspection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["summary-expanded", "file-table-opened", "manifest-fetch-failed"],
+    },
+    readFileCount: { type: "integer", dataClass: "count", required: false },
+    omittedFileCount: { type: "integer", dataClass: "count", required: false },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 128 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+      maxLength: 512,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+      maxLength: 128,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  diagnosticWhen: [{ field: "reason", values: ["manifest-fetch-failed"] }],
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-evidence-inspection"],
+  proofIds: ["client.evidence.inspected.line"],
   releaseImpact: "patch",
 });
 
@@ -1909,7 +1992,7 @@ function logClientKnowledgeCatalog(
   return true;
 }
 
-function answerCopyFailureEvidence(
+function clientReportFailureEvidence(
   request: ClientDiagnosticIngestRequest,
 ): Readonly<Record<string, unknown>> {
   const evidence = request.errorEvidence;
@@ -1936,7 +2019,7 @@ function logClientAnswerCopy(
     failed ? { ...envelope, errorKind: request.errorKind ?? "unavailable" } : envelope,
     {
       ...copy,
-      ...(failed ? answerCopyFailureEvidence(request) : {}),
+      ...(failed ? clientReportFailureEvidence(request) : {}),
       completeness: "complete",
       loss: "none",
     },
@@ -2092,6 +2175,51 @@ function logClientCitationActivation(
   return true;
 }
 
+function logClientScopeNotice(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const notice = request.scopeNotice;
+  if (notice === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SCOPE_NOTICE_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...notice, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
+function logClientEvidenceInspection(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const inspection = request.evidenceInspection;
+  if (inspection === undefined) return false;
+  const failed = inspection.reason === "manifest-fetch-failed";
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  const event = activityLogEvent(
+    CLIENT_EVIDENCE_INSPECTED_OPERATION,
+    failed ? { ...envelope, errorKind: request.errorKind ?? "unavailable" } : envelope,
+    {
+      reason: inspection.reason,
+      ...(inspection.readFileCount === undefined
+        ? {}
+        : { readFileCount: inspection.readFileCount }),
+      ...(inspection.omittedFileCount === undefined
+        ? {}
+        : { omittedFileCount: inspection.omittedFileCount }),
+      ...(failed ? clientReportFailureEvidence(request) : {}),
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+  if (failed) getServerLogger().warn(event);
+  else getServerLogger().info(event);
+  return true;
+}
+
 function logClientCodingRunRestore(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2109,6 +2237,17 @@ function logClientCodingRunRestore(
 }
 
 // The closed report shapes, each of which owns its own registered line.
+function logRetrievalClientReport(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  return (
+    logClientCitationActivation(request, correlationId) ||
+    logClientScopeNotice(request, correlationId) ||
+    logClientEvidenceInspection(request, correlationId)
+  );
+}
+
 function logClosedClientReport(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2121,7 +2260,7 @@ function logClosedClientReport(
     logClientSupportReportDownload(request, correlationId) ||
     logClientSupportReportPrepared(request, correlationId) ||
     logClientFilesScopeDecision(request, correlationId) ||
-    logClientCitationActivation(request, correlationId) ||
+    logRetrievalClientReport(request, correlationId) ||
     logClientCodingRunRestore(request, correlationId)
   );
 }
@@ -2705,6 +2844,7 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||
     report.codingRunRestore !== undefined ||
+    report.scopeNotice !== undefined ||
     report.citationActivation !== undefined
   );
 }
@@ -2712,6 +2852,8 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
 // The closed report shapes: a select dismissal and a catalog picture are routine, and an answer copy
 // spends the failure budget only when it failed.
 function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget | undefined {
+  if (report.evidenceInspection !== undefined)
+    return report.evidenceInspection.reason === "manifest-fetch-failed" ? "failure" : "routine";
   if (
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "52125c6a8bee814bac81113c377da0ded031521711b0c43b4a41363afc970134"
+    "catalogDigest": "b9a5527331fb004fcdafe1c639ed3ccc27c7a1f319597e47f2b8e86c0bbae369"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 532,
-    "proofCount": 539,
-    "resolvedProofCount": 539,
-    "failureClassCount": 342,
+    "operationCount": 539,
+    "proofCount": 551,
+    "resolvedProofCount": 551,
+    "failureClassCount": 346,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -112,6 +112,7 @@
         "reference-id.issued",
         "request",
         "server.diagnostic.failure",
+        "skills.library.operation",
         "sse.run-events.resume",
         "sse.stream.closed",
         "store.journey-outcomes.migration",
@@ -143,11 +144,13 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.evidence.inspected",
         "client.files-scope.decision",
         "client.git-operation.attempted",
         "client.git-operation.settled",
         "client.knowledge-catalog.unavailable",
         "client.markdown.layout",
+        "client.scope.notice",
         "client.select.dismissed",
         "client.session-repair.acknowledged",
         "client.session-repair.failed",
@@ -204,6 +207,7 @@
         "gateway.context-window.adoption",
         "gateway.context-window.probe",
         "gateway.context-window.retry",
+        "gateway.conversation.admission",
         "gateway.discovery.alias-intersection",
         "gateway.instance.bound",
         "gateway.instance.reset",
@@ -238,6 +242,7 @@
         "gateway.stream.completed",
         "gateway.stream.failed",
         "gateway.stream.started",
+        "gateway.tool-arguments.redacted",
         "gateway.tool-calling.verification",
         "gateway.tool-catalog.call-bound",
         "gateway.tool-catalog.native-passthrough",
@@ -471,11 +476,13 @@
         "search.answer.assessed",
         "search.citations.reconciled",
         "search.citations.support-settled",
+        "search.connected-context.answer-details",
         "search.connected-context.clarification-needed",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
         "search.connected-context.failed",
         "search.connected-context.metadata-unavailable",
+        "search.connected-context.selection-details",
         "search.connected-context.source-details",
         "search.connected-context.started",
         "search.entailment.judged",
@@ -706,6 +713,9 @@
     }
   ],
   "failureClassScenarios": {
+    "markdown-skill-library": ["bff.dependency-failure"],
+    "client-scope-notice": ["client-diagnostics.dependency-failure"],
+    "client-evidence-inspection": ["client-diagnostics.dependency-failure"],
     "browser-handoff": ["ui.dependency-failure"],
     "chat-context-management": ["bff.dependency-failure"],
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
@@ -867,6 +877,7 @@
     "gateway-tool-calling-capability": ["model-gateway.dependency-failure"],
     "gateway-voice-configuration": ["model-gateway.dependency-failure"],
     "gateway-tool-catalog": ["model-gateway.rejection"],
+    "gateway-tool-arguments": ["model-gateway.dependency-failure"],
     "gateway-tool-schema-rejection": ["model-gateway.dependency-failure"],
     "git-change-chat-connect": ["editor-delivery.rejection"],
     "git-change-chat-refresh": ["editor-delivery.rejection"],
@@ -1104,7 +1115,8 @@
     "chat.context.management.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.selected.budget": [
       "packages/keiko-server/src/chat-activity.test.ts",
-      "packages/keiko-server/src/chat-stream-handlers.test.ts"
+      "packages/keiko-server/src/chat-stream-handlers.test.ts",
+      "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
     ],
     "chat.continuity.capture.line": [
       "packages/keiko-server/src/chat-context-status.test.ts",
@@ -1121,7 +1133,10 @@
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts",
       "packages/keiko-model-gateway/src/openai-adapter.logging.test.ts"
     ],
-    "chat.response.message.causality": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.response.message.causality": [
+      "packages/keiko-server/src/chat-activity.test.ts",
+      "packages/keiko-server/src/grounded-memory-activity.public-handler.test.ts"
+    ],
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
@@ -1198,6 +1213,9 @@
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.evidence.inspected.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.files-scope.decision.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
@@ -1211,6 +1229,7 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.markdown.layout.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.scope.notice.line": ["packages/keiko-server/src/client-diagnostics-routes.test.ts"],
     "client.select.dismissed.line": ["packages/keiko-server/src/client-diagnostics-routes.test.ts"],
     "client.session-repair.acknowledged.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
@@ -1225,7 +1244,10 @@
       "packages/keiko-server/src/client-diagnostics-loss.test.ts",
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
-    "client.stage.started.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.stage.started.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts",
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.support-report.download-started.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts",
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
@@ -1719,6 +1741,9 @@
     "gateway.context-window.retry.line": [
       "packages/keiko-server/src/gateway-context-window.test.ts"
     ],
+    "gateway.conversation.admission.line": [
+      "packages/keiko-server/src/conversation-readiness-admission.test.ts"
+    ],
     "gateway.discovery.alias-intersection.line": [
       "packages/keiko-server/src/gateway-discovery-roles.test.ts",
       "packages/keiko-server/src/gateway-setup.test.ts"
@@ -1790,9 +1815,15 @@
     ],
     "gateway.setup.metadata.resolved.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "gateway.spend.ceiling.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
-    "gateway.spend.rejected.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
+    "gateway.spend.rejected.line": [
+      "packages/keiko-server/src/gateway-spend-budget.test.ts",
+      "packages/keiko-server/src/grounded-repo-semantic-search.test.ts"
+    ],
     "gateway.spend.reserved.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
-    "gateway.spend.settled.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
+    "gateway.spend.settled.line": [
+      "packages/keiko-server/src/gateway-spend-budget.test.ts",
+      "packages/keiko-server/src/grounded-repo-semantic-search.test.ts"
+    ],
     "gateway.stream.abandoned.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
@@ -1810,6 +1841,9 @@
     "gateway.stream.started.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
+    ],
+    "gateway.tool-arguments.redacted.emitted-line": [
+      "packages/keiko-model-gateway/src/openai-adapter.tool-arguments.test.ts"
     ],
     "gateway.tool-calling.verification.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "gateway.tool-catalog.call-bound.emitted-line": [
@@ -2235,6 +2269,11 @@
     "search.citations.support-settled.line": [
       "packages/keiko-server/src/grounded-citation-log.test.ts"
     ],
+    "search.connected-context.answer-details.line": [
+      "packages/keiko-server/src/grounded-answer-activity.test.ts",
+      "packages/keiko-server/src/grounded-plural-synthesis-ceiling.public-handler.test.ts",
+      "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
+    ],
     "search.connected-context.clarification-needed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.denied-root-log.test.ts",
@@ -2251,7 +2290,9 @@
     ],
     "search.connected-context.completion-details.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
-      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts"
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-query-facet-ranges.test.ts",
+      "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts"
     ],
     "search.connected-context.failed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
@@ -2261,6 +2302,24 @@
     ],
     "search.connected-context.metadata-unavailable.line": [
       "packages/keiko-server/src/grounded-metadata-failure.activity-log.test.ts"
+    ],
+    "search.connected-context.selection-details.line": [
+      "packages/keiko-server/src/grounded-diagnostic-references.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.denied-root-log.test.ts",
+      "packages/keiko-server/src/grounded-plural-refresh-budget.public-handler.test.ts",
+      "packages/keiko-server/src/grounded-route-coverage.test.ts",
+      "packages/keiko-server/src/grounded-semantic-budget.test.ts",
+      "packages/keiko-server/src/grounded-symbol-trace.test.ts"
+    ],
+    "search.connected-context.path-ranking.line": [
+      "packages/keiko-server/src/grounded-path-ranking.activity-log.test.ts"
+    ],
+    "search.connected-context.selection-quality.line": [
+      "packages/keiko-server/src/grounded-selection-quality.activity-log.test.ts"
+    ],
+    "search.connected-context.continuity.line": [
+      "packages/keiko-server/src/grounded-conversation-referents.activity-log.test.ts"
     ],
     "search.connected-context.source-details.line": [
       "packages/keiko-server/src/grounded-binary-probe.activity-log.test.ts",
@@ -2273,10 +2332,17 @@
       "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts",
       "packages/keiko-server/src/grounded-source-decisions.activity-log.test.ts"
     ],
+    "search.connected-context.explicit-admission.line": [
+      "packages/keiko-server/src/grounded-explicit-paths.test.ts"
+    ],
+    "search.connected-context.diagnostic-references.line": [
+      "packages/keiko-server/src/grounded-diagnostic-references.activity-log.test.ts"
+    ],
     "search.connected-context.started.line": [
       "packages/keiko-server/src/grounded-case-sensitive.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
-      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts"
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.denied-root-log.test.ts"
     ],
     "search.entailment.judged.line": [
       "packages/keiko-server/src/grounded-entailment-stage.test.ts"
@@ -2379,6 +2445,9 @@
       "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
+    "skills.library.operation.lifecycle": [
+      "packages/keiko-server/src/markdown-skill-routes.test.ts"
+    ],
     "speech.stt.language.normalized.emitted-line": [
       "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts"
     ],
@@ -2606,6 +2675,7 @@
     "lifecycle-crash.loss": ["tests/activity-log-scenarios/lifecycle-runtime.test.ts"],
     "memory-knowledge.crash": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],
     "memory-knowledge.dependency-failure": [
+      "tests/activity-log-scenarios/connected-context-retrieval-miss.test.ts",
       "tests/activity-log-scenarios/memory-knowledge.test.ts"
     ],
     "memory-knowledge.loss": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],

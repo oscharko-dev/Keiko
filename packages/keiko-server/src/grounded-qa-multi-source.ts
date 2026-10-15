@@ -1,3 +1,13 @@
+import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
+import {
+  markdownSkillPromptUsage,
+  withMarkdownSkillInstructions,
+} from "./markdown-skill-prompt.js";
+import { assistantReferenceExcerptIds } from "./grounded-assistant-referents.js";
+import {
+  withSentEvidenceInventory,
+  withSentSelectionDiagnostics,
+} from "./grounded-answer-evidence.js";
 import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
@@ -15,14 +25,19 @@ import {
 // gateway messages, citations, and evidence from the exact same primitives.
 
 import { mapWithConcurrency } from "./bounded-concurrency.js";
-import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
+import {
+  reconcileAndLogInlineCitations,
+  type CitationReconciliationMetadata,
+} from "./grounded-citation-log.js";
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
 import {
   CancelledError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
@@ -40,19 +55,28 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  type MarkdownSkillDocument,
   buildGroundedAnswerContextPackSummary,
   chatConnectedScopeFingerprintInput,
   type ChatConnectedScope,
   type GroundedAnswer,
+  type GroundedInsufficiencyDeclaration,
   type GroundedAnswerContextSummary,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
+  type CitationRepairDisposition,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import type { RouteResult } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentContextProfileForModel, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentRedactionSecrets,
+  currentOwnAssessmentPolicy,
+} from "./deps.js";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { normalizeGroundedAnswerAssessment } from "./grounded-answer-assessment.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { Chat, ChatMessage } from "./store/index.js";
@@ -61,28 +85,47 @@ import {
   clarificationUserMessage,
   retrieveConnectedContextPack,
   type OrchestratorInput,
+  type GroundedAnswerOptions,
+  type GroundedAnswerer,
   type RetrievalOnlyOutput,
+  logGroundedAnswerForPack,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
-import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
+import { configuredGroundedSemanticRequest } from "./grounded-semantic-request.js";
+import { createSemanticRefreshDocumentBudget } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
-import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { groundedSystemPrompt, sentGroundedFileCount } from "./grounded-prompt.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
+  createGroundedSynthesisCallBudget,
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
   type GroundedAnswerResult,
+  type GroundedSynthesisCallBudget,
+  type GroundedSynthesisAttemptOptions,
 } from "./grounded-answer.js";
 import {
+  callPluralGroundedSynthesis,
+  pluralSynthesisMetadata,
+  withPluralSynthesisUsage,
+  capturePluralSynthesisCounts,
+} from "./grounded-plural-synthesis.js";
+import {
   connectedSearchNoEvidenceAnswer,
+  assessmentAwareUncertainty,
+  groundedAnswerEvidenceFields,
+  buildInsufficiencyScopeIndex,
+  declaredInsufficiencyPaths,
+  validateGroundedAnswerEvidence,
   buildPackCitationIndex,
   citationSourceIdForIndex,
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   packsHaveUsableEvidence,
+  noEvidenceMarker,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import {
@@ -91,6 +134,7 @@ import {
 } from "./grounded-citation-projection.js";
 import {
   appendGroundedAnswerEntailment,
+  assertGroundedPromptOverheadFits,
   buildQuery,
   buildSelectedScopeFrom,
   clarificationRequest,
@@ -118,10 +162,27 @@ import {
   sizeExclusionLines,
   fitPromptOmissionMetadata,
   withPromptExcerptByteLimit,
+  withPromptExcerptBudget,
+  groundedRetrievalContinuityFields,
+  type GroundedRetrievalContinuityInput,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { logPromptWindowFit } from "./knowledge-prompt-window.js";
+import { buildCitationRepairPrompt } from "./grounded-citation-repair.js";
+import {
+  repairGroundedAnswer,
+  observeGroundedCitationBehaviour,
+  type GroundedRepairContext,
+  type GroundedRepairResult,
+} from "./grounded-answer-repair.js";
+import {
+  citationBehaviourFor,
+  citationBehaviourObserverFor,
+} from "./grounded-citation-capability.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import { logGroundedPromptSelection } from "./chat-activity.js";
 
 export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 
@@ -368,6 +429,13 @@ function mergeCoverageSummaries(
   };
 }
 
+function mergedSelectionConfidence(
+  summaries: readonly GroundedAnswerContextPackSummary[],
+): GroundedAnswerContextPackSummary["selectionConfidence"] {
+  if (summaries.some((summary) => summary.selectionConfidence === "low")) return "low";
+  return summaries.every((summary) => summary.selectionConfidence === "high") ? "high" : undefined;
+}
+
 export function mergeContextPackSummaries(
   summaries: readonly GroundedAnswerContextPackSummary[],
 ): GroundedAnswerContextPackSummary {
@@ -379,6 +447,7 @@ export function mergeContextPackSummaries(
   // structurally path-free: fixed lane-id keys, numeric counts/tokens, a pressure enum, and a boolean.
   const mergedContextSummary = mergeContextSummaries(summaries);
   const mergedCoverage = mergeCoverageSummaries(summaries);
+  const selectionConfidence = mergedSelectionConfidence(summaries);
   return {
     schemaVersion: first.schemaVersion,
     scopeId: `scope-${createHash("sha256")
@@ -395,6 +464,7 @@ export function mergeContextPackSummaries(
     omittedCounts: mergeOmittedCounts(summaries),
     uncertaintyCount: summaries.reduce((acc, s) => acc + s.uncertaintyCount, 0),
     elapsedMs: summaries.reduce((acc, s) => acc + s.elapsedMs, 0),
+    ...(selectionConfidence === undefined ? {} : { selectionConfidence }),
     ...(mergedCoverage !== undefined ? { coverage: mergedCoverage } : {}),
     ...(mergedContextSummary !== undefined ? { contextSummary: mergedContextSummary } : {}),
   };
@@ -405,6 +475,7 @@ export function mergeContextPackSummaries(
 export interface LabeledPack {
   readonly label: string;
   readonly pack: ConnectedContextPack;
+  readonly requiredEvidenceAtomIds?: readonly string[];
 }
 
 function sourceSection(
@@ -445,22 +516,24 @@ function buildRawMultiSourceGatewayMessages(
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
   omissionPathBytes?: number,
+  ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
+  protectedSkill?: MarkdownSkillDocument,
 ): readonly GatewayChatMessage[] {
   const sections = labeledPacks.flatMap((entry, index) =>
     sourceSection(entry, index, redactor, omissionPathBytes),
   );
   const userContent = [
-    "User question:",
-    redactString(redactor, question),
+    ...sections,
     "",
     `Connected sources (${String(labeledPacks.length)}). For every repository claim, cite its`,
     "source ordinal and file in one marker (e.g. [source:1|src/file.ts:10-20]).",
     "",
-    ...sections,
+    "User question:",
+    redactString(redactor, question),
   ].join("\n");
   return [
-    { role: "system", content: GROUNDED_SYSTEM_PROMPT },
-    { role: "user", content: userContent },
+    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
+    { role: "user", content: withMarkdownSkillInstructions(userContent, protectedSkill) },
   ];
 }
 
@@ -500,20 +573,28 @@ function sourceBudgetBytes(totalBytes: number, index: number, weights: readonly 
 function withMultiSourcePromptExcerptTotalBudget(
   labeledPacks: readonly LabeledPack[],
   totalExcerptBytes: number,
+  preserveSelectionMetadata = false,
 ): readonly LabeledPack[] {
-  if (totalExcerptBytes <= 0 || labeledPacks.length === 0) {
-    return withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-  }
   const weights = labeledPacks.map((entry) => bestPackScore(entry.pack));
   return labeledPacks.map((entry, index) => {
     const excerptCount = packExcerptCount(entry.pack);
     const perExcerpt =
       excerptCount === 0
         ? 0
-        : Math.floor(sourceBudgetBytes(totalExcerptBytes, index, weights) / excerptCount);
+        : Math.floor(
+            sourceBudgetBytes(Math.max(0, totalExcerptBytes), index, weights) / excerptCount,
+          );
+    const pack = entry.requiredEvidenceAtomIds?.length
+      ? withPromptExcerptBudget(
+          entry.pack,
+          perExcerpt * excerptCount,
+          undefined,
+          entry.requiredEvidenceAtomIds,
+        )
+      : withPromptExcerptByteLimit(entry.pack, perExcerpt);
     return {
       ...entry,
-      pack: withPromptExcerptByteLimit(entry.pack, perExcerpt),
+      pack: preserveSelectionMetadata ? { ...entry.pack, files: pack.files } : pack,
     };
   });
 }
@@ -533,10 +614,15 @@ function multiSourceInputTokens(
   options: GroundedGatewayPromptOptions,
 ): number {
   const packTokens = labeledPacks.reduce(
-    (sum, entry) => sum + entry.pack.budget.modelInputTokensMax,
+    (sum, entry) =>
+      sum + Math.max(0, entry.pack.budget.modelInputTokensMax - entry.pack.usage.modelInputTokens),
     0,
   );
-  return Math.min(packTokens, options.modelInputTokensMax ?? packTokens);
+  return Math.min(
+    packTokens,
+    options.modelInputTokensMax ?? packTokens,
+    options.callerInputTokensMax ?? packTokens,
+  );
 }
 
 function multiSourcePromptFit(
@@ -553,6 +639,22 @@ function multiSourcePromptFit(
   };
 }
 
+function multiSourcePromptRenderer(
+  question: string,
+  redactor: Redactor,
+  options: GroundedGatewayPromptOptions,
+): (packs: readonly LabeledPack[], pathBytes?: number) => readonly GatewayChatMessage[] {
+  return (packs, bytes) =>
+    buildRawMultiSourceGatewayMessages(
+      question,
+      packs,
+      redactor,
+      bytes,
+      options.ownAssessmentPolicy,
+      options.protectedSkill,
+    );
+}
+
 function budgetedMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
@@ -560,41 +662,63 @@ function budgetedMultiSourceGatewayMessages(
   options: GroundedGatewayPromptOptions = {},
 ): FittedMultiSourcePrompt {
   const { limit, fits } = multiSourcePromptFit(labeledPacks, options);
-  const fullMessages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
+  const render = multiSourcePromptRenderer(question, redactor, options);
+  const fullMessages = render(labeledPacks);
   if (fits(fullMessages)) return { messages: fullMessages, packs: labeledPacks };
   const metadataFit = fitPromptOmissionMetadata(
-    (bytes) => buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor, bytes),
+    (bytes) => render(labeledPacks, bytes),
     fits,
     limit,
   );
   if (metadataFit !== undefined) return { ...metadataFit, packs: labeledPacks };
+  // Dropping a subject adds uncertainty text. Find the source window with stable metadata,
+  // then admit only its truthful form; the empty prompt is not an absolute lower cost bound.
+  const optimistic = fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, options, true);
+  const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, optimistic.totalExcerptBytes);
+  const messages = render(packs, 0);
+  if (fits(messages)) return { messages, packs, omissionPathBytes: 0 };
+  return fitMultiSourceExcerptWindow(labeledPacks, render, fits, limit, options, false);
+}
 
-  const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-  const overheadBytes = promptByteLength(
-    buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
+function fitMultiSourceExcerptWindow(
+  labeledPacks: readonly LabeledPack[],
+  render: ReturnType<typeof multiSourcePromptRenderer>,
+  fits: (messages: readonly GatewayChatMessage[]) => boolean,
+  limit: number,
+  options: GroundedGatewayPromptOptions,
+  preserveSelectionMetadata: boolean,
+): FittedMultiSourcePrompt & { readonly totalExcerptBytes: number } {
+  const trim = (bytes: number): readonly LabeledPack[] =>
+    withMultiSourcePromptExcerptTotalBudget(labeledPacks, bytes, preserveSelectionMetadata);
+  const emptyPacks = trim(0);
+  const overhead = render(emptyPacks, 0);
+  const overheadBytes = promptByteLength(overhead);
+  const aggregateLimit = multiSourceInputTokens(labeledPacks, {
+    ...options,
+    callerInputTokensMax: undefined,
+  });
+  const callerLimit = options.callerInputTokensMax;
+  assertGroundedPromptOverheadFits(
+    {
+      bytes: overheadBytes,
+      tokens: countGatewayPromptTokens({ messages: overhead }, options.tokenAccounting),
+    },
+    callerLimit === undefined ? aggregateLimit : (options.modelInputTokensMax ?? aggregateLimit),
+    callerLimit === undefined ? undefined : Math.min(aggregateLimit, callerLimit),
   );
-  // When overhead alone (system prompt + question + framing for all sources) exceeds the limit,
-  // no amount of excerpt trimming can bring the prompt within budget. Throw instead of sending
-  // an over-limit prompt to the provider which would result in an opaque 400 context-window error.
-  if (!fits(buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0))) {
-    throw new ContextOverflowError(
-      `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
-    );
+  let low = 1;
+  let high = Math.max(0, limit - overheadBytes);
+  let best = { messages: overhead, packs: emptyPacks, omissionPathBytes: 0, totalExcerptBytes: 0 };
+  while (low <= high) {
+    const totalExcerptBytes = Math.floor((low + high) / 2);
+    const packs = trim(totalExcerptBytes);
+    const messages = render(packs, 0);
+    if (fits(messages)) {
+      best = { messages, packs, omissionPathBytes: 0, totalExcerptBytes };
+      low = totalExcerptBytes + 1;
+    } else high = totalExcerptBytes - 1;
   }
-  let totalExcerptBytes = Math.max(0, limit - overheadBytes);
-  while (totalExcerptBytes >= 0) {
-    const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes);
-    const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor, 0);
-    if (fits(messages) || totalExcerptBytes === 0) {
-      return { messages, packs, omissionPathBytes: 0 };
-    }
-    totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
-  }
-  return {
-    messages: buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
-    packs: emptyPacks,
-    omissionPathBytes: 0,
-  };
+  return best;
 }
 
 // The fit decision on the existing `search.prompt.window-fitted` port, like the Knowledge Pod and
@@ -615,9 +739,18 @@ function loggedMultiSourceFit(
   try {
     fitted = budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor, options);
   } catch (error) {
-    if (error instanceof ContextOverflowError) {
+    if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError) {
       const empty = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-      const promptTokens = tokens(buildRawMultiSourceGatewayMessages(question, empty, redactor, 0));
+      const promptTokens = tokens(
+        buildRawMultiSourceGatewayMessages(
+          question,
+          empty,
+          redactor,
+          0,
+          options.ownAssessmentPolicy,
+          options.protectedSkill,
+        ),
+      );
       const fit = { referenceCount, sentReferenceCount: 0, promptTokens, inputBudget };
       logPromptWindowFit({ state: "refused", ...fit }, correlationId);
     }
@@ -642,15 +775,25 @@ export function fittedMultiSourcePrompt(
   redactor: Redactor,
   options: GroundedGatewayPromptOptions = {},
   correlationId?: string,
-): SentGroundedPrompt {
+): SentGroundedPrompt & { readonly packs: readonly LabeledPack[] } {
   const fitted = loggedMultiSourceFit(question, labeledPacks, redactor, options, correlationId);
   return {
+    packs: fitted.packs,
     messages: fitted.messages,
+    protectedSkill:
+      options.protectedSkill === undefined
+        ? undefined
+        : markdownSkillPromptUsage(options.protectedSkill, {
+            tokenAccounting: options.tokenAccounting,
+            maxInputTokens: multiSourceInputTokens(labeledPacks, options),
+          }),
     withoutSources: buildRawMultiSourceGatewayMessages(
       question,
-      withMultiSourcePromptExcerptByteLimit(labeledPacks, 0),
+      fitted.packs.map((entry) => ({ ...entry, pack: { ...entry.pack, files: [] } })),
       redactor,
       -1,
+      options.ownAssessmentPolicy,
+      options.protectedSkill,
     ),
     sentReferenceCount: promptExcerptCount(fitted.packs.map((entry) => entry.pack)),
     availableReferenceCount: promptExcerptCount(labeledPacks.map((entry) => entry.pack)),
@@ -671,16 +814,20 @@ export function defaultRetriever(
   deps?: UiHandlerDeps,
   correlationId?: string,
 ): GroundedRetriever {
+  const refreshDocuments =
+    deps === undefined ? undefined : createSemanticRefreshDocumentBudget(deps);
   return (input: OrchestratorInput, childSignal = signal): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
     const semanticLease =
       deps === undefined
-        ? { provider: undefined, close: (): void => undefined }
-        : configuredRepoSemanticSearchProviderLeaseFor(deps, childSignal, input.workspaceRoot);
+        ? { providerFor: undefined, close: (): void => undefined }
+        : configuredGroundedSemanticRequest(deps, input.workspaceRoot, refreshDocuments);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
       signal: childSignal,
+      declarationVerificationSignal: signal,
+      ownAssessmentPolicy: deps === undefined ? undefined : currentOwnAssessmentPolicy(deps),
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source
@@ -689,9 +836,10 @@ export function defaultRetriever(
       ...(deps?.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndexForRoot: deps.workspaceIndexForRoot }),
-      ...(semanticLease.provider === undefined
+      diagnostics: deps?.diagnostics,
+      ...(semanticLease.providerFor === undefined
         ? {}
-        : { repoSemanticSearchProvider: semanticLease.provider }),
+        : { repoSemanticSearchProviderFor: semanticLease.providerFor }),
     }).finally(() => {
       semanticLease.close();
     });
@@ -700,10 +848,31 @@ export function defaultRetriever(
 
 // ─── Multi-source answerer seam ───────────────────────────────────────────────
 
-export type MultiSourceAnswerer = (
-  question: string,
-  labeledPacks: readonly LabeledPack[],
-) => Promise<GroundedAnswerPayload>;
+export interface MultiSourceAnswerer {
+  (question: string, labeledPacks: readonly LabeledPack[]): Promise<GroundedAnswerPayload>;
+  readonly repair?: GroundedAnswerer["repair"];
+  readonly remainingSynthesisCalls?: GroundedSynthesisCallBudget["remaining"];
+  readonly pendingSynthesisUsage?: GroundedSynthesisCallBudget["pendingUsage"];
+  readonly takeFailedSynthesisUsage?: GroundedSynthesisCallBudget["takeUsage"];
+  readonly reservedSynthesisOutputTokens?: GroundedSynthesisCallBudget["reservedOutputTokens"];
+  readonly completedSynthesisCalls?: GroundedSynthesisCallBudget["completed"];
+}
+
+interface MultiSourceGatewayContext {
+  readonly synthesisBudget: GroundedSynthesisCallBudget;
+  readonly originalBudget: ReturnType<typeof modelWindowAwareBudget>;
+  readonly startedAtMs: number;
+  readonly deps: UiHandlerDeps;
+  readonly model: ModelPort;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly answerOptions: Pick<
+    GroundedAnswerOptions,
+    "answerOnlyContextAvailable" | "currentQuestion"
+  > & { readonly userMessageId?: string };
+  sent?: ReturnType<typeof fittedMultiSourcePrompt>;
+}
 
 // Like the folder answerer (createGatewayAnswerer): each attempt fits the prompt to the model's
 // current input budget, and a provider overflow that states the real window re-fits and sends once
@@ -714,40 +883,316 @@ export function createMultiSourceAnswerer(
   modelId: string,
   signal: AbortSignal,
   correlationId: string | undefined,
+  answerOptions: Pick<GroundedAnswerOptions, "answerOnlyContextAvailable" | "currentQuestion"> & {
+    readonly userMessageId?: string;
+  } = {},
 ): MultiSourceAnswerer {
-  return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
-    ensureNotCancelled(signal);
-    let sent: SentGroundedPrompt | undefined;
-    const response = await withAdoptedContextWindowRetry(
-      deps,
-      { modelId, surface: "grounded", correlationId },
-      () => {
-        const tokenAccounting = currentContextProfileForModel(deps, modelId)?.tokenAccounting;
-        const options = groundedPromptOptions(deps, modelId, tokenAccounting);
-        sent = fittedMultiSourcePrompt(
-          question,
-          labeledPacks,
-          deps.redactor,
-          options,
-          correlationId,
-        );
-        return model.call(
-          { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
-          signal,
-        );
+  const ctx: MultiSourceGatewayContext = {
+    synthesisBudget: createGroundedSynthesisCallBudget(),
+    originalBudget: modelWindowAwareBudget(deps, modelId),
+    startedAtMs: Date.now(),
+    deps,
+    model: withMarkdownSkillAdmission(
+      model,
+      deps.store.markdownSkills,
+      answerOptions.userMessageId,
+      deps.markdownSkillAuthority,
+    ),
+    modelId,
+    signal,
+    correlationId,
+    answerOptions,
+  };
+  return Object.assign(
+    (question: string, packs: readonly LabeledPack[]) =>
+      multiSourceGatewayAnswer(ctx, question, packs),
+    {
+      remainingSynthesisCalls: (): number => ctx.synthesisBudget.remaining(),
+      pendingSynthesisUsage: (): ReturnType<GroundedSynthesisCallBudget["pendingUsage"]> =>
+        ctx.synthesisBudget.pendingUsage(),
+      takeFailedSynthesisUsage: (): ReturnType<GroundedSynthesisCallBudget["takeUsage"]> =>
+        ctx.synthesisBudget.takeUsage(),
+      reservedSynthesisOutputTokens: (): number => ctx.synthesisBudget.reservedOutputTokens(),
+      completedSynthesisCalls: (): number => ctx.synthesisBudget.completed(),
+      repair: (
+        question: string,
+        _pack: ConnectedContextPack,
+        original: string,
+        options: GroundedAnswerOptions,
+      ) => multiSourceGatewayRepair(ctx, question, original, options),
+    },
+  );
+}
+
+async function multiSourceGatewayAnswer(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  labeledPacks: readonly LabeledPack[],
+): Promise<GroundedAnswerResult> {
+  const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
+  ensureNotCancelled(ctx.signal);
+  const response = await withAdoptedContextWindowRetry(
+    ctx.deps,
+    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
+    () => multiSourceGatewayAttempt(ctx, question, labeledPacks),
+  );
+  const sent = ctx.sent;
+  if (sent === undefined) throw new TypeError("Multi-source fitted prompt is unavailable");
+  const answer = multiSourceAnswerResult(
+    response,
+    sent,
+    ctx.answerOptions.currentQuestion ?? question,
+    ctx.modelId,
+    currentContextProfileForModel(ctx.deps, ctx.modelId),
+  );
+  return withPluralSynthesisUsage(answer, ctx.synthesisBudget, countsBefore);
+}
+
+async function multiSourceGatewayAttempt(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  packs: readonly LabeledPack[],
+): Promise<NormalizedResponse | undefined> {
+  const accounting = currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting;
+  const options = multiSourceRemainingPromptOptions(ctx, packs, accounting);
+  const sent = fittedMultiSourcePrompt(
+    question,
+    packs,
+    ctx.deps.redactor,
+    options,
+    ctx.correlationId,
+  );
+  ctx.sent = sent;
+  if (
+    sent.sentReferenceCount === 0 &&
+    ctx.answerOptions.answerOnlyContextAvailable !== true &&
+    options.ownAssessmentPolicy !== "allowed"
+  )
+    return undefined;
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    { ...sent, sentEvidencePacks: sent.packs.map((entry) => entry.pack) },
+    multiSourceInputTokens(packs, options),
+    accounting,
+  );
+  const grants = multiSourceSynthesisGrants(ctx, packs);
+  return callPluralGroundedSynthesis({
+    model: ctx.model,
+    signal: ctx.signal,
+    budget: ctx.synthesisBudget,
+    grants,
+    accounting,
+    request: {
+      modelId: ctx.modelId,
+      messages: sent.messages,
+      stream: false,
+      maxOutputTokens: Math.min(
+        modelWindowAwareBudget(ctx.deps, ctx.modelId).modelOutputTokensMax,
+        grants.outputTokensMax - ctx.synthesisBudget.pendingUsage().completionTokens,
+      ),
+      logContext: { correlationId: ctx.correlationId },
+    },
+  });
+}
+
+function multiSourceSynthesisGrants(
+  ctx: MultiSourceGatewayContext,
+  packs: readonly LabeledPack[],
+): GroundedSynthesisAttemptOptions {
+  const elapsed = [
+    ctx.originalBudget.elapsedMsMax,
+    ...packs.map((entry) => entry.pack.budget.elapsedMsMax),
+  ].filter((limit): limit is number => limit !== null);
+  return {
+    inputTokensMax: remainingMultiSourceResource(
+      ctx.originalBudget.modelInputTokensMax,
+      packs,
+      "modelInputTokensMax",
+      "modelInputTokens",
+    ),
+    outputTokensMax: remainingMultiSourceResource(
+      ctx.originalBudget.modelOutputTokensMax,
+      packs,
+      "modelOutputTokensMax",
+      "modelOutputTokens",
+    ),
+    ...(elapsed.length === 0 ? {} : { deadlineAtMs: ctx.startedAtMs + Math.min(...elapsed) }),
+    signal: ctx.signal,
+  };
+}
+
+function remainingMultiSourceResource(
+  max: number,
+  packs: readonly LabeledPack[],
+  budgetKey: "modelInputTokensMax" | "modelOutputTokensMax",
+  usageKey: "modelInputTokens" | "modelOutputTokens",
+): number {
+  const original = Math.min(
+    max,
+    packs.reduce((sum, entry) => sum + entry.pack.budget[budgetKey], 0),
+  );
+  return Math.max(0, original - packs.reduce((sum, entry) => sum + entry.pack.usage[usageKey], 0));
+}
+
+function multiSourceRemainingPromptOptions(
+  ctx: MultiSourceGatewayContext,
+  packs: readonly LabeledPack[],
+  accounting: GroundedGatewayPromptOptions["tokenAccounting"],
+): GroundedGatewayPromptOptions {
+  const options = groundedPromptOptions(ctx.deps, ctx.modelId, accounting);
+  return {
+    ...options,
+    protectedSkill:
+      ctx.answerOptions.userMessageId === undefined
+        ? undefined
+        : ctx.deps.store.markdownSkills.forTurn(ctx.answerOptions.userMessageId),
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
+    callerInputTokensMax: Math.max(
+      0,
+      multiSourceSynthesisGrants(ctx, packs).inputTokensMax -
+        ctx.synthesisBudget.pendingUsage().promptTokens,
+    ),
+  };
+}
+
+function multiSourceRepairPrompt(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  original: string,
+  options: GroundedAnswerOptions,
+): ReturnType<typeof fittedMultiSourcePrompt> | undefined {
+  const packs = ctx.sent?.packs;
+  if (packs === undefined) return undefined;
+  const accounting = currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting;
+  const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, accounting);
+  try {
+    const fitted = fittedMultiSourcePrompt(
+      `${question}\n\n${buildCitationRepairPrompt(original)}`,
+      packs,
+      ctx.deps.redactor,
+      {
+        ...promptOptions,
+        protectedSkill:
+          ctx.answerOptions.userMessageId === undefined
+            ? undefined
+            : ctx.deps.store.markdownSkills.forTurn(ctx.answerOptions.userMessageId),
+        ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
+        callerInputTokensMax: options.modelInputTokensMax ?? 0,
       },
+      ctx.correlationId,
     );
-    const content = response.content.trim();
-    assertUsableAssistantContent(content, modelId);
-    const { promptTokens, completionTokens } = response.usage;
-    const profile = currentContextProfileForModel(deps, modelId);
-    return {
-      content,
-      usage: { promptTokens, completionTokens },
-      ...(sent === undefined
-        ? {}
-        : { promptContext: sentPromptContext(sent, promptTokens, profile) }),
-    };
+    return fitted.packs === packs ? fitted : undefined;
+  } catch (error) {
+    if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError)
+      return undefined;
+    throw error;
+  }
+}
+
+async function multiSourceGatewayRepair(
+  ctx: MultiSourceGatewayContext,
+  question: string,
+  original: string,
+  options: GroundedAnswerOptions,
+): Promise<GroundedAnswerResult> {
+  const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
+  const sent = multiSourceRepairPrompt(ctx, question, original, options);
+  if (sent === undefined || ctx.synthesisBudget.remaining() <= 0)
+    return uninvokedCitationRepair(original);
+  const signal = multiSourceRepairSignal(ctx.signal, options);
+  if (signal === undefined) return uninvokedCitationRepair(original);
+  logMultiSourceRepairPrompt(ctx, sent, options);
+  if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs)
+    return uninvokedCitationRepair(original);
+  ensureNotCancelled(signal);
+  const response = await callPluralGroundedSynthesis({
+    model: ctx.model,
+    signal,
+    budget: ctx.synthesisBudget,
+    grants: {
+      inputTokensMax: options.modelInputTokensMax ?? 0,
+      outputTokensMax: options.modelOutputTokensMax ?? 0,
+      signal,
+      deadlineAtMs: options.deadlineAtMs,
+    },
+    accounting: currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
+    request: {
+      modelId: ctx.modelId,
+      messages: sent.messages,
+      stream: false,
+      maxOutputTokens: options.modelOutputTokensMax,
+      logContext: { correlationId: ctx.correlationId },
+    },
+  });
+  assertUsableAssistantContent(response.content.trim(), ctx.modelId);
+  return withPluralSynthesisUsage(
+    {
+      content: response.content.trim(),
+      usage: { promptTokens: 0, completionTokens: 0 },
+      sentEvidencePacks: sent.packs.map((entry) => entry.pack),
+      modelInvoked: true,
+    },
+    ctx.synthesisBudget,
+    countsBefore,
+  );
+}
+
+function logMultiSourceRepairPrompt(
+  ctx: MultiSourceGatewayContext,
+  sent: ReturnType<typeof fittedMultiSourcePrompt>,
+  options: GroundedAnswerOptions,
+): void {
+  logGroundedPromptSelection(
+    ctx.correlationId,
+    { ...sent, sentEvidencePacks: sent.packs.map((entry) => entry.pack) },
+    Math.min(
+      options.modelInputTokensMax ?? 0,
+      multiSourceInputTokens(sent.packs, groundedPromptOptions(ctx.deps, ctx.modelId, undefined)),
+    ),
+    currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting,
+  );
+}
+
+export function uninvokedCitationRepair(content: string): GroundedAnswerResult {
+  return { content, modelInvoked: false, usage: { promptTokens: 0, completionTokens: 0 } };
+}
+
+function multiSourceRepairSignal(
+  parent: AbortSignal,
+  options: GroundedAnswerOptions,
+): AbortSignal | undefined {
+  const remainingMs =
+    options.deadlineAtMs === undefined ? undefined : options.deadlineAtMs - Date.now();
+  if (remainingMs !== undefined && remainingMs <= 0) return undefined;
+  const signals = [parent, ...(options.signal === undefined ? [] : [options.signal])];
+  if (remainingMs !== undefined) signals.push(AbortSignal.timeout(Math.ceil(remainingMs)));
+  return AbortSignal.any(signals);
+}
+
+function multiSourceAnswerResult(
+  response: NormalizedResponse | undefined,
+  sent: ReturnType<typeof fittedMultiSourcePrompt>,
+  question: string,
+  modelId: string,
+  profile: ReturnType<typeof currentContextProfileForModel>,
+): GroundedAnswerResult {
+  const content = response?.content.trim() ?? connectedSearchNoEvidenceAnswer(question);
+  if (response !== undefined) assertUsableAssistantContent(content, modelId);
+  const packs = sent.packs.map((entry) => entry.pack);
+  return {
+    content,
+    modelInvoked: response !== undefined,
+    noEvidence: sent.sentReferenceCount === 0,
+    usage: {
+      promptTokens: response?.usage.promptTokens ?? 0,
+      completionTokens: response?.usage.completionTokens ?? 0,
+    },
+    evidenceScopeIndex: buildInsufficiencyScopeIndex(packs),
+    sentEvidencePacks: packs,
+    filesInPrompt: sentGroundedFileCount(packs),
+    ...(response === undefined
+      ? {}
+      : { promptContext: sentPromptContext(sent, response.usage.promptTokens, profile) }),
   };
 }
 
@@ -762,6 +1207,24 @@ interface RetrievedSource {
   readonly elapsedMs: number;
   readonly scope: SelectedScope;
   readonly plan: RetrievalOnlyOutput["plan"];
+  readonly declarationScopeIndexFor?: RetrievalOnlyOutput["declarationScopeIndexFor"];
+}
+
+/** Reuse canonical admission for declared paths; only final sent excerpts establish read-state. */
+export function verifiedPluralInsufficiencyScopeIndex(
+  sources: readonly Pick<RetrievalOnlyOutput, "declarationScopeIndexFor">[],
+  content: string,
+  sentPacks: readonly ConnectedContextPack[],
+  discovered?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>,
+): ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]> {
+  const paths = declaredInsufficiencyPaths(content);
+  const inventory = new Map(buildInsufficiencyScopeIndex([], discovered));
+  for (const source of sources) {
+    for (const [path, state] of source.declarationScopeIndexFor?.(paths) ?? []) {
+      inventory.set(path, state);
+    }
+  }
+  return buildInsufficiencyScopeIndex(sentPacks, inventory);
 }
 
 interface SkippedScope {
@@ -775,7 +1238,9 @@ interface RetrievalOutcome {
   readonly firstError: RouteResult | undefined;
 }
 
-export interface MultiSourceAskInput {
+export interface MultiSourceAskInput extends GroundedRetrievalContinuityInput {
+  /** Verified discovered paths; only actual sent evidence promotes a path to read-state. */
+  readonly insufficiencyScopeIndex?: ReadonlyMap<string, GroundedInsufficiencyDeclaration["state"]>;
   readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
@@ -913,6 +1378,7 @@ async function retrieveOneSource(
         query,
         workspaceRoot: scope.workspaceRoot,
         budget,
+        ...groundedRetrievalContinuityFields(ctx, scope, cs, ctx.sourceScopeFingerprints),
         ...(workspaceFs === undefined ? {} : { workspaceFs }),
       },
       ctx.signal,
@@ -935,6 +1401,7 @@ async function retrieveOneSource(
     elapsedMs: out.elapsedMs,
     scope,
     plan: out.plan,
+    declarationScopeIndexFor: out.declarationScopeIndexFor,
     sourceScopeFingerprint: groundedSourceScopeFingerprint(scope, cs, ctx.sourceScopeFingerprints),
   };
 }
@@ -979,6 +1446,7 @@ async function retrieveAllSources(
 
 interface SourceCitationBundle {
   readonly source: RetrievedSource;
+  readonly sentPack: ConnectedContextPack;
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly labeledCitations: readonly GroundedEvidenceCitation[];
 }
@@ -1009,10 +1477,12 @@ function labelAnswerCitations(
   sourceLabel: string,
   redactor: Redactor,
   sourceScopeFingerprint?: string,
+  sourceId?: string,
 ): readonly GroundedEvidenceCitation[] {
   return citations.map((citation) => ({
     ...citation,
     source: redactString(redactor, sourceLabel),
+    ...(sourceId === undefined ? {} : { sourceId }),
     ...(sourceScopeFingerprint === undefined ? {} : { sourceScopeFingerprint }),
   }));
 }
@@ -1034,25 +1504,30 @@ function sourceCitationBundles(
   sources: readonly RetrievedSource[],
   redactor: Redactor,
   assistantContent: string,
+  sentPacks: readonly ConnectedContextPack[],
 ): readonly SourceCitationBundle[] {
-  const projected = buildSourcedAnswerCitations(
-    sources.map((source) => source.pack),
-    assistantContent,
-    (value) => redactString(redactor, value),
+  const projected = buildSourcedAnswerCitations(sentPacks, assistantContent, (value) =>
+    redactString(redactor, value),
   );
   return sources.map((source, index) => {
     const sourceId = citationSourceIdForIndex(index);
     const citations = projected
       .filter((entry) => entry.sourceId === sourceId)
       .map((entry) => entry.citation);
+    const observed = withSentSelectionDiagnostics(source.pack, sentPacks, Date.now());
     return {
-      source,
+      source: {
+        ...source,
+        pack: observed,
+      },
+      sentPack: withSentEvidenceInventory(observed, sentPacks),
       citations,
       labeledCitations: labelAnswerCitations(
         citations,
         source.label,
         redactor,
         source.sourceScopeFingerprint,
+        sourceId,
       ),
     };
   });
@@ -1091,13 +1566,14 @@ function mergedUncertainty(
 function persistPerSourceEvidence(
   ctx: MultiSourceAskInput,
   bundles: readonly SourceCitationBundle[],
+  completedSynthesisCallCount: number | undefined,
 ): {
   readonly firstRunId: string | undefined;
   readonly runIds: readonly string[];
 } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
-  for (const [ordinal, { source: src, citations }] of bundles.entries()) {
+  for (const [ordinal, { source: src, sentPack, citations }] of bundles.entries()) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
     const runId = groundedEvidenceRunId({
@@ -1112,14 +1588,17 @@ function persistPerSourceEvidence(
         runId,
         modelId: ctx.modelId,
         workspaceRoot: src.scope.workspaceRoot,
+        sourceScopeFingerprint: src.sourceScopeFingerprint,
         chatId: ctx.chat.id,
         plan: src.plan,
-        pack: src.pack,
+        pack: sentPack,
+        retrievedFileCount: src.pack.files.length,
         citationCount: citations.length,
+        completedSynthesisCallCount,
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
-        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, src.pack),
+        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, sentPack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -1135,11 +1614,39 @@ function persistPerSourceEvidence(
   return { firstRunId, runIds };
 }
 
+function noSourceAnswerMarkers(
+  assistant: GroundedAnswerResult,
+  redactor: Redactor,
+): readonly GroundedUncertainty[] {
+  if (assistant.noEvidence !== true) return [];
+  const marker = noEvidenceMarker(Date.now());
+  return [{ kind: marker.kind, claim: redactString(redactor, marker.claim) }];
+}
+
+function multiSourceAnswerSummaries(
+  ctx: MultiSourceAskInput,
+  bundles: ReturnType<typeof sourceCitationBundles>,
+  modelInvoked: boolean,
+): readonly GroundedAnswerContextPackSummary[] {
+  return bundles.map(({ source: src, citations }) =>
+    buildGroundedAnswerContextPackSummary(
+      src.pack,
+      modelInvoked ? citations.length : 0,
+      src.elapsedMs,
+      groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
+    ),
+  );
+}
+
+function bundleSources(bundles: readonly SourceCitationBundle[]): readonly RetrievedSource[] {
+  return bundles.map((bundle) => bundle.source);
+}
+
 function assembleMultiSourceAnswer(
   ctx: MultiSourceAskInput,
   sources: readonly RetrievedSource[],
   skipped: readonly SkippedScope[],
-  assistant: GroundedAnswerResult,
+  assistant: RepairedMultiSourceAnswer,
   ids: {
     readonly userMessageId: string;
     readonly assistantMessageId: string;
@@ -1149,21 +1656,19 @@ function assembleMultiSourceAnswer(
   },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
-  const modelInvoked = !ids.abstained || ctx.answerOnlyContextAvailable === true;
-  const citationBundles = sourceCitationBundles(sources, redactor, assistant.content);
-  const citations = modelInvoked ? mergedCitations(citationBundles) : [];
-  const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
-    buildGroundedAnswerContextPackSummary(
-      src.pack,
-      modelInvoked ? sourceCitations.length : 0,
-      src.elapsedMs,
-      groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
-    ),
+  const modelInvoked =
+    assistant.modelInvoked ?? (!ids.abstained || ctx.answerOnlyContextAvailable === true);
+  const citationBundles = sourceCitationBundles(
+    sources,
+    redactor,
+    assistant.content,
+    finalMultiSourceEvidence(assistant, sources),
   );
-  const mergedSummary = mergeContextPackSummaries(summaries);
+  const citations = modelInvoked ? mergedCitations(citationBundles) : [];
+  const summaries = multiSourceAnswerSummaries(ctx, citationBundles, modelInvoked);
   const { firstRunId, runIds } = ids.abstained
     ? { firstRunId: undefined, runIds: [] as readonly string[] }
-    : persistPerSourceEvidence(ctx, citationBundles);
+    : persistPerSourceEvidence(ctx, citationBundles, assistant.completedSynthesisCallCount);
   // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline citations against the merged
   // evidence packs the model actually received; flag references to un-retrieved files.
   const reconciliationUncertainty = modelInvoked
@@ -1176,14 +1681,16 @@ function assembleMultiSourceAnswer(
     ...(firstRunId === undefined ? {} : { evidenceRunId: firstRunId }),
     evidenceRunIds: runIds,
     content: redactString(redactor, assistant.content),
+    ...groundedAnswerEvidenceFields(assistant),
     citations,
-    uncertainty: [
-      ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
+    uncertainty: assessmentAwareUncertainty(assistant.content, [
+      ...mergedUncertainty(bundleSources(citationBundles), skipped, ctx.preSkipped ?? [], redactor),
       ...reconciliationUncertainty,
-    ],
+      ...noSourceAnswerMarkers(assistant, redactor),
+    ]),
     omittedCount: sources.reduce((acc, src) => acc + connectedContextOmittedCount(src.pack), 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
-    contextPack: withMergedAssistantUsage(mergedSummary, assistant),
+    contextPack: withMergedAssistantUsage(mergeContextPackSummaries(summaries), assistant),
     ...(modelInvoked && assistant.promptContext !== undefined
       ? { promptContext: assistant.promptContext }
       : {}),
@@ -1197,6 +1704,7 @@ function withMergedAssistantUsage(
 ): ReturnType<typeof mergeContextPackSummaries> {
   return {
     ...mergedSummary,
+    ...(assistant.filesInPrompt === undefined ? {} : { filesInPrompt: assistant.filesInPrompt }),
     usage: {
       ...mergedSummary.usage,
       modelInputTokens: mergedSummary.usage.modelInputTokens + assistant.usage.promptTokens,
@@ -1205,10 +1713,17 @@ function withMergedAssistantUsage(
   };
 }
 
+function finalMultiSourceEvidence(
+  assistant: GroundedAnswerResult,
+  sources: readonly RetrievedSource[],
+): readonly ConnectedContextPack[] {
+  return assistant.sentEvidencePacks ?? sources.map((source) => source.pack);
+}
+
 // Wire-projected reconciliation markers (unsupported-citation + incomplete-answer) for the
 // multi-source path. Mirrors the single-source reconciliation in runGroundedExploration.
 function buildMultiSourceReconciliationUncertainty(
-  assistant: GroundedAnswerResult,
+  assistant: RepairedMultiSourceAnswer,
   sources: readonly RetrievedSource[],
   redactor: Redactor,
   correlationId: string | undefined,
@@ -1216,13 +1731,19 @@ function buildMultiSourceReconciliationUncertainty(
   const nowMs = Date.now();
   const reconciliation = reconcileAndLogInlineCitations(
     assistant.content,
-    buildPackCitationIndex(sources.map((s) => s.pack)),
+    buildPackCitationIndex(finalMultiSourceEvidence(assistant, sources)),
     correlationId,
+    {
+      answerKind: assistant.answerKind,
+      citationBehaviour: assistant.citationBehaviour,
+      citationRepairDisposition: assistant.citationRepairDisposition,
+      ...multiSourceInsufficiencyObservation(assistant),
+    },
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const missing =
     unsupported === undefined && reconciliation.citedScopePaths.size === 0
-      ? missingCitationMarkerFor(assistant.content, nowMs)
+      ? missingCitationMarkerFor(assistant.content, nowMs, assistant.answerKind)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
@@ -1262,7 +1783,7 @@ async function applyMultiSourceEntailment(
     assembled,
     stage,
     assistant.content,
-    retrieved.map((source) => source.pack),
+    finalMultiSourceEvidence(assistant, retrieved),
     ctx.deps.redactor,
   );
 }
@@ -1342,12 +1863,13 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   // GEN-AI-GROUNDING-002/-003 (RB-4): abstain BEFORE the model call when no source carries usable
   // evidence — the folders path must not answer confidently over zero evidence, and no grounded
   // evidence manifest may be persisted.
-  const abstained = !packsHaveUsableEvidence(retrieved.map((s) => s.pack));
-  const assistant = await answerMultiSource(ctx, retrieved, abstained);
+  const noRetrievedEvidence = !packsHaveUsableEvidence(retrieved.map((s) => s.pack));
+  const assistant = await answerMultiSource(ctx, retrieved, noRetrievedEvidence, startedAtMs);
   if (isRouteResult(assistant)) {
     return assistant;
   }
   ensureNotCancelled(ctx.signal);
+  const abstained = noRetrievedEvidence || assistant.noEvidence === true;
   const persisted = persistMultiSourceExchange(ctx, assistant);
   const answer = await applyMultiSourceEntailment(
     ctx,
@@ -1357,7 +1879,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     }),
     assistant,
     retrieved,
-    !abstained || ctx.answerOnlyContextAvailable === true,
+    assistant.modelInvoked ?? (!abstained || ctx.answerOnlyContextAvailable === true),
   );
   ensureNotCancelled(ctx.signal);
   const completedAnswer = withAnswerDuration(answer, startedAtMs);
@@ -1378,26 +1900,291 @@ async function answerMultiSource(
   ctx: MultiSourceAskInput,
   retrieved: readonly RetrievedSource[],
   abstained: boolean,
-): Promise<GroundedAnswerResult | RouteResult> {
+  startedAtMs: number,
+): Promise<RepairedMultiSourceAnswer | RouteResult> {
   ensureNotCancelled(ctx.signal);
-  if (abstained && ctx.answerOnlyContextAvailable !== true) {
+  if (
+    abstained &&
+    ctx.answerOnlyContextAvailable !== true &&
+    currentOwnAssessmentPolicy(ctx.deps) !== "allowed"
+  ) {
     return {
       content: connectedSearchNoEvidenceAnswer(ctx.content),
+      answerKind: "refusal",
       usage: { promptTokens: 0, completionTokens: 0 },
     };
   }
+  const observeCitationBehaviour = citationBehaviourObserverFor(
+    ctx.deps,
+    ctx.modelId,
+    ctx.correlationId,
+  );
   try {
-    const assistant = normalizeGroundedAnswerPayload(
-      await ctx.answerer(
-        ctx.answerContent ?? ctx.content,
-        retrieved.map((s) => ({ label: s.label, pack: s.pack })),
-      ),
-    );
+    const assistant = await normalizedMultiSourceAnswer(ctx, retrieved);
     ensureNotCancelled(ctx.signal);
-    return assistant;
+    const scopeIndex = verifiedPluralInsufficiencyScopeIndex(
+      retrieved,
+      assistant.content,
+      assistant.sentEvidencePacks ?? [],
+      ctx.insufficiencyScopeIndex,
+    );
+    const validated = {
+      ...assistant,
+      insufficiencyDeclarations: undefined,
+      ...validateGroundedAnswerEvidence(assistant.content, scopeIndex, ctx.content),
+    };
+    return await repairMultiSourceAnswer(
+      ctx,
+      retrieved,
+      validated,
+      startedAtMs,
+      observeCitationBehaviour,
+    );
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
   }
+}
+
+function sourcePromptPack(ctx: MultiSourceAskInput, source: RetrievedSource): LabeledPack {
+  const requiredEvidenceAtomIds = assistantReferenceExcerptIds(
+    source.pack,
+    (ctx.assistantReferents ?? []).filter(
+      (reference) => reference.sourceScopeFingerprint === source.sourceScopeFingerprint,
+    ),
+  );
+  return {
+    label: source.label,
+    pack: source.pack,
+    ...(requiredEvidenceAtomIds.length === 0 ? {} : { requiredEvidenceAtomIds }),
+  };
+}
+
+async function normalizedMultiSourceAnswer(
+  ctx: MultiSourceAskInput,
+  retrieved: readonly RetrievedSource[],
+): Promise<GroundedAnswerResult> {
+  const answer = normalizeGroundedAnswerPayload(
+    await ctx.answerer(
+      ctx.answerContent ?? ctx.content,
+      retrieved.map((source) => sourcePromptPack(ctx, source)),
+    ),
+  );
+  return normalizeGroundedAnswerAssessment(
+    answer,
+    currentOwnAssessmentPolicy(ctx.deps),
+    ctx.correlationId,
+    ctx.content,
+    undefined,
+    retrieved.length > 0 &&
+      retrieved.every((source) => source.plan.targetDecision?.conversationOnly === true) &&
+      !packsHaveUsableEvidence(finalMultiSourceEvidence(answer, retrieved)),
+  );
+}
+
+interface RepairedMultiSourceAnswer extends GroundedAnswerResult {
+  readonly citationRepairDisposition?: CitationRepairDisposition;
+}
+
+function multiSourceInsufficiencyObservation(
+  assistant: GroundedAnswerResult,
+): CitationReconciliationMetadata {
+  const counts = assistant.insufficiencyObservation;
+  return counts === undefined
+    ? {}
+    : {
+        insufficiencyDeclaredCount: counts.declaredCount,
+        declaredInScopeCount: counts.inScopeCount,
+        declaredUnreadInScopeCount: counts.unreadInScopeCount,
+        declaredNotInScopeCount: counts.notInScopeCount,
+      };
+}
+
+function multiSourceRepairPack(
+  ctx: MultiSourceAskInput,
+  sources: readonly RetrievedSource[],
+): ConnectedContextPack | undefined {
+  const first = sources[0]?.pack;
+  if (first === undefined) return undefined;
+  const budget = modelWindowAwareBudget(ctx.deps, ctx.modelId);
+  const elapsedLimits = [
+    budget.elapsedMsMax,
+    ...sources.map((source) => source.pack.budget.elapsedMsMax),
+  ].filter((limit): limit is number => limit !== null);
+  return {
+    ...first,
+    usage: {
+      ...first.usage,
+      modelInputTokens: sources.reduce(
+        (sum, source) => sum + source.pack.usage.modelInputTokens,
+        0,
+      ),
+      modelOutputTokens: sources.reduce(
+        (sum, source) => sum + source.pack.usage.modelOutputTokens,
+        0,
+      ),
+    },
+    budget: {
+      ...budget,
+      elapsedMsMax: elapsedLimits.length === 0 ? null : Math.min(...elapsedLimits),
+      modelInputTokensMax: Math.min(
+        budget.modelInputTokensMax,
+        sources.reduce((sum, source) => sum + source.pack.budget.modelInputTokensMax, 0),
+      ),
+      modelOutputTokensMax: Math.min(
+        budget.modelOutputTokensMax,
+        sources.reduce((sum, source) => sum + source.pack.budget.modelOutputTokensMax, 0),
+      ),
+    },
+  };
+}
+
+async function repairMultiSourceAnswer(
+  ctx: MultiSourceAskInput,
+  sources: readonly RetrievedSource[],
+  assistant: GroundedAnswerResult,
+  startedAtMs: number,
+  observeCitationBehaviour: ReturnType<typeof citationBehaviourObserverFor>,
+): Promise<RepairedMultiSourceAnswer> {
+  const pack = multiSourceRepairPack(ctx, sources);
+  if (pack === undefined) return assistant;
+  let budgetRefused = false;
+  const repair = ctx.answerer.repair;
+  const repairContext = {
+    question: ctx.answerContent ?? ctx.content,
+    pack,
+    answer: assistant,
+    nowMs: Date.now,
+    ...(pack.budget.elapsedMsMax === null
+      ? {}
+      : { deadlineAtMs: startedAtMs + pack.budget.elapsedMsMax }),
+    ...(repair === undefined
+      ? {}
+      : {
+          invokeRepair: async (
+            original: string,
+            options: GroundedAnswerOptions,
+          ): Promise<GroundedAnswerPayload> => {
+            const result = normalizeGroundedAnswerPayload(
+              await repair(ctx.answerContent ?? ctx.content, pack, original, options),
+            );
+            budgetRefused = result.modelInvoked === false;
+            return result;
+          },
+        }),
+    deps: {
+      answerer: pluralSynthesisMetadata(ctx.answerer),
+      signal: ctx.signal,
+      reliableCitationBehaviour: citationBehaviourFor(ctx.deps, ctx.modelId),
+      observeCitationBehaviour,
+    },
+  };
+  const repaired = await repairGroundedAnswer(repairContext);
+  const finalAnswer = finalPluralRepairAnswer(repairContext, repaired, budgetRefused);
+  recordMultiSourceRepair(ctx, sources, finalAnswer, repaired.failure);
+  return finalAnswer;
+}
+
+function recordMultiSourceRepair(
+  ctx: Pick<MultiSourceAskInput, "deps" | "correlationId">,
+  sources: readonly RetrievedSource[],
+  answer: GroundedAnswerResult & { readonly citationRepairDisposition: CitationRepairDisposition },
+  failure: unknown,
+): void {
+  recordPluralGroundedAnswer(
+    sources.map((source) => source.pack),
+    answer,
+    answer.citationRepairDisposition,
+    ctx.correlationId,
+    failure,
+    currentOwnAssessmentPolicy(ctx.deps),
+  );
+}
+
+export function finalPluralRepairAnswer(
+  context: GroundedRepairContext,
+  repaired: GroundedRepairResult,
+  budgetRefused: boolean,
+): GroundedAnswerResult & { readonly citationRepairDisposition: CitationRepairDisposition } {
+  return {
+    ...observeGroundedCitationBehaviour({ ...context, answer: repaired.answer }),
+    citationRepairDisposition: budgetRefused ? "skipped-budget" : repaired.disposition,
+  };
+}
+
+function declarationMatchesScope(path: string, scope: SelectedScope): boolean {
+  if (scope.kind === "workspace-root") return true;
+  return scope.relativePaths.some(
+    (selected) =>
+      path === selected || (scope.kind === "directory" && path.startsWith(`${selected}/`)),
+  );
+}
+
+function pluralAnswerForPack(
+  pack: ConnectedContextPack,
+  packs: readonly ConnectedContextPack[],
+  answer: GroundedAnswerResult,
+): GroundedAnswerResult {
+  const sent = (answer.sentEvidencePacks ?? []).filter(
+    (entry) =>
+      entry.scope.scopeId === pack.scope.scopeId &&
+      entry.scope.workspaceRoot === pack.scope.workspaceRoot,
+  );
+  const declarations = (answer.insufficiencyDeclarations ?? []).filter((declaration) => {
+    const matches = packs.filter((entry) =>
+      declarationMatchesScope(declaration.scopePath, entry.scope),
+    );
+    return matches.length === 1 && matches[0] === pack;
+  });
+  return {
+    ...answer,
+    sentEvidencePacks: sent,
+    filesInPrompt: sentGroundedFileCount(sent),
+    insufficiencyDeclarations: declarations,
+    insufficiencyObservation: {
+      declaredCount: declarations.length,
+      inScopeCount: declarations.length,
+      unreadInScopeCount: declarations.filter(
+        (declaration) => declaration.state === "unread-in-scope",
+      ).length,
+      notInScopeCount: 0,
+    },
+  };
+}
+
+export function recordPluralGroundedAnswer(
+  packs: readonly ConnectedContextPack[],
+  answer: GroundedAnswerResult,
+  disposition: CitationRepairDisposition,
+  correlationId: string | undefined,
+  failure?: unknown,
+  ownAssessmentPolicy?: OwnAssessmentPolicy,
+): void {
+  for (const pack of packs)
+    logGroundedAnswerForPack(
+      pack,
+      pluralAnswerForPack(pack, packs, answer),
+      disposition,
+      correlationId,
+      failure,
+      ownAssessmentPolicy,
+    );
+}
+
+export function recordPluralCitationRepairFailure(
+  deps: Pick<UiHandlerDeps, "diagnostics" | "redactor">,
+  correlationId: string | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "POST /api/chats/messages/grounded",
+      source: "grounded.qa.citation-repair",
+      error,
+      redact: (message): string => deps.redactor(message) as string,
+    }),
+    code: "GROUNDED_CITATION_REPAIR_FAILED",
+  });
 }
 
 function mapMultiSourceError(

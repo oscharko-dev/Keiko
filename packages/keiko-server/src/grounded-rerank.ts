@@ -19,6 +19,7 @@ export interface RerankInput<P> {
   readonly engineScore: number; // native within-engine relevance (used ONLY for within-engine rank)
   readonly sourceLabel: string;
   readonly tieKey: string; // stable, unique-within-kind key for deterministic tie-break
+  readonly continuityReferenceKey?: string;
   readonly payload: P; // opaque; returned on the selected candidates for citation building
 }
 
@@ -36,6 +37,7 @@ export interface SelectedCandidate<P> {
   readonly fusedScore: number; // quantized RRF score
   readonly marker: number; // 1-based GLOBAL marker assigned in final selection order
   readonly rerankerScore?: number | undefined;
+  readonly continuityReferenceKey?: string;
   readonly payload: P;
 }
 
@@ -103,7 +105,11 @@ export function rerankAndSelect<P>(
 ): readonly SelectedCandidate<P>[] {
   if (inputs.length === 0) return [];
 
-  const ranked = buildRanked(inputs);
+  const ranked = [...buildRanked(inputs)].sort(
+    (a, b) =>
+      Number(b.input.continuityReferenceKey !== undefined) -
+      Number(a.input.continuityReferenceKey !== undefined),
+  );
   const selected: SelectedCandidate<P>[] = [];
   let runningBytes = 0;
 
@@ -122,6 +128,9 @@ export function rerankAndSelect<P>(
       engineRank: r.engineRank,
       fusedScore: r.fusedScore,
       marker: selected.length + 1,
+      ...(r.input.continuityReferenceKey === undefined
+        ? {}
+        : { continuityReferenceKey: r.input.continuityReferenceKey }),
       payload: r.input.payload,
     });
   }

@@ -1606,3 +1606,35 @@ it("transports the closed profile outcome without inventing catalog counts", asy
   });
   expect(lastPostedBody(fetchMock)).not.toHaveProperty("modelCatalog");
 });
+
+it("retains closed scope and inspection reports without spending failure capacity", async () => {
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  setClientDiagnosticWriter(fanOutClientDiagnostic);
+  for (let index = 0; index < 8; index++) {
+    reportClientDiagnostic("client.scope.notice", {
+      correlationId: `ui_scope-${String(index)}`,
+      scopeNotice: { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 },
+    });
+  }
+  reportClientDiagnostic("client.evidence.inspected", {
+    correlationId: "ui_inspect-0001",
+    evidenceInspection: { reason: "file-table-opened", readFileCount: 3, omittedFileCount: 1 },
+  });
+  reportClientDiagnostic("boundary caught TypeError", {
+    kind: "window-error",
+    errorKind: "unavailable",
+  });
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(10));
+  const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)) as unknown);
+  expect(bodies[0]).toMatchObject({
+    scopeNotice: { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 },
+  });
+  expect(bodies[8]).toMatchObject({
+    evidenceInspection: { reason: "file-table-opened", readFileCount: 3, omittedFileCount: 1 },
+  });
+  expect(bodies.every(isClientDiagnosticIngestRequest)).toBe(true);
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});

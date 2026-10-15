@@ -45,12 +45,38 @@ describe("#2348 D12 cap evidence harness", () => {
     expect(spec).not.toContain("EventDispatch");
     expect(spec).toContain('event.kind !== "stopped"');
     expect(spec).toContain('"pointerdown"');
-    expect(spec).toContain("probe.controlCompleted = true");
+    expect(spec).toContain("probe.controlSettled = true");
     expect(spec).toContain("probe.terminalSseObserved = true");
     expect(spec).toContain('panel?.textContent.includes("No active debug session.")');
     expect(spec).toContain("__keikoD12AfterNextPaint");
     expect(spec).toContain("collectStoppedProjectionSamples");
     expect(spec).toContain("CAP_SAMPLE_COUNT");
+  });
+
+  it("requires exact stop settlement and terminal proof independently of driver polling", () => {
+    const spec = readFileSync(SPEC_PATH, "utf8");
+    expect(spec).toContain('page.on("requestfinished", onSettlement)');
+    expect(spec).toContain('page.on("requestfailed", onSettlement)');
+    expect(spec).toContain('page.off("requestfinished", onSettlement)');
+    expect(spec).toContain('page.off("requestfailed", onSettlement)');
+    expect(spec).toContain("if (request === expected) settle?.(request)");
+    expect(spec).toContain("const response = await request.response()");
+    expect(spec).toContain("expect(response.status()).toBe(200)");
+    expect(spec).toContain('expect(request.failure()?.errorText).toBe("net::ERR_ABORTED")');
+    expect(spec).not.toContain("await response.finished()");
+    expect(spec).toContain('expect(failure.errorText).toBe("net::ERR_ABORTED")');
+    expect(spec).toContain("D12_RESPONSE_COMPLETION_NOTIFICATION_UNAVAILABLE");
+    expect(spec).toContain(
+      "if (sessionId !== undefined) await expectServerStopped(page, sessionId)",
+    );
+    expect(spec).toContain(
+      "Promise.all([stopFromDebugPanel(page, panel), captureSettledStopRequest(page, request)])",
+    );
+    expect(spec).toContain('await route.abort("aborted")');
+    expect(spec).toContain("expect(serverCompleted).toBe(true)");
+    expect(spec).not.toContain(
+      "await stopFromDebugPanel(page, panel);\n  await page.evaluate(() => {\n    const probe = window.__keikoD12StopProbe;",
+    );
   });
 
   it("keeps forced heap collection outside the output-flood long-task window", () => {

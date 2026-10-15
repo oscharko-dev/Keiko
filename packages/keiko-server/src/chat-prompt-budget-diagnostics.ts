@@ -10,7 +10,10 @@ import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   resolveContextTokenAccounting,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ConversationMemoryContextEntryWire,
+  MarkdownSkillDocument,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
 import { buildPromptAssemblyTokenSummary } from "./chat-prompt-budget-token-summary.js";
@@ -118,13 +121,14 @@ function buildRepoEvidenceLane(input: {
 }
 
 function buildUserTaskLane(input: {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly latestTurnTokens: number;
   readonly inputBudget: number;
 }): ContextLaneDiagnostics {
   return laneDiagnostics({
     laneId: "user-task",
     estimatedTokens: input.latestTurnTokens,
-    includedItems: 1,
+    includedItems: input.protectedSkill === undefined ? 1 : 2,
     excludedItems: 0,
     budgetPressure: pressureForTokens(input.latestTurnTokens, input.inputBudget),
   });
@@ -222,6 +226,7 @@ function buildPromptWorkingMemoryLane(input: {
 }
 
 interface BuildPromptAssemblyLanesInput {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly tokenSummary: ReturnType<typeof buildPromptAssemblyTokenSummary>;
   readonly profile: ContextProfile;
   readonly historyOutcome: ConversationCompactionOutcome;
@@ -240,7 +245,11 @@ function buildPromptAssemblyLanes(input: BuildPromptAssemblyLanesInput): Context
   const { historyTokens, memoryTokens, documentTokens, latestTurnTokens, systemTokens } =
     input.tokenSummary;
   const systemLane = buildSystemContractLane({ systemTokens, inputBudget });
-  const userTaskLane = buildUserTaskLane({ latestTurnTokens, inputBudget });
+  const userTaskLane = buildUserTaskLane({
+    latestTurnTokens,
+    inputBudget,
+    protectedSkill: input.protectedSkill,
+  });
   const repoEvidenceLane = buildRepoEvidenceLane({
     documentTokens,
     documentContext: input.documentContext,
@@ -280,6 +289,7 @@ function buildPromptAssemblyLanes(input: BuildPromptAssemblyLanesInput): Context
 }
 
 export function buildPromptAssemblyDiagnostics(input: {
+  readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly profile: ContextProfile;
   readonly historyOutcome: ConversationCompactionOutcome;
   readonly historyTurnCount: number;
@@ -311,6 +321,7 @@ export function buildPromptAssemblyDiagnostics(input: {
       profile.effectiveInputBudget,
     ),
     lanes: buildPromptAssemblyLanes({
+      protectedSkill: input.protectedSkill,
       tokenSummary,
       profile,
       historyOutcome: input.historyOutcome,

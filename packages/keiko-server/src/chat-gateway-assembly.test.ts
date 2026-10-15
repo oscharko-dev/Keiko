@@ -1166,3 +1166,38 @@ it("prepares a compact execution prompt without replacing the persisted original
   );
   expect(assembly.messages.at(-1)?.content).toBe(execution.content);
 });
+
+it("refuses an oversized protected skill before any prompt-compaction model call", async () => {
+  const { store, chatId } = createStore();
+  const body = "Check this synthetic boundary. ".repeat(2000);
+  const skill = store.markdownSkills.import({
+    fileName: "method.md",
+    contentBase64: Buffer.from(body).toString("base64"),
+  });
+  store.markdownSkills.select(chatId, skill, 0);
+  const content = "Long current task. ".repeat(2000);
+  const user = store.createMessage(createMessage(chatId, "user", content, NOW));
+  const call = vi.fn(() => Promise.reject(new Error("Must not dispatch")));
+  const deps = createDeps(
+    store,
+    deriveContextProfile({
+      maxInputTokens: 4096,
+      reservedOutputTokens: 1024,
+      safetyMarginTokens: 128,
+    }),
+    { modelPortFactory: () => ({ call }) },
+  );
+  await expect(
+    prepareDesktopChatPrompt(
+      deps,
+      makeRequest(chatId, content),
+      CHAT_MODEL,
+      { gatewayConfigGeneration: undefined },
+      new AbortController().signal,
+      "skill-overflow",
+      { userMessageId: user.id },
+    ),
+  ).rejects.toThrow(/Shorten or deselect/u);
+  expect(call).not.toHaveBeenCalled();
+  store.close();
+});

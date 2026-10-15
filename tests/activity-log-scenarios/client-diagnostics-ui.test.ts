@@ -110,6 +110,59 @@ describe("Activity Log scenario: client-diagnostics", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("reconstructs a scope notice and evidence inspection failure in one complete private report", async () => {
+    const startedAtMs = Date.now();
+    const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"];
+    const envelope = {
+      message: "private-client-text-canary",
+      clientTs: CLIENT_TS,
+      correlationId: CORRELATION_ID,
+    };
+    const notice = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          ...envelope,
+          scopeNotice: { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 },
+        }),
+      ),
+    );
+    const inspection = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          ...envelope,
+          evidenceInspection: { reason: "manifest-fetch-failed" },
+          errorKind: "unavailable",
+          errorEvidence: { errorClass: "TypeError", frames, causeChain: ["TypeError"] },
+        }),
+      ),
+    );
+    expect(notice.status).toBe(204);
+    expect(inspection.status).toBe(204);
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.scope.notice", "client.evidence.inspected"],
+    });
+    expect(trace.failureClasses).toEqual(
+      expect.arrayContaining(["client-scope-notice", "client-evidence-inspection"]),
+    );
+    const log = readPersistedActivityLog(stateDir);
+    expect(log).not.toContain("private-client-text-canary");
+    const inspected = parsedLine(persistedActivityLogLines(log, "client.evidence.inspected")[0]);
+    expect(inspected).toMatchObject({
+      reason: "manifest-fetch-failed",
+      errorKind: "unavailable",
+      causeChain: ["TypeError"],
+    });
+    expect(inspected.frames).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^dist\/ui\/static\/_next\/static\/chunks\/sha256-[a-f0-9]+\.js:12:345$/u,
+        ),
+      ]),
+    );
+  });
+
   // Fault injection: the browser reports its EventSource transport closing unexpectedly (readyState
   // 2 = CLOSED) with counts of what it already dropped locally while the stream was down — a
   // genuine dependency failure (the BFF's SSE channel) surfacing through the ingest route's one

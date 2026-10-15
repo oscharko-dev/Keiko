@@ -402,3 +402,86 @@ describe("endpointContractAdapter", () => {
     });
   });
 });
+
+describe("configured server route discovery", () => {
+  it("retains the real configured server registration without a client link", async () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": [
+        'export const routes = [{ method: "POST",',
+        '  pattern: "/api/items",',
+        "  handler: handleItem,",
+        "}];",
+      ].join("\n"),
+    });
+    const graph = await buildEndpointContractGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+    expect(graph.routes).toEqual([
+      expect.objectContaining({
+        method: "POST",
+        path: "/api/items",
+        handler: "handleItem",
+        line: 1,
+      }),
+    ]);
+    expect(graph.links).toEqual([]);
+    const atoms = await endpointContractAdapter.lookup(
+      scope,
+      nlq("Trace POST /api/items from route to handler"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+    );
+    expect(atoms.map((atom) => atom.scopePath)).toEqual(["src/entry.ts"]);
+  });
+
+  it("restricts explicit method/path questions before linked endpoint promotion", async () => {
+    const { scope, fs } = makeScope({
+      "src/Controller.java": [
+        "class Controller {",
+        '@GetMapping("/api/items") public void wrongMethod() {}',
+        '@PostMapping("/api/other") public void wrongPath() {}',
+        '@PostMapping("/api/items") public void correct() {}',
+        "}",
+      ].join("\n"),
+      "src/api.ts": [
+        'fetch("/api/items");',
+        'fetch("/api/other", { method: "POST" });',
+        'fetch("/api/items", { method: "POST" });',
+      ].join("\n"),
+    });
+    const atoms = await endpointContractAdapter.lookup(
+      scope,
+      nlq("Trace POST /api/items from route to handler"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+    );
+    expect(atoms.map((atom) => [atom.scopePath, atom.lineRange?.startLine])).toEqual([
+      ["src/Controller.java", 4],
+      ["src/api.ts", 3],
+    ]);
+  });
+
+  it("ignores route-shaped comments, string bodies and split nested records", async () => {
+    const { scope, fs } = makeScope({
+      "src/entry.ts": [
+        '// { method: "POST", path: "/api/items", handler: comment }',
+        'const label = `{ method: "POST", path: "/api/items", handler: stringBody }`;',
+        'const nested = { a: { method: "POST", handler: split }, b: { path: "/api/items" } };',
+      ].join("\n"),
+    });
+    const graph = await buildEndpointContractGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+    expect(graph.routes).toEqual([]);
+  });
+});
+
+describe("configured route property certification", () => {
+  it.each([
+    'const object = { badmethod: "POST", path: "/api/items", handler: wrong };',
+    'const object = { method: "POST", notpattern: "/api/items", handler: wrong };',
+    'const object = { method: "POST", method: "GET", path: "/api/items", handler: wrong };',
+    'const object = { method: "POST", path: "/api/items", path: "/api/other", handler: wrong };',
+    'const object = { method: "POST", path: "/api/items", handler: first, handler: second };',
+  ])("does not certify partial property names or duplicate properties: %s", async (content) => {
+    const { scope, fs } = makeScope({ "src/entry.ts": content });
+    const graph = await buildEndpointContractGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+    expect(graph.routes).toEqual([]);
+  });
+});

@@ -3,14 +3,14 @@
 // createUiServer dispatch (CSP + SECURITY_HEADERS surface), with an in-memory store so the FS is never
 // touched unless an individual test injects a fake ModelPort.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   GatewayConfig,
-  GatewayRequest,
+  GatewayCallRequest,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type {
@@ -27,6 +27,14 @@ import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { handlePromptEnhancement } from "./routes.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "../coding-app-session/_support.js";
+import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -89,7 +97,7 @@ function modelResponse(content: string): NormalizedResponse {
   };
 }
 
-function modelPort(content: string, calls: GatewayRequest[]): ModelPort {
+function modelPort(content: string, calls: GatewayCallRequest[]): ModelPort {
   return {
     call: (request): Promise<NormalizedResponse> => {
       calls.push(request);
@@ -220,7 +228,7 @@ describe("POST /api/prompt-enhancement", () => {
   });
 
   it("applies the selected enhancement model through the server ModelPort", async () => {
-    const calls: GatewayRequest[] = [];
+    const calls: GatewayCallRequest[] = [];
     const modelText = [
       "## Role",
       "You are a route-level prompt enhancement specialist.",
@@ -375,5 +383,124 @@ describe("handlePromptEnhancement (cancellation + stream errors)", () => {
     expect((result.body as { error: { code: string } }).error.code).toBe(
       "PROMPT_ENHANCER_INVALID_REQUEST",
     );
+  });
+});
+
+const PRIVATE_SOURCE =
+  "# Garden sensor concept\nConfirmed: check the valve.\nFinal section: sampling frequency is undecided.";
+const PRIVATE_DRAFT = [
+  "# Garden sensor review",
+  "## Purpose\nPlan a review.",
+  "## When to use\nWhen reviewing garden sensors.",
+  "## Scope\nConcept-only planning.",
+  "## Steps\nCheck the valve.",
+  "## Quality checks\nKeep unknowns explicit.",
+  "## Output\nA review plan.",
+  "## Open decisions\nSampling frequency is undecided.",
+  "## Source references\nGarden sensor concept, final section.",
+].join("\n\n");
+const PRIVATE_REQUEST = { text: PRIVATE_SOURCE, modelId: CHAT_MODEL, outputKind: "markdown-skill" };
+
+function authorSession(): {
+  channel: ReturnType<typeof createCodingAppSessionChannel>;
+  token: string;
+  headers: Record<string, string>;
+} {
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("Pairing fixture failed");
+  return {
+    channel,
+    token: paired.cookieToken,
+    headers: { ...POST_HEADERS, Cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` },
+  };
+}
+
+describe("private skill drafting through the existing enhancer route", () => {
+  it("requires a paired session before calling the selected model", async () => {
+    const calls: GatewayCallRequest[] = [];
+    await closeServer();
+    await startBound({ modelPortFactory: () => modelPort(PRIVATE_DRAFT, calls) });
+    const response = await post(PRIVATE_REQUEST);
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(calls).toHaveLength(0);
+    expect(await response.text()).not.toContain(PRIVATE_SOURCE);
+  });
+
+  it("returns the complete draft without persisting source, draft or an active skill", async () => {
+    const session = authorSession();
+    const calls: GatewayCallRequest[] = [];
+    const evidenceDir = join(staticRoot, "private-evidence");
+    await closeServer();
+    await startBound({
+      codingAppSessionChannel: session.channel,
+      evidenceDir,
+      modelPortFactory: () => modelPort(PRIVATE_DRAFT, calls),
+    });
+    const response = await post(PRIVATE_REQUEST, session.headers);
+    expect(response.status).toBe(200);
+    const result = (await response.json()) as PromptEnhancementWireResponse;
+    expect(result.outputKind).toBe("markdown-skill");
+    expect(result.renderedPrompt).toBe(PRIVATE_DRAFT);
+    expect(result.evidence).toEqual({ status: "not-recorded", reason: "private-skill-draft" });
+    expect(calls[0]?.messages[1]?.content).toContain(PRIVATE_SOURCE);
+    expect(calls[0]?.logContext?.correlationId).toBeTruthy();
+    expect(existsSync(evidenceDir)).toBe(false);
+    expect(store.markdownSkills.list()).toEqual([]);
+  });
+
+  it("discards output if the paired session is revoked during generation", async () => {
+    const session = authorSession();
+    await closeServer();
+    await startBound({
+      codingAppSessionChannel: session.channel,
+      modelPortFactory: () => ({
+        call: (): Promise<NormalizedResponse> => {
+          session.channel.signOut(session.token);
+          return Promise.resolve(modelResponse(PRIVATE_DRAFT));
+        },
+      }),
+    });
+    const response = await post(PRIVATE_REQUEST, session.headers);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain(PRIVATE_DRAFT);
+  });
+
+  it("returns a safe refusal when the gateway fails and never records a fallback", async () => {
+    const session = authorSession();
+    const records: ServerDiagnosticRecord[] = [];
+    const evidenceDir = join(staticRoot, "private-evidence");
+    await closeServer();
+    await startBound({
+      codingAppSessionChannel: session.channel,
+      evidenceDir,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      modelPortFactory: () => ({
+        call: (): Promise<NormalizedResponse> =>
+          Promise.reject(new Error("synthetic-provider-detail")),
+      }),
+    });
+    const response = await post(PRIVATE_REQUEST, session.headers);
+    expect(response.status).toBe(422);
+    const body = await response.text();
+    expect(body).toContain("PROMPT_ENHANCER_SKILL_DRAFT_REFUSED");
+    expect(body).not.toContain("synthetic-provider-detail");
+    expect(existsSync(evidenceDir)).toBe(false);
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "prompt.enhancement",
+        correlationId: response.headers.get("x-keiko-correlation-id"),
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("synthetic-provider-detail");
+    expect(JSON.stringify(records)).not.toContain(PRIVATE_SOURCE);
   });
 });

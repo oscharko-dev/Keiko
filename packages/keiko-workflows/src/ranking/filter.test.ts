@@ -44,6 +44,38 @@ function annotated(
 }
 
 describe("filterCandidates", () => {
+  it("uses producer ordering only to choose one eligible low-confidence fallback", () => {
+    const result = filterCandidates(
+      [annotated("adjacent/note.md", 0.12), annotated("src/transform.ts", 0.08)],
+      options({ fallbackOrder: ["src/transform.ts", "adjacent/note.md"] }),
+    );
+    expect(result.kept).toEqual([candidate("src/transform.ts", 0.08)]);
+    expect(result.omitted).toEqual([
+      { scopePath: "adjacent/note.md", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+    ]);
+  });
+
+  it("never lets fallback ordering bypass exclusions, the floor, or a zero grant", () => {
+    const entries = [
+      annotated("dist/first.js", 0.13, true),
+      annotated("duplicate.md", 0.12, false, true),
+      {
+        ...annotated("binary.dat", 0.11),
+        candidate: { ...candidate("binary.dat", 0.11), omitted: "binary" as const },
+      },
+      annotated("weak.md", 0.05),
+      annotated("strong.md", 0.7),
+    ];
+    const fallbackOrder = entries.map((entry) => entry.candidate.scopePath);
+    expect(filterCandidates(entries, options({ fallbackOrder })).kept).toEqual([
+      candidate("strong.md", 0.7),
+    ]);
+    expect(filterCandidates(entries, options({ fallbackOrder, maxKept: 0 })).kept).toEqual([]);
+    expect(filterCandidates(entries.slice(0, -1), options({ fallbackOrder })).kept).toEqual([
+      candidate("weak.md", 0.05),
+    ]);
+  });
+
   it("retains certified generated content without overriding eligibility denials", () => {
     const blocked = {
       ...annotated("dist/blocked.ts", 0.9, true),
@@ -184,5 +216,32 @@ describe("filterCandidates", () => {
       options({ omitGenerated: false }),
     );
     expect(result.kept).toHaveLength(1);
+  });
+});
+
+describe("path-aware deterministic score ties", () => {
+  it("orders score ties by exact path then segment affinity before depth and spelling", () => {
+    const exact = annotated("z/deep/exact.ts", 0.5);
+    const segment = annotated("y/deep/segment.ts", 0.5);
+    const shallow = annotated("a.ts", 0.5);
+    const entries = [
+      shallow,
+      {
+        ...segment,
+        candidate: {
+          ...segment.candidate,
+          signals: [{ name: "path-segment-affinity", value: 0.8 }],
+        },
+      },
+      {
+        ...exact,
+        candidate: { ...exact.candidate, signals: [{ name: "exact-path-match", value: 0.8 }] },
+      },
+    ];
+    expect(filterCandidates(entries, options()).kept.map((entry) => entry.scopePath)).toEqual([
+      exact.candidate.scopePath,
+      segment.candidate.scopePath,
+      shallow.candidate.scopePath,
+    ]);
   });
 });

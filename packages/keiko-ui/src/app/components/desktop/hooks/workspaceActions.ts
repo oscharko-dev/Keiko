@@ -23,6 +23,7 @@ import type {
   ChatBindingTarget,
   ChatUnbindTarget,
   FilesWindowContext,
+  FilesScopeBindReply,
   OpenEditorFileResult,
   ViewportWorld,
   WorkspaceApi,
@@ -1048,7 +1049,7 @@ interface ConnectArgs {
         chatWindowId: string,
         scope: ChatConnectedScope,
         target?: ChatBindingTarget,
-      ) => boolean | Promise<boolean>)
+      ) => FilesScopeBindReply | Promise<FilesScopeBindReply>)
     | undefined;
   readonly onScopeUnbind?:
     | ((
@@ -1099,6 +1100,7 @@ export interface GitChangeBindSelection {
 
 interface BindAcceptance {
   readonly accepted: boolean;
+  readonly acknowledgedScope?: ChatConnectedScope;
   readonly gitChangeRelationshipId?: string;
 }
 
@@ -1249,7 +1251,11 @@ function resolveScopeBindAcceptance(
   target: ChatBindingTarget | undefined,
 ): Promise<BindAcceptance> | BindAcceptance {
   if (chatWindowId === null) return { accepted: false };
-  return Promise.resolve(onScopeBind?.(chatWindowId, scope, target)).then(booleanBindAcceptance);
+  return Promise.resolve(onScopeBind?.(chatWindowId, scope, target)).then((reply) =>
+    typeof reply === "object"
+      ? { accepted: true, acknowledgedScope: reply }
+      : booleanBindAcceptance(reply),
+  );
 }
 
 function resolveConnectorBindAcceptance(
@@ -1693,7 +1699,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
               b: toId,
               ...connectionScopeFields(
                 chatWindowId,
-                boundScope,
+                binding.acknowledgedScope ?? boundScope,
                 connectorScope,
                 gitChangeSelection,
                 binding.gitChangeRelationshipId,
@@ -2353,6 +2359,21 @@ export function filesChatBindScope(
   const chat = windowOfType(a, b, "chat");
   if (files === null || chat === null) return null;
   return filesVisibleScope(files, connectedAtMs);
+}
+
+export const KEEP_FILES_FOLDER_CFG_KEY = "keepFilesFolder";
+
+export function pinnedFilesScope(
+  next: ChatConnectedScope,
+  canonical: readonly ChatConnectedScope[] | undefined,
+  keepFolder: boolean,
+): ChatConnectedScope | null {
+  if (!keepFolder || next.kind !== "files") return next;
+  if (canonical === undefined) return null;
+  const sameRoot = canonical.filter((scope) => scope.root === next.root);
+  if (sameRoot.length === 0) return next;
+  const folders = sameRoot.filter((scope) => scope.kind !== "files");
+  return folders.length === 1 ? (folders[0] ?? null) : null;
 }
 
 export function boundScopeOf(conn: {

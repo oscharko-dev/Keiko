@@ -326,6 +326,83 @@ response, derived from that check. Missing paths remain listed as `available: fa
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
 
+#### Private Markdown instruction library (issue #4023)
+
+Schema v42 adds `markdown_skills` and `markdown_skill_revisions` to this same private UI
+database. The library is installation-local, independent of projects, and uses the existing
+database permissions, transactional migration runner and `BEGIN IMMEDIATE` write boundary.
+It adds no database engine, vector index or filesystem import path.
+
+A plain UTF-8 `.md` upload is sufficient. The server validates the original bytes, removes an
+optional UTF-8 BOM and normalizes CRLF/CR to LF once. It otherwise preserves the complete text;
+frontmatter is ordinary text and confers no authority. A server-generated identity, immutable
+revision, SHA-256 digest and byte count identify the saved body. Imported instructions are private
+content, never public catalog metadata or Activity Log fields, and are not redacted into a
+different instruction file. This database remains permission-protected plaintext, not encrypted
+storage. Skill files must not be used as a credential store.
+
+The bounded library accepts 128 KiB per file, 128 current skills, 16 MiB of retained revision
+bodies and 10,000 revisions in total. Limits come from the shared Markdown skill contract.
+Importing identical current content returns its existing identity; a different body with the
+same display name creates a separate skill. Explicit replacement checks the current revision
+and creates a new immutable revision. Old revisions remain readable until the skill is deleted;
+deletion removes every revision and makes existing references unavailable. Deletion also checks
+the current revision. SQLite transactions prevent stale updates and partial writes. Reads verify
+the stored body's digest and byte count before returning it.
+
+The additive `/api/skills` list/import, `/api/skills/:id` read/replace/delete and
+`/api/skills/:id/export` routes require the existing paired app session. Mutations revalidate the
+session after reading their bounded JSON upload; existing transport/CSRF gates still apply.
+List responses contain metadata only. Explicit export returns a standalone `skill.md` download
+payload with the saved normalized text. No import or export invokes a model, fetches a remote
+resource or executes the document. `skills.library.operation` records action, lifecycle phase
+and HTTP status on the existing Activity Log, without names, filenames or bodies.
+
+### Protected skill selection and accepted turns (schema 43, #4024)
+
+The same private store holds `markdown_skill_selections` (one explicit selection and optimistic
+revision per chat) and `markdown_skill_turn_bindings` (the immutable revision accepted with a user
+message). Binding and user-message insertion share a transaction. Neither table stores instruction
+bodies. Legacy and unselected turns stay unselected after a later selection; retries resolve their
+original revision. Replacing a library entry never upgrades an existing selection automatically.
+
+Chat/message foreign keys cascade normal ownership cleanup. Skill references deliberately do not
+cascade on library deletion: the historical identity remains and subsequent resolution refuses the
+unavailable revision, rather than silently executing without the selected method. Selection changes
+use the existing authenticated app session and body-free library lifecycle operation.
+
+Canonical instructions remain in the library, outside compactable conversation history. Ordinary
+Chat assembly reserves the complete prepared instructions in the existing non-evictable user-task
+lane before fitting history. They count in the canonical final prompt estimate and are never traded
+for output reserve. The existing context meter identifies their protected contribution separately;
+that contribution is never scaled down to disguise an input-budget overflow. Context evidence
+records only identity, revision, digest and estimated contribution. Folder, multiple-folder,
+Knowledge Pod and mixed-source synthesis include the same complete instructions before their
+existing prompt fitters allocate excerpts. The body does not enter retrieval queries, citations,
+history summaries or evidence packs. Grounded prompt observations retain the protected share so the
+context meter subtracts it from the already counted instruction share before displaying it.
+
+Buffered, streaming and regeneration calls resolve the original turn binding. The existing Gateway
+attempt-admission callback revalidates availability on physical retries without widening an
+existing caller grant. Prompt preparation refuses an impossible protected scaffold before making a
+compaction model call; compaction targets reserve the skill's share while compacting only task text.
+The Chat Composer exposes upload, preview, selection, replacement, export and deletion in its
+existing footer, with a visible selected-revision chip. Saving or replacing a file never activates
+it. Selection changes refresh the context meter. Each send carries the observed selection revision;
+a concurrent change refuses the send before persistence or model dispatch and preserves the draft.
+An unpaired Composer sends an explicit no-skill precondition. Independently of that client
+precondition, every productive selected-skill turn requires a live paired app session on the server
+before persistence. Missing, numeric and null preconditions cannot grant authority. Buffered,
+streaming, regeneration and grounded physical model attempts revalidate the request-bound session
+identity and rotation through the existing app-session channel, including transport retries. A
+revoked session fails closed. Legacy ordinary Chat without a selected skill retains its existing
+behavior and does not renew a session merely by parsing a rejected request.
+
+OpenCode and separate coding-workflow integration belong to #4025 under epic #3897, independently of
+Chat epic #4022. They must reuse this library and preserve the same invariants through their own
+final prompt owners. Until then the connected Git-description workflow refuses an active skill
+explicitly; ordinary Chat remains available.
+
 ### D6 — Path validation policy (fail-closed)
 
 All path validation for project paths is centralized in `src/ui/store/validation.ts`. No path
@@ -431,7 +508,10 @@ is never world-readable.
 `"Mistral-Small-3.1-24B-Instruct-2503"`) — never an API key, provider URL, deployment mapping,
 or authentication credential. The BFF accepts only capability registry entries with
 `kind === "chat"`; the store layer also rejects URL-, JSON-, and secret-shaped values before they
-can be written. The `short_result` column (chat messages) is passed through
+can be written. A registry id can retain one trailing `@region` qualifier (letters, digits and
+hyphens), as regional OpenAI-compatible gateways require. This does not admit email domains,
+repeated qualifiers or credential-bearing URLs, and the existing length bound still applies.
+The `short_result` column (chat messages) is passed through
 `deepRedactStrings(value, redactor)` before persistence, using the same `UiHandlerDeps.redactor`
 the BFF already applies to live payloads (ADR-0011 D9). No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.

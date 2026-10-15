@@ -6,16 +6,17 @@ window is backgrounded or minimized and remains available while the foreground u
 or contains only a load error. Keyboard modality is established with a real Tab press before moving
 focus; programmatic focus after a pointer click must not steal the foreground.
 
-This set was regenerated on 2026-10-08 from PR #3895 source head
-`330a71436d0d739bac2cfe7f8dd4c577f6344cf9` in an isolated macOS arm64 checkout using Node 24.21.0,
-npm 11.19.0, Next.js 16.3.8, and Playwright 1.63.0. The unchanged eight-test Chromium suite passed
-in 57.5 seconds, including the real-BFF outage journey. The unchanged evidence freshness gate and
+This set was regenerated on 2026-10-12 (UTC) from PR #3913 signed source head
+`2eb5752bc9f5192b19a79117df4a5964d9707c57` in the main macOS arm64 checkout using Node 24.18.0,
+npm 11.16.0, Next.js 16.3.8, and Playwright 1.63.0. The unchanged eight-test Chromium suite passed
+in 41.6 seconds, including the real-BFF outage journey. The unchanged evidence freshness gate and
 its three focused contract controls also passed. All eight UI source hashes and four harness
 hashes match that inspected source head.
 
 The original producer recreated all 17 tracked artifacts: 14 screenshots and three JSON records.
-Only `11-progress-state.png` changed PNG bytes relative to the previous committed set; the other
-13 screenshots remained byte-identical. All three JSON records now bind the actual inspected
+`11-progress-state.png` and `13-reconnecting-state-mocked.png` changed PNG bytes relative to the
+previous committed set; the other 12 screenshots remained
+byte-identical. All three JSON records now bind the actual inspected
 sources. This is macOS browser and fixture qualification; it does not claim Linux execution,
 production update success, native N−1→N replacement, or final integrated-head acceptance.
 

@@ -165,6 +165,11 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
     message: "chat.error.contextOverflow.message",
     remediation: "chat.error.contextOverflow.remediation",
   },
+  GATEWAY_ATTEMPT_ADMISSION_DENIED: {
+    title: "chat.error.attemptAdmission.title",
+    message: "chat.error.attemptAdmission.message",
+    remediation: "chat.error.attemptAdmission.remediation",
+  },
   DESKTOP_CHAT_STREAM_STALLED: {
     title: "chat.error.streamStalled.title",
     message: "chat.error.streamStalled.message",

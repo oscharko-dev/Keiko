@@ -40,7 +40,8 @@ import { Icons } from "./Icons";
 import {
   consumeRepositoryReferenceLineSuffix,
   parseExactRepositoryReference,
-  RepositoryReferenceInline,
+  ProseRepositoryReference,
+  type RepositoryReferenceEvidence,
   repositoryReferenceTextParts,
   repositoryReferencePathLabels,
   sanitizeRepositoryEvidenceText,
@@ -50,6 +51,7 @@ import {
   type RepositoryReferenceTextPart,
 } from "./repositoryReferences";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import { useWindowStageEvidence } from "./hooks/useWindowStageEvidence";
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
 
@@ -59,6 +61,7 @@ export interface SafeMarkdownProps {
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
+  readonly repositoryEvidence?: RepositoryReferenceEvidence | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly streaming?: boolean | undefined;
@@ -69,6 +72,7 @@ interface RenderOptions {
   readonly literalUserInput: boolean;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly repositoryEvidence: RepositoryReferenceEvidence | undefined;
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly streaming: boolean;
   readonly repositoryPathLabels: ReadonlyMap<string, string>;
@@ -80,9 +84,38 @@ interface RenderOptions {
 
 type CopyState = "idle" | "copied" | "failed";
 
-function CopyButton({ text }: { readonly text: string }): ReactNode {
+function CopyFeedbackTimer({ reset }: { readonly reset: () => void }): null {
+  useWindowStageEvidence("markdown copy feedback");
+  useEffect(() => {
+    const timer = setTimeout(reset, 1500);
+    return (): void => clearTimeout(timer);
+  }, [reset]);
+  return null;
+}
+
+interface CodeCopyFeedback {
+  readonly copyState: CopyState;
+  readonly status: string;
+  readonly copyOrdinal: number;
+  readonly handleCopy: () => void;
+  readonly resetCopy: () => void;
+}
+
+function useCodeCopyFeedback(text: string): CodeCopyFeedback {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [status, setStatus] = useState("");
+  const [copyOrdinal, setCopyOrdinal] = useState(0);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return (): void => {
+      mounted.current = false;
+    };
+  }, []);
+  const resetCopy = useCallback(() => {
+    setCopyState("idle");
+    setStatus("");
+  }, []);
 
   const handleCopy = useCallback(() => {
     // navigator.clipboard is undefined in non-secure contexts (and unimplemented in jsdom).
@@ -95,25 +128,29 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
     }
     void navigator.clipboard.writeText(text).then(
       () => {
+        if (!mounted.current) return;
         setCopyState("copied");
         setStatus("Code copied");
-        setTimeout(() => {
-          setCopyState("idle");
-          setStatus("");
-        }, 1500);
+        setCopyOrdinal((ordinal) => ordinal + 1);
       },
       () => {
+        if (!mounted.current) return;
         setCopyState("failed");
         setStatus("Clipboard access failed. Select the code manually and copy it.");
       },
     );
   }, [text]);
+  return { copyState, status, copyOrdinal, handleCopy, resetCopy };
+}
 
+function CopyButton({ text }: { readonly text: string }): ReactNode {
+  const { copyState, status, copyOrdinal, handleCopy, resetCopy } = useCodeCopyFeedback(text);
   const copied = copyState === "copied";
   const failed = copyState === "failed";
 
   return (
     <div className="sm-code-copy-wrap">
+      {copied && <CopyFeedbackTimer key={copyOrdinal} reset={resetCopy} />}
       <button
         type="button"
         className="sm-code-copy"
@@ -670,10 +707,11 @@ function renderRepositoryText(
         const reference = part.reference;
         if (reference === undefined) return null;
         return (
-          <RepositoryReferenceInline
+          <ProseRepositoryReference
             key={partKey}
             reference={reference}
             roots={options.repositoryRoots}
+            evidence={options.repositoryEvidence}
             openReference={options.openRepositoryReference}
             displayPath={options.repositoryPathLabels.get(reference.path)}
           />
@@ -698,9 +736,10 @@ function renderInlineCode(
       {reference === null ? (
         text
       ) : (
-        <RepositoryReferenceInline
+        <ProseRepositoryReference
           reference={reference}
           roots={options.repositoryRoots}
+          evidence={options.repositoryEvidence}
           openReference={options.openRepositoryReference}
           displayPath={options.repositoryPathLabels.get(reference.path)}
           className="repo-ref-link repo-ref-link-inline-code"
@@ -896,6 +935,7 @@ function SafeMarkdownImpl({
   diagnosticCorrelationId,
   diagnosticMessageId,
   repositoryRoots = EMPTY_ROOTS,
+  repositoryEvidence,
   openRepositoryReference,
   citationPreview,
   streaming = false,
@@ -919,6 +959,7 @@ function SafeMarkdownImpl({
       citationPreview,
       streaming,
       repositoryRoots,
+      repositoryEvidence,
       openRepositoryReference,
       repositoryPathLabels,
     }),
@@ -927,6 +968,7 @@ function SafeMarkdownImpl({
       citationPreview,
       openRepositoryReference,
       repositoryRoots,
+      repositoryEvidence,
       repositoryPathLabels,
       streaming,
     ],
@@ -959,6 +1001,7 @@ export interface SafeMarkdownBoundaryProps {
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
+  readonly repositoryEvidence?: RepositoryReferenceEvidence | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly streaming?: boolean | undefined;
@@ -995,6 +1038,7 @@ export class SafeMarkdownBoundary extends Component<
         diagnosticCorrelationId={this.props.diagnosticCorrelationId}
         diagnosticMessageId={this.props.diagnosticMessageId}
         repositoryRoots={this.props.repositoryRoots}
+        repositoryEvidence={this.props.repositoryEvidence}
         openRepositoryReference={this.props.openRepositoryReference}
         citationPreview={this.props.citationPreview}
         streaming={this.props.streaming}

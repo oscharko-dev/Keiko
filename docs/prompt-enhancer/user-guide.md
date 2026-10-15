@@ -136,3 +136,38 @@ Prompt quality is measured offline across eight dimensions — clarity, complete
 faithfulness, format adherence, safety, task success, and token efficiency — by a deterministic
 evaluation suite that runs in continuous integration. Because every stage is deterministic, the same
 draft always produces the same enhanced prompt and the same scores.
+
+## Private Markdown skills in Chat
+
+Open **Skills** below the Chat composer to upload a UTF-8 `.md` file. Review its contents, then
+select it for that chat. Uploading a file does not activate it. The composer displays the selected
+name and revision; remove that selection to return to ordinary Chat behavior.
+
+The context meter includes **Skill instructions (protected)**. Keiko keeps the complete selected
+revision outside conversation summaries and restores it after compaction and reload. If the skill
+cannot fit with the model's required instructions and output reserve, the request is refused;
+shorten the skill, remove the selection, or select a model with a larger context window.
+
+Replacing a library item creates a new revision. Existing chats retain their selected revision
+until you explicitly select another one. If a selected revision is deleted or unavailable, correct
+the selection before sending. Concurrent selection changes are checked again when a turn is sent.
+
+To prepare a skill from a concept, expand **Create from document or text** in the same dialog. Paste text
+or upload a UTF-8 `.md`/`.txt` source, then generate with the chat's selected model. No repository is
+required. The complete source must fit; Keiko refuses oversized inputs or unfinished model output.
+Review the editable draft and preview, especially proposals, examples, conflicts, and open decisions.
+Save it to the local library or download the Markdown file. Saving does not select the skill.
+Cancellation or closing the dialog does not save or activate a draft.
+
+Imports are limited to 128 KiB per file. The private library supports 128 skills, with bounded
+retained revision storage. Exported files contain the skill text: store and share them according to
+your own document policy. Uploaded skills and generated drafts stay out of application repositories;
+a generation request sends the source to the configured Model Gateway. Keiko does not persist the
+source or draft in Prompt Enhancer evidence. The local Activity Log records operation states and
+counts without document bodies. No external skill marketplace or automatic publication is involved.
+
+Skills supply instructions, not executable plugins or additional permissions. Generated drafts
+require human review; structural validation cannot certify that a model retained every source fact.
+This feature applies to Keiko Chat. OpenCode and Coding Workbench integration is tracked separately
+in [#4025](https://github.com/oscharko-dev/Keiko/issues/4025) under
+[#3897](https://github.com/oscharko-dev/Keiko/issues/3897).

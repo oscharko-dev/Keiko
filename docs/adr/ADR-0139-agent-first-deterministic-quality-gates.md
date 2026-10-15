@@ -53,25 +53,41 @@ A check may be GitHub-required for `dev` integration only if it is deterministic
 source tree: type checking, linting, formatting, hermetic unit/integration tests, coverage
 ratchets, architecture rules, static security scans, packaging smokes, bounded-behaviour e2e
 assertions (caps, counts, markers, redaction), and validation of committed evidence documents.
-Authoritative wall-clock assertions (latency percentiles, long-task ceilings, memory-over-time) are
-enforced only in controlled measurement contexts: the official D12 producer environment and the
-scheduled performance workflow, both of which set `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`. In required-runner
-context the same specs still verify their bounded-cap composition (byte, marker, retained-entry,
-and variable caps) but reduce the repeated latency-sampling loops that exist only to feed those
+Authoritative wall-clock verdicts (latency percentiles, long-task ceilings, memory-over-time) are
+enforced only against controlled measurement evidence. The official D12 producer records the full
+samples and the evidence gate judges their budgets; ADR-0156 D1/D6 supersedes the former producer
+assertions and scheduled measurement. The scheduled workflow checks drift, not a hosted clock. Stop latency begins at the actual pointer
+activation and ends after the stop request has settled, terminal SSE has arrived, and the terminal
+UI has painted. A received response must be HTTP 200 and complete; an invalidated request may instead
+settle with the browser's explicit `net::ERR_ABORTED`, because the terminal stream event advances
+the existing session fence and cancels obsolete requests. Other transport failures do not qualify.
+The witness subscribes to the exact request's `requestfinished` or `requestfailed` event before
+dispatch. It does not wait on `Response.finished()`: that separate observation promise can remain
+pending after headers and cancellation, even though the request has emitted its terminal event.
+The authoritative stopped/evicted server projection remains a separate mandatory assertion. The
+request witness runs independently of that assertion's polling; polling delay is test overhead,
+not product latency. Request settlement, terminal SSE, painted terminal UI, the server-state proof
+and the 200 ms budget remain mandatory.
+In required-runner context the same specs still verify their bounded-cap composition (byte,
+marker, retained-entry, and variable caps) but reduce the repeated latency-sampling loops that feed
 percentiles — a full ten-sample stop/flood loop can exceed the E2E timeout on a shared two-core
 runner even when nothing regressed. A shared-runner scheduling spike can therefore neither fail a
 budget assertion nor time out an integration. The budgets themselves are unchanged and continue to
 be enforced deterministically at PR time through the committed D12 evidence document, which was
 measured under the controlled environment with the full sample count.
 
-Separately, a regression pin for a pure-CPU algorithm may also run as an opt-in developer
-pre-flight micro-benchmark in the version-pinned local Linux gate container when it is not invoked
-by any required CI context, enables the wall-clock environment variable only for its focused child
-process, and separately pins the deterministic behavioral invariant in ordinary tests. Such a
-local check is diagnostic only: it does not produce D12 evidence, confer an integration verdict,
-or widen the set of required wall-clock assertions. This narrow allowance keeps isolated
-algorithmic pins such as the bounded workspace-pattern normalization check available as a focused
-developer pre-flight without reintroducing shared-runner timing into the pull-request path.
+Separately, focused developer pre-flight regression pins run in the version-pinned local Linux
+gate container, outside every required CI context. The mandatory local `fast` suite runs the
+workspace-pattern algorithm pin and the physical-line public-handler pin sequentially, setting
+`KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1` only for those child processes. The latter measures the actual
+handler, workspace file reads and Activity Log with a bounded provider fixture; it is not a
+pure-CPU benchmark or a live-model measurement. Ordinary tests retain the exact source content,
+path admission, source-currentness checks and body-free work ceilings, with no whole-case skip.
+The controlled handler child uses the same coverage configuration and unchanged 5000 ms budget.
+These checks must run on an idle machine before delivery; the local gate propagates either child
+failure. They do not produce D12 evidence, confer a hosted integration verdict, or replace the
+official performance evidence. This allowance keeps both the 1000 ms algorithm pin and the
+5000 ms handler pin enforced without letting shared-runner scheduling decide them.
 
 ### D2 — Performance evidence binds the measured product, not the repository
 

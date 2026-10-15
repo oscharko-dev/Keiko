@@ -5355,12 +5355,6 @@
     },
     {
       "path": "packages/keiko-server/src/promptEnhancer/routes.ts",
-      "owner": "handlePromptEnhancement",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/promptEnhancer/routes.ts",
       "owner": "readPromptEnhancementRequest",
       "kind": "unregistered-catch",
       "count": 2
@@ -8313,12 +8307,6 @@
     },
     {
       "path": "packages/keiko-workflows/src/promptEnhancer/index.ts",
-      "owner": "callModelForText",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-workflows/src/promptEnhancer/index.ts",
       "owner": "isJsonValueResponse",
       "kind": "unregistered-catch",
       "count": 1
@@ -8668,12 +8656,6 @@
     {
       "path": "packages/keiko-workspace/src/repoSearchSemantic.ts",
       "owner": "runSemanticSearchSession",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-workspace/src/structuralAdapterRequestContext.ts",
-      "owner": "currentCandidateContentMetadata",
       "kind": "unregistered-catch",
       "count": 1
     },

@@ -1,3 +1,11 @@
+import type { GatewayCallRequest } from "./gateway.js";
+import {
+  callerAdmittedRequest,
+  onceCallerReservation,
+  settleCallerAttempt,
+  settleFailedCallerAttempt,
+  CallerAttemptAdmissionError,
+} from "./gateway-attempt-admission.js";
 // Zero-dependency OpenAI-compatible HTTP adapter built on globalThis.fetch and
 // AbortSignal. fetch, clock, request-id, and cost class are injected so tests run
 // with no network I/O and no real time. The raw provider body is never echoed into
@@ -54,7 +62,7 @@ import {
   reasoningText,
   textFromContent,
 } from "./normalize.js";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redact, redactSecretLiterals } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import {
   OTHER_OUTPUT_TOKEN_FIELD,
@@ -64,6 +72,7 @@ import {
   type OutputTokenField,
 } from "./output-token-limit.js";
 import {
+  countGatewayPromptTokens,
   openAiCompatiblePromptMessage,
   openAiCompatiblePromptTools,
   type OpenAiCompatiblePromptMessage,
@@ -319,6 +328,30 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
   proofIds: ["chat.response.streamed.emitted-line"],
   releaseImpact: "patch",
 });
+
+// #4009: the arguments of a governed changeset edit lost a configured provider secret before
+// reaching the tool. They are otherwise passed byte for byte, so this is the only change the gateway
+// makes to them; a positive count is a diagnostic fact (an `oldString` it touched cannot match).
+const TOOL_ARGUMENTS_REDACTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-arguments.redacted",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "openai-adapter.logToolArgumentsRedacted",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    toolCallCount: { type: "integer", dataClass: "count", required: true },
+    redactedStringCount: { type: "integer", dataClass: "count", required: true },
+  },
+  diagnosticWhen: [{ field: "redactedStringCount", positive: true }],
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tool-arguments"],
+  proofIds: ["gateway.tool-arguments.redacted.emitted-line"],
+  releaseImpact: "patch",
+});
 const GATEWAY_EGRESS_CODES: Record<OutboundHttpEgressErrorCode, GatewayEgressErrorCode> = {
   PROXY_UNREACHABLE: ERROR_CODES.PROXY_UNREACHABLE,
   PROXY_AUTH_REQUIRED: ERROR_CODES.PROXY_AUTH_REQUIRED,
@@ -471,6 +504,7 @@ interface ChatRequestBody {
 }
 
 interface DispatchedResponse {
+  readonly reservation?: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
   readonly response: Response;
   readonly signal: AbortSignal;
   // Clears the timers of the request's deadline; every dispatched request ends with one call.
@@ -583,7 +617,7 @@ function chatCompletionsUrl(config: ModelProviderConfig): string {
 
 // Always returns the array shape: the plain-string case is handled at the call site so this
 // helper itself never mixes return types (sonarjs/function-return-type).
-type ProviderGatewayRequest = GatewayRequest & {
+type ProviderGatewayRequest = GatewayCallRequest & {
   readonly tools?: readonly ToolDefinition[] | undefined;
 };
 
@@ -864,22 +898,42 @@ export class ResponseRedactionError extends MalformedToolCallError {}
 // this constant, let alone that limit).
 const MAX_REDACT_DEPTH = 32;
 
-function redactUnknown(value: unknown, secrets: readonly string[], depth = 0): unknown {
+// How a model value is scrubbed: `redact()` (configured literals plus heuristic secret shapes) for
+// content, structured output and every tool except the changeset edit, or the configured literals
+// alone for changeset-edit arguments, which are workspace file content (#4009). `changed` counts
+// the strings the scrub altered.
+interface ValueScrub {
+  readonly secrets: readonly string[];
+  readonly text: (value: string) => string;
+  changed: number;
+}
+
+function heuristicScrub(secrets: readonly string[]): ValueScrub {
+  return { secrets, text: (value) => redact(value, secrets), changed: 0 };
+}
+
+function literalScrub(secrets: readonly string[]): ValueScrub {
+  return { secrets, text: (value) => redactSecretLiterals(value, secrets), changed: 0 };
+}
+
+function redactUnknown(value: unknown, scrub: ValueScrub, depth = 0): unknown {
   if (depth >= MAX_REDACT_DEPTH) {
     throw new ResponseRedactionError(
       "gateway response payload exceeds the maximum redaction depth",
-      secrets,
+      scrub.secrets,
     );
   }
   if (typeof value === "string") {
-    return redact(value, secrets);
+    const scrubbed = scrub.text(value);
+    if (scrubbed !== value) scrub.changed += 1;
+    return scrubbed;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactUnknown(item, secrets, depth + 1));
+    return value.map((item) => redactUnknown(item, scrub, depth + 1));
   }
   if (isRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, secrets, depth + 1)]),
+      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, scrub, depth + 1)]),
     );
   }
   return value;
@@ -889,28 +943,52 @@ function redactRecord(
   value: Record<string, unknown> | null,
   secrets: readonly string[],
 ): Record<string, unknown> | null {
-  return value === null ? null : (redactUnknown(value, secrets) as Record<string, unknown>);
+  return value === null
+    ? null
+    : (redactUnknown(value, heuristicScrub(secrets)) as Record<string, unknown>);
 }
 
-function redactToolCall(call: NormalizedToolCall, secrets: readonly string[]): NormalizedToolCall {
+// A tool call's name is matched against the offered catalog. The governed changeset edit executes
+// its arguments exactly as they arrive: an `oldString` must match its file and a `newString` is the
+// content that gets written, so they lose only the configured provider secrets, never text that
+// merely looks like a credential (#4009). Every other tool's arguments are displayed (`question`)
+// or sent outward (`keiko_research_fetch`), so they keep the full heuristic redaction.
+function redactToolCall(
+  call: NormalizedToolCall,
+  secrets: readonly string[],
+  exactContent: ValueScrub,
+  isExactContentTool: (alias: string) => boolean,
+): NormalizedToolCall {
+  const name = redact(call.name, secrets);
+  const scrub = isExactContentTool(name) ? exactContent : heuristicScrub(secrets);
   return {
     ...call,
-    name: redact(call.name, secrets),
-    arguments: redactUnknown(call.arguments, secrets) as Record<string, unknown>,
+    name,
+    arguments: redactUnknown(call.arguments, scrub) as Record<string, unknown>,
   };
+}
+
+interface RedactedResponse {
+  readonly response: NormalizedResponse;
+  readonly toolArgumentsRedacted: number;
 }
 
 function redactResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
-): NormalizedResponse {
-  return {
+  isExactContentTool: (alias: string) => boolean,
+): RedactedResponse {
+  const exactContent = literalScrub(secrets);
+  const redacted: NormalizedResponse = {
     ...response,
     content: redact(response.content, secrets),
-    toolCalls: response.toolCalls.map((call) => redactToolCall(call, secrets)),
+    toolCalls: response.toolCalls.map((call) =>
+      redactToolCall(call, secrets, exactContent, isExactContentTool),
+    ),
     structuredOutput: redactRecord(response.structuredOutput, secrets),
     ...(response.reasoning === undefined ? {} : { reasoning: redact(response.reasoning, secrets) }),
   };
+  return { response: redacted, toolArgumentsRedacted: exactContent.changed };
 }
 
 function providerReportedUsage(payload: unknown): boolean {
@@ -925,10 +1003,15 @@ function bindCatalogResponse(
   secrets: readonly string[],
   catalog: GatewayToolCatalogBridge,
   usageReported: boolean,
+  onToolArgumentsRedacted: (redactedStringCount: number, toolCallCount: number) => void,
 ): NormalizedResponse {
   try {
     catalog.assertNativeTransport(response);
-    return bindNormalizedToolCalls(redactResponse(response, secrets), catalog.bindCalls);
+    const redacted = redactResponse(response, secrets, catalog.isExactContentTool);
+    if (redacted.toolArgumentsRedacted > 0) {
+      onToolArgumentsRedacted(redacted.toolArgumentsRedacted, response.toolCalls.length);
+    }
+    return bindNormalizedToolCalls(redacted.response, catalog.bindCalls);
   } catch (error) {
     if (usageReported) retainMeasuredCatalogFailureUsage(error, response.usage);
     throw error;
@@ -1599,6 +1682,7 @@ function* flushedLanes(
 }
 
 export class OpenAiAdapter implements ProviderAdapter {
+  readonly attemptAdmissionBoundary = "transport";
   private readonly now: () => number;
   private readonly log: ModelGatewayLogSink;
 
@@ -1611,7 +1695,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   }
 
   call = async (
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     config: ModelProviderConfig,
   ): Promise<NormalizedResponse> => {
     const secrets = [config.apiKey, config.baseUrl];
@@ -1639,7 +1723,12 @@ export class OpenAiAdapter implements ProviderAdapter {
         mapHttpError(response, config.modelId, secrets, errorPayload);
       }
       const payload = await this.readBody(response, config, secrets, dispatched.signal);
-      return this.finishedResponse(payload, request, config, secrets, catalog, start);
+      const answer = this.finishedResponse(payload, request, config, secrets, catalog, start);
+      settleCallerAttempt(dispatched.reservation, answer.usage, true);
+      return answer;
+    } catch (error_) {
+      settleFailedCallerAttempt(dispatched.reservation, error_, true);
+      throw error_;
     } finally {
       dispatched.dispose();
     }
@@ -1654,7 +1743,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   // (ADR-0003): their silence and budget bound the read instead of one `timeoutMs`.
   callStream = async function* (
     this: OpenAiAdapter,
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     config: ModelProviderConfig,
     bounds?: StreamReadBounds,
   ): AsyncGenerator<GatewayStreamChunk> {
@@ -1690,13 +1779,28 @@ export class OpenAiAdapter implements ProviderAdapter {
         catalog,
         start,
       };
-      yield* answeredWholeBody(response)
-        ? this.wholeBodyChunks(response, read)
-        : this.streamedChunks(response, read);
+      yield* this.admittedResponseChunks(dispatched, read);
+    } catch (error_) {
+      settleFailedCallerAttempt(dispatched.reservation, error_, true);
+      throw error_;
     } finally {
       dispatched.dispose();
     }
   };
+
+  private async *admittedResponseChunks(
+    dispatched: DispatchedResponse,
+    read: StreamRead,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    const chunks = answeredWholeBody(dispatched.response)
+      ? this.wholeBodyChunks(dispatched.response, read)
+      : this.streamedChunks(dispatched.response, read);
+    for await (const chunk of chunks) {
+      if (chunk.type === "done")
+        settleCallerAttempt(dispatched.reservation, chunk.response.usage, true);
+      yield chunk;
+    }
+  }
 
   // Reads the SSE stream into `acc`, yielding redacted answer tokens as `delta` chunks and the
   // model's reasoning as `reasoning` chunks (#3878). A suffix that matches the start of a
@@ -1823,7 +1927,33 @@ export class OpenAiAdapter implements ProviderAdapter {
       request.responseFormat?.type === "json_schema",
     );
     assertUsableAssistantResponse(normalized, config.modelId, secrets);
-    return bindCatalogResponse(normalized, secrets, catalog, providerReportedUsage(payload));
+    return bindCatalogResponse(
+      normalized,
+      secrets,
+      catalog,
+      providerReportedUsage(payload),
+      (redactedStringCount, toolCallCount) => {
+        this.logToolArgumentsRedacted(config.modelId, redactedStringCount, toolCallCount);
+      },
+    );
+  }
+
+  // #4009: changeset-edit arguments lose only the configured provider secrets. When that happened
+  // the tool received changed text, so the line names how many argument strings changed, at `warn`:
+  // a scrubbed `oldString` cannot match its file. Counts only, never the arguments or the secret.
+  private logToolArgumentsRedacted(
+    modelId: string,
+    redactedStringCount: number,
+    toolCallCount: number,
+  ): void {
+    const correlationId = logCorrelationId(this.log);
+    this.log.write(
+      activityLogEvent(
+        TOOL_ARGUMENTS_REDACTED_OPERATION,
+        { level: "warn", ...(correlationId === undefined ? {} : { correlationId }) },
+        { modelId: logModelId(modelId), toolCallCount, redactedStringCount },
+      ),
+    );
   }
 
   // One line per streamed read, body-free (ADR-0003): how it ended, how many data events it had,
@@ -1913,23 +2043,20 @@ export class OpenAiAdapter implements ProviderAdapter {
     includeUsage = true,
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
-    const body = JSON.stringify(
-      stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
+    const reservation = this.transportReservation(request, config);
+    const { body, deadline } = this.prepareHttpDispatch(
+      request,
+      config,
+      reservation,
+      url,
+      stream,
+      bounds,
+      includeUsage,
     );
-    const headers = {
-      "content-type": "application/json",
-      ...apiKeyHeaders(config),
-    };
-    const readBounds = dispatchedReadBounds(stream, bounds);
-    logChatDispatch(
-      this.log,
-      chatDispatchFields(url, request, config, body, stream, includeUsage, readBounds),
-    );
-    const deadline = requestDeadline(config.timeoutMs, readBounds, request.cancellationSignal);
     try {
       const response = await gatewayFetch(url, {
         method: "POST",
-        headers,
+        headers: { "content-type": "application/json", ...apiKeyHeaders(config) },
         body,
         signal: deadline.signal,
         fetchImpl: this.deps.fetchImpl,
@@ -1937,11 +2064,70 @@ export class OpenAiAdapter implements ProviderAdapter {
         ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
       deadline.responseStarted();
-      return { response, signal: deadline.signal, dispose: deadline.dispose };
+      return {
+        response,
+        reservation,
+        signal: deadline.signal,
+        dispose: (): void => {
+          try {
+            settleCallerAttempt(reservation, undefined, true, response.ok ? "unknown" : "none");
+          } finally {
+            deadline.dispose();
+          }
+        },
+      };
     } catch (error) {
       deadline.dispose();
-      throw this.mapDispatchError(error, config, deadline.signal, secrets);
+      const failure = this.mapDispatchError(error, config, deadline.signal, secrets);
+      settleFailedCallerAttempt(reservation, failure, true);
+      throw failure;
     }
+  }
+
+  private prepareHttpDispatch(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    reservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>,
+    url: string,
+    stream: boolean,
+    bounds: StreamReadBounds | undefined,
+    includeUsage: boolean,
+  ): { readonly body: string; readonly deadline: RequestDeadline } {
+    try {
+      request = callerAdmittedRequest(request, reservation);
+      const body = JSON.stringify(
+        stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
+      );
+      const readBounds = dispatchedReadBounds(stream, bounds);
+      logChatDispatch(
+        this.log,
+        chatDispatchFields(url, request, config, body, stream, includeUsage, readBounds),
+      );
+      return {
+        body,
+        deadline: requestDeadline(config.timeoutMs, readBounds, request.cancellationSignal),
+      };
+    } catch (error_) {
+      settleCallerAttempt(reservation, undefined, false, "none");
+      throw error_;
+    }
+  }
+
+  private transportReservation(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+  ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
+    const admit = request.attemptAdmission;
+    if (admit === undefined) return undefined;
+    const reservation = admit({
+      promptTokens: countGatewayPromptTokens(request),
+      maxOutputTokens: dispatchedMaxOutputTokens(request, config) ?? 0,
+    });
+    if (reservation === undefined)
+      throw new CallerAttemptAdmissionError(
+        "Caller synthesis attempt grant exhausted before HTTP dispatch",
+      );
+    return onceCallerReservation(reservation);
   }
 
   private async dispatchCompatibleStream(

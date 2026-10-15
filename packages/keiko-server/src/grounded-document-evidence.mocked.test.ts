@@ -5,9 +5,10 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import type {
-  SelectedScope,
-  RetrievalQuery,
+import {
+  DEFAULT_EXPLORATION_BUDGET,
+  type SelectedScope,
+  type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type {
   SearchScope,
@@ -22,6 +23,8 @@ vi.mock("@oscharko-dev/keiko-local-knowledge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-local-knowledge")>();
   return { ...actual, extractBoundedDocumentText: extractMock };
 });
+
+import type { DocumentEvidenceInputs } from "./grounded-document-evidence.js";
 
 const { collectConnectedDocumentEvidence, MAX_DOCUMENT_EXTRACTED_BYTES } =
   await import("./grounded-document-evidence.js");
@@ -86,6 +89,7 @@ function query(): RetrievalQuery {
 
 function run(
   relativePaths: readonly string[],
+  overrides: Partial<DocumentEvidenceInputs> = {},
 ): ReturnType<typeof collectConnectedDocumentEvidence> {
   const searchScope: SearchScope = {
     workspace: workspace(),
@@ -98,6 +102,7 @@ function run(
     searchScope,
     fs: fs(),
     nowMs: () => 1_000,
+    ...overrides,
   });
 }
 
@@ -106,6 +111,33 @@ beforeEach(() => {
 });
 
 describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
+  it.each([
+    { label: "redaction expansion", text: "api_key=a", excerptBytesMax: 9 },
+    { label: "window separators", text: "x".repeat(8193), excerptBytesMax: 8193 },
+  ])("bounds the returned logical projection after $label", async ({ text, excerptBytesMax }) => {
+    extractMock.mockResolvedValue({
+      outcome: "extracted",
+      format: "docx",
+      text,
+      extractedBytes: Buffer.byteLength(text),
+      truncated: false,
+      diagnostics: [],
+    });
+    const result = await run(["docs/bounded.docx"], {
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax, filesReadMax: 1 },
+    });
+    const content = (result.excerpts.get("docs/bounded.docx") ?? [])
+      .map((window) => window.content)
+      .join("\n");
+    expect(Buffer.byteLength(content)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(content)).toBeLessThanOrEqual(excerptBytesMax);
+    expect(
+      result.uncertainty.some(
+        (marker) => marker.kind === "scope-incomplete" && marker.claim.includes("truncated"),
+      ),
+    ).toBe(true);
+  });
+
   it("strips credential-shaped strings from document excerpt windows", async () => {
     extractMock.mockResolvedValue({
       outcome: "extracted",

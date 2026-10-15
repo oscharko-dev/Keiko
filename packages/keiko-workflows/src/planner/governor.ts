@@ -41,7 +41,9 @@ const USAGE_KEYS: readonly (keyof ExplorationUsage)[] = [
   "rerankCalls",
 ];
 
-const BUDGET_KEY_FOR_USAGE: Readonly<Record<keyof ExplorationUsage, keyof ExplorationBudget>> = {
+const BUDGET_KEY_FOR_USAGE: Readonly<
+  Record<keyof ExplorationUsage, Exclude<keyof ExplorationBudget, "followUpPassesMax">>
+> = {
   searchCalls: "searchCallsMax",
   filesRead: "filesReadMax",
   excerptBytes: "excerptBytesMax",

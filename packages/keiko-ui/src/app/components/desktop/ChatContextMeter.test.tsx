@@ -541,6 +541,37 @@ describe("Chat context request diagnostics", () => {
     contextApi.report.mockClear();
   });
 
+  it("remeasures the selected skill before another message is sent", async () => {
+    const session = contextSession();
+    const view = render(<ChatContextMeterContainer session={session} />);
+    await screen.findByRole("button", { name: /approximately 80% used/ });
+    contextApi.fetch.mockResolvedValue(status(9_000));
+    view.rerender(
+      <ChatContextMeterContainer
+        session={{
+          ...session,
+          markdownSkill: {
+            chatId: session.activeChat?.id,
+            view: {
+              availability: "available",
+              name: "Synthetic",
+              selection: {
+                revision: 1,
+                skill: { id: "synthetic", revision: 1, digest: "a".repeat(64) },
+              },
+            },
+            busy: false,
+            failed: false,
+            refresh: vi.fn(),
+            select: vi.fn(),
+          },
+        }}
+      />,
+    );
+    await screen.findByRole("button", { name: /approximately 90% used/ });
+    expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps a requested compaction pending when selected model metadata refreshes", async () => {
     const session = contextSession();
     const initial = meterCapability("fixture", 12_000);

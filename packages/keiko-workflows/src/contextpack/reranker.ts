@@ -5,6 +5,7 @@
 // "skip reranking" rather than as an error.
 
 import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type RerankerAvailability =
   | { readonly available: true; readonly modelLabel: string }
@@ -17,6 +18,8 @@ export interface RerankerExecutionContext {
 
 export interface RerankerSeam {
   readonly name: string;
+  /** Request-local outcome of the last invocation; identity fallback is never proof of success. */
+  readonly getDiagnostics?: (() => GroundedRerankerDiagnostics | undefined) | undefined;
   isAvailable(context?: RerankerExecutionContext): Promise<RerankerAvailability>;
   rerank(
     candidates: readonly CandidateFile[],
