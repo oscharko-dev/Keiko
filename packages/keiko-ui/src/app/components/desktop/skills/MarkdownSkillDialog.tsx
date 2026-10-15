@@ -94,15 +94,16 @@ function SkillUpload({
   readonly previous?: MarkdownSkillMetadata;
 }): ReactNode {
   const t = useTranslate();
+  const disabled = library.busy || !library.available;
   return (
-    <label className={styles.cmpFilePicker} data-disabled={library.busy}>
+    <label className={styles.cmpFilePicker} data-disabled={disabled}>
       <FileIcon size={18} />
       <span>{t(previous === undefined ? "chat.skills.upload" : "chat.skills.replace")}</span>
       <input
         type="file"
         className="visually-hidden"
         accept=".md,text/markdown"
-        disabled={library.busy}
+        disabled={disabled}
         onChange={(event) => {
           const file = event.target.files?.[0];
           event.target.value = "";
@@ -121,11 +122,10 @@ function SkillLibraryStatus({
   readonly skill: ChatMarkdownSkill;
 }): ReactNode {
   const t = useTranslate();
-  if (skill.requireNoSkill === true) return <p>{t("chat.skills.sessionRequired")}</p>;
   if (library.error !== undefined || skill.failed)
     return (
       <div role="alert">
-        {t(library.error === "file" ? "chat.skills.fileError" : "chat.skills.requestError")}
+        {t(skillLibraryErrorKey(library.error, skill.requireNoSkill === true))}
         <button
           type="button"
           disabled={library.busy}
@@ -140,6 +140,14 @@ function SkillLibraryStatus({
     );
   if (library.busy) return <output>{t("chat.skills.loading")}</output>;
   return library.skills.length === 0 ? <p>{t("chat.skills.empty")}</p> : null;
+}
+
+function skillLibraryErrorKey(
+  error: MarkdownSkillLibrary["error"],
+  sessionRequired: boolean,
+): "chat.skills.fileError" | "chat.skills.sessionRequired" | "chat.skills.requestError" {
+  if (error === "file") return "chat.skills.fileError";
+  return sessionRequired ? "chat.skills.sessionRequired" : "chat.skills.requestError";
 }
 
 function SkillRow({
