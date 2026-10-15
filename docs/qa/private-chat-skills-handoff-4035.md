@@ -6,56 +6,36 @@ all-acceptance-criteria qualification. Continue on `codex/fix-private-skill-uplo
 the PR targets `dev`, is not a draft, and must keep auto-merge disabled. Integration
 and publication are not authorized.
 
-## Closing checkpoint: 2026-10-15
+## Latest checkpoint: 2026-10-15, resumed qualification
 
-The owner requested commit, push, and handoff now. No further product changes are in
-progress. The closing follow-up keeps draft warnings and Retry readable in compact
-Chat windows, recognizes the existing QI translation hook in the localization guard,
-and updates the authoring fixture to use actual admitted source references. All five
-targeted WebKit layout cases pass without reducing geometry thresholds; 158 component,
-accessibility, and styling tests and 219 localization-guard tests pass. The current-head
-PR comment records the final build, Sonar, and full chat-send results.
+Both defects identified at the earlier handoff are now repaired and pushed:
 
-Additional actual In-App Browser observations after the first handoff:
+- Deleted immutable selections are checked during shared turn admission. Actual two-tab deletion
+  now returns `SKILL_SELECTION_CHANGED` (409), shows the unavailable selection, and preserves the
+  draft. Plain and grounded admission regression tests verify refusal before provider dispatch.
+  The retained browser-run closure contains corrupt historical lines, so that closure cannot prove
+  a complete zero-dispatch count; do not present the unit assertion as complete browser evidence.
+- History rehydration selects complementary relevant sections within the existing budget instead
+  of losing an earlier rule to the last query-term hit. The actual 8k-model compaction repair run
+  preserved missing/null, invalid/non-finite values, inclusive 20/80 boundaries, and unresolved
+  calibration ownership/interval. The original failed answer remains recorded separately.
+- Review fixes reject invalid closing Markdown fences and unsupported empty source references.
+  The final sort implementation remains compatible with the package's TypeScript library target.
 
-- Native Markdown upload, byte-identical export, explicit selection, and keyboard
-  Escape succeeded again after a normal launcher restart.
-- The same maximized Chat fitted both a tall tab and a shorter tab, leaving the
-  shorter tab's composer visible.
-- A private Unicode draft survived immediate Chat close and reopening from history.
-- A valid skill exceeding the smaller model's mandatory prompt budget produced an
-  actionable `GATEWAY_CONTEXT_OVERFLOW`, retained the chip and draft, and recorded
-  zero provider dispatches in the canonical Activity Log.
-- The third selected normative-status answer preserved the unapproved calibration
-  conflict, example-versus-requirement distinction, and undecided ownership.
+Code head `f8ad827be` passed the complete local `test:coverage:quality` chain (all 27 package
+floors and 73 governed file floors), root typecheck, full lint, architecture positive/negative,
+Activity Log/error-observability checks, and the local Sonar analyzer. Required CI is separate;
+check its exact current head before integration. No integration or publication is authorized.
 
-Two confirmed defects remain for the next agent; neither is repaired in this checkpoint:
+The combined local runtime also contains voice PR #4033. An actual In-App Browser microphone
+recording reached local LiteLLM and Whisper, returned HTTP 200, retained the selected skill,
+and populated the editable Chat draft. The owner requested a subsequent simpler one-control
+waveform design; its implementation and final UI qualification belong to PR #4033. Additional
+room audio in a long capture means this observation is not a perfect-transcription claim.
 
-1. **Deleting a selected skill in another tab produces an unexpected 500 on send.**
-   The draft survives and no provider request is dispatched, but the stale tab does
-   not show the intended unavailable selection. Canonical evidence traces the failure
-   to `markdownSkills.resolve` during turn admission. The shared
-   `markdown-skill-selection-admission.ts` helper checks authority/revision without
-   checking that the selected immutable reference still exists. Add the existing
-   live-reference/digest availability check after authority validation, return the
-   existing `SKILL_SELECTION_CHANGED` 409, and exercise plain and grounded admission.
-   The UI already refreshes selection for that refusal. Repeat the two-tab deletion
-   journey in the actual In-App Browser after the fix.
-2. **Automatic compaction can omit an early relevant source rule.** The reconstructed
-   productive request still contained the complete selected skill exactly once, but
-   the source rule was absent from its summary and rehydrated history. The explicit
-   `null`-means-missing rule belonged to the original concept, not the selected skill.
-   `chat-history-rehydration.ts` currently favors the last query-term match in a
-   message. Investigate bounded multiple-section selection with broader relevant-term
-   coverage and newer equivalent evidence taking priority; preserve scope, redaction,
-   and the existing token budget. Do not introduce scenario-specific prompt patches.
-
-Both failures have a retained red production-helper reproduction in the local audit's
-`core-fix-red.log`. The visible failure artifacts are `in-app-stale-skill-delete.json`
-and `in-app-runs/automatic-compaction-reconstruction.json`. No fixing source edits were
-started before this requested stop. The combined skills/dictation microphone journey,
-the remaining semantic campaign, and a fully green frozen-tree gate matrix are still
-required before any release-readiness claim.
+The semantic campaign has **19/48 answers captured**, including retained failures, plus a
+separate successful compaction repair retest. Three independently assessed authoring generations
+are complete. This is not an all-acceptance-criteria release qualification.
 
 ## Implemented repair
 
@@ -120,20 +100,21 @@ These observations are distinct from automated browser fixtures and unit tests.
   3,595 tokens were saved across one summarized message. No messages were inserted
   by an API to manufacture this checkpoint.
 
-### Latest failed semantic observation
+### Retained semantic observations
 
-The captured `automatic-compaction-selected-1` answer incorrectly classified `null`
-as invalid instead of missing. It preserved the 20/80 boundaries and the unresolved
-calibration interval/owner. Record the run as a semantic failure, even though the
-request succeeded and the visible protected-skill accounting remained stable.
-Investigate the retained summary, complete original source, selected body, and final
-productive request before deciding whether the cause is compaction, model behavior,
-or another implementation defect. Do not replace this result with a successful retry.
+The original `automatic-compaction-selected-1` answer classified `null` incorrectly. The repaired
+production path was retested through the actual UI and answered correctly; retain both artifacts.
+The repair retest is not an additional independent repetition in the 48-answer campaign.
 
-An earlier oversized setup hit the existing 60-second prompt-compaction step limit
-and exposed input loss in the older UI. Its failure is retained separately. The
-reduced explicit retry succeeded. The new proven-failure draft recovery still needs
-the final corresponding real-browser interruption test.
+All six generated-test answers were executed unchanged against the independent application:
+selected runs passed 21/21, 15/15, and 20/20; controls passed 6/6 and 7/7, while control 2 failed
+one of three tests because it accumulated multiple rendered status nodes. Boundary mutation
+failed 2, 1, 2, 1, and 1 assertions in the five passing baseline suites respectively. Selected run 2
+also lacks a meaningful component text assertion despite a passing logic assertion. Preserve these
+semantic weaknesses; passing execution alone does not certify useful generated test coverage.
+
+The earlier failed prompt-compaction timeout and its explicit successful retry remain separate.
+The final real-browser interruption/recovery journey still needs qualification.
 
 ## Remaining acceptance work
 
@@ -155,10 +136,10 @@ excluded by the owner and belongs to #3897. Merge authorization is a separate bo
    generation, review/edit, explicit save, download, deletion, native reimport, and
    explicit selection. Include unavailable-model/rejected-output/cancel behavior and
    a benign untrusted instruction attempting publication or provider changes.
-5. Investigate the failed automatic-compaction answer above, then finish the remaining
+5. Preserve the failed automatic-compaction answer and the successful repair retest, then finish the remaining
    selected and matched no-skill semantic repetitions. The declared campaign contains
    six core and two grounded scenarios, each with three selected runs and three
-   controls: **11/48 answers captured**, with failures retained; this is not 11 passes.
+   controls: **19/48 answers captured**, with failures retained; this is not 19 passes.
    Three separately evaluated authoring generations are complete. Setup replies do
    not count as qualification answers.
 6. Import a valid but mandatory-budget-exceeding skill, select the real smaller-context
@@ -168,7 +149,8 @@ excluded by the owner and belongs to #3897. Merge authorization is a separate bo
    supported, including manual/automatic compaction and truthful source citations.
    Regenerate an old turn after changing the future-turn selection and verify its
    original binding. Include streaming cancellation and explicit retry.
-8. Execute every remaining generated-test answer unchanged against both the correct
+8. All six captured core generated-test answers have been executed; preserve their outcomes above.
+   Execute any further generated-test answers unchanged against both the correct
    independent app and its boundary mutant. Inspect meaning and actual assertions;
    a compilation/infrastructure error is not mutation detection.
 9. Finish current-head local gates and required CI/review settlement. Review the
