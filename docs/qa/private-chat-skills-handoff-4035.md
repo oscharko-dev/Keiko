@@ -19,7 +19,17 @@ changed its title, explicitly saved without activation, downloaded byte-identica
 deleted this disposable test skill, reimported that download with the native picker and explicitly
 selected it. Immediate reload before the draft debounce exposed a lost unsaved edit; the release
 repair adds page-hide flush and bounded keepalive transport while retaining the existing warning
-and revision checks. The actual browser repair retest remains required.
+and revision checks. Capture-phase publication also flushes the editor's pending 16 ms frame before
+the draft persistence listener runs. On the built 1.2.3 candidate, both sequential native typing
+and a complete Unicode edit survived immediate browser reload. The retained draft included
+umlauts and Japanese characters without truncation. Regression assertions cover page departure,
+editor publication order, pairing and bounded keepalive transport.
+
+One additional selected manual-compaction answer passed all boundary and open-decision checks
+after actual UI compaction and process restart. The campaign now has **20/48 answers captured**,
+including the earlier failures; setup-only replies remain excluded. The next automatic-compaction
+run visibly saved 1,784 tokens across one summarized message while retaining the 813-token protected
+skill contribution. Its semantic answer is still being assessed.
 
 ## Latest checkpoint: 2026-10-15, resumed qualification
 

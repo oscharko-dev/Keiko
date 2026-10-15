@@ -60,8 +60,7 @@ function useDeferredComposerChange(
   const flush = useCallback((): boolean => {
     const change = pending.current;
     cancel();
-    if (change === null || change.owner === null || controller.current !== change.owner)
-      return false;
+    if (!change?.owner || controller.current !== change.owner) return false;
     publishedValues.current.push(change.value);
     current.current.onChange(change.value, change.cursor);
     return true;

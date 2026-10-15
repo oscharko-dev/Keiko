@@ -432,6 +432,9 @@ describe("VoiceDictationPreviewFromController", () => {
     expect(vi.getTimerCount()).toBe(0);
     view.rerender(<VoiceDictationWaveform controller={recording} />);
     expect(lines().every((line) => line.getAttribute("y1") === "15")).toBe(true);
+    view.rerender(<VoiceDictationWaveform controller={recording} visible={false} />);
+    expect(view.container).toBeEmptyDOMElement();
+    expect(vi.getTimerCount()).toBe(0);
     view.unmount();
     expect(vi.getTimerCount()).toBe(0);
   });

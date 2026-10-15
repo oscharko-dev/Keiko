@@ -43,7 +43,7 @@ export function VoiceDictationWaveform({
   readonly visible?: boolean;
 }): ReactNode {
   const t = useVoiceTranslate();
-  const recording = controller.phase === "recording" && controller.micReady;
+  const recording = visible && controller.phase === "recording" && controller.micReady;
   const samples = useLevelHistory(controller.audioLevel, recording);
   const label = captureLabel(controller, t);
   if (!visible || !controller.busy) return null;
