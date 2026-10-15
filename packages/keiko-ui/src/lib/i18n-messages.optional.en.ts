@@ -1,4 +1,46 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.skills.author.title": "Create from document or text",
+  "chat.skills.author.description":
+    "Paste the complete concept or load a text file. Keiko uses the selected chat model to prepare a private, editable draft.",
+  "chat.skills.author.file": "Source file (.md or .txt)",
+  "chat.skills.author.source": "Source text",
+  "chat.skills.author.generate": "Prepare draft",
+  "chat.skills.author.generating": "Preparing draft…",
+  "chat.skills.author.modelRequired": "Select a chat model before preparing a draft.",
+  "chat.skills.author.sourceError":
+    "Use complete UTF-8 text up to 100,000 characters and 128 KiB. Files must be .md or .txt.",
+  "chat.skills.author.generationError":
+    "No complete skill draft was returned. Check the selected model and gateway, shorten the source if needed, and try again.",
+  "chat.skills.author.review":
+    "Review the full draft, especially proposals, contradictions and open decisions. Saving or downloading does not activate the skill.",
+  "chat.skills.author.draft": "Skill draft (Markdown)",
+  "chat.skills.author.save": "Save reviewed skill",
+  "chat.skills.title": "Skills",
+  "chat.skills.sessionRequired":
+    "Open Keiko from its launcher to manage private skills. Chat remains available without a skill.",
+  "chat.skills.close": "Close skills",
+  "chat.skills.description":
+    "Upload a Markdown file, then select it for this chat. Uploading alone does not activate a skill.",
+  "chat.skills.protected":
+    "Used for each new message. Skill instructions count toward the context and remain intact when the conversation is compacted.",
+  "chat.skills.remove": "Remove skill from this chat",
+  "chat.skills.unavailable": "Selected skill unavailable",
+  "chat.skills.requestError": "Skills could not be updated. Reload the selection and try again.",
+  "chat.skills.upload": "Upload Markdown (.md, up to 128 KiB)",
+  "chat.skills.replace": "Replace with Markdown",
+  "chat.skills.retry": "Reload",
+  "chat.skills.loading": "Loading skills…",
+  "chat.skills.empty": "No skills yet. Upload your first Markdown skill.",
+  "chat.skills.fileError": "Choose a non-empty .md file up to 128 KiB.",
+  "chat.skills.selected": "Active in this chat",
+  "chat.skills.select": "Select",
+  "chat.skills.preview": "Skill preview",
+  "chat.skills.export": "Download Markdown",
+  "chat.skills.delete": "Delete",
+  "chat.skills.deleteWarning": "Chats using this skill will require a new selection.",
+  "chat.skills.confirmDelete": "Delete skill",
+  "chat.skills.cancel": "Cancel",
+
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} agents",
   "agentLauncher.model": "Model",
@@ -1255,6 +1297,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.wait": "Available after the current response finishes.",
   "chat.context.total": "{used} of {usable} usable input tokens · context window {window}",
   "chat.context.breakdown": "Context window breakdown",
+  "chat.context.segment.skill": "Skill instructions (protected)",
   "chat.context.segment.system": "System instructions",
   "chat.context.segment.summary": "Summary of earlier messages",
   "chat.context.segment.messages": "Messages",

@@ -492,3 +492,11 @@ describe("useChatSession run-summary patching", () => {
     }
   });
 });
+
+// Existing journeys start with the authoritative empty skill selection.
+vi.mock("@/lib/markdown-skills-api", () => ({
+  fetchMarkdownSkillSelection: vi
+    .fn()
+    .mockResolvedValue({ availability: "none", selection: { revision: 0, skill: null } }),
+  changeMarkdownSkillSelection: vi.fn(),
+}));

@@ -102,6 +102,9 @@ import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.j
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import { mockRequest, mockResponse } from "./_support.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -2672,6 +2675,59 @@ function assertHybridWindowFitLine(
 }
 
 describe("hybrid model budget and runtime truth", () => {
+  it.each([false, true])(
+    "protects the complete skill at hybrid fitting (overflow: %s)",
+    async (overflow) => {
+      const ctx = await hybridReviewContext();
+      const body = "# Synthetic method\nExplain the boundary first. Grüße 😀.\n".repeat(
+        overflow ? 1500 : 1,
+      );
+      const profile = deriveContextProfile({
+        maxInputTokens: 8192,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      });
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from(body).toString("base64"),
+      });
+      store.markdownSkills.select(ctx.chat.id, skill, 0);
+      const userMessage = store.createMessage({
+        chatId: ctx.chat.id,
+        role: "user",
+        content: ctx.content,
+        timestamp: NOW,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const prompts: string[] = [];
+      const result = await runHybridGroundedAsk({
+        ...ctx,
+        deps: { ...ctx.deps, contextProfile: profile },
+        contextProfile: profile,
+        userMessage,
+        answer: (_system, user) => {
+          prompts.push(user);
+          return Promise.resolve("Source behavior [1].");
+        },
+      });
+      if (overflow) {
+        expect(result.status).toBe(502);
+        expect(result.body).toMatchObject({ error: { code: "GATEWAY_CONTEXT_OVERFLOW" } });
+        expect(prompts).toHaveLength(0);
+      } else {
+        expect(result.status, JSON.stringify(result.body)).toBe(200);
+        expect(prompts).toHaveLength(1);
+        expect(prompts[0]?.split(body)).toHaveLength(2);
+        expect((result.body as GroundedAnswer).promptContext?.protectedSkill?.reference.id).toBe(
+          skill.id,
+        );
+      }
+    },
+  );
   it("uses the selected model budget before retrieving folder excerpts", async () => {
     const ctx = await hybridReviewContext();
     const profile = deriveContextProfile({
@@ -3594,177 +3650,230 @@ describe("AC5 routing — folders-only must not invoke hybrid.answer", () => {
 
 // ─── Case 4b: Single connector (no folders) routes to local-knowledge, not hybrid ──
 
+function skillRoutingSession(paired: boolean): {
+  channel: NonNullable<UiHandlerDeps["codingAppSessionChannel"]>;
+  context: (body: string) => RouteContext;
+} {
+  const registry = createSessionRegistry();
+  const session = registry.mint("knowledge-skill-routing");
+  return {
+    channel: createCodingAppSessionChannel({ registry }),
+    context: (body): RouteContext => {
+      const ctx = routeCtx(body);
+      if (paired) ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${session.cookieToken}`;
+      return ctx;
+    },
+  };
+}
+
+function assertKnowledgeSkill(
+  answer: GroundedAnswer,
+  modelPrompts: readonly string[],
+  embeddingInputs: readonly string[],
+  skillBody: string,
+  skillId: string,
+  selected: boolean,
+): void {
+  const synthesis = modelPrompts.filter((prompt) => prompt.includes("Citations:"));
+  expect(synthesis.length).toBeGreaterThan(0);
+  for (const prompt of synthesis) expect(prompt.split(skillBody)).toHaveLength(selected ? 2 : 1);
+  expect(embeddingInputs.some((query) => query.includes(skillBody))).toBe(false);
+  expect(answer.promptContext?.protectedSkill?.reference.id).toBe(selected ? skillId : undefined);
+}
+
 describe("AC5 routing — single connector must route to handleLocalKnowledgeGroundedAsk", () => {
-  it("routes a single-localKnowledgeScope chat to local-knowledge groundingKind, not hybrid", async () => {
-    // Arrange: exactly 1 connector, 0 folders.
-    // handleGroundedAsk dispatches to handleLocalKnowledgeGroundedAsk (folderScopes.length===0 + connectorCount===1).
-    const { capsuleId: capId } = await seedReadyCapsule("Solo Docs");
-    const chatId = makeHybridChat([], [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }]);
+  it.each([false, true])(
+    "routes a single-localKnowledgeScope chat with protected skill %s",
+    async (selectedSkill) => {
+      const session = skillRoutingSession(selectedSkill);
+      // Arrange: exactly 1 connector, 0 folders.
+      // handleGroundedAsk dispatches to handleLocalKnowledgeGroundedAsk (folderScopes.length===0 + connectorCount===1).
+      const { capsuleId: capId } = await seedReadyCapsule("Solo Docs");
+      const chatId = makeHybridChat(
+        [],
+        [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+      );
 
-    // A throwing hybrid.answer proves the hybrid branch is never entered.
-    const hybrid: HybridSeam = {
-      answer: throwingHybridAnswerer(),
-    };
+      // A throwing hybrid.answer proves the hybrid branch is never entered.
+      const hybrid: HybridSeam = {
+        answer: throwingHybridAnswerer(),
+      };
 
-    // The single-connector path requires a real model port (not injected as a hybrid seam).
-    // We provide a full config with the chat model + embedding model so capability resolution passes.
-    const embeddingModelId = "text-embedding-3-small"; // matches seedCapsuleWithVectors default
-    const adapter = scriptedAdapter();
-    const embeddingInputs: string[] = [];
-    const modelPrompts: string[] = [];
-    const fakeModelPort: ModelPort = {
-      call: (request) => {
-        modelPrompts.push(request.messages.map((message) => message.content).join("\n"));
-        return Promise.resolve({
-          modelId: CHAT_MODEL,
-          content: "Local knowledge answer [1].",
-          finishReason: "stop" as const,
-          toolCalls: [],
-          structuredOutput: null,
-          usage: {
-            requestId: "lk-test",
-            promptTokens: 10,
-            completionTokens: 5,
-            latencyMs: 5,
-            costClass: "medium" as const,
-          },
-        });
-      },
-    };
-    const configuredDeps: UiHandlerDeps = {
-      ...hybridDeps({
-        evidenceStore: createInMemoryEvidenceStore(),
-        localKnowledgeEmbeddingRequest: (request) => {
-          embeddingInputs.push(request.input);
-          return adapter.request(request);
-        },
-      }),
-      config: {
-        providers: [
-          {
+      // The single-connector path requires a real model port (not injected as a hybrid seam).
+      // We provide a full config with the chat model + embedding model so capability resolution passes.
+      const embeddingModelId = "text-embedding-3-small"; // matches seedCapsuleWithVectors default
+      const adapter = scriptedAdapter();
+      const embeddingInputs: string[] = [];
+      const modelPrompts: string[] = [];
+      const fakeModelPort: ModelPort = {
+        call: (request) => {
+          modelPrompts.push(request.messages.map((message) => message.content).join("\n"));
+          return Promise.resolve({
             modelId: CHAT_MODEL,
-            baseUrl: "https://provider.example/v1",
-            apiKey: "example-secret-token",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
+            content: "Local knowledge answer [1].",
+            finishReason: "stop" as const,
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "lk-test",
+              promptTokens: 10,
+              completionTokens: 5,
+              latencyMs: 5,
+              costClass: "medium" as const,
+            },
+          });
+        },
+      };
+      const configuredDeps: UiHandlerDeps = {
+        ...hybridDeps({
+          evidenceStore: createInMemoryEvidenceStore(),
+          localKnowledgeEmbeddingRequest: (request) => {
+            embeddingInputs.push(request.input);
+            return adapter.request(request);
           },
-          {
-            modelId: embeddingModelId,
-            baseUrl: "https://provider.example/v1",
-            apiKey: "example-secret-token",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [
-          {
-            id: CHAT_MODEL,
-            kind: "chat",
-            contextWindow: 64_000,
-            maxOutputTokens: 4_096,
-            toolCalling: true,
-            structuredOutput: true,
-            streaming: true,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "medium",
-            latencyClass: "standard",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-        ],
-      },
-      configPresent: true,
-      modelPortFactory: () => fakeModelPort,
-    };
+        }),
+        config: {
+          providers: [
+            {
+              modelId: CHAT_MODEL,
+              baseUrl: "https://provider.example/v1",
+              apiKey: "example-secret-token",
+              timeoutMs: 30_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 500,
+            },
+            {
+              modelId: embeddingModelId,
+              baseUrl: "https://provider.example/v1",
+              apiKey: "example-secret-token",
+              timeoutMs: 30_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 500,
+            },
+          ],
+          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+          capabilities: [
+            {
+              id: CHAT_MODEL,
+              kind: "chat",
+              contextWindow: 64_000,
+              maxOutputTokens: 4_096,
+              toolCalling: true,
+              structuredOutput: true,
+              streaming: true,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              costClass: "medium",
+              latencyClass: "standard",
+              throughputHint: "test",
+              preferredUseCases: [],
+              knownLimitations: [],
+            },
+          ],
+        },
+        configPresent: true,
+        codingAppSessionChannel: session.channel,
+        modelPortFactory: () => fakeModelPort,
+      };
 
-    const correctionId = seedGermanContinuity(chatId);
-    const originalMessages = store.listMessages(chatId, 500);
-    const followUp = "Erkläre das.";
-    const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: followUp, modelId: CHAT_MODEL })),
-      configuredDeps,
-      undefined,
-      undefined,
-      hybrid,
-    );
+      const correctionId = seedGermanContinuity(chatId);
+      const originalMessages = store.listMessages(chatId, 500);
+      const skillBody = "# Synthetic method\nExplain edge cases before examples. Grüße 😀.\n";
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from(skillBody).toString("base64"),
+      });
+      if (selectedSkill) store.markdownSkills.select(chatId, skill, 0);
+      const followUp = "Erkläre das.";
+      const result = await handleGroundedAsk(
+        session.context(JSON.stringify({ chatId, content: followUp, modelId: CHAT_MODEL })),
+        configuredDeps,
+        undefined,
+        undefined,
+        hybrid,
+      );
 
-    // Assert: local-knowledge path returns 200 with groundingKind "local-knowledge"
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as GroundedAnswer;
+      // Assert: local-knowledge path returns 200 with groundingKind "local-knowledge"
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = result.body as GroundedAnswer;
 
-    // mutation: if the dispatch condition (folderScopes.length===0 && connectorCount===1) is
-    // removed or inverted, the hybrid path is taken and groundingKind would be "hybrid"
-    expect(answer.groundingKind).toBe("local-knowledge");
+      // mutation: if the dispatch condition (folderScopes.length===0 && connectorCount===1) is
+      // removed or inverted, the hybrid path is taken and groundingKind would be "hybrid"
+      expect(answer.groundingKind).toBe("local-knowledge");
 
-    // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
-    const lkAnswer = asLocalKnowledge(answer);
-    expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
-    expect(embeddingInputs).toContain(
-      `${followUp}\nWelche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?`,
-    );
-    expect(modelPrompts.some((prompt) => prompt.includes("60000 EUR"))).toBe(true);
-    expect(store.listMessages(chatId, 500).slice(0, 120)).toEqual(originalMessages);
-    const firstCheckpoint = loadChatContinuityCheckpoint(
-      configuredDeps.evidenceStore,
-      chatId,
-      store.chatHistoryRevision(chatId),
-    );
-    expect(firstCheckpoint?.conversationCoverage?.contextWindowTokens).toBe(8000);
-    expect(firstCheckpoint?.itemsBefore).toBeGreaterThan(0);
-    const repeated = await handleGroundedAsk(
-      routeCtx(
-        JSON.stringify({ chatId, content: "Bitte erkläre das nochmal.", modelId: CHAT_MODEL }),
-      ),
-      configuredDeps,
-      undefined,
-      undefined,
-      hybrid,
-    );
-    expect(repeated.status, JSON.stringify(repeated.body)).toBe(200);
-    expect(store.findMessageById(correctionId)?.content).toContain("60000 EUR");
-    const previousRevision = store.chatHistoryRevision(chatId);
-    store.createMessage({
-      chatId,
-      role: "user",
-      content: "Verbindliche Korrektur: Das Budget beträgt jetzt 55000 EUR.",
-      timestamp: NOW + 1005,
-      runId: undefined,
-      workflowId: undefined,
-      workflowStatus: undefined,
-      shortResult: undefined,
-      taskType: undefined,
-    });
-    expect(store.chatHistoryRevision(chatId)).toBeGreaterThan(previousRevision);
-    modelPrompts.length = 0;
-    const revised = await handleGroundedAsk(
-      routeCtx(
-        JSON.stringify({ chatId, content: "Welches Budget ist gültig?", modelId: CHAT_MODEL }),
-      ),
-      configuredDeps,
-      undefined,
-      undefined,
-      hybrid,
-    );
-    expect(revised.status, JSON.stringify(revised.body)).toBe(200);
-    expect(modelPrompts.some((prompt) => prompt.includes("55000 EUR"))).toBe(true);
-    const revisedPrompt = modelPrompts.find((prompt) => prompt.includes("55000 EUR")) ?? "";
-    expect(revisedPrompt.lastIndexOf("55000 EUR")).toBeGreaterThan(
-      revisedPrompt.lastIndexOf("60000 EUR"),
-    );
-    expect(
-      loadChatContinuityCheckpoint(
+      // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
+      const lkAnswer = asLocalKnowledge(answer);
+      assertKnowledgeSkill(
+        answer,
+        modelPrompts,
+        embeddingInputs,
+        skillBody,
+        skill.id,
+        selectedSkill,
+      );
+      expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
+      expect(embeddingInputs).toContain(
+        `${followUp}\nWelche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?`,
+      );
+      expect(modelPrompts.some((prompt) => prompt.includes("60000 EUR"))).toBe(true);
+      expect(store.listMessages(chatId, 500).slice(0, 120)).toEqual(originalMessages);
+      const firstCheckpoint = loadChatContinuityCheckpoint(
         configuredDeps.evidenceStore,
         chatId,
         store.chatHistoryRevision(chatId),
-      )?.conversationCoverage?.historyRevision,
-    ).toBe(store.chatHistoryRevision(chatId));
-  });
+      );
+      expect(firstCheckpoint?.conversationCoverage?.contextWindowTokens).toBe(8000);
+      expect(firstCheckpoint?.itemsBefore).toBeGreaterThan(0);
+      const repeated = await handleGroundedAsk(
+        session.context(
+          JSON.stringify({ chatId, content: "Bitte erkläre das nochmal.", modelId: CHAT_MODEL }),
+        ),
+        configuredDeps,
+        undefined,
+        undefined,
+        hybrid,
+      );
+      expect(repeated.status, JSON.stringify(repeated.body)).toBe(200);
+      expect(store.findMessageById(correctionId)?.content).toContain("60000 EUR");
+      const previousRevision = store.chatHistoryRevision(chatId);
+      store.createMessage({
+        chatId,
+        role: "user",
+        content: "Verbindliche Korrektur: Das Budget beträgt jetzt 55000 EUR.",
+        timestamp: NOW + 1005,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      expect(store.chatHistoryRevision(chatId)).toBeGreaterThan(previousRevision);
+      modelPrompts.length = 0;
+      const revised = await handleGroundedAsk(
+        session.context(
+          JSON.stringify({ chatId, content: "Welches Budget ist gültig?", modelId: CHAT_MODEL }),
+        ),
+        configuredDeps,
+        undefined,
+        undefined,
+        hybrid,
+      );
+      expect(revised.status, JSON.stringify(revised.body)).toBe(200);
+      expect(modelPrompts.some((prompt) => prompt.includes("55000 EUR"))).toBe(true);
+      const revisedPrompt = modelPrompts.find((prompt) => prompt.includes("55000 EUR")) ?? "";
+      expect(revisedPrompt.lastIndexOf("55000 EUR")).toBeGreaterThan(
+        revisedPrompt.lastIndexOf("60000 EUR"),
+      );
+      expect(
+        loadChatContinuityCheckpoint(
+          configuredDeps.evidenceStore,
+          chatId,
+          store.chatHistoryRevision(chatId),
+        )?.conversationCoverage?.historyRevision,
+      ).toBe(store.chatHistoryRevision(chatId));
+    },
+  );
 
   // ADR-0173 D5: local-knowledge-grounded-qa.ts's StoreBackedAnswerGenerator.generate is the real
   // model.call site this dispatch path reaches (no seam bypasses it here, unlike the hybrid tests

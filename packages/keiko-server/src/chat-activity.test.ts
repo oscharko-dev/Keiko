@@ -41,6 +41,41 @@ afterEach(() => {
 });
 
 describe("chat-activity.ts Activity Log proofs (#3532)", () => {
+  it("records selected skill identity and estimated contribution without instruction contents", () => {
+    const sink = captureServerLog();
+    const protectedSkill = {
+      id: "msk_00000000-0000-4000-8000-000000000001",
+      revision: 1,
+      digest: "a".repeat(64),
+      name: "Private synthetic name",
+      body: "# Private synthetic method\nVerify the boundary.",
+      byteCount: 59,
+      createdAt: 1,
+    };
+    const assembly = selectGatewayPromptAssembly({
+      protectedSkill,
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "Synthetic request", discussionMode: undefined },
+      profile: DEFAULT_CONTEXT_PROFILE,
+      memoryEntries: [],
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    if (assembly === undefined) throw new Error("Missing fixture assembly");
+    logChatContextSelection("skill-context-proof", assembly, 0);
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    const persisted = expectActivityLogProof("chat.context.selected.budget", line);
+    expect(persisted).toMatchObject({
+      skillId: protectedSkill.id,
+      skillRevision: 1,
+      skillDigest: protectedSkill.digest,
+      skillInstructionTokens: assembly.protectedSkill?.estimatedTokens,
+    });
+    expect(line).not.toContain(protectedSkill.name);
+    expect(line).not.toContain("Verify the boundary");
+  });
+
   it("records a verbatim context selection with zero compaction and image costs", () => {
     const sink = captureServerLog();
     const assembly = selectGatewayPromptAssembly({

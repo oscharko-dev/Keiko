@@ -1,3 +1,4 @@
+import { markdownSkillInstructionTokens } from "./markdown-skill-prompt.js";
 import type {
   ChatContextStatusWire,
   GroundedPromptContextWire,
@@ -181,8 +182,9 @@ function pendingCompaction(
   counted: CountedHistory,
   correlationId: string | undefined,
   loaded: LoadedHistoryCheckpoint,
+  protectedSkillTokens = 0,
 ): PendingProjection | undefined {
-  const scaffold = currentRequestScaffoldTokens(profile.tokenAccounting);
+  const scaffold = currentRequestScaffoldTokens(profile.tokenAccounting) + protectedSkillTokens;
   if (counted.tokens + scaffold < profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD)
     return undefined;
   const target = Math.floor(profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET) - scaffold;
@@ -326,6 +328,30 @@ function inspectConversationContext(
   return { conversationProfile, checkpoint, counted, currentPrompt, grounded };
 }
 
+function protectedSkillStatus(
+  deps: UiHandlerDeps,
+  chatId: string,
+  profile: ContextProfile,
+): {
+  readonly tokens: number;
+  readonly wire: Pick<ChatContextStatusWire, "protectedSkill">;
+} {
+  const selected = deps.store.markdownSkills.selection(chatId);
+  if (selected.skill === null) return { tokens: 0, wire: {} };
+  const skill = deps.store.markdownSkills.resolve(selected.skill);
+  const tokens = markdownSkillInstructionTokens(skill, profile);
+  return {
+    tokens,
+    wire: {
+      protectedSkill: {
+        reference: selected.skill,
+        selectionRevision: selected.revision,
+        estimatedTokens: tokens,
+      },
+    },
+  };
+}
+
 function contextStatusWithCheckpoint(
   deps: UiHandlerDeps,
   chatId: string,
@@ -336,6 +362,7 @@ function contextStatusWithCheckpoint(
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   const { conversationProfile, checkpoint, counted, currentPrompt, grounded } =
     inspectConversationContext(deps, chatId, modelId, profile, loaded);
+  const protectedSkill = protectedSkillStatus(deps, chatId, profile);
   const pending = pendingCompaction(
     deps,
     chatId,
@@ -343,14 +370,17 @@ function contextStatusWithCheckpoint(
     counted,
     correlationId,
     loaded,
+    grounded === undefined ? protectedSkill.tokens : 0,
   );
   const breakdown = contextBreakdown({
     profile,
+    protectedSkillTokens: protectedSkill.tokens,
     conversation: pending?.conversation ?? storedConversation(counted, checkpoint),
     grounded,
   });
   return {
     modelId,
+    ...protectedSkill.wire,
     contextWindowTokens: profile.maxInputTokens,
     ...(profile.inputTokenLimit === undefined ? {} : { inputLimitTokens: profile.inputTokenLimit }),
     ...assumedWindowField(deps, modelId),
@@ -430,8 +460,10 @@ function manualCompactionCandidate(
   // which compaction never touches (PR #3678 review).
   const checkpoint = checkpointForProfile(loadedCheckpoint, profile);
   const stored = countHistory(deps, chatId, profile, checkpoint).tokens;
+  const skillTokens = protectedSkillStatus(deps, chatId, modelProfile).tokens;
   const budget = Math.floor(
-    Math.min(profile.effectiveInputBudget, stored) * AUTOMATIC_COMPACTION_TARGET,
+    Math.min(Math.max(0, profile.effectiveInputBudget - skillTokens), stored) *
+      AUTOMATIC_COMPACTION_TARGET,
   );
   try {
     const outcome = conversationForGatewayWithCompaction(snapshot.history, {

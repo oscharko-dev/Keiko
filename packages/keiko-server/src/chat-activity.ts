@@ -203,6 +203,10 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
     tokensAfter: { type: "integer", dataClass: "count", required: true },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
     promptTokens: { type: "integer", dataClass: "count", required: true },
+    skillId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 64 },
+    skillRevision: { type: "integer", dataClass: "count", required: false },
+    skillDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    skillInstructionTokens: { type: "integer", dataClass: "count", required: false },
     inputBudget: { type: "integer", dataClass: "count", required: true },
     sourceSelectionConfidence: {
       type: "string",
@@ -412,6 +416,20 @@ export function logChatTurnStartedEvent(
   );
 }
 
+function selectedSkillLogFields(
+  assembly: Pick<SentGroundedPrompt, "protectedSkill">,
+): Record<string, unknown> {
+  const usage = assembly.protectedSkill;
+  return usage === undefined
+    ? {}
+    : {
+        skillId: usage.reference.id,
+        skillRevision: usage.reference.revision,
+        skillDigest: usage.reference.digest,
+        skillInstructionTokens: usage.estimatedTokens,
+      };
+}
+
 /** Record the selection before dispatch so failed or cancelled turns retain their budget evidence. */
 export function logChatContextSelection(
   correlationId: string | undefined,
@@ -434,6 +452,7 @@ export function logChatContextSelection(
       {
         state: compacted ? "compacted" : "verbatim",
         ...historyMetrics,
+        ...selectedSkillLogFields(assembly),
         tokensSaved: Math.max(0, tokensBefore - tokensAfter),
         promptTokens: diagnostics.totalEstimatedTokens,
         inputBudget: diagnostics.profile.effectiveInputBudget,
@@ -449,7 +468,7 @@ export function logChatContextSelection(
 /** Grounded prompts have no history-message or image lane; log the actual fitted dispatch. */
 export function logGroundedPromptSelection(
   correlationId: string | undefined,
-  prompt: Pick<SentGroundedPrompt, "messages" | "sentEvidencePacks">,
+  prompt: Pick<SentGroundedPrompt, "messages" | "sentEvidencePacks" | "protectedSkill">,
   inputBudget: number,
   accounting?: ContextProfile["tokenAccounting"],
 ): void {
@@ -468,6 +487,7 @@ export function logGroundedPromptSelection(
         tokensAfter: 0,
         tokensSaved: 0,
         promptTokens: tokens,
+        ...selectedSkillLogFields(prompt),
         inputBudget,
         ...(confidence === undefined ? {} : { sourceSelectionConfidence: confidence }),
         imageCount: 0,

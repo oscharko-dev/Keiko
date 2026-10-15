@@ -175,6 +175,7 @@ it("forwards actual governed memory authority through the public plural handler 
   expect(factory.mock.calls[0]?.[5]).toEqual({
     currentQuestion: content,
     answerOnlyContextAvailable: true,
+    userMessageId: deps.store.listMessages(chatId).find((message) => message.role === "user")?.id,
   });
 
   expect(synthesis[0]?.messages.map((message) => message.content).join("\n")).toContain(MEMORY);

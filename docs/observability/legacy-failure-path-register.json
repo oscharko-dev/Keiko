@@ -5355,12 +5355,6 @@
     },
     {
       "path": "packages/keiko-server/src/promptEnhancer/routes.ts",
-      "owner": "handlePromptEnhancement",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/promptEnhancer/routes.ts",
       "owner": "readPromptEnhancementRequest",
       "kind": "unregistered-catch",
       "count": 2
@@ -8308,12 +8302,6 @@
     {
       "path": "packages/keiko-workflows/src/observations/command.ts",
       "owner": "commandRehydrationHandle",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-workflows/src/promptEnhancer/index.ts",
-      "owner": "callModelForText",
       "kind": "unregistered-catch",
       "count": 1
     },

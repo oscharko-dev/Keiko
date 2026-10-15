@@ -65,6 +65,16 @@ import {
   type ContextLaneId,
 } from "./context-engineering.js";
 
+export { MARKDOWN_SKILL_LIMITS } from "./markdown-skills.js";
+export type {
+  MarkdownSkillReference,
+  MarkdownSkillSelection,
+  MarkdownSkillSelectionView,
+  MarkdownSkillMetadata,
+  MarkdownSkillDocument,
+  MarkdownSkillUpload,
+} from "./markdown-skills.js";
+
 export interface Project {
   readonly path: string;
   readonly name: string;
@@ -508,6 +518,7 @@ export interface ChatsResponse {
  *   safety-margin     — estimation headroom that is never planned for input
  */
 export type ChatContextSegmentId =
+  | "skill"
   | "system"
   | "summary"
   | "messages"
@@ -527,6 +538,13 @@ export interface ChatContextSegmentWire {
 }
 
 export interface ChatContextStatusWire {
+  readonly protectedSkill?:
+    | {
+        readonly reference: import("./markdown-skills.js").MarkdownSkillReference;
+        readonly selectionRevision: number;
+        readonly estimatedTokens: number;
+      }
+    | undefined;
   readonly modelId: string;
   readonly contextWindowTokens: number;
   /** Optional independently declared input ceiling of the selected model. */
@@ -1129,6 +1147,8 @@ export interface DesktopChatSendRequestWire {
   // Composer sends may omit it.
   readonly clientTurnId?: string | undefined;
   readonly expectedGroundingScopeIdentity?: string | undefined;
+  /** Observed selection revision; null explicitly requires no active skill. Stale sends are refused. */
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
@@ -1265,6 +1285,8 @@ export interface GroundedAskRequest {
   // different effective model, grounding scope, or memory request fails closed.
   readonly clientTurnId?: string | undefined;
   readonly expectedGroundingScopeIdentity?: string | undefined;
+  /** Observed selection revision; null explicitly requires no active skill. Stale sends are refused. */
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
   // Center model-selection guardrails instead of silently falling back to the chat's stored model.
   readonly modelId?: string | undefined;
@@ -1773,6 +1795,12 @@ export interface HybridGroundedAnswer extends GroundedAnswerEvidenceDeclaration 
  * window. The context meter shows this and plans the next grounded question with it.
  */
 export interface GroundedPromptContextWire {
+  readonly protectedSkill?:
+    | {
+        readonly reference: import("./markdown-skills.js").MarkdownSkillReference;
+        readonly estimatedTokens: number;
+      }
+    | undefined;
   /** Answering model identity; older persisted answers may not carry it. */
   readonly modelId?: string | undefined;
   readonly promptTokens: number;

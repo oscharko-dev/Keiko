@@ -164,6 +164,40 @@ function minimumInputBudget(
 }
 
 describe("bound folder windows at existing shared selection fences", () => {
+  it.each(["single", "multiple"] as const)(
+    "reserves the complete selected skill before fitting %s sources",
+    (topology) => {
+      const store = createInMemoryUiStore();
+      stores.push(store);
+      const body = "# Synthetic method\nCheck Grüße, edge cases, and 😀 inputs.\n";
+      const protectedSkill = store.markdownSkills.import({
+        fileName: "synthetic.md",
+        contentBase64: Buffer.from(body).toString("base64"),
+      });
+      const source = pack([EARLY, REQUIRED]);
+      const fit = (
+        skill = protectedSkill,
+        modelInputTokensMax = 8000,
+      ): ReturnType<typeof fittedGroundedGatewayPrompt> => {
+        const options = { protectedSkill: skill, modelInputTokensMax };
+        return topology === "single"
+          ? fittedGroundedGatewayPrompt("Explain that.", source, redactor, options)
+          : fittedMultiSourcePrompt(
+              "Explain that.",
+              [{ label: "Example", pack: source }],
+              redactor,
+              options,
+            );
+      };
+      const sent = fit();
+      const rendered = sent.messages.map((message) => message.content).join("\n");
+      expect(rendered.split(body)).toHaveLength(2);
+      expect(sent.withoutSources.map((message) => message.content).join("\n")).toContain(body);
+      expect(sent.protectedSkill).toMatchObject({ reference: { id: protectedSkill.id } });
+      const oversized = { ...protectedSkill, body: body.repeat(1000) };
+      expect(() => fit(oversized, 800)).toThrow();
+    },
+  );
   it.each(["count", "bytes"] as const)(
     "retains the read hint at the provisional %s limit without changing native rank",
     (limit) => {

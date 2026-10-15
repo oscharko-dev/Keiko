@@ -25,7 +25,7 @@
          windows-portable-rfc3161.cs is an offline RFC 3161 timestamp responder verifier and
          does not touch any ASP.NET Core surface — the framework reference bloated the
          restore graph with the ASP.NET Core targeting pack for no compiler benefit. -->
-    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <Compile Include="../windows-portable-rfc3161.cs" Link="windows-portable-rfc3161.cs" />
   </ItemGroup>
 </Project>

@@ -1,6 +1,12 @@
 "use client";
 
 import {
+  useChatMarkdownSkill,
+  chatSkillBlocksSend,
+  expectedMarkdownSkillSelection,
+  type ChatMarkdownSkill,
+} from "./useChatMarkdownSkill";
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -14,7 +20,10 @@ import {
   MAX_ATTACHMENT_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { useTranslate } from "@/lib/i18n";
-import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
+import {
+  ATTACHMENT_CLEANUP_DEFERRED_ERROR,
+  SKILL_SELECTION_UNAVAILABLE_ERROR,
+} from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
@@ -875,6 +884,7 @@ interface SendMessageOptions {
 }
 
 interface CanonicalVoiceSendTarget {
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   readonly chat: Chat;
   readonly project: CanonicalChatProjectTarget;
   readonly modelId: string;
@@ -893,6 +903,7 @@ interface CanonicalChatProjectTarget {
 }
 
 interface UngroundedSendRequest {
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   readonly chat: Chat;
   readonly project: CanonicalChatProjectTarget;
   readonly content: string;
@@ -913,6 +924,7 @@ function desktopChatInputForUngrounded(
     request;
   return {
     chatId: chat.id,
+    expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
     projectPath: project.path,
     content,
     modelId,
@@ -930,6 +942,7 @@ function desktopChatInputForUngrounded(
 }
 
 interface SendAttemptRequest {
+  readonly expectedSkillSelectionRevision?: number | null | undefined;
   readonly chat: Chat;
   readonly project: CanonicalChatProjectTarget;
   readonly content: string;
@@ -944,7 +957,13 @@ interface SendAttemptRequest {
 
 interface GroundedSendRequest extends Pick<
   SendAttemptRequest,
-  "chat" | "content" | "optimisticId" | "modelId" | "signal" | "clientTurnId"
+  | "chat"
+  | "content"
+  | "optimisticId"
+  | "modelId"
+  | "signal"
+  | "clientTurnId"
+  | "expectedSkillSelectionRevision"
 > {
   readonly memory: ConversationMemoryRequestWire;
   readonly correlationId: SendAttemptRequest["correlationId"];
@@ -1026,6 +1045,7 @@ interface CanonicalVoiceTurnInput {
   // Realtime session and may be retried after navigation or a scope mutation; deriving this target
   // from live session state on a later retry could route an A transcript through chat/scope B.
   readonly target: {
+    readonly expectedSkillSelectionRevision?: number | null | undefined;
     readonly chat: Chat;
     readonly modelId: string;
   };
@@ -1490,6 +1510,7 @@ interface ChatModelCatalogRead {
 }
 
 export interface UseChatSessionResult {
+  readonly markdownSkill?: ChatMarkdownSkill | undefined;
   projects: ProjectWithAvailability[];
   chats: Chat[];
   messages: ChatMessage[];
@@ -2619,6 +2640,14 @@ function handleStreamUngroundedTransportFailure(
   resolve(failure);
 }
 
+function skillSelectionBlocksSend(
+  skill: ChatMarkdownSkill,
+  chatId: string,
+  canonicalTarget: CanonicalVoiceSendTarget | undefined,
+): boolean {
+  return canonicalTarget === undefined && skill.chatId === chatId && chatSkillBlocksSend(skill);
+}
+
 function canonicalTurnInProgressFailure(error: unknown): FailedSendOutcome {
   if (!(error instanceof ApiError)) return { status: "failed" };
   if (error.code === "CHAT_TURN_IN_PROGRESS") {
@@ -2627,7 +2656,11 @@ function canonicalTurnInProgressFailure(error: unknown): FailedSendOutcome {
   if (error.code === "CHAT_TURN_IDEMPOTENCY_CONFLICT") {
     return { status: "failed", permanentFailure: true, identityConflict: true };
   }
-  if (error.code === "GROUNDING_SCOPE_CHANGED") {
+  if (
+    error.code === "GROUNDING_SCOPE_CHANGED" ||
+    error.code === "SKILL_SELECTION_CHANGED" ||
+    error.code === "SKILL_SURFACE_UNSUPPORTED"
+  ) {
     return {
       status: "failed",
       permanentFailure: true,
@@ -2948,6 +2981,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const autoCreate = options.autoCreate ?? true;
   const loadMemoryAutonomyModeImpl = options.loadMemoryAutonomyModeImpl ?? loadMemoryAutonomyMode;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
+  const markdownSkill = useChatMarkdownSkill(state.activeChat?.id);
   const sessionStateRef = useRef<SessionState>(state);
   sessionStateRef.current = state;
   const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
@@ -4048,6 +4082,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       });
       const requestBody = {
         chatId: chat.id,
+        expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
         projectPath: project.path,
         content,
         modelId,
@@ -4178,6 +4213,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       memory,
       clientTurnId,
       correlationId,
+      expectedSkillSelectionRevision,
     }: GroundedSendRequest): Promise<SendAttemptOutcome> => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
@@ -4192,6 +4228,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             memory,
             ...(clientTurnId === undefined ? {} : { clientTurnId }),
             ...expectedGroundedScopeIdentity(chat, clientTurnId),
+            expectedSkillSelectionRevision,
           },
           signal,
           correlationId,
@@ -4284,6 +4321,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         if (staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
         const terminal = await sendGrounded({
           chat,
+          expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
           content: request.content,
           optimisticId: request.optimisticId,
           modelId: request.modelId,
@@ -4296,6 +4334,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
       const ungroundedRequest: UngroundedSendRequest = {
         chat,
+        expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
         project: request.project,
         content: request.content,
         optimisticId: request.optimisticId,
@@ -4520,6 +4559,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return { status: "not-sent" };
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
+      if (skillSelectionBlocksSend(markdownSkill, chat.id, canonicalTarget)) {
+        setError(SKILL_SELECTION_UNAVAILABLE_ERROR);
+        return { status: "not-sent" };
+      }
+      const expectedSkillSelectionRevision =
+        canonicalTarget === undefined
+          ? expectedMarkdownSkillSelection(markdownSkill)
+          : canonicalTarget.expectedSkillSelectionRevision;
       const clientTurnId = options?.clientTurnId ?? crypto.randomUUID();
       const optimistic =
         options?.optimisticMessage ?? canonicalVoiceOptimisticMessage(chat.id, content);
@@ -4559,9 +4606,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           signal: controller.signal,
           canonicalTarget,
           forceBuffered: options?.forceBuffered === true,
+          expectedSkillSelectionRevision,
           clientTurnId,
           ...(options?.correlationId === undefined ? {} : { correlationId: options.correlationId }),
         });
+        if (terminal.status === "failed" && terminal.scopeChanged === true)
+          void markdownSkill.refresh();
         const { settled, persistence, failedCanonicalTurn } = await settleSendAttempt({
           terminal,
           chat,
@@ -4614,6 +4664,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     },
     [
       draftState,
+      markdownSkill,
       selectionUnavailable,
       refuseHeldSelection,
       state.activeChat,
@@ -4942,6 +4993,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         clientTurnId,
         correlationId: input.correlationId,
         target: {
+          expectedSkillSelectionRevision: input.target.expectedSkillSelectionRevision,
           chat,
           project,
           modelId,
@@ -5156,6 +5208,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
       noEligibleModels,
+      markdownSkill,
       draft: draftState,
       loading,
       sending,
@@ -5212,6 +5265,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.activeChat,
       state.selectedModel,
       noEligibleModels,
+      markdownSkill,
       draftState,
       setDraft,
       loading,

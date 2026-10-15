@@ -198,6 +198,10 @@ const EXPECTED_TABLES = new Set([
   "git_journey_outcomes",
   "github_issue_reader_authorization",
   "memory_autonomy_policy",
+  "markdown_skills",
+  "markdown_skill_revisions",
+  "markdown_skill_selections",
+  "markdown_skill_turn_bindings",
   "projects",
   "relationship_audit_entries",
   "relationship_lifecycle_history",
@@ -607,6 +611,27 @@ describe("forbidden-fields — coding history identity tables", () => {
     ["coding_history_message_bindings", ["run_id", "source_id", "message_id"]],
   ] as const)("keeps %s free of conversation bodies and credentials", (table, expected) => {
     const inspector = openMigratedSchema(join(tmpDir, "coding-history-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, table))).toEqual(new Set(expected));
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — private instruction library (ADR-0013)", () => {
+  it.each([
+    ["markdown_skill_selections", ["chat_id", "revision", "skill_id", "skill_revision", "digest"]],
+    ["markdown_skill_turn_bindings", ["message_id", "skill_id", "skill_revision", "digest"]],
+    ["markdown_skills", ["id", "revision"]],
+    [
+      "markdown_skill_revisions",
+      ["skill_id", "revision", "digest", "name", "byte_count", "created_at", "body"],
+    ],
+  ] as const)("limits %s to reviewed private skill state", (table, expected) => {
+    // The instruction body is intentionally private user content. No credentials or executable
+    // capability metadata belong here; list/discovery/log projections never expose this body.
+    const inspector = openMigratedSchema(join(tmpDir, "skill-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, table))).toEqual(new Set(expected));
     } finally {

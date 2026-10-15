@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -170,7 +171,7 @@ interface OutputFloodEvidence {
 interface D12StopProbe {
   readonly sessionId: string;
   activatedAt?: number;
-  controlCompleted: boolean;
+  controlSettled: boolean;
   terminalSseObserved: boolean;
   finishing: boolean;
 }
@@ -255,7 +256,7 @@ async function installStopProbeInitializer(page: Page): Promise<void> {
     window.__keikoArmD12Stop = (sessionId): void => {
       window.__keikoD12StopProbe = {
         sessionId,
-        controlCompleted: false,
+        controlSettled: false,
         terminalSseObserved: false,
         finishing: false,
       };
@@ -278,7 +279,7 @@ async function installStopDomLatencyCapture(page: Page): Promise<void> {
       if (probe === undefined) return;
       if (
         probe.activatedAt === undefined ||
-        !probe.controlCompleted ||
+        !probe.controlSettled ||
         !probe.terminalSseObserved ||
         !terminalDomReady()
       )
@@ -1288,18 +1289,69 @@ async function detachHeapClient(page: Page, client: CDPSession): Promise<void> {
   }
 }
 
+async function observeRequestSettlement(
+  page: Page,
+  pendingRequest: Promise<Request>,
+): Promise<Request> {
+  const observed = new Set<Request>();
+  let expected: Request | undefined;
+  let settle: ((request: Request) => void) | undefined;
+  const completion = new Promise<Request>((resolve) => {
+    settle = resolve;
+  });
+  const onSettlement = (request: Request): void => {
+    observed.add(request);
+    if (request === expected) settle?.(request);
+  };
+  // Subscribe before the request starts. Unlike Response.finished(), these terminal events also
+  // cover cancellation after headers, when the response's separate completion promise can hang.
+  page.on("requestfinished", onSettlement);
+  page.on("requestfailed", onSettlement);
+  try {
+    expected = await pendingRequest;
+    if (observed.has(expected)) settle?.(expected);
+    return await completion;
+  } finally {
+    page.off("requestfinished", onSettlement);
+    page.off("requestfailed", onSettlement);
+  }
+}
+
+async function captureSettledStopRequest(
+  page: Page,
+  pendingRequest: Promise<Request>,
+): Promise<void> {
+  const request = await observeRequestSettlement(page, pendingRequest);
+  const response = await request.response();
+  if (response === null) expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
+  else {
+    expect(response.status()).toBe(200);
+    const failure = request.failure();
+    if (failure !== null) expect(failure.errorText).toBe("net::ERR_ABORTED");
+  }
+  await page.evaluate(() => {
+    const probe = window.__keikoD12StopProbe;
+    if (probe === undefined) throw new Error("D12_STOP_PROBE_NOT_ARMED");
+    probe.controlSettled = true;
+  });
+}
+
 async function stopFloodNearBoundary(page: Page, panel: Locator): Promise<number> {
   await clearCapturedEvents(page);
   const session = await startFromDebugPanel(page, panel);
   const sampleCount = await page.evaluate(() => window.__keikoD12StopSamples?.length ?? 0);
   await page.evaluate((sessionId) => window.__keikoArmD12Stop?.(sessionId), session.sessionId);
   await waitForAdapterBytes(page, session.sessionId, 896 * 1_024);
-  await stopFromDebugPanel(page, panel);
-  await page.evaluate(() => {
-    const probe = window.__keikoD12StopProbe;
-    if (probe === undefined) throw new Error("D12_STOP_PROBE_NOT_ARMED");
-    probe.controlCompleted = true;
+  // The terminal SSE can invalidate and abort the control request before a response arrives.
+  // Observe that request's actual settlement; the existing server-state assertion, terminal SSE
+  // and painted terminal DOM still independently prove completion without charging poll delay.
+  const request = page.waitForRequest((request) => {
+    if (!request.url().endsWith("/api/editor/debug/control")) return false;
+    if (request.method() !== "POST") return false;
+    const body = request.postDataJSON() as { sessionId?: string; action?: string } | null;
+    return body?.sessionId === session.sessionId && body.action === "stop";
   });
+  await Promise.all([stopFromDebugPanel(page, panel), captureSettledStopRequest(page, request)]);
   await expect
     .poll(() => page.evaluate(() => window.__keikoD12StopSamples?.length ?? 0))
     .toBe(sampleCount + 1);
@@ -1705,3 +1757,139 @@ test("#2348 D12 composes the real output limit with bounded browser state and te
     await detachHeapClient(page, heapClient);
   }
 });
+
+test("#2348 stop measurement observes a completed server stop when its response is aborted", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
+  let serverCompleted = false;
+  await page.route("**/api/editor/debug/control", async (route) => {
+    const body = route.request().postDataJSON() as { action?: string };
+    if (body.action !== "stop") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    serverCompleted = true;
+    await route.abort("aborted");
+  });
+  const latency = await stopFloodNearBoundary(page, panel);
+  expect(serverCompleted).toBe(true);
+  expect(Number.isFinite(latency)).toBe(true);
+  expect(latency).toBeGreaterThanOrEqual(0);
+});
+
+test("#2348 stop observation does not depend on the response completion notification", async ({
+  page,
+}) => {
+  const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
+  const session = await startFromDebugPanel(page, panel);
+  await page.evaluate((id) => window.__keikoArmD12Stop?.(id), session.sessionId);
+  let acknowledged = false;
+  page.on("response", (response) => {
+    if (!response.url().endsWith("/api/editor/debug/control")) return;
+    const body = response.request().postDataJSON() as { action?: string };
+    if (body.action !== "stop") return;
+    acknowledged = true;
+    // Keep the real request, BFF, body and terminal UI. Fault only Playwright's completion
+    // notification: CI observed this promise never settling after the HTTP 200 response.
+    response.finished = (): Promise<null> =>
+      Promise.reject(new Error("D12_RESPONSE_COMPLETION_NOTIFICATION_UNAVAILABLE"));
+  });
+  const pending = page.waitForRequest((request) =>
+    request.url().endsWith("/api/editor/debug/control"),
+  );
+  await Promise.all([
+    captureSettledStopRequest(page, pending),
+    page.evaluate(async ({ sessionId, pauseGeneration }) => {
+      const response = await fetch("/api/editor/debug/control", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
+        body: JSON.stringify({ schemaVersion: "1", sessionId, pauseGeneration, action: "stop" }),
+      });
+      if (response.status !== 200) throw new Error("D12_REAL_STOP_REJECTED");
+      await response.json();
+    }, session),
+  ]);
+  expect(acknowledged).toBe(true);
+  await expectServerStopped(page, session.sessionId);
+  await expect(panel.getByText("No active debug session.")).toBeVisible();
+  activeSessionId = undefined;
+});
+
+test("#2348 stop observation settles cancellation after real response headers", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
+  const session = await startFromDebugPanel(page, panel);
+  await page.evaluate((id) => window.__keikoArmD12Stop?.(id), session.sessionId);
+  let body: Buffer = Buffer.alloc(0);
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "access-control-allow-origin": new URL(page.url()).origin,
+      "access-control-allow-credentials": "true",
+    });
+    // Forward only the first byte of the real successful BFF response, leaving its body pending.
+    response.write(body.subarray(0, 1));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new TypeError("D12_BRIDGE_NOT_LISTENING");
+  }
+  try {
+    await page.route("**/api/editor/debug/control", async (route) => {
+      const actual = await route.fetch();
+      expect(actual.status()).toBe(200);
+      body = await actual.body();
+      expect(body.length).toBeGreaterThan(1);
+      await route.continue({
+        url: `http://127.0.0.1:${String(address.port)}/api/editor/debug/control`,
+      });
+    });
+    const pending = page.waitForRequest((request) =>
+      request.url().endsWith("/api/editor/debug/control"),
+    );
+    await Promise.all([
+      captureSettledStopRequest(page, pending),
+      abortStopAfterHeaders(page, session),
+    ]);
+    const request = await pending;
+    expect((await request.response())?.status()).toBe(200);
+    expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
+    await expectServerStopped(page, session.sessionId);
+    await expect(panel.getByText("No active debug session.")).toBeVisible();
+    activeSessionId = undefined;
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error === undefined) resolve();
+        else reject(error);
+      });
+    });
+  }
+});
+
+async function abortStopAfterHeaders(page: Page, session: DebugSessionProjection): Promise<void> {
+  const aborted = await page.evaluate(async ({ sessionId, pauseGeneration }) => {
+    const controller = new AbortController();
+    const response = await fetch("/api/editor/debug/control", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
+      body: JSON.stringify({ schemaVersion: "1", sessionId, pauseGeneration, action: "stop" }),
+      signal: controller.signal,
+    });
+    if (response.status !== 200) throw new Error("D12_REAL_STOP_HEADERS_MISSING");
+    controller.abort();
+    return response.json().then(
+      () => false,
+      (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+    );
+  }, session);
+  expect(aborted).toBe(true);
+}

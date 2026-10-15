@@ -68,6 +68,7 @@ function segmentLabel(
 ): string {
   const labels: Record<ChatContextSegmentWire["id"], string> = {
     system: t("chat.context.segment.system"),
+    skill: t("chat.context.segment.skill"),
     summary: t("chat.context.segment.summary"),
     messages: t("chat.context.segment.messages"),
     knowledge: t("chat.context.segment.knowledge"),

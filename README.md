@@ -90,7 +90,15 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
 
-## What's new in 1.2.1
+## What's new in 1.2.2
+
+- **Private skills in Chat.** Open **Skills** beside the Composer, upload a Markdown file and select it for that chat. The active skill is visible beside the context meter. Preview, replace, download or delete a skill in the same dialog; uploading alone does not activate it.
+- **Instructions that survive compaction.** The complete selected revision counts toward the context budget and remains intact when conversation history is summarized. If it cannot fit or its revision is unavailable, Chat explains the correction instead of silently dropping it.
+- **Create a skill from a concept.** Paste text or select a document, prepare a draft through your configured gateway, review and edit it, then explicitly save or download it. A repository is not required. Skills remain local and grant no additional execution or network permissions.
+
+See the [private Chat skills guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/prompt-enhancer/user-guide.md#private-markdown-skills-in-chat) for import limits, selection, privacy and context handling. OpenCode/Coding Workbench skill integration is separate work; this release adds skills to Keiko Chat.
+
+## Previous improvements in 1.2.1
 
 - **More relevant source evidence.** Connected-folder questions retain named files and relevant implementation bodies more reliably within the existing read, token and time budgets. Physical source ranges and the evidence actually sent to the model stay aligned.
 - **Reliable startup and edits.** Configured gateways and selected models survive normal project startup, readiness refreshes automatically, and governed file edits preserve ordinary text exactly. Coding completion requires fresh verification after the final edit.

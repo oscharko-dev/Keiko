@@ -1,3 +1,10 @@
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
+import {
+  markdownSkillPromptUsage,
+  withMarkdownSkillInstructions,
+} from "./markdown-skill-prompt.js";
+import { logGroundedPromptSelection } from "./chat-activity.js";
 import { createHash } from "node:crypto";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
@@ -21,20 +28,21 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
-import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type {
-  Chat,
-  ChatLocalKnowledgeScope,
-  ChatMessage,
-  GroundedRerankerDiagnostics,
-  GroundedAnswer,
-  GroundedPromptContextWire,
-  GroundedUncertainty,
-  HtmlManualCitationMetadata,
-  HtmlManualCitationOpenEligibility,
-  HtmlManualCitationOpenUnavailableReason,
-  LocalKnowledgeEvidenceCitation,
-  LocalKnowledgeGroundedAnswer,
+import {
+  DEFAULT_GROUNDING_LIMITS,
+  type MarkdownSkillDocument,
+  type Chat,
+  type ChatLocalKnowledgeScope,
+  type ChatMessage,
+  type GroundedRerankerDiagnostics,
+  type GroundedAnswer,
+  type GroundedPromptContextWire,
+  type GroundedUncertainty,
+  type HtmlManualCitationMetadata,
+  type HtmlManualCitationOpenEligibility,
+  type HtmlManualCitationOpenUnavailableReason,
+  type LocalKnowledgeEvidenceCitation,
+  type LocalKnowledgeGroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   ContextProfile,
@@ -683,6 +691,7 @@ function buildLocalKnowledgeMessages(
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
+  protectedSkill?: MarkdownSkillDocument,
 ): {
   readonly messages: readonly { readonly role: "system" | "user"; readonly content: string }[];
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
@@ -700,21 +709,25 @@ function buildLocalKnowledgeMessages(
     },
     {
       role: "user",
-      content: [
-        `Question: ${question}`,
-        "",
-        localKnowledgePromptSummary(input),
-        "",
-        "Citations:",
-        ...rendered.lines,
-        ...repairInstruction,
-      ].join("\n"),
+      content: withMarkdownSkillInstructions(
+        [
+          `Question: ${question}`,
+          "",
+          localKnowledgePromptSummary(input),
+          "",
+          "Citations:",
+          ...rendered.lines,
+          ...repairInstruction,
+        ].join("\n"),
+        protectedSkill,
+      ),
     },
   ] as const;
   return { messages, numericEvidence: rendered.numericEvidence };
 }
 
 interface AnswerGeneratorContext {
+  readonly userMessageId?: string | undefined;
   readonly deps: UiHandlerDeps;
   readonly correlationId: string | undefined;
 }
@@ -784,8 +797,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return sentPromptContext(sent.prompt, this.measuredPromptTokens, sent.profile);
   }
 
+  private selectedSkill(): MarkdownSkillDocument | undefined {
+    const id = this.context.userMessageId;
+    return id === undefined ? undefined : this.context.deps.store.markdownSkills.forTurn(id);
+  }
+
   private callWithinWindow(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
     const available = Math.min(input.references.length, this.limits.maxPromptReferences);
+    const skill = this.selectedSkill();
     const render = (count: number): ReturnType<typeof buildLocalKnowledgeMessages> =>
       buildLocalKnowledgeMessages(
         input.query.answerQuestion ?? input.query.text,
@@ -793,6 +812,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         this.store,
         this.redactExcerpt,
         this.limits,
+        skill,
       );
     const profile = currentContextProfileForModel(this.context.deps, this.modelId);
     const fitted = fitKnowledgePrompt(available, render, profile, {
@@ -807,10 +827,20 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         withoutSources: render(0).messages,
         sentReferenceCount: fitted.referenceCount,
         availableReferenceCount: available,
+        protectedSkill:
+          skill === undefined
+            ? undefined
+            : markdownSkillPromptUsage(skill, profile ?? DEFAULT_CONTEXT_PROFILE),
       },
       profile,
     };
     this.measuredPromptTokens = 0;
+    logGroundedPromptSelection(
+      this.context.correlationId,
+      this.sent.prompt,
+      profile?.effectiveInputBudget ?? 0,
+      profile?.tokenAccounting,
+    );
     return this.model.call(
       {
         modelId: this.modelId,
@@ -2598,19 +2628,24 @@ async function persistScopedGroundedAnswer(
 function createScopedAnswerGenerator(
   model: ModelPort,
   modelId: string,
-  deps: UiHandlerDeps,
   env: { readonly store: KnowledgeStore },
   limits: ReturnType<typeof currentGroundingLimits>,
-  correlationId: string | undefined,
+  context: AnswerGeneratorContext,
 ): StoreBackedAnswerGenerator {
+  const { deps, correlationId, userMessageId } = context;
   return new StoreBackedAnswerGenerator(
-    model,
+    withMarkdownSkillAdmission(
+      model,
+      deps.store.markdownSkills,
+      userMessageId,
+      deps.markdownSkillAuthority,
+    ),
     modelId,
     env.store,
     createSqliteAuditSink(env.store),
     (value: string): string => redactText(deps, value),
     limits,
-    { deps, correlationId },
+    { deps, correlationId, userMessageId },
   );
 }
 
@@ -2659,7 +2694,8 @@ async function runScopedGroundedAnswer(
   const model = resolveModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
   const limits = currentGroundingLimits(deps);
-  const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits, correlationId);
+  const generation = { deps, correlationId, userMessageId: input.userMessage?.id };
+  const generator = createScopedAnswerGenerator(model, modelId, env, limits, generation);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
     {

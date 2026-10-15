@@ -1,3 +1,11 @@
+import {
+  markdownSkillDraftRequest,
+  requireSkillDraftCompletion,
+  validateMarkdownSkillDraft,
+  PromptEnhancementSkillDraftError,
+} from "./markdownSkillDraft.js";
+export { PromptEnhancementSkillDraftError } from "./markdownSkillDraft.js";
+
 // Prompt Enhancer workflow authority (Epic #1307, Issue #1314; ADR-0044 §1/§3/§4).
 //
 // This module owns the governed `analyze → plan → optimize → validate → optional model refine →
@@ -69,6 +77,7 @@ export class PromptEnhancementCancelledError extends Error {
 }
 
 export interface RunPromptEnhancementDeps {
+  readonly correlationId?: string | undefined;
   // A credential-free view of the resolved Model-Gateway config, or undefined when none is configured.
   // Used to resolve the optional enhancement model's readiness (AC3).
   readonly gatewayRoutingConfig: ConfiguredCapabilitySource | undefined;
@@ -463,6 +472,8 @@ function modelRequest(
   analysis: PreparedEnhancement["analysis"],
   deterministicPrompt: EnhancedPrompt,
 ): GatewayRequest {
+  if (request.outputKind === "markdown-skill")
+    return markdownSkillDraftRequest(request, capability);
   return {
     modelId,
     messages: [
@@ -485,7 +496,8 @@ function stripOuterMarkdownFence(text: string): string {
   return match?.[1]?.trim() ?? text.trim();
 }
 
-function modelRenderedPrompt(content: string): string | undefined {
+function modelRenderedPrompt(content: string, skillDraft = false): string | undefined {
+  if (skillDraft) return validateMarkdownSkillDraft(stripOuterMarkdownFence(content));
   const sanitized = stripOuterMarkdownFence(stripUnsafeFormatChars(content).normalize("NFKC"));
   if (sanitized.length === 0) return undefined;
   if (sanitized.length <= MODEL_RENDERED_PROMPT_MAX_CHARS) return sanitized;
@@ -585,31 +597,41 @@ async function callModelForText(options: {
   const { context, request, deps, prepared, deterministicPrompt } = options;
   try {
     const response = await context.model.call(
-      modelRequest(
-        context.routing.resolvedModelId,
-        context.capability,
-        request,
-        prepared.analysis,
-        deterministicPrompt,
-      ),
+      {
+        ...modelRequest(
+          context.routing.resolvedModelId,
+          context.capability,
+          request,
+          prepared.analysis,
+          deterministicPrompt,
+        ),
+        ...(deps.correlationId === undefined
+          ? {}
+          : { logContext: { correlationId: deps.correlationId } }),
+      },
       deps.signal ?? new AbortController().signal,
     );
     throwIfCancelled(deps.signal);
+    if (request.outputKind === "markdown-skill") requireSkillDraftCompletion(response);
     return { ok: true, content: response.content };
-  } catch {
+  } catch (error) {
     throwIfCancelled(deps.signal);
+    if (error instanceof PromptEnhancementSkillDraftError) throw error;
+    if (request.outputKind === "markdown-skill")
+      throw new PromptEnhancementSkillDraftError("model-failed");
     return { ok: false, routing: fallbackRouting(context.routing, "model-call-failed") };
   }
 }
 
 function buildModelRefinement(options: {
+  readonly skillDraft: boolean;
   readonly content: string;
   readonly routing: PromptEnhancementModelRouting;
   readonly prepared: PreparedEnhancement;
   readonly deterministicPrompt: EnhancedPrompt;
 }): MaybeModelRefinementOutcome {
   const { content, routing, prepared, deterministicPrompt } = options;
-  const renderedPrompt = modelRenderedPrompt(content);
+  const renderedPrompt = modelRenderedPrompt(content, options.skillDraft);
   if (renderedPrompt === undefined) {
     return { applied: false, routing: fallbackRouting(routing, "model-empty-response") };
   }
@@ -685,7 +707,11 @@ async function tryModelRefinement(options: {
 }): Promise<MaybeModelRefinementOutcome> {
   const { request, deps, resolvedModel, prepared, deterministicPrompt } = options;
   const execution = resolveModelExecution(resolvedModel, deps);
-  if (!execution.ok) return { applied: false, routing: execution.routing };
+  if (!execution.ok) {
+    if (request.outputKind === "markdown-skill")
+      throw new PromptEnhancementSkillDraftError("model-unavailable");
+    return { applied: false, routing: execution.routing };
+  }
   const content = await callModelForText({
     context: execution.context,
     request,
@@ -697,6 +723,7 @@ async function tryModelRefinement(options: {
   // No `selection`: the model refinement's verdict is computed on the text it actually returns, so
   // the winner candidate's assessment is deliberately out of reach here (0.3.0 audit P0, #2802).
   return buildModelRefinement({
+    skillDraft: request.outputKind === "markdown-skill",
     content: content.content,
     routing: execution.context.routing,
     prepared,
@@ -757,6 +784,7 @@ function buildWireResponse(options: {
     selected.renderedPrompt ?? PromptEnhancer.renderEnhancedPromptText(selected.prompt);
   return {
     schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
+    ...(request.outputKind === undefined ? {} : { outputKind: request.outputKind }),
     promptId: selected.promptId,
     inputFingerprintSha256,
     analysis,
@@ -796,6 +824,8 @@ export async function runPromptEnhancement(
     selection,
   });
   throwIfCancelled(deps.signal);
+  if (request.outputKind === "markdown-skill" && !modelRefinement.applied)
+    throw new PromptEnhancementSkillDraftError("invalid-output");
   return buildWireResponse({
     request,
     inputFingerprintSha256,
@@ -880,6 +910,8 @@ export function buildPromptEnhancementRecordInput(options: {
   readonly recordedAt: string;
 }): PromptEnhancementRecordInput {
   const { rawInput, result, recordedAt } = options;
+  if (result.outputKind === "markdown-skill")
+    throw new PromptEnhancementSkillDraftError("private-evidence");
   const winnerProfile = result.candidates.scorecards.find(
     (scorecard) => scorecard.candidateId === result.candidates.winnerCandidateId,
   )?.profile;

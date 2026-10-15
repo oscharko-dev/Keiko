@@ -28,6 +28,7 @@ type ContextSession = Pick<
   | "regeneratingMessageId"
   | "loading"
   | "models"
+  | "markdownSkill"
 >;
 
 interface ContextState {
@@ -81,6 +82,7 @@ function contextAuthorityKey(session: ContextSession): string {
     chat?.projectPath,
     session.selectedModel,
     chat?.groundingScopeIdentity ?? legacyScopeGeometry(session),
+    session.markdownSkill?.view?.selection,
   ]);
 }
 

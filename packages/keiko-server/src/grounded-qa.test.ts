@@ -1705,6 +1705,107 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it("requires live skill authority before grounded turn persistence regardless of client preconditions", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const skill = store.markdownSkills.import({
+      fileName: "method.md",
+      contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+    });
+    store.markdownSkills.select(chatId, skill, 0);
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const pair = channel.pair(fakePairingRequestBody());
+    if (!pair.paired) throw new Error("Expected pairing");
+    channel.signOut(pair.cookieToken);
+    const seen: GatewayRequest[] = [];
+    for (const revision of [undefined, 1, null]) {
+      for (const cookie of [undefined, `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}`]) {
+        const result = await handleGroundedAsk(
+          ctx(
+            JSON.stringify({
+              chatId,
+              content: GROUNDED_FIXTURE_QUESTION,
+              expectedSkillSelectionRevision: revision,
+            }),
+            fakeRes(),
+            cookie,
+          ),
+          deps(fakeModel("Must not dispatch", seen), {}, { codingAppSessionChannel: channel }),
+        );
+        expect(result).toMatchObject({ status: 404 });
+        expect(store.listMessages(chatId)).toHaveLength(0);
+      }
+    }
+    expect(seen).toHaveLength(0);
+  });
+
+  it.each(["single", "multiple"] as const)(
+    "applies the pinned skill once at the actual %s-folder synthesis boundary",
+    async (topology) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      if (topology === "multiple") {
+        const second = join(tmp, "second-synthetic-root");
+        mkdirSync(second);
+        seedScopedRepo(second);
+        store.updateChat(chatId, {
+          connectedScopes: [projectPath, second].map((root) => ({
+            kind: "workspace-root",
+            root,
+            relativePaths: [],
+            connectedAtMs: NOW,
+          })),
+        });
+      }
+      const body = "# Synthetic review\nExplain a boundary condition before examples. Grüße 😀.\n";
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from(body).toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const seen: GatewayRequest[] = [];
+      const paired = pairedReportOwner(tmp);
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION }),
+          fakeRes(),
+          paired.cookie,
+        ),
+        deps(
+          fakeModel(
+            topology === "single"
+              ? "MyClass is implemented [src/foo.ts:1-3]."
+              : "MyClass is implemented [source:1|src/foo.ts:1-3].",
+            seen,
+          ),
+          {},
+          { codingAppSessionChannel: paired.owner.codingAppSessionChannel },
+        ),
+      );
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(seen.length).toBeGreaterThan(0);
+      for (const request of seen) {
+        expect(
+          request.messages
+            .map((message) => message.content)
+            .join("\n")
+            .split(body),
+        ).toHaveLength(2);
+      }
+      const answer = result.body as GroundedAnswer;
+      expect(answer.promptContext?.protectedSkill?.reference).toMatchObject({
+        id: skill.id,
+        revision: 1,
+      });
+      expect(store.markdownSkills.forTurn(answer.userMessageId)?.digest).toBe(skill.digest);
+      expect(store.listMessages(chatId).some((message) => message.content.includes(body))).toBe(
+        false,
+      );
+    },
+  );
   it.each(["ENOTCONN", "EHOSTDOWN", "ENXIO", "EMFILE", "ETIMEDOUT"])(
     "keeps a healthy connected root when a sibling fails with %s",
     async (code) => {
@@ -2232,7 +2333,11 @@ describe("handleGroundedAsk", () => {
         { ...ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })), correlationId },
         sharedDeps,
       );
-      expect(probe).toHaveBeenCalledWith(sharedDeps, CHAT_MODEL, correlationId);
+      expect(probe).toHaveBeenCalledWith(
+        expect.objectContaining(sharedDeps),
+        CHAT_MODEL,
+        correlationId,
+      );
       expect(newProbe).not.toHaveBeenCalled();
       probe.mockRestore();
       newProbe.mockRestore();
@@ -5792,6 +5897,7 @@ describe("actual fitted repository evidence authority", () => {
       expect(factory.mock.calls[0]?.[5]).toEqual({
         currentQuestion: "Explain Feature",
         answerOnlyContextAvailable: false,
+        userMessageId: (result.body as GroundedAnswer).userMessageId,
       });
     } finally {
       factory.mockRestore();

@@ -433,7 +433,7 @@ function targetPromptObservation(answer, target) {
   };
 }
 
-async function logAnalysis(stateDir, correlationId) {
+export async function logAnalysis(stateDir, correlationId) {
   const reader = await importBuilt("keiko-activity-log", "reader/index.js");
   const { openSafeArtifactFile } = await importBuilt("keiko-security", "fs-hardening.js");
   const files = reader.listActivityLogStoreFiles(stateDir);

@@ -1,3 +1,5 @@
+import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
+import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
 import { gatewayAssemblyOutputAllocation } from "./chat-prompt-budget.js";
 import { beginAppSessionOperation } from "./coding-app-session/appSessionReadAuthority.js";
 import {
@@ -407,12 +409,17 @@ function streamWithWindowRetry(
       attempt,
     });
     const stream = admitted.callStream(
-      {
-        modelId,
-        messages: assembly.messages,
-        ...gatewayAssemblyOutputAllocation(assembly),
-        logContext: { correlationId: ctx.correlationId },
-      },
+      protectMarkdownSkillRequest(
+        {
+          modelId,
+          messages: assembly.messages,
+          ...gatewayAssemblyOutputAllocation(assembly),
+          logContext: { correlationId: ctx.correlationId },
+        },
+        deps.store.markdownSkills,
+        admitted.gatewayTurn.currentUserMessageId,
+        deps.markdownSkillAuthority,
+      ),
       controller.signal,
     );
     return { assembly, turn: await streamConversation(ctx, deps, stream, controller, termination) };
@@ -435,6 +442,7 @@ async function buildPreparedStreamAssembly(
       turn.executionAdmission,
       signal,
       ctx.correlationId,
+      { userMessageId: turn.gatewayTurn.currentUserMessageId },
     );
     return assemblyWithConversationImages(
       deps,
@@ -485,8 +493,9 @@ function finalizeStreamedTurn(
 
 export async function handleSendDesktopChatStream(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
+  requestDeps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {
+  const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
   const cancellation = createRequestCancellation(ctx, "desktop chat stream cancelled");
   let releaseSession = (): void => undefined;
   try {
