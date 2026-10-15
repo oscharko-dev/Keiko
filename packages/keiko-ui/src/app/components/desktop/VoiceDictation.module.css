@@ -11,7 +11,8 @@
 .cmpWaveform svg {
   display: block;
   width: 100%;
-  height: 32px;
+  height: 24px;
+  opacity: 0.72;
   /* New samples enter beside the microphone on the right. Older samples disappear
      across the leftmost third, before the adjacent model and skill controls. */
   mask-image: linear-gradient(to right, transparent, #000 33%, #000);
@@ -19,7 +20,7 @@
 
 .cmpWaveform line {
   stroke: currentColor;
-  stroke-width: 3;
+  stroke-width: 2;
   stroke-linecap: round;
 }
 
