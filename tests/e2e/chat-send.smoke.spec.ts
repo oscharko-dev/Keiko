@@ -421,7 +421,7 @@ test("applies a selected private skill once across compaction and reload, then r
     page.locator('article[data-role="assistant"]').filter({ hasText: "KEIKO_SKILL_ONCE_OK" }),
   ).toHaveCount(1);
   await page.getByRole("button", { name: /Conversation context:/ }).click();
-  await expect(page.getByText("Skill instructions (protected)", { exact: true })).toBeVisible();
+  await expect(page.getByText("Skill instructions", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Compact context now" })).toBeEnabled();
   await page.getByRole("button", { name: "Compact context now" }).click();
   await expect(page.getByText(/tokens saved/)).toBeVisible();

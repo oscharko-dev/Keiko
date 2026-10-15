@@ -128,6 +128,12 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.cmpProtected {
+  display: inline-flex;
+  margin-inline-start: 4px;
+  vertical-align: text-bottom;
+  color: var(--accent-text);
+}
 .cmpLegendDetail {
   display: block;
   color: var(--fg-muted);

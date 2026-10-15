@@ -1299,13 +1299,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.untilConversationCompaction":
     "{tokens} conversation tokens until automatic compaction.",
   "chat.context.sourcesPolicy":
-    "Sources are retrieved fresh for each question, never summarized. Conversation capacity is separate.",
+    "Sources are retrieved fresh within the source budget for each question, never summarized. Conversation capacity is separate.",
   "chat.context.sourcesPolicyGrounded":
-    "Sources are retrieved fresh for each question, never summarized.",
+    "Sources are retrieved fresh within the source budget for each question, never summarized.",
   "chat.context.automatic":
     "Automatic compaction at 90% of usable capacity, before the next request.",
   "chat.context.retained":
-    "Manual compaction: one pass; available again with new messages and 50% capacity used. The full chat stays saved; summaries may omit details.",
+    "Manual compaction: one pass; available again with new messages and 50% capacity used. System and skill instructions stay unchanged. The full chat stays saved; summaries may omit details.",
   "chat.context.error": "Context could not be updated.",
   "chat.context.retry": "Retry",
   "chat.context.compact": "Compact context now",
@@ -1313,7 +1313,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.wait": "Available after the current response finishes.",
   "chat.context.total": "{used} of {usable} usable input tokens · context window {window}",
   "chat.context.breakdown": "Context window breakdown",
-  "chat.context.segment.skill": "Skill instructions (protected)",
+  "chat.context.segment.skill": "Skill instructions",
+  "chat.context.notCompacted": "Not compacted",
   "chat.context.segment.system": "System instructions",
   "chat.context.segment.summary": "Summary of earlier messages",
   "chat.context.segment.messages": "Messages",

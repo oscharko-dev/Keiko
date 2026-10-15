@@ -9,11 +9,19 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useLocale } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { Icons } from "./Icons";
 import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
 import styles from "./ChatContextMeter.module.css";
+
+const LockIcon = Icons.lock;
+const UNCOMPACTED_SEGMENTS = new Set<ChatContextSegmentWire["id"]>([
+  "system",
+  "skill",
+  "knowledge",
+]);
 
 export interface ChatContextMeterProps {
   readonly status: ChatContextStatusWire | undefined;
@@ -128,6 +136,17 @@ function SegmentBar({
   );
 }
 
+function CompactionProtection({ id }: { readonly id: ChatContextSegmentWire["id"] }): ReactNode {
+  const t = useTranslate();
+  if (!UNCOMPACTED_SEGMENTS.has(id)) return null;
+  const label = t("chat.context.notCompacted");
+  return (
+    <span className={styles.cmpProtected} role="img" aria-label={label} title={label}>
+      <LockIcon size={13} />
+    </span>
+  );
+}
+
 function SegmentRow({
   segment,
   status,
@@ -144,6 +163,7 @@ function SegmentRow({
       <span className={styles.cmpSwatch} data-segment={segment.id} aria-hidden="true" />
       <span className={styles.cmpLegendLabel}>
         {segmentLabel(t, segment, status.conversationInputBudgetTokens !== undefined)}
+        <CompactionProtection id={segment.id} />
         {detail === undefined ? null : <span className={styles.cmpLegendDetail}>{detail}</span>}
       </span>
       <span className={styles.cmpLegendValue}>{segment.tokens.toLocaleString(locale)}</span>

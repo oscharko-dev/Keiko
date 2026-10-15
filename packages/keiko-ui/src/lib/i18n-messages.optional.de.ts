@@ -1352,13 +1352,13 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.untilConversationCompaction":
     "Noch {tokens} Gesprächs-Tokens bis zur automatischen Kompaktierung.",
   "chat.context.sourcesPolicy":
-    "Quellen werden je Frage neu geladen und nie zusammengefasst. Die Gesprächskapazität ist separat.",
+    "Quellen werden je Frage innerhalb des Quellenbudgets neu geladen und nie zusammengefasst. Die Gesprächskapazität ist separat.",
   "chat.context.sourcesPolicyGrounded":
-    "Quellen werden je Frage neu geladen und nie zusammengefasst.",
+    "Quellen werden je Frage innerhalb des Quellenbudgets neu geladen und nie zusammengefasst.",
   "chat.context.automatic":
     "Automatisch ab 90 % der nutzbaren Kapazität, vor der nächsten Anfrage.",
   "chat.context.retained":
-    "Manuell: ein Durchlauf; erneut verfügbar mit neuen Nachrichten und 50 % belegter Kapazität. Der vollständige Chat bleibt gespeichert; Zusammenfassungen können Details auslassen.",
+    "Manuell: ein Durchlauf; erneut verfügbar mit neuen Nachrichten und 50 % belegter Kapazität. System- und Skill-Anweisungen bleiben unverändert. Der vollständige Chat bleibt gespeichert; Zusammenfassungen können Details auslassen.",
   "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
   "chat.context.retry": "Erneut versuchen",
   "chat.context.compact": "Kontext jetzt kompaktieren",
@@ -1366,7 +1366,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
   "chat.context.total": "{used} von {usable} nutzbaren Eingabe-Tokens · Kontextfenster {window}",
   "chat.context.breakdown": "Aufteilung des Kontextfensters",
-  "chat.context.segment.skill": "Skill-Anweisungen (geschützt)",
+  "chat.context.segment.skill": "Skill-Anweisungen",
+  "chat.context.notCompacted": "Wird nicht kompaktiert",
   "chat.context.segment.system": "Systemanweisungen",
   "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
   "chat.context.segment.messages": "Nachrichten",
