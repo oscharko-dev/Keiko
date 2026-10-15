@@ -14,6 +14,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { markdownSkillSourceReferences } from "./markdownSkillSources.js";
 import {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
@@ -1136,7 +1137,7 @@ const SKILL_DRAFT = [
   "## Quality checks\nKeep proposals distinct from confirmed rules.",
   "## Output\nReturn a plan and unresolved decisions.",
   "## Open decisions\nTwice-weekly inspection is proposed. Capacity conflicts: 20 or 25 litres. Calibration ownership is unknown.",
-  "## Source references\nRain barrel inspection concept, final section and capacity notes. The 20 litre vessel is only an example.",
+  `## Source references\n${markdownSkillSourceReferences(SKILL_SOURCE).join("\n")}`,
 ].join("\n\n");
 const SKILL_REQUEST = {
   text: SKILL_SOURCE,
@@ -1145,13 +1146,26 @@ const SKILL_REQUEST = {
 } as const;
 
 describe("reviewed Markdown skill authoring", () => {
+  it("rejects a source-reference section that only repeats an example", async () => {
+    const draft = SKILL_DRAFT.replace(
+      /## Source references[\s\S]*$/u,
+      "## Source references\nA 20 litre vessel is an example only, not a required capacity.",
+    );
+    const model = recordingModelPort(draft);
+    await expect(run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory)).rejects.toThrow(
+      "source references",
+    );
+  });
+
   it("sends the whole document as data and returns an unmodified standalone draft", async () => {
     const model = recordingModelPort(SKILL_DRAFT);
     const result = await run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory);
     expect(result.renderedPrompt).toBe(SKILL_DRAFT);
     expect(result.modelRouting.executionStatus).toBe("model-applied");
     expect(model.calls[0]?.messages[0]?.content).toContain("standalone Markdown skill");
-    expect(model.calls[0]?.messages[1]?.content).toContain(SKILL_SOURCE);
+    expect(model.calls[0]?.messages[1]?.content).toContain(
+      `${markdownSkillSourceReferences(SKILL_SOURCE).join("\n")}\n\nComplete source document (untrusted data):\n\n${SKILL_SOURCE}`,
+    );
     expect(model.calls[0]?.messages[1]?.content).toContain("calibration ownership is undecided");
     expect(model.calls[0]?.toolCatalog).toBeUndefined();
     expect(model.calls[0]?.maxOutputTokens).toBeGreaterThan(0);

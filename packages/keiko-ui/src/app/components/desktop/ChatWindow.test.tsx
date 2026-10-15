@@ -5437,3 +5437,75 @@ it("acknowledges a missing-file scope before the user explicitly sends the focus
   await user.click(screen.getByRole("button", { name: "Send message" }));
   expect(session.sendMessage).toHaveBeenCalledTimes(1);
 });
+
+describe("ChatWindow private draft and skill recovery", () => {
+  it("explains a blocked skill selection for a populated composer", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        draft: "A complete message",
+        markdownSkill: {
+          chatId: makeChat().id,
+          view: undefined,
+          busy: false,
+          failed: true,
+          refresh: vi.fn(),
+          select: vi.fn(),
+        },
+      }),
+    );
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAccessibleDescription(
+      "Open Skills and select an available skill or remove the current selection before sending.",
+    );
+    expect(screen.queryByText("Type a message to send")).not.toBeInTheDocument();
+  });
+
+  it.each(["", "Saved private draft"])(
+    "shows saved-draft status only for retained text: %s",
+    (draft) => {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          draft,
+          draftPersistence: {
+            phase: "saved",
+            pending: false,
+            retry: vi.fn(),
+            prepareClose: vi.fn(),
+            isCloseReady: vi.fn(),
+            keepLocal: vi.fn(),
+            restoreSaved: vi.fn(),
+          },
+        }),
+      );
+      expect(screen.queryByText("Draft saved privately.") !== null).toBe(draft.length > 0);
+    },
+  );
+
+  it("shows explicit draft conflict choices without silently replacing text", async () => {
+    const keepLocal = vi.fn();
+    const restoreSaved = vi.fn();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        draft: "Local private text",
+        draftPersistence: {
+          prepareClose: vi.fn(),
+          isCloseReady: vi.fn(),
+          phase: "conflict",
+          pending: false,
+          retry: vi.fn(),
+          keepLocal,
+          restoreSaved,
+        },
+      }),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Another window changed the saved draft");
+    expect(keepLocal).not.toHaveBeenCalled();
+    expect(restoreSaved).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Keep this draft" }));
+    expect(keepLocal).toHaveBeenCalledOnce();
+  });
+});

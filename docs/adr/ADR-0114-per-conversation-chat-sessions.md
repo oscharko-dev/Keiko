@@ -60,6 +60,15 @@ windows.
    window aborts and disposes only that instance. Cold bootstrap requests and chat-mutation
    notifications remain shared and ref-counted, avoiding N identical network bootstraps while
    preserving per-window mutable state.
+   Unsent text is additionally saved per `chatId` in the existing private UiStore (schema 44),
+   through authenticated draft reads and revision-checked writes. Reload restores only that
+   conversation's text; a conversation switch does not erase another conversation's saved draft.
+   Concurrent tabs cannot overwrite a newer draft without resolving the stale revision. Browser
+   storage and diagnostic evidence never contain draft text. Unconfirmed writes and transient
+   attachments retain an unload warning instead of claiming durable recovery. Closing or cutting a
+   chat window waits for private draft acknowledgement and refuses unresolved conflicts or staged
+   attachments. A final synchronous readiness check preserves edits made during asynchronous
+   connection teardown; acknowledged unbinds still remove their corresponding visible connections.
 2. **D2 — Global shell session.** `AppShell` retains one application session for catalog, project,
    history, and shell consumers. Nested window providers shadow it for all ChatWindow descendants.
    A window never claims or mutates another window's active conversation state.
@@ -76,8 +85,10 @@ windows.
    omit their originating path from window configuration.
 5. **D5 — Server posture is unchanged.** GEN-PERF-CHATSTREAM-001 remains the concurrency
    governance: above the cap, sends degrade per-conversation to the buffered path (already
-   wired client-side). No wire, schema, or persistence change is required; memory actions
-   and grounded answers already ride per-`chatId` requests.
+   wired client-side). Memory actions and grounded answers already ride per-`chatId` requests.
+   The draft repair adds only a private, chat-bound text record and its monotonic revision to the
+   existing UiStore; it does not admit a turn or alter the model request. Clearing a sent draft
+   keeps its revision tombstone so stale clients cannot resurrect the previous text.
 6. **D6 — Voice stays a process-wide singleton.** Exactly one active voice dialogue
    across all chat windows (one microphone, one realtime session), bound to the
    conversation it was started in; other windows render a "voice busy elsewhere"

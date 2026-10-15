@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import {
   act,
   cleanup,
@@ -142,6 +143,61 @@ describe("Chat Markdown skill controls", () => {
       expect(screen.queryByRole("button", { name: /Boundary review/ })).toBeNull(),
     );
     expect(api.changeMarkdownSkillSelection).toHaveBeenLastCalledWith("chat-a", null, 1);
+  });
+
+  it("keeps keyboard focus on the preview action while its read is pending", async () => {
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    let resolve!: (document: MarkdownSkillDocument) => void;
+    vi.mocked(api.readMarkdownSkill).mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    render(<Harness />);
+    const dialog = await open();
+    await waitFor(() => expect(dialog).toHaveFocus());
+    const preview = within(dialog).getByRole("button", { name: DOCUMENT.name });
+    preview.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    expect(preview).toBeEnabled();
+    expect(preview).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Enter}");
+    expect(api.readMarkdownSkill).toHaveBeenCalledOnce();
+    await act(async () => resolve(DOCUMENT));
+    expect(preview).toHaveFocus();
+    await user.tab();
+    expect(within(dialog).getByRole("button", { name: "Select" })).toHaveFocus();
+  });
+
+  it("keeps selection keyboard focus through activation so Escape returns to Skills", async () => {
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    let resolve!: (view: MarkdownSkillSelectionView) => void;
+    vi.mocked(api.changeMarkdownSkillSelection).mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "Skills" });
+    trigger.focus();
+    const dialog = await open();
+    await waitFor(() => expect(dialog).toHaveFocus());
+    const select = within(dialog).getByRole("button", { name: "Select" });
+    select.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    expect(select).toBeEnabled();
+    expect(select).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Enter}");
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledOnce();
+    await act(async () => resolve(SELECTED));
+    expect(select).toHaveFocus();
+    expect(select).toHaveAccessibleName("Active in this chat");
+    await user.keyboard("{Enter}{Escape}");
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("does not upload unsupported or oversized files", async () => {

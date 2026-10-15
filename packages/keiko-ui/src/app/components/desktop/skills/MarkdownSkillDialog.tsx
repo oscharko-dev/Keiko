@@ -164,13 +164,15 @@ function SkillRow({
   const t = useTranslate();
   const selected = skill.view?.selection.skill;
   const active = selected?.id === item.id && selected.revision === item.revision;
+  const selectionDisabled = disabled || skill.busy || library.busy || active;
   return (
     <li data-selected={active}>
       <button
         type="button"
         className={styles.cmpName}
-        disabled={library.busy}
+        aria-disabled={library.busy}
         onClick={() => {
+          if (library.busy) return;
           void library.inspect(item);
         }}
       >
@@ -180,8 +182,9 @@ function SkillRow({
       <button
         type="button"
         aria-pressed={active}
-        disabled={disabled || skill.busy || library.busy || active}
+        aria-disabled={selectionDisabled}
         onClick={() => {
+          if (selectionDisabled) return;
           void skill
             .select({ id: item.id, revision: item.revision, digest: item.digest })
             .catch(() => undefined);

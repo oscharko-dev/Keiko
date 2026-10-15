@@ -35,6 +35,9 @@ import {
   fakePairingRequestBody,
 } from "../coding-app-session/_support.js";
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -160,6 +163,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resetServerLogger();
   await closeServer();
   store.close();
   rmSync(staticRoot, { recursive: true, force: true });
@@ -397,9 +401,25 @@ const PRIVATE_DRAFT = [
   "## Quality checks\nKeep unknowns explicit.",
   "## Output\nA review plan.",
   "## Open decisions\nSampling frequency is undecided.",
-  "## Source references\nGarden sensor concept, final section.",
 ].join("\n\n");
 const PRIVATE_REQUEST = { text: PRIVATE_SOURCE, modelId: CHAT_MODEL, outputKind: "markdown-skill" };
+
+function privateDraft(request: GatewayCallRequest | undefined): string {
+  const source = request?.messages.find((message) => message.role === "user")?.content;
+  const index = source?.split("\n\nComplete source document (untrusted data):")[0];
+  if (index === undefined)
+    throw new TypeError("Skill fixture requires the production source index");
+  return `${PRIVATE_DRAFT}\n\n## Source references\n${index.split("\n").slice(1).join("\n")}`;
+}
+
+function privateModelPort(calls: GatewayCallRequest[]): ModelPort {
+  return {
+    call(request): Promise<NormalizedResponse> {
+      calls.push(request);
+      return Promise.resolve(modelResponse(privateDraft(request)));
+    },
+  };
+}
 
 function authorSession(): {
   channel: ReturnType<typeof createCodingAppSessionChannel>;
@@ -423,7 +443,7 @@ describe("private skill drafting through the existing enhancer route", () => {
   it("requires a paired session before calling the selected model", async () => {
     const calls: GatewayCallRequest[] = [];
     await closeServer();
-    await startBound({ modelPortFactory: () => modelPort(PRIVATE_DRAFT, calls) });
+    await startBound({ modelPortFactory: () => privateModelPort(calls) });
     const response = await post(PRIVATE_REQUEST);
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -439,13 +459,13 @@ describe("private skill drafting through the existing enhancer route", () => {
     await startBound({
       codingAppSessionChannel: session.channel,
       evidenceDir,
-      modelPortFactory: () => modelPort(PRIVATE_DRAFT, calls),
+      modelPortFactory: () => privateModelPort(calls),
     });
     const response = await post(PRIVATE_REQUEST, session.headers);
     expect(response.status).toBe(200);
     const result = (await response.json()) as PromptEnhancementWireResponse;
     expect(result.outputKind).toBe("markdown-skill");
-    expect(result.renderedPrompt).toBe(PRIVATE_DRAFT);
+    expect(result.renderedPrompt).toBe(privateDraft(calls[0]));
     expect(result.evidence).toEqual({ status: "not-recorded", reason: "private-skill-draft" });
     expect(calls[0]?.messages[1]?.content).toContain(PRIVATE_SOURCE);
     expect(calls[0]?.logContext?.correlationId).toBeTruthy();
@@ -459,9 +479,9 @@ describe("private skill drafting through the existing enhancer route", () => {
     await startBound({
       codingAppSessionChannel: session.channel,
       modelPortFactory: () => ({
-        call: (): Promise<NormalizedResponse> => {
+        call: (request): Promise<NormalizedResponse> => {
           session.channel.signOut(session.token);
-          return Promise.resolve(modelResponse(PRIVATE_DRAFT));
+          return Promise.resolve(modelResponse(privateDraft(request)));
         },
       }),
     });
@@ -502,5 +522,28 @@ describe("private skill drafting through the existing enhancer route", () => {
     ]);
     expect(JSON.stringify(records)).not.toContain("synthetic-provider-detail");
     expect(JSON.stringify(records)).not.toContain(PRIVATE_SOURCE);
+  });
+
+  it("rejects untraceable source references with body-free generation evidence", async () => {
+    const session = authorSession();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const invalid = `${PRIVATE_DRAFT}\n\n## Source references\nA small garden is an example only.`;
+    await closeServer();
+    await startBound({
+      codingAppSessionChannel: session.channel,
+      modelPortFactory: () => modelPort(invalid, []),
+    });
+    const response = await post(PRIVATE_REQUEST, session.headers);
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain("source references do not match");
+    const events = sink.events.filter((event) => event.op === "skills.library.operation");
+    expect(events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ action: "generate", phase: "started" }),
+      expect.objectContaining({ action: "generate", phase: "rejected", httpStatus: 422 }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain(PRIVATE_SOURCE);
+    expect(JSON.stringify(events)).not.toContain(invalid);
+    expect(store.markdownSkills.list()).toEqual([]);
   });
 });

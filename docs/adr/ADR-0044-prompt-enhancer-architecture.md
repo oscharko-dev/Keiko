@@ -167,8 +167,14 @@ normalizing or truncating the source. The canonical capability-derived context p
 output tokens and accounts for the complete request. It grants no tools or external fetching.
 
 The draft requires purpose, applicability, scope, steps, quality criteria, output, open decisions
-and bounded source references. Confirmed rules, proposals, examples, conflicts and unknowns remain
-explicit. Structural checks reject incomplete, empty-section, unsafe and oversized output; a
+and bounded source references. The workflow derives an index of source headings or plain-text
+paragraphs with their actual line ranges; adjacent sections coalesce above 24 references while
+retaining complete source coverage. The unchanged source and index remain in the user/data channel.
+The model must reproduce that index in its source-reference section. Missing, invented or altered
+references reject the draft rather than being repaired or appended after generation. This verifies
+where the source can be found, not whether the generated method faithfully interprets every rule.
+Confirmed rules, proposals, examples, conflicts and unknowns remain explicit. Structural checks
+reject incomplete, empty-section, unsafe and oversized output; a
 non-stop completion or unavailable/failed model produces an actionable refusal, never the normal
 enhancer's deterministic fallback. Structural checks do not certify semantic faithfulness. The
 user reviews and edits the complete draft; save, download and chat selection remain separate actions.

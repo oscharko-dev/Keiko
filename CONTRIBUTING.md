@@ -26,6 +26,10 @@ See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area
 
 ### Activity Log runtime changes
 
+Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
+The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
+concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
 APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in

@@ -1093,6 +1093,10 @@ alone); the `coding-workbench` latency profile selects timeout floors only.
 
 ### Rule 2 — when you debug, the log is your primary source
 
+Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.
+Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
+browser persistence; stale revisions fail closed (ADR-0114 D1).
+
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:
 
