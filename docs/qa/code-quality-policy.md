@@ -47,15 +47,20 @@ justified representation boundary, such as attaching a nominal brand after struc
 it neither validates hostile input nor authorizes a chained assertion. These two syntax rules do
 not establish boundary/domain qualification or complete #3918.
 
-Git status, diff, history, summary and remotes parsing reuse concrete admission in their owning
-contracts modules. The typed parsers return the original accepted value; legacy validators retain
+Git status, diff, history, summary, remotes and sync preview/execute parsing reuse concrete admission
+in their owning contracts modules. The typed parsers return the original accepted value; legacy validators retain
 their result shapes and diagnostics. Status, history-entry, history-ref and remote arrays validate
 each indexed member, including sparse positions, without trusting caller-supplied iteration
 methods. History retains its strict date and pagination bounds; summary and remotes retain their
-distinct URL policies and paired upstream fields. The lazy browser consumers carry the parser's
-value through the existing fetch scaffold. An empty 204 on these typed reads is a contract refusal
+distinct URL policies and paired upstream fields. Sync execute now validates its optional upstream
+through that same owning guard; preview retains its executable/block-reason complement and execute
+retains its closed outcomes. The lazy browser consumers carry the parser's value through the
+existing fetch scaffold. An empty 204 on these typed response paths is a contract refusal
 with the response correlation and existing body-free diagnostic; ordinary no-content mutation
-routes retain their behavior. Other legacy response paths remain separate migration obligations.
+routes retain their behavior. Sync response admission preserves POST bodies, approvals, authority
+and cancellation, and never replays an execution after a malformed response. A real API/browser
+transport/registered-writer/support-analyzer scenario proves the correlated body-free refusal with
+a healthy control. Other legacy response paths remain separate migration obligations.
 
 Policy validation retains the initial guards and rejects any activation shrink against the
 complete reachable policy history. Shallow history fails; a second unrelated commit cannot hide
@@ -369,6 +374,13 @@ record's existing closure, not a classification of every helper. Their public pr
 identity and typed output and reject malformed inputs; the owning suites retain date, pagination,
 URL and upstream checks and prove the sparse/spoofed-array repair. These records do not classify
 the injected UI callback graph or complete the remaining boundary/domain migration.
+The sync preview and execute records add exactly two slots: the unknown input parameter of
+`parseGitSyncPreview` and `parseGitSyncExecuteResponse`. Their public proofs preserve identity,
+optional presence, ordered refusals, the executable gate and closed outcomes, and reject malformed
+upstream data through the existing guard. Shared private helpers, exported operation/outcome guards,
+the imported upstream guard and the injected UI callback graph receive no additional classification
+from these records. The actual browser transport and physical writer/analyzer proofs remain
+separate acceptance evidence.
 Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require
@@ -452,7 +464,7 @@ The selected phase builds packages through the canonical wrapper, captures the c
 
 The same-library child helper uses the existing180000ms/SIGKILL/32MiB owner bounds and POSIX detached group. Timeout/output overflow kills the owned group and destroys its owned pipe readers before awaiting actual direct close and observing group absence; the failure remains failed. Unsupported/incomplete drain fails closed; no Windows taskkill or new dependency is introduced. This does not promise containment of a deliberately escaped descendant. Default static platform support is unchanged. Structured process/report failures remain body-free and explicit selected-phase failure exits nonzero even when static enforcement passed. No automatic retries, arbitrary policy commands, extra CLI-owner loop or performance qualification are supplied.
 
-Qualified records prove only their reviewed exact runtime/consumer assertions on this assessed subject. Injected route services prove admission/checked forwarding, actual SQLite tests prove physical refusal, and registered physical writer/analyzer scenarios supply their separate evidence. Declaration/body counterfactual controls and independent review remain acceptance obligations; qualified current9 is not completion of the170-owner/domain migration. Ordinary local scope contracts do not create a mounted server local-manual feature. Optional workspace prototype hardening stays deferred.
+Qualified records prove only their reviewed exact runtime/consumer assertions on this assessed subject. Injected route services prove admission/checked forwarding, actual SQLite tests prove physical refusal, and registered physical writer/analyzer scenarios supply their separate evidence. Declaration/body counterfactual controls and independent review remain acceptance obligations; qualified records do not complete the170-owner/domain migration. Ordinary local scope contracts do not create a mounted server local-manual feature. Optional workspace prototype hardening stays deferred.
 
 The actual JSON reporter file is fresh in an owner-private temporary directory and is admitted only after the child closes. The report and captured pipe bytes together must fit the existing32MiB bound. This is post-close report admission, not an instantaneous disk quota. Successful phase output carries actual direct-close/group-absence facts; no arbitrary report body is printed or attached. Installed tool entrypoints and their package/lock identities are checked before and after; this does not attest every transitive npm/Vitest implementation file.
 

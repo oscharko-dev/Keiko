@@ -7,6 +7,7 @@ import type {
   GitRepositoryState,
   GitUnavailableReason,
   GitRepositoryValidation,
+  GitRepositoryParseResult,
 } from "./git-repository.js";
 import { GIT_REPOSITORY_STATES, isGitWireUnavailableReason } from "./git-repository.js";
 import { isGitUpstreamSummary } from "./git-repository-summary.js";
@@ -135,6 +136,11 @@ function isNonNegativeInteger(input: unknown): input is number {
   return typeof input === "number" && Number.isInteger(input) && input >= 0;
 }
 
+function rejectSyncField(reasons: string[], reason: string): false {
+  reasons.push(reason);
+  return false;
+}
+
 export function isGitSyncOperation(v: unknown): v is GitSyncOperation {
   return v === "fetch" || v === "pull";
 }
@@ -146,35 +152,41 @@ export function isGitSyncOutcome(v: unknown): v is GitSyncOutcome {
 function validateSyncPreviewIdentity(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
-  if (input.schemaVersion !== GIT_SYNC_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
-  if (!isGitSyncOperation(input.operation)) reasons.push("operation invalid");
+): boolean {
+  let valid = true;
+  if (input.schemaVersion !== GIT_SYNC_SCHEMA_VERSION)
+    valid = rejectSyncField(reasons, "schemaVersion invalid");
+  if (!isGitSyncOperation(input.operation)) valid = rejectSyncField(reasons, "operation invalid");
   if (!GIT_REPOSITORY_STATES_VALUES.includes(input.state)) {
-    reasons.push("state invalid");
+    valid = rejectSyncField(reasons, "state invalid");
   }
   if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    reasons.push("reason invalid");
+    valid = rejectSyncField(reasons, "reason invalid");
   }
+  return valid;
 }
 
 function validateSyncPreviewBranchFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   for (const key of ["branch", "remote"] as const) {
     if (input[key] !== undefined && !isString(input[key])) {
-      reasons.push(`${key} must be a string when present`);
+      valid = rejectSyncField(reasons, `${key} must be a string when present`);
     }
   }
   if (input.upstream !== undefined && !isGitUpstreamSummary(input.upstream)) {
-    reasons.push("upstream must be { ref, remote?, branch? } when present");
+    valid = rejectSyncField(reasons, "upstream must be { ref, remote?, branch? } when present");
   }
+  return valid;
 }
 
 function validateSyncPreviewFlags(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   for (const key of [
     "available",
     "detached",
@@ -183,11 +195,13 @@ function validateSyncPreviewFlags(
     "dirty",
     "executable",
   ] as const) {
-    if (!isBoolean(input[key])) reasons.push(`${key} must be a boolean`);
+    if (!isBoolean(input[key])) valid = rejectSyncField(reasons, `${key} must be a boolean`);
   }
   for (const key of ["ahead", "behind"] as const) {
-    if (!isNonNegativeInteger(input[key])) reasons.push(`${key} must be a non-negative integer`);
+    if (!isNonNegativeInteger(input[key]))
+      valid = rejectSyncField(reasons, `${key} must be a non-negative integer`);
   }
+  return valid;
 }
 
 // The producer (keiko-server syncExecution.ts buildSyncPreview) sets
@@ -196,51 +210,95 @@ function validateSyncPreviewFlags(
 function validateSyncPreviewExecutableGate(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let valid = true;
   if (
     input.blockReason !== undefined &&
     !GIT_SYNC_BLOCK_REASONS_VALUES.includes(input.blockReason)
   ) {
-    reasons.push("blockReason invalid");
+    valid = rejectSyncField(reasons, "blockReason invalid");
   }
   if (input.executable === true && input.blockReason !== undefined) {
-    reasons.push("blockReason must be absent when executable is true");
+    valid = rejectSyncField(reasons, "blockReason must be absent when executable is true");
   }
   if (input.executable === false && input.blockReason === undefined) {
-    reasons.push("blockReason must be present when executable is false");
+    valid = rejectSyncField(reasons, "blockReason must be present when executable is false");
   }
+  return valid;
 }
 
 // The preview is a read-only readiness envelope (branch/upstream/ahead/behind + executable gate);
 // centralizing the validator keeps per-field failure messages predictable for callers.
-export function validateGitSyncPreview(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  validateSyncPreviewIdentity(input, reasons);
-  validateSyncPreviewBranchFields(input, reasons);
-  validateSyncPreviewFlags(input, reasons);
-  validateSyncPreviewExecutableGate(input, reasons);
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+function admitGitSyncPreview(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitSyncPreview {
+  const identity = validateSyncPreviewIdentity(input, reasons);
+  const branchFields = validateSyncPreviewBranchFields(input, reasons);
+  const flags = validateSyncPreviewFlags(input, reasons);
+  const gate = validateSyncPreviewExecutableGate(input, reasons);
+  return identity && branchFields && flags && gate;
 }
 
-// eslint-disable-next-line complexity
-export function validateGitSyncExecuteResponse(input: unknown): GitRepositoryValidation {
+export function parseGitSyncPreview(input: unknown): GitRepositoryParseResult<GitSyncPreview> {
   const reasons: string[] = [];
   if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  if (input.schemaVersion !== GIT_SYNC_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
-  if (!isGitSyncOperation(input.operation)) reasons.push("operation invalid");
-  if (!isGitSyncOutcome(input.status)) reasons.push("status invalid");
-  if (!isBoolean(input.available)) reasons.push("available must be a boolean");
-  if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
+  return admitGitSyncPreview(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+}
+
+export function validateGitSyncPreview(input: unknown): GitRepositoryValidation {
+  const result = parseGitSyncPreview(input);
+  return result.ok ? { ok: true } : result;
+}
+
+function validateSyncExecuteIdentity(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): boolean {
+  let valid = true;
+  if (input.schemaVersion !== GIT_SYNC_SCHEMA_VERSION)
+    valid = rejectSyncField(reasons, "schemaVersion invalid");
+  if (!isGitSyncOperation(input.operation)) valid = rejectSyncField(reasons, "operation invalid");
+  if (!isGitSyncOutcome(input.status)) valid = rejectSyncField(reasons, "status invalid");
+  return valid;
+}
+
+function validateSyncExecuteFlags(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): boolean {
+  let valid = true;
+  if (!isBoolean(input.available)) valid = rejectSyncField(reasons, "available must be a boolean");
+  if (!isBoolean(input.truncated)) valid = rejectSyncField(reasons, "truncated must be a boolean");
   for (const key of ["ahead", "behind"] as const) {
     if (input[key] !== undefined && !isNonNegativeInteger(input[key])) {
-      reasons.push(`${key} must be a non-negative integer when present`);
+      valid = rejectSyncField(reasons, `${key} must be a non-negative integer when present`);
     }
   }
-  for (const key of ["branch", "remote"] as const) {
-    if (input[key] !== undefined && !isString(input[key])) {
-      reasons.push(`${key} must be a string when present`);
-    }
-  }
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  return valid;
+}
+
+function admitGitSyncExecuteResponse(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): input is Readonly<Record<string, unknown>> & GitSyncExecuteResponse {
+  const identity = validateSyncExecuteIdentity(input, reasons);
+  const flags = validateSyncExecuteFlags(input, reasons);
+  const branchFields = validateSyncPreviewBranchFields(input, reasons);
+  return identity && flags && branchFields;
+}
+
+export function parseGitSyncExecuteResponse(
+  input: unknown,
+): GitRepositoryParseResult<GitSyncExecuteResponse> {
+  const reasons: string[] = [];
+  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+  return admitGitSyncExecuteResponse(input, reasons)
+    ? { ok: true, value: input }
+    : { ok: false, reasons };
+}
+
+export function validateGitSyncExecuteResponse(input: unknown): GitRepositoryValidation {
+  const result = parseGitSyncExecuteResponse(input);
+  return result.ok ? { ok: true } : result;
 }

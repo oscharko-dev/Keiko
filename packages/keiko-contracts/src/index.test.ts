@@ -1536,6 +1536,18 @@ import { parseGitRepositoryStatusResponse as parsePublicGitStatusForIndex } from
 
 import { parseGitHistoryResponse as parsePublicHistoryForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
+  parseGitSyncPreview as parsePublicSyncPreviewForIndex,
+  parseGitSyncExecuteResponse as parsePublicSyncExecuteForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+
+it("exports both additive Git sync parser type identities", () => {
+  const preview: typeof import("./index.js").parseGitSyncPreview = parsePublicSyncPreviewForIndex;
+  const execute: typeof import("./index.js").parseGitSyncExecuteResponse =
+    parsePublicSyncExecuteForIndex;
+  for (const parse of [preview, execute])
+    expect(parse(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+import {
   parseGitRepositorySummary as parsePublicSummaryForIndex,
   parseGitRemotesResponse as parsePublicRemotesForIndex,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";

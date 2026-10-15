@@ -72,6 +72,11 @@ const PACKAGED_INCIDENTS: ScenarioIncidentRecorders = {
 
 interface GitApiFixture {
   readonly fetchGitDiff: (input: { readonly root: string }) => Promise<unknown>;
+  readonly fetchGitDeliverySyncExecute: (input: {
+    readonly operation: "fetch";
+    readonly projectId: string;
+    readonly userInitiated: true;
+  }) => Promise<unknown>;
 }
 interface ClientDiagnosticsFixture {
   readonly resetClientDiagnosticWriter: () => void;
@@ -101,6 +106,7 @@ async function loadGitDiagnosticFixture(): Promise<{
   if (
     ![
       api.fetchGitDiff,
+      api.fetchGitDeliverySyncExecute,
       diagnostics.resetClientDiagnosticWriter,
       diagnostics.setClientDiagnosticWriter,
       transport.fanOutClientDiagnostic,
@@ -175,6 +181,68 @@ async function driveGitScopeRefusal(context: (body: string) => RouteContext): Pr
   expect(bodies[0]).not.toContain("private-git-root");
   expect(bodies[0]).not.toContain("private git diff body");
   expect(bodies[0]).not.toContain("scope invalid");
+}
+
+function gitSyncResponse(malformed: boolean): Response {
+  return new Response(
+    JSON.stringify({
+      schemaVersion: "1",
+      operation: "fetch",
+      status: "succeeded",
+      available: true,
+      truncated: false,
+      branch: "private-sync-branch",
+      upstream: { ref: malformed ? 123 : "private-sync-ref" },
+    }),
+    { headers: { "X-Keiko-Correlation-Id": "git-sync-response-scenario" } },
+  );
+}
+
+async function driveGitSyncRefusal(context: (body: string) => RouteContext): Promise<void> {
+  let executions = 0;
+  let delivery: Promise<Response> | undefined;
+  const bodies: string[] = [];
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (input === "/api/git-delivery/fetch/execute") {
+        expect(init?.method).toBe("POST");
+        executions += 1;
+        return gitSyncResponse(executions > 1);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  const request = {
+    operation: "fetch",
+    projectId: "private-sync-project",
+    userInitiated: true,
+  } as const;
+  await expect(api.fetchGitDeliverySyncExecute(request)).resolves.toMatchObject({
+    upstream: { ref: "private-sync-ref" },
+  });
+  expect(bodies).toEqual([]);
+  await expect(api.fetchGitDeliverySyncExecute(request)).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "git-sync-response-scenario",
+  });
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(executions).toBe(2);
+  for (const privateValue of ["private-sync-branch", "private-sync-ref", "private-sync-project"])
+    expect(bodies[0]).not.toContain(privateValue);
 }
 
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
@@ -286,6 +354,29 @@ describe("Activity Log scenario: client-diagnostics", () => {
     expect(trace.failureClasses).toContain("client-diagnostic");
     expect(readPersistedActivityLog(stateDir)).not.toContain("private-git-root");
     expect(readPersistedActivityLog(stateDir)).not.toContain("private git diff body");
+  });
+
+  it("persists a malformed Git sync response without replaying the mutation", async () => {
+    const startedAtMs = Date.now();
+    await driveGitSyncRefusal(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-sync-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    for (const privateValue of ["private-sync-branch", "private-sync-ref", "private-sync-project"])
+      expect(log).not.toContain(privateValue);
   });
 
   // Fault injection: four refused reports (two sharing a refusal reason within the same throttle

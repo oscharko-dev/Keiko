@@ -3360,7 +3360,7 @@ export async function fetchGitDeliverySyncPreview(
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
   const api = await loadGitWorkbenchApi();
-  return api.fetchGitSyncPreview(fetchJson, input, signal);
+  return api.fetchGitSyncPreview(fetchParsedJson, input, signal);
 }
 
 export async function fetchGitDeliverySyncExecute(
@@ -3368,7 +3368,7 @@ export async function fetchGitDeliverySyncExecute(
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
   const api = await loadGitWorkbenchApi();
-  return api.fetchGitSyncExecute(fetchJson, input, signal);
+  return api.fetchGitSyncExecute(fetchParsedJson, input, signal);
 }
 
 export interface GitDeliverySyncApproveResponse {

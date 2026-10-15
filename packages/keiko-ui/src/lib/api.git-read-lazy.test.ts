@@ -29,11 +29,15 @@ it("loads Git read validators only when a Git read is requested", async () => {
     (): Promise<unknown> => api.fetchGitSummary("/repo"),
     (): Promise<unknown> => api.fetchGitRemotes("/repo"),
     (): Promise<unknown> => api.fetchGitDiff({ root: "/repo", path: "index.ts" }),
+    (): Promise<unknown> =>
+      api.fetchGitDeliverySyncPreview({ operation: "fetch", projectId: "/repo" }),
+    (): Promise<unknown> =>
+      api.fetchGitDeliverySyncExecute({ operation: "fetch", projectId: "/repo" }),
   ]) {
     await expect(read()).rejects.toBeDefined();
     expect(new Set(imports)).toEqual(new Set(["fetchers", "summary"]));
   }
-  expect(fetch).toHaveBeenCalledTimes(5);
+  expect(fetch).toHaveBeenCalledTimes(7);
 });
 
 function hasRuntimeBinding(clause: ts.ImportClause | undefined): boolean {
@@ -57,7 +61,7 @@ it("keeps ordinary Git validator imports out of the eager API module", () => {
   const eagerGitImports = source.statements.filter((statement) => {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
       return false;
-    if (!/\/git-(?:repository(?:-summary)?|history)$/u.test(statement.moduleSpecifier.text))
+    if (!/\/git-(?:repository(?:-summary)?|history|sync)$/u.test(statement.moduleSpecifier.text))
       return false;
     return hasRuntimeBinding(statement.importClause);
   });
@@ -78,6 +82,8 @@ it("ordinary Git reads select typed parsers in the existing deferred module", ()
     ["fetchGitHistory", "parseGitHistoryResponse"],
     ["fetchGitSummary", "parseGitRepositorySummary"],
     ["fetchGitRemotes", "parseGitRemotesResponse"],
+    ["fetchGitSyncPreview", "parseGitSyncPreview"],
+    ["fetchGitSyncExecute", "parseGitSyncExecuteResponse"],
   ]) {
     const fn = source.statements.find(
       (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,

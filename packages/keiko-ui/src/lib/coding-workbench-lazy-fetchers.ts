@@ -47,8 +47,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { parseGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
-  validateGitSyncPreview,
-  validateGitSyncExecuteResponse,
+  parseGitSyncPreview,
+  parseGitSyncExecuteResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import {
   parseGitRemotesResponse,
@@ -510,7 +510,7 @@ function gitDeliverySyncPath(
 }
 
 export async function fetchGitSyncPreview(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
@@ -521,12 +521,12 @@ export async function fetchGitSyncPreview(
       body: gitDeliverySyncBody(input),
       ...(signal === undefined ? {} : { signal }),
     },
-    validateGitSyncPreview,
+    parseGitSyncPreview,
   );
 }
 
 export async function fetchGitSyncExecute(
-  fetchJson: ApiFetchJson,
+  fetchJson: ApiFetchParsedJson,
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
@@ -537,7 +537,7 @@ export async function fetchGitSyncExecute(
       body: gitDeliverySyncBody(input),
       ...(signal === undefined ? {} : { signal }),
     },
-    validateGitSyncExecuteResponse,
+    parseGitSyncExecuteResponse,
   );
 }
 

@@ -879,6 +879,94 @@
           "testName": "Git summary and remotes typed parsers (#3918) public: retains URL redaction and upstream pair admission"
         }
       ]
+    },
+    {
+      "id": "git-sync-preview-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parseGitSyncPreview",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parseGitSyncPreview"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parseGitSyncPreview"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parsePublicGitSyncPreview"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-sync.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-sync.test.ts",
+          "testName": "Git sync typed parsers (#3918) public preview: preserves original upstream and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-sync.test.ts",
+          "testName": "Git sync typed parsers (#3918) public preview: refuses malformed ingress with eager ordered reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-sync.test.ts",
+          "testName": "Git sync typed parsers (#3918) public preview: retains executable gates outcomes and optional counter bounds"
+        }
+      ]
+    },
+    {
+      "id": "git-sync-execute-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parseGitSyncExecuteResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parseGitSyncExecuteResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parseGitSyncExecuteResponse"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/git-sync.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-sync",
+        "exportName": "parsePublicGitSyncExecute"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-sync.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-sync.test.ts",
+          "testName": "Git sync typed parsers (#3918) public execute: preserves original upstream and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-sync.test.ts",
+          "testName": "Git sync typed parsers (#3918) public execute: refuses malformed ingress with eager ordered reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-sync.test.ts",
+          "testName": "Git sync typed parsers (#3918) public execute: retains executable gates outcomes and optional counter bounds"
+        }
+      ]
     }
   ]
 }

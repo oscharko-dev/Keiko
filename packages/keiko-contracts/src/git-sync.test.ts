@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  validateGitSyncExecuteResponse as validatePublicSyncExecute,
+  parseGitSyncPreview as parsePublicPreview,
+  parseGitSyncExecuteResponse as parsePublicExecute,
+} from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+import {
   GIT_SYNC_BLOCK_REASONS,
   GIT_SYNC_OPERATIONS,
   GIT_SYNC_OUTCOMES,
@@ -8,6 +13,8 @@ import {
   isGitSyncOutcome,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
+  parseGitSyncPreview,
+  parseGitSyncExecuteResponse,
   type GitSyncOutcome,
 } from "./git-sync.js";
 
@@ -55,6 +62,186 @@ function validExecute(): Record<string, unknown> {
     truncated: false,
   };
 }
+
+// GIT-SYNC-UPSTREAM-ADMISSION-01: a declared optional upstream must be admitted when supplied.
+describe("Git sync execute upstream admission (#3918)", () => {
+  for (const [surface, validate] of [
+    ["source", validateGitSyncExecuteResponse],
+    ["public", validatePublicSyncExecute],
+  ] as const) {
+    it.each([
+      null,
+      true,
+      1,
+      "private-upstream",
+      [],
+      {},
+      { ref: 1 },
+      { ref: "origin/main", remote: "origin" },
+    ])(`${surface}: refuses malformed supplied upstream %j`, (upstream) => {
+      expect(validate({ ...validExecute(), upstream })).toEqual({
+        ok: false,
+        reasons: ["upstream must be { ref, remote?, branch? } when present"],
+      });
+    });
+  }
+});
+
+export function parsePublicGitSyncPreview(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
+  import("@oscharko-dev/keiko-contracts").GitSyncPreview
+> {
+  const result = parsePublicPreview(input);
+  return result;
+}
+
+export function parsePublicGitSyncExecute(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").GitRepositoryParseResult<
+  import("@oscharko-dev/keiko-contracts").GitSyncExecuteResponse
+> {
+  const result = parsePublicExecute(input);
+  return result;
+}
+
+describe("Git sync typed parsers (#3918)", () => {
+  for (const { phase, parse, fixture, surface } of [
+    { phase: "preview", surface: "source", parse: parseGitSyncPreview, fixture: validPreview },
+    {
+      phase: "preview",
+      surface: "public",
+      parse: parsePublicGitSyncPreview,
+      fixture: validPreview,
+    },
+    {
+      phase: "execute",
+      surface: "source",
+      parse: parseGitSyncExecuteResponse,
+      fixture: validExecute,
+    },
+    {
+      phase: "execute",
+      surface: "public",
+      parse: parsePublicGitSyncExecute,
+      fixture: validExecute,
+    },
+  ]) {
+    it(`${surface} ${phase}: preserves original upstream and optional presence`, () => {
+      for (const upstream of [
+        undefined,
+        { ref: "origin/main" },
+        { ref: "origin/main", remote: "origin", branch: "main" },
+      ]) {
+        const input = { ...fixture(), upstream, branch: undefined };
+        const result = parse(input);
+        if (!result.ok) throw new TypeError("healthy sync refused");
+        expect(result.value).toBe(input);
+        expect(result.value.upstream).toBe(upstream);
+        expect(Object.hasOwn(result.value, "branch")).toBe(true);
+      }
+      const omitted = fixture();
+      delete omitted.upstream;
+      delete omitted.branch;
+      const result = parse(omitted);
+      if (!result.ok) throw new TypeError("omitted optionals refused");
+      expect(result.value).toBe(omitted);
+      expect(Object.hasOwn(result.value, "upstream")).toBe(false);
+      expect(Object.hasOwn(result.value, "branch")).toBe(false);
+    });
+    it(`${surface} ${phase}: refuses malformed ingress with eager ordered reasons`, () => {
+      for (const input of [null, undefined, true, 1, "input", []])
+        expect(parse(input)).toEqual({ ok: false, reasons: ["response must be an object"] });
+      for (const upstream of [
+        null,
+        true,
+        1,
+        "input",
+        [],
+        {},
+        { ref: 1 },
+        { ref: "origin/main", remote: "origin" },
+      ])
+        expect(parse({ ...fixture(), upstream })).toEqual({
+          ok: false,
+          reasons: ["upstream must be { ref, remote?, branch? } when present"],
+        });
+      const input = {
+        ...fixture(),
+        schemaVersion: 0,
+        operation: "push",
+        branch: 1,
+        upstream: null,
+        available: 1,
+        ahead: -1,
+      };
+      const reasons =
+        phase === "preview"
+          ? [
+              "schemaVersion invalid",
+              "operation invalid",
+              "branch must be a string when present",
+              "upstream must be { ref, remote?, branch? } when present",
+              "available must be a boolean",
+              "ahead must be a non-negative integer",
+            ]
+          : [
+              "schemaVersion invalid",
+              "operation invalid",
+              "available must be a boolean",
+              "ahead must be a non-negative integer when present",
+              "branch must be a string when present",
+              "upstream must be { ref, remote?, branch? } when present",
+            ];
+      expect(parse(input)).toEqual({ ok: false, reasons });
+    });
+    it(`${surface} ${phase}: retains executable gates outcomes and optional counter bounds`, () => {
+      if (phase === "preview") {
+        expect(parse({ ...fixture(), executable: false }).ok).toBe(false);
+        expect(parse({ ...fixture(), blockReason: "no-upstream" }).ok).toBe(false);
+        expect(parse({ ...fixture(), executable: false, blockReason: "no-upstream" }).ok).toBe(
+          true,
+        );
+        expect(parse({ ...fixture(), executable: false, blockReason: "invalid" }).ok).toBe(false);
+      } else {
+        for (const status of GIT_SYNC_OUTCOMES)
+          expect(parse({ ...fixture(), status }).ok).toBe(true);
+        for (const [key, value] of [
+          ["status", "invalid"],
+          ["truncated", 1],
+          ["available", 1],
+          ["ahead", -1],
+          ["behind", Infinity],
+          ["branch", 1],
+          ["remote", true],
+        ] as const)
+          expect(parse({ ...fixture(), [key]: value }).ok).toBe(false);
+        const input = fixture();
+        delete input.ahead;
+        delete input.behind;
+        expect(parse(input).ok).toBe(true);
+        expect(parse({ ...input, ahead: undefined, behind: undefined }).ok).toBe(true);
+      }
+    });
+  }
+});
+
+it("public sync parsers retain concrete output and refusal types", () => {
+  const preview = parsePublicPreview(validPreview());
+  const execute = parsePublicExecute(validExecute());
+  if (!preview.ok || !execute.ok) throw new TypeError("healthy sync refused");
+  const first: import("@oscharko-dev/keiko-contracts").GitSyncPreview = preview.value;
+  const second: import("@oscharko-dev/keiko-contracts").GitSyncExecuteResponse = execute.value;
+  expect(first.executable).toBe(true);
+  expect(second.status).toBe("succeeded");
+  // @ts-expect-error Execute results do not carry the preview executable gate.
+  const wrong: import("@oscharko-dev/keiko-contracts").GitSyncPreview = execute.value;
+  expect(wrong).toBe(second);
+  const refused = parsePublicPreview(null);
+  if (refused.ok) throw new TypeError("primitive admitted");
+  // @ts-expect-error Refusal has no successfully admitted value.
+  expect(refused.value).toBeUndefined();
+});
 
 describe("frozen governance tables (KEIKO-0879)", () => {
   it("GIT_SYNC_OPERATIONS is frozen and a mutation attempt leaves it unchanged", () => {

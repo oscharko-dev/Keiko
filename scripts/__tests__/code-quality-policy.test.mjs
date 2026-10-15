@@ -68,6 +68,8 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "git-history-public-parser",
       "git-summary-public-parser",
       "git-remotes-public-parser",
+      "git-sync-preview-public-parser",
+      "git-sync-execute-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -166,6 +168,8 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     ["history", "git-history", "parseGitHistoryResponse", "parsePublicGitHistory"],
     ["summary", "git-repository-summary", "parseGitRepositorySummary", "parsePublicGitSummary"],
     ["remotes", "git-repository-summary", "parseGitRemotesResponse", "parsePublicGitRemotes"],
+    ["sync-preview", "git-sync", "parseGitSyncPreview", "parsePublicGitSyncPreview"],
+    ["sync-execute", "git-sync", "parseGitSyncExecuteResponse", "parsePublicGitSyncExecute"],
   ])(
     "pins the additive Git %s parser without changing prior obligations",
     (kind, module, producer, consumer) => {

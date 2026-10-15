@@ -1813,6 +1813,8 @@ export type {
   isGitSyncOutcome,
   validateGitSyncPreview,
   validateGitSyncExecuteResponse,
+  parseGitSyncPreview,
+  parseGitSyncExecuteResponse,
 } from "./git-sync.js";
 
 // ─── Agent repository operation facade (Issue #1577, Epic #1571) ─────────────
