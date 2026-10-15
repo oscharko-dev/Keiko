@@ -3393,7 +3393,7 @@
         "Dictation: compatible browser recordings are normalized to mono PCM16 WAV for Whisper through LiteLLM. One microphone control starts and stops recording, a subtle waveform shows input, and the transcript goes directly into the editable draft without automatically sending.",
         "Private skills: the library refreshes when the normal launcher session becomes available. Deleted selected revisions stop a turn with a correction path. Drafting guidance covers concrete applicability, numbered steps and bounded validation loops; generated drafts still require human review. Source references must match the actual document, and fenced examples cannot impersonate required sections.",
         "Chat recovery: unsent drafts survive reload and restart, simultaneous edits require an explicit choice, and proven failed sends preserve the unchanged draft without automatically replaying it.",
-        "Context and layout: compaction recovery retains complementary relevant sections, while maximized Chat windows fit each tab so the composer remains reachable."
+        "Context and layout: manual compaction completes in one pass and stays disabled until new messages bring conversation usage back to at least 50%. Automatic compaction remains at 90%. Compaction recovery retains complementary relevant sections, while maximized Chat windows fit each tab so the composer remains reachable."
       ],
       "review": {
         "status": "reviewed",

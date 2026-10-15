@@ -1357,7 +1357,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.automatic":
     "Keiko kompaktiert ab 90 % der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
   "chat.context.retained":
-    "Kompaktierung fasst frühere Nachrichten zusammen. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
+    "Manuelles Kompaktieren fasst den verfügbaren Gesprächsverlauf in einem Durchlauf zusammen. Es wird erst mit neuen Nachrichten und mindestens 50 % belegter Gesprächskapazität wieder verfügbar. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
   "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
   "chat.context.retry": "Erneut versuchen",
   "chat.context.compact": "Kontext jetzt kompaktieren",

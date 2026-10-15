@@ -1304,7 +1304,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.automatic":
     "Keiko compacts automatically at 90% of usable input capacity before sending the next request.",
   "chat.context.retained":
-    "Compaction summarizes earlier messages. The full conversation stays saved; summaries can omit details.",
+    "Manual compaction summarizes the available conversation in one pass. It becomes available again only with new messages and at least 50% conversation capacity used. The full conversation stays saved; summaries can omit details.",
   "chat.context.error": "Context could not be updated.",
   "chat.context.retry": "Retry",
   "chat.context.compact": "Compact context now",
