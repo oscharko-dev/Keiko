@@ -7,13 +7,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.draft.saved": "Entwurf privat gespeichert.",
   "chat.draft.unsaved": "Die Änderungen am Entwurf sind noch nicht gespeichert.",
   "chat.draft.saving": "Entwurf wird gespeichert…",
-  "chat.draft.unavailable":
-    "Dieser Entwurf ist nicht gespeichert. Öffne Keiko über den Launcher, um die private Sitzung wiederherzustellen, und versuche es erneut.",
+  "chat.draft.unavailable": "Entwurf nicht gespeichert. Keiko über den Launcher öffnen.",
   "chat.draft.failed":
     "Dieser Entwurf konnte nicht gespeichert werden. Lass dieses Fenster geöffnet und versuche es erneut.",
   "chat.draft.conflict":
     "Ein anderes Fenster hat den gespeicherten Entwurf geändert. Behalte diesen Entwurf, um ihn zu ersetzen, oder ersetze diesen Text durch den gespeicherten Entwurf.",
-  "chat.draft.retry": "Speichern erneut versuchen",
+  "chat.draft.retry": "Erneut speichern",
   "chat.draft.keepLocal": "Diesen Entwurf behalten",
   "chat.draft.useSaved": "Gespeicherten Entwurf verwenden",
   "chat.skills.sendBlocked":

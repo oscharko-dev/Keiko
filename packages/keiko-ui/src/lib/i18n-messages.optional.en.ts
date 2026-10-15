@@ -5,8 +5,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.draft.saved": "Draft saved privately.",
   "chat.draft.unsaved": "Draft changes are not saved yet.",
   "chat.draft.saving": "Saving draft…",
-  "chat.draft.unavailable":
-    "This draft is not saved. Open Keiko from its launcher to restore the private session, then retry.",
+  "chat.draft.unavailable": "Draft not saved. Open Keiko from its launcher.",
   "chat.draft.failed": "This draft could not be saved. Keep this window open and retry.",
   "chat.draft.conflict":
     "Another window changed the saved draft. Keep this draft to replace it, or use the saved draft to replace this text.",

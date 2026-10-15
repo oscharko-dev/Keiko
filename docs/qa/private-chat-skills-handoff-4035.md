@@ -6,6 +6,57 @@ all-acceptance-criteria qualification. Continue on `codex/fix-private-skill-uplo
 the PR targets `dev`, is not a draft, and must keep auto-merge disabled. Integration
 and publication are not authorized.
 
+## Closing checkpoint: 2026-10-15
+
+The owner requested commit, push, and handoff now. No further product changes are in
+progress. The closing follow-up keeps draft warnings and Retry readable in compact
+Chat windows, recognizes the existing QI translation hook in the localization guard,
+and updates the authoring fixture to use actual admitted source references. All five
+targeted WebKit layout cases pass without reducing geometry thresholds; 158 component,
+accessibility, and styling tests and 219 localization-guard tests pass. The current-head
+PR comment records the final build, Sonar, and full chat-send results.
+
+Additional actual In-App Browser observations after the first handoff:
+
+- Native Markdown upload, byte-identical export, explicit selection, and keyboard
+  Escape succeeded again after a normal launcher restart.
+- The same maximized Chat fitted both a tall tab and a shorter tab, leaving the
+  shorter tab's composer visible.
+- A private Unicode draft survived immediate Chat close and reopening from history.
+- A valid skill exceeding the smaller model's mandatory prompt budget produced an
+  actionable `GATEWAY_CONTEXT_OVERFLOW`, retained the chip and draft, and recorded
+  zero provider dispatches in the canonical Activity Log.
+- The third selected normative-status answer preserved the unapproved calibration
+  conflict, example-versus-requirement distinction, and undecided ownership.
+
+Two confirmed defects remain for the next agent; neither is repaired in this checkpoint:
+
+1. **Deleting a selected skill in another tab produces an unexpected 500 on send.**
+   The draft survives and no provider request is dispatched, but the stale tab does
+   not show the intended unavailable selection. Canonical evidence traces the failure
+   to `markdownSkills.resolve` during turn admission. The shared
+   `markdown-skill-selection-admission.ts` helper checks authority/revision without
+   checking that the selected immutable reference still exists. Add the existing
+   live-reference/digest availability check after authority validation, return the
+   existing `SKILL_SELECTION_CHANGED` 409, and exercise plain and grounded admission.
+   The UI already refreshes selection for that refusal. Repeat the two-tab deletion
+   journey in the actual In-App Browser after the fix.
+2. **Automatic compaction can omit an early relevant source rule.** The reconstructed
+   productive request still contained the complete selected skill exactly once, but
+   the source rule was absent from its summary and rehydrated history. The explicit
+   `null`-means-missing rule belonged to the original concept, not the selected skill.
+   `chat-history-rehydration.ts` currently favors the last query-term match in a
+   message. Investigate bounded multiple-section selection with broader relevant-term
+   coverage and newer equivalent evidence taking priority; preserve scope, redaction,
+   and the existing token budget. Do not introduce scenario-specific prompt patches.
+
+Both failures have a retained red production-helper reproduction in the local audit's
+`core-fix-red.log`. The visible failure artifacts are `in-app-stale-skill-delete.json`
+and `in-app-runs/automatic-compaction-reconstruction.json`. No fixing source edits were
+started before this requested stop. The combined skills/dictation microphone journey,
+the remaining semantic campaign, and a fully green frozen-tree gate matrix are still
+required before any release-readiness claim.
+
 ## Implemented repair
 
 - Refresh private skill selection and library reads when the existing launcher
@@ -107,7 +158,7 @@ excluded by the owner and belongs to #3897. Merge authorization is a separate bo
 5. Investigate the failed automatic-compaction answer above, then finish the remaining
    selected and matched no-skill semantic repetitions. The declared campaign contains
    six core and two grounded scenarios, each with three selected runs and three
-   controls: **10/48 answers captured**, with failures retained; this is not 10 passes.
+   controls: **11/48 answers captured**, with failures retained; this is not 11 passes.
    Three separately evaluated authoring generations are complete. Setup replies do
    not count as qualification answers.
 6. Import a valid but mandatory-budget-exceeding skill, select the real smaller-context

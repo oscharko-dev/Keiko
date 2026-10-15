@@ -2748,6 +2748,7 @@ function resolveRepositoryMentionInsertion(
 function composerBoxClassNameFor(compact: boolean, voiceDialogActive: boolean): string {
   return [
     "cmp-box",
+    styles.cmpBox,
     compact ? "cmp-box-compact" : "",
     voiceDialogActive ? styles.voiceDialogBox : "",
   ]
@@ -5635,7 +5636,7 @@ function ChatWindowComposerFooter({
   return (
     <>
       {visible.length > 0 || activeChat !== undefined ? (
-        <div className="chatw-foot">
+        <div className={`chatw-foot ${styles.cmpFooter}`}>
           <form
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {

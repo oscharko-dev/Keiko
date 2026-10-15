@@ -25,7 +25,7 @@ export function ChatDraftStatus({
   const failed = phase === "failed" || phase === "unavailable";
   return (
     <div
-      className={failed || phase === "conflict" ? styles.sessionNotice : styles.cmpBatchModeLabel}
+      className={failed || phase === "conflict" ? styles.cmpDraftNotice : styles.cmpBatchModeLabel}
       role={failed || phase === "conflict" ? "alert" : "status"}
     >
       <span>{t(`chat.draft.${phase}`)}</span>
