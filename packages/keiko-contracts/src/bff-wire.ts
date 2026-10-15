@@ -1112,6 +1112,15 @@ export function classifyAttachmentMime(mimeType: string): "image" | "document" |
 export const MAX_DESKTOP_CHAT_INPUT_BYTES = 256_000;
 // Keep the independent code-unit and UTF-8 byte ceilings explicit: callers must enforce both.
 export const MAX_DESKTOP_CHAT_INPUT_CHARS = 256_000;
+/** Private, chat-bound composer text; never part of chat listings or model context. */
+export interface ChatDraft {
+  readonly text: string;
+  readonly revision: number;
+}
+export interface ChatDraftUpdate {
+  readonly text: string;
+  readonly expectedRevision: number;
+}
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
 

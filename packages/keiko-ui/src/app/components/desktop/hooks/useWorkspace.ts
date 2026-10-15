@@ -14,6 +14,7 @@ import {
 } from "react";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
+import { chatWindowCloseGuard, isChatWindowCloseReady } from "../windows/chatWindowActivity";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
@@ -69,6 +70,19 @@ import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLa
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
+
+async function prepareWindowClose(windowId: string): Promise<boolean> {
+  try {
+    return (await chatWindowCloseGuard(windowId)?.()) ?? true;
+  } catch (error) {
+    reportClientDiagnostic("Chat draft close preparation failed.", {
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return false;
+  }
+}
 
 type CurrentRef<T> = { current: T };
 
@@ -872,6 +886,7 @@ function usePanZoom({
 }
 
 interface UseHydrateArgs {
+  readonly worldVP: () => ViewportWorld | null;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
@@ -1248,18 +1263,35 @@ function buildServerWorkspaceSnapshot(
   };
 }
 
+function fitSnapshotMaximized(
+  snapshot: WorkspaceSnapshot,
+  vp: ViewportWorld | null,
+): WorkspaceSnapshot {
+  if (vp === null || vp.w <= 0 || vp.h <= 0) return snapshot;
+  const wins = snapshot.wins.map((win) => (win.max ? fitWindowToViewport(win, vp) : win));
+  if (wins.every((win, index) => win === snapshot.wins[index])) return snapshot;
+  reportClientDiagnostic("Workspace maximized geometry fitted to local viewport.", {
+    composerActivity: "workspace-viewport-fitted",
+  });
+  return { ...snapshot, wins };
+}
+
 function applyPersistedWorkspaceSnapshot(
   snapshot: { readonly wins: AppWindow[]; readonly conns: Connection[] },
   setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
   setConns: Dispatch<SetStateAction<Connection[]>>,
   zc: CurrentRef<number>,
-): void {
-  zc.current = snapshot.wins.reduce((maxZ, win) => Math.max(maxZ, win.z), 1);
-  setWins(snapshot.wins);
-  setConns(snapshot.conns);
+  vp: ViewportWorld | null,
+): WorkspaceSnapshot {
+  const fitted = fitSnapshotMaximized(snapshot, vp);
+  zc.current = fitted.wins.reduce((maxZ, win) => Math.max(maxZ, win.z), 1);
+  setWins(fitted.wins);
+  setConns(fitted.conns);
+  return fitted;
 }
 
 function useHydrate({
+  worldVP,
   wsRef,
   setWins,
   setConns,
@@ -1276,11 +1308,12 @@ function useHydrate({
     // hydrated snapshot so an immediate cross-tab storage event echoing this exact
     // value is recognised as a no-op (before the debounced local persist runs).
     lastAppliedSerializedRef.current = serializePersistedSnapshot(snapshot);
-    applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc);
-  }, [wsRef, setWins, setConns, zc, lastAppliedSerializedRef]);
+    applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc, worldVP());
+  }, [wsRef, worldVP, setWins, setConns, zc, lastAppliedSerializedRef]);
 }
 
 interface UseStorageSyncArgs {
+  readonly worldVP: () => ViewportWorld | null;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
   readonly zc: CurrentRef<number>;
@@ -1303,6 +1336,7 @@ function serializePersistedSnapshot(snapshot: {
 }
 
 function useWorkspaceStorageSync({
+  worldVP,
   setWins,
   setConns,
   zc,
@@ -1329,13 +1363,14 @@ function useWorkspaceStorageSync({
       // what the sibling tab wrote). suppressNextServerPersistRef already guards
       // the server PUT; this guards the localStorage write.
       suppressNextLocalPersistRef.current = true;
-      applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc);
+      applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc, worldVP());
     };
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("storage", onStorage);
     };
   }, [
+    worldVP,
     setWins,
     setConns,
     zc,
@@ -1346,6 +1381,7 @@ function useWorkspaceStorageSync({
 }
 
 interface UseServerSyncArgs {
+  readonly worldVP: () => ViewportWorld | null;
   readonly wins: AppWindow[] | null;
   readonly conns: readonly Connection[];
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
@@ -1355,6 +1391,7 @@ interface UseServerSyncArgs {
 }
 
 function useWorkspaceServerSync({
+  worldVP,
   wins,
   conns,
   setWins,
@@ -1441,18 +1478,16 @@ function useWorkspaceServerSync({
   const applyServerSnapshot = useCallback(
     (serverSnapshot: ServerWorkspaceSnapshot): void => {
       const snapshot = snapshotFromRaw(serverSnapshot.windows, serverSnapshot.connections);
-      lastAcknowledgedSnapshotRef.current = JSON.stringify({
-        windows: snapshot.wins,
-        connections: snapshot.conns,
-      });
       localDirtyRef.current = false;
       if (serverSnapshot.revision > revisionRef.current) {
         revisionRef.current = serverSnapshot.revision;
       }
       suppressNextPersistRef.current = true;
-      applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc);
+      const fitted = applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc, worldVP());
+      // A local viewport adaptation is presentation, not a new shared-layout mutation.
+      lastAcknowledgedSnapshotRef.current = serializePersistedSnapshot(fitted);
     },
-    [setWins, setConns, zc, suppressNextPersistRef],
+    [worldVP, setWins, setConns, zc, suppressNextPersistRef],
   );
 
   useEffect(() => {
@@ -1770,7 +1805,10 @@ interface UseFitMaximizedArgs {
 // clamp in WindowFrame. Without this, shrinking the viewport could strand a
 // window entirely off-screen with no visible recovery path (audit C132).
 export function fitWindowToViewport(w: AppWindow, vp: ViewportWorld): AppWindow {
-  if (w.max) return { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h };
+  if (w.max) {
+    if (w.x === vp.x && w.y === vp.y && w.w === vp.w && w.h === vp.h) return w;
+    return { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h };
+  }
   const { x, y } = clampWorkspaceWindowOrigin(w, vp);
   return x === w.x && y === w.y ? w : { ...w, x, y };
 }
@@ -2277,8 +2315,9 @@ export function useWorkspace(
     setView,
   });
 
-  useHydrate({ wsRef, setWins, setConns, zc, lastAppliedSerializedRef });
+  useHydrate({ wsRef, worldVP, setWins, setConns, zc, lastAppliedSerializedRef });
   useWorkspaceStorageSync({
+    worldVP,
     setWins,
     setConns,
     zc,
@@ -2287,6 +2326,7 @@ export function useWorkspace(
     suppressNextLocalPersistRef,
   });
   useWorkspaceServerSync({
+    worldVP,
     wins,
     conns,
     setWins,
@@ -2509,17 +2549,15 @@ export function useWorkspace(
   // the batch half-applied, so each connection is torn down exactly once here,
   // keyed by connection id, and a refused edge blocks only the endpoints that
   // belong to it.
-  const closeWindowsWithTeardown = useCallback(
-    async (ids: readonly string[]): Promise<readonly string[]> => {
-      const targets = ids.filter(
-        (id) => !pendingWindowClosesRef.current.has(id) && winsByIdRef.current.has(id),
-      );
+  const finishWindowCloses = useCallback(
+    async (targets: readonly string[]): Promise<readonly string[]> => {
       if (targets.length === 0) return [];
       const byConnection = batchConnectionTeardowns(targets, connsByEndpointRef.current);
       // Unconnected windows keep the synchronous close they have always had.
       if (byConnection.length === 0) {
-        for (const id of targets) mutations.close(id);
-        return targets;
+        const ready = targets.filter(isChatWindowCloseReady);
+        for (const id of ready) mutations.close(id);
+        return ready;
       }
       for (const id of targets) pendingWindowClosesRef.current.add(id);
       try {
@@ -2546,7 +2584,13 @@ export function useWorkspace(
           }),
         );
         const refused = refusedTeardownEndpoints(outcomes, new Set(targets));
-        const closed = targets.filter((id) => !refused.has(id));
+        // Edits may arrive while unbind waits. Preserve those windows, and reflect every
+        // acknowledged unbind even when a new draft now prevents its window from closing.
+        const removed = new Set(
+          outcomes.filter((item) => item.accepted).map((item) => item.conn.id),
+        );
+        setConns((current) => current.filter((conn) => !removed.has(conn.id)));
+        const closed = targets.filter((id) => !refused.has(id) && isChatWindowCloseReady(id));
         for (const id of closed) mutations.close(id);
         return closed;
       } finally {
@@ -2557,10 +2601,29 @@ export function useWorkspace(
       winsByIdRef,
       connsByEndpointRef,
       mutations,
+      setConns,
       stableScopeUnbind,
       stableConnectorUnbind,
       stableGitChangeUnbind,
     ],
+  );
+
+  const closeWindowsWithTeardown = useCallback(
+    async (ids: readonly string[]): Promise<readonly string[]> => {
+      const targets = ids.filter(
+        (id) => !pendingWindowClosesRef.current.has(id) && winsByIdRef.current.has(id),
+      );
+      if (!targets.some((id) => chatWindowCloseGuard(id) !== undefined))
+        return finishWindowCloses(targets);
+      for (const id of targets) pendingWindowClosesRef.current.add(id);
+      try {
+        const accepted = await Promise.all(targets.map(prepareWindowClose));
+        return await finishWindowCloses(targets.filter((_id, index) => accepted[index]));
+      } finally {
+        for (const id of targets) pendingWindowClosesRef.current.delete(id);
+      }
+    },
+    [finishWindowCloses, winsByIdRef],
   );
 
   const closeWithTeardown = useCallback<WorkspaceApi["close"]>(

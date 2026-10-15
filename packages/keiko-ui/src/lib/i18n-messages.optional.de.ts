@@ -1,6 +1,22 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "chat.draft.attachmentsUnsaved":
+    "Sende oder entferne die vorgemerkten Anhänge, bevor du diesen Chat schließt. Sie sind noch nicht gespeichert.",
+  "chat.draft.loading": "Gespeicherter Entwurf wird geladen…",
+  "chat.draft.saved": "Entwurf privat gespeichert.",
+  "chat.draft.unsaved": "Die Änderungen am Entwurf sind noch nicht gespeichert.",
+  "chat.draft.saving": "Entwurf wird gespeichert…",
+  "chat.draft.unavailable": "Entwurf nicht gespeichert. Keiko über den Launcher öffnen.",
+  "chat.draft.failed":
+    "Dieser Entwurf konnte nicht gespeichert werden. Lass dieses Fenster geöffnet und versuche es erneut.",
+  "chat.draft.conflict":
+    "Ein anderes Fenster hat den gespeicherten Entwurf geändert. Behalte diesen Entwurf, um ihn zu ersetzen, oder ersetze diesen Text durch den gespeicherten Entwurf.",
+  "chat.draft.retry": "Erneut speichern",
+  "chat.draft.keepLocal": "Diesen Entwurf behalten",
+  "chat.draft.useSaved": "Gespeicherten Entwurf verwenden",
+  "chat.skills.sendBlocked":
+    "Öffne Skills und wähle einen verfügbaren Skill oder entferne die aktuelle Auswahl, bevor du sendest.",
   "chat.skills.author.title": "Aus Dokument oder Text erstellen",
   "chat.skills.author.description":
     "Füge das vollständige Konzept ein oder lade eine Textdatei. Keiko erstellt mit dem ausgewählten Chat-Modell einen privaten, bearbeitbaren Entwurf.",

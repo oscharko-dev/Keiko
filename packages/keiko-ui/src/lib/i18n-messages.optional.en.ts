@@ -1,4 +1,19 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.draft.attachmentsUnsaved":
+    "Send or remove the staged attachments before closing this chat. They have not been saved.",
+  "chat.draft.loading": "Loading saved draft…",
+  "chat.draft.saved": "Draft saved privately.",
+  "chat.draft.unsaved": "Draft changes are not saved yet.",
+  "chat.draft.saving": "Saving draft…",
+  "chat.draft.unavailable": "Draft not saved. Open Keiko from its launcher.",
+  "chat.draft.failed": "This draft could not be saved. Keep this window open and retry.",
+  "chat.draft.conflict":
+    "Another window changed the saved draft. Keep this draft to replace it, or use the saved draft to replace this text.",
+  "chat.draft.retry": "Retry draft save",
+  "chat.draft.keepLocal": "Keep this draft",
+  "chat.draft.useSaved": "Use saved draft",
+  "chat.skills.sendBlocked":
+    "Open Skills and select an available skill or remove the current selection before sending.",
   "chat.skills.author.title": "Create from document or text",
   "chat.skills.author.description":
     "Paste the complete concept or load a text file. Keiko uses the selected chat model to prepare a private, editable draft.",

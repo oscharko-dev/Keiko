@@ -25,7 +25,8 @@
   outline-offset: 2px;
 }
 .cmpControls button:disabled,
-.cmpDialog button:disabled {
+.cmpDialog button:disabled,
+.cmpDialog button[aria-disabled="true"] {
   opacity: 0.55;
   cursor: default;
 }

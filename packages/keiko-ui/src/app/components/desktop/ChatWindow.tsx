@@ -1,5 +1,6 @@
 "use client";
 
+import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
 import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
 import { ChatScopeNotice } from "./ChatScopeNotice";
@@ -63,7 +64,11 @@ import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { useConnectedEvidenceReferences } from "./hooks/useConnectedEvidenceReferences";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
-import { chatSkillBlocksSend, expectedMarkdownSkillSelection } from "./hooks/useChatMarkdownSkill";
+import {
+  chatSkillBlocksSend,
+  expectedMarkdownSkillSelection,
+  type ChatMarkdownSkill,
+} from "./hooks/useChatMarkdownSkill";
 import { MarkdownSkillControl } from "./skills/MarkdownSkillControl";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
@@ -239,6 +244,7 @@ const NO_MODEL_ALERT_ID = "cmp-no-model-alert";
 
 // Stable id for the "type a message" send-button hint for aria-describedby.
 const SEND_HINT_ID = "cmp-send-hint";
+const SKILL_SEND_HINT_ID = "cmp-skill-send-hint";
 
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
@@ -2341,9 +2347,11 @@ function sendDescribedById(
   noEligibleModels: boolean,
   loading: boolean,
   draftEmpty: boolean,
+  skillBlocked: boolean,
 ): string | undefined {
   if (noEligibleModels) return NO_MODEL_ALERT_ID;
   if (loading) return LOADING_STATUS_ID;
+  if (skillBlocked) return SKILL_SEND_HINT_ID;
   if (draftEmpty) return SEND_HINT_ID;
   return undefined;
 }
@@ -2408,6 +2416,10 @@ function ComposerSendButton({
   );
 }
 
+function skillSendHint(skill: ChatMarkdownSkill | undefined, t: I18nTranslate): string {
+  return t(skill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked");
+}
+
 function ComposerBar({
   session,
   ready,
@@ -2440,7 +2452,12 @@ function ComposerBar({
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
   //                  LOADING_STATUS_ID while bootstrapping,
   //                  else SEND_HINT_ID when only the draft is empty
-  const sendDescribedBy = sendDescribedById(noEligibleModels, loading, draftEmpty);
+  const sendDescribedBy = sendDescribedById(
+    noEligibleModels,
+    loading,
+    draftEmpty,
+    chatSkillBlocksSend(session.markdownSkill),
+  );
 
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
@@ -2500,6 +2517,11 @@ function ComposerBar({
           sendDescribedBy={sendDescribedBy}
         />
       </div>
+      {sendDescribedBy === SKILL_SEND_HINT_ID ? (
+        <span id={SKILL_SEND_HINT_ID} className="sr-only">
+          {skillSendHint(session.markdownSkill, t)}
+        </span>
+      ) : null}
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
       {sendDescribedBy === SEND_HINT_ID ? (
         <span id={SEND_HINT_ID} className="sr-only">
@@ -2727,6 +2749,7 @@ function resolveRepositoryMentionInsertion(
 function composerBoxClassNameFor(compact: boolean, voiceDialogActive: boolean): string {
   return [
     "cmp-box",
+    styles.cmpBox,
     compact ? "cmp-box-compact" : "",
     voiceDialogActive ? styles.voiceDialogBox : "",
   ]
@@ -5507,6 +5530,17 @@ function EmptySessionFeedback({
   return null;
 }
 
+function ComposerSkillNotice(): ReactNode {
+  const { markdownSkill } = useChatSessionComposer();
+  const t = useTranslate();
+  if (!chatSkillBlocksSend(markdownSkill)) return null;
+  return (
+    <output className={styles.sessionNotice}>
+      {t(markdownSkill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked")}
+    </output>
+  );
+}
+
 function ComposerSendNotice({
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
@@ -5597,7 +5631,7 @@ function ChatWindowComposerFooter({
   return (
     <>
       {visible.length > 0 || activeChat !== undefined ? (
-        <div className="chatw-foot">
+        <div className={`chatw-foot ${styles.cmpFooter}`}>
           <form
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {
@@ -5615,6 +5649,7 @@ function ChatWindowComposerFooter({
               controlsNarrow={effectiveControlsNarrow}
               barCompact={effectiveBarCompact}
             />
+            <ComposerSkillNotice />
             <ComposerSendNotice
               canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry}
               retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
@@ -5907,6 +5942,7 @@ export function ChatWindow({
         draft={draft}
         focusComposer={() => composerInputRef.current?.focus()}
       />
+      <ChatDraftStatus draft={draft} persistence={session.draftPersistence} />
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}

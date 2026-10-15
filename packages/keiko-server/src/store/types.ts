@@ -14,6 +14,8 @@ import type { MarkdownSkillStore } from "./markdownSkills.js";
 import type {
   Project,
   Chat,
+  ChatDraft,
+  ChatDraftUpdate,
   ChatMessage,
   ChatTurnState,
   CreateChatOptions,
@@ -118,6 +120,8 @@ export interface UiStore {
 
   readonly listChats: (projectPath: string, limit?: number) => readonly Chat[];
   readonly findChatById: (id: string) => Chat | undefined;
+  readonly readChatDraft: (id: string) => ChatDraft;
+  readonly updateChatDraft: (id: string, update: ChatDraftUpdate) => ChatDraft;
   readonly createChat: (
     projectPath: string,
     title: string,
