@@ -1093,6 +1093,11 @@ alone); the `coding-workbench` latency profile selects timeout floors only.
 
 ### Rule 2 — when you debug, the log is your primary source
 
+For dictation, `speech.stt.request.dispatch` records the sent container class and byte count,
+and `speech.stt.request.completed` records a received provider HTTP status. An absent status
+means no response was observed. Browser clips are normalized in memory to mono PCM16 WAV;
+normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
+
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:
 

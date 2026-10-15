@@ -1956,6 +1956,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-ui/app/components/desktop/hooks/assistant-speech-streaming",
   "keiko-ui/app/components/desktop/hooks/canonical-voice-hasher",
   "keiko-ui/app/components/desktop/hooks/canonical-voice-hasher-runtime",
+  "keiko-ui/app/components/desktop/hooks/dictation-audio",
   "keiko-ui/app/components/desktop/hooks/dictation-recorder",
   "keiko-ui/app/components/desktop/hooks/discussion-voice",
   "keiko-ui/app/components/desktop/hooks/documentContext",

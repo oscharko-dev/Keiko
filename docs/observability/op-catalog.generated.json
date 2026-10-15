@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b9a5527331fb004fcdafe1c639ed3ccc27c7a1f319597e47f2b8e86c0bbae369",
+    "catalogDigest": "45b7a8ea833e1b3204c38b06c9ccddc61a38ea1c15c83b2591a1f9f97374d447",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32648,7 +32648,7 @@
         "proofIds": ["speech.stt.language.normalized.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:39",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:337"]
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:351"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32710,6 +32710,11 @@
             "type": "number",
             "dataClass": "duration",
             "required": false
+          },
+          "httpStatus": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -32718,8 +32723,8 @@
         "failureClasses": ["speech-stt-request"],
         "proofIds": ["speech.stt.request.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:112",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:194"]
+        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:121",
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:205"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32755,6 +32760,17 @@
             "type": "number",
             "dataClass": "duration",
             "required": false
+          },
+          "audioBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "audioFormat": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["wav", "webm", "ogg", "mp4", "m4a", "mp3", "flac", "bin"]
           }
         },
         "causal": "correlation",
@@ -32764,7 +32780,7 @@
         "proofIds": ["speech.stt.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:67",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:93"]
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:100"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45574,6 +45590,7 @@
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
+          "count",
           "digest",
           "duration",
           "loss-state",
@@ -82533,6 +82550,12 @@
                   "required": false
                 },
                 {
+                  "name": "httpStatus",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "modelId",
                   "type": "string",
                   "dataClass": "opaque-id",
@@ -82554,6 +82577,7 @@
               "evidenceClasses": [
                 "closed-enum",
                 "completeness-state",
+                "count",
                 "digest",
                 "duration",
                 "loss-state",
@@ -82576,6 +82600,18 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "audioBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "audioFormat",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "endpointDigest",
                   "type": "string",
                   "dataClass": "digest",
@@ -82595,7 +82631,9 @@
                 }
               ],
               "evidenceClasses": [
+                "closed-enum",
                 "completeness-state",
+                "count",
                 "digest",
                 "duration",
                 "loss-state",
@@ -90221,7 +90259,7 @@
     {
       "op": "<dynamic>",
       "category": "embedding",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:474",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:488",
       "package": "keiko-model-gateway"
     },
     {
@@ -90647,7 +90685,7 @@
     {
       "op": "speech.stt.request.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:115",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:124",
       "package": "keiko-model-gateway"
     },
     {

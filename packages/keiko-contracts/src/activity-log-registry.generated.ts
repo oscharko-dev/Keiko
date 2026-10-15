@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b9a5527331fb004fcdafe1c639ed3ccc27c7a1f319597e47f2b8e86c0bbae369" as const;
+  "45b7a8ea833e1b3204c38b06c9ccddc61a38ea1c15c83b2591a1f9f97374d447" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -35171,6 +35171,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "httpStatus",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "modelId",
               type: "string",
               dataClass: "opaque-id",
@@ -35192,6 +35198,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           evidenceClasses: [
             "closed-enum",
             "completeness-state",
+            "count",
             "digest",
             "duration",
             "loss-state",
@@ -35214,6 +35221,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "audioBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "audioFormat",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "endpointDigest",
               type: "string",
               dataClass: "digest",
@@ -35232,7 +35251,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
           ],
-          evidenceClasses: ["completeness-state", "digest", "duration", "loss-state", "opaque-id"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

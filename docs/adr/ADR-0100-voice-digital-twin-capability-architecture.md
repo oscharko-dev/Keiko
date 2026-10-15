@@ -271,6 +271,14 @@ columns) is [`docs/voice/deployment-profile-matrix.md`](../voice/deployment-prof
 
 ### D8 — Supply-chain policy: no new runtime media packages by default (supply-chain)
 
+Completed browser dictation clips use native `OfflineAudioContext` decoding, mono mixing and
+16 kHz resampling, followed by an in-memory PCM16 WAV envelope. This avoids requiring every
+customer-hosted Whisper decoder behind a gateway to support browser WebM/Opus or MP4.
+The existing audio byte ceiling and two-minute capture limit remain unchanged. No server codec
+package, raw audio persistence or compatibility retry is introduced. The gateway's existing STT
+dispatch/completion evidence records only container class, byte count and received HTTP status;
+browser conversion failures use the existing client diagnostic sink.
+
 The runtime dependency budget for voice is **the existing `ws` package (8.21.0) plus browser-native WebRTC
 APIs** — nothing more, by default. No `socket.io`, `simple-peer`, `peerjs`, `mediasoup`, `livekit`,
 server-side WebRTC stack, or other runtime media package may be added by default. WebRTC is treated as a
