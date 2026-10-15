@@ -25,9 +25,10 @@ their validated local support report; photos alone do not establish the upstream
 1. Query the existing Activity Log by the failed request's correlation id. For a received support
    report, validate it with `keiko support analyze REPORT --json` first.
 2. Inspect `speech.stt.request.dispatch`: `audioFormat`, `audioBytes`, and the applied deadline.
-3. Inspect `speech.stt.request.completed`: failure kind and `httpStatus`, when present. A 400/422
-   response warrants checking the provider's accepted request and audio formats. A missing status
-   indicates that no HTTP response was received; inspect the existing egress diagnostics.
+3. Inspect `speech.stt.request.completed`: read `failureKind` first, then `httpStatus`, when present.
+   A 400/422 response warrants checking the provider's accepted request and audio formats. A missing
+   status indicates that no HTTP response was received; `failureKind` on that same event identifies
+   the classified failure, such as a timeout, cancellation or transport error.
 4. Compare the same synthetic spoken clip as browser-encoded audio and PCM WAV through the same
    gateway alias. Keep credentials, audio, transcripts and raw provider bodies out of diagnostics.
 
@@ -58,14 +59,20 @@ Recording, transcription, preview editing, insertion, a second recording, discar
 cancellation passed; all captured microphone tracks ended. The subsequent Gemma chat turn completed.
 A separate instance with an unreachable voice provider returned 502 and exercised retry and dismissal
 while preserving text entry. Denied microphone permission produced the specific permission message
-without uploading audio. The four existing dictation smoke journeys passed in Chromium and WebKit;
+without uploading audio. The four existing dictation smoke journeys passed in Chromium, WebKit and Firefox;
 WebKit also decoded real MP4/AAC and WAV clips that transcribed through the running application.
-The local Playwright Firefox binary could not launch ("Could not find profile folder"), including
-with independently selected temporary directories; Firefox qualification remains outstanding.
+Firefox also normalized real Ogg/Opus, WebM/Opus and WAV clips and transcribed them through the
+running application. Its initial profile-folder launch failure was resolved by using isolated
+`MOZ_APP_DATA` and `MOZ_LOCAL_APP_DATA` directories, without changing browser security settings.
 A real 120-second clip normalized to 3,840,044 bytes and transcribed through
 the BFF and gateway successfully. The separate full-length native UI recording also stopped
 automatically and returned a transcript: 3,841,964 WAV bytes, approximately 125 seconds from the
 initial click through transcription, all microphone tracks ended and no browser page errors.
+
+The complete local coverage-quality aggregate passed: package, UI and script suites, all 27
+package metric floors, both release targets and all 73 governed file floors. The editor bundle
+evidence was regenerated and verified with the repository-approved Node 24.18.0 runtime after
+reproducing a gzip measurement mismatch from Node 24.21.0; no budget or threshold was changed.
 
 This proves the compatibility defect and its repair; it does not establish the customer's exact upstream cause
 or general transcription accuracy across microphones, accents and acoustic conditions.
