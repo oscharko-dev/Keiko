@@ -38,6 +38,9 @@ browser, the affordance is simply absent — there is no broken or disabled-look
    once, and focus returns to the composer. There is no separate review panel or Insert/Re-record/Discard
    step in ordinary Chat. The user can edit, dictate again, or send through the normal composer flow.
    Dictation never auto-sends. The Coding Workbench retains its explicit preview/insertion flow.
+   Switching the conversation cancels the active capture and rejects its pending transcript.
+   An empty result leaves the draft unchanged and displays a brief instruction to try the microphone
+   again; no additional action buttons appear.
 
 ## Failure handling
 
@@ -56,7 +59,8 @@ Every failure resolves to a non-blocking message that leaves the composer fully 
 The microphone's accessible description explains that audio goes only to the configured speech-to-text
 endpoint. Keiko holds capture audio in memory and does not log it. Once inserted, recognized text is an
 ordinary editable composer draft and follows the existing private draft persistence policy. The existing
-Activity Log records only the closed `dictation-inserted` or `dictation-empty` completion category;
+Activity Log records the closed `dictation-inserted` or `dictation-empty` completion category and
+`dictation-context-changed` when a conversation switch cancels the flow;
 no audio, transcript, selected-skill content, or endpoint enters this diagnostic.
 
 ## Permissions-Policy scoping

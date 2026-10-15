@@ -29,6 +29,7 @@ const VOICE_EN_MESSAGES = {
   "voice.dictation.preparingMic": "Preparing mic…",
   "voice.dictation.capturing": "Capturing speech…",
   "voice.dictation.listening": "Listening…",
+  "voice.dictation.empty": "No speech was recognized. Click the microphone to try again.",
   "voice.dictation.preview": "Dictation transcript preview",
   "voice.dictation.ready": "Transcript ready for review.",
   "voice.dictation.review": "Review your dictation",
@@ -104,6 +105,8 @@ const VOICE_DE_MESSAGES: VoiceMessageCatalog = {
   "voice.dictation.preparingMic": "Mikrofon wird vorbereitet…",
   "voice.dictation.capturing": "Sprache wird erfasst…",
   "voice.dictation.listening": "Hört zu…",
+  "voice.dictation.empty":
+    "Keine Sprache erkannt. Klicke auf das Mikrofon, um es erneut zu versuchen.",
   "voice.dictation.preview": "Vorschau des Diktat-Transkripts",
   "voice.dictation.ready": "Transkript ist zur Prüfung bereit.",
   "voice.dictation.review": "Diktat prüfen",

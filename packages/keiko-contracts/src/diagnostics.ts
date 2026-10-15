@@ -413,6 +413,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "draft-resynchronized",
   "dictation-inserted",
   "dictation-empty",
+  "dictation-context-changed",
   "scope-refusal-restored",
   "scope-refusal-skipped-owner",
   "scope-refusal-skipped-draft",

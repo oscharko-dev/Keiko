@@ -112,11 +112,15 @@ export function VoiceDictationButton({
 /** Ordinary Chat keeps errors inline and retries through the same microphone button. */
 export function VoiceDictationComposerStatus({
   error,
+  emptyResult = false,
 }: {
   readonly error: DictationError | undefined;
+  readonly emptyResult?: boolean | undefined;
 }): ReactNode {
   const t = useTranslate();
-  if (error === undefined) return null;
+  if (error === undefined) {
+    return emptyResult ? <output>{t("voice.dictation.empty")}</output> : null;
+  }
   return (
     <p className="cmp-voice-error-text" role="alert">
       {errorHeadline(error.reason, t)}

@@ -194,7 +194,10 @@ Ordinary Chat uses one microphone/stop control: stop appends the completed trans
 editable draft. A measured waveform occupies only the free footer space, with new samples beside the
 stop control and a fade before the persistent model/skill controls. There is no separate confirmation
 panel; editing and sending remain the normal composer actions. The Coding Workbench retains its explicit
-preview. Completion emits only a closed insertion/empty category on the existing Activity Log. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
+preview. Empty completion leaves the draft unchanged and announces retry through the same microphone.
+The capture is bound to its starting conversation; a conversation change cancels the flow and rejects
+late completion. Completion and context cancellation emit only closed categories on the existing
+Activity Log. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
 
 No default transcription deployment or output voice is inherited when a deployment changes. An
 unchanged existing provider-specific value may be preserved by an unrelated update; selecting a new

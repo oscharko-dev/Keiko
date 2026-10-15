@@ -245,6 +245,64 @@ describe("useDictation — page microphone ownership", () => {
 });
 
 describe("useDictation — enabled happy path (AC2)", () => {
+  it.each(["", "  \n  "])(
+    "announces an empty automatic result without inserting %j",
+    async (transcript) => {
+      const recorder = makeRecorder({});
+      const onInsert = vi.fn();
+      const { result } = renderHook(() =>
+        useDictation({
+          onInsert,
+          insertOnComplete: true,
+          createRecorder: () => recorder.recorder,
+          transcribe: async () => ({ transcript }),
+          postRollMs: 0,
+        }),
+      );
+      act(() => result.current.start());
+      await waitFor(() => expect(result.current.phase).toBe("recording"));
+      act(() => result.current.stop());
+      await waitFor(() => expect(result.current.phase).toBe("idle"));
+      expect(onInsert).not.toHaveBeenCalled();
+      expect(result.current.emptyResult).toBe(true);
+      act(() => result.current.start());
+      await waitFor(() => expect(result.current.phase).toBe("recording"));
+      expect(result.current.emptyResult).toBe(false);
+    },
+  );
+
+  it("rejects a pending transcript after its conversation changes", async () => {
+    const recorder = makeRecorder({});
+    const onInsert = vi.fn();
+    let complete!: (result: VoiceTranscriptionResult) => void;
+    const transcribe = vi.fn(
+      () =>
+        new Promise<VoiceTranscriptionResult>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const { result, rerender } = renderHook(
+      ({ contextKey }) =>
+        useDictation({
+          onInsert,
+          contextKey,
+          insertOnComplete: true,
+          createRecorder: () => recorder.recorder,
+          transcribe,
+          postRollMs: 0,
+        }),
+      { initialProps: { contextKey: "chat-a" } },
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    act(() => result.current.stop());
+    await waitFor(() => expect(transcribe).toHaveBeenCalledOnce());
+    rerender({ contextKey: "chat-b" });
+    await act(async () => complete({ transcript: "belongs to chat a" }));
+    expect(onInsert).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe("idle");
+  });
+
   it("inserts a completed composer dictation once without a separate preview confirmation", async () => {
     const recorder = makeRecorder({});
     const onInsert = vi.fn();

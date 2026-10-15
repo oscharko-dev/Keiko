@@ -59,7 +59,10 @@ Recording, transcription, preview editing, insertion, a second recording, discar
 cancellation passed; all captured microphone tracks ended. The subsequent Gemma chat turn completed.
 A separate instance with an unreachable voice provider returned 502 and exercised retry and dismissal
 while preserving text entry. Denied microphone permission produced the specific permission message
-without uploading audio. The four existing dictation smoke journeys passed in Chromium, WebKit and Firefox;
+without uploading audio. Before the one-control UI follow-up, the four existing dictation smoke
+journeys passed in each of Chromium, WebKit and Firefox. The later one-control layout has four passing
+Chromium smoke journeys and actual In-App Browser inspection; those results do not establish a manual
+layout check in the other engines.
 WebKit also decoded real MP4/AAC and WAV clips that transcribed through the running application.
 Firefox also normalized real Ogg/Opus, WebM/Opus and WAV clips and transcribed them through the
 running application. Its initial profile-folder launch failure was resolved by using isolated

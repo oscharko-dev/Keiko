@@ -2849,7 +2849,7 @@ function ComposerStatusRow({
     <>
       {voiceDialogActive ? null : <SendLifecycleStatus status={sendStatus} />}
       {!voiceDialogActive && voiceDictationVisible ? (
-        <VoiceDictationComposerStatus error={dictation.error} />
+        <VoiceDictationComposerStatus error={dictation.error} emptyResult={dictation.emptyResult} />
       ) : null}
     </>
   );
@@ -3237,6 +3237,7 @@ function ComposerCoreImpl({
   const dictation = useDictation({
     onInsert: insertTranscript,
     insertOnComplete: true,
+    contextKey: activeChat?.id,
     captureOwner: voiceCaptureOwner,
     realtime: { enabled: liveDictationEnabled },
   });

@@ -11,7 +11,7 @@
 // resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4). The audio and
 // transcript live only in React state for the lifetime of the flow and are never logged.
 
-import { useCallback, useEffect, useId, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError, transcribeDictation } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -77,6 +77,7 @@ export interface DictationError {
 
 interface DictationState {
   readonly phase: DictationPhase;
+  readonly emptyResult: boolean;
   readonly transcript: string;
   readonly errorReason: DictationErrorReason | undefined;
   readonly errorMessage: string | undefined;
@@ -94,6 +95,7 @@ interface DictationState {
 
 const INITIAL_STATE: DictationState = {
   phase: "idle",
+  emptyResult: false,
   transcript: "",
   errorReason: undefined,
   errorMessage: undefined,
@@ -122,7 +124,7 @@ type DictationAction =
     }
   | { readonly type: "editTranscript"; readonly value: string }
   | ({ readonly type: "error" } & DictationError)
-  | { readonly type: "reset" };
+  | { readonly type: "reset"; readonly emptyResult?: boolean };
 
 // Pure transition function — no side effects, fully unit-testable. Each case is linear so the
 // reducer stays well under the cyclomatic-complexity gate.
@@ -170,7 +172,7 @@ function dictationReducer(state: DictationState, action: DictationAction): Dicta
         errorCorrelationId: action.correlationId,
       };
     case "reset":
-      return INITIAL_STATE;
+      return { ...INITIAL_STATE, emptyResult: action.emptyResult === true };
   }
 }
 
@@ -183,6 +185,8 @@ export interface UseDictationOptions {
   // Ordinary Chat inserts the completed transcript directly into its editable draft. Other
   // consumers retain their explicit preview flow; neither mode sends a message.
   readonly insertOnComplete?: boolean;
+  // A changed conversation cancels capture and rejects completion from the previous conversation.
+  readonly contextKey?: string | undefined;
   // Chat-window identity shared with Voice Dialogue. It serializes every microphone capture on the
   // page without coupling the two controllers or leaking capture state between conversations.
   readonly captureOwner?: string | undefined;
@@ -218,6 +222,7 @@ export interface UseDictationOptions {
 
 export interface DictationController {
   readonly phase: DictationPhase;
+  readonly emptyResult?: boolean;
   readonly mode: DictationMode;
   readonly transcript: string;
   readonly liveTranscript: string;
@@ -367,6 +372,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
   const captureLeaseRef = useRef(options.captureLease ?? Symbol("dictation-capture"));
   const ownsCaptureLease = options.captureLease === undefined;
   const [state, dispatch] = useReducer(dictationReducer, INITIAL_STATE);
+  const startedContext = useRef(options.contextKey);
 
   // Stable refs for the injectable seams and the live session/timer so the action callbacks stay
   // referentially stable and the reducer stays pure.
@@ -1001,6 +1007,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
   ]);
 
   const start = useCallback((): void => {
+    startedContext.current = options.contextKey;
     if (!claimVoiceCapture(captureOwner, captureLeaseRef.current)) {
       dispatch({
         type: "error",
@@ -1014,7 +1021,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
       return;
     }
     startBatch();
-  }, [captureOwner, realtimeEnabled, startBatch, startRealtime]);
+  }, [captureOwner, options.contextKey, realtimeEnabled, startBatch, startRealtime]);
 
   const cancel = useCallback((): void => {
     // Mark any in-flight start() as cancelled so a microphone grant that resolves after this call is
@@ -1037,6 +1044,8 @@ export function useDictation(options: UseDictationOptions): DictationController 
     cancel();
   }, [cancel]);
 
+  useDictationContextReset(options.contextKey, cancel);
+
   const retry = useCallback((): void => {
     cancel();
     start();
@@ -1047,10 +1056,17 @@ export function useDictation(options: UseDictationOptions): DictationController 
     if (text.length > 0) {
       onInsert(text);
     }
-    dispatch({ type: "reset" });
-  }, [onInsert, state.transcript]);
+    dispatch({
+      type: "reset",
+      emptyResult: options.insertOnComplete === true && text.length === 0,
+    });
+  }, [onInsert, options.insertOnComplete, state.transcript]);
 
-  useCompletedDictationInsertion(options.insertOnComplete === true, state, insert);
+  useCompletedDictationInsertion(
+    options.insertOnComplete === true && startedContext.current === options.contextKey,
+    state,
+    insert,
+  );
 
   const setTranscript = useCallback((value: string): void => {
     dispatch({ type: "editTranscript", value });
@@ -1080,6 +1096,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
 
   return {
     phase: state.phase,
+    emptyResult: state.emptyResult,
     mode: state.mode,
     transcript: state.transcript,
     liveTranscript: state.liveTranscript,
@@ -1110,6 +1127,18 @@ export function useDictation(options: UseDictationOptions): DictationController 
     insert,
     setTranscript,
   };
+}
+
+function useDictationContextReset(contextKey: string | undefined, cancel: () => void): void {
+  const previous = useRef(contextKey);
+  useLayoutEffect(() => {
+    if (previous.current === contextKey) return;
+    previous.current = contextKey;
+    cancel();
+    reportClientDiagnostic("Composer dictation reset after a conversation change.", {
+      composerActivity: "dictation-context-changed",
+    });
+  }, [cancel, contextKey]);
 }
 
 function useCompletedDictationInsertion(

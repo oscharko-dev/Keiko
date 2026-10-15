@@ -478,4 +478,12 @@ describe("VoiceDictationPreviewFromController", () => {
     expect(controller.discard).toHaveBeenCalledTimes(1);
     expect(onAfterDiscard).toHaveBeenCalledTimes(1);
   });
+
+  it("explains an empty result and keeps retry on the existing microphone", () => {
+    render(<VoiceDictationComposerStatus error={undefined} emptyResult />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "No speech was recognized. Click the microphone to try again.",
+    );
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
 });
