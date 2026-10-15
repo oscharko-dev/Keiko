@@ -36,6 +36,18 @@ describe("Markdown skill source references", () => {
     ]);
   });
 
+  it.each(["```", "~~~~"])("ignores invalid closing fences inside %s samples", (fence) => {
+    const source = `# Source\n${fence}md\n${fence}js\n## Sample\n${fence} \t\n## Real section\nDecision.`;
+    expect(markdownSkillSourceReferences(source)).toEqual([
+      "- Source lines 1-5: Source",
+      "- Source lines 6-7: Real section",
+    ]);
+  });
+
+  it("rejects an empty source-reference section", () => {
+    expect(markdownSkillSourceReferencesMatch(draftWithReferences([]), SOURCE)).toBe(false);
+  });
+
   it("bounds index length while retaining contiguous coverage through the final source line", () => {
     const source = Array.from(
       { length: 100 },

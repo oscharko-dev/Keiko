@@ -1146,6 +1146,14 @@ const SKILL_REQUEST = {
 } as const;
 
 describe("reviewed Markdown skill authoring", () => {
+  it.each(["", " \n\t"])("rejects empty source text before model dispatch: %j", async (text) => {
+    const model = recordingModelPort(SKILL_DRAFT);
+    await expect(
+      run({ ...SKILL_REQUEST, text }, configWithProvider(CHAT_MODEL), model.factory),
+    ).rejects.toThrow();
+    expect(model.calls).toHaveLength(0);
+  });
+
   it("rejects a source-reference section that only repeats an example", async () => {
     const draft = SKILL_DRAFT.replace(
       /## Source references[\s\S]*$/u,

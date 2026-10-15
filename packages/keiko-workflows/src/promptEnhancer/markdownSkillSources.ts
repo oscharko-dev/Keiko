@@ -1,6 +1,10 @@
 const MAX_SOURCE_REFERENCES = 24;
 const MAX_REFERENCE_LABEL_CHARACTERS = 120;
 
+function closesFence(line: string, delimiter: string, fence: string): boolean {
+  return delimiter.startsWith(fence) && /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/u.test(line);
+}
+
 function sourceSectionStarts(lines: readonly string[]): readonly number[] {
   const headings: number[] = [];
   let fence: string | undefined;
@@ -8,7 +12,7 @@ function sourceSectionStarts(lines: readonly string[]): readonly number[] {
     const delimiter = /^ {0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
     if (delimiter !== undefined) {
       if (fence === undefined) fence = delimiter;
-      else if (delimiter.startsWith(fence)) fence = undefined;
+      else if (closesFence(line, delimiter, fence)) fence = undefined;
       continue;
     }
     if (fence === undefined && /^ {0,3}#{1,6}[ \t]+\S/u.test(line)) headings.push(index);
