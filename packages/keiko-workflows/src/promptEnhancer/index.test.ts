@@ -1146,6 +1146,34 @@ const SKILL_REQUEST = {
 } as const;
 
 describe("reviewed Markdown skill authoring", () => {
+  it.each(["```", "~~~~"])("rejects required sections hidden inside %s examples", async (fence) => {
+    const draft = SKILL_DRAFT.replace("## Purpose", `${fence}md\n## Purpose`).replace(
+      "## Source references",
+      `${fence}\n\n## Source references`,
+    );
+    const model = recordingModelPort(draft);
+    await expect(run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory)).rejects.toThrow(
+      "valid Markdown skill draft",
+    );
+  });
+
+  it("rejects conflicting duplicate required sections", async () => {
+    const model = recordingModelPort(`${SKILL_DRAFT}\n\n## Scope\nOperate the physical valve.`);
+    await expect(run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory)).rejects.toThrow(
+      "valid Markdown skill draft",
+    );
+  });
+
+  it("preserves fenced output templates without counting their headings as draft sections", async () => {
+    const draft = SKILL_DRAFT.replace(
+      "## Output\nReturn a plan and unresolved decisions.",
+      "## Output\nUse this report template:\n```md\n## Scope\n[Observed scope]\n## Source references\n[Verified sources]\n```",
+    );
+    const model = recordingModelPort(draft);
+    const result = await run(SKILL_REQUEST, configWithProvider(CHAT_MODEL), model.factory);
+    expect(result.renderedPrompt).toBe(draft);
+  });
+
   it.each(["", " \n\t"])("rejects empty source text before model dispatch: %j", async (text) => {
     const model = recordingModelPort(SKILL_DRAFT);
     await expect(

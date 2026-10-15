@@ -174,11 +174,22 @@ The model must reproduce that index in its source-reference section. Missing, in
 references reject the draft rather than being repaired or appended after generation. This verifies
 where the source can be found, not whether the generated method faithfully interprets every rule.
 Confirmed rules, proposals, examples, conflicts and unknowns remain explicit. Structural checks
-reject incomplete, empty-section, unsafe and oversized output; a
+recognize actual level-two headings outside fenced examples, require each mandatory section exactly
+once, and reject incomplete, empty-section, unsafe and oversized output; fenced output templates
+remain unchanged content rather than masquerading as document structure. Source indexing and draft
+validation share the same fence-aware heading scan. A
 non-stop completion or unavailable/failed model produces an actionable refusal, never the normal
 enhancer's deterministic fallback. Structural checks do not certify semantic faithfulness. The
 user reviews and edits the complete draft; save, download and chat selection remain separate actions.
 Saving uses the existing private Markdown library and never activates the skill.
+
+Authoring instructions favor concise, task-specific applicability, numbered steps, concrete output
+structure and a bounded check/correct/recheck loop. They preserve unresolved alternatives rather
+than inventing defaults, commands or successful validation. These refinements apply relevant
+[community authoring recommendations](https://www.mdskills.ai/docs/skill-best-practices) without
+requiring frontmatter, imposing an arbitrary line-count limit, fetching reference bundles or
+changing explicit human selection. Existing generation lifecycle events record success or rejection
+without source or draft bodies; the heading checks add no separate logging subsystem.
 
 Private drafting is an exception to ordinary prompt-enhancement evidence persistence: neither
 source nor draft enters its evidence store, even when configured. The existing record builder

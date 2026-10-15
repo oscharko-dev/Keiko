@@ -5,7 +5,7 @@ function closesFence(line: string, delimiter: string, fence: string): boolean {
   return delimiter.startsWith(fence) && /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/u.test(line);
 }
 
-function sourceSectionStarts(lines: readonly string[]): readonly number[] {
+function headingStarts(lines: readonly string[]): readonly number[] {
   const headings: number[] = [];
   let fence: string | undefined;
   for (const [index, line] of lines.entries()) {
@@ -17,10 +17,33 @@ function sourceSectionStarts(lines: readonly string[]): readonly number[] {
     }
     if (fence === undefined && /^ {0,3}#{1,6}[ \t]+\S/u.test(line)) headings.push(index);
   }
+  return headings;
+}
+
+function sourceSectionStarts(lines: readonly string[]): readonly number[] {
+  const headings = headingStarts(lines);
   if (headings.length > 0) return headings[0] === 0 ? headings : [0, ...headings];
   return lines.flatMap((line, index) =>
     index === 0 || (line.trim().length > 0 && lines[index - 1]?.trim().length === 0) ? [index] : [],
   );
+}
+
+/** Only actual level-two headings delimit sections; fenced examples remain unchanged body text. */
+export function markdownSkillSections(content: string): readonly {
+  readonly title: string;
+  readonly body: string;
+}[] {
+  const lines = content.split("\n");
+  const starts = headingStarts(lines).filter((index) =>
+    /^ {0,3}##[ \t]+/u.test(lines[index] ?? ""),
+  );
+  return starts.map((start, index) => ({
+    title: (lines[start] ?? "").trim().slice(2).trim().toLowerCase(),
+    body: lines
+      .slice(start + 1, starts[index + 1])
+      .join("\n")
+      .trim(),
+  }));
 }
 
 function sourceLabel(lines: readonly string[], start: number, end: number): string {
@@ -51,12 +74,12 @@ export function markdownSkillSourceReferences(source: string): readonly string[]
 
 /** Validate provenance without rewriting the model's output or certifying its interpretation. */
 export function markdownSkillSourceReferencesMatch(content: string, source: string): boolean {
-  const sections = content.split(/^## /mu).slice(1);
-  const references = sections.filter((section) => /^source references[ \t]*\r?\n/iu.test(section));
+  const references = markdownSkillSections(content).filter(
+    (section) => section.title === "source references",
+  );
   if (references.length !== 1) return false;
-  const actual = references[0]
-    ?.split("\n")
-    .slice(1)
+  const actual = references[0]?.body
+    .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
   const expected = markdownSkillSourceReferences(source);

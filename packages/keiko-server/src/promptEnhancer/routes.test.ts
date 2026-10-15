@@ -546,4 +546,31 @@ describe("private skill drafting through the existing enhancer route", () => {
     expect(JSON.stringify(events)).not.toContain(invalid);
     expect(store.markdownSkills.list()).toEqual([]);
   });
+
+  it("records a rejected generation for ambiguous required sections without leaking the draft", async () => {
+    const session = authorSession();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    await closeServer();
+    await startBound({
+      codingAppSessionChannel: session.channel,
+      modelPortFactory: () => ({
+        call: (request): Promise<NormalizedResponse> =>
+          Promise.resolve(
+            modelResponse(`${privateDraft(request)}\n\n## Scope\nConflicting scope.`),
+          ),
+      }),
+    });
+    const response = await post(PRIVATE_REQUEST, session.headers);
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain("valid Markdown skill draft");
+    const events = sink.events.filter((event) => event.op === "skills.library.operation");
+    expect(events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ action: "generate", phase: "started" }),
+      expect.objectContaining({ action: "generate", phase: "rejected", httpStatus: 422 }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain(PRIVATE_SOURCE);
+    expect(JSON.stringify(events)).not.toContain("Conflicting scope");
+    expect(store.markdownSkills.list()).toEqual([]);
+  });
 });
