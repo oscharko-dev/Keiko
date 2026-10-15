@@ -16,6 +16,22 @@ import { VoiceDictationWaveform } from "./VoiceDictationWaveform";
 import type { DictationController } from "./hooks/useDictation";
 
 describe("VoiceDictationButton", () => {
+  it("names the retained-transcript action and explains how to make room", async () => {
+    const onStart = vi.fn();
+    const view = render(
+      <>
+        <VoiceDictationButton phase="error" insertionPending onStart={onStart} onStop={vi.fn()} />
+        <VoiceDictationComposerStatus error={{ reason: "draft-too-long", message: "unused" }} />
+      </>,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Shorten it");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Insert transcript into the message" }),
+    );
+    expect(onStart).toHaveBeenCalledOnce();
+    expect(await axe(view.container)).toHaveNoViolations();
+  });
+
   it("renders a labelled start affordance when idle and starts on click", async () => {
     const onStart = vi.fn();
     render(<VoiceDictationButton phase="idle" onStart={onStart} onStop={vi.fn()} />);

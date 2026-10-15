@@ -123,7 +123,12 @@ import {
   supportsSpeechOutput,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
-import { useDictation, type DictationController } from "./hooks/useDictation";
+import {
+  useDictation,
+  dictationInsertionPending,
+  remainingDictationCharacters,
+  type DictationController,
+} from "./hooks/useDictation";
 import { dictationCaptureSupported } from "./hooks/dictation-recorder";
 import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
 import { VoiceDictationButton, VoiceDictationComposerStatus } from "./VoiceDictation";
@@ -2479,6 +2484,7 @@ function ComposerBar({
         {voiceDictationVisible ? (
           <VoiceDictationButton
             phase={dictation.phase}
+            insertionPending={dictationInsertionPending(dictation)}
             onStart={dictation.start}
             onStop={dictation.stop}
             buttonRef={micButtonRef}
@@ -3237,6 +3243,7 @@ function ComposerCoreImpl({
   const dictation = useDictation({
     onInsert: insertTranscript,
     insertOnComplete: true,
+    availableCharacters: remainingDictationCharacters(draft),
     contextKey: activeChat?.id,
     captureOwner: voiceCaptureOwner,
     realtime: { enabled: liveDictationEnabled },

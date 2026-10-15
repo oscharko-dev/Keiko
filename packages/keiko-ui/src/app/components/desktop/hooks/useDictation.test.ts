@@ -8,7 +8,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { VoiceLatencySample } from "./voice-latency-observer";
-import { useDictation } from "./useDictation";
+import { useDictation, remainingDictationCharacters } from "./useDictation";
 import { REALTIME_TRANSCRIPT_LIMIT_MESSAGE } from "./voice-realtime-events";
 import {
   DictationRecorderError,
@@ -245,6 +245,46 @@ describe("useDictation — page microphone ownership", () => {
 });
 
 describe("useDictation — enabled happy path (AC2)", () => {
+  it("accounts for the real composer separator and trailing whitespace at the input boundary", () => {
+    expect(remainingDictationCharacters(" \n ")).toBe(MAX_DESKTOP_CHAT_INPUT_CHARS);
+    expect(remainingDictationCharacters("x".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS - 2))).toBe(1);
+    expect(remainingDictationCharacters("x".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS - 1))).toBe(0);
+    expect(remainingDictationCharacters("x".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS))).toBe(0);
+    expect(remainingDictationCharacters("draft \n ")).toBe(MAX_DESKTOP_CHAT_INPUT_CHARS - 6);
+  });
+
+  it("retains a transcript that cannot fit and inserts it on explicit retry after shortening", async () => {
+    const recorder = makeRecorder({});
+    const onInsert = vi.fn();
+    const transcribe = vi.fn(async () => ({ transcript: "dictated text" }));
+    const { result, rerender } = renderHook(
+      ({ availableCharacters }) =>
+        useDictation({
+          onInsert,
+          availableCharacters,
+          insertOnComplete: true,
+          createRecorder: () => recorder.recorder,
+          transcribe,
+          postRollMs: 0,
+        }),
+      { initialProps: { availableCharacters: 12 } },
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.error?.reason).toBe("draft-too-long");
+    expect(result.current.transcript).toBe("dictated text");
+    expect(onInsert).not.toHaveBeenCalled();
+    rerender({ availableCharacters: 13 });
+    expect(onInsert).not.toHaveBeenCalled();
+    act(() => result.current.start());
+    expect(onInsert).toHaveBeenCalledExactlyOnceWith("dictated text");
+    expect(result.current.phase).toBe("idle");
+    expect(recorder.start).toHaveBeenCalledOnce();
+    expect(transcribe).toHaveBeenCalledOnce();
+  });
+
   it.each(["", "  \n  "])(
     "announces an empty automatic result without inserting %j",
     async (transcript) => {

@@ -67,6 +67,7 @@ export type DictationErrorReason =
   | "unavailable" // the BFF reports speech-to-text is not available (VOICE_UNAVAILABLE)
   | "negotiation-failed" // the provider rejected or could not complete the WebRTC handshake
   | "connection-failed" // the live-control or WebRTC connection was interrupted
+  | "draft-too-long" // retain the transcript until the user makes room in the composer
   | "transcribe-failed"; // the provider could not transcribe (rate-limited / timeout / provider error)
 
 export interface DictationError {
@@ -123,6 +124,7 @@ type DictationAction =
       readonly note?: string | undefined;
     }
   | { readonly type: "editTranscript"; readonly value: string }
+  | { readonly type: "insertionRefused" }
   | ({ readonly type: "error" } & DictationError)
   | { readonly type: "reset"; readonly emptyResult?: boolean };
 
@@ -163,6 +165,8 @@ function dictationReducer(state: DictationState, action: DictationAction): Dicta
       };
     case "editTranscript":
       return { ...state, transcript: action.value };
+    case "insertionRefused":
+      return refusedInsertion(state);
     case "error":
       return {
         ...INITIAL_STATE,
@@ -178,6 +182,24 @@ function dictationReducer(state: DictationState, action: DictationAction): Dicta
 
 import type { ClientVoiceCaptureReason } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
+function refusedInsertion(state: DictationState): DictationState {
+  return {
+    ...state,
+    phase: "error",
+    errorReason: "draft-too-long",
+    errorMessage: "The draft has insufficient space for the completed dictation.",
+  };
+}
+
+export function dictationInsertionPending(controller: DictationController): boolean {
+  return controller.error?.reason === "draft-too-long";
+}
+
+export function remainingDictationCharacters(draft: string): number {
+  const occupied = draft.trim().length === 0 ? 0 : draft.trimEnd().length + 1;
+  return Math.max(0, MAX_DESKTOP_CHAT_INPUT_CHARS - occupied);
+}
+
 export interface UseDictationOptions {
   // Appends the reviewed transcript into the composer draft. The hook never sends — insertion is the
   // terminal action, after which the user sends through the normal composer flow.
@@ -185,6 +207,8 @@ export interface UseDictationOptions {
   // Ordinary Chat inserts the completed transcript directly into its editable draft. Other
   // consumers retain their explicit preview flow; neither mode sends a message.
   readonly insertOnComplete?: boolean;
+  // Current free composer capacity, including any separator added by the owning composer.
+  readonly availableCharacters?: number;
   // A changed conversation cancels capture and rejects completion from the previous conversation.
   readonly contextKey?: string | undefined;
   // Chat-window identity shared with Voice Dialogue. It serializes every microphone capture on the
@@ -1053,6 +1077,13 @@ export function useDictation(options: UseDictationOptions): DictationController 
 
   const insert = useCallback((): void => {
     const text = state.transcript.trim();
+    if (text.length > (options.availableCharacters ?? MAX_DESKTOP_CHAT_INPUT_CHARS)) {
+      dispatch({ type: "insertionRefused" });
+      reportClientDiagnostic("Composer dictation exceeds the remaining input capacity.", {
+        composerActivity: "input-limit",
+      });
+      return;
+    }
     if (text.length > 0) {
       onInsert(text);
     }
@@ -1060,7 +1091,15 @@ export function useDictation(options: UseDictationOptions): DictationController 
       type: "reset",
       emptyResult: options.insertOnComplete === true && text.length === 0,
     });
-  }, [onInsert, options.insertOnComplete, state.transcript]);
+    reportClientDiagnostic("Composer dictation completed.", {
+      composerActivity: text.length > 0 ? "dictation-inserted" : "dictation-empty",
+    });
+  }, [onInsert, options.availableCharacters, options.insertOnComplete, state.transcript]);
+
+  const startOrInsert = useCallback((): void => {
+    if (state.errorReason === "draft-too-long") insert();
+    else start();
+  }, [insert, start, state.errorReason]);
 
   useCompletedDictationInsertion(
     options.insertOnComplete === true && startedContext.current === options.contextKey,
@@ -1119,10 +1158,10 @@ export function useDictation(options: UseDictationOptions): DictationController 
       state.phase === "recording" ||
       state.phase === "finalizing" ||
       state.phase === "transcribing",
-    start,
+    start: startOrInsert,
     stop,
     cancel,
-    retry,
+    retry: state.errorReason === "draft-too-long" ? insert : retry,
     discard,
     insert,
     setTranscript,
@@ -1155,9 +1194,5 @@ function useCompletedDictationInsertion(
     if (!enabled || inserted.current) return;
     inserted.current = true;
     insert();
-    reportClientDiagnostic("Composer dictation completed.", {
-      composerActivity:
-        state.transcript.trim().length > 0 ? "dictation-inserted" : "dictation-empty",
-    });
   }, [enabled, state.phase, state.transcript, insert]);
 }

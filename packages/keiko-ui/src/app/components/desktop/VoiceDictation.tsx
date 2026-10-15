@@ -60,6 +60,7 @@ interface VoiceDictationButtonProps {
   readonly onStop: () => void;
   readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
   readonly compact?: boolean | undefined;
+  readonly insertionPending?: boolean | undefined;
 }
 
 export function VoiceDictationButton({
@@ -68,6 +69,7 @@ export function VoiceDictationButton({
   onStop,
   buttonRef,
   compact = false,
+  insertionPending = false,
 }: VoiceDictationButtonProps): ReactNode {
   const t = useTranslate();
   const recording = phase === "recording";
@@ -75,7 +77,7 @@ export function VoiceDictationButton({
   // Interactive only when there is a clear action: start from idle/preview/error, stop while
   // recording. The transient requesting / transcribing states are announced but not clickable.
   const busy = phase === "requesting" || phase === "finalizing" || phase === "transcribing";
-  const label = micLabel(phase, t);
+  const label = insertionPending ? t("voice.dictation.insertAria") : micLabel(phase, t);
   return (
     <button
       type="button"
@@ -167,6 +169,8 @@ function errorHeadline(reason: DictationErrorReason, t: I18nTranslate): string {
       return t("voice.dictation.error.negotiationFailed");
     case "connection-failed":
       return t("voice.dictation.error.connectionFailed");
+    case "draft-too-long":
+      return t("voice.dictation.error.draftTooLong");
     case "transcribe-failed":
     case "capture-failed":
       return t("voice.dictation.error.failed");
