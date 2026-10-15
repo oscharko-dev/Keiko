@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 
 import { createRequire } from "node:module";
 import { KEIKO_CONTRACTS_VERSION } from "./version.js";
@@ -1558,4 +1558,34 @@ it("exports all three additive Git read parser type identities", () => {
   const remotes: typeof import("./index.js").parseGitRemotesResponse = parsePublicRemotesForIndex;
   for (const parse of [history, summary, remotes])
     expect(parse(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+
+import {
+  parseLocalKnowledgeCapsulesResponse as parsePublicCatalogCapsulesForIndex,
+  parseLocalKnowledgeCapsuleSetsResponse as parsePublicCatalogSetsForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+
+it("exposes concrete typed catalog wire parsers without widening strict producers (#3918)", () => {
+  const capsules: typeof import("@oscharko-dev/keiko-contracts").parseLocalKnowledgeCapsulesResponse =
+    parsePublicCatalogCapsulesForIndex;
+  const sets: typeof import("@oscharko-dev/keiko-contracts").parseLocalKnowledgeCapsuleSetsResponse =
+    parsePublicCatalogSetsForIndex;
+  expect(capsules({ capsules: [] })).toEqual({ ok: true, value: { capsules: [] } });
+  expect(sets({ capsuleSets: [] })).toEqual({ ok: true, value: { capsuleSets: [] } });
+  const pin = <T>(_value?: T): T | undefined => undefined;
+  pin<import("./index.js").KnowledgePodCatalogSummary>();
+  pin<import("./index.js").LocalKnowledgeCapsulesCatalogResponse>();
+  pin<import("./index.js").LocalKnowledgeCapsuleSetsCatalogResponse>();
+  expectTypeOf<import("./index.js").LegacyKnowledgePodCatalogSummary>().not.toExtend<
+    import("./index.js").KnowledgePodSummary
+  >();
+  expectTypeOf<import("./index.js").KnowledgePodSummary>().toExtend<
+    import("./index.js").KnowledgePodCatalogSummary
+  >();
+  expectTypeOf<
+    import("./index.js").LocalKnowledgeCapsulesCatalogResponse["capsules"][number]["id"]
+  >().toEqualTypeOf<import("./index.js").KnowledgeCapsuleId>();
+  expectTypeOf<
+    import("./index.js").LocalKnowledgeCapsuleSetsCatalogResponse["capsuleSets"][number]["capsuleCount"]
+  >().toEqualTypeOf<number>();
 });

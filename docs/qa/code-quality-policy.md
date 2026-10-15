@@ -381,6 +381,22 @@ upstream data through the existing guard. Shared private helpers, exported opera
 the imported upstream guard and the injected UI callback graph receive no additional classification
 from these records. The actual browser transport and physical writer/analyzer proofs remain
 separate acceptance evidence.
+The two Knowledge catalog parsers likewise return the original admitted capsule-list or
+capsule-set-list response. Their concrete catalog wire types include the existing legacy case
+where only `modelUsePolicy` is omitted or undefined; strict complete Summary producers and their
+validator still require that policy. Present policies pass the existing policy validator. The
+browser applies the existing sealed, all-operations-denied default to legacy summaries, without
+normalizing an incomplete wire object into a complete Summary. Existing display-name redaction,
+optional-field omission and list query behavior remain owned by their existing consumers.
+
+The two actual catalog GETs use the shared HTTP validator callback. Each GET owns its request
+failure diagnostic, including transport and non-success responses, while the catalog owns
+fulfilled-response projection failures and unexpected whole-load failures. An actual empty-body
+validator refusal is already reported by shared HTTP; only that invocation's observed refusal
+defers to it. An error code alone cannot establish prior reporting. The existing registered
+client diagnostic, writer and analyzer path supplies body-free correlation evidence; no second
+logging or deduplication subsystem is introduced. Public parser qualification does not classify
+the UI callback graph or the remaining domain scope.
 Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require

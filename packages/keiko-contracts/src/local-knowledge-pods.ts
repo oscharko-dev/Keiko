@@ -211,6 +211,16 @@ export interface KnowledgePodSummary {
   readonly connectorSource?: AtlassianConnectorPodSource;
 }
 
+// Older catalog responses omitted only model-use policy. All other summary fields remain required.
+export interface LegacyKnowledgePodCatalogSummary extends Omit<
+  KnowledgePodSummary,
+  "modelUsePolicy"
+> {
+  readonly modelUsePolicy?: undefined;
+}
+
+export type KnowledgePodCatalogSummary = KnowledgePodSummary | LegacyKnowledgePodCatalogSummary;
+
 export interface LocalKnowledgeCapsuleListEntry {
   readonly id: KnowledgeCapsuleId;
   readonly displayName: string;
@@ -234,6 +244,20 @@ export interface LocalKnowledgeCapsuleSetListEntry {
 export interface LocalKnowledgeCapsuleSetsResponse {
   readonly capsuleSets: readonly LocalKnowledgeCapsuleSetListEntry[];
   readonly knowledgePods?: readonly KnowledgePodSummary[];
+}
+
+export interface LocalKnowledgeCapsulesCatalogResponse extends Omit<
+  LocalKnowledgeCapsulesResponse,
+  "knowledgePods"
+> {
+  readonly knowledgePods?: readonly KnowledgePodCatalogSummary[];
+}
+
+export interface LocalKnowledgeCapsuleSetsCatalogResponse extends Omit<
+  LocalKnowledgeCapsuleSetsResponse,
+  "knowledgePods"
+> {
+  readonly knowledgePods?: readonly KnowledgePodCatalogSummary[];
 }
 
 const SUMMARY_KEYS = [
@@ -1135,10 +1159,7 @@ function validateCompatibility(value: unknown, errors: string[]): boolean {
   return valid;
 }
 
-function admitsKnowledgePodSummary(
-  input: Record<string, unknown>,
-  errors: string[],
-): input is Record<string, unknown> & PodSummaryStructure {
+function validateSummaryBeforePolicy(input: Record<string, unknown>, errors: string[]): boolean {
   let valid = true;
   onlyKeys(input, SUMMARY_KEYS, "summary", errors);
   valid = combineAdmissions(valid, validateSummaryScalars(input, errors));
@@ -1151,7 +1172,11 @@ function admitsKnowledgePodSummary(
   valid = combineAdmissions(valid, validateRetrieval(input.retrieval, errors));
   valid = combineAdmissions(valid, validatePrivacy(input.privacy, errors));
   valid = combineAdmissions(valid, validateGovernance(input.governance, errors));
-  valid = combineAdmissions(valid, validateModelUsePolicy(input.modelUsePolicy, errors));
+  return valid;
+}
+
+function validateSummaryAfterPolicy(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   valid = combineAdmissions(valid, validateCompatibility(input.compatibility, errors));
   valid = combineAdmissions(valid, validateFuturePlaceholderPosture(input, errors));
   valid = combineAdmissions(
@@ -1160,6 +1185,15 @@ function admitsKnowledgePodSummary(
   );
 
   return valid;
+}
+
+function admitsKnowledgePodSummary(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & PodSummaryStructure {
+  let valid = validateSummaryBeforePolicy(input, errors);
+  valid = combineAdmissions(valid, validateModelUsePolicy(input.modelUsePolicy, errors));
+  return combineAdmissions(valid, validateSummaryAfterPolicy(input, errors));
 }
 
 export function validateKnowledgePodSummary(
@@ -1337,7 +1371,7 @@ function validateUpdatedAt(value: unknown, errors: string[]): boolean {
 function validateLifecycleState(value: unknown, errors: string[]): boolean {
   let valid = true;
   if (value === undefined) return valid;
-  if (typeof value === "string" && CAPSULE_LIFECYCLE_STATES_ADMISSION.includes(value)) {
+  if (typeof value === "string" && CAPSULE_LIFECYCLE_STATES_ADMISSION.has(value)) {
     return valid;
   }
   valid = reject(errors, "summary.lifecycleState is invalid");
@@ -1385,5 +1419,132 @@ const BACKINGS_ADMISSION: ReadonlySet<unknown> = BACKINGS;
 const FUTURE_POD_PLACEHOLDER_KINDS_ADMISSION: ReadonlySet<unknown> = FUTURE_POD_PLACEHOLDER_KINDS;
 const KINDS_ADMISSION: ReadonlySet<unknown> = KINDS;
 const READINESS_ADMISSION: ReadonlySet<unknown> = READINESS;
-const CAPSULE_LIFECYCLE_STATES_ADMISSION: readonly unknown[] = CAPSULE_LIFECYCLE_STATES;
+const CAPSULE_LIFECYCLE_STATES_ADMISSION: ReadonlySet<unknown> = new Set(CAPSULE_LIFECYCLE_STATES);
 const SOURCE_KINDS_ADMISSION: ReadonlySet<unknown> = SOURCE_KINDS;
+
+// This wire admission retains original references and admits only the erased ID brands after
+// checking their concrete string representation. Legacy policy omission grants no model authority.
+function admitsCatalogSummary(
+  input: unknown,
+  errors: string[],
+): input is KnowledgePodCatalogSummary {
+  if (!isRecord(input)) return reject(errors, "catalog summary must be an object");
+  let valid = validateSummaryBeforePolicy(input, errors);
+  if (input.modelUsePolicy !== undefined) {
+    valid = combineAdmissions(valid, validateModelUsePolicy(input.modelUsePolicy, errors));
+  }
+  valid = combineAdmissions(valid, validateSummaryAfterPolicy(input, errors));
+  return valid && errors.length === 0;
+}
+
+function isCatalogString(input: unknown): input is string {
+  return typeof input === "string" && input.trim().length > 0 && isSafeDisplaySummary(input);
+}
+
+function isCatalogCount(input: unknown): input is number {
+  return typeof input === "number" && Number.isSafeInteger(input) && input >= 0;
+}
+
+function isCatalogTimestamp(input: unknown): input is number {
+  return typeof input === "number" && Number.isFinite(input) && input >= 0;
+}
+
+function admitsCapsuleEntry(
+  input: unknown,
+  errors: string[],
+): input is LocalKnowledgeCapsuleListEntry {
+  if (!isRecord(input)) return reject(errors, "capsule entry must be an object");
+  onlyKeys(
+    input,
+    ["id", "displayName", "lifecycleState", "sourceCount", "updatedAt"],
+    "capsule",
+    errors,
+  );
+  const fields = [
+    isCatalogString(input.id),
+    isCatalogString(input.displayName),
+    typeof input.lifecycleState === "string" &&
+      CAPSULE_LIFECYCLE_STATES_ADMISSION.has(input.lifecycleState),
+    isCatalogCount(input.sourceCount),
+    isCatalogTimestamp(input.updatedAt),
+  ];
+  const valid = fields.every(Boolean);
+  return valid || reject(errors, "capsule entry fields are invalid");
+}
+
+function admitsCapsuleSetEntry(
+  input: unknown,
+  errors: string[],
+): input is LocalKnowledgeCapsuleSetListEntry {
+  if (!isRecord(input)) return reject(errors, "capsule set entry must be an object");
+  onlyKeys(input, ["id", "displayName", "capsuleCount", "composedAt"], "capsuleSet", errors);
+  const fields = [
+    isCatalogString(input.id),
+    isCatalogString(input.displayName),
+    isCatalogCount(input.capsuleCount),
+    isCatalogTimestamp(input.composedAt),
+  ];
+  const valid = fields.every(Boolean);
+  return valid || reject(errors, "capsule set entry fields are invalid");
+}
+
+function admitsCatalogArray<T>(
+  input: unknown,
+  errors: string[],
+  admit: (value: unknown, errors: string[]) => value is T,
+): input is readonly T[] {
+  if (!Array.isArray(input)) return reject(errors, "catalog member must be an array");
+  const extent = input.length;
+  if (!isCapturedExtent(extent)) return reject(errors, "catalog extent is invalid");
+  let valid = true;
+  for (let index = 0; index < extent; index += 1) {
+    const member: unknown = input[index];
+    valid = combineAdmissions(valid, admit(member, errors));
+  }
+  return combineAdmissions(valid, validateStableExtent(input, extent, "catalog", errors));
+}
+
+function admitsCatalogSummaries(
+  input: unknown,
+  errors: string[],
+): input is readonly KnowledgePodCatalogSummary[] | undefined {
+  return input === undefined || admitsCatalogArray(input, errors, admitsCatalogSummary);
+}
+
+function admitsCapsulesCatalog(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & LocalKnowledgeCapsulesCatalogResponse {
+  onlyKeys(input, ["capsules", "knowledgePods"], "catalog", errors);
+  let valid = admitsCatalogArray(input.capsules, errors, admitsCapsuleEntry);
+  valid = combineAdmissions(valid, admitsCatalogSummaries(input.knowledgePods, errors));
+  return valid && errors.length === 0;
+}
+
+function admitsCapsuleSetsCatalog(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & LocalKnowledgeCapsuleSetsCatalogResponse {
+  onlyKeys(input, ["capsuleSets", "knowledgePods"], "catalog", errors);
+  let valid = admitsCatalogArray(input.capsuleSets, errors, admitsCapsuleSetEntry);
+  valid = combineAdmissions(valid, admitsCatalogSummaries(input.knowledgePods, errors));
+  return valid && errors.length === 0;
+}
+
+export function parseLocalKnowledgeCapsulesResponse(
+  input: unknown,
+): LocalKnowledgeValidation<LocalKnowledgeCapsulesCatalogResponse> {
+  if (!isRecord(input)) return { ok: false, errors: ["catalog must be an object"] };
+  const errors: string[] = [];
+  return admitsCapsulesCatalog(input, errors) ? { ok: true, value: input } : { ok: false, errors };
+}
+
+export function parseLocalKnowledgeCapsuleSetsResponse(
+  input: unknown,
+): LocalKnowledgeValidation<LocalKnowledgeCapsuleSetsCatalogResponse> {
+  if (!isRecord(input)) return { ok: false, errors: ["catalog must be an object"] };
+  const errors: string[] = [];
+  return admitsCapsuleSetsCatalog(input, errors)
+    ? { ok: true, value: input }
+    : { ok: false, errors };
+}

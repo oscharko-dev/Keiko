@@ -331,6 +331,82 @@ async function driveTrust204Refusal(context: (body: string) => RouteContext): Pr
   expect(bodies.join("\n")).not.toContain("private-trust-project");
 }
 
+interface CatalogApiFixture {
+  readonly fetchCapsules: (options: { readonly includeKnowledgePods: true }) => Promise<unknown>;
+  readonly fetchCapsuleSets: (options: { readonly includeKnowledgePods: true }) => Promise<unknown>;
+}
+
+function catalogScenarioResponse(sets: boolean, malformed: boolean): Response {
+  const headers = {
+    "X-Keiko-Correlation-Id": sets
+      ? "catalog-sets-response-scenario"
+      : "catalog-capsules-response-scenario",
+  };
+  if (malformed && sets) return new Response(null, { status: 204, headers });
+  const body = sets
+    ? { capsuleSets: [] }
+    : {
+        capsules: malformed
+          ? [{ id: "private-catalog-id", displayName: "private-catalog-label" }]
+          : [],
+      };
+  return new Response(JSON.stringify(body), { headers });
+}
+
+async function driveCatalogRefusals(context: (body: string) => RouteContext): Promise<void> {
+  const api = await vi.importActual<CatalogApiFixture>(
+    "../../packages/keiko-ui/src/lib/local-knowledge-api.js",
+  );
+  const { diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  let malformed = false;
+  let requests = 0;
+  const bodies: string[] = [];
+  const deliveries: Promise<Response>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input === "string" && input.startsWith("/api/local-knowledge/")) {
+        requests += 1;
+        expect(input).toMatch(/includeKnowledgePods=1$/u);
+        return catalogScenarioResponse(input.includes("capsule-sets"), malformed);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      const delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      deliveries.push(delivery);
+      return delivery;
+    },
+  );
+  await expect(api.fetchCapsules({ includeKnowledgePods: true })).resolves.toEqual({
+    capsules: [],
+  });
+  await expect(api.fetchCapsuleSets({ includeKnowledgePods: true })).resolves.toEqual({
+    capsuleSets: [],
+  });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  await expect(api.fetchCapsules({ includeKnowledgePods: true })).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "catalog-capsules-response-scenario",
+  });
+  await expect(api.fetchCapsuleSets({ includeKnowledgePods: true })).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: "catalog-sets-response-scenario",
+  });
+  expect(requests).toBe(4);
+  expect(bodies).toHaveLength(2);
+  expect((await Promise.all(deliveries)).map((response) => response.status)).toEqual([204, 204]);
+  expect(bodies.join("\n")).not.toContain("private-catalog");
+}
+
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
 function parsedLine(line: string | undefined): Record<string, unknown> {
@@ -541,6 +617,34 @@ describe("Activity Log scenario: client-diagnostics", () => {
     expect(trace.failureClasses).toContain("client-diagnostic");
     expect(log).not.toContain("private-trust-project");
     expect(log).not.toContain("/api/editor/verification/trust");
+  });
+
+  it("persists actual catalog malformed-200 and empty-204 refusals exactly once per request", async () => {
+    const startedAtMs = Date.now();
+    await driveCatalogRefusals(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(2);
+    for (const [index, correlationId] of [
+      "catalog-capsules-response-scenario",
+      "catalog-sets-response-scenario",
+    ].entries()) {
+      expect(parsedLine(lines[index])).toMatchObject({
+        correlationId,
+        errorClass: "ApiError",
+        errorKind: "validation-failed",
+        completeness: "complete",
+        loss: "none",
+      });
+    }
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-catalog");
+    expect(log).not.toContain("/api/local-knowledge/");
   });
 
   // Fault injection: four refused reports (two sharing a refusal reason within the same throttle

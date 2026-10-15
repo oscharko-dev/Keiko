@@ -90,6 +90,7 @@ afterEach(() => {
   resetClientDiagnosticWriter();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 async function flush(): Promise<void> {
@@ -151,7 +152,14 @@ describe("loadKnowledgeCatalog", () => {
   });
 
   it("reports a failed load body-free and returns it as an error, not an empty catalog", async () => {
-    fetchCapsulesMock.mockRejectedValueOnce(new Error("secret /Users/alice/private/pod.db"));
+    const actual = await vi.importActual<typeof import("@/lib/local-knowledge-api")>(
+      "@/lib/local-knowledge-api",
+    );
+    fetchCapsulesMock.mockImplementationOnce(actual.fetchCapsules);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("secret /Users/alice/private/pod.db")),
+    );
 
     const snapshot = await loadKnowledgeCatalog();
 
@@ -164,8 +172,15 @@ describe("loadKnowledgeCatalog", () => {
   });
 
   it("reports both failed lists instead of stopping at the capsule failure", async () => {
-    fetchCapsulesMock.mockRejectedValueOnce(new Error("capsules down"));
-    fetchCapsuleSetsMock.mockRejectedValueOnce(new Error("sets down"));
+    const actual = await vi.importActual<typeof import("@/lib/local-knowledge-api")>(
+      "@/lib/local-knowledge-api",
+    );
+    fetchCapsulesMock.mockImplementationOnce(actual.fetchCapsules);
+    fetchCapsuleSetsMock.mockImplementationOnce(actual.fetchCapsuleSets);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("private list transport failure")),
+    );
 
     const snapshot = await loadKnowledgeCatalog();
 
@@ -175,6 +190,38 @@ describe("loadKnowledgeCatalog", () => {
       "Keiko knowledge catalog load failed (list=capsule-sets).",
     ]);
   });
+
+  it.each(["malformed200", "empty204", "same-code502", "transport"])(
+    "keeps one correlated diagnostic for actual GET failure %s",
+    async (phase) => {
+      const actual = await vi.importActual<typeof import("@/lib/local-knowledge-api")>(
+        "@/lib/local-knowledge-api",
+      );
+      fetchCapsulesMock.mockImplementationOnce(actual.fetchCapsules);
+      fetchCapsuleSetsMock.mockImplementationOnce(actual.fetchCapsuleSets);
+      const request = vi.fn((path: RequestInfo | URL): Promise<Response> => {
+        if (typeof path === "string" && path.includes("capsule-sets"))
+          return Promise.resolve(new Response(JSON.stringify({ capsuleSets: [] })));
+        if (phase === "transport") return Promise.reject(new TypeError("private catalog detail"));
+        if (phase === "empty204") return Promise.resolve(new Response(null, { status: 204 }));
+        const payload =
+          phase === "same-code502"
+            ? { error: { code: "CONTRACT_VALIDATION_FAILED", message: "private catalog detail" } }
+            : null;
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), { status: phase === "same-code502" ? 502 : 200 }),
+        );
+      });
+      vi.stubGlobal("fetch", request);
+      const snapshot = await loadKnowledgeCatalog();
+      expect(snapshot.loadError).toBeInstanceOf(Error);
+      expect(snapshot.capsules).toEqual([]);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.meta?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/u);
+      expect(JSON.stringify(diagnostics)).not.toContain("private catalog detail");
+    },
+  );
 
   it("returns a load error for a capsule response without capsules instead of rejecting", async () => {
     const malformed = {} as CapsulesResponse;
@@ -396,9 +443,13 @@ describe("useKnowledgeCatalog recovery", () => {
 
   it("keeps the last good snapshot when a background re-read fails", async () => {
     vi.useFakeTimers();
+    const actual = await vi.importActual<typeof import("@/lib/local-knowledge-api")>(
+      "@/lib/local-knowledge-api",
+    );
     fetchCapsulesMock
-      .mockResolvedValueOnce({ capsules: [wireCapsule("cap-1", "test", "indexing")] })
-      .mockRejectedValue(new Error("gateway restarting"));
+      .mockImplementation(actual.fetchCapsules)
+      .mockResolvedValueOnce({ capsules: [wireCapsule("cap-1", "test", "indexing")] });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("gateway restarting")));
     const scopes = [capsuleScope("cap-1")];
     const { result } = renderHook(() => useKnowledgeCatalog(scopes));
     await flush();

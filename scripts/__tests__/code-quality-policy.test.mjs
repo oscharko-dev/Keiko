@@ -70,6 +70,8 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "git-remotes-public-parser",
       "git-sync-preview-public-parser",
       "git-sync-execute-public-parser",
+      "knowledge-catalog-capsules-public-parser",
+      "knowledge-catalog-capsule-sets-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -202,6 +204,45 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         const changed = structuredClone(policy);
         if (mode === "removed") changed.responsibilities.splice(index, 1);
         else changed.responsibilities[index].consumer.exportName = "unreviewedParser";
+        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
+      }
+    },
+  );
+
+  it.each([
+    ["capsules", "parseLocalKnowledgeCapsulesResponse", "parsePublicCapsulesCatalog"],
+    ["capsule-sets", "parseLocalKnowledgeCapsuleSetsResponse", "parsePublicCapsuleSetsCatalog"],
+  ])(
+    "pins the additive Knowledge catalog %s public parser and rejects removal/rebinding",
+    (kind, producer, consumer) => {
+      const index = policy.responsibilities.findIndex(
+        (record) => record.id === `knowledge-catalog-${kind}-public-parser`,
+      );
+      const record = policy.responsibilities[index];
+      const path = "packages/keiko-contracts/src/local-knowledge-pods.test.ts";
+      const selector = {
+        consumerPath: path,
+        specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        exportName: producer,
+      };
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
+      expect(record.transform).toEqual(selector);
+      expect(record.output).toEqual(selector);
+      expect(record.consumer).toEqual({
+        ...selector,
+        exportName: consumer,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      expect(record.proofs).toEqual([path]);
+      expect(record.proofAssertions).toHaveLength(3);
+      for (const mode of ["removed", "rebound"]) {
+        const changed = structuredClone(policy);
+        if (mode === "removed") changed.responsibilities.splice(index, 1);
+        else changed.responsibilities[index].consumer.exportName = "unreviewedCatalogParser";
         expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
       }
     },

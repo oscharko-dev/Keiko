@@ -967,6 +967,94 @@
           "testName": "Git sync typed parsers (#3918) public execute: retains executable gates outcomes and optional counter bounds"
         }
       ]
+    },
+    {
+      "id": "knowledge-catalog-capsules-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parseLocalKnowledgeCapsulesResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parseLocalKnowledgeCapsulesResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parseLocalKnowledgeCapsulesResponse"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parsePublicCapsulesCatalog",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge-pods.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge catalog public capsules parser (#3918) preserves original current and legacy identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge catalog public capsules parser (#3918) refuses malformed ingress members sparse arrays and invalid present policy"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge catalog public capsules parser (#3918) retains browser-safe legacy labels while rejecting malformed list scalars"
+        }
+      ]
+    },
+    {
+      "id": "knowledge-catalog-capsule-sets-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parseLocalKnowledgeCapsuleSetsResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parseLocalKnowledgeCapsuleSetsResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parseLocalKnowledgeCapsuleSetsResponse"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
+        "exportName": "parsePublicCapsuleSetsCatalog",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/local-knowledge-pods.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge catalog public capsuleSets parser (#3918) preserves original current and legacy identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge catalog public capsuleSets parser (#3918) refuses malformed ingress members sparse arrays and invalid present policy"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+          "testName": "Knowledge catalog public capsuleSets parser (#3918) retains browser-safe legacy labels while rejecting malformed list scalars"
+        }
+      ]
     }
   ]
 }

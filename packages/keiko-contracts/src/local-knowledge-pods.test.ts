@@ -9,6 +9,8 @@ import {
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,
+  parseLocalKnowledgeCapsulesResponse,
+  parseLocalKnowledgeCapsuleSetsResponse,
   type KnowledgePodSummary,
 } from "./local-knowledge-pods.js";
 import { resolveKnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
@@ -765,7 +767,11 @@ describe("KnowledgePodSummary connectorSource projection (Issue #2240)", () => {
   });
 });
 
-import { validateKnowledgePodSummary as publicValidateSummary } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import {
+  validateKnowledgePodSummary as publicValidateSummary,
+  parseLocalKnowledgeCapsulesResponse as parsePublicCapsules,
+  parseLocalKnowledgeCapsuleSetsResponse as parsePublicCapsuleSets,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 type SummaryAny<T> = 0 extends 1 & T ? true : false;
 function consumePublicSummary(input: unknown): void {
   const result = publicValidateSummary(input);
@@ -872,3 +878,143 @@ describe.each([
     });
   });
 });
+
+export function parsePublicCapsulesCatalog(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").LocalKnowledgeValidation<
+  import("@oscharko-dev/keiko-contracts").LocalKnowledgeCapsulesCatalogResponse
+> {
+  const result = parsePublicCapsules(input);
+  return result;
+}
+
+export function parsePublicCapsuleSetsCatalog(
+  input: unknown,
+): import("@oscharko-dev/keiko-contracts").LocalKnowledgeValidation<
+  import("@oscharko-dev/keiko-contracts").LocalKnowledgeCapsuleSetsCatalogResponse
+> {
+  const result = parsePublicCapsuleSets(input);
+  return result;
+}
+
+function capsuleCatalogEntry(): object {
+  return {
+    id: happySummary().id,
+    displayName: "Legacy label",
+    lifecycleState: "ready",
+    sourceCount: 1,
+    updatedAt: 1.5,
+  };
+}
+
+function capsuleSetCatalogEntry(): object {
+  return { id: happySummary().id, displayName: "Legacy set", capsuleCount: 1, composedAt: 1.5 };
+}
+
+for (const { field, entry, parse, surface } of [
+  {
+    field: "capsules",
+    entry: capsuleCatalogEntry,
+    parse: parseLocalKnowledgeCapsulesResponse,
+    surface: "source",
+  },
+  {
+    field: "capsules",
+    entry: capsuleCatalogEntry,
+    parse: parsePublicCapsulesCatalog,
+    surface: "public",
+  },
+  {
+    field: "capsuleSets",
+    entry: capsuleSetCatalogEntry,
+    parse: parseLocalKnowledgeCapsuleSetsResponse,
+    surface: "source",
+  },
+  {
+    field: "capsuleSets",
+    entry: capsuleSetCatalogEntry,
+    parse: parsePublicCapsuleSetsCatalog,
+    surface: "public",
+  },
+])
+  describe(`Knowledge catalog ${surface} ${field} parser (#3918)`, () => {
+    it("preserves original current and legacy identities and optional presence", () => {
+      const current = happySummary();
+      const { modelUsePolicy: _omitted, ...legacy } = current;
+      for (const summary of [current, legacy, { ...legacy, modelUsePolicy: undefined }]) {
+        const input = { [field]: [entry()], knowledgePods: [summary] };
+        const result = parse(input);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new TypeError("catalog fixture refused");
+        expect(result.value).toBe(input);
+        expect(result.value.knowledgePods).toBe(input.knowledgePods);
+        const admitted = result.value.knowledgePods?.[0];
+        if (admitted === undefined) throw new TypeError("catalog summary missing");
+        expect(admitted).toBe(summary);
+        expect(admitted.counts).toBe(summary.counts);
+        expect(admitted.compatibility).toBe(summary.compatibility);
+        expect(Object.hasOwn(admitted, "modelUsePolicy")).toBe(
+          Object.hasOwn(summary, "modelUsePolicy"),
+        );
+      }
+      expect(validateKnowledgePodSummary(legacy).ok).toBe(false);
+      expect(validateKnowledgePodSummary({ ...legacy, modelUsePolicy: undefined }).ok).toBe(false);
+      expect(validateKnowledgePodSummary(current).ok).toBe(true);
+      for (const input of [{ [field]: [] }, { [field]: [], knowledgePods: undefined }]) {
+        const result = parse(input);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new TypeError("catalog fixture refused");
+        expect(result.value).toBe(input);
+        expect(Object.hasOwn(result.value, "knowledgePods")).toBe(
+          Object.hasOwn(input, "knowledgePods"),
+        );
+      }
+    });
+
+    it("refuses malformed ingress members sparse arrays and invalid present policy", () => {
+      const sparse: unknown[] = [];
+      sparse.length = 1;
+      for (const input of [
+        undefined,
+        null,
+        1,
+        "malformed",
+        [],
+        {},
+        { [field]: null },
+        { [field]: [null] },
+        { [field]: sparse },
+        { [field]: [{ ...entry(), id: 1 }] },
+        {
+          [field]: [
+            { ...entry(), ...(field === "capsules" ? { sourceCount: -1 } : { capsuleCount: -1 }) },
+          ],
+        },
+        { [field]: [], knowledgePods: sparse },
+        { [field]: [], knowledgePods: [{ ...happySummary(), modelUsePolicy: null }] },
+        { [field]: [], knowledgePods: [{ ...happySummary(), modelUsePolicy: { mode: "allow" } }] },
+        { [field]: [], knowledgePods: [{ ...happySummary(), counts: { sourceCount: -1 } }] },
+        { [field]: [], unexpected: true },
+      ]) {
+        const result = parse(input);
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new TypeError("malformed catalog admitted");
+        expect(result.errors.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("retains browser-safe legacy labels while rejecting malformed list scalars", () => {
+      for (const displayName of ["/private/legacy-name", "https://legacy.invalid/label"]) {
+        expect(parse({ [field]: [{ ...entry(), displayName }] }).ok).toBe(true);
+      }
+      for (const changed of [
+        { displayName: 7 },
+        { displayName: "" },
+        { id: null },
+        { lifecycleState: "invalid" },
+        field === "capsules" ? { updatedAt: -1 } : { composedAt: -1 },
+        field === "capsules" ? { sourceCount: 0.5 } : { capsuleCount: 0.5 },
+      ])
+        expect(parse({ [field]: [{ ...entry(), ...changed }] }).ok).toBe(false);
+    });
+  });

@@ -131,7 +131,7 @@ function settleCatalogList<Response, Entry>(
   toEntries: (response: Response) => readonly Entry[],
 ): CatalogListOutcome<Entry> {
   if (result.status !== "fulfilled") {
-    reportCatalogLoadFailure(list, result.reason);
+    // The actual catalog GET owns request rejection evidence, including empty-body validation.
     return { failed: true, reason: result.reason };
   }
   try {
