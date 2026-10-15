@@ -89,12 +89,22 @@ export function useChatDraftUnloadGuard(
   attachments: number,
 ): void {
   useEffect(() => {
+    const flush = (): void => controller.flush();
+    const visibilityChanged = (): void => {
+      if (document.visibilityState === "hidden") flush();
+    };
     const beforeUnload = (event: BeforeUnloadEvent): void => {
       if (!controller.hasUnsaved() && attachments === 0) return;
       controller.flush();
       event.preventDefault();
     };
     window.addEventListener("beforeunload", beforeUnload);
-    return (): void => window.removeEventListener("beforeunload", beforeUnload);
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return (): void => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
   }, [controller, attachments]);
 }

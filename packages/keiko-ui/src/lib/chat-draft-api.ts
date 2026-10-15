@@ -14,9 +14,13 @@ export async function readChatDraft(chatId: string): Promise<ChatDraft> {
 
 export async function writeChatDraft(chatId: string, update: ChatDraftUpdate): Promise<ChatDraft> {
   await codingAppSessionPairingSettled();
+  const body = JSON.stringify(update);
   return bffFetchJson(`/api/chats/${encodeURIComponent(chatId)}/draft`, {
     method: "PUT",
-    body: JSON.stringify(update),
+    body,
+    // Let an admitted save survive page teardown. Oversized drafts retain normal transport
+    // and the existing unsaved-change guard instead of exceeding fetch's 64 KiB body cap.
+    keepalive: new Blob([body]).size <= 60 * 1024,
     cache: "no-store",
     signal: AbortSignal.timeout(15_000),
   });

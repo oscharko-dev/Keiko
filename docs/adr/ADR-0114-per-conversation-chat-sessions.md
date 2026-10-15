@@ -65,7 +65,11 @@ windows.
    conversation's text; a conversation switch does not erase another conversation's saved draft.
    Concurrent tabs cannot overwrite a newer draft without resolving the stale revision. Browser
    storage and diagnostic evidence never contain draft text. Unconfirmed writes and transient
-   attachments retain an unload warning instead of claiming durable recovery. Closing or cutting a
+   attachments retain an unload warning instead of claiming durable recovery. Hidden-page and
+   pagehide events additionally flush pending drafts; bounded save requests use fetch keepalive
+   so an admitted write can finish across page teardown. Oversized drafts retain ordinary transport
+   and the warning. This is best-effort transport, not a guarantee after forced termination, a
+   pending revision conflict, or unavailable storage. Closing or cutting a
    chat window waits for private draft acknowledgement and refuses unresolved conflicts or staged
    attachments. A final synchronous readiness check preserves edits made during asynchronous
    connection teardown; acknowledged unbinds still remove their corresponding visible connections.

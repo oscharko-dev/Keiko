@@ -242,6 +242,22 @@ describe("private chat drafts", () => {
     expect(saved.defaultPrevented).toBe(false);
   });
 
+  it("flushes a pending draft when the page hides without beforeunload", async () => {
+    vi.useFakeTimers();
+    const draft = controller();
+    await draft.refresh("a");
+    const view = renderHook(() => useChatDraftUnloadGuard(draft, 0));
+    draft.setText("a", "Keep the latest edit on reload");
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeChatDraft).toHaveBeenCalledOnce();
+    expect(writeChatDraft).toHaveBeenCalledWith("a", {
+      text: "Keep the latest edit on reload",
+      expectedRevision: 0,
+    });
+    view.unmount();
+  });
+
   it("warns before unload for transient attachments even with a saved draft", async () => {
     const draft = controller();
     await draft.refresh("a");
