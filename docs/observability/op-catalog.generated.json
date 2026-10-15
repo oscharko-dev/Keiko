@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "be733d2f79b2426d63c76f30f8d2c7c5583d37c1b7352848367b2e16ac6eb2d2",
+    "catalogDigest": "119d8d14bc63dc3e9ef898cbcb37401716d2b747868555d80da5051492d8ad5f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3317,6 +3317,8 @@
               "workspace-layout-unlocked",
               "literal-input-preserved",
               "draft-resynchronized",
+              "context-details-expanded",
+              "context-details-collapsed",
               "dictation-inserted",
               "dictation-empty",
               "dictation-context-changed",

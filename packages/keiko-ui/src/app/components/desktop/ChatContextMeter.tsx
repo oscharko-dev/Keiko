@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useContextDisclosure } from "./useContextDisclosure";
 import type {
@@ -8,6 +8,7 @@ import type {
   ChatContextStatusWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useLocale } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate as I18nTranslate,
@@ -42,17 +43,14 @@ function ContextMetrics({ status }: { readonly status: ChatContextStatusWire }):
     [t("chat.context.safetyMargin"), number(status.safetyMarginTokens)],
   ];
   return (
-    <>
-      <dl className={styles.cmpMetrics}>
-        {rows.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <ContextFootnotes status={status} />
-    </>
+    <dl className={styles.cmpMetrics}>
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -181,7 +179,6 @@ function ContextBreakdown({
           <SegmentRow key={segment.id} segment={segment} status={status} />
         ))}
       </ul>
-      <ContextNotes status={status} />
     </>
   );
 }
@@ -204,27 +201,32 @@ function lastRequestText(
   });
 }
 
+function SourceCapacityWarning({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const sources = status.knowledgeSources;
+  const trimmed =
+    sources !== undefined && sources.sentReferenceCount < sources.availableReferenceCount;
+  return trimmed ? (
+    <p className={styles.cmpWarning} role="note">
+      {t("chat.context.referencesTrimmed", {
+        sent: sources.sentReferenceCount.toLocaleString(locale),
+        available: sources.availableReferenceCount.toLocaleString(locale),
+      })}
+    </p>
+  ) : null;
+}
+
 function ContextNotes({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
   const t = useTranslate();
   const locale = useLocale();
   const number = (value: number): string => value.toLocaleString(locale);
-  const sources = status.knowledgeSources;
-  const trimmed =
-    sources !== undefined && sources.sentReferenceCount < sources.availableReferenceCount;
   const until =
     status.autoCompactionAtTokens === undefined
       ? undefined
       : Math.max(0, status.autoCompactionAtTokens - status.estimatedInputTokens);
   return (
     <>
-      {trimmed ? (
-        <p className={styles.cmpWarning} role="note">
-          {t("chat.context.referencesTrimmed", {
-            sent: number(sources.sentReferenceCount),
-            available: number(sources.availableReferenceCount),
-          })}
-        </p>
-      ) : null}
       {status.lastRequest === undefined ? null : (
         <p className={styles.cmpHelp}>{lastRequestText(t, number, status.lastRequest)}</p>
       )}
@@ -243,11 +245,14 @@ function ContextNotes({ status }: { readonly status: ChatContextStatusWire }): R
 }
 
 function ContextSummary({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
-  return status.segments === undefined ? (
-    <ContextMetrics status={status} />
-  ) : (
+  return (
     <>
-      <ContextBreakdown status={status} segments={status.segments} />
+      {status.segments === undefined ? (
+        <ContextMetrics status={status} />
+      ) : (
+        <ContextBreakdown status={status} segments={status.segments} />
+      )}
+      <SourceCapacityWarning status={status} />
       <ContextFootnotes status={status} />
     </>
   );
@@ -296,7 +301,6 @@ function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }
           })}
         </p>
       )}
-      <DeclaredInputLimit status={status} />
       {status.contextWindowAssumed === true ? (
         <p className={styles.cmpHelp}>{t("chat.context.windowAssumed")}</p>
       ) : null}
@@ -335,6 +339,46 @@ function SourcesPolicyNote({ status }: { readonly status: ChatContextStatusWire 
   );
 }
 
+function ContextExplanation({
+  status,
+}: {
+  readonly status: ChatContextMeterProps["status"];
+}): ReactNode {
+  const t = useTranslate();
+  const id = useId();
+  const [expanded, setExpanded] = useState(false);
+  const toggle = (): void => {
+    setExpanded(!expanded);
+    reportClientDiagnostic("Keiko context explanation visibility changed.", {
+      composerActivity: expanded ? "context-details-collapsed" : "context-details-expanded",
+    });
+  };
+  return (
+    <div className={styles.cmpExplanation}>
+      <button
+        type="button"
+        className={styles.cmpDetailsToggle}
+        aria-expanded={expanded}
+        aria-controls={id}
+        onClick={toggle}
+      >
+        <span className={styles.cmpChevron} aria-hidden="true">
+          ›
+        </span>
+        {t("chat.context.details")}
+      </button>
+      <div id={id} hidden={!expanded}>
+        <p className={styles.cmpHelp}>{t("chat.context.estimate")}</p>
+        <AutomaticCompactionNote status={status} />
+        <p className={styles.cmpHelp}>{t("chat.context.retained")}</p>
+        {status?.knowledgeSources === undefined ? null : <SourcesPolicyNote status={status} />}
+        {status === undefined ? null : <ContextNotes status={status} />}
+        {status === undefined ? null : <DeclaredInputLimit status={status} />}
+      </div>
+    </div>
+  );
+}
+
 function ContextDetails(props: ChatContextMeterProps): ReactNode {
   const t = useTranslate();
   return (
@@ -343,12 +387,6 @@ function ContextDetails(props: ChatContextMeterProps): ReactNode {
         <p>{t("chat.context.unavailable")}</p>
       ) : (
         <ContextSummary status={props.status} />
-      )}
-      <p className={styles.cmpHelp}>{t("chat.context.estimate")}</p>
-      <AutomaticCompactionNote status={props.status} />
-      <p className={styles.cmpHelp}>{t("chat.context.retained")}</p>
-      {props.status?.knowledgeSources === undefined ? null : (
-        <SourcesPolicyNote status={props.status} />
       )}
       {props.error ? (
         <p>
@@ -369,6 +407,7 @@ function ContextDetails(props: ChatContextMeterProps): ReactNode {
         {t(props.compacting ? "chat.context.compacting" : "chat.context.compact")}
       </button>
       {props.busy ? <p className={styles.cmpHelp}>{t("chat.context.wait")}</p> : null}
+      <ContextExplanation status={props.status} />
     </>
   );
 }

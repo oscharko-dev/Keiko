@@ -303,6 +303,8 @@ describe("POST /api/diagnostics/client", () => {
     "scope-refusal-skipped-owner",
     "scope-refusal-skipped-draft",
     "scope-refusal-skipped-unproven",
+    "context-details-expanded",
+    "context-details-collapsed",
     "dictation-inserted",
     "dictation-empty",
     "dictation-context-changed",

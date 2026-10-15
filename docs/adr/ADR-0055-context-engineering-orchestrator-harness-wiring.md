@@ -204,6 +204,9 @@ reopening the control cannot shrink it again. Connected sources and protected Sk
 unchanged. Automatic maintenance still starts at 90% before request dispatch and targets 70%; a
 grounded chat applies these thresholds to its dedicated conversation lane. Existing body-free
 `chat.context.management` events report the saved tokens or an unchanged result.
+The context meter keeps metrics, savings and the action visible, with concise explanations in a
+collapsed disclosure. Expanding or collapsing it emits the corresponding closed activity on the
+existing body-free `client.composer.activity` operation.
 
 The validated `ContextCompactionRecord` contains structured continuity fields and source spans.
 `tokensBefore` counts the removed provider messages; `tokensAfter` counts the incremental cost of

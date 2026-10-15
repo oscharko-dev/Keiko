@@ -1329,6 +1329,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   // Chat context meter and grounded evidence panel: both render only in the lazily loaded chat
   // window, so their strings stay out of the first-load catalog (editor-bundle-size budget).
   "chat.context.title": "Gesprächskontext",
+  "chat.context.details": "Details zur Kontextnutzung",
   "chat.context.heading": "Gesprächskontext {percent} %",
   "chat.context.label": "Gesprächskontext: ungefähr {percent} % belegt",
   "chat.context.used": "Geschätzt belegte Tokens",
@@ -1336,14 +1337,14 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.window": "Gesamtes Kontextfenster",
   "chat.context.outputReserve": "Für die Antwort reserviert",
   "chat.context.safetyMargin": "Sicherheitsreserve",
-  "chat.context.saved": "{tokens} Tokens bei {count} zusammengefassten Nachrichten eingespart.",
-  "chat.context.saved.one": "{tokens} Tokens bei 1 zusammengefassten Nachricht eingespart.",
+  "chat.context.saved": "{tokens} Tokens gespart · {count} Nachrichten zusammengefasst",
+  "chat.context.saved.one": "{tokens} Tokens gespart · 1 Nachricht zusammengefasst",
   "chat.context.percent": "{percent} %",
   "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
   "chat.context.estimate":
-    "Geschätzt für die nächste Anfrage, bei Wissens-Chats mit dem Quellenanteil der letzten Frage. Entwurf und Anhänge kommen beim Senden hinzu.",
+    "Schätzung für die nächste Anfrage mit dem letzten Quellenanteil. Entwurf und Anhänge kommen beim Senden hinzu.",
   "chat.context.automaticGrounded":
-    "Keiko kompaktiert den Gesprächsverlauf ab 90 % seines Bereichs von {tokens} Tokens. Die Quellenkapazität ist separat.",
+    "Automatisch ab 90 % des Gesprächsbudgets von {tokens} Tokens. Quellen nutzen separate Kapazität.",
   "chat.context.segment.sourceCapacity": "Zusätzliche Quellenkapazität",
   "chat.context.segment.inputUnavailable": "Für Eingaben nicht verfügbar",
   "chat.context.declaredInputLimit": "Eingabegrenze des Modells: {tokens} Tokens.",
@@ -1351,13 +1352,13 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.untilConversationCompaction":
     "Noch {tokens} Gesprächs-Tokens bis zur automatischen Kompaktierung.",
   "chat.context.sourcesPolicy":
-    "Verbundene Quellenauszüge werden für jede Frage neu geladen und nie zusammengefasst. Der Gesprächsverlauf nutzt ein eigenes Eingabebudget.",
+    "Quellen werden je Frage neu geladen und nie zusammengefasst. Die Gesprächskapazität ist separat.",
   "chat.context.sourcesPolicyGrounded":
-    "Verbundene Quellenauszüge werden für jede Frage neu geladen und nie zusammengefasst. Das aktuelle Eingabebudget für den Gesprächsverlauf beträgt {tokens} Tokens.",
+    "Quellen werden je Frage neu geladen und nie zusammengefasst.",
   "chat.context.automatic":
-    "Keiko kompaktiert ab 90 % der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
+    "Automatisch ab 90 % der nutzbaren Kapazität, vor der nächsten Anfrage.",
   "chat.context.retained":
-    "Manuelles Kompaktieren fasst den verfügbaren Gesprächsverlauf in einem Durchlauf zusammen. Es wird erst mit neuen Nachrichten und mindestens 50 % belegter Gesprächskapazität wieder verfügbar. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
+    "Manuell: ein Durchlauf; erneut verfügbar mit neuen Nachrichten und 50 % belegter Kapazität. Der vollständige Chat bleibt gespeichert; Zusammenfassungen können Details auslassen.",
   "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
   "chat.context.retry": "Erneut versuchen",
   "chat.context.compact": "Kontext jetzt kompaktieren",
@@ -1380,16 +1381,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.referencesTrimmed":
     "Nur {sent} von {available} Referenzen passten ins Kontextfenster des Modells. Verwendet wurden die relevantesten.",
   "chat.context.lastRequestMeasured":
-    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen).",
+    "Letzte Wissensanfrage: {tokens} Tokens vom Anbieter gemessen.",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hatte diese Anfrage auf {estimated} Tokens geschätzt. Die Aufteilung oben schätzt die nächste Anfrage.",
+    "Letzte Wissensanfrage: {tokens} Tokens vom Anbieter gemessen; {estimated} für diese Anfrage geschätzt.",
   "chat.context.lastRequestEstimated":
     "Letzte Wissensanfrage: ungefähr {tokens} Tokens (geschätzt).",
   "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",
   "chat.context.windowAssumed":
-    "Das Gateway meldet für dieses Modell kein Kontextfenster. Keiko plant mit dem angenommenen Wert und übernimmt das tatsächliche Fenster automatisch, sobald der Anbieter es meldet.",
+    "Kontextfenster vorläufig angenommen, bis der Anbieter seine Größe meldet.",
   "chat.context.pending":
-    "Der gespeicherte Verlauf ({before} Tokens) wird beim nächsten Senden automatisch auf etwa {after} Tokens kompaktiert.",
+    "Nächste Anfrage: Verlauf von {before} auf etwa {after} Tokens reduziert.",
   "grounded.inspection.coverageGap.one":
     "Diese Antwort berücksichtigt die durchsuchbaren Dateien im verbundenen Ordner. Mindestens {count} Datei wurde nicht durchsucht (erfasste Ausschlüsse: {detail}). Diese erfassten Ausschlüsse umfassen möglicherweise nicht jede ausgeschlossene Datei.",
   "grounded.inspection.coverageGap.other":

@@ -411,6 +411,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-unlocked",
   "literal-input-preserved",
   "draft-resynchronized",
+  "context-details-expanded",
+  "context-details-collapsed",
   "dictation-inserted",
   "dictation-empty",
   "dictation-context-changed",

@@ -3160,6 +3160,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-layout-unlocked",
           "literal-input-preserved",
           "draft-resynchronized",
+          "context-details-expanded",
+          "context-details-collapsed",
           "dictation-inserted",
           "dictation-empty",
           "dictation-context-changed",

@@ -414,7 +414,7 @@ test("applies a selected private skill once across compaction and reload, then r
   const chip = page.getByRole("button", { name: /Synthetic boundary method.*v1/ });
   await expect(chip).toBeVisible();
   await composer.fill(
-    "Review this synthetic reading. " + "The sensor has a missing value. ".repeat(100),
+    "Review this synthetic reading. " + "The sensor has a missing value. ".repeat(400),
   );
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(
@@ -422,10 +422,15 @@ test("applies a selected private skill once across compaction and reload, then r
   ).toHaveCount(1);
   await page.getByRole("button", { name: /Conversation context:/ }).click();
   await expect(page.getByText("Skill instructions (protected)", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compact context now" })).toBeEnabled();
   await page.getByRole("button", { name: "Compact context now" }).click();
-  await expect(page.getByText(/tokens saved across/)).toBeVisible();
+  await expect(page.getByText(/tokens saved/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compact context now" })).toBeDisabled();
   await page.reload();
   await expect(chip).toBeVisible();
+  await page.getByRole("button", { name: /Conversation context:/ }).click();
+  await expect(page.getByRole("button", { name: "Compact context now" })).toBeDisabled();
+  await page.getByRole("button", { name: /Conversation context:/ }).click();
   await composer.fill("Review another synthetic reading.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(
@@ -699,7 +704,7 @@ test.describe("native Composer clipboard", () => {
     const source = [
       "export interface Probe { readonly count: number; }",
       ...Array.from(
-        { length: 60 },
+        { length: 300 },
         (_, index) => `export const count${String(index)}: number = ${String(index)};`,
       ),
     ].join("\n");
@@ -737,8 +742,10 @@ test.describe("native Composer clipboard", () => {
     await expect(prompt.getByRole("button", { name: "Apply in editor" })).toHaveCount(0);
     await expect(page.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30000 });
     await page.getByRole("button", { name: /Conversation context:/ }).click();
+    await expect(page.getByRole("button", { name: "Compact context now" })).toBeEnabled();
     await page.getByRole("button", { name: "Compact context now" }).click();
-    await expect(page.getByText(/tokens saved across/)).toBeVisible();
+    await expect(page.getByText(/tokens saved/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Compact context now" })).toBeDisabled();
     await expect(page.getByText("The context could not be refreshed.")).toHaveCount(0);
     await expectStoredPrompt(
       request,
