@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -1817,3 +1818,78 @@ test("#2348 stop observation does not depend on the response completion notifica
   await expect(panel.getByText("No active debug session.")).toBeVisible();
   activeSessionId = undefined;
 });
+
+test("#2348 stop observation settles cancellation after real response headers", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
+  const session = await startFromDebugPanel(page, panel);
+  await page.evaluate((id) => window.__keikoArmD12Stop?.(id), session.sessionId);
+  let body: Buffer = Buffer.alloc(0);
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "access-control-allow-origin": new URL(page.url()).origin,
+      "access-control-allow-credentials": "true",
+    });
+    // Forward only the first byte of the real successful BFF response, leaving its body pending.
+    response.write(body.subarray(0, 1));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new TypeError("D12_BRIDGE_NOT_LISTENING");
+  }
+  try {
+    await page.route("**/api/editor/debug/control", async (route) => {
+      const actual = await route.fetch();
+      expect(actual.status()).toBe(200);
+      body = await actual.body();
+      expect(body.length).toBeGreaterThan(1);
+      await route.continue({
+        url: `http://127.0.0.1:${String(address.port)}/api/editor/debug/control`,
+      });
+    });
+    const pending = page.waitForRequest((request) =>
+      request.url().endsWith("/api/editor/debug/control"),
+    );
+    await Promise.all([
+      captureSettledStopRequest(page, pending),
+      abortStopAfterHeaders(page, session),
+    ]);
+    const request = await pending;
+    expect((await request.response())?.status()).toBe(200);
+    expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
+    await expectServerStopped(page, session.sessionId);
+    await expect(panel.getByText("No active debug session.")).toBeVisible();
+    activeSessionId = undefined;
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error === undefined) resolve();
+        else reject(error);
+      });
+    });
+  }
+});
+
+async function abortStopAfterHeaders(page: Page, session: DebugSessionProjection): Promise<void> {
+  const aborted = await page.evaluate(async ({ sessionId, pauseGeneration }) => {
+    const controller = new AbortController();
+    const response = await fetch("/api/editor/debug/control", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
+      body: JSON.stringify({ schemaVersion: "1", sessionId, pauseGeneration, action: "stop" }),
+      signal: controller.signal,
+    });
+    if (response.status !== 200) throw new Error("D12_REAL_STOP_HEADERS_MISSING");
+    controller.abort();
+    return response.json().then(
+      () => false,
+      (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+    );
+  }, session);
+  expect(aborted).toBe(true);
+}

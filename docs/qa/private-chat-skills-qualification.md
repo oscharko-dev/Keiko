@@ -233,6 +233,9 @@ made no model dispatch. Both interruption attempts retained the complete selecte
   terminal `requestfinished`/`requestfailed` event, registered before dispatch. Successful completion
   still requires HTTP 200; only explicit browser cancellation is accepted as the alternative.
   The existing server, stream, paint and bounded-cap proofs remain mandatory.
+  A separate transport regression forwards the real BFF's successful headers and first body byte
+  through a fixture-owned loopback bridge, then aborts the browser's body read. This exercises the
+  received-headers cancellation path without replacing the real stop operation or terminal state.
 
 ### Gate boundary
 
