@@ -281,16 +281,54 @@ describe("runGroundedRetrievalLatencyGate", () => {
     );
   }, 180_000);
 
-  it("excludes warmups and measures every sample before its distinct probe", async () => {
-    const measured = Array.from({ length: budget.iterations }, (_, index) => index + 1);
-    const warmups = Array.from(
-      { length: budget.warmupIterations },
-      () => budget.p95BudgetMs + 1000,
+  function scenarioFixture(scenarioBudget, sampleOptions, probeOptions, offset) {
+    const measured = Array.from(
+      { length: scenarioBudget.iterations },
+      (_, index) => offset + index + 1,
     );
-    const probeMs = budget.p95BudgetMs + 1;
-    const values = [...warmups, ...measured, probeMs];
-    let index = 0;
-    const producer = vi.fn(async () => ({ totalMs: values[index++] }));
+    const warmups = Array.from(
+      { length: scenarioBudget.warmupIterations },
+      () => scenarioBudget.p95BudgetMs + 1000,
+    );
+    const probeMs = scenarioBudget.p95BudgetMs + offset + 1;
+    return {
+      measured,
+      probeMs,
+      steps: [
+        ...[...warmups, ...measured].map((totalMs) => ({ totalMs, options: sampleOptions })),
+        { totalMs: probeMs, options: probeOptions },
+      ],
+    };
+  }
+
+  it("excludes warmups and measures every sample before its distinct probe", async () => {
+    const semantic = scenarioFixture(
+      budget,
+      {},
+      { injectedJudgeDelayMs: budget.regressionProbe.judgeDelayMs },
+      0,
+    );
+    const followUp = scenarioFixture(
+      budget.boundedFollowUp,
+      { scenario: "bounded-follow-up" },
+      {
+        scenario: "bounded-follow-up",
+        injectedFollowUpDelayMs: budget.boundedFollowUp.regressionProbe.followUpDelayMs,
+      },
+      budget.iterations,
+    );
+    const steps = [...semantic.steps, ...followUp.steps];
+    let started = 0;
+    let settled = 0;
+    const producer = vi.fn(async (options) => {
+      expect(settled).toBe(started);
+      const step = steps[started++];
+      if (step === undefined) throw new RangeError("finite latency fixture exhausted");
+      expect(options).toEqual(step.options);
+      await Promise.resolve();
+      settled += 1;
+      return { totalMs: step.totalMs };
+    });
     vi.doMock("@oscharko-dev/keiko-server", () => ({ runGroundedRetrievalLatencyEval: producer }));
     vi.resetModules();
     try {
@@ -302,21 +340,28 @@ describe("runGroundedRetrievalLatencyGate", () => {
           log: () => discard(),
           fail: (message) => failures.push(message),
         });
-        const expected = evaluateGroundedLatency({ samples: measured, budget });
-        expect(result.p50).toBe(expected.p50);
-        expect(result.p95).toBe(expected.p95);
-        expect(result.p50).toBeGreaterThan(0);
-        expect(result.ok).toBe(true);
-        expect(failures).toEqual([]);
-        expect(result.probe.regressedMs).toBe(probeMs);
-        expect(result.probe.detected).toBe(true);
-        expect(producer).toHaveBeenCalledTimes(values.length);
-        for (let call = 1; call < values.length; call += 1) {
-          expect(producer).toHaveBeenNthCalledWith(call);
+        for (const [actual, fixture, scenarioBudget] of [
+          [result, semantic, budget],
+          [result.boundedFollowUp, followUp, budget.boundedFollowUp],
+        ]) {
+          const expected = evaluateGroundedLatency({
+            samples: fixture.measured,
+            budget: scenarioBudget,
+          });
+          expect(actual.p50).toBe(expected.p50);
+          expect(actual.p95).toBe(expected.p95);
+          expect(actual.p50).toBeGreaterThan(0);
+          expect(actual.ok).toBe(true);
+          expect(actual.failures).toEqual([]);
+          expect(actual.probe.regressedMs).toBe(fixture.probeMs);
+          expect(actual.probe.detected).toBe(true);
         }
-        expect(producer).toHaveBeenLastCalledWith({
-          injectedJudgeDelayMs: budget.regressionProbe.judgeDelayMs,
-        });
+        expect(failures).toEqual([]);
+        expect(producer).toHaveBeenCalledTimes(steps.length);
+        expect(settled).toBe(steps.length);
+        for (const [index, step] of steps.entries()) {
+          expect(producer).toHaveBeenNthCalledWith(index + 1, step.options);
+        }
       });
     } finally {
       vi.doUnmock("@oscharko-dev/keiko-server");
