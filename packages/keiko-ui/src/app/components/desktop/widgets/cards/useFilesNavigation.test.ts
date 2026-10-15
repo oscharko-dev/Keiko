@@ -10,6 +10,49 @@ import { observeFilesDirectoryRead } from "@/lib/files-navigation-evidence";
 import { useFilesNavigation } from "./useFilesNavigation";
 
 describe("folder navigation", () => {
+  it("preserves the selected folder and history only for its acknowledged canonical root", () => {
+    const changeRoot = vi.fn();
+    const view = renderHook(
+      ({ root, resolved }) => useFilesNavigation(root, changeRoot, "Alpha", resolved),
+      {
+        initialProps: { root: "/alias", resolved: "/canonical" },
+      },
+    );
+    act(() => view.result.current.visit("Alpha/nested"));
+    view.rerender({ root: "/canonical", resolved: "/canonical" });
+    expect(view.result.current.path).toBe("Alpha/nested");
+    act(() => view.result.current.back());
+    expect(view.result.current.path).toBe("Alpha");
+    expect(changeRoot).not.toHaveBeenCalled();
+    view.rerender({ root: "/unrelated", resolved: "/canonical" });
+    expect(view.result.current.path).toBeNull();
+    act(() => view.result.current.back());
+    expect(changeRoot).toHaveBeenCalledWith("/canonical");
+  });
+  it("restores an initial canonical folder while root changes reset its relative binding", () => {
+    const view = renderHook(({ root }) => useFilesNavigation(root, undefined, "docs"), {
+      initialProps: { root: "/repo" },
+    });
+    expect(view.result.current.path).toBe("docs");
+    view.rerender({ root: "/other" });
+    expect(view.result.current.path).toBeNull();
+  });
+  it.each([
+    "../outside",
+    "/absolute",
+    "docs/../outside",
+    "docs\\other",
+    "docs\u202e",
+    "docs\nother",
+    "docs\u2028other",
+    "docs/",
+    "",
+    "https://outside.test",
+  ])("rejects an unsafe persisted initial folder: %s", (path) => {
+    const view = renderHook(() => useFilesNavigation("/repo", undefined, path));
+    expect(view.result.current.path).toBeNull();
+  });
+
   it("keeps folder history across explicit roots and restores the relative folder", () => {
     const changeRoot = vi.fn();
     const { result, rerender } = renderHook(({ root }) => useFilesNavigation(root, changeRoot), {

@@ -35,6 +35,43 @@ function total(breakdown: ReturnType<typeof contextBreakdown>): number {
 }
 
 describe("contextBreakdown", () => {
+  it("moves an already counted skill out of grounded instructions without double counting", () => {
+    const lastPrompt = {
+      ...LAST_PROMPT,
+      protectedSkill: {
+        reference: { id: "skill", revision: 1, digest: "digest" },
+        estimatedTokens: 100,
+      },
+    };
+    const breakdown = contextBreakdown({
+      profile: PROFILE,
+      conversation: CONVERSATION,
+      protectedSkillTokens: 100,
+      grounded: { historyLaneTokens: 3925, lastPrompt },
+    });
+    expect(breakdown.segments.find((segment) => segment.id === "system")?.tokens).toBe(210);
+    expect(breakdown.segments.find((segment) => segment.id === "skill")?.tokens).toBe(100);
+    expect(total(breakdown)).toBe(PROFILE.maxInputTokens);
+    const cleared = contextBreakdown({
+      profile: PROFILE,
+      conversation: CONVERSATION,
+      grounded: { historyLaneTokens: 3925, lastPrompt },
+    });
+    expect(cleared.usedTokens).toBe(breakdown.usedTokens - 100);
+  });
+  it("never scales down the protected skill contribution, even when it exceeds the budget", () => {
+    const protectedSkillTokens = PROFILE.effectiveInputBudget + 100;
+    const breakdown = contextBreakdown({
+      profile: PROFILE,
+      conversation: CONVERSATION,
+      protectedSkillTokens,
+    });
+    expect(breakdown.segments.find((segment) => segment.id === "skill")?.tokens).toBe(
+      protectedSkillTokens,
+    );
+    expect(breakdown.usedTokens).toBeGreaterThan(PROFILE.effectiveInputBudget);
+    expect(breakdown.segments.every((segment) => segment.tokens >= 0)).toBe(true);
+  });
   it("breaks a plain chat's window into shares that sum to the window", () => {
     const breakdown = contextBreakdown({ profile: PROFILE, conversation: CONVERSATION });
     expect(breakdown.segments.map((segment) => segment.id)).toEqual([

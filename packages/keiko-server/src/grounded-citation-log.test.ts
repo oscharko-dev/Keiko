@@ -37,6 +37,31 @@ function evidence(
 }
 
 describe("summarizeCitationReconciliation", () => {
+  it("does not count knowledge-block markers as source groups or dangling citations", () => {
+    expect(
+      summarizeCitationReconciliation(
+        evidence({
+          answer: "Fact [1].\n\n<assessment>Advice [90, 91].</assessment>",
+          attachedIndices: [1],
+        }),
+      ),
+    ).toMatchObject({ outcome: "cited", groupedMarkerCount: 0, danglingMarkerCount: 0 });
+  });
+
+  it("truthfully records assessment-only without inventing a source refusal or uncited claim", () => {
+    expect(
+      summarizeCitationReconciliation(
+        evidence({
+          answer: "<assessment>Advice [90, 91].</assessment>",
+        }),
+      ),
+    ).toMatchObject({
+      outcome: "assessment-only",
+      attachedCount: 0,
+      groupedMarkerCount: 0,
+      danglingMarkerCount: 0,
+    });
+  });
   it("classifies an answer whose markers all attached", () => {
     expect(
       summarizeCitationReconciliation(
@@ -135,6 +160,17 @@ describe("logCitationReconciliation", () => {
     logCitationReconciliation(
       evidence({ answer, attachedIndices: [1], weakOverlapCount: 1, referenceCount: 5 }),
       "citation-reconcile-proof-0001",
+      {
+        answerKind: "answer",
+        citationBehaviour: undefined,
+        scopeIdentitySha256: "a".repeat(64),
+        queryIdentitySha256: "b".repeat(64),
+        followUpPass: 0,
+        insufficiencyDeclaredCount: 2,
+        declaredInScopeCount: 1,
+        declaredUnreadInScopeCount: 1,
+        declaredNotInScopeCount: 1,
+      },
     );
 
     const [event] = sink.events;
@@ -158,7 +194,16 @@ describe("logCitationReconciliation", () => {
       danglingMarkerCount: 2,
       completeness: "complete",
       loss: "none",
+      answerKind: "answer",
+      scopeIdentitySha256: "a".repeat(64),
+      queryIdentitySha256: "b".repeat(64),
+      followUpPass: 0,
+      insufficiencyDeclaredCount: 2,
+      declaredInScopeCount: 1,
+      declaredUnreadInScopeCount: 1,
+      declaredNotInScopeCount: 1,
     });
+    expect(persisted).not.toHaveProperty("citationBehaviour");
     // Counts and one closed outcome only: never the answer, a marker literal or an excerpt.
     const serialized = sink.lines().join("\n");
     expect(serialized).not.toContain("Java 17");

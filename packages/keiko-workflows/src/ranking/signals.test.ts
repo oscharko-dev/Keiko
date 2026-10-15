@@ -13,6 +13,7 @@ import { DEFAULT_GENERATED_PATTERNS, extractSignals, type RankingHints } from ".
 const REQUIRED_HINTS: Required<RankingHints> = {
   generatedPathPatterns: DEFAULT_GENERATED_PATTERNS,
   duplicateOf: new Map<string, string>(),
+  recentPaths: [],
 };
 
 function atom(scopePath: string, score: number): EvidenceAtom {

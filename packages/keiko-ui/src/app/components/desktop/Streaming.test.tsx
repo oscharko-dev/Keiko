@@ -838,6 +838,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(askGroundedSpy).toHaveBeenCalledWith(
       {
         chatId: groundedChat.id,
+        expectedSkillSelectionRevision: 0,
         clientTurnId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
         content: "ground plural scope",
         modelId: "example-chat-model",
@@ -1808,3 +1809,11 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     rafSpy.mockRestore();
   });
 });
+
+// Existing journeys start with the authoritative empty skill selection.
+vi.mock("@/lib/markdown-skills-api", () => ({
+  fetchMarkdownSkillSelection: vi
+    .fn()
+    .mockResolvedValue({ availability: "none", selection: { revision: 0, skill: null } }),
+  changeMarkdownSkillSelection: vi.fn(),
+}));

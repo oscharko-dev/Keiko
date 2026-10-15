@@ -357,3 +357,85 @@ describe("complete wire optional copy admission", () => {
     },
   );
 });
+
+describe("private skill output kind", () => {
+  // DEV-SYNC-PROMPT-OUTPUT-KIND-COPY-01: admit the actual supplied copy, not a filtered mode.
+  for (const surface of ["source", "public"] as const) {
+    it(`${surface}: refuses an invalid output kind observed during copying`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get outputKind(): string {
+          return ++reads < 3 ? "markdown-skill" : "invalid-kind";
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["request.outputKind must be markdown-skill when set"],
+      });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: refuses a present undefined mode copied after successful preflight`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get outputKind(): string | undefined {
+          return ++reads < 4 ? "markdown-skill" : undefined;
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["request.outputKind must be markdown-skill when set"],
+      });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: preserves ordinary mode omission skill mode and initial error order`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      for (const input of [
+        { text: "Synthetic complete document" },
+        { text: "Synthetic complete document", outputKind: undefined },
+      ]) {
+        expect(validate(input)).toEqual({ ok: true, value: { text: input.text } });
+      }
+      const skill = { text: "Synthetic complete document", outputKind: "markdown-skill" };
+      expect(validate(skill)).toEqual({ ok: true, value: skill });
+      expect(
+        validate({ text: null, outputKind: "invalid-kind", profilePreference: "invalid" }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "request.outputKind must be markdown-skill when set",
+          "request.text must be a string",
+          "request.profilePreference must be a known profile id when set",
+        ],
+      });
+    });
+  }
+  it("preserves the opt-in document-to-skill mode", () => {
+    expect(
+      validatePromptEnhancementWireRequest({
+        text: "Complete source",
+        outputKind: "markdown-skill",
+      }),
+    ).toEqual({ ok: true, value: { text: "Complete source", outputKind: "markdown-skill" } });
+  });
+  it.each([null, "code", 1, {}])("rejects unsupported output modes: %j", (outputKind) => {
+    expect(validatePromptEnhancementWireRequest({ text: "Complete source", outputKind }).ok).toBe(
+      false,
+    );
+  });
+});

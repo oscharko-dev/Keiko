@@ -14,6 +14,7 @@ import {
 import { DEFAULT_SEARCH_LIMITS, type SearchLimits, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceInfo } from "./types.js";
 import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
+import { endpointContractAdapter } from "./endpointContractAdapter.js";
 
 const MEM_ROOT = "/ws";
 const FIXED_NOW = (): number => 1_700_000_000_000;
@@ -596,5 +597,39 @@ describe("runStructuralAdapters", () => {
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual([
       "src/main/java/java/PaymentService.java",
     ]);
+  });
+});
+
+describe("certified endpoint registration merge", () => {
+  it("retains the actual requested server registration inside the unchanged merge cap", async () => {
+    const { scope } = makeScope();
+    const fs = memFs(MEM_ROOT, {
+      "src/entry.ts":
+        'const routes = [{ method: "POST", path: "/api/items", handler: handleItem }];',
+    });
+    const unrelated = fakeAtom("src/unrelated.ts", "earlier-adapter");
+    const registry = { adapters: [fakeAdapter("earlier", [unrelated]), endpointContractAdapter] };
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 1 };
+    const result = await runStructuralAdapters(
+      registry,
+      scope,
+      nlq("Trace POST /api/items"),
+      limits,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(result.errored).toEqual([]);
+    expect(result.atoms).toHaveLength(1);
+    expect(result.atoms[0]?.scopePath).toBe("src/entry.ts");
+    expect(result.atoms[0]?.provenance.tool).toBe("endpoint-contract-server-route");
+    const ordinary = await runStructuralAdapters(
+      registry,
+      scope,
+      nlq("Explain this module"),
+      limits,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(ordinary.atoms).toEqual([unrelated]);
   });
 });

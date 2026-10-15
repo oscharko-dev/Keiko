@@ -85,7 +85,9 @@ it.each([
   expect(queries).toHaveLength(1);
   expect(queries[0]).toMatchObject({ kind: "natural-language", text: question });
   expect(pack.files.map((file) => file.scopePath)).toContain("source/context.ts");
-  const completion = events.find((event) => event.op === "search.connected-context.completed");
+  const completion = events.find(
+    (event) => event.op === "search.connected-context.completion-details",
+  );
   expect(completion?.extra?.augmentationSkipReason).not.toBe("complete-exact-lookup");
   expect(completion?.extra?.augmentationSkipReason).not.toBe("literal-absence");
 });

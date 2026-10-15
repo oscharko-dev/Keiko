@@ -187,3 +187,30 @@ describe("isNoEvidenceAnswerText", () => {
     expect(isNoEvidenceAnswerText(long)).toBe(false);
   });
 });
+
+describe("pure first-person selected-scope access refusals", () => {
+  it.each([
+    "I cannot inspect the previously referenced file within this selected scope.",
+    "I cannot read the selected file in the current workspace.",
+    "I am unable to access this file within the selected scope.",
+    "Ich kann die zuvor referenzierte Datei in diesem ausgewählten Scope nicht einsehen.",
+    "Ich kann diese Datei im aktuellen Kontext nicht lesen.",
+  ])("recognizes a claim-free scope refusal: %s", (answer) => {
+    expect(isNoEvidenceAnswerText(answer)).toBe(true);
+  });
+
+  it.each([
+    "I cannot inspect the previously referenced file within this selected scope. Feature returns true.",
+    "I cannot inspect the previously referenced file within this selected scope, but Feature returns true.",
+    "Ich kann diese Datei im aktuellen Kontext nicht lesen. Feature gibt true zurück.",
+    "I cannot inspect the selected file because Feature returns true.",
+    "The product cannot inspect the selected file within this selected scope.",
+    "The file cannot access authentication in the current workspace.",
+    "I cannot inspect the previously referenced file within this selected scope [1].",
+    "`I cannot inspect the previously referenced file within this selected scope.`",
+    "```text\nI cannot inspect the previously referenced file within this selected scope.\n```",
+    "Example: I cannot inspect the previously referenced file within this selected scope.",
+  ])("retains citation requirements for claims and mixed answers: %s", (answer) => {
+    expect(isNoEvidenceAnswerText(answer)).toBe(false);
+  });
+});

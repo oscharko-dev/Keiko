@@ -119,7 +119,7 @@ function armStructuralExecutionRace(control: StructuralExecutionControl): Struct
   };
 }
 
-async function raceStructuralExecution<T>(
+export async function raceStructuralExecution<T>(
   work: Promise<T>,
   control: StructuralExecutionControl,
   discardStoppedResult?: (result: T) => Promise<void>,

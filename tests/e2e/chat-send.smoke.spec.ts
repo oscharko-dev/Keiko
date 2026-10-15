@@ -1,10 +1,13 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { test } from "./support/smoke-test.js";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { editorModifier, selectAllInEditor } from "./support/editor-chord.js";
+import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
+import { runAxe, formatViolations } from "./support/axe.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -109,6 +112,114 @@ test.afterEach(() => {
   }
 });
 
+async function connectedReadMetadataChat(request: APIRequestContext): Promise<{
+  readonly chat: ChatResponse["chat"];
+  readonly projectPath: string;
+}> {
+  const projectPath = realpathSync(createProjectFixture());
+  mkdirSync(join(projectPath, "src"));
+  writeFileSync(
+    join(projectPath, "src/read.ts"),
+    'export const readMarker = "KEIKO_E2E_READ_METADATA";\n',
+  );
+  writeFileSync(join(projectPath, "src/cited.ts"), "export const citedMarker = true;\n");
+  writeFileSync(join(projectPath, "src/excluded.ts"), "x".repeat(4 * 1024 * 1024));
+  await ensureProject(request, projectPath);
+  const created = await request.post("/api/chats", {
+    headers: MUTATION_HEADERS,
+    data: { projectPath, title: "Read metadata", selectedModel: CHAT_MODEL_ID },
+  });
+  expect(created.status()).toBe(201);
+  const { chat } = (await created.json()) as ChatResponse;
+  const bound = await request.patch(`/api/chats?id=${encodeURIComponent(chat.id)}`, {
+    headers: MUTATION_HEADERS,
+    data: {
+      connectedScopes: [
+        {
+          kind: "files",
+          relativePaths: ["src/read.ts", "src/cited.ts", "src/excluded.ts"],
+          connectedAtMs: 1,
+        },
+      ],
+    },
+  });
+  expect(bound.ok()).toBe(true);
+  return { chat, projectPath };
+}
+
+async function askReadMetadata(
+  page: Page,
+  request: APIRequestContext,
+): Promise<ReturnType<Page["getByRole"]>> {
+  const { chat } = await connectedReadMetadataChat(request);
+  await seedChatWindow(page, chat);
+  await page.goto("/");
+  const window = page.getByRole("region", { name: "Chat — Read metadata" });
+  await window
+    .getByRole("textbox", { name: "Chat message" })
+    .fill(
+      "Which supplied files are src/read.ts and src/cited.ts? Include src/excluded.ts if available.",
+    );
+  const response = page.waitForResponse(
+    (reply) =>
+      reply.url().endsWith("/api/chats/messages/grounded") && reply.request().method() === "POST",
+  );
+  await window.getByRole("button", { name: "Send message" }).click();
+  const delivered = await response;
+  expect(delivered.status()).toBe(200);
+  const answer = (await delivered.json()) as { readonly evidenceRunId: string };
+  const manifest = await request.get(`/api/evidence/${encodeURIComponent(answer.evidenceRunId)}`);
+  expect(manifest.ok()).toBe(true);
+  const audit = (await manifest.json()) as {
+    readonly manifest: {
+      readonly connectedContext: {
+        readonly files: readonly { readonly scopePath: string }[];
+        readonly omitted: readonly { readonly scopePath: string; readonly reason: string }[];
+      };
+    };
+  };
+  expect(audit.manifest.connectedContext.files.map((file) => file.scopePath)).toEqual(
+    expect.arrayContaining(["src/read.ts", "src/cited.ts"]),
+  );
+  expect(audit.manifest.connectedContext.omitted).toContainEqual(
+    expect.objectContaining({ scopePath: "src/excluded.ts", reason: "size-exceeded" }),
+  );
+  return window;
+}
+
+test("shows native persisted uncited reads before opening evidence and after reload @smoke", async ({
+  page,
+  request,
+}) => {
+  const window = await askReadMetadata(page, request);
+  await expect(
+    window.getByRole("button", { name: /Open src\/read.ts.*Read, not cited/ }),
+  ).toBeVisible();
+  await expect(
+    window.locator("details.grounded-evidence-disclosure:not(.ctx-status)"),
+  ).not.toHaveAttribute("open");
+  await expect(window.getByRole("table")).toHaveCount(0);
+  await page.reload();
+  await expect(
+    window.getByRole("button", { name: /Open src\/read.ts.*Read, not cited/ }),
+  ).toBeVisible();
+  await expect(window.getByRole("table")).toHaveCount(0);
+});
+
+test("retains native cited and genuinely size-excluded read states @smoke", async ({
+  page,
+  request,
+}) => {
+  const window = await askReadMetadata(page, request);
+  await expect(
+    window.getByRole("button", { name: /Open src\/cited.ts.*Cited evidence/ }).first(),
+  ).toBeVisible();
+  await expect(
+    window.getByRole("button", { name: /Open src\/excluded.ts.*Not read/ }),
+  ).toBeVisible();
+  await expect(window.getByRole("table")).toHaveCount(0);
+});
+
 test("sends a chat message and streams a persisted assistant reply @smoke", async ({
   page,
   request,
@@ -206,6 +317,151 @@ async function clearFixtureComposer(page: Page): Promise<void> {
   await composer.press("Backspace");
   await expect(composer).toHaveText("");
 }
+
+test("keeps a long private skill preview keyboard-scrollable and accessible @smoke", async ({
+  page,
+  request,
+}) => {
+  await page.addInitScript({ path: createRequire(import.meta.url).resolve("axe-core/axe.min.js") });
+  await openFixtureComposer(page, request);
+  await page.goto(`/${editorM11PairingFragment("skill-preview-keyboard")}`);
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
+  const body = "# Long synthetic method\n\n" + "Review the next boundary.\n\n".repeat(60);
+  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  const chooser = page.waitForEvent("filechooser");
+  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({
+    name: "long-synthetic.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from(body),
+  });
+  const content = dialog.getByRole("region", { name: "Long synthetic method · v1" });
+  await expect(content).toBeVisible();
+  await content.focus();
+  await expect(content).toBeFocused();
+  await content.press("PageDown");
+  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  const violations = await runAxe(page, "dialog");
+  expect(violations, formatViolations(violations)).toEqual([]);
+  const preview = dialog.getByRole("region", { name: "Skill preview", exact: true });
+  await preview.getByRole("button", { name: "Delete", exact: true }).click();
+  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(preview).toHaveCount(0);
+});
+
+test("applies a selected private skill once across compaction and reload, then removes it @smoke", async ({
+  page,
+  request,
+}) => {
+  const fixture = await openFixtureComposer(page, request);
+  await page.goto(`/${editorM11PairingFragment("chat-skills")}`);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
+  const body = readFileSync(new URL("./fixtures/private-markdown-skill.md", import.meta.url));
+  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  const chooser = page.waitForEvent("filechooser");
+  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await (await chooser).setFiles({ name: "synthetic.md", mimeType: "text/markdown", buffer: body });
+  await expect(
+    dialog.getByRole("heading", { name: "Synthetic boundary method · v1" }),
+  ).toBeVisible();
+  const selection = dialog
+    .getByRole("listitem")
+    .filter({ hasText: "Synthetic boundary method" })
+    .getByRole("button", { name: "Select", exact: true });
+  await expect(selection).toBeVisible();
+  await selection.click();
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Close skills" }).click();
+  const chip = page.getByRole("button", { name: /Synthetic boundary method.*v1/ });
+  await expect(chip).toBeVisible();
+  await composer.fill(
+    "Review this synthetic reading. " + "The sensor has a missing value. ".repeat(100),
+  );
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.locator('article[data-role="assistant"]').filter({ hasText: "KEIKO_SKILL_ONCE_OK" }),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: /Conversation context:/ }).click();
+  await expect(page.getByText("Skill instructions (protected)", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Compact context now" }).click();
+  await expect(page.getByText(/tokens saved across/)).toBeVisible();
+  await page.reload();
+  await expect(chip).toBeVisible();
+  await composer.fill("Review another synthetic reading.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.locator('article[data-role="assistant"]').filter({ hasText: "KEIKO_SKILL_ONCE_OK" }),
+  ).toHaveCount(2);
+  await page.getByRole("button", { name: "Remove skill from this chat" }).click();
+  await expect(chip).toHaveCount(0);
+  await composer.fill("Continue without the method.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator('article[data-role="assistant"]').last()).toContainText(REPLY_MARKER);
+  const params = new URLSearchParams({ chatId: fixture.chat.id, projectPath: fixture.projectPath });
+  const messagesResponse = await request.get(`/api/chats/messages?${params.toString()}`);
+  const messages = (await messagesResponse.json()) as {
+    messages: { role: string; content: string }[];
+  };
+  expect(messages.messages.filter((message) => message.role === "user").at(-1)?.content).toBe(
+    "Continue without the method.",
+  );
+});
+
+test("creates, reviews, exports and reimports a private skill without automatic activation @smoke", async ({
+  page,
+  request,
+}, testInfo) => {
+  await openFixtureComposer(page, request);
+  await page.goto(`/${editorM11PairingFragment("skill-authoring")}`);
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
+  await dialog.getByRole("button", { name: "Create from document or text" }).click();
+  await dialog.getByLabel("Source file (.md or .txt)").setInputFiles({
+    name: "concept.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(
+      "Synthetic garden concept: confirmed missing readings; weekly calibration is proposed. Final section: calibration ownership is undecided. SYNTHETIC_GARDEN_SOURCE_COMPLETE",
+    ),
+  });
+  await expect(dialog.getByLabel("Source text")).toHaveValue(/SYNTHETIC_GARDEN_SOURCE_COMPLETE/);
+  await dialog.getByRole("button", { name: "Prepare draft" }).click();
+  const draft = dialog.getByLabel("Skill draft (Markdown)");
+  await expect(draft).toHaveValue(/Weekly calibration is proposed, not approved/);
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
+  await draft.fill(`${await draft.inputValue()}\nReviewed by the local operator.`);
+  await dialog.getByRole("button", { name: "Save reviewed skill" }).click();
+  await expect(
+    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+  ).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
+  const downloaded = page.waitForEvent("download");
+  const preview = dialog.getByRole("region", { name: "Skill preview" });
+  await preview.getByRole("button", { name: "Download Markdown" }).click();
+  const saved = testInfo.outputPath("reviewed-skill.md");
+  await (await downloaded).saveAs(saved);
+  expect(readFileSync(saved, "utf8")).toContain("Reviewed by the local operator.");
+  await preview.getByRole("button", { name: "Delete", exact: true }).click();
+  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  await dialog.getByLabel(/Upload Markdown/).setInputFiles(saved);
+  await expect(
+    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+  ).toBeVisible();
+  await dialog
+    .getByRole("listitem")
+    .filter({ hasText: "Garden calibration review" })
+    .getByRole("button", { name: "Select", exact: true })
+    .click();
+  await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Close skills" }).click();
+  await expect(page.getByRole("button", { name: /Garden calibration review.*v1/ })).toBeVisible();
+});
 
 async function openFixtureComposer(
   page: Page,

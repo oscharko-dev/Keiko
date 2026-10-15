@@ -304,6 +304,7 @@ export {
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  CallerAttemptAdmissionError,
   ERROR_CODES,
   GatewayEgressError,
   GatewayError,

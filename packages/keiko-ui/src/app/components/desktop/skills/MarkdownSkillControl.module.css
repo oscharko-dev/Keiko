@@ -1,0 +1,235 @@
+.cmpControls {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 220px;
+  gap: 4px;
+  font-size: 12px;
+}
+.cmpControls button,
+.cmpDialog button {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.cmpControls button:focus-visible,
+.cmpDialog button:focus-visible,
+.cmpFilePicker:focus-within,
+.cmpMarkdown:focus-visible,
+.cmpDialog input:focus-visible,
+.cmpDialog textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpControls button:disabled,
+.cmpDialog button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.cmpChip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 160px;
+  border-radius: 7px;
+  border: 1px solid var(--accent);
+}
+.cmpChip button {
+  border: 0;
+  background: transparent;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmpChip button:first-child {
+  display: inline-flex;
+  align-items: center;
+  flex: 1;
+}
+.cmpChip button:last-child {
+  flex: 0 0 28px;
+  padding: 5px;
+}
+.cmpChipName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmpChip .cmpRevision {
+  flex-shrink: 0;
+}
+.cmpRevision,
+.cmpHint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.cmpBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100200;
+  background: rgb(0 0 0 / 35%);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.cmpDialog {
+  position: relative;
+  margin: 0;
+  width: min(600px, 100%);
+  max-height: min(760px, 90dvh);
+  overflow: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  padding: 24px;
+  box-shadow: 0 12px 48px rgb(0 0 0 / 20%);
+}
+.cmpDialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cmpDialog h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.cmpDialog p {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cmpUpload {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.cmpFilePicker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+.cmpFilePicker:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-overlay);
+}
+.cmpFilePicker[data-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.cmpList li[data-selected="true"] {
+  background: var(--surface-elevated);
+}
+.cmpDialog button {
+  min-height: 36px;
+}
+.cmpDialog button:hover:enabled {
+  background: var(--surface-elevated);
+  border-color: var(--border-strong);
+}
+.cmpDialog button[aria-pressed="true"] {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  opacity: 1;
+}
+.cmpDialog [role="alert"] {
+  color: var(--feedback-danger);
+}
+.cmpDialog output {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.cmpList {
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+.cmpList li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-radius: var(--radius-control);
+}
+.cmpList .cmpName {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.cmpPreview {
+  border-top: 1px solid var(--border-default);
+  padding-top: 12px;
+}
+.cmpPreview h3 {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.cmpMarkdown {
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+.cmpActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cmpAuthor {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-default);
+  padding-top: 12px;
+}
+.cmpAuthor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  padding: 8px;
+  font: inherit;
+}
+.cmpAuthor label {
+  margin: 12px 0;
+}
+
+@media (max-width: 480px) {
+  .cmpDialog {
+    padding: 16px;
+  }
+  .cmpList li {
+    flex-wrap: wrap;
+  }
+  .cmpList .cmpName {
+    flex-basis: calc(100% - 50px);
+  }
+}
+@media (forced-colors: active) {
+  .cmpFilePicker,
+  .cmpChip,
+  .cmpDialog {
+    border-color: ButtonText;
+  }
+}

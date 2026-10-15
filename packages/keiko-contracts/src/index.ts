@@ -2839,6 +2839,7 @@ export type {
   ConnectedContextPack,
   ConnectedContextPackSummary,
   ContextPackDiagnostics,
+  ContinuityReferentSource,
   RankedCandidateExplanation,
   ConversationAttachmentContextLink,
   ValidationResult,

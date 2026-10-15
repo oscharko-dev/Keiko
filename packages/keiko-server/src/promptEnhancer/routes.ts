@@ -9,6 +9,10 @@
 // existing ModelPort factory so provider credentials stay behind the server boundary.
 
 import type { IncomingMessage } from "node:http";
+import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import { logMarkdownSkillOperation } from "../markdown-skill-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { validatePromptEnhancementWireRequest } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
 import type {
   PromptEnhancementWireRequest,
@@ -32,6 +36,7 @@ import {
 import {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
+  PromptEnhancementSkillDraftError,
   buildPromptEnhancementRecordInput,
   promptEnhancementGatewayRoutingConfig,
   runPromptEnhancement,
@@ -186,6 +191,81 @@ async function readPromptEnhancementRequest(
  * POST /api/prompt-enhancement — generate a governed, reviewable Enhanced Prompt from a raw draft.
  * Validation, Model-Gateway routing (AC3), cancellation, and safe error shaping are all handled here.
  */
+function draftAccessFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: PromptEnhancementWireRequest,
+): RouteResult | undefined {
+  if (
+    request.outputKind !== "markdown-skill" ||
+    resolveAppSessionReadAuthority(deps, ctx.req) !== undefined
+  )
+    return undefined;
+  return {
+    status: 404,
+    body: errorBody("NOT_FOUND", "Skill authoring is unavailable.", ctx.correlationId),
+  };
+}
+
+function enhancementFailure(error: unknown): RouteResult {
+  if (error instanceof PromptEnhancementCancelledError) return cancelledResult();
+  if (error instanceof PromptEnhancementInputError) return invalidRequest(error.errors);
+  if (error instanceof PromptEnhancementSkillDraftError)
+    return { status: 422, body: errorBody("PROMPT_ENHANCER_SKILL_DRAFT_REFUSED", error.message) };
+  if (error instanceof EvidenceWriteError)
+    return {
+      status: 500,
+      body: errorBody(
+        "PROMPT_ENHANCER_EVIDENCE_WRITE",
+        "Prompt enhancement evidence could not be recorded.",
+      ),
+    };
+  return {
+    status: 500,
+    body: errorBody("PROMPT_ENHANCER_INTERNAL", "Prompt enhancement failed unexpectedly."),
+  };
+}
+
+async function enhancementResult(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: PromptEnhancementWireRequest,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  const denied = draftAccessFailure(ctx, deps, request);
+  if (denied !== undefined) return denied;
+  try {
+    const result = await runPromptEnhancement(request, {
+      gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(currentGatewayConfig(deps)),
+      modelPortFactory: deps.modelPortFactory,
+      signal,
+      correlationId: ctx.correlationId,
+    });
+    const revoked = draftAccessFailure(ctx, deps, request);
+    if (revoked !== undefined) return revoked;
+    const body: PromptEnhancementWireResponse = {
+      ...result,
+      evidence:
+        request.outputKind === "markdown-skill"
+          ? { status: "not-recorded", reason: "private-skill-draft" }
+          : recordEvidenceReference(request.text, result, deps),
+    };
+    return { status: 200, body: deps.redactor(body) };
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        operation: "prompt.enhancement",
+        source: "prompt.enhancement.route",
+        error,
+        redact: (message) => String(deps.redactor(message)),
+      }),
+    );
+    return enhancementFailure(error);
+  }
+}
+
 export const handlePromptEnhancement = async (
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -193,43 +273,15 @@ export const handlePromptEnhancement = async (
   const signal = requestAbortSignal(ctx);
   const validated = await readPromptEnhancementRequest(ctx, signal);
   if (!validated.ok) return validated.result;
-
-  try {
-    const result = await runPromptEnhancement(validated.value, {
-      gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(currentGatewayConfig(deps)),
-      modelPortFactory: deps.modelPortFactory,
-      signal,
-    });
-    const body: PromptEnhancementWireResponse = {
-      ...result,
-      evidence: recordEvidenceReference(validated.value.text, result, deps),
-    };
-    // AC4 defence-in-depth: deep-redact every string leaf of the response through the live audit
-    // redactor before it leaves the server, so any secret-shaped substring a user pasted into their own
-    // draft is scrubbed from the echoed input / rendered prompt. Scores, ids, and enums are untouched.
-    return { status: 200, body: deps.redactor(body) };
-  } catch (error) {
-    if (error instanceof PromptEnhancementCancelledError) {
-      return cancelledResult();
-    }
-    if (error instanceof PromptEnhancementInputError) {
-      return invalidRequest(error.errors);
-    }
-    if (error instanceof EvidenceWriteError) {
-      return {
-        status: 500,
-        body: errorBody(
-          "PROMPT_ENHANCER_EVIDENCE_WRITE",
-          "Prompt enhancement evidence could not be recorded.",
-        ),
-      };
-    }
-    // Unknown failure: a safe, content-free 500 (no raw input, stack, or provider detail).
-    return {
-      status: 500,
-      body: errorBody("PROMPT_ENHANCER_INTERNAL", "Prompt enhancement failed unexpectedly."),
-    };
-  }
+  const privateDraft = validated.value.outputKind === "markdown-skill";
+  if (privateDraft) logMarkdownSkillOperation(ctx.correlationId, "generate", "started", 0);
+  const result = await enhancementResult(ctx, deps, validated.value, signal);
+  if (!privateDraft) return result;
+  let phase: "failed" | "rejected" | "completed" = "completed";
+  if (result.status >= 400) phase = "rejected";
+  if (result.status >= 500) phase = "failed";
+  logMarkdownSkillOperation(ctx.correlationId, "generate", phase, result.status);
+  return { ...result, headers: { "Cache-Control": "no-store" } };
 };
 
 export const handlePromptEnhancementEvidence = (

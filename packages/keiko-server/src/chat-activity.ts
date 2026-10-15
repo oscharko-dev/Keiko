@@ -1,4 +1,8 @@
-import type { ModelKind } from "@oscharko-dev/keiko-contracts";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import type { ContextProfile, ModelKind } from "@oscharko-dev/keiko-contracts";
+import type { SentGroundedPrompt } from "./grounded-prompt-context.js";
+import type { ContextSelectionConfidence } from "@oscharko-dev/keiko-contracts/connected-context";
+
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -17,6 +21,11 @@ export type ChatRejectionReason = "readiness" | "generation" | "grounding-scope"
 // observation for it (nothing checked it since start or since the configuration changed),
 // `not-ready` when a check ran and failed.
 export type ChatReadinessObservation = "unobserved" | "not-ready";
+
+export interface ChatResponseMemoryActivity {
+  readonly uncitedMemoryContextMarkerCount: number;
+  readonly memoryContextDisposition: "included" | "excluded" | "not-requested";
+}
 
 interface ChatRejectionModelEvidence {
   readonly modelIdDigest?: string | undefined;
@@ -154,6 +163,13 @@ const CHAT_RESPONSE_MESSAGE_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-activity.logChatResponseMessage",
   fields: {
+    uncitedMemoryContextMarkerCount: { type: "integer", dataClass: "count", required: false },
+    memoryContextDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["included", "excluded", "not-requested"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -187,7 +203,17 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
     tokensAfter: { type: "integer", dataClass: "count", required: true },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
     promptTokens: { type: "integer", dataClass: "count", required: true },
+    skillId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 64 },
+    skillRevision: { type: "integer", dataClass: "count", required: false },
+    skillDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    skillInstructionTokens: { type: "integer", dataClass: "count", required: false },
     inputBudget: { type: "integer", dataClass: "count", required: true },
+    sourceSelectionConfidence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["high", "low"],
+    },
     imageCount: { type: "integer", dataClass: "count", required: true },
     imageReserveTokens: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -390,6 +416,20 @@ export function logChatTurnStartedEvent(
   );
 }
 
+function selectedSkillLogFields(
+  assembly: Pick<SentGroundedPrompt, "protectedSkill">,
+): Record<string, unknown> {
+  const usage = assembly.protectedSkill;
+  return usage === undefined
+    ? {}
+    : {
+        skillId: usage.reference.id,
+        skillRevision: usage.reference.revision,
+        skillDigest: usage.reference.digest,
+        skillInstructionTokens: usage.estimatedTokens,
+      };
+}
+
 /** Record the selection before dispatch so failed or cancelled turns retain their budget evidence. */
 export function logChatContextSelection(
   correlationId: string | undefined,
@@ -412,6 +452,7 @@ export function logChatContextSelection(
       {
         state: compacted ? "compacted" : "verbatim",
         ...historyMetrics,
+        ...selectedSkillLogFields(assembly),
         tokensSaved: Math.max(0, tokensBefore - tokensAfter),
         promptTokens: diagnostics.totalEstimatedTokens,
         inputBudget: diagnostics.profile.effectiveInputBudget,
@@ -422,6 +463,54 @@ export function logChatContextSelection(
       },
     ),
   );
+}
+
+/** Grounded prompts have no history-message or image lane; log the actual fitted dispatch. */
+export function logGroundedPromptSelection(
+  correlationId: string | undefined,
+  prompt: Pick<SentGroundedPrompt, "messages" | "sentEvidencePacks" | "protectedSkill">,
+  inputBudget: number,
+  accounting?: ContextProfile["tokenAccounting"],
+): void {
+  const tokens = countGatewayPromptTokens({ messages: prompt.messages }, accounting);
+  const confidence = sentSourceConfidence(prompt);
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_CONTEXT_SELECTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        state: "verbatim",
+        omittedSummaryCategories: 0,
+        compactedHistoryMessages: 0,
+        retainedHistoryMessages: 0,
+        tokensBefore: 0,
+        tokensAfter: 0,
+        tokensSaved: 0,
+        promptTokens: tokens,
+        ...selectedSkillLogFields(prompt),
+        inputBudget,
+        ...(confidence === undefined ? {} : { sourceSelectionConfidence: confidence }),
+        imageCount: 0,
+        imageReserveTokens: 0,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function sentSourceConfidence(
+  prompt: Pick<SentGroundedPrompt, "sentEvidencePacks">,
+): ContextSelectionConfidence | undefined {
+  const confidence = prompt.sentEvidencePacks?.map(
+    (pack) => pack.diagnostics?.selection?.selectionConfidence,
+  );
+  if (confidence?.includes("low")) return "low";
+  return confidence !== undefined &&
+    confidence.length > 0 &&
+    confidence.every((value) => value === "high")
+    ? "high"
+    : undefined;
 }
 
 function contextHistoryMetrics(assembly: GatewayPromptAssembly): {
@@ -457,6 +546,7 @@ export function logChatResponseMessages(body: unknown, correlationId: string | u
 export function logChatResponseMessage(
   assistantMessageId: string,
   correlationId: string | undefined,
+  memory?: ChatResponseMemoryActivity,
 ): void {
   if (!isValidCorrelationId(assistantMessageId)) return;
   getServerLogger().info(
@@ -468,7 +558,7 @@ export function logChatResponseMessage(
           ? {}
           : { parentCorrelationId: correlationId }),
       },
-      { completeness: "complete", loss: "none" },
+      { completeness: "complete", loss: "none", ...memory },
     ),
   );
 }

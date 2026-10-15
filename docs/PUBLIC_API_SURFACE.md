@@ -1,4 +1,4 @@
-# Public API surface — 1.2.0
+# Public API surface — 1.2.2
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -70,7 +70,7 @@ root `@oscharko-dev/keiko` import surface. The compatibility alias `SDK_VERSION`
 
 ### Reviewed workspace and readiness helpers
 
-1.2.0 adds the Workbench integration helpers below to the root barrel. They reuse their
+1.2.1 adds the Workbench integration helpers below to the root barrel. They reuse their
 original workspace and gateway implementations; exporting them does not create a runtime
 authority grant or activate the original OpenCode host.
 
@@ -86,6 +86,13 @@ The associated declaration-only additions are `StructuralExecutionControl` and t
 `WorkspacePathDiscoveryTruncationReason` types. The runtime and declaration allowlists are
 derived from the actual fresh root build by the existing package-surface producer. No root
 export is removed, no root package entry point is added, and no raw filesystem adapter is exported.
+
+The same release adds `CallerAttemptAdmissionError` to distinguish refusal by the caller's
+remaining grant from provider context overflow; the declaration-only `GatewayRetryNotice` and
+`GatewayRetryObserver` types describe bounded retry observations. `decodeHtmlEntities` and
+`decodeXmlEntities` expose the existing document decoding semantics. The source-query helpers
+`containsNumberedCompoundQueryTerm`, `isNumberedCompoundQueryTerm` and
+`hasRecursiveTraversalQuery` classify query intent; they grant no source authority or budget.
 
 The internal contracts package also provides `runtime/coding-app-session-pairing` so desktop
 startup can import the existing pairing codecs without loading channel/history validators. The
@@ -103,18 +110,31 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.2.2: the root runtime/declaration export contract and CLI entrypoints are unchanged from
+  v1.2.1. Private Markdown skills extend authenticated local Chat routes and the existing UI
+  store, including explicit per-chat selection and protected context accounting. Document-to-skill
+  drafting is an optional output kind of the existing Prompt Enhancer. These local application
+  contracts do not add a public root package entrypoint or an OpenCode skill API. SQLite migrations
+  V42 and V43 are forward-only; existing chats initially have no selected skill.
+- 1.2.1: relative to the actual v1.2.0 export contract, the root adds
+  `CallerAttemptAdmissionError`, `StructuralExecutionStoppedError`,
+  `WORKSPACE_PATH_DISCOVERY_LIMITS`, `WORKSPACE_PATH_DISCOVERY_MODES`,
+  `WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS`, `containsNumberedCompoundQueryTerm`,
+  `decodeHtmlEntities`, `decodeXmlEntities`, `discoverWorkspacePaths`,
+  `executionControlledWorkspaceFs`, `hasRecursiveTraversalQuery`,
+  `isNumberedCompoundQueryTerm` and `readGatewayReadinessChatCompletionResponse`.
+  Declaration-only additions are `GatewayRetryNotice`, `GatewayRetryObserver`,
+  `StructuralExecutionControl`, `WorkspacePathDiscoveryEntry`, `WorkspacePathDiscoveryMode`,
+  `WorkspacePathDiscoveryRequest`, `WorkspacePathDiscoveryResult`, `WorkspacePathDiscoveryStats`
+  and `WorkspacePathDiscoveryTruncationReason`. No root export is removed. The root package still
+  exports only `"."` and keeps the existing `keiko` CLI entrypoint. The source, runtime and
+  declaration allowlists are verified against the assembled package.
 - 1.2.0: relative to 1.1.13, the root surface adds `assumedChatCapability`,
   `decodeTextFileBytes`, `discoverGatewayContextWindow`, `hasSymbolRelationshipQuery` and
-  `requestedSourceInspectionExtensions`, `discoverWorkspacePaths`, `executionControlledWorkspaceFs`,
-  `readGatewayReadinessChatCompletionResponse`, `StructuralExecutionStoppedError`,
-  `WORKSPACE_PATH_DISCOVERY_MODES`, `WORKSPACE_PATH_DISCOVERY_LIMITS` and
-  `WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS`, plus the declaration-only types
-  `ContextWindowReport`, `GatewayContextWindowDiscovery`, `GatewayContextWindowDiscoveryRequest`,
-  `StructuralExecutionControl`, `WorkspacePathDiscoveryEntry`, `WorkspacePathDiscoveryMode`,
-  `WorkspacePathDiscoveryRequest`, `WorkspacePathDiscoveryResult`, `WorkspacePathDiscoveryStats` and
-  `WorkspacePathDiscoveryTruncationReason`. No root export is
-  removed or renamed in the machine-readable allowlist. The root package still exports only `"."`,
-  and the existing `keiko` CLI entrypoint remains in place.
+  `requestedSourceInspectionExtensions`, plus the declaration-only types `ContextWindowReport`,
+  `GatewayContextWindowDiscovery` and `GatewayContextWindowDiscoveryRequest`. No root export is
+  removed or renamed in the machine-readable allowlist. Workbench discovery and controlled
+  filesystem helpers documented above first appear in 1.2.1, not the published v1.2.0 contract.
   Support tooling uses `keiko support export` to create a private canonical report and
   `keiko support analyze FILE --json` to validate it before machine consumption. `--out` selects a
   directory, not a filename; raw logs, legacy bundles and inclusion flags are refused. Browser

@@ -278,6 +278,10 @@ const GROUNDED_GET_STUBS: Readonly<Record<string, unknown>> = {
   "/api/projects": { projects: [GROUNDED_PROJECT_ENTRY] },
   "/api/config": { config: null, configPresent: false },
   "/api/chats": { chats: [GROUNDED_CHAT] },
+  [`/api/chats/${GROUNDED_CHAT_ID}/skill`]: {
+    availability: "none",
+    selection: { revision: 0, skill: null },
+  },
   "/api/local-knowledge/capsules": {
     capsules: [
       {

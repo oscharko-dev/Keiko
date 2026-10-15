@@ -238,3 +238,8 @@
     animation: none;
   }
 }
+
+.cmpBarSegment[data-segment="skill"],
+.cmpSwatch[data-segment="skill"] {
+  background: var(--viz-5);
+}

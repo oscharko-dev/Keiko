@@ -172,6 +172,23 @@ tokens, header values) from strings before they reach any error message, log cal
 artefact. All error constructors call `redact()` on provider-derived strings. Config serialisation
 omits credential fields.
 
+**Changeset-edit arguments are exact model output, not prose (#4009, 2026-10-10).** The governed
+changeset edit (`keiko.changeset.edit`) consumes its arguments byte for byte: it matches `oldString`
+against the file and writes `newString` as file content. `redact()`'s heuristic shape patterns are
+unsafe there. They match ordinary text: the Requesty benchmark's README prose "supports basic stock
+holds" reached the edit tool as "supports Basic [REDACTED] holds". Every exact replacement then
+failed as `old-string-not-found`, and created content would have been written changed. The
+OpenAI-compatible adapter therefore scrubs the arguments of a call bound to that tool, resolved
+through the offered catalog's `toolRef.canonicalId` rather than the alias spelling, with
+`redactSecretLiterals()` only. That helper removes exactly the configured provider literals (API key
+and base URL) and nothing else. Every other tool keeps the full `redact()`, because its arguments
+are displayed to the operator (`question`) or leave the machine (`keiko_research_fetch`). Answer
+text, reasoning, structured output and tool names keep it too. The changeset tool keeps its own
+scope, authority, digest and secret-path checks. When a configured literal was removed from
+changeset-edit arguments, `gateway.tool-arguments.redacted` records it at `warn` under the call's
+correlation, with the model digest and the tool-call and changed-string counts, never the arguments
+or the secret.
+
 ### D8 — CLI surface: `keiko models`
 
 We will add a `models` sub-command to the CLI with two sub-commands: `list` (prints capability

@@ -1,0 +1,405 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'adjacent declarations' > adjacent declarations 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 1,
+        "startLine": 1,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 0.5,
+    },
+    {
+      "lineRange": {
+        "endLine": 2,
+        "startLine": 2,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 0.25,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 2,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 76,
+      "scopePath": "src/routes.ts",
+      "score": 76.598,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'annotation' > annotation 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 4,
+        "startLine": 1,
+      },
+      "scopePath": "src/routes.java",
+      "score": 0.5,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 236,
+      "scopePath": "src/routes.java",
+      "score": 236.59799999999998,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'comment' > comment 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 1,
+        "startLine": 1,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 0.75,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 76,
+      "scopePath": "src/routes.ts",
+      "score": 76.598,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'configured route' > configured route 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 2,
+        "startLine": 2,
+      },
+      "scopePath": "config/routes.json",
+      "score": 0.75,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 236,
+      "scopePath": "config/routes.json",
+      "score": 236.748,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'distant route' > distant route 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 1,
+        "startLine": 1,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 0.25,
+    },
+    {
+      "lineRange": {
+        "endLine": 5,
+        "startLine": 5,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 0.5,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 2,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 76,
+      "scopePath": "src/routes.ts",
+      "score": 76.598,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'docstring' > docstring 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 2,
+        "startLine": 2,
+      },
+      "scopePath": "src/routes.py",
+      "score": 0.75,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 76,
+      "scopePath": "src/routes.py",
+      "score": 76.598,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'encoded html route' > encoded html route 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 1,
+        "startLine": 1,
+      },
+      "scopePath": "manual.html",
+      "score": 1,
+    },
+    {
+      "lineRange": {
+        "endLine": 2,
+        "startLine": 2,
+      },
+      "scopePath": "manual.html",
+      "score": 0.75,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 2,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 87,
+      "scopePath": "manual.html",
+      "score": 87.199,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'late deep route' > late deep route 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 129,
+        "startLine": 129,
+      },
+      "scopePath": "src/a/b/c/d/e/routes.ts",
+      "score": 1,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 236,
+      "scopePath": "src/a/b/c/d/e/routes.ts",
+      "score": 236.593,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'multiline route' > multiline route 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 1,
+        "startLine": 1,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 0.25,
+    },
+    {
+      "lineRange": {
+        "endLine": 4,
+        "startLine": 4,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 0.5,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 2,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 236,
+      "scopePath": "src/routes.ts",
+      "score": 236.59799999999998,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'route' > route 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 1,
+        "startLine": 1,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 1,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 236,
+      "scopePath": "src/routes.ts",
+      "score": 236.59799999999998,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'template expression' > template expression 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 1,
+        "startLine": 1,
+      },
+      "scopePath": "src/routes.ts",
+      "score": 1,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 236,
+      "scopePath": "src/routes.ts",
+      "score": 236.59799999999998,
+    },
+  ],
+}
+`;
+
+exports[`request-local source preparation from the actual streamed search producer > preserves old producer output for 'yaml route' > yaml route 1`] = `
+{
+  "atoms": [
+    {
+      "lineRange": {
+        "endLine": 4,
+        "startLine": 1,
+      },
+      "scopePath": "config/routes.yaml",
+      "score": 0.5,
+    },
+  ],
+  "candidates": [],
+  "coverage": {
+    "discovered": 1,
+    "incomplete": false,
+    "matches": 1,
+    "reasons": [],
+    "scanned": 1,
+    "skipped": 0,
+  },
+  "ranked": [
+    {
+      "contentScore": 236,
+      "scopePath": "config/routes.yaml",
+      "score": 236.748,
+    },
+  ],
+}
+`;

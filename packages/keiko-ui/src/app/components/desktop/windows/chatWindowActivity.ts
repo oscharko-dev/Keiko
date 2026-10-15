@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+
+import type { ChatConnectedScope } from "@/lib/types";
 
 export type ChatWindowFlowIntensity = "light" | "heavy";
 
@@ -12,6 +14,7 @@ export interface ChatWindowFlow {
 export interface ChatWindowRuntimeTarget {
   readonly conversationId: string;
   readonly projectPath: string;
+  readonly connectedScopes?: readonly ChatConnectedScope[];
 }
 
 interface ChatWindowRuntimeState {
@@ -47,7 +50,7 @@ const FLOW_AFTERGLOW_MS = 2_500;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
 const listeners = new Set<() => void>();
-const runtimes = new Map<string, ChatWindowRuntimeState>();
+let runtimes: ReadonlyMap<string, ChatWindowRuntimeState> = new Map();
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -140,9 +143,14 @@ export function registerChatWindowRuntime(
   runtime: ChatWindowRuntimeTarget,
 ): () => void {
   const registration = Symbol("chat-window-runtime");
-  runtimes.set(windowId, { runtime, registration });
+  runtimes = new Map(runtimes).set(windowId, { runtime, registration });
+  for (const listener of listeners) listener();
   return (): void => {
-    if (runtimes.get(windowId)?.registration === registration) runtimes.delete(windowId);
+    if (runtimes.get(windowId)?.registration !== registration) return;
+    const next = new Map(runtimes);
+    next.delete(windowId);
+    runtimes = next;
+    for (const listener of listeners) listener();
   };
 }
 
@@ -151,8 +159,7 @@ export function chatWindowRuntimeTarget(windowId: string): ChatWindowRuntimeTarg
   return state === undefined
     ? undefined
     : {
-        conversationId: state.runtime.conversationId,
-        projectPath: state.runtime.projectPath,
+        ...state.runtime,
       };
 }
 
@@ -171,5 +178,17 @@ export function useChatWindowFlows(): ReadonlyMap<string, ChatWindowFlow> {
     subscribe,
     (): ReadonlyMap<string, ChatWindowFlow> => snapshot,
     (): ReadonlyMap<string, ChatWindowFlow> => snapshot,
+  );
+}
+
+export function useChatWindowRuntimes(): ReadonlyMap<string, ChatWindowRuntimeTarget> {
+  const current = useSyncExternalStore(
+    subscribe,
+    () => runtimes,
+    () => runtimes,
+  );
+  return useMemo(
+    () => new Map(Array.from(current, ([id, state]) => [id, state.runtime])),
+    [current],
   );
 }

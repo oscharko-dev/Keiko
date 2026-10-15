@@ -158,6 +158,7 @@ function resolveRole(scopePath: string, editablePaths: ReadonlySet<string>): Con
 interface RerankerOutcome {
   readonly ordered: readonly CandidateFile[];
   readonly reranked: boolean;
+  readonly attempted: boolean;
 }
 
 async function applyReranker(
@@ -171,14 +172,16 @@ async function applyReranker(
   // ExplorationBudget.rerankCallsMax authoritative even when a custom reranker is supplied
   // and avoids billing a rerank call against a run whose budget set rerankCallsMax=0.
   if (usage.rerankCalls >= budget.rerankCallsMax) {
-    return { ordered: ranked, reranked: false };
+    return { ordered: ranked, reranked: false, attempted: false };
   }
   const availability = await reranker.isAvailable();
   if (!availability.available) {
-    return { ordered: ranked, reranked: false };
+    return { ordered: ranked, reranked: false, attempted: false };
   }
   const reordered = await reranker.rerank(ranked, atomsByPath, ranked.length);
-  return { ordered: reordered, reranked: true };
+  const diagnostics = reranker.getDiagnostics?.();
+  const applied = diagnostics === undefined || diagnostics.status === "applied";
+  return { ordered: applied ? reordered : ranked, reranked: applied, attempted: true };
 }
 
 interface BuildPlan {
@@ -260,16 +263,15 @@ function contextWindowsForAtom(
     return matching.filter((window) => window.identity !== undefined || window === legacy);
   }
   // A single shortened read can still provide useful evidence for part of a broad range.
-  // Multiple uncovered windows must not fabricate continuity across a gap or conflicting read.
-  if (source.length !== 1) return [];
-  const window = source[0];
   const range = atom.lineRange;
-  return window !== undefined &&
-    range !== undefined &&
-    window.startLine <= range.endLine &&
-    window.endLine >= range.startLine
-    ? [window]
-    : [];
+  if (range === undefined) return [];
+  // Identified read views remain separate; they do not imply continuity across unread lines.
+  return source.filter(
+    (window) =>
+      (source.length === 1 || window.identity !== undefined) &&
+      window.startLine <= range.endLine &&
+      window.endLine >= range.startLine,
+  );
 }
 
 interface CompactedContextWindows {
@@ -322,9 +324,14 @@ function compactIdentifiedContextWindows(
   };
   const merged = mergeContextWindows(normalizeExcerptWindows(source));
   const windows = merged.windows;
-  // Prompt admission ranks the excerpt carrying the bytes; metadata-only siblings cannot lend
-  // it their score later. Preserve every edge, but assign each shared body to its strongest atom.
-  const rankedAtoms = [...atoms].sort((left, right) => right.score - left.score);
+  // Located evidence owns a shared body before unlocated discovery metadata, so a path-only
+  // score cannot replace the actual window's relevance during prompt fitting. Preserve every
+  // edge and assign shared bodies to the strongest located atom; standalone listings still fall back.
+  const rankedAtoms = [...atoms].sort(
+    (left, right) =>
+      Number(left.lineRange === undefined) - Number(right.lineRange === undefined) ||
+      right.score - left.score,
+  );
   for (const atom of rankedAtoms) {
     for (const window of contextWindowsForAtom(windows, atom)) {
       appendCompactContextWindow(state, atom, window, maxBytes, scopeId);
@@ -1061,7 +1068,7 @@ export async function assembleContextPack(
     initialUsage,
     input.initialUncertainty,
   );
-  if (rerankerOutcome.reranked) {
+  if (rerankerOutcome.attempted) {
     plan.usage = { ...plan.usage, rerankCalls: plan.usage.rerankCalls + 1 };
   }
   const pack = buildPack(input, plan, now);

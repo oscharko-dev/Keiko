@@ -129,8 +129,13 @@ export type {
 export {
   candidateBucketForPath,
   hasSymbolRelationshipQuery,
+  hasRecursiveTraversalQuery,
   SYMBOL_RELATION_TERMS,
 } from "./repoSearchPolicy.js";
+export {
+  containsNumberedCompoundQueryTerm,
+  isNumberedCompoundQueryTerm,
+} from "./repoSearchQueryTerms.js";
 export { requestedSourceInspectionExtensions } from "./repoSearchSourceInspection.js";
 export type {
   SemanticFusionSignals,
@@ -201,6 +206,8 @@ export type {
   EcosystemStructureProfile,
   EcosystemVersionDeclaration,
 } from "./ecosystems.js";
+export { decodeXmlEntities } from "./xmlEntities.js";
+export { decodeHTML as decodeHtmlEntities } from "entities";
 export { decodeTextFileBytes, looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 export type { BinaryProbeOptions } from "./binaryDetect.js";
 export {

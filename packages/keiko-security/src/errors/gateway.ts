@@ -11,6 +11,7 @@ export const ERROR_CODES = {
   MODEL_REFUSAL: "GATEWAY_MODEL_REFUSAL",
   MALFORMED_TOOL_CALL: "GATEWAY_MALFORMED_TOOL_CALL",
   CONTEXT_OVERFLOW: "GATEWAY_CONTEXT_OVERFLOW",
+  ATTEMPT_ADMISSION_DENIED: "GATEWAY_ATTEMPT_ADMISSION_DENIED",
   RATE_LIMIT: "GATEWAY_RATE_LIMIT",
   TIMEOUT: "GATEWAY_TIMEOUT",
   CANCELLED: "GATEWAY_CANCELLED",
@@ -95,6 +96,12 @@ export class ContextOverflowError extends GatewayError {
   // (vLLM: "maximum context length is N tokens" / "max_model_len=N"). Attached at the throw site,
   // like requestId; a count, never content. Absent for a local admission refusal.
   reportedContextWindowTokens?: number;
+}
+
+/** Caller attempt or cumulative token authority refused another dispatch, not its prompt size. */
+export class CallerAttemptAdmissionError extends GatewayError {
+  readonly code = ERROR_CODES.ATTEMPT_ADMISSION_DENIED;
+  readonly retryable = false;
 }
 
 // A rate limit is always an HTTP 429 by definition (that is the status the provider used to

@@ -465,6 +465,30 @@ describe("desktop support report transport", () => {
     expect(sink.lines().join("\n")).not.toContain(selected);
   });
 
+  it("removes credential-shaped selections before dispatching a paired report job", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const selected = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".");
+    vi.mocked(runSupportReportJob).mockResolvedValue({
+      fileName: fixtureReportFileName,
+      reportJson: "{}",
+    });
+    const response = await handleCreateSupportReport(
+      context(JSON.stringify({ correlationId: selected })),
+      deps(),
+    );
+    expect(response.status).toBe(200);
+    expect(runSupportReportJob).toHaveBeenCalledWith(
+      "/server-private-report-state",
+      undefined,
+      expect.any(AbortSignal),
+      "report-route-test",
+      expect.any(Function),
+    );
+    expect(sink.events.some((event) => event.op === "support.report.ui.completed")).toBe(true);
+    expect(sink.lines().join("\n")).not.toContain(selected);
+  });
+
   it("records completed limited availability without inventing activity-log loss", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));

@@ -23,8 +23,15 @@ import {
   normalizeEndpointPath,
   unquote,
 } from "./endpointContractPaths.js";
-import { endpointSourceFileSetFromCandidates, type SourceFile } from "./endpointContractSource.js";
+import {
+  endpointSourceFileSetFromCandidates,
+  type EndpointSourceReadDeps,
+  type SourceFile,
+} from "./endpointContractSource.js";
 import { gatherCandidatesWithControl, type CandidateSet } from "./repoSearchScan.js";
+
+import { repositoryConfiguredRouteDeclarations } from "./repoSearchRoutes.js";
+import { repositorySourceLines } from "./repoSearchSourceClassification.js";
 
 interface EndpointBuildState {
   readonly routes: EndpointRouteContract[];
@@ -341,7 +348,38 @@ function extractFetchCalls(file: SourceFile, state: EndpointBuildState): void {
   }
 }
 
+function extractConfiguredServerRoutes(file: SourceFile, state: EndpointBuildState): void {
+  const lines = repositorySourceLines(file.text, file.scopePath);
+  const declarations = repositoryConfiguredRouteDeclarations(
+    lines.map((line) => line.code).join("\n"),
+    lines.map((line) => line.structural).join("\n"),
+  );
+  for (const declaration of declarations) {
+    const method = declaration.method.toUpperCase() as EndpointHttpMethod;
+    if (!HTTP_METHODS.has(method)) continue;
+    state.routes.push({
+      stableId: hashEndpointContractId("ec-route", [
+        method,
+        declaration.path,
+        file.scopePath,
+        declaration.line,
+      ]),
+      method,
+      path: declaration.path,
+      normalizedPath: normalizeEndpointPath(declaration.path),
+      scopePath: file.scopePath,
+      line: declaration.line,
+      framework: "configured-node",
+      handler: declaration.handler,
+      requestType: undefined,
+      responseType: undefined,
+      confidence: 0.92,
+    });
+  }
+}
+
 function extractTypeScript(file: SourceFile, state: EndpointBuildState): void {
+  extractConfiguredServerRoutes(file, state);
   extractAxiosCalls(file, state);
   extractFetchCalls(file, state);
   extractTsDtos(file, state);
@@ -497,6 +535,7 @@ export async function buildEndpointContractGraph(
   limits: SearchLimits,
   fs: WorkspaceFs,
   executionControl?: StructuralExecutionControl,
+  sourceReadDeps?: EndpointSourceReadDeps,
 ): Promise<EndpointContractGraph> {
   const control =
     executionControl ?? createStructuralExecutionControl(limits.elapsedMsMax, Date.now);
@@ -506,6 +545,7 @@ export async function buildEndpointContractGraph(
     fs,
     gatherCandidatesWithControl(scope, limits, fs, control),
     control,
+    sourceReadDeps,
   );
 }
 
@@ -515,6 +555,7 @@ export async function buildEndpointContractGraphFromCandidates(
   fs: WorkspaceFs,
   candidateSet: CandidateSet,
   executionControl?: StructuralExecutionControl,
+  sourceReadDeps?: EndpointSourceReadDeps,
 ): Promise<EndpointContractGraph> {
   const control =
     executionControl ?? createStructuralExecutionControl(limits.elapsedMsMax, Date.now);
@@ -524,6 +565,7 @@ export async function buildEndpointContractGraphFromCandidates(
     fs,
     candidateSet,
     control,
+    sourceReadDeps,
   );
   return buildEndpointContractGraphFromSources(
     sourceSet.files,

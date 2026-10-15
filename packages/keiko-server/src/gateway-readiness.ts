@@ -62,6 +62,7 @@ import {
   settleGatewayProbeSpend,
   transientGatewayStatus,
   type GatewayProbeSpendContext,
+  type GatewayToolCallingProbeStatus,
 } from "./gateway-tool-calling-probe.js";
 import {
   reconcileGatewayContextWindowReadiness,
@@ -711,6 +712,7 @@ async function providerRequest(
       ...(deps.gatewayReadinessFetch !== undefined
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
+      ...(deps.gatewayReadinessSignal === undefined ? {} : { signal: deps.gatewayReadinessSignal }),
       ...(options.stream === true ? { stream: true } : {}),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
@@ -836,6 +838,7 @@ async function probeConfiguredEmbedding(
       ...(deps.gatewayReadinessFetch !== undefined
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
+      ...(deps.gatewayReadinessSignal === undefined ? {} : { signal: deps.gatewayReadinessSignal }),
       timeoutMs: provider.timeoutMs,
       egress: config.egress,
     });
@@ -907,6 +910,7 @@ async function probeReranker(
       config,
       correlationId,
       fetchImpl: deps.gatewayReadinessFetch,
+      signal: deps.gatewayReadinessSignal,
     });
     return rerankerSelectionResult(selection, start);
   } catch (probeError) {
@@ -1225,23 +1229,36 @@ async function probeToolCalling(
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   let failure: GatewayReadinessProbeResult | undefined;
+  const reportFailure = (probeError: unknown): void => {
+    failure = reportProbeFailure(
+      deps,
+      correlationId,
+      "tool_calling",
+      start,
+      "Tool calling could not be verified.",
+      probeError,
+    );
+  };
   const status = await probeGatewayToolCalling(
     config,
     provider,
     deps.gatewayReadinessFetch,
-    (error) => {
-      failure = reportProbeFailure(
-        deps,
-        correlationId,
-        "tool_calling",
-        start,
-        "Tool calling could not be verified.",
-        error,
-      );
-    },
+    reportFailure,
     probeSpendContext(deps, config, provider, correlationId),
-  );
+    deps.gatewayReadinessSignal,
+  ).catch((probeError: unknown): GatewayToolCallingProbeStatus => {
+    reportFailure(probeError);
+    return "unverified";
+  });
   if (failure !== undefined) return failure;
+  return observedToolCallingResult(status, start, provider);
+}
+
+function observedToolCallingResult(
+  status: GatewayToolCallingProbeStatus,
+  start: number,
+  provider: ModelProviderConfig,
+): GatewayReadinessProbeResult {
   if (status === "verified") {
     return result(
       "tool_calling",
@@ -2525,14 +2542,10 @@ export function cancellableConversationProbeDeps(
   deps: UiHandlerDeps,
   signal: AbortSignal,
 ): UiHandlerDeps {
-  const fetch = deps.gatewayReadinessFetch ?? globalThis.fetch;
+  const previous = deps.gatewayReadinessSignal;
   return {
     ...deps,
-    gatewayReadinessFetch: (input, init): Promise<Response> =>
-      fetch(input, {
-        ...init,
-        signal: init?.signal == null ? signal : AbortSignal.any([signal, init.signal]),
-      }),
+    gatewayReadinessSignal: previous === undefined ? signal : AbortSignal.any([previous, signal]),
   };
 }
 

@@ -1110,6 +1110,26 @@ describe("git-change description-authority admission (#3400)", () => {
     });
   }
 
+  it("refuses an active skill on the separate Git description workflow before persistence", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const skill = fixture.deps.store.markdownSkills.import({
+        fileName: "synthetic.md",
+        contentBase64: Buffer.from("# Synthetic\nCheck boundaries.\n").toString("base64"),
+      });
+      fixture.deps.store.markdownSkills.select(fixture.chatId, skill, 0);
+      const result = await sendBreakerChat(fixture, "refine description", "skill-description");
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "SKILL_SURFACE_UNSUPPORTED" } },
+      });
+      expect(fixture.deps.store.listMessages(fixture.chatId)).toHaveLength(0);
+    } finally {
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("refuses a stale source identity before persisting a Git description turn", async () => {
     const fixture = await createGatewayBreakerFixture();
     const sink = createBufferedServerLogSink();

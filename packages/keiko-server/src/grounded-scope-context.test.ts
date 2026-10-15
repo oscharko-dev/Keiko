@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFileServerLogSink, type ServerLogSink } from "./observability/index.js";
@@ -7,9 +7,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import type { WorkspaceInfo, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { KnownFitScopeContext } from "./grounded-scope-context.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { materializeConnectedFixture } from "./grounded-eval-support.js";
 
 const ROOT = "/scope-context-fixture";
 const WORKSPACE: WorkspaceInfo = {
@@ -33,7 +35,10 @@ afterEach(() => {
   for (const cleanup of logCleanups.splice(0)) cleanup();
 });
 
-function capture(persisted: boolean): {
+function capture(
+  persisted: boolean,
+  root: string,
+): {
   log: ServerLogSink;
   completed: () => Readonly<Record<string, unknown>> | undefined;
 } {
@@ -65,7 +70,7 @@ function capture(persisted: boolean): {
     completed: (): Readonly<Record<string, unknown>> => {
       log.close?.();
       const raw = readPersistedActivityLog(stateDir);
-      expect(raw).not.toContain(ROOT);
+      expect(raw).not.toContain(root);
       for (const line of raw.split("\n").filter(Boolean)) {
         const value: unknown = JSON.parse(line);
         if (
@@ -87,13 +92,14 @@ function request(
   text: string,
   capacity: number,
   elapsedMsMax: number | null,
+  root = ROOT,
 ): Parameters<typeof retrieveConnectedContextPack>[0] {
   return {
-    workspaceRoot: ROOT,
+    workspaceRoot: root,
     scope: {
       schemaVersion: "1",
       scopeId: "scope",
-      workspaceRoot: ROOT,
+      workspaceRoot: root,
       kind: "workspace-root",
       relativePaths: [],
       conversationId: undefined,
@@ -105,11 +111,21 @@ function request(
   };
 }
 
+async function gitFixtureRoot(files: Readonly<Record<string, string>>): Promise<string> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-known-fit-git-")));
+  logCleanups.push(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  await materializeConnectedFixture(root, { ...files, ".git/HEAD": "fixture" });
+  return root;
+}
+
 async function retrieve(
   files: Readonly<Record<string, string>>,
   text: string,
   capacity = 8192,
   options: {
+    git?: boolean;
     persisted?: boolean;
     fs?: WorkspaceFs;
     nowMs?: () => number;
@@ -119,15 +135,16 @@ async function retrieve(
   result: Awaited<ReturnType<typeof retrieveConnectedContextPack>>;
   completed: Readonly<Record<string, unknown>> | undefined;
 }> {
-  const activity = capture(options.persisted === true);
+  const root = options.git === true ? await gitFixtureRoot(files) : ROOT;
+  const activity = capture(options.persisted === true, root);
   const result = await retrieveConnectedContextPack(
-    request(text, capacity, options.elapsedMsMax ?? null),
+    request(text, capacity, options.elapsedMsMax ?? null, root),
     {
       correlationId: "known-fit-proof",
       activityLog: activity.log,
-      fs: options.fs ?? memFs(ROOT, files),
+      fs: options.fs ?? (options.git === true ? nodeWorkspaceFs : memFs(root, files)),
       nowMs: options.nowMs ?? ((): number => 0),
-      detectWorkspace: () => WORKSPACE,
+      detectWorkspace: () => ({ ...WORKSPACE, root, selectedRoot: root }),
       answerer: {
         answer: (): Promise<string> => Promise.reject(new Error("Retrieval must not answer")),
       },
@@ -224,7 +241,14 @@ describe("known-fit scope admission", () => {
   it.each(["Trace callers of workflow", "Show the history of workflow"])(
     "supplements %s without replacing requested retrieval rings",
     async (question) => {
-      const { result, completed } = await retrieve({ "a.txt": "workflow step one\n" }, question);
+      const { result, completed } = await retrieve(
+        { "a.txt": "workflow step one\n" },
+        question,
+        8192,
+        {
+          git: true,
+        },
+      );
       expect(completed).toMatchObject({
         scopeContextState: "applied",
         scopeContextSelectedFileCount: 1,
@@ -243,6 +267,20 @@ describe("known-fit scope admission", () => {
             excerpt.atom.provenance.tool === "repo.findFiles",
         ),
       ).toBe(true);
+    },
+  );
+
+  it.each(["Trace callers of workflow", "Show the history of workflow"])(
+    "retains known-fit evidence without Git execution in an ordinary folder: %s",
+    async (question) => {
+      const { result, completed } = await retrieve({ "a.txt": "workflow step one\n" }, question);
+      expect(completed).toMatchObject({
+        scopeContextState: "applied",
+        scopeContextSelectedFileCount: 1,
+        skippedRingKinds: ["git-history"],
+        ringSkipReasons: ["no-git-metadata"],
+      });
+      expect(result.pack.files).toHaveLength(1);
     },
   );
 

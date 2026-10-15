@@ -1,3 +1,6 @@
+import { translate, type I18nTranslate } from "@/lib/i18n";
+import type { ChatConnectedScope } from "@/lib/types";
+import { scopePathBasename } from "../connectedScopePresentation";
 import type { WindowType } from "./WindowsRegistry";
 
 // GEN-DUP-SEMANTIC-012 — the single owner of "which window types ingest a connected Files scope".
@@ -14,7 +17,7 @@ const FILES_CONTEXT_TYPES: ReadonlySet<WindowType> = new Set<WindowType>([
 ]);
 
 // Types that additionally read the CONNECTED Files window's focused-file path (a subset of the
-// files-context receivers — chat binds only the folder root, not the focused file).
+// files-context receivers — chat uses its acknowledged folder, directory or file scope).
 const FOCUSED_FILE_CONTEXT_TYPES: ReadonlySet<WindowType> = new Set<WindowType>([
   "agents",
   "quality",
@@ -127,23 +130,16 @@ function configRoot(cfg: Record<string, unknown> | undefined): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function lastPathSegment(value: string): string {
-  for (const segment of value.split(/[/\\]/u).reverse()) {
-    if (segment.length > 0) return segment;
-  }
-  return value;
-}
-
 function filesScopeLabel(cfg: Record<string, unknown> | undefined, root: string): string {
   const activeFile = cfg?.["activeFilePath"];
   if (typeof activeFile === "string" && activeFile.length > 0) {
-    return lastPathSegment(activeFile);
+    return scopePathBasename(activeFile);
   }
   const activeDirectory = cfg?.["activeDirectoryPath"];
   if (typeof activeDirectory === "string" && activeDirectory.length > 0) {
-    return `${lastPathSegment(activeDirectory)}/`;
+    return `${scopePathBasename(activeDirectory)}/`;
   }
-  return `${lastPathSegment(root)}/`;
+  return `${scopePathBasename(root)}/`;
 }
 
 // The window in the pair whose type matches, or null when neither does.
@@ -162,30 +158,58 @@ function otherSideOf(side: WinSnapshot | null, a: WinSnapshot, b: WinSnapshot): 
 // Files-context edge: one side is a Files window whose bound partner (chat, agents, quality,
 // editor, promptEnhancer) consumes its folder scope. Returns null when the pair isn't a
 // files-context edge so relLabel can fall through to the generic pair classifier below.
-function filesRelLabel(a: WinSnapshot, b: WinSnapshot): string | null {
+export interface ConnectionLabelContext {
+  readonly t?: I18nTranslate;
+  // undefined: canonical chat still loading; null: canonical scope absent or ambiguous.
+  readonly scope?: ChatConnectedScope | null;
+}
+
+export const englishConnectionTranslate: I18nTranslate = (key, values) =>
+  translate("en", key, values);
+
+function canonicalScopeLabel(scope: ChatConnectedScope): string {
+  if (scope.kind === "files") {
+    return scope.relativePaths.length === 1
+      ? scopePathBasename(scope.relativePaths[0] ?? "")
+      : String(scope.relativePaths.length);
+  }
+  const path = scope.kind === "directory" ? scope.relativePaths[0] : scope.root;
+  return `${scopePathBasename(path ?? "")}/`;
+}
+
+function filesRelLabel(
+  a: WinSnapshot,
+  b: WinSnapshot,
+  context: ConnectionLabelContext,
+): string | null {
   const filesSide = resolveSideOfType(a, b, "files");
   const other = otherSideOf(filesSide, a, b);
   if (filesSide === null || other === null || !receivesFilesContext(other.type)) return null;
+  const t = context.t ?? englishConnectionTranslate;
+  if (context.scope === null) return t("connection.noFolder");
+  if (context.scope !== undefined) {
+    return context.scope.kind === "files" && context.scope.relativePaths.length > 1
+      ? t("connection.usesFiles", { count: context.scope.relativePaths.length })
+      : t("connection.uses", { name: canonicalScopeLabel(context.scope) });
+  }
   const root = configRoot(filesSide.cfg);
-  // Honest empty state: nothing is bound yet, so the badge must not claim a folder.
-  if (root === null) return "no folder selected";
-  // Show only the basename — full absolute paths blew the badge up to hundreds of pixels
-  // of destructive (remove) click area on the canvas.
-  return `uses ${filesScopeLabel(filesSide.cfg, root)}`;
+  return root === null
+    ? t("connection.noFolder")
+    : t("connection.uses", { name: filesScopeLabel(filesSide.cfg, root) });
 }
 
 // Epic #750 #756 — a Figma edge means the QI hub will generate from the captured snapshot,
 // unless a specific screen was selected on the Figma Snapshot window, in which case the edge
 // reads as "uses view".
-function figmaRelLabel(a: WinSnapshot, b: WinSnapshot): string {
+function figmaRelLabel(a: WinSnapshot, b: WinSnapshot, t: I18nTranslate): string {
   const figmaSide = resolveSideOfType(a, b, "figma");
   const selectedScreenName = figmaSide?.cfg?.["selectedScreenName"];
   return typeof selectedScreenName === "string" && selectedScreenName.trim().length > 0
-    ? "uses view"
-    : "uses snapshot";
+    ? t("connection.usesView")
+    : t("connection.usesSnapshot");
 }
 
-type PairLabelResolver = (a: WinSnapshot, b: WinSnapshot) => string;
+type PairLabelResolver = (a: WinSnapshot, b: WinSnapshot, t: I18nTranslate) => string;
 
 // Ordered classifier for non-files edges: the first entry whose type is present in the pair
 // wins, so entry order matters whenever a pair could match more than one entry. None of these
@@ -194,33 +218,42 @@ type PairLabelResolver = (a: WinSnapshot, b: WinSnapshot) => string;
 const PAIR_LABEL_RESOLVERS: readonly (readonly [WindowType, PairLabelResolver])[] = [
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
   // connector's selected capsule / capsule-set as knowledge (Epic #189 / Epic #710, Issue #718).
-  ["connector", (): string => "uses knowledge"],
-  ["governedGit", (): string => "uses Git change"],
-  ["figmaJson", (): string => "uses JSON"],
-  ["figmaImage", (): string => "uses image"],
-  ["figmaView", (): string => "uses view"],
+  ["connector", (_a, _b, t): string => t("connection.usesKnowledge")],
+  ["governedGit", (_a, _b, t): string => t("connection.usesGitChange")],
+  ["figmaJson", (_a, _b, t): string => t("connection.usesJson")],
+  ["figmaImage", (_a, _b, t): string => t("connection.usesImage")],
+  ["figmaView", (_a, _b, t): string => t("connection.usesView")],
   ["figma", figmaRelLabel],
-  ["terminal", (): string => "runs in"],
+  ["terminal", (_a, _b, t): string => t("connection.runsIn")],
   // Every label must read as a mini-sentence predicate ("Chat uses tools Plugins");
   // bare "tools" / "linked" carried no relationship meaning (uiux-fix F048, C409).
-  ["plugins", (): string => "uses tools"],
-  ["review", (): string => "reviews"],
-  ["browser", (): string => "browses"],
+  ["plugins", (_a, _b, t): string => t("connection.usesTools")],
+  ["review", (_a, _b, t): string => t("connection.reviews")],
+  ["browser", (_a, _b, t): string => t("connection.browses")],
 ];
 
-function pairRelLabel(a: WinSnapshot, b: WinSnapshot, pair: readonly [string, string]): string {
-  if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
+function pairRelLabel(
+  a: WinSnapshot,
+  b: WinSnapshot,
+  pair: readonly [string, string],
+  t: I18nTranslate,
+): string {
+  if (pair[0] === "agents" && pair[1] === "agents") return t("connection.delegates");
   for (const [type, resolve] of PAIR_LABEL_RESOLVERS) {
-    if (pair.includes(type)) return resolve(a, b);
+    if (pair.includes(type)) return resolve(a, b, t);
   }
-  return "connected";
+  return t("connection.connected");
 }
 
-export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
-  const filesLabel = filesRelLabel(a, b);
+export function relLabel(
+  a: WinSnapshot,
+  b: WinSnapshot,
+  context: ConnectionLabelContext = {},
+): string {
+  const filesLabel = filesRelLabel(a, b, context);
   if (filesLabel !== null) return filesLabel;
   const pair: readonly [string, string] = [a.type, b.type];
-  return pairRelLabel(a, b, pair);
+  return pairRelLabel(a, b, pair, context.t ?? englishConnectionTranslate);
 }
 
 export interface BezierPath {

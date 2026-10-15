@@ -579,9 +579,17 @@ export interface RuntimeGatewayConfig {
     checkedAt: string,
     observedGeneration?: number,
     conversationCheckedAt?: string,
+    citationObservation?: CitationCapabilityObservation,
   ): void;
   readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
+
+type CitationCapabilityObservation = Pick<
+  VerifiedModelCapabilityObservation,
+  | "citationBehaviourWindow"
+  | "citationBehaviourDeploymentSha256"
+  | "citationBehaviourObservationStatus"
+>;
 
 export type VerifiedModelCapabilityFields = Partial<
   Pick<
@@ -600,6 +608,8 @@ export type VerifiedModelCapabilityFields = Partial<
   >
 >;
 
+export const CITATION_BEHAVIOUR_WINDOW_MAX = 8;
+
 export interface VerifiedModelCapabilityObservation {
   readonly modelId: string;
   readonly generation: number;
@@ -607,6 +617,10 @@ export interface VerifiedModelCapabilityObservation {
   /** Actual chat observation time, separate from retained feature evidence. */
   readonly conversationCheckedAt?: string | undefined;
   readonly fields: VerifiedModelCapabilityFields;
+  /** Body-free, request outcomes owned by this same generation; never readiness or durable config. */
+  readonly citationBehaviourWindow?: readonly NonNullable<ModelCapability["citationBehaviour"]>[];
+  readonly citationBehaviourDeploymentSha256?: string;
+  readonly citationBehaviourObservationStatus?: "applied" | "unavailable";
 }
 
 export interface GatewayDiscoveredModels {
@@ -690,6 +704,8 @@ export type ContextProfileResolver = (modelId: string) => ContextProfile;
 export type CodingSidecarGatewayModelSourceResolver = () => CodingWorkbenchModelSource;
 
 export interface UiHandlerDeps {
+  /** Server-only, request-scoped revalidation of the paired session using a private skill. */
+  readonly markdownSkillAuthority?: (() => boolean) | undefined;
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
   readonly config: GatewayConfig | undefined;
   /** Encrypted, bounded local custody for browser-uploaded conversation images. */
@@ -1018,9 +1034,11 @@ export interface UiHandlerDeps {
         correlationId?: string,
       ) => Promise<GatewayModelDiscoveryOutput>)
     | undefined;
-  // Test seam for the non-mutating gateway readiness probes. Production uses globalThis.fetch via
-  // the existing gateway HTTP transport; route tests inject a deterministic fetch implementation.
+  // Test seam for non-mutating gateway readiness probes. Production uses the existing native
+  // gateway HTTP transport; route tests may inject a deterministic fetch implementation.
   readonly gatewayReadinessFetch?: typeof fetch | undefined;
+  /** Graph-owned cancellation stays separate from the injected-fetch test seam. */
+  readonly gatewayReadinessSignal?: AbortSignal | undefined;
   /** Test seams for the platform-neutral portable-release trust root and expiry clock. */
   readonly updatePortableReleaseTrustedKeys?: readonly PortableReleaseTrustedKey[] | undefined;
   readonly updatePortableReleaseNow?: (() => number) | undefined;
@@ -1688,7 +1706,14 @@ function gatewayCapabilityRecorder(
   generation: () => number,
   admitted: (modelId: string) => boolean,
 ): RuntimeGatewayConfig["recordVerifiedCapability"] {
-  return (modelId, fields, checkedAt, observedGeneration, conversationCheckedAt): void => {
+  return (
+    modelId,
+    fields,
+    checkedAt,
+    observedGeneration,
+    conversationCheckedAt,
+    citationObservation,
+  ): void => {
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
     if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
@@ -1700,7 +1725,44 @@ function gatewayCapabilityRecorder(
         ? {}
         : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
+      ...boundedCitationObservation(
+        citationObservation ?? observations.get(modelId),
+        currentGeneration,
+      ),
     });
+  };
+}
+
+function boundedCitationObservation(
+  observation:
+    | (Pick<
+        VerifiedModelCapabilityObservation,
+        | "citationBehaviourWindow"
+        | "citationBehaviourDeploymentSha256"
+        | "citationBehaviourObservationStatus"
+      > & { readonly generation?: number })
+    | undefined,
+  generation: number,
+): Pick<
+  VerifiedModelCapabilityObservation,
+  | "citationBehaviourWindow"
+  | "citationBehaviourDeploymentSha256"
+  | "citationBehaviourObservationStatus"
+> {
+  if (observation?.generation !== undefined && observation.generation !== generation) return {};
+  if (
+    observation?.citationBehaviourWindow === undefined ||
+    observation.citationBehaviourDeploymentSha256 === undefined
+  )
+    return {};
+  return {
+    citationBehaviourWindow: observation.citationBehaviourWindow.slice(
+      -CITATION_BEHAVIOUR_WINDOW_MAX,
+    ),
+    citationBehaviourDeploymentSha256: observation.citationBehaviourDeploymentSha256,
+    ...(observation.citationBehaviourObservationStatus === undefined
+      ? {}
+      : { citationBehaviourObservationStatus: observation.citationBehaviourObservationStatus }),
   };
 }
 

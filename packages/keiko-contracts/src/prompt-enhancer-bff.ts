@@ -51,6 +51,8 @@ export const PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT = 7 as const;
 // mints the `PromptEnhancementRequestId` and `EnhancedPromptId` and stamps the schema version so a
 // client can never forge an id or a path-traversal fragment.
 export interface PromptEnhancementWireRequest {
+  /** Reviewed document-to-skill draft; requires a configured model and never uses a fallback. */
+  readonly outputKind?: "markdown-skill";
   // The raw, untrusted user draft. Bounded and validated as safe text; never interpolated into a
   // trusted instruction channel by the pipeline.
   readonly text: string;
@@ -162,7 +164,7 @@ export interface PromptEnhancementGroundingReadiness {
 // integrity metadata.
 export type PromptEnhancementEvidenceReferenceStatus = "recorded" | "not-recorded";
 export type PromptEnhancementEvidenceReferenceReason =
-  "evidence-recorded" | "evidence-store-not-configured";
+  "evidence-recorded" | "evidence-store-not-configured" | "private-skill-draft";
 
 export interface PromptEnhancementEvidenceReference {
   readonly status: PromptEnhancementEvidenceReferenceStatus;
@@ -190,6 +192,7 @@ export interface PromptEnhancementEvidenceReference {
 //     the model text. `renderedPromptEstimatedTokens` is the one number that always describes
 //     `renderedPrompt` on both paths.
 export interface PromptEnhancementWireResponse {
+  readonly outputKind?: "markdown-skill";
   readonly schemaVersion: typeof PROMPT_ENHANCER_SCHEMA_VERSION;
   // The branded EnhancedPromptId of the delivered prompt, as a plain wire string. Equals
   // `enhancedPrompt.promptId` on the deterministic paths; on the model-assisted path it is a distinct
@@ -228,6 +231,7 @@ export interface PromptEnhancementWireResponse {
 // Mirrors the discriminated-result discipline of `prompt-enhancer-validation.ts`: pure, never throws,
 // one short machine-readable error per failed invariant, never echoes raw input.
 const WIRE_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "outputKind",
   "text",
   "profilePreference",
   "missingInformationStrategy",
@@ -372,7 +376,16 @@ const validateCandidateCountField: WireFieldValidator = (input, errors, copied =
   return true;
 };
 
+const validateOutputKind: WireFieldValidator = (input, errors, copied = false) => {
+  if (hasWireField(input, "outputKind", copied) && input.outputKind !== "markdown-skill") {
+    errors.push("request.outputKind must be markdown-skill when set");
+    return false;
+  }
+  return true;
+};
+
 const WIRE_FIELD_VALIDATORS: readonly WireFieldValidator[] = [
+  validateOutputKind,
   validateUnknownFields,
   validateTextField,
   validateProfileField,
@@ -388,6 +401,7 @@ const WIRE_FIELD_VALIDATORS: readonly WireFieldValidator[] = [
 function buildWireRequestValue(input: Record<string, unknown>): Record<string, unknown> {
   return {
     text: input.text,
+    ...(input.outputKind === undefined ? {} : { outputKind: input.outputKind }),
     ...(input.profilePreference === undefined
       ? {}
       : { profilePreference: input.profilePreference }),

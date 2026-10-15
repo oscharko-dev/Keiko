@@ -63,6 +63,11 @@ import type {
   NormalizedResponse,
   OpenAIEmbeddingOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
+import {
+  Gateway,
+  createDefaultChatCapability,
+  parseGatewayConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
   Chat,
@@ -384,6 +389,26 @@ function deps(model: ModelPort, overrides: Partial<UiHandlerDeps> = {}): UiHandl
   };
 }
 
+function pairedSkillFixture(model: ModelPort): {
+  deps: UiHandlerDeps;
+  request: (body: Record<string, unknown>) => IncomingMessage;
+} {
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const pair = channel.pair(fakePairingRequestBody());
+  if (!pair.paired) throw new Error("Expected paired fixture");
+  return {
+    deps: deps(model, { codingAppSessionChannel: channel }),
+    request: (body): IncomingMessage => {
+      const req = makeReq(body);
+      req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}` };
+      return req;
+    },
+  };
+}
+
 function readyRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
   let current = config;
   let generation = 0;
@@ -675,6 +700,207 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it.each(["revoked", "rotated"] as const)(
+    "revalidates %s paired skill authority at a physical retry",
+    async (change) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const channel = createCodingAppSessionChannel({
+        registry: createSessionRegistry(),
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const pair = channel.pair(fakePairingRequestBody());
+      if (!pair.paired) throw new Error("Expected paired fixture");
+      let observed = false;
+      const model: ModelPort = {
+        call: async (request) => {
+          const grant = { promptTokens: 1, maxOutputTokens: 1 };
+          expect(request.attemptAdmission?.(grant)).toBeDefined();
+          if (change === "revoked") channel.signOut(pair.cookieToken);
+          else channel.rotate(pair.cookieToken);
+          observed = true;
+          request.attemptAdmission?.(grant);
+          return Promise.resolve(normalizedResponse("Must not complete"));
+        },
+      };
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        content: "Review",
+        modelId: CHAT_MODEL,
+      });
+      req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}` };
+      const result = await handleSendDesktopChat(
+        routeContext(req, captureResWithEvents().res),
+        deps(model, { codingAppSessionChannel: channel }),
+      );
+      expect(observed).toBe(true);
+      expect(result).toMatchObject({ status: 404 });
+      expect(
+        store.listMessages(chatId).filter((message) => message.role === "assistant"),
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each(["buffered", "streamed"] as const)(
+    "requires live server-owned skill authority for %s regardless of the client precondition",
+    async (transport) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const gateway = streamingModel("Must not dispatch");
+      const buffered = vi.spyOn(gateway.model, "call");
+      const channel = createCodingAppSessionChannel({
+        registry: createSessionRegistry(),
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const pair = channel.pair(fakePairingRequestBody());
+      if (!pair.paired) throw new Error("Expected paired fixture");
+      channel.signOut(pair.cookieToken);
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      for (const revision of [undefined, 1, null]) {
+        for (const cookie of [undefined, `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}`]) {
+          const req = makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: "Review the reading",
+            modelId: CHAT_MODEL,
+            expectedSkillSelectionRevision: revision,
+          });
+          req.headers = cookie === undefined ? {} : { cookie };
+          const result = await handlers[transport](
+            routeContext(req, captureResWithEvents().res),
+            deps(gateway.model, { codingAppSessionChannel: channel }),
+          );
+          expect(result).toMatchObject({ status: 404 });
+          expect(store.listMessages(chatId)).toHaveLength(0);
+        }
+      }
+      expect(buffered).not.toHaveBeenCalled();
+      expect(gateway.calls.count).toBe(0);
+    },
+  );
+
+  it.each([
+    ["buffered", 0],
+    ["streamed", 0],
+    ["buffered", null],
+    ["streamed", null],
+  ] as const)(
+    "refuses a mismatched skill selection before %s dispatch (observed %s)",
+    async (transport, expectedSkillSelectionRevision) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Synthetic\nCheck bounds.\n").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const gateway = streamingModel("Must not dispatch");
+      const bufferedCall = vi.spyOn(gateway.model, "call");
+      const paired = pairedSkillFixture(gateway.model);
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const result = await handlers[transport](
+        routeContext(
+          paired.request({
+            chatId,
+            projectPath: projectDir,
+            content: "Review boundary",
+            modelId: CHAT_MODEL,
+            clientTurnId: "stale-skill",
+            expectedSkillSelectionRevision,
+          }),
+          captureResWithEvents().res,
+        ),
+        paired.deps,
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+      });
+      expect(gateway.calls.count).toBe(0);
+      expect(gateway.recorded.request).toBeUndefined();
+      expect(bufferedCall).not.toHaveBeenCalled();
+      expect(store.listMessages(chatId)).toHaveLength(0);
+    },
+  );
+
+  it.each(["buffered", "streamed"] as const)(
+    "pins selected skills across %s send and regeneration",
+    async (transport) => {
+      const chatId = seedChat();
+      const body = "# Synthetic method\nCheck boundary inputs before examples. Grüße 😀.\n";
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from(body).toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const requests: GatewayCallRequest[] = [];
+      const model: ModelPort = {
+        call: (request) => {
+          requests.push(request);
+          return Promise.resolve(normalizedResponse("Synthetic answer."));
+        },
+        callStream: async function* (request): AsyncGenerator<GatewayStreamChunk> {
+          requests.push(request);
+          yield {
+            type: "done",
+            response: await Promise.resolve(normalizedResponse("Synthetic answer.")),
+          };
+        },
+      };
+      const paired = pairedSkillFixture(model);
+      const shared = paired.deps;
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const result = await handlers[transport](
+        routeContext(
+          paired.request({
+            chatId,
+            projectPath: projectDir,
+            content: "Review this.",
+            modelId: CHAT_MODEL,
+          }),
+          captureResWithEvents().res,
+        ),
+        shared,
+      );
+      expect(result === STREAMING || result.status === 200).toBe(true);
+      const assistant = store.listMessages(chatId).find((message) => message.role === "assistant");
+      expect(assistant).toBeDefined();
+      store.markdownSkills.select(chatId, null, 1);
+      const regeneration = (): Promise<Awaited<ReturnType<typeof handleRegenerateDesktopChat>>> =>
+        handleRegenerateDesktopChat(
+          routeContext(
+            paired.request({
+              chatId,
+              projectPath: projectDir,
+              assistantMessageId: assistant?.id,
+              modelId: CHAT_MODEL,
+            }),
+            captureResWithEvents().res,
+          ),
+          shared,
+        );
+      expect((await regeneration()).status).toBe(200);
+      expect(requests).toHaveLength(2);
+      for (const request of requests)
+        expect(
+          request.messages
+            .map((message) => message.content)
+            .join("\n")
+            .split(body),
+        ).toHaveLength(2);
+      store.markdownSkills.delete(skill.id, skill.revision);
+      expect((await regeneration()).status).toBe(409);
+      expect(requests).toHaveLength(2);
+    },
+  );
   it.each([
     ["buffered", "unknown-chat"],
     ["streamed", "unknown-chat"],
@@ -3677,6 +3903,72 @@ describe("desktop chat SSE streaming handler", () => {
     expect(record?.message).toBe("server-operation-failed");
     expect(JSON.stringify(record)).not.toContain("boom-unexpected-mid-stream");
   });
+
+  it.each(["buffered", "streamed"] as const)(
+    "keeps caller admission typed on the public %s boundary",
+    async (mode) => {
+      const chatId = seedChat();
+      const fetchImpl = vi.fn<typeof fetch>();
+      const gateway = new Gateway(
+        parseGatewayConfig({
+          providers: [
+            {
+              modelId: CHAT_MODEL,
+              baseUrl: "https://admission.example.invalid/v1",
+              apiKey: "fixture",
+              maxRetries: 0,
+            },
+          ],
+          capabilities: [createDefaultChatCapability(CHAT_MODEL)],
+        }),
+        { fetchImpl },
+      );
+      const model: ModelPort = {
+        call: (request) => gateway.chat({ ...request, attemptAdmission: () => undefined }),
+        callStream: (request) =>
+          gateway.chatStream({ ...request, attemptAdmission: () => undefined }),
+      };
+      const records: import("./diagnostics-log.js").ServerDiagnosticRecord[] = [];
+      const response = captureRes();
+      const ctx = {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+          response.res,
+        ),
+        correlationId: "cid-caller-admission",
+      };
+      const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+      const result: unknown = await handler(
+        ctx,
+        deps(model, { diagnostics: { record: (record) => records.push(record) } }),
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+      if (mode === "buffered")
+        expect(result).toMatchObject({
+          status: 403,
+          body: { error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } },
+        });
+      else {
+        const error = parseSse(response.writes).find((record) => record.event === "error");
+        expect(error?.data).toMatchObject({
+          code: "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+          correlationId: "cid-caller-admission",
+        });
+      }
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        code: "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+        errorClass: "CallerAttemptAdmissionError",
+        correlationId: "cid-caller-admission",
+        message: "server-operation-failed",
+      });
+      expect(JSON.stringify(records)).not.toContain("Caller synthesis attempt grant");
+      expect(gateway.circuitStatus(CHAT_MODEL)).toMatchObject({
+        state: "closed",
+        consecutiveFailures: 0,
+      });
+    },
+  );
 
   // ADR-0173 D5: the streaming call site (streamAndPersist) must stamp the request's correlation id
   // into GatewayCallRequest.logContext, mirroring the buffered path, so a gateway retry line for a

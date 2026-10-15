@@ -192,6 +192,37 @@ describe("primary content evidence is independent of presentation wording", () =
     },
   );
 
+  it.each([
+    ['Find the literal "dir/file.ts".', false],
+    ['Find "dir/file.ts" exactly.', false],
+    ['Find the literal "dir/file.ts" exactly.', false],
+    ['Find the literal "dir/file.ts".', true],
+    ['Find "dir/file.ts" exactly.', true],
+    ['Find the literal "dir/file.ts" exactly.', true],
+  ] as const)(
+    "searches contents for %s when the path exists=%s",
+    async (question, pathExists): Promise<void> => {
+      writeFileSync(join(root, "facts", "target.txt"), "dir/file.ts observed value 81234\n");
+      if (pathExists) {
+        mkdirSync(join(root, "dir"));
+        writeFileSync(join(root, "dir", "file.ts"), "export const unrelatedValue = 81235;\n");
+      }
+      const { pack, plan } = await retrieve(question);
+      expect(plan.targetDecision?.kind).toBe("literal-search");
+      const occurrence = pack.files.find((file) => file.scopePath === "facts/target.txt");
+      expect(
+        occurrence?.excerpts.some(
+          (excerpt) =>
+            excerpt.atom.provenance.kind === "lexical-search" &&
+            excerpt.content.includes("dir/file.ts observed value 81234"),
+        ),
+      ).toBe(true);
+      expect(
+        JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value)),
+      ).toContain("dir/file.ts observed value 81234");
+    },
+  );
+
   it.each(["ns::sym", "fn()", "@Decorator", "dir/file.ts"])(
     "retains actual punctuation-bearing code target %s with literal provenance",
     async (target): Promise<void> => {

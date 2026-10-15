@@ -286,6 +286,12 @@ describe("logErrorKind", () => {
 });
 
 describe("activityLogErrorKind", () => {
+  it("classifies only the stable caller-admission code as authority denial", () => {
+    expect(activityLogErrorKind({ code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" })).toBe(
+      "authority-denied",
+    );
+    expect(activityLogErrorKind({ message: "GATEWAY_ATTEMPT_ADMISSION_DENIED" })).toBe("unknown");
+  });
   it("maps the gateway authentication taxonomy to the closed permission denial kind", () => {
     const error = Object.assign(new Error("provider rejected credentials"), {
       code: "GATEWAY_AUTHENTICATION",

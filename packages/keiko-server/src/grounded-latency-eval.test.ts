@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_EXPLORATION_BUDGET,
+  isWithinBudget,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 
 import { FIXTURE_ANSWER_CLAIMS, runGroundedRetrievalLatencyEval } from "./grounded-latency-eval.js";
 
@@ -13,6 +17,7 @@ describe("runGroundedRetrievalLatencyEval", () => {
     expect(sample.retrievalMs).toBeGreaterThan(0);
     expect(sample.entailmentMs).toBeGreaterThan(0);
     expect(sample.totalMs).toBeCloseTo(sample.retrievalMs + sample.entailmentMs, 6);
+    expect(sample.followUp).toBeUndefined();
   });
 
   // The entailment stage short-circuits a claim to `unavailable` WITHOUT calling the judge when the
@@ -45,4 +50,40 @@ describe("runGroundedRetrievalLatencyEval", () => {
     // visible once per stage rather than once per claim.
     expect(delayed.entailmentMs - clean.entailmentMs).toBeGreaterThan(delayMs / 2);
   }, 30_000);
+
+  it("measures a genuinely unread file admitted by the actual bounded follow-up", async () => {
+    const sample = await runGroundedRetrievalLatencyEval({ scenario: "bounded-follow-up" });
+
+    expect(sample.totalMs).toBeGreaterThan(0);
+    expect(sample.retrievalMs).toBe(sample.totalMs);
+    expect(sample.entailmentMs).toBe(0);
+    expect(sample.judgedClaims).toBe(0);
+    expect(sample.followUp).toMatchObject({
+      passCount: 1,
+      admittedPathCount: 1,
+      synthesisCalls: 2,
+    });
+    const usage = sample.followUp?.usage;
+    if (usage === undefined) throw new TypeError("Expected the actual follow-up usage");
+    expect(usage.filesRead).toBeGreaterThan(0);
+    expect(usage.searchCalls).toBeGreaterThan(0);
+    expect(usage.excerptBytes).toBeGreaterThan(0);
+    expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(true);
+  });
+
+  it("injects the follow-up regression into the actual second synthesis", async () => {
+    const injectedFollowUpDelayMs = 40;
+    const clean = await runGroundedRetrievalLatencyEval({ scenario: "bounded-follow-up" });
+    const delayed = await runGroundedRetrievalLatencyEval({
+      scenario: "bounded-follow-up",
+      injectedFollowUpDelayMs,
+    });
+
+    expect(clean.followUp).toBeDefined();
+    expect(delayed.followUp).toBeDefined();
+    expect(delayed.followUp?.synthesisCalls).toBe(2);
+    const cleanMs = clean.followUp?.synthesisMs ?? 0;
+    const delayedMs = delayed.followUp?.synthesisMs ?? 0;
+    expect(delayedMs - cleanMs).toBeGreaterThan(injectedFollowUpDelayMs / 2);
+  });
 });

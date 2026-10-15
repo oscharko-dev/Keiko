@@ -596,11 +596,6 @@
       "Regression (default)",
       "Requirements"
     ],
-    "packages/keiko-ui/src/app/components/desktop/windows/ConnectionsLayer.tsx": [
-      "Click again to remove:",
-      "Click once to arm removal.",
-      "Remove?"
-    ],
     "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx": [
       "Close",
       "Full screen",

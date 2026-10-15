@@ -1,6 +1,7 @@
 // Shared extraction for HTTP method + path questions. Query classification, content prescoring,
 // and line matching must recognize the same route syntax so a route cannot be prioritized by one
 // retrieval ring and treated as generic prose by another.
+import type { RepositorySourceLine } from "./repoSearchSourceClassification.js";
 
 const ROUTE_QUERY_PATH_RE = /\/[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-]/u;
 const ROOT_ROUTE_AFTER_METHOD_RE =
@@ -321,27 +322,202 @@ function configuredRouteMarker(candidate: string): string | undefined {
     : repositoryRouteDeclarationMarker(method, path);
 }
 
-function configuredRouteMarkers(code: string, structural: string): readonly string[] {
-  const frames: string[][] = [];
-  const markers: string[] = [];
+interface ConfiguredRouteFrame {
+  readonly code: string[];
+  readonly structural: string[];
+  readonly positions: number[];
+  readonly line: number;
+  readonly spreadBody: boolean;
+}
+
+export interface RepositoryConfiguredRouteDeclaration extends RepositoryRouteQuery {
+  readonly handler: string;
+  readonly handlerStart: number;
+  readonly handlerEnd: number;
+  readonly line: number;
+  readonly endLine: number;
+}
+
+interface CompletedConfiguredRoute {
+  readonly code: string;
+  readonly structural: string;
+  readonly positions: readonly number[];
+  readonly line: number;
+  readonly endLine: number;
+  readonly spreadBody: boolean;
+}
+
+function configuredSpreadBody(structural: string, index: number): boolean {
+  let cursor = index - 1;
+  while (cursor >= 0 && /\s/u.test(structural.charAt(cursor))) cursor -= 1;
+  return structural.slice(Math.max(0, cursor - 2), cursor + 1) === "...";
+}
+
+function appendConfiguredCharacter(
+  frame: ConfiguredRouteFrame | undefined,
+  code: string,
+  structural: string,
+  position: number,
+): void {
+  if (frame === undefined) return;
+  frame.code.push(code);
+  frame.structural.push(structural);
+  frame.positions.push(position);
+}
+
+function configuredRouteFrames(
+  code: string,
+  structural: string,
+): readonly CompletedConfiguredRoute[] {
+  const frames: ConfiguredRouteFrame[] = [];
+  const completed: CompletedConfiguredRoute[] = [];
+  let line = 1;
   for (let index = 0; index < structural.length; index += 1) {
     const char = structural.charAt(index);
+    if (char === "\n") line += 1;
     if (char === "{") {
-      frames.push(["{"]);
+      frames.push({
+        code: ["{"],
+        structural: ["{"],
+        positions: [index],
+        line,
+        spreadBody: configuredSpreadBody(structural, index),
+      });
       continue;
     }
     const frame = frames.at(-1);
-    if (char !== "}") {
-      frame?.push(code.charAt(index));
-      continue;
-    }
-    frame?.push("}");
-    const completed = frames.pop();
-    const marker = completed === undefined ? undefined : configuredRouteMarker(completed.join(""));
-    if (marker !== undefined) markers.push(marker);
-    frames.at(-1)?.push(" ");
+    appendConfiguredCharacter(frame, code.charAt(index), char, index);
+    if (char !== "}") continue;
+    const ended = frames.pop();
+    if (ended !== undefined)
+      completed.push({
+        code: ended.code.join(""),
+        structural: ended.structural.join(""),
+        positions: ended.positions,
+        line: ended.line,
+        endLine: line,
+        spreadBody: ended.spreadBody,
+      });
+    appendConfiguredCharacter(frames.at(-1), " ", " ", index);
   }
-  return markers;
+  return completed;
+}
+
+function configuredRouteMarkers(code: string, structural: string): readonly string[] {
+  return configuredRouteFrames(code, structural).flatMap((frame) => {
+    const marker = configuredRouteMarker(frame.code);
+    return marker === undefined ? [] : [marker];
+  });
+}
+
+interface ConfiguredRouteField {
+  readonly start: number;
+  readonly name: string;
+  readonly code: string;
+  readonly structural: string;
+}
+
+function configuredRouteFields(
+  frame: CompletedConfiguredRoute,
+): readonly ConfiguredRouteField[] | undefined {
+  const fields: ConfiguredRouteField[] = [];
+  let start = 1;
+  for (let end = 1; end < frame.structural.length; end += 1) {
+    if (frame.structural.charAt(end) !== "," && end !== frame.structural.length - 1) continue;
+    const code = frame.code.slice(start, end).trim();
+    const structural = frame.structural.slice(start, end);
+    const fieldStart = start;
+    start = end + 1;
+    if (code.length === 0) continue;
+    if (!/^(?:[A-Za-z_$][\w$]*|"[^"\\]*"|'[^'\\]*')\s*:/u.test(code)) return undefined;
+    const match = CONFIGURED_ROUTE_FIELD_RE.exec(code);
+    const name = match?.[0].replaceAll('"', "").replaceAll("'", "").replaceAll(":", "").trim();
+    if (name !== undefined && structural.includes(":"))
+      fields.push({ start: fieldStart, name, code, structural });
+    start = end + 1;
+  }
+  return fields;
+}
+
+function uniqueConfiguredField(
+  fields: readonly ConfiguredRouteField[],
+  names: readonly string[],
+): ConfiguredRouteField | undefined {
+  const matching = fields.filter((field) => names.includes(field.name));
+  return matching.length === 1 ? matching[0] : undefined;
+}
+
+function configuredFieldLiteralMatches(
+  field: ConfiguredRouteField | undefined,
+  value: string,
+): boolean {
+  if (field === undefined) return false;
+  const literal = field.code.slice(field.code.indexOf(":") + 1).trim();
+  return ['"', "'", "`"].some((quote) => literal === `${quote}${value}${quote}`);
+}
+
+interface ConfiguredHandler {
+  readonly name: string;
+  readonly offset: number;
+}
+
+function configuredHandler(field: ConfiguredRouteField | undefined): ConfiguredHandler | undefined {
+  if (field === undefined) return undefined;
+  const colon = field.structural.indexOf(":");
+  const value = field.structural.slice(colon + 1);
+  const name = /^\s*([A-Za-z_$][\w$]{0,127})\s*$/u.exec(value)?.[1];
+  return name === undefined
+    ? undefined
+    : { name, offset: field.start + colon + 1 + value.indexOf(name) };
+}
+
+function configuredRouteMethod(fields: readonly ConfiguredRouteField[]): string | undefined {
+  const field = uniqueConfiguredField(fields, ["method"]);
+  const literal = CONFIGURED_ROUTE_METHOD_RE.exec(field?.code ?? "")?.[1];
+  return literal !== undefined && configuredFieldLiteralMatches(field, literal)
+    ? literal.toLowerCase()
+    : undefined;
+}
+
+function configuredRoutePathField(fields: readonly ConfiguredRouteField[]): string | undefined {
+  const field = uniqueConfiguredField(fields, ["path", "pattern"]);
+  const path = configuredRoutePath(field?.code ?? "");
+  return path !== undefined && configuredFieldLiteralMatches(field, path) ? path : undefined;
+}
+
+function configuredRouteDeclaration(
+  frame: CompletedConfiguredRoute,
+): RepositoryConfiguredRouteDeclaration | undefined {
+  if (frame.endLine - frame.line >= REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES) return undefined;
+  if (frame.spreadBody || /\.\.\.|[,{]\s*\[/u.test(frame.structural)) return undefined;
+  const fields = configuredRouteFields(frame);
+  if (fields === undefined) return undefined;
+  const method = configuredRouteMethod(fields);
+  const path = configuredRoutePathField(fields);
+  const handler = configuredHandler(uniqueConfiguredField(fields, ["handler"]));
+  if (method === undefined || path === undefined || handler === undefined) return undefined;
+  const handlerStart = frame.positions[handler.offset];
+  const handlerLast = frame.positions[handler.offset + handler.name.length - 1];
+  if (handlerStart === undefined || handlerLast === undefined) return undefined;
+  return {
+    method,
+    path,
+    handler: handler.name,
+    handlerStart,
+    handlerEnd: handlerLast + 1,
+    line: frame.line,
+    endLine: frame.endLine,
+  };
+}
+
+export function repositoryConfiguredRouteDeclarations(
+  code: string,
+  structural: string,
+): readonly RepositoryConfiguredRouteDeclaration[] {
+  return configuredRouteFrames(code, structural).flatMap((frame) => {
+    const declaration = configuredRouteDeclaration(frame);
+    return declaration === undefined ? [] : [declaration];
+  });
 }
 
 interface YamlRouteLine {
@@ -557,11 +733,11 @@ export function repositoryRouteDeclarationMarker(method: string, path: string): 
   return `${ROUTE_DECLARATION_MARKER_PREFIX}:${method.toLowerCase()}:${path.toLowerCase()}`;
 }
 
-export function repositoryRouteDeclarationMarkers(
+function markersForSegments(
   text: string,
-  shapeText = text,
+  shapeText: string,
+  segments: readonly RouteSourceSegment[],
 ): readonly string[] {
-  const segments = routeSourceSegments(text, shapeText);
   const markers = new Set([
     ...configuredRouteMarkers(text, shapeText),
     ...configuredYamlRouteMarkers(text, shapeText),
@@ -572,4 +748,35 @@ export function repositoryRouteDeclarationMarkers(
     for (const marker of declarationMarkers(group.code, group.structural)) markers.add(marker);
   }
   return [...markers];
+}
+
+export function repositoryRouteDeclarationMarkers(
+  text: string,
+  shapeText = text,
+): readonly string[] {
+  return markersForSegments(text, shapeText, routeSourceSegments(text, shapeText));
+}
+
+/** Reuse only the overlapping window's segments; route binding remains four physical lines. */
+export function repositoryRouteDeclarationWindowContains(
+  lines: readonly Pick<RepositorySourceLine, "code" | "structural">[],
+  marker: string,
+): boolean {
+  const prepared = lines
+    .slice(0, REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES)
+    .map((line, index) => segmentsForLine(line.code, line.structural, index));
+  for (let index = 0; index < lines.length; index += 1) {
+    const window = lines.slice(index, index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES);
+    const markers = markersForSegments(
+      window.map((line) => line.code).join("\n"),
+      window.map((line) => line.structural).join("\n"),
+      prepared.flat(),
+    );
+    if (markers.includes(marker)) return true;
+    prepared.shift();
+    const nextIndex = index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES;
+    const next = lines[nextIndex];
+    if (next !== undefined) prepared.push(segmentsForLine(next.code, next.structural, nextIndex));
+  }
+  return false;
 }

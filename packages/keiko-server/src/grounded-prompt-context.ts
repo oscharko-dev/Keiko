@@ -10,8 +10,13 @@ import type { GroundedPromptContextWire } from "@oscharko-dev/keiko-contracts/bf
 import type { GatewayPromptTokenInput } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 
 import { knowledgePromptShare } from "./knowledge-prompt-window.js";
+import type { MarkdownSkillPromptUsage } from "./markdown-skill-prompt.js";
 
 export interface SentGroundedPrompt {
+  readonly protectedSkill?: MarkdownSkillPromptUsage | undefined;
+  readonly sentEvidencePacks?:
+    | readonly import("@oscharko-dev/keiko-contracts/connected-context").ConnectedContextPack[]
+    | undefined;
   /** The messages exactly as the model received them. */
   readonly messages: GatewayPromptTokenInput["messages"];
   /** The same prompt rendered without any excerpt: the question, instructions and framing. */
@@ -51,6 +56,7 @@ export function sentPromptContext(
     promptTokensMeasured: measured,
     estimatedPromptTokens: share.estimatedTokens,
     instructionTokens: share.instructionTokens,
+    ...(prompt.protectedSkill === undefined ? {} : { protectedSkill: prompt.protectedSkill }),
     sourceTokens: share.sourceTokens,
     sentReferenceCount: prompt.sentReferenceCount,
     availableReferenceCount: prompt.availableReferenceCount,

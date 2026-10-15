@@ -12,6 +12,8 @@ import {
 const repoRoot = resolve(import.meta.dirname, "..", "..");
 const manifest = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8"));
 const targetSource = readFileSync(resolve(repoRoot, GROUNDED_WORKSPACE_PATTERN_TEST), "utf8");
+const lineTest = "packages/keiko-server/src/grounded-symbol-line.public-handler.test.ts";
+const lineSource = readFileSync(resolve(repoRoot, lineTest), "utf8");
 const localGateSource = readFileSync(resolve(repoRoot, "docker/gates/run-gates.sh"), "utf8");
 
 afterEach(() => {
@@ -81,6 +83,66 @@ describe("grounded workspace-pattern performance command", () => {
     expect(targetSource).toContain("repeat(320_000)");
     expect(targetSource).toContain("toBeLessThan(1000)");
     expect(resolveInstalledVitestEntry()).toMatch(/vitest\.mjs$/u);
+  });
+
+  it("always runs the physical-line scenario after the pattern pin with coverage enabled", () => {
+    const execute = vi.fn(() => ({ status: 0 }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(
+      runGroundedWorkspacePatternPerformance({
+        resolveEntry: () => "/installed/vitest.mjs",
+        execute,
+        environment: { SENTINEL: "kept", KEIKO_ENFORCE_WALL_CLOCK_BUDGETS: "0" },
+      }),
+    ).toBe(0);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[1]).toEqual([
+      "/installed/vitest.mjs",
+      "run",
+      "--config",
+      "vitest.coverage.packages.config.ts",
+      "--coverage",
+      lineTest,
+      "--coverage.reportsDirectory=coverage/grounded-line-performance",
+    ]);
+    expect(execute.mock.calls[1]?.[2].env).toEqual({
+      SENTINEL: "kept",
+      KEIKO_ENFORCE_WALL_CLOCK_BUDGETS: "1",
+    });
+    expect(execute.mock.calls[1]?.[2]).toMatchObject({
+      cwd: repoRoot,
+      timeout: 90_000,
+      killSignal: "SIGTERM",
+      stdio: "inherit",
+    });
+    expect(execute.mock.calls[1]?.[2]).not.toHaveProperty("shell");
+  });
+
+  it.each([
+    { status: 7, signal: null },
+    { status: null, signal: "SIGTERM" },
+  ])("fails closed on a failed or terminated physical-line child: $status", (failure) => {
+    const execute = vi.fn().mockReturnValueOnce({ status: 0 }).mockReturnValueOnce(failure);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(
+      runGroundedWorkspacePatternPerformance({
+        resolveEntry: () => "/installed/vitest.mjs",
+        execute,
+        environment: {},
+      }),
+    ).toBe(failure.status ?? 1);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("keeps line content and work assertions unconditional while controlling only its 5s pin", () => {
+    expect(lineSource).not.toMatch(/it\.(?:skip|skipIf|runIf)|describe\.(?:skip|skipIf|runIf)/u);
+    expect(lineSource).toContain('if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1")');
+    expect(lineSource).toContain("expect(elapsed).toBeLessThan(5_000)");
+    expect(lineSource).toContain("expect(prompt.includes(FACT)).toBe(true)");
+    expect(lineSource).toContain("workspaceIoContentReadCalls");
+    expect(lineSource).toContain("workspaceIoContentReadBytes");
   });
 
   it("propagates a focused Vitest failure without widening the target", () => {

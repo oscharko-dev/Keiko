@@ -84,7 +84,9 @@ interface FilesWidgetProps {
   readonly presentation?: "directory" | "project";
   readonly openingRoot?: boolean;
   readonly root?: string;
+  readonly resolvedRoot?: string | undefined;
   readonly activeFilePath?: string | undefined;
+  readonly initialDirectoryPath?: string | undefined;
   readonly openFilesDirectly?: boolean | undefined;
   readonly watchActive?: boolean | undefined;
   readonly onActiveFileChange?: (
@@ -677,7 +679,7 @@ function fallbackString(primary: string | null, secondary?: string | null): stri
   return primary ?? secondary ?? "";
 }
 function rootForCache(cacheRoot: string, apiRoot: string, resolved: string | null): string | null {
-  return cacheRoot === apiRoot ? resolved : null;
+  return cacheRoot === apiRoot || apiRoot === resolved ? resolved : null;
 }
 function nonemptyRoot(root: string): string | null {
   return root.length > 0 ? root : null;
@@ -758,9 +760,11 @@ function emptyDirectory(state: DirectoryState | undefined): boolean {
 
 export function FilesWidget({
   root,
+  resolvedRoot: hostResolvedRoot,
   presentation = "directory",
   openingRoot = false,
   activeFilePath,
+  initialDirectoryPath,
   openFilesDirectly = false,
   watchActive = true,
   onActiveFileChange,
@@ -778,6 +782,7 @@ export function FilesWidget({
   const apiRootRef = useRef(apiRoot);
   apiRootRef.current = apiRoot;
   const [resolvedRootValue, setResolvedRootValue] = useState<string | null>(null);
+  const observedRootRef = useRef<{ requested: string; resolved: string } | null>(null);
   const [directoryRoot, setDirectoryRoot] = useState(apiRoot);
   const resolvedRoot = rootForCache(directoryRoot, apiRoot, resolvedRootValue);
   const effectiveRoot = fallbackString(resolvedRoot, apiRoot);
@@ -785,7 +790,12 @@ export function FilesWidget({
   // (real) root whenever the widget loads a folder, so it always shows where we are.
   const [rootDraft, setRootDraft] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const navigation = useFilesNavigation(apiRoot, onRootChange);
+  const navigation = useFilesNavigation(
+    apiRoot,
+    onRootChange,
+    initialDirectoryPath,
+    hostResolvedRoot === apiRoot ? hostResolvedRoot : resolvedRootValue,
+  );
   const currentDirectoryPath = navigation.path;
   const takeNavigationRead = navigation.takeRead;
   const selectNavigationRoot = navigation.selectRoot;
@@ -794,6 +804,8 @@ export function FilesWidget({
   const currentDirectoryRef = useRef(currentDirectoryPath);
   currentDirectoryRef.current = currentDirectoryPath;
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
+  const directoriesRef = useRef(directories);
+  directoriesRef.current = directories;
   const [directoryRenderLimits, setDirectoryRenderLimits] = useState<Record<string, number>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
   const [treeTooltip, setTreeTooltip] = useState<TreeTooltipState | null>(null);
@@ -987,6 +999,7 @@ export function FilesWidget({
         const response = await readSharedFilesTree(apiRoot, path, takeNavigationRead(path));
         if (isStale()) return;
         if (path === "") {
+          observedRootRef.current = { requested: requestRoot, resolved: response.root };
           setResolvedRootValue(response.root);
           activeFileChangeRef.current?.(null, response.root, currentDirectoryRef.current);
         }
@@ -1032,19 +1045,35 @@ export function FilesWidget({
   );
 
   useEffect(() => {
+    const observed = observedRootRef.current;
+    if (observed?.requested === apiRoot) return;
     directoryLoadSeqRef.current += 1;
+    if (
+      observed !== null &&
+      observed.requested !== apiRoot &&
+      (observed.resolved === apiRoot || hostResolvedRoot === apiRoot)
+    ) {
+      observedRootRef.current = { requested: apiRoot, resolved: apiRoot };
+      setDirectoryRoot(apiRoot);
+      setResolvedRootValue(apiRoot);
+      for (const [path, state] of Object.entries(directoriesRef.current)) {
+        if (state.loading) void loadDirectory(path);
+      }
+      return;
+    }
+    observedRootRef.current = null;
     setDirectoryRoot(apiRoot);
     setSelectedPath(null);
     setGitDiffState(null);
     previousDirectoryRef.current = null;
-    activeFileChangeRef.current?.(null, null, null);
+    activeFileChangeRef.current?.(null, null, currentDirectoryRef.current);
     setResolvedRootValue(null);
     setExpanded(new Set([""]));
     setDirectories({});
     setDirectoryRenderLimits({});
     directoryAccessOrderRef.current = [];
     void loadDirectory("");
-  }, [apiRoot, loadDirectory]);
+  }, [apiRoot, hostResolvedRoot, loadDirectory]);
 
   const visibleBaseRoot = effectiveRoot;
   const visibleRootPath = displayPath(visibleBaseRoot, currentDirectoryPath);

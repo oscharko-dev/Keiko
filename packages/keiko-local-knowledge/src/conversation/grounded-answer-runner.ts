@@ -70,6 +70,7 @@ function shouldRepairMissingCitations(
   const { attached } = generated;
   if (references.length === 0 || attached.citations.length > 0) return false;
   if (generated.ownAssessment !== undefined && attached.text.trim().length === 0) return false;
+  if (generated.neutralized && attached.text.trim().length === 0) return false;
   return !isNoEvidenceAnswerText(attached.text);
 }
 
@@ -116,6 +117,7 @@ function buildRetrievalDependencies(deps: GroundedAnswerDependencies): Retrieval
   return {
     store: deps.retrieval.store,
     embeddingAdapter: deps.retrieval.embeddingAdapter,
+    ...(deps.retrieval.logContext !== undefined ? { logContext: deps.retrieval.logContext } : {}),
     ...(deps.retrieval.queryTransformer !== undefined
       ? { queryTransformer: deps.retrieval.queryTransformer }
       : {}),

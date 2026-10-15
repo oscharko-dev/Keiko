@@ -242,6 +242,26 @@ export interface GatewayToolCatalogBridge {
   readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
   readonly tools: readonly ToolDefinition[];
   readonly bind: (call: NormalizedToolCall) => NormalizedToolCall;
+  /**
+   * True when `alias` is offered as the governed changeset edit (#4009). Its arguments are matched
+   * against and written to workspace files byte for byte, so the adapter scrubs only the configured
+   * provider literals from them. Resolved through the catalog identity, never the alias spelling.
+   */
+  readonly isExactContentTool: (alias: string) => boolean;
+}
+
+/** The one governed tool whose arguments are workspace file content, consumed byte for byte. */
+const EXACT_CONTENT_TOOL_ID = "keiko.changeset.edit";
+
+function isExactContentTool(
+  normalizer: ToolInvocationNormalizer | undefined,
+  alias: string,
+): boolean {
+  return (
+    normalizer?.binding.projection.tools.some(
+      (tool) => tool.alias === alias && tool.toolRef.canonicalId === EXACT_CONTENT_TOOL_ID,
+    ) === true
+  );
 }
 
 /** Retains counts the provider reported before its semantically invalid tool call was rejected. */
@@ -600,6 +620,7 @@ function bridge(
     bind: (call: NormalizedToolCall): NormalizedToolCall => bindCall(normalizer, call, now, log),
     bindCalls: (calls: readonly NormalizedToolCall[]): readonly NormalizedToolCall[] =>
       bindCalls(normalizer, calls, now, log),
+    isExactContentTool: (alias: string): boolean => isExactContentTool(normalizer, alias),
   });
 }
 

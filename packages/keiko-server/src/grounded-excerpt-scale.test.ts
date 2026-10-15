@@ -16,6 +16,7 @@ import {
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { staleSemanticMarker } from "./grounded-semantic-request.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -115,5 +116,44 @@ describe("real retrieval omission and cache scale", () => {
     expect(second.pack).toBe(first.pack);
     expect(second.pack.files.length + connectedContextOmittedCount(second.pack)).toBe(64);
     expect(validateConnectedContextPack(second.pack)).toEqual({ ok: true });
+  });
+
+  it("reprojects changed cache diagnostics without mutating historical observations", async () => {
+    const input = request(corpus(64), 64);
+    const real = createMicroIndex({ maxEntries: 4, ttlMs: 60_000, nowMs: () => 0 });
+    const first = await retrieve(input, real);
+    const historical = Object.freeze({
+      ...first.pack,
+      diagnostics: Object.freeze({
+        rankedCandidates: [],
+        ...first.pack.diagnostics,
+        semanticProviderDisposition: "unavailable" as const,
+        scopeContextState: "overflow" as const,
+      }),
+      uncertainty: Object.freeze([
+        ...first.pack.uncertainty,
+        ...staleSemanticMarker({ semanticStaleFallbackCount: 1, semanticRefreshedFileCount: 0 }, 0),
+      ]),
+    });
+    let hits = 0;
+    const cache: MicroIndex = {
+      ...real,
+      get: (key) => {
+        if (real.get(key) === undefined) return undefined;
+        hits += 1;
+        return historical;
+      },
+    };
+    const current = await retrieve(input, cache);
+    expect(hits).toBe(1);
+    expect(current.pack).not.toBe(historical);
+    expect(current.pack.diagnostics).toEqual(first.pack.diagnostics);
+    expect(current.pack.uncertainty).toEqual(first.pack.uncertainty);
+    expect(historical.diagnostics).toMatchObject({
+      semanticProviderDisposition: "unavailable",
+      scopeContextState: "overflow",
+    });
+    expect(historical.uncertainty).toHaveLength(first.pack.uncertainty.length + 1);
+    expect(validateConnectedContextPack(current.pack)).toEqual({ ok: true });
   });
 });

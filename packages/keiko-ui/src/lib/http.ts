@@ -263,6 +263,7 @@ const BFF_CODE_ERROR_KINDS: ReadonlyMap<string, ActivityLogErrorKind> = new Map(
   ["STATE_UNAVAILABLE", "unavailable"],
   // The model budget must change before retrying these requests; neither is a transport outage.
   ["GATEWAY_CONTEXT_OVERFLOW", "invalid-request"],
+  ["GATEWAY_ATTEMPT_ADMISSION_DENIED", "authority-denied"],
   ["GATEWAY_OUTPUT_EXHAUSTED", "invalid-request"],
   ["CONVERSATION_OVERSIZED_CONTEXT", "invalid-request"],
   ["NO_MODEL", "unavailable"],

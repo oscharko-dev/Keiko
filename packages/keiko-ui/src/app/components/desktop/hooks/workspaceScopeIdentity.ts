@@ -1,7 +1,9 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import type { ChatConnectedScope } from "@/lib/types";
-import { chatConnectedScopeFingerprintInput } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  chatConnectedScopeFingerprintInput,
+  type ChatConnectedScope,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 /** Preserve the acknowledged edge's identity without persisting its raw paths. */
 export function connectedScopeFingerprint(

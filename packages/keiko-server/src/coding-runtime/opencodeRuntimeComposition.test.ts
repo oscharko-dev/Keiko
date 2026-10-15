@@ -937,7 +937,8 @@ async function startBridgeFixture(
       args: [],
       inheritedEnvAllowlist: [],
       shutdownTimeoutMs: fixtureShutdownTimeout(control),
-      startTimeoutMs: control?.startTimeoutMs ?? 100,
+      // Ordinary tests exercise live filesystem setup; deadline tests pass their own short bound.
+      startTimeoutMs: control?.startTimeoutMs ?? 5_000,
       signal: fixtureSignal(control),
       confinement: {
         platform: "darwin",
@@ -3865,6 +3866,77 @@ describe("private OpenCode tool bridge", () => {
 });
 
 describe("production OpenCode pending-spawn guard wiring", () => {
+  it("allows ordinary fixture startup across a short scheduling delay", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        canSpawnRuntime: (): boolean => {
+          vi.setSystemTime(Date.now() + 150);
+          return true;
+        },
+      },
+    );
+    try {
+      expect(fixture.runtime.manager.health()).toMatchObject({
+        status: "ready",
+        activeRunId: FIXTURE_RUN_ID,
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("clears prepared state when the deadline expires before native spawn", async () => {
+    vi.useFakeTimers();
+    try {
+      const spawned = vi.fn();
+      const clear = vi.fn();
+      const released = vi.fn();
+      const guard = vi.fn<NonNullable<StartBridgeControl["canSpawnRuntime"]>>(() => {
+        vi.setSystemTime(Date.now() + 20);
+        return true;
+      });
+      const fixture = await startBridgeFixture(
+        { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+        undefined,
+        {
+          startTimeoutMs: 20,
+          canSpawnRuntime: guard,
+          onSpawn: spawned,
+          onRelease: released,
+          expectedStart: { ok: false, failureCode: "start-timeout", retryable: true },
+          safeActivity: {
+            arm: vi.fn(),
+            clear,
+            ingest: () => true,
+            recordDrops: vi.fn(),
+            settleTool: vi.fn(),
+          },
+          afterStart: async (runtime, runRoot) => {
+            expect(guard).toHaveBeenCalledOnce();
+            expect(spawned).not.toHaveBeenCalled();
+            expect(released).not.toHaveBeenCalled();
+            expect(runtime.manager.health()).toEqual({ status: "stopped" });
+            expect(existsSync(runRoot)).toBe(false);
+            expect(clear).toHaveBeenCalledOnce();
+            await expect(
+              runtime.toolBridge.handle({
+                method: "POST",
+                headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+                body: "{}",
+              }),
+            ).resolves.toMatchObject({ status: 503 });
+          },
+        },
+      );
+      await fixture.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forwards the server-owned live guard and refuses spawn before native readiness", async () => {
     const spawned = vi.fn();
     const guard = vi.fn<NonNullable<StartBridgeControl["canSpawnRuntime"]>>(() => false);

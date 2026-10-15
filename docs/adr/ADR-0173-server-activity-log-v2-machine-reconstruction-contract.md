@@ -386,9 +386,13 @@ no implicit process sink, so constructing a fixture cannot contaminate the runni
 activity log. `UNKNOWN_CORRELATION_ID` remains available only when a reusable internal operation
 genuinely has neither a request, run, job, nor bootstrap context; it is not a bootstrap default.
 
-`parentCorrelationId` reuses the existing `isValidCorrelationId` shape guard; it is not a new trust
-boundary, and browser-supplied values are never accepted as authoritative without server-side
-validation — the same posture that already governs `correlationId`.
+Request resolution accepts a client identity only when its bounded header-safe shape also survives
+the existing writer label redaction unchanged. Otherwise it mints one UUID before response-header,
+route, gateway and parent propagation; a potentially secret-shaped value is neither echoed nor
+digested. Safe long identifiers, lowercase digests and UUIDs keep their identity.
+`parentCorrelationId` reuses the existing `isValidCorrelationId` shape and redaction-stability guard;
+browser-supplied values are never authoritative without server-side validation. Optional internal
+callers without a safe context retain the existing body-free unknown marker.
 
 ### D6 — The generated typed registry is the single production authority
 
@@ -596,6 +600,14 @@ A registration never declares `frames` or `causeChain` required. Redaction omits
 a required one would reject the ordinary failure without Keiko frames or a cause. The generator
 reports that declaration as `registration-omitted-field-required`.
 
+`gateway.conversation.admission` records the closed decision before a conversation model call,
+with admitted and current configuration generations and the request correlation. A fresh probe
+and a turn-local completed-call continuation remain distinct. Refusals distinguish model or
+generation replacement, absent observations, failed probes, invalid timestamps and expiry without
+recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
+attempt or uncertain output reservation; actual interrupted provider calls retain conservative
+accounting. See [ADR-0171](ADR-0171-gateway-readiness-capability-reconciliation.md).
+
 Grounded diagnostics use the same registry and request correlation. `search.citations.reconciled`
 covers numeric references and file locations for Knowledge Pod, folder, multi-source and hybrid
 answers. `citationKind` identifies `numeric` or `file`; hybrid may emit one of each. Required
@@ -639,6 +651,13 @@ the optional memory enrichment.
 observed/retained files and charged/capacity bytes; excerpt omitted ranges, truncated windows,
 unread files and stop reasons; and metadata observed, retained and discarded counts. These are
 phase measurements, not a claim that every discovered file reached the model.
+The same `completion-details` event optionally records `excerptServedQueryFacetCount`: the
+per-path total of canonical query groups present in actual nonempty returned ordinary source
+views. No query terms, source text or paths are recorded. This count describes reader coverage
+before final prompt fitting; it does not certify complete functions, answer quality or model-sent
+membership. Zero records planned ordinary query-group work with no served group. Absence means
+that scheduling did not report an observation, not a measured zero. The complete registration,
+including completeness and loss fields, remains within the existing 48-field limit.
 `workspace.root.denied` records the actual safe errno or error class as `failureKind`, preserving
 the underlying recognized cause of `WorkspaceNotFoundError`, with error kind, frames and cause
 chain when available. It no longer substitutes a constant root-not-found label for every cause.
@@ -1500,9 +1519,9 @@ client failure incident; their owning lifecycle evidence remains.
     repair request itself (the local-session ensure) mints its id before it is sent, so
     a failure that never reached the server is still recorded under that id with its closed
     class, which a message report may now carry as `errorKind`.
-  Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
-  budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
-  sliding window), so it can never starve a failure report. Every drop is still counted as loss.
+    Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
+    budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
+    sliding window), so it can never starve a failure report. Every drop is still counted as loss.
 
 The agent-reading step this adds: **for a failed request**, read `routeTemplate`,
 `queryParamNames`, `responseBytes`, `aborted` and — for a stream — the `sse.stream.closed` line's
@@ -1666,7 +1685,7 @@ reader import it; nothing restates it.
 | `activity-<start>-<pid>-<instance>-<index>.jsonl`        | A sealed segment: read-only (`0400`), never rewritten.                 |
 | `server-YYYY-MM-DD.log`, `server.log`                    | Legacy files of the retired daily rotation. Read-only.                 |
 | `pin-<24 hex>.json`                                      | A retention-pin record.                                                |
-| `store-policy.json`                                      | The store's one governing policy record (#3554); never log content.   |
+| `store-policy.json`                                      | The store's one governing policy record (#3554); never log content.    |
 
 `<start>` is the segment's UTC start time (`YYYYMMDDTHHMMSSmmmZ`), `<pid>` and `<instance>` are the
 envelope's process identity, and `<index>` counts that instance's segments from `000001`. Sealing

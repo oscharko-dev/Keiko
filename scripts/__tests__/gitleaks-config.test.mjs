@@ -167,6 +167,15 @@ function syntheticWorkbenchJwtException() {
   return table;
 }
 
+function ledgerOwnerCommitException() {
+  const table = allowlistTables(repositoryConfig).find((entry) =>
+    entry.get("description")?.includes("recorded owner Git commit identities"),
+  );
+  expect(table).toBeDefined();
+  if (table === undefined) throw new TypeError("Missing recorded owner commit exception");
+  return table;
+}
+
 function literalArrayPattern(table, key) {
   const pattern = table.get(key)?.match(/'''(.*)'''/u)?.[1];
   expect(pattern).toBeDefined();
@@ -209,6 +218,29 @@ describe(".gitleaks.toml allowlists", () => {
     expect(lineRegex.test(fixture.replace(/\.[A-Za-z0-9_-]+",/u, '.another-signature",'))).toBe(
       false,
     );
+  });
+
+  it("limits recorded owner commit metadata to its exact path, rule, fields and value", () => {
+    const table = ledgerOwnerCommitException();
+    expect(table.get("condition")).toBe('"AND"');
+    expect(table.get("targetrules")).toBe('["generic-api-key"]');
+    expect(table.get("regextarget")).toBe('"line"');
+    expect(table.has("commits")).toBe(false);
+    const path = "docs/qa/evidence/3881/acceptance-ledger.json";
+    const pathPattern = literalArrayPattern(table, "paths");
+    expect(pathPattern.test(path)).toBe(true);
+    expect(pathPattern.test(`other/${path}`)).toBe(false);
+    expect(pathPattern.test(`${path}.bak`)).toBe(false);
+    const ledger = JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
+    const commit = ledger.sourceSnapshot.head;
+    const linePattern = literalArrayPattern(table, "regexes");
+    const changedCommit = `${commit[0] === "a" ? "b" : "a"}${commit.slice(1)}`;
+    for (const field of ["authenticOldOwnerCommit", "authenticOwnerCommit"]) {
+      const line = `    "${field}": "${commit}",`;
+      expect(linePattern.test(line)).toBe(true);
+      expect(linePattern.test(line.replace(commit, changedCommit))).toBe(false);
+      expect(linePattern.test(line.replace(field, "authenticNewOwnerCommit"))).toBe(false);
+    }
   });
 });
 

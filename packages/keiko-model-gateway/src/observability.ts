@@ -359,6 +359,7 @@ const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
 
 export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {
   const kind = logErrorKind(error).toLowerCase();
+  if (kind === "gateway_attempt_admission_denied") return "authority-denied";
   const matched = ACTIVITY_LOG_ERROR_KIND_RULES.find(({ pattern }) => pattern.test(kind));
   return matched?.result ?? (kind === "unknown" ? "unknown" : "internal");
 }
