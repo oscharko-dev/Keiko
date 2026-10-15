@@ -178,33 +178,32 @@ export class ChatDraftActions {
   }
 
   private async waitUntilIdle(entry: DraftEntry): Promise<void> {
-    while (entry.pending) {
-      await new Promise<void>((resolve) => {
-        entry.idleWaiters.push(resolve);
-      });
-    }
+    if (!entry.pending) return;
+    await new Promise<void>((resolve) => {
+      entry.idleWaiters.push(resolve);
+    });
+    // A queued session refresh can start before this waiter resumes.
+    await this.waitUntilIdle(entry);
   }
 
   private async settleForClose(chatId: string, entry: DraftEntry): Promise<boolean> {
     if (entry.timer !== undefined) clearTimeout(entry.timer);
     entry.timer = undefined;
     await this.waitUntilIdle(entry);
-    while (dirty(entry) && entry.phase === "unsaved") {
+    if (dirty(entry) && entry.phase === "unsaved") {
       await this.save(chatId);
-      await this.waitUntilIdle(entry);
       if (chatId === "") return false;
+      return this.settleForClose(chatId, entry);
     }
     return !dirty(entry);
   }
 
   async prepareClose(): Promise<boolean> {
-    do {
-      const outcomes = await Promise.all(
-        [...this.state.entries].map(([chatId, entry]) => this.settleForClose(chatId, entry)),
-      );
-      if (!outcomes.every(Boolean)) return false;
-      // Typing or chat navigation may have changed entries while another save was pending.
-    } while (this.state.hasUnsaved());
-    return true;
+    const outcomes = await Promise.all(
+      [...this.state.entries].map(([chatId, entry]) => this.settleForClose(chatId, entry)),
+    );
+    if (!outcomes.every(Boolean)) return false;
+    // Typing or chat navigation may have changed entries while another save was pending.
+    return this.state.hasUnsaved() ? this.prepareClose() : true;
   }
 }
