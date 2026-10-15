@@ -3338,6 +3338,76 @@
         "warningText": "Restart after installation. Review custom support scripts when upgrading from before 1.2.0: use canonical private reports, a directory for export output and the versioned analysis envelope. Preserve a backup of local application state before changing versions; older binaries cannot read the updated skill schema.",
         "verifiedCarryForward": false
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-15-keiko-1.2.3-chat-reliability",
+      "packageVersion": "1.2.3",
+      "releaseTag": "v1.2.3",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Repair Whisper/LiteLLM dictation and simplify recording to one control. Recover private skill access and Chat drafts, validate generated source references, and preserve relevant context through compaction.",
+      "affectedStateStores": ["ui-store-schema", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "Forward-only SQLite migration V44 adds authenticated private Chat drafts with revision compare-and-swap. Existing skill and conversation records are retained. Simultaneous edits require an explicit choice; draft bodies remain outside browser persistence and diagnostics. Normal startup applies the migration. Preserve a backup before changing versions; older binaries cannot read the newer schema.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Registered body-free draft lifecycle, composer recovery and speech format/status observations extend the catalog. Drafts, skill bodies and audio remain excluded from diagnostics. Historical registries are retained.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "releaseNoteBullets": [
+        "Dictation: compatible browser recordings are normalized to mono PCM16 WAV for Whisper through LiteLLM. One microphone control starts and stops recording, a subtle waveform shows input, and the transcript goes directly into the editable draft without automatically sending.",
+        "Private skills: the library refreshes when the normal launcher session becomes available. Deleted selected revisions stop a turn with a correction path, and generated skill source references must match the actual admitted document.",
+        "Chat recovery: unsent drafts survive reload and restart, simultaneous edits require an explicit choice, and proven failed sends preserve the unchanged draft without automatically replaying it.",
+        "Context and layout: compaction recovery retains complementary relevant sections, while maximized Chat windows fit each tab so the composer remains reachable."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-15",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/4033#issuecomment-6196901568",
+        "rationale": "The owner explicitly selected version 1.2.3 and requested release conditional on completed qualification. The referenced comment records that instruction without claiming a separate approval review or completed acceptance. This entry covers the combined repairs in #4033 and #4035 since v1.2.2; the source integration base has no additional commits since that stable tag. Publication still requires completed acceptance, protected exact-head checks and review settlement, owner-authorized integration, the governed Release workflow and artifact alignment. OpenCode skill integration and universal model accuracy are not claimed."
+      },
+      "breakingException": {
+        "rationale": "This patch retains existing manual-update eligibility and does not claim new native cross-platform updater canaries. The V44 local schema migration is forward-only.",
+        "warningText": "Restart after installation. Back up local application state before changing versions; older binaries cannot read the newer draft schema. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow.",
+        "verifiedCarryForward": false
+      }
     }
   ]
 }

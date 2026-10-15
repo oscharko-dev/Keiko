@@ -2470,7 +2470,7 @@ function ComposerBar({
         onAttachFiles={onAttachFiles}
         controlsNarrow={controlsNarrow}
       />
-      {voiceDictationVisible ? <VoiceDictationWaveform controller={dictation} /> : null}
+      <VoiceDictationWaveform controller={dictation} visible={voiceDictationVisible} />
       <div className="cmp-bar-main">
         {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
             speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at

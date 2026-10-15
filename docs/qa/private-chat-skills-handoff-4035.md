@@ -6,6 +6,21 @@ all-acceptance-criteria qualification. Continue on `codex/fix-private-skill-uplo
 the PR targets `dev`, is not a draft, and must keep auto-merge disabled. Integration
 and publication are not authorized.
 
+## Release continuation: 2026-10-15
+
+The owner has now requested version 1.2.3, conditional on completed qualification. The repairs
+from this branch are included in the combined release candidate in PR #4033. Auto-merge remains
+disabled. Earlier statements below that integration/publication is unauthorized describe the
+handoff checkpoint; the new owner request authorizes the protected release path after acceptance
+and all required checks/review settlement. It does not waive incomplete acceptance.
+
+A fresh visible-browser authoring run used pasted source, generated and reviewed the draft,
+changed its title, explicitly saved without activation, downloaded byte-identical Markdown,
+deleted this disposable test skill, reimported that download with the native picker and explicitly
+selected it. Immediate reload before the draft debounce exposed a lost unsaved edit; the release
+repair adds page-hide flush and bounded keepalive transport while retaining the existing warning
+and revision checks. The actual browser repair retest remains required.
+
 ## Latest checkpoint: 2026-10-15, resumed qualification
 
 Both defects identified at the earlier handoff are now repaired and pushed:

@@ -37,14 +37,16 @@ function captureLabel(controller: DictationController, t: I18nTranslate): string
 /** A bounded history of the existing recorder's RMS levels, never synthetic animation or audio. */
 export function VoiceDictationWaveform({
   controller,
+  visible = true,
 }: {
   readonly controller: DictationController;
+  readonly visible?: boolean;
 }): ReactNode {
   const t = useVoiceTranslate();
   const recording = controller.phase === "recording" && controller.micReady;
   const samples = useLevelHistory(controller.audioLevel, recording);
   const label = captureLabel(controller, t);
-  if (!controller.busy) return null;
+  if (!visible || !controller.busy) return null;
   return (
     <div className={styles.cmpWaveform} data-recording={recording} role="status" aria-live="polite">
       {recording ? (
