@@ -6,20 +6,21 @@ window is backgrounded or minimized and remains available while the foreground u
 or contains only a load error. Keyboard modality is established with a real Tab press before moving
 focus; programmatic focus after a pointer click must not steal the foreground.
 
-This set was regenerated on 2026-10-15 UTC from the PR #4013 checkout at signed head
-`31db98b01c55fc6fd4a8391bf40c8c8208035c31` with the pending typed Git sync preview/execute repair.
-The manifest's source hashes bind the actual measured working-tree bytes, including `api.ts`;
-this does not attribute the pending repair to that parent commit. The run used macOS arm64,
-Node 24.18.0, npm 11.16.0, Next.js 16.3.8 and Playwright 1.63.0. The unchanged eight-test Chromium
-suite passed in 56.8 seconds, including the real-BFF outage journey. All eight UI source hashes
-and four harness hashes bind the measured source.
+This set was regenerated on 2026-10-15 UTC from PR #4013 signed source head
+`95e8806eb57501baf297b1ab1add958e221101dd`, after reconciling dev `2a9a07b6` with the
+contract and transport changes. The run used macOS arm64, Node 24.18.0, npm 11.16.0,
+Next.js 16.3.8 and Playwright 1.63.0. The unchanged eight-test Chromium suite passed in
+1.2 minutes, including the real-BFF outage journey. All eight UI source hashes and four
+harness hashes bind the measured source.
 
 The original producer recreated all 17 tracked artifacts: 14 screenshots and three JSON records.
-All fourteen screenshots remain byte-identical to the previous committed set, and the three JSON
-records bind the measured sources. The existing native `ButtonText` behavior for both startup-notice
-actions in forced-colors mode remains unchanged. This is macOS browser and fixture qualification;
-it does not claim Linux updater execution, production update success, native N−1→N replacement,
-or final integrated-head acceptance.
+`10-responsive-manual-path.png` and `11-progress-state.png` changed PNG bytes relative to that
+source head; the other twelve screenshots remain byte-identical. The lead inspected both
+before/after capture pairs and found no visible layout, control or content regression. The three
+JSON records bind the measured sources. The existing native `ButtonText` behavior for both
+startup-notice actions in forced-colors mode remains unchanged. This is macOS browser and fixture
+qualification; it does not claim Linux updater execution, production update success, native
+N−1→N replacement, provider readiness or final integrated-head acceptance.
 
 The current suite includes the real-BFF outage journey. Both the main server and the outage
 harness use isolated copies of the fake-key gateway fixture, preserving the tracked source
