@@ -1,4 +1,19 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.draft.attachmentsUnsaved":
+    "Send or remove the staged attachments before closing this chat. They have not been saved.",
+  "chat.draft.loading": "Loading saved draft…",
+  "chat.draft.saved": "Draft saved privately.",
+  "chat.draft.unsaved": "Draft changes are not saved yet.",
+  "chat.draft.saving": "Saving draft…",
+  "chat.draft.unavailable": "Draft not saved. Open Keiko from its launcher.",
+  "chat.draft.failed": "This draft could not be saved. Keep this window open and retry.",
+  "chat.draft.conflict":
+    "Another window changed the saved draft. Keep this draft to replace it, or use the saved draft to replace this text.",
+  "chat.draft.retry": "Retry draft save",
+  "chat.draft.keepLocal": "Keep this draft",
+  "chat.draft.useSaved": "Use saved draft",
+  "chat.skills.sendBlocked":
+    "Open Skills and select an available skill or remove the current selection before sending.",
   "chat.skills.author.title": "Create from document or text",
   "chat.skills.author.description":
     "Paste the complete concept or load a text file. Keiko uses the selected chat model to prepare a private, editable draft.",
@@ -1261,6 +1276,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   // Chat context meter and grounded evidence panel: both render only in the lazily loaded chat
   // window, so their strings stay out of the first-load catalog (editor-bundle-size budget).
   "chat.context.title": "Conversation context",
+  "chat.context.details": "Context usage details",
   "chat.context.heading": "Conversation context {percent}%",
   "chat.context.label": "Conversation context: approximately {percent}% used",
   "chat.context.used": "Estimated tokens used",
@@ -1268,14 +1284,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.window": "Full context window",
   "chat.context.outputReserve": "Reserved for the answer",
   "chat.context.safetyMargin": "Safety margin",
-  "chat.context.saved": "{tokens} tokens saved across {count} summarized messages.",
-  "chat.context.saved.one": "{tokens} tokens saved across 1 summarized message.",
+  "chat.context.saved": "{tokens} tokens saved · {count} messages summarized",
+  "chat.context.saved.one": "{tokens} tokens saved · 1 message summarized",
   "chat.context.percent": "{percent}%",
   "chat.context.unavailable": "Context estimate unavailable",
   "chat.context.estimate":
-    "Estimated for the next request; knowledge chats include the latest question's source share. Your draft and attachments are added when you send.",
+    "Estimate for the next request, including the latest source share. Draft and attachments are added on send.",
   "chat.context.automaticGrounded":
-    "Keiko compacts the conversation at 90% of its {tokens}-token lane. Source capacity is separate.",
+    "Automatic compaction at 90% of the {tokens}-token conversation budget. Sources use separate capacity.",
   "chat.context.segment.sourceCapacity": "Additional source capacity",
   "chat.context.segment.inputUnavailable": "Unavailable for input",
   "chat.context.declaredInputLimit": "Model input limit: {tokens} tokens.",
@@ -1283,13 +1299,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.untilConversationCompaction":
     "{tokens} conversation tokens until automatic compaction.",
   "chat.context.sourcesPolicy":
-    "Connected source excerpts are retrieved fresh for each question and are never summarized. Conversation history uses its own input budget.",
+    "Sources are retrieved fresh within the source budget for each question, never summarized. Conversation capacity is separate.",
   "chat.context.sourcesPolicyGrounded":
-    "Connected source excerpts are retrieved fresh for each question and are never summarized. The current conversation input budget is {tokens} tokens.",
+    "Sources are retrieved fresh within the source budget for each question, never summarized.",
   "chat.context.automatic":
-    "Keiko compacts automatically at 90% of usable input capacity before sending the next request.",
+    "Automatic compaction at 90% of usable capacity, before the next request.",
   "chat.context.retained":
-    "Compaction summarizes earlier messages. The full conversation stays saved; summaries can omit details.",
+    "Manual compaction: one pass; available again with new messages and 50% capacity used. System and skill instructions stay unchanged. The full chat stays saved; summaries may omit details.",
   "chat.context.error": "Context could not be updated.",
   "chat.context.retry": "Retry",
   "chat.context.compact": "Compact context now",
@@ -1297,7 +1313,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.wait": "Available after the current response finishes.",
   "chat.context.total": "{used} of {usable} usable input tokens · context window {window}",
   "chat.context.breakdown": "Context window breakdown",
-  "chat.context.segment.skill": "Skill instructions (protected)",
+  "chat.context.segment.skill": "Skill instructions",
+  "chat.context.notCompacted": "Not compacted",
   "chat.context.segment.system": "System instructions",
   "chat.context.segment.summary": "Summary of earlier messages",
   "chat.context.segment.messages": "Messages",
@@ -1312,15 +1329,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.referencesTrimmed":
     "Only {sent} of {available} references fit the model's context window. The most relevant were used.",
   "chat.context.lastRequestMeasured":
-    "Last knowledge request: {tokens} tokens (measured by the provider).",
+    "Last knowledge request: {tokens} tokens measured by the provider.",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Last knowledge request: {tokens} tokens (measured by the provider). Keiko estimated that request at {estimated} tokens. The breakdown above estimates the next request.",
+    "Last knowledge request: {tokens} tokens measured by the provider; {estimated} estimated for that request.",
   "chat.context.lastRequestEstimated": "Last knowledge request: about {tokens} tokens (estimated).",
   "chat.context.untilCompaction": "{tokens} tokens until automatic compaction.",
-  "chat.context.windowAssumed":
-    "The gateway declares no context window for this model. Keiko plans with the assumed value and adopts the real window automatically as soon as the provider states it.",
-  "chat.context.pending":
-    "The stored history ({before} tokens) is compacted automatically to about {after} tokens before the next request.",
+  "chat.context.windowAssumed": "Context window assumed until the provider reports its size.",
+  "chat.context.pending": "Next request: history reduced from {before} to about {after} tokens.",
   "grounded.inspection.coverageGap.one":
     "This answer reflects only the searchable files in the connected scope. At least {count} file was not searched (recorded exclusions: {detail}). These recorded exclusions may not include every excluded file.",
   "grounded.inspection.coverageGap.other":

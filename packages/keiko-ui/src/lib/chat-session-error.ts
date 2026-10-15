@@ -1,8 +1,10 @@
+export const DRAFT_ATTACHMENTS_UNSAVED_ERROR = "DRAFT_ATTACHMENTS_UNSAVED";
 export const ATTACHMENT_CLEANUP_DEFERRED_ERROR = "ATTACHMENT_CLEANUP_DEFERRED";
 export const SKILL_SELECTION_UNAVAILABLE_ERROR = "SKILL_SELECTION_UNAVAILABLE";
 
 export type ChatSessionErrorPresentation =
   | { readonly kind: "none" }
+  | { readonly kind: "draft-attachments-unsaved" }
   | { readonly kind: "attachment-cleanup-deferred" }
   | { readonly kind: "skill-selection-unavailable" }
   | { readonly kind: "message"; readonly message: string };
@@ -13,6 +15,7 @@ export type ChatSessionErrorPresentation =
 export function chatSessionErrorPresentation(
   error: string | undefined,
 ): ChatSessionErrorPresentation {
+  if (error === DRAFT_ATTACHMENTS_UNSAVED_ERROR) return { kind: "draft-attachments-unsaved" };
   if (error === undefined) return { kind: "none" };
   if (error === ATTACHMENT_CLEANUP_DEFERRED_ERROR) {
     return { kind: "attachment-cleanup-deferred" };

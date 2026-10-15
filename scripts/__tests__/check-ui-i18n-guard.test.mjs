@@ -548,6 +548,36 @@ const FILES_FEATURE_CATALOG =
   "packages/keiko-ui/src/app/components/desktop/widgets/cards/files-widget-i18n.ts";
 const FILES_FEATURE_COPY = { "tree.projectRoot": "Project", "tree.connectionFailed": "Failed" };
 
+test.each([
+  ["translated", { "qi.run.openFromHub": "Lauf öffnen" }, "", true],
+  ["missing German", {}, "", false],
+  ["untranslated copy", { "qi.run.openFromHub": "Lauf öffnen" }, "Open the run now", false],
+])("recognizes the existing QI translation hook: %s", async (_name, german, literal, accepted) => {
+  const catalog =
+    "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/qi-i18n.ts";
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]: `export function Run() { const t = useQiTranslate(); return <p>{t("qi.run.openFromHub")}${literal}</p>; }`,
+      [catalog]: singleFileCatalog({ "qi.run.openFromHub": "Open run" }, german),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE, catalog] });
+      expect(result.i18nRelevantFiles).toEqual([UI_FILE]);
+      expect(result.ok, result.problems.join("; ")).toBe(accepted);
+      expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
+        false,
+      );
+    },
+  );
+});
+
+test("tracks QI hook additions as localization changes", () => {
+  const line = "const t = useQiTranslate();";
+  expect(hasI18nRelevantAddedLine(line)).toBe(true);
+  expect(hasNewI18nSignature([line], [])).toBe(true);
+});
+
 function filesWidgetCatalog(englishKeys, germanKeys) {
   return singleFileCatalog(englishKeys, germanKeys)
     .replace("FEATURE_EN_MESSAGES", "EN_FILES_WIDGET_MESSAGES")

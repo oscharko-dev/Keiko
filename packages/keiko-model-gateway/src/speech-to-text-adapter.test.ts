@@ -43,6 +43,24 @@ async function bodyToText(init: RequestInit): Promise<string> {
 }
 
 describe("requestSpeechToText", () => {
+  it("records provider HTTP status and sent audio format without provider error bodies", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "whisper-large-v3",
+      audio: AUDIO,
+      mimeType: "audio/wav",
+      correlationId: "corr-stt-http-status",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => new Response("private provider rejection", { status: 422 })),
+    });
+    expect(events[0]?.extra).toMatchObject({ audioFormat: "wav", audioBytes: AUDIO.byteLength });
+    expect(events.at(-1)?.extra).toMatchObject({ httpStatus: 422, failureKind: "transport" });
+    expect(formatActivityLogProofLine(events.at(-1) ?? {})).toContain('"httpStatus":422');
+    expect(JSON.stringify(events)).not.toContain("private provider rejection");
+  });
+
   it("POSTs multipart/form-data to /audio/transcriptions with the audio, model, and auth header", async () => {
     let seenUrl = "";
     let seenMethod = "";
@@ -592,6 +610,7 @@ describe("requestSpeechToText", () => {
         timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
       },
     });
+    expect(completed?.extra).not.toHaveProperty("httpStatus");
   });
 
   // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate

@@ -403,6 +403,22 @@ Chat epic #4022. They must reuse this library and preserve the same invariants t
 final prompt owners. Until then the connected Git-description workflow refuses an active skill
 explicitly; ordinary Chat remains available.
 
+### Private composer drafts (schema 44, #4026)
+
+The same permission-protected UI database retains one private text draft and monotonic revision
+per chat in `chat_drafts`. The chat foreign key cascades deletion. The existing paired app session
+guards reads and writes through `/api/chats/:id/draft`; writes revalidate the session after reading
+the bounded request. A `BEGIN IMMEDIATE` compare-and-set rejects stale revisions. Empty text remains
+an explicit revisioned tombstone, so an earlier writer cannot resurrect a cleared draft. Drafts
+accept at most 256,000 characters and 256,000 UTF-8 bytes, using the existing chat-content limits.
+
+Draft text remains outside browser storage, chat-list metadata and Activity Log records. The
+existing `chat.draft.operation` lifecycle exposes only action, phase and HTTP status. Drafts inherit
+this database's permission-protected plaintext storage; they introduce neither an encryption claim
+nor a credential store. Attachments remain transient and are not represented as restored files.
+ADR-0114 defines per-chat hydration, conflict resolution, acknowledged window closure, and the
+unload warning while a private write or attachment remains unsaved.
+
 ### D6 — Path validation policy (fail-closed)
 
 All path validation for project paths is centralized in `src/ui/store/validation.ts`. No path

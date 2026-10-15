@@ -20,6 +20,8 @@ export interface ChatWindowRuntimeTarget {
 interface ChatWindowRuntimeState {
   readonly runtime: ChatWindowRuntimeTarget;
   readonly registration: symbol;
+  readonly prepareClose: (() => Promise<boolean>) | undefined;
+  readonly isCloseReady: (() => boolean) | undefined;
 }
 
 export type ChatWindowGroundingActivity =
@@ -141,9 +143,11 @@ export function usePublishChatWindowActivity(
 export function registerChatWindowRuntime(
   windowId: string,
   runtime: ChatWindowRuntimeTarget,
+  prepareClose?: () => Promise<boolean>,
+  isCloseReady?: () => boolean,
 ): () => void {
   const registration = Symbol("chat-window-runtime");
-  runtimes = new Map(runtimes).set(windowId, { runtime, registration });
+  runtimes = new Map(runtimes).set(windowId, { runtime, registration, prepareClose, isCloseReady });
   for (const listener of listeners) listener();
   return (): void => {
     if (runtimes.get(windowId)?.registration !== registration) return;
@@ -152,6 +156,14 @@ export function registerChatWindowRuntime(
     runtimes = next;
     for (const listener of listeners) listener();
   };
+}
+
+export function isChatWindowCloseReady(windowId: string): boolean {
+  return runtimes.get(windowId)?.isCloseReady?.() ?? true;
+}
+
+export function chatWindowCloseGuard(windowId: string): (() => Promise<boolean>) | undefined {
+  return runtimes.get(windowId)?.prepareClose;
 }
 
 export function chatWindowRuntimeTarget(windowId: string): ChatWindowRuntimeTarget | undefined {
@@ -166,11 +178,13 @@ export function chatWindowRuntimeTarget(windowId: string): ChatWindowRuntimeTarg
 export function usePublishChatWindowRuntime(
   windowId: string,
   target: ChatWindowRuntimeTarget | undefined,
+  prepareClose?: () => Promise<boolean>,
+  isCloseReady?: () => boolean,
 ): void {
   useEffect((): (() => void) | undefined => {
     if (target === undefined) return;
-    return registerChatWindowRuntime(windowId, target);
-  }, [target, windowId]);
+    return registerChatWindowRuntime(windowId, target, prepareClose, isCloseReady);
+  }, [target, windowId, prepareClose, isCloseReady]);
 }
 
 export function useChatWindowFlows(): ReadonlyMap<string, ChatWindowFlow> {

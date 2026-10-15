@@ -2,8 +2,8 @@
  * Installs a deterministic microphone and MediaRecorder before any application script runs.
  *
  * The fake makes dictation capability independent of the Playwright engine's host-media support
- * while the product still executes its real feature probe and recorder lifecycle. No microphone,
- * provider, or OS codec is touched by these browser journeys.
+ * while the product still executes its real feature probe and recorder lifecycle. No microphone or
+ * provider is touched; the fixture emits valid silent WAV for native browser decoding by these browser journeys.
  */
 export function fakeDictationMediaInit(mode: "grant" | "deny"): string {
   return `
@@ -26,7 +26,7 @@ export function fakeDictationMediaInit(mode: "grant" | "deny"): string {
       });
       class FakeMediaRecorder {
         static isTypeSupported() { return true; }
-        constructor() { this.state = "inactive"; this.mimeType = "audio/webm"; this._l = {}; }
+        constructor() { this.state = "inactive"; this.mimeType = "audio/wav"; this._l = {}; }
         addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
         emit(type, event = {}) {
           for (const cb of this._l[type] || []) cb(event);
@@ -38,13 +38,13 @@ export function fakeDictationMediaInit(mode: "grant" | "deny"): string {
         requestData() {
           if (this.state !== "recording") return;
           this.emit("dataavailable", {
-            data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
+            data: new Blob([Uint8Array.from(atob("UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="), c => c.charCodeAt(0))], { type: "audio/wav" }),
           });
         }
         stop() {
           this.state = "inactive";
           this.emit("dataavailable", {
-            data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
+            data: new Blob([Uint8Array.from(atob("UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="), c => c.charCodeAt(0))], { type: "audio/wav" }),
           });
           this.emit("stop");
         }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import {
   useChatMarkdownSkill,
   chatSkillBlocksSend,
@@ -22,6 +23,7 @@ import {
 import { useTranslate } from "@/lib/i18n";
 import {
   ATTACHMENT_CLEANUP_DEFERRED_ERROR,
+  DRAFT_ATTACHMENTS_UNSAVED_ERROR,
   SKILL_SELECTION_UNAVAILABLE_ERROR,
 } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
@@ -1510,6 +1512,7 @@ interface ChatModelCatalogRead {
 }
 
 export interface UseChatSessionResult {
+  readonly draftPersistence?: ChatDraftPersistence | undefined;
   readonly markdownSkill?: ChatMarkdownSkill | undefined;
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -2637,7 +2640,10 @@ function handleStreamUngroundedTransportFailure(
   const failure = canonicalTurnInProgressFailure(caught);
   retainStreamFailure(caught, context);
   if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
-  resolve(failure);
+  resolve({
+    ...failure,
+    correlationId: failure.correlationId ?? correlationIdOf(caught) ?? context.correlationId,
+  });
 }
 
 function skillSelectionBlocksSend(
@@ -2883,13 +2889,31 @@ function isScopeChangeRefusal(terminal: SendAttemptOutcome): terminal is FailedS
   );
 }
 
-function isRecoverableScopeRefusal(input: TypedDraftRecovery): boolean {
+function isRecoverableFailedSend(input: TypedDraftRecovery): boolean {
   return (
     input.terminal.status === "failed" &&
-    input.terminal.scopeChanged === true &&
-    input.terminal.scopeChangeStatus === 409 &&
+    input.terminal.canonicalTurnInProgress !== true &&
     (input.persistence === "missing" || input.failedCanonicalTurn === true)
   );
+}
+
+type DraftRecoveryActivity = "restored" | "skipped-owner" | "skipped-draft" | "skipped-unproven";
+
+function draftRecoveryReporter(terminal: FailedSendOutcome): {
+  readonly correlationId: string;
+  readonly report: (activity: DraftRecoveryActivity) => void;
+} {
+  const scopeRefusal = isScopeChangeRefusal(terminal);
+  const prefix = scopeRefusal ? "scope-refusal" : "send-failure";
+  const correlationId = terminal.correlationId ?? newClientCorrelationId();
+  return {
+    correlationId,
+    report: (activity): void =>
+      reportClientDiagnostic(
+        scopeRefusal ? "Keiko scope-refused composer recovery." : "Keiko failed composer recovery.",
+        { correlationId, composerActivity: `${prefix}-${activity}` },
+      ),
+  };
 }
 
 async function refreshScopeRefusedChat(
@@ -2987,12 +3011,19 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
     ChatMessage | undefined
   >();
-  const [draftState, setDraftState] = useState("");
   const draftRevisionRef = useRef(0);
-  const setDraft = useCallback((value: string): void => {
+  const onDraftReplaced = useCallback((): void => {
     draftRevisionRef.current += 1;
-    setDraftState(value);
   }, []);
+  const chatDraft = useChatDraft(state.activeChat?.id, onDraftReplaced);
+  const { text: draftState, setText: setDraftState } = chatDraft;
+  const setDraft = useCallback(
+    (value: string): void => {
+      draftRevisionRef.current += 1;
+      setDraftState(value);
+    },
+    [setDraftState],
+  );
   const [loading, setLoading] = useState(true);
   // Issue #152 — lifecycle is the source of truth; `sending` is derived.
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle");
@@ -3114,6 +3145,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // outstanding object-URL previews without re-subscribing the mount effect to attachment changes.
   const pendingAttachmentsRef = useRef<readonly PendingAttachment[]>([]);
   pendingAttachmentsRef.current = pendingAttachments;
+  useChatDraftUnloadGuard(chatDraft.controller, pendingAttachments.length);
+  const prepareDraftClose = useCallback(async (): Promise<boolean> => {
+    const saved = await chatDraft.controller.prepareClose();
+    if (pendingAttachmentsRef.current.length > 0) {
+      setError(DRAFT_ATTACHMENTS_UNSAVED_ERROR);
+      return false;
+    }
+    return saved;
+  }, [chatDraft.controller]);
+  const isDraftCloseReady = useCallback(
+    (): boolean => !chatDraft.controller.hasUnsaved() && pendingAttachmentsRef.current.length === 0,
+    [chatDraft.controller],
+  );
+  const draftPersistence = useMemo(
+    () => ({
+      ...chatDraft.persistence,
+      prepareClose: prepareDraftClose,
+      isCloseReady: isDraftCloseReady,
+    }),
+    [chatDraft.persistence, prepareDraftClose, isDraftCloseReady],
+  );
   // Issue #148 — documents that contributed extracted context to the most recent send. Drives
   // the post-send disclosure note (which docs were included + whether any was truncated).
   const [lastSentDocuments, setLastSentDocuments] = useState<readonly SentDocumentDisclosure[]>([]);
@@ -3197,14 +3249,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // 0.3.0 release audit — each mounted session owns one composer (draft text + staged attachment
-  // queue). Switching that session to another conversation must clear the composer fail-closed so
-  // content staged for chat A cannot ride into chat B. ADR-0114 now mounts one session per chat
-  // window, so this reset is local to that window and never touches a sibling composer.
+  // Text drafts remain private and keyed by chat. Transient attachments never cross chats.
   const resetComposerForConversationSwitch = useCallback((): void => {
-    setDraft("");
     clearPendingAttachments();
-  }, [clearPendingAttachments, setDraft]);
+  }, [clearPendingAttachments]);
 
   // Issue #148 — extract bounded text from the staged DOCUMENT attachments for the send body.
   // Images are excluded here (they stay on the metadata-only attachments path). A document with
@@ -3563,6 +3611,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setState((previous) => applyChatUpsert(previous, mutation.chat));
         return;
       }
+      chatDraft.controller.forget(mutation.chatId);
       setState((previous) => ({
         ...previous,
         chats: removeChatFromList(previous.chats, mutation.chatId),
@@ -3570,7 +3619,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         messages: previous.activeChat?.id === mutation.chatId ? [] : previous.messages,
       }));
     });
-  }, []);
+  }, [chatDraft.controller]);
 
   useEffect(() => {
     const reconciliationControllers = reconciliationControllersRef.current;
@@ -4036,7 +4085,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           retainStreamFailure(apiError, { ...context, kind: "sse-error" });
           setError(errorMessage(apiError));
           removeTempMessage(tempAssistantId);
-          resolve({ status: "failed" });
+          resolve({ status: "failed", correlationId });
         },
         onCancelled: (): void => {
           cancelFlush();
@@ -4500,42 +4549,34 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const recoverUnsentTypedDraft = useCallback(
     async (input: TypedDraftRecovery): Promise<void> => {
-      if (input.draftRevision === undefined || !isScopeChangeRefusal(input.terminal)) return;
-      const correlationId = input.terminal.correlationId ?? newClientCorrelationId();
-      const report = (
-        composerActivity:
-          | "scope-refusal-restored"
-          | "scope-refusal-skipped-owner"
-          | "scope-refusal-skipped-draft"
-          | "scope-refusal-skipped-unproven",
-      ): void =>
-        reportClientDiagnostic("Keiko scope-refused composer recovery.", {
-          correlationId,
-          composerActivity,
-        });
+      if (input.draftRevision === undefined || input.terminal.status !== "failed") return;
+      const scopeRefusal = isScopeChangeRefusal(input.terminal);
+      const { correlationId, report } = draftRecoveryReporter(input.terminal);
       if (!ownsRefusedDraft(input)) {
-        report("scope-refusal-skipped-owner");
+        report("skipped-owner");
         return;
       }
-      if (!isRecoverableScopeRefusal(input)) {
-        report("scope-refusal-skipped-unproven");
+      if (!isRecoverableFailedSend(input)) {
+        report("skipped-unproven");
         return;
       }
       const refreshingChat = sessionStateRef.current.activeChat;
-      const refreshed = await refreshScopeRefusedChat(input, correlationId);
+      const refreshed = scopeRefusal
+        ? await refreshScopeRefusedChat(input, correlationId)
+        : undefined;
       if (!ownsRefusedDraft(input)) {
-        report("scope-refusal-skipped-owner");
+        report("skipped-owner");
         return;
       }
       if (refreshed !== undefined && sessionStateRef.current.activeChat === refreshingChat) {
         notifyChatUpsert(refreshed);
       }
       if (draftRevisionRef.current !== input.draftRevision) {
-        report("scope-refusal-skipped-draft");
+        report("skipped-draft");
         return;
       }
       setDraft(input.text);
-      report("scope-refusal-restored");
+      report("restored");
     },
     [setDraft, ownsRefusedDraft],
   );
@@ -5210,6 +5251,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       noEligibleModels,
       markdownSkill,
       draft: draftState,
+      draftPersistence,
       loading,
       sending,
       sendStatus,
@@ -5266,6 +5308,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.selectedModel,
       noEligibleModels,
       markdownSkill,
+      draftPersistence,
       draftState,
       setDraft,
       loading,

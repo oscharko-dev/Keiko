@@ -22,6 +22,29 @@ interface PendingChange {
 
 const DRAFT_PUBLICATION_DELAY_MS = 16;
 
+function useComposerUnloadFlush(flush: () => boolean): void {
+  useLayoutEffect(() => {
+    const publish = (): void => {
+      if (!flush()) return;
+      reportClientDiagnostic("Keiko composer departure flushed the current draft.", {
+        composerActivity: "literal-input-preserved",
+      });
+    };
+    const visibilityChanged = (): void => {
+      if (document.visibilityState === "hidden") publish();
+    };
+    // Publish the editor's final frame before the Chat draft persistence listener runs.
+    window.addEventListener("beforeunload", publish, true);
+    window.addEventListener("pagehide", publish, true);
+    document.addEventListener("visibilitychange", visibilityChanged, true);
+    return (): void => {
+      window.removeEventListener("beforeunload", publish, true);
+      window.removeEventListener("pagehide", publish, true);
+      document.removeEventListener("visibilitychange", visibilityChanged, true);
+    };
+  }, [flush]);
+}
+
 function useDeferredComposerChange(
   controller: RefObject<ComposerEditorController | null>,
   current: RefObject<MarkdownComposerProps>,
@@ -29,28 +52,29 @@ function useDeferredComposerChange(
 ): { publishChange: (value: string, cursor: number) => void; cancel: () => void } {
   const pending = useRef<PendingChange | null>(null);
   const pendingTimer = useRef<number | null>(null);
-  const publishChange = useCallback(
-    (value: string, cursor: number): void => {
-      const owner = controller.current;
-      pending.current = { owner, value, cursor };
-      if (pendingTimer.current !== null) return;
-      pendingTimer.current = window.setTimeout(() => {
-        pendingTimer.current = null;
-        const change = pending.current;
-        if (change?.owner !== owner) return;
-        pending.current = null;
-        if (owner === null || controller.current !== owner) return;
-        publishedValues.current.push(change.value);
-        current.current.onChange(change.value, change.cursor);
-      }, DRAFT_PUBLICATION_DELAY_MS);
-    },
-    [controller, current, publishedValues],
-  );
   const cancel = useCallback((): void => {
     if (pendingTimer.current !== null) window.clearTimeout(pendingTimer.current);
     pendingTimer.current = null;
     pending.current = null;
   }, []);
+  const flush = useCallback((): boolean => {
+    const change = pending.current;
+    cancel();
+    if (!change?.owner || controller.current !== change.owner) return false;
+    publishedValues.current.push(change.value);
+    current.current.onChange(change.value, change.cursor);
+    return true;
+  }, [cancel, controller, current, publishedValues]);
+  useComposerUnloadFlush(flush);
+  const publishChange = useCallback(
+    (value: string, cursor: number): void => {
+      const owner = controller.current;
+      pending.current = { owner, value, cursor };
+      if (pendingTimer.current !== null) return;
+      pendingTimer.current = window.setTimeout(flush, DRAFT_PUBLICATION_DELAY_MS);
+    },
+    [controller, flush],
+  );
   return { publishChange, cancel };
 }
 

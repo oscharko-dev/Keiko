@@ -38,6 +38,7 @@ import {
 import {
   AUTOMATIC_COMPACTION_TARGET,
   AUTOMATIC_COMPACTION_THRESHOLD,
+  MANUAL_COMPACTION_THRESHOLD,
 } from "./chat-compaction-thresholds.js";
 import { hasGroundingScope } from "./chat-grounding.js";
 import {
@@ -388,7 +389,10 @@ function contextStatusWithCheckpoint(
     reservedOutputTokens: profile.reservedOutputTokens,
     safetyMarginTokens: profile.safetyMarginTokens,
     estimatedInputTokens: breakdown.usedTokens,
-    canCompact: counted.messages >= 2,
+    canCompact:
+      counted.messages >= 2 &&
+      counted.tokens + (grounded === undefined ? protectedSkill.tokens : 0) >=
+        conversationProfile.effectiveInputBudget * MANUAL_COMPACTION_THRESHOLD,
     ...checkpointSavings(checkpoint, counted),
     ...(pending === undefined ? {} : { pendingCompaction: pending.wire }),
     ...groundedStatusFields(currentPrompt),
@@ -434,18 +438,32 @@ function compactionProjection(
   }
 }
 
+function manualCompactionBudget(
+  deps: UiHandlerDeps,
+  chatId: string,
+  modelId: string,
+): { readonly profile: ContextProfile; readonly budget: number } {
+  const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
+  const grounded = groundedShare(deps, chatId, modelProfile) !== undefined;
+  const profile = grounded ? groundedConversationLaneProfile(modelProfile) : modelProfile;
+  const skillTokens = grounded ? 0 : protectedSkillStatus(deps, chatId, modelProfile).tokens;
+  return {
+    profile,
+    budget: Math.floor(
+      Math.max(0, profile.effectiveInputBudget - skillTokens) * AUTOMATIC_COMPACTION_TARGET,
+    ),
+  };
+}
+
 function manualCompactionCandidate(
   deps: UiHandlerDeps,
   chatId: string,
   modelId: string,
   correlationId: string,
   loadedCheckpoint: LoadedHistoryCheckpoint,
+  enabled: boolean,
 ): ContextCompactionRecord | undefined {
-  const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
-  const profile =
-    groundedShare(deps, chatId, modelProfile) === undefined
-      ? modelProfile
-      : groundedConversationLaneProfile(modelProfile);
+  const { profile, budget } = manualCompactionBudget(deps, chatId, modelId);
   const snapshot = captureChatHistoryWithCheckpoint({
     store: deps.store,
     evidenceStore: deps.evidenceStore,
@@ -456,15 +474,11 @@ function manualCompactionCandidate(
     correlationId,
     loadedCheckpoint,
   });
-  // The conversation's own stored size: in a grounded chat the reading also carries the sources,
-  // which compaction never touches (PR #3678 review).
+  if (!enabled) return undefined;
+  // Fit all remaining history once. Repeatedly targeting 70% of the current stored size makes
+  // each click remove another prefix instead of completing the user's maintenance request.
   const checkpoint = checkpointForProfile(loadedCheckpoint, profile);
   const stored = countHistory(deps, chatId, profile, checkpoint).tokens;
-  const skillTokens = protectedSkillStatus(deps, chatId, modelProfile).tokens;
-  const budget = Math.floor(
-    Math.min(Math.max(0, profile.effectiveInputBudget - skillTokens), stored) *
-      AUTOMATIC_COMPACTION_TARGET,
-  );
   try {
     const outcome = conversationForGatewayWithCompaction(snapshot.history, {
       contextProfile: profile,
@@ -472,6 +486,7 @@ function manualCompactionCandidate(
       earlierCompaction: snapshot.earlierCompaction,
       redactionSecrets: currentRedactionSecrets(deps),
       preserveNewestTurn: false,
+      compactAllHistory: true,
     });
     const record = stampHistoryRevision(
       outcome.compaction,
@@ -479,7 +494,8 @@ function manualCompactionCandidate(
       profile.maxInputTokens,
       profile.effectiveInputBudget,
     );
-    return record !== undefined && record.tokensAfter < record.tokensBefore ? record : undefined;
+    const after = countGatewayPromptTokens({ messages: outcome.messages }, profile.tokenAccounting);
+    return record !== undefined && after < stored ? record : undefined;
   } catch (error) {
     if (error instanceof ContextOverflowError) return undefined;
     throw error;
@@ -495,7 +511,14 @@ export function compactChatContext(
   const startedAt = Date.now();
   const loaded = loadHistoryCheckpoint({ ...deps, chatId, correlationId });
   const before = contextStatusWithCheckpoint(deps, chatId, modelId, correlationId, loaded);
-  const compaction = manualCompactionCandidate(deps, chatId, modelId, correlationId, loaded);
+  const compaction = manualCompactionCandidate(
+    deps,
+    chatId,
+    modelId,
+    correlationId,
+    loaded,
+    before.canCompact,
+  );
   if (compaction === undefined) {
     logChatContextManagement("unchanged", before, 0, correlationId);
     return { ...before, canCompact: false };

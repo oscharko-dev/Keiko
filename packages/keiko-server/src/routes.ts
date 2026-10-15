@@ -74,6 +74,7 @@ import {
   handleSendDesktopChat,
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
 import {
   handleDeleteConversationAttachment,
   handleUploadConversationAttachment,
@@ -623,6 +624,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "DELETE", pattern: "/api/projects", handler: handleDeleteProject },
   { method: "POST", pattern: "/api/repositories/clone", handler: handleCloneRepository },
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
+  { method: "GET", pattern: "/api/chats/:id/draft", handler: handleReadChatDraft },
+  { method: "PUT", pattern: "/api/chats/:id/draft", handler: handleSaveChatDraft },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b9a5527331fb004fcdafe1c639ed3ccc27c7a1f319597e47f2b8e86c0bbae369"
+    "catalogDigest": "119d8d14bc63dc3e9ef898cbcb37401716d2b747868555d80da5051492d8ad5f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 539,
-    "proofCount": 551,
-    "resolvedProofCount": 551,
-    "failureClassCount": 346,
+    "operationCount": 540,
+    "proofCount": 552,
+    "resolvedProofCount": 552,
+    "failureClassCount": 347,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -94,6 +94,7 @@
         "chat.continuity.degraded",
         "chat.continuity.rehydration",
         "chat.creation.rejected",
+        "chat.draft.operation",
         "chat.regeneration.rejected",
         "chat.response.message",
         "chat.scope.update",
@@ -713,6 +714,7 @@
     }
   ],
   "failureClassScenarios": {
+    "chat-draft-persistence": ["bff.dependency-failure"],
     "markdown-skill-library": ["bff.dependency-failure"],
     "client-scope-notice": ["client-diagnostics.dependency-failure"],
     "client-evidence-inspection": ["client-diagnostics.dependency-failure"],
@@ -1125,6 +1127,7 @@
     "chat.continuity.degraded.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.continuity.rehydration.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"

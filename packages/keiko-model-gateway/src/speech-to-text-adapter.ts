@@ -77,6 +77,13 @@ const SPEECH_STT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
     // The floored deadline (#3591) this call actually runs under, so an operator can read the
     // applied bound instead of inferring it from the caller's configured value.
     timeoutMs: { type: "number", dataClass: "duration", required: false },
+    audioBytes: { type: "integer", dataClass: "count", required: false },
+    audioFormat: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["wav", "webm", "ogg", "mp4", "m4a", "mp3", "flac", "bin"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -97,6 +104,8 @@ function logDispatch(request: SpeechToTextRequest, timeoutMs: number): void {
         endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
         modelId: logModelId(request.modelId),
         timeoutMs,
+        audioBytes: request.audio.byteLength,
+        audioFormat: extensionForMime(request.mimeType),
       },
     ),
   );
@@ -150,6 +159,7 @@ const SPEECH_STT_REQUEST_COMPLETED_OPERATION = defineActivityLogOperation({
     // The floored deadline (#3591) this call ran under — the same applied bound the dispatch
     // line above carries, so a timeout outcome reads without joining back to the earlier line.
     timeoutMs: { type: "number", dataClass: "duration", required: false },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -186,6 +196,7 @@ function logCompleted(
   request: SpeechToTextRequest,
   timeoutMs: number,
   outcome: SpeechToTextOutcome,
+  httpStatus?: number,
 ): void {
   const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
   const correlationId = logCorrelationId(log);
@@ -206,6 +217,7 @@ function logCompleted(
         outcome: outcome.ok ? "succeeded" : "failed",
         ...(failureKind === undefined ? {} : { failureKind }),
         timeoutMs,
+        ...(httpStatus === undefined ? {} : { httpStatus }),
       },
     ),
   );
@@ -276,7 +288,9 @@ const OUTBOUND_STT_KINDS: Record<OutboundHttpEgressErrorCode, SpeechToTextErrorK
 // Closed map of recognized audio container MIME types to a filename extension for the multipart
 // `file` part. Any other MIME type is rejected by the caller before reaching this adapter, so the
 // `bin` fallback is defensive only.
-const MIME_EXTENSIONS: Readonly<Record<string, string>> = Object.freeze({
+type AudioFormat = "wav" | "webm" | "ogg" | "mp4" | "m4a" | "mp3" | "flac" | "bin";
+
+const MIME_EXTENSIONS: Readonly<Record<string, AudioFormat>> = Object.freeze({
   "audio/webm": "webm",
   "audio/ogg": "ogg",
   "audio/wav": "wav",
@@ -320,7 +334,7 @@ function headerName(name: string | undefined): string {
   return name.toLowerCase();
 }
 
-function extensionForMime(mimeType: string): string {
+function extensionForMime(mimeType: string): AudioFormat {
   return MIME_EXTENSIONS[mimeType.toLowerCase()] ?? "bin";
 }
 
@@ -559,17 +573,17 @@ async function decodeSuccess(response: Response): Promise<SpeechToTextOutcome> {
 async function dispatchAndDecode(
   built: BuiltRequest,
   request: SpeechToTextRequest,
-): Promise<SpeechToTextOutcome> {
+): Promise<{ outcome: SpeechToTextOutcome; httpStatus?: number }> {
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
-    return { ok: false, kind: dispatched };
+    return { outcome: { ok: false, kind: dispatched } };
   }
   if (!dispatched.ok) {
     const kind = classifyStatus(dispatched.status) ?? "transport";
     await discardBody(dispatched);
-    return { ok: false, kind };
+    return { outcome: { ok: false, kind }, httpStatus: dispatched.status };
   }
-  return decodeSuccess(dispatched);
+  return { outcome: await decodeSuccess(dispatched), httpStatus: dispatched.status };
 }
 
 // Single round-trip speech-to-text transcription. Provider-neutral, no retry (a dictation request
@@ -582,7 +596,7 @@ export async function requestSpeechToText(
   // call — the narrower, conditional language-normalization line (when one fires) follows it.
   const built = buildRequest(request);
   logLanguageNormalization(request);
-  const outcome = await dispatchAndDecode(built, request);
-  logCompleted(request, built.timeoutMs, outcome);
+  const { outcome, httpStatus } = await dispatchAndDecode(built, request);
+  logCompleted(request, built.timeoutMs, outcome, httpStatus);
   return outcome;
 }
