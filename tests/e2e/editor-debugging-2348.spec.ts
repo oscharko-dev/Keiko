@@ -1288,19 +1288,45 @@ async function detachHeapClient(page: Page, client: CDPSession): Promise<void> {
   }
 }
 
+async function observeRequestSettlement(
+  page: Page,
+  pendingRequest: Promise<Request>,
+): Promise<Request> {
+  const observed = new Set<Request>();
+  let expected: Request | undefined;
+  let settle: ((request: Request) => void) | undefined;
+  const completion = new Promise<Request>((resolve) => {
+    settle = resolve;
+  });
+  const onSettlement = (request: Request): void => {
+    observed.add(request);
+    if (request === expected) settle?.(request);
+  };
+  // Subscribe before the request starts. Unlike Response.finished(), these terminal events also
+  // cover cancellation after headers, when the response's separate completion promise can hang.
+  page.on("requestfinished", onSettlement);
+  page.on("requestfailed", onSettlement);
+  try {
+    expected = await pendingRequest;
+    if (observed.has(expected)) settle?.(expected);
+    return await completion;
+  } finally {
+    page.off("requestfinished", onSettlement);
+    page.off("requestfailed", onSettlement);
+  }
+}
+
 async function captureSettledStopRequest(
   page: Page,
   pendingRequest: Promise<Request>,
 ): Promise<void> {
-  const request = await pendingRequest;
+  const request = await observeRequestSettlement(page, pendingRequest);
   const response = await request.response();
-  if (response === null) {
-    expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
-  } else {
+  if (response === null) expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
+  else {
     expect(response.status()).toBe(200);
-    if ((await response.finished()) !== null) {
-      expect(request.failure()?.errorText).toBe("net::ERR_ABORTED");
-    }
+    const failure = request.failure();
+    if (failure !== null) expect(failure.errorText).toBe("net::ERR_ABORTED");
   }
   await page.evaluate(() => {
     const probe = window.__keikoD12StopProbe;
@@ -1752,4 +1778,42 @@ test("#2348 stop measurement observes a completed server stop when its response 
   expect(serverCompleted).toBe(true);
   expect(Number.isFinite(latency)).toBe(true);
   expect(latency).toBeGreaterThanOrEqual(0);
+});
+
+test("#2348 stop observation does not depend on the response completion notification", async ({
+  page,
+}) => {
+  const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
+  const session = await startFromDebugPanel(page, panel);
+  await page.evaluate((id) => window.__keikoArmD12Stop?.(id), session.sessionId);
+  let acknowledged = false;
+  page.on("response", (response) => {
+    if (!response.url().endsWith("/api/editor/debug/control")) return;
+    const body = response.request().postDataJSON() as { action?: string };
+    if (body.action !== "stop") return;
+    acknowledged = true;
+    // Keep the real request, BFF, body and terminal UI. Fault only Playwright's completion
+    // notification: CI observed this promise never settling after the HTTP 200 response.
+    response.finished = (): Promise<null> =>
+      Promise.reject(new Error("D12_RESPONSE_COMPLETION_NOTIFICATION_UNAVAILABLE"));
+  });
+  const pending = page.waitForRequest((request) =>
+    request.url().endsWith("/api/editor/debug/control"),
+  );
+  await Promise.all([
+    captureSettledStopRequest(page, pending),
+    page.evaluate(async ({ sessionId, pauseGeneration }) => {
+      const response = await fetch("/api/editor/debug/control", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
+        body: JSON.stringify({ schemaVersion: "1", sessionId, pauseGeneration, action: "stop" }),
+      });
+      if (response.status !== 200) throw new Error("D12_REAL_STOP_REJECTED");
+      await response.json();
+    }, session),
+  ]);
+  expect(acknowledged).toBe(true);
+  await expectServerStopped(page, session.sessionId);
+  await expect(panel.getByText("No active debug session.")).toBeVisible();
+  activeSessionId = undefined;
 });

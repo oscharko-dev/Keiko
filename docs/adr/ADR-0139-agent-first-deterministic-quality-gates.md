@@ -61,6 +61,9 @@ activation and ends after the stop request has settled, terminal SSE has arrived
 UI has painted. A received response must be HTTP 200 and complete; an invalidated request may instead
 settle with the browser's explicit `net::ERR_ABORTED`, because the terminal stream event advances
 the existing session fence and cancels obsolete requests. Other transport failures do not qualify.
+The witness subscribes to the exact request's `requestfinished` or `requestfailed` event before
+dispatch. It does not wait on `Response.finished()`: that separate observation promise can remain
+pending after headers and cancellation, even though the request has emitted its terminal event.
 The authoritative stopped/evicted server projection remains a separate mandatory assertion. The
 request witness runs independently of that assertion's polling; polling delay is test overhead,
 not product latency. Request settlement, terminal SSE, painted terminal UI, the server-state proof

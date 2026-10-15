@@ -55,10 +55,17 @@ describe("#2348 D12 cap evidence harness", () => {
 
   it("requires exact stop settlement and terminal proof independently of driver polling", () => {
     const spec = readFileSync(SPEC_PATH, "utf8");
+    expect(spec).toContain('page.on("requestfinished", onSettlement)');
+    expect(spec).toContain('page.on("requestfailed", onSettlement)');
+    expect(spec).toContain('page.off("requestfinished", onSettlement)');
+    expect(spec).toContain('page.off("requestfailed", onSettlement)');
+    expect(spec).toContain("if (request === expected) settle?.(request)");
     expect(spec).toContain("const response = await request.response()");
     expect(spec).toContain("expect(response.status()).toBe(200)");
-    expect(spec).toContain("await response.finished()");
     expect(spec).toContain('expect(request.failure()?.errorText).toBe("net::ERR_ABORTED")');
+    expect(spec).not.toContain("await response.finished()");
+    expect(spec).toContain('expect(failure.errorText).toBe("net::ERR_ABORTED")');
+    expect(spec).toContain("D12_RESPONSE_COMPLETION_NOTIFICATION_UNAVAILABLE");
     expect(spec).toContain(
       "if (sessionId !== undefined) await expectServerStopped(page, sessionId)",
     );

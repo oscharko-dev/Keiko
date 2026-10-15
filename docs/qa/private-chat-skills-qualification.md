@@ -226,6 +226,13 @@ made no model dispatch. Both interruption attempts retained the complete selecte
   projection, terminal stream event and painted terminal UI. The focused regression and normal
   output-cap scenario both pass; the 200 ms budget and all bounded-cap assertions remain unchanged.
   The changed measurement toolchain requires fresh reference evidence before the next push.
+- The subsequent hosted run passed all three browser lanes but found a second stop-witness edge:
+  `Response.finished()` remained pending after HTTP 200. A new real-BFF regression faults only
+  that Playwright observation method while retaining the real request, body and terminal server/UI
+  state; it fails with the former witness. Request completion now comes from the exact request's
+  terminal `requestfinished`/`requestfailed` event, registered before dispatch. Successful completion
+  still requires HTTP 200; only explicit browser cancellation is accepted as the alternative.
+  The existing server, stream, paint and bounded-cap proofs remain mandatory.
 
 ### Gate boundary
 
