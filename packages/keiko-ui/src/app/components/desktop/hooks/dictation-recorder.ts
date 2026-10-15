@@ -14,6 +14,7 @@ import type {
   ClientVoiceCaptureReason,
   ClientVoiceCaptureError,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { normalizeDictationAudio } from "./dictation-audio";
 
 export interface DictationCapture {
   readonly audioBase64: string;
@@ -458,12 +459,13 @@ async function beginSession(
       }
       const effectiveType =
         capture.recorder.mimeType !== "" ? capture.recorder.mimeType : mimeType || "audio/webm";
-      const blob = new Blob(capture.chunks, { type: effectiveType });
+      const durationMs = Math.max(1, Date.now() - capture.startedAt);
+      const blob = await normalizeDictationAudio(new Blob(capture.chunks, { type: effectiveType }));
       const audioBase64 = await blobToBase64(blob);
       return {
         audioBase64,
-        mimeType: effectiveType,
-        durationMs: Math.max(1, Date.now() - capture.startedAt),
+        mimeType: blob.type,
+        durationMs,
       };
     },
     cancel(): void {

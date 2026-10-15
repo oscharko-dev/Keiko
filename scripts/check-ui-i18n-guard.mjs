@@ -55,6 +55,8 @@ const I18N_USAGE_APIS = [
   // These follow the same shape as `useTranslate` / `useCodingWorkbenchTranslate` above:
   // a hook that returns `(key, values?) => string`, backed by a matching-key EN and DE map.
   { name: "useProblemsTranslate", pattern: /\buseProblemsTranslate\s*\(/ },
+  // Quality Intelligence uses its existing matching-key EN/DE feature catalog.
+  { name: "useQiTranslate", pattern: /\buseQiTranslate\s*\(/ },
   // Files and Editor share the existing feature-scoped EN/DE Files catalog.
   { name: "useFilesWidgetTranslate", pattern: /\buseFilesWidgetTranslate\s*\(/ },
   { name: "FilesWidgetTranslate-type", pattern: /\bFilesWidgetTranslate\b/ },

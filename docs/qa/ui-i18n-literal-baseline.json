@@ -434,9 +434,6 @@
       "QI source",
       "Retry"
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/index.tsx": [
-      "Open a run from the Quality Intelligence hub."
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/ChatHistoryPanel.tsx": [
       "Chat History",
       "Conversation state",

@@ -1437,7 +1437,12 @@ function useBoundChatWindowRuntime(
     routing.lookupFailed,
     routing.targetMissing,
   ]);
-  usePublishChatWindowRuntime(windowId, runtimeTarget);
+  usePublishChatWindowRuntime(
+    windowId,
+    runtimeTarget,
+    session.draftPersistence?.prepareClose,
+    session.draftPersistence?.isCloseReady,
+  );
 }
 
 function useBoundChatTitleSync(
