@@ -62,6 +62,7 @@ import {
   type ScenarioIncidentRecorders,
 } from "../support/activity-log-scenario.js";
 import { fixtureEvent } from "../support/activity-log-segments.js";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 
 // The ui scenarios write through the built package, so their incidents come from it too: one
 // Activity Log writer instance per process (activity-log-scenario.ts).
@@ -243,6 +244,91 @@ async function driveGitSyncRefusal(context: (body: string) => RouteContext): Pro
   expect(executions).toBe(2);
   for (const privateValue of ["private-sync-branch", "private-sync-ref", "private-sync-project"])
     expect(bodies[0]).not.toContain(privateValue);
+}
+
+interface WorkspaceTrustFixture {
+  readonly fetchWorkspaceTrustStatus: (projectId: string) => Promise<unknown>;
+  readonly mutateWorkspaceTrust: (projectId: string, mutation: "grant") => Promise<unknown>;
+  readonly WORKSPACE_TRUST_CHANGED_EVENT: string;
+}
+
+function trustStatusResponse(empty: boolean): Response {
+  return new Response(
+    empty
+      ? null
+      : JSON.stringify({
+          kind: "workspace-trust-status",
+          schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+          projectId: "private-trust-project",
+          trust: "trusted",
+          decidedBy: "server",
+          reason: "human-grant",
+          revision: 1,
+        }),
+    {
+      status: empty ? 204 : 200,
+      headers: { "X-Keiko-Correlation-Id": "trust-204-response-scenario" },
+    },
+  );
+}
+
+async function driveTrust204Refusal(context: (body: string) => RouteContext): Promise<void> {
+  const api = await vi.importActual<WorkspaceTrustFixture>(
+    "../../packages/keiko-ui/src/lib/workspace-trust-api.js",
+  );
+  const { diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  const browser = new EventTarget();
+  vi.stubGlobal("window", browser);
+  const changes = vi.fn();
+  browser.addEventListener(api.WORKSPACE_TRUST_CHANGED_EVENT, changes);
+  let empty = false;
+  let requests = 0;
+  const bodies: string[] = [];
+  const deliveries: Promise<Response>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input === "string" && input.startsWith("/api/editor/verification/trust")) {
+        requests += 1;
+        return trustStatusResponse(empty);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      const delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      deliveries.push(delivery);
+      return delivery;
+    },
+  );
+  await expect(api.fetchWorkspaceTrustStatus("private-trust-project")).resolves.toMatchObject({
+    trust: "trusted",
+  });
+  expect(bodies).toEqual([]);
+  empty = true;
+  for (const action of [
+    (): Promise<unknown> => api.fetchWorkspaceTrustStatus("private-trust-project"),
+    (): Promise<unknown> => api.mutateWorkspaceTrust("private-trust-project", "grant"),
+  ])
+    await expect(action()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+      correlationId: "trust-204-response-scenario",
+    });
+  expect(requests).toBe(3);
+  expect(changes).not.toHaveBeenCalled();
+  expect(bodies).toHaveLength(2);
+  expect((await Promise.all(deliveries)).map((response) => response.status)).toEqual([204, 204]);
+  for (const body of bodies) {
+    expect(body).toContain('"errorClass":"ApiError"');
+    expect(body).toContain('"frames":[]');
+    expect(body).toContain('"causeChain":[]');
+  }
+  expect(bodies.join("\n")).not.toContain("private-trust-project");
 }
 
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
@@ -430,6 +516,31 @@ describe("Activity Log scenario: client-diagnostics", () => {
     expect(trace.failureClasses).toContain("client-diagnostic");
     for (const privateValue of ["private-sync-branch", "private-sync-ref", "private-sync-project"])
       expect(log).not.toContain(privateValue);
+  });
+
+  it("persists each actual 204 trust refusal without a false change announcement or replay", async () => {
+    const startedAtMs = Date.now();
+    await driveTrust204Refusal(context);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(2);
+    for (const line of lines)
+      expect(parsedLine(line)).toMatchObject({
+        correlationId: "trust-204-response-scenario",
+        clientKind: "other",
+        errorKind: "validation-failed",
+        completeness: "complete",
+        loss: "none",
+        errorClass: "ApiError",
+      });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-trust-project");
+    expect(log).not.toContain("/api/editor/verification/trust");
   });
 
   // Fault injection: four refused reports (two sharing a refusal reason within the same throttle

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, fetchGitBranches } from "./api";
 import {
   bffFetchJson,
+  type BffResponseMetadata,
   bffCodeErrorKind,
   bffRequestErrorKind,
   responseCorrelationIdOf,
@@ -207,6 +208,81 @@ describe("bffFetchJson — success bodies", () => {
   it("returns undefined on 204 No Content", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
     await expect(bffFetchJson("/api/x", { method: "DELETE" })).resolves.toBeUndefined();
+  });
+
+  it("preserves ordinary DELETE 204 receipts and the supplied AbortSignal without replay", async () => {
+    const signal = new AbortController().signal;
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(bffFetchJson("/api/x", { method: "DELETE", signal })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(lastInit(fetchMock).signal).toBe(signal);
+    expect(new Headers(lastInit(fetchMock).headers).get("X-Keiko-CSRF")).toBe("1");
+    expect(ensureLocalSession).not.toHaveBeenCalled();
+  });
+
+  it("routes undefined and actual metadata through a supplied validator on 204", async () => {
+    const response = new Response(null, {
+      status: 204,
+      headers: { Date: "Thu, 15 Oct 2026 12:00:00 GMT" },
+    });
+    const readBody = vi.spyOn(response, "json");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    const validator = vi.fn((_: string, value: unknown, _metadata: BffResponseMetadata) => ({
+      mapped: value,
+    }));
+    const startedAt = performance.now();
+    await expect(bffFetchJson("/api/x", undefined, { validator })).resolves.toEqual({
+      mapped: undefined,
+    });
+    expect(validator).toHaveBeenCalledExactlyOnceWith("/api/x", undefined, {
+      headers: response.headers,
+      receivedAtMs: expect.any(Number),
+    });
+    expect(validator.mock.calls[0]?.[2].headers).toBe(response.headers);
+    expect(validator.mock.calls[0]?.[2].receivedAtMs).toBeGreaterThanOrEqual(startedAt);
+    expect(readBody).not.toHaveBeenCalled();
+    expect(performance.now()).toBeGreaterThanOrEqual(startedAt);
+  });
+
+  it("correlates and reports a rejected 204 validator once without request or error content", async () => {
+    const error = new ApiError("CONTRACT_VALIDATION_FAILED", "private response detail", 502);
+    error.stack = `ApiError: private response detail\n    at ${location.origin}/_next/static/chunks/fixture-204.js:12:345`;
+    const diagnostics = vi.fn();
+    setClientDiagnosticWriter(diagnostics);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 204,
+        headers: { "X-Keiko-Correlation-Id": "http-204-response-scenario" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      bffFetchJson(
+        "/api/private-root",
+        { method: "POST" },
+        {
+          validator: () => {
+            throw error;
+          },
+        },
+      ),
+    ).rejects.toBe(error);
+    expect(error.correlationId).toBe("http-204-response-scenario");
+    expect(diagnostics).toHaveBeenCalledExactlyOnceWith("bff:contract-validation-failed", {
+      kind: "other",
+      errorKind: "validation-failed",
+      correlationId: "http-204-response-scenario",
+      errorEvidence: {
+        errorClass: "ApiError",
+        frames: ["dist/ui/static/_next/static/chunks/fixture-204.js:12:345"],
+        causeChain: [],
+      },
+    });
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private-root");
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private response detail");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(ensureLocalSession).not.toHaveBeenCalled();
   });
 
   it("parses and returns the JSON body on 200", async () => {

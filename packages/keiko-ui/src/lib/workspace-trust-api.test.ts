@@ -186,6 +186,52 @@ describe("workspace trust API", () => {
     });
   });
 
+  it("refuses a body-free 204 trust read with its response correlation and no replay", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 204,
+        headers: { "X-Keiko-Correlation-Id": "trust-read-204-scenario" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+      correlationId: "trust-read-204-scenario",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a 204 trust mutation without announcing a change or replaying it", async () => {
+    const listener = vi.fn();
+    window.addEventListener(WORKSPACE_TRUST_CHANGED_EVENT, listener);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 204,
+        headers: { "X-Keiko-Correlation-Id": "trust-write-204-scenario" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(mutateWorkspaceTrust("/repo-a", "grant")).rejects.toMatchObject({
+        code: "CONTRACT_VALIDATION_FAILED",
+        status: 502,
+        correlationId: "trust-write-204-scenario",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/editor/verification/trust",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        }),
+      );
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(WORKSPACE_TRUST_CHANGED_EVENT, listener);
+    }
+  });
+
   it("projects only redacted API error metadata for trust surfaces", () => {
     const correlated = new ApiError("WORKSPACE_STATE_UNAVAILABLE", "sensitive detail", 503);
     correlated.correlationId = "trust-surface-request-2625";
