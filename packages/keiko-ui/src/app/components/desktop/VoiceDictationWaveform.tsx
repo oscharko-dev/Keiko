@@ -7,15 +7,16 @@ import styles from "./VoiceDictation.module.css";
 
 const SAMPLE_COUNT = 64;
 const SAMPLE_INTERVAL_MS = 80;
+const SAMPLE_POSITIONS = Array.from({ length: SAMPLE_COUNT }, (_, index) => index * 6 + 3);
 
 function useLevelHistory(level: number, recording: boolean): readonly number[] {
   const current = useRef(0);
   current.current = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0;
   const [samples, setSamples] = useState<readonly number[]>(() =>
-    Array<number>(SAMPLE_COUNT).fill(0),
+    new Array<number>(SAMPLE_COUNT).fill(0),
   );
   useEffect(() => {
-    setSamples(Array<number>(SAMPLE_COUNT).fill(0));
+    setSamples(new Array<number>(SAMPLE_COUNT).fill(0));
     if (!recording) return;
     const timer = setInterval(() => {
       setSamples((previous) => [...previous.slice(1), current.current]);
@@ -50,16 +51,19 @@ export function VoiceDictationWaveform({
         <>
           <span className="sr-only">{label}</span>
           <svg viewBox="0 0 384 32" preserveAspectRatio="none" aria-hidden="true">
-            {samples.map((level, index) => (
-              <line
-                key={index}
-                x1={index * 6 + 3}
-                x2={index * 6 + 3}
-                y1={15 - level * 13}
-                y2={17 + level * 13}
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
+            {SAMPLE_POSITIONS.map((position, index) => {
+              const level = samples[index] ?? 0;
+              return (
+                <line
+                  key={position}
+                  x1={position}
+                  x2={position}
+                  y1={15 - level * 13}
+                  y2={17 + level * 13}
+                  vectorEffect="non-scaling-stroke"
+                />
+              );
+            })}
           </svg>
         </>
       ) : (
