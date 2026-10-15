@@ -117,9 +117,8 @@ function complementaryExcerpts(candidates: readonly SourceExcerpt[]): readonly s
     selected.push(best);
     for (const term of best.terms) covered.add(term);
   }
-  return selected
-    .toSorted((left, right) => right.offset - left.offset)
-    .map(({ excerpt }) => excerpt);
+  selected.sort((left, right) => right.offset - left.offset);
+  return selected.map(({ excerpt }) => excerpt);
 }
 
 /** Re-read only eligible turns from the same chat. Search cannot widen a connector/workspace scope. */
