@@ -2706,6 +2706,186 @@
           "testName": "code task execution public parser (#3918) pins source public and forwarding checked return types"
         }
       ]
+    },
+    {
+      "id": "run-control-snapshot-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRunControlSnapshotV1",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRunControlSnapshotV1"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRunControlSnapshotV1"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "parsePublicRunControlSnapshot",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-run-control.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "run control snapshot public parser (#3918) retains original grants and nested fact identities"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "run control snapshot public parser (#3918) retains all tagged fact outcomes empty grants and omitted fact values"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "run control snapshot public parser (#3918) refuses malformed snapshots with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "run control snapshot public parser (#3918) retains the single observed task id read"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "run control snapshot public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "C1A run-control member admission refuses skipped grant validation through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "C1A run-control member admission refuses sparse grants through public"
+        }
+      ]
+    },
+    {
+      "id": "runtime-governance-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRuntimeGovernanceRequestV1",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRuntimeGovernanceRequestV1"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRuntimeGovernanceRequestV1"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "parsePublicGovernanceRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-run-control.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance request public parser (#3918) retains every operation identity and closed branch fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance request public parser (#3918) retains both admitted decide grant scopes"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance request public parser (#3918) refuses malformed requests with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance request public parser (#3918) retains the second observed operation refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance request public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "C1A finite run-control discriminator observations preserves valid changing run-control fallback observations through public"
+        }
+      ]
+    },
+    {
+      "id": "runtime-governance-outcome-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRuntimeGovernanceOutcomeV1",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRuntimeGovernanceOutcomeV1"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "validateRuntimeGovernanceOutcomeV1"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
+        "exportName": "parsePublicGovernanceOutcome",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-run-control.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance outcome public parser (#3918) retains all outcome identities and ordered lifecycle references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance outcome public parser (#3918) refuses fields from foreign outcome arms including own undefined"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance outcome public parser (#3918) refuses malformed outcomes with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance outcome public parser (#3918) retains the second observed status refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "runtime governance outcome public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "C1A run-control member admission refuses skipped lifecycle validation through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "C1A run-control member admission refuses sparse lifecycle events through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "C1A finite run-control discriminator observations preserves valid changing run-control fallback observations through public"
+        }
+      ]
     }
   ]
 }

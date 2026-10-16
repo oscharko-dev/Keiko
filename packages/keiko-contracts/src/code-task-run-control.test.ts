@@ -1,7 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  RUNTIME_GOVERNANCE_LIFECYCLE_KINDS as publicLifecycleKinds,
+  RUNTIME_GOVERNANCE_OPERATIONS as publicOperations,
+  validateRunControlSnapshotV1 as publicRunControlSnapshot,
+  validateRuntimeGovernanceRequestV1 as publicGovernanceRequest,
+  validateRuntimeGovernanceOutcomeV1 as publicGovernanceOutcome,
+  type RunControlSnapshotV1 as PublicRunControlSnapshotV1,
+  type RuntimeGovernanceRequestV1 as PublicRuntimeGovernanceRequestV1,
+  type RuntimeGovernanceOutcomeV1 as PublicRuntimeGovernanceOutcomeV1,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-run-control";
 
 import { hasInheritedEnumerableProperty } from "./code-task-acceptance.js";
-import { CODE_TASK_GOVERNANCE_SCHEMA_VERSION } from "./code-task-governance.js";
+import {
+  CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
+  CODE_TASK_GRANT_SCOPES,
+  GOVERNED_ACTION_DECISIONS,
+} from "./code-task-governance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 import {
   validateRunControlSnapshotV1,
@@ -719,4 +734,349 @@ describe("C1A finite run-control discriminator observations", () => {
       expect(statusReads).toBe(2);
     },
   );
+});
+
+type SourceRunControlSnapshotParse = CodingWorkbenchValidationResult<RunControlSnapshotV1>;
+type SourceGovernanceRequestParse = CodingWorkbenchValidationResult<RuntimeGovernanceRequestV1>;
+type SourceGovernanceOutcomeParse = CodingWorkbenchValidationResult<RuntimeGovernanceOutcomeV1>;
+type PublicRunControlSnapshotParse = CodingWorkbenchValidationResult<PublicRunControlSnapshotV1>;
+type PublicGovernanceRequestParse =
+  CodingWorkbenchValidationResult<PublicRuntimeGovernanceRequestV1>;
+type PublicGovernanceOutcomeParse =
+  CodingWorkbenchValidationResult<PublicRuntimeGovernanceOutcomeV1>;
+
+export function parsePublicRunControlSnapshot(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicRunControlSnapshotV1> {
+  const result = publicRunControlSnapshot(input);
+  return result;
+}
+
+export function parsePublicGovernanceRequest(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicRuntimeGovernanceRequestV1> {
+  const result = publicGovernanceRequest(input);
+  return result;
+}
+
+export function parsePublicGovernanceOutcome(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicRuntimeGovernanceOutcomeV1> {
+  const result = publicGovernanceOutcome(input);
+  return result;
+}
+
+describe("run control snapshot public parser (#3918)", () => {
+  it("retains original grants and nested fact identities", () => {
+    const input = {
+      ...snapshot(),
+      grantRefs: CODE_TASK_GRANT_SCOPES.map((grantScope) => ({ grantId: "grt-1", grantScope })),
+    };
+    const result = parsePublicRunControlSnapshot(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy run control snapshot refused");
+    expect(result.value).toBe(input);
+    expect(result.value.grantRefs).toBe(input.grantRefs);
+    for (const [index, ref] of input.grantRefs.entries())
+      expect(result.value.grantRefs[index]).toBe(ref);
+    expect(result.value.recoveryRef).toBe(input.recoveryRef);
+    expect(result.value.pendingQuestion).toBe(input.pendingQuestion);
+  });
+
+  it("retains all tagged fact outcomes empty grants and omitted fact values", () => {
+    for (const outcome of ["absent", "unavailable", "unknown"]) {
+      const input = {
+        ...snapshot(),
+        grantRefs: [],
+        recoveryRef: { outcome },
+        pendingQuestion: { outcome },
+      };
+      const result = parsePublicRunControlSnapshot(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy non-known run control facts refused");
+      expect(result.value).toBe(input);
+      expect(result.value.grantRefs).toBe(input.grantRefs);
+      expect(Object.hasOwn(result.value.recoveryRef, "value")).toBe(false);
+      expect(Object.hasOwn(result.value.pendingQuestion, "value")).toBe(false);
+      expect(
+        parsePublicRunControlSnapshot({ ...input, recoveryRef: { outcome, value: undefined } }).ok,
+      ).toBe(false);
+      expect(
+        parsePublicRunControlSnapshot({ ...input, pendingQuestion: { outcome, value: undefined } })
+          .ok,
+      ).toBe(false);
+    }
+    const input = {
+      ...snapshot(),
+      recoveryRef: { outcome: "known", value: "checkpoint-1" },
+      pendingQuestion: { outcome: "known", value: "que_1" },
+    };
+    const result = parsePublicRunControlSnapshot(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy known run control facts refused");
+    expect(result.value.recoveryRef).toBe(input.recoveryRef);
+    expect(result.value.pendingQuestion).toBe(input.pendingQuestion);
+  });
+
+  it("refuses malformed snapshots with exact eager ordered diagnostics", () => {
+    expect(parsePublicRunControlSnapshot(null)).toEqual({
+      ok: false,
+      errors: ["run-control snapshot must be an object"],
+    });
+    expect(
+      parsePublicRunControlSnapshot({
+        ...snapshot(),
+        runEpoch: -1,
+        stateRevision: -1,
+        grantRefs: {},
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "runEpoch must be a non-negative integer",
+        "stateRevision must be a non-negative integer",
+        "grantRefs must be an array",
+      ],
+    });
+  });
+
+  it("retains the single observed task id read", () => {
+    const input = snapshot();
+    const taskId = input.taskId;
+    let reads = 0;
+    Object.defineProperty(input, "taskId", {
+      get: (): string => {
+        reads += 1;
+        return taskId;
+      },
+    });
+    const result = parsePublicRunControlSnapshot(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy observed run control snapshot refused");
+    expect(result.value).toBe(input);
+    expect(reads).toBe(1);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateRunControlSnapshotV1,
+    ).returns.toEqualTypeOf<SourceRunControlSnapshotParse>();
+    expectTypeOf(publicRunControlSnapshot).returns.toEqualTypeOf<PublicRunControlSnapshotParse>();
+    expectTypeOf(
+      parsePublicRunControlSnapshot,
+    ).returns.toEqualTypeOf<PublicRunControlSnapshotParse>();
+    const result = parsePublicRunControlSnapshot(snapshot());
+    if (!result.ok) throw new TypeError("healthy public snapshot types refused");
+    expectTypeOf(result.value.taskId).toEqualTypeOf<PublicRunControlSnapshotV1["taskId"]>();
+    expectTypeOf(result.value.grantRefs).toEqualTypeOf<PublicRunControlSnapshotV1["grantRefs"]>();
+    type Failure = Extract<ReturnType<typeof publicRunControlSnapshot>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("runtime governance request public parser (#3918)", () => {
+  it("retains every operation identity and closed branch fields", () => {
+    const { actionKind, requestedGrantScope, ...target } = decideRequest();
+    for (const operation of publicOperations) {
+      const input =
+        operation === "decide"
+          ? { ...target, operation, actionKind, requestedGrantScope }
+          : { ...target, operation };
+      const result = parsePublicGovernanceRequest(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy public governance operation refused");
+      expect(result.value).toBe(input);
+      expect(Object.hasOwn(result.value, "actionKind")).toBe(operation === "decide");
+      expect(Object.hasOwn(result.value, "requestedGrantScope")).toBe(operation === "decide");
+      if (operation !== "decide")
+        expect(
+          parsePublicGovernanceRequest({
+            ...input,
+            actionKind: undefined,
+            requestedGrantScope: undefined,
+          }).ok,
+        ).toBe(false);
+    }
+  });
+
+  it("retains both admitted decide grant scopes", () => {
+    for (const requestedGrantScope of CODE_TASK_GRANT_SCOPES) {
+      const input = { ...decideRequest(), requestedGrantScope };
+      const result = parsePublicGovernanceRequest(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy decide grant scope refused");
+      expect(result.value).toBe(input);
+    }
+  });
+
+  it("refuses malformed requests with exact eager ordered diagnostics", () => {
+    expect(parsePublicGovernanceRequest(null)).toEqual({
+      ok: false,
+      errors: ["runtime governance request must be an object"],
+    });
+    expect(
+      parsePublicGovernanceRequest({
+        ...decideRequest(),
+        actionKind: "bogus",
+        requestedGrantScope: "forever",
+        taskId: 0,
+        stateRevision: -1,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "actionKind is invalid",
+        "requestedGrantScope is invalid",
+        "taskId is invalid",
+        "stateRevision must be a non-negative integer",
+      ],
+    });
+  });
+
+  it("retains the second observed operation refusal", () => {
+    const { actionKind: _actionKind, requestedGrantScope: _scope, ...target } = decideRequest();
+    const input = { ...target, operation: "pause" };
+    let reads = 0;
+    Object.defineProperty(input, "operation", {
+      get: (): string => {
+        reads += 1;
+        return reads === 1 ? "pause" : "invalid";
+      },
+    });
+    expect(parsePublicGovernanceRequest(input)).toEqual({
+      ok: false,
+      errors: ["operation is invalid"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateRuntimeGovernanceRequestV1,
+    ).returns.toEqualTypeOf<SourceGovernanceRequestParse>();
+    expectTypeOf(publicGovernanceRequest).returns.toEqualTypeOf<PublicGovernanceRequestParse>();
+    expectTypeOf(
+      parsePublicGovernanceRequest,
+    ).returns.toEqualTypeOf<PublicGovernanceRequestParse>();
+    const result = parsePublicGovernanceRequest(decideRequest());
+    if (!result.ok) throw new TypeError("healthy public governance request types refused");
+    expectTypeOf(result.value.runId).toEqualTypeOf<PublicRuntimeGovernanceRequestV1["runId"]>();
+    if (result.value.operation === "decide")
+      expectTypeOf(result.value.requestedGrantScope).toEqualTypeOf<"once" | "task">();
+    type Failure = Extract<ReturnType<typeof publicGovernanceRequest>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("runtime governance outcome public parser (#3918)", () => {
+  it("retains all outcome identities and ordered lifecycle references", () => {
+    const base = { kind: "runtime-governance-outcome", schemaVersion: 1 };
+    const events = publicLifecycleKinds.map((kind, sequence) => ({
+      sequence,
+      kind,
+      stateRevision: sequence,
+    }));
+    const settled = { ...base, status: "settled", events };
+    for (const input of [
+      ...GOVERNED_ACTION_DECISIONS.map((decision) => ({ ...base, status: "decided", decision })),
+      settled,
+      { ...base, status: "unsupported", reasonCode: "no-capability" },
+      { ...base, status: "denied", reasonCode: "policy-denied" },
+    ]) {
+      const result = parsePublicGovernanceOutcome(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy public governance outcome refused");
+      expect(result.value).toBe(input);
+      if (result.value.status === "settled") {
+        expect(result.value.events).toBe(events);
+        for (const [index, event] of events.entries())
+          expect(result.value.events[index]).toBe(event);
+      }
+    }
+    const empty = { ...base, status: "settled", events: [] };
+    const result = parsePublicGovernanceOutcome(empty);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy empty public lifecycle refused");
+    expect(result.value).toBe(empty);
+  });
+
+  it("refuses fields from foreign outcome arms including own undefined", () => {
+    const base = { kind: "runtime-governance-outcome", schemaVersion: 1 };
+    for (const input of [
+      { ...base, status: "decided", decision: "allowed", events: undefined },
+      { ...base, status: "settled", events: [], decision: undefined },
+      { ...base, status: "unsupported", reasonCode: "no-capability", events: undefined },
+      { ...base, status: "denied", reasonCode: "policy-denied", decision: undefined },
+    ]) {
+      expect(parsePublicGovernanceOutcome(input).ok).toBe(false);
+    }
+  });
+
+  it("refuses malformed outcomes with exact eager ordered diagnostics", () => {
+    expect(parsePublicGovernanceOutcome(null)).toEqual({
+      ok: false,
+      errors: ["runtime governance outcome must be an object"],
+    });
+    expect(
+      parsePublicGovernanceOutcome({
+        kind: "wrong",
+        schemaVersion: 2,
+        status: "settled",
+        events: [{ sequence: -1, stateRevision: -1, kind: "bogus" }],
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "kind is invalid",
+        "schemaVersion must be the literal 1",
+        "events[0].sequence must be a non-negative integer",
+        "events[0].stateRevision must be a non-negative integer",
+        "events[0].kind is invalid",
+      ],
+    });
+  });
+
+  it("retains the second observed status refusal", () => {
+    const input = {
+      kind: "runtime-governance-outcome",
+      schemaVersion: 1,
+      status: "unsupported",
+      reasonCode: "no-capability",
+    };
+    let reads = 0;
+    Object.defineProperty(input, "status", {
+      get: (): string => {
+        reads += 1;
+        return reads === 1 ? "unsupported" : "invalid";
+      },
+    });
+    expect(parsePublicGovernanceOutcome(input)).toEqual({
+      ok: false,
+      errors: ["status is invalid"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateRuntimeGovernanceOutcomeV1,
+    ).returns.toEqualTypeOf<SourceGovernanceOutcomeParse>();
+    expectTypeOf(publicGovernanceOutcome).returns.toEqualTypeOf<PublicGovernanceOutcomeParse>();
+    expectTypeOf(
+      parsePublicGovernanceOutcome,
+    ).returns.toEqualTypeOf<PublicGovernanceOutcomeParse>();
+    const result = parsePublicGovernanceOutcome({
+      kind: "runtime-governance-outcome",
+      schemaVersion: 1,
+      status: "settled",
+      events: [],
+    });
+    if (!result.ok) throw new TypeError("healthy public governance outcome types refused");
+    if (result.value.status === "settled")
+      expectTypeOf(result.value.events).toEqualTypeOf<
+        Extract<PublicRuntimeGovernanceOutcomeV1, { status: "settled" }>["events"]
+      >();
+    type Failure = Extract<ReturnType<typeof publicGovernanceOutcome>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
 });

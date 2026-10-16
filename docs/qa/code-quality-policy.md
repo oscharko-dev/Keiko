@@ -67,7 +67,7 @@ pending, stale or failed proofs cannot adapt it, and another `Reflect.get` coord
 No own-property/descriptor/cache replacement, receiver/read-order change or domain typing is
 introduced. The runtime, registered evidence contract, record and proof bodies remain unchanged.
 The native census is preserved; only the one qualified active operation can become an adaptation.
-The final complete production gate must actually qualify all 51 records on its current candidate
+The final complete production gate must actually qualify all 54 records on its current candidate
 and cover the full contracts production inventory. An earlier qualified report or a constructed
 unit input cannot supply that execution. This activation does not complete the 170-owner domain
 migration or activate the remaining six boundary rules.
@@ -697,3 +697,15 @@ precedes that projection, so this refusal neither revokes a grant nor supplies n
 No production API, runtime code, resolver, scope or optional dictionary/typeof grant changes.
 Qualification of these two roots does not establish governance domain zero or complete the remaining
 accepted-owner obligations.
+
+Three run-control public validators extend the register from 51 to 54 mandatory unknown-parameter
+obligations: run snapshots, runtime governance requests and runtime governance outcomes. Existing
+named public exports are the proof surfaces; no active production validator caller is presumed.
+Direct public forwarding wrappers preserve original and nested references, all six operation arms,
+all four outcome arms, tagged fact omission and own-undefined refusal, empty and dense collections,
+exact eager refusals and the existing getter phases. Strict return pins distinguish source-owned
+brands from canonical public DTO brands. Existing sparse/member and changing-observation regression
+pins remain selected. These contracts grant no execution capability or authority; missing runtime
+capabilities remain unsupported or denied. No production API, runtime bytes, resolver, scope or
+optional dictionary/typeof grant changes. Qualification is limited to these three public roots and
+does not discharge domain zero or the remaining accepted-owner obligations.
