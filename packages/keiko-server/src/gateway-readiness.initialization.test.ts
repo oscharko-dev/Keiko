@@ -12,6 +12,7 @@ import {
   type UiHandlerDeps,
 } from "./deps.js";
 import {
+  awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
   initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
@@ -23,6 +24,49 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 
 const compositions: UiHandlerDeps[] = [];
 const directories: string[] = [];
+
+it.each([
+  ["selected", awaitInitializedConversationReadiness],
+  ["default", awaitAnyInitializedConversationReadyChatModel],
+] as const)(
+  "keeps %s Chat admission pending through a three-minute shared probe",
+  async (_name, join) => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const deps = composition();
+    vi.useFakeTimers();
+    let release: ((response: Response) => void) | undefined;
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    configure(deps, "corr-slow-initialization");
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledOnce();
+    });
+    let settled = false;
+    const admission = join(deps, "chat-model", "corr-slow-admission").then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(180_000);
+    const settledBeforeAnswer = settled;
+    release?.(chatProbeAnswer());
+    await admission;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settledBeforeAnswer).toBe(false);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(currentConversationReady(deps, "chat-model")).toBe(true);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.readiness.automatic.joined",
+        correlationId: "corr-slow-admission",
+      }),
+    );
+  },
+);
 
 afterEach(async (): Promise<void> => {
   for (const deps of compositions.splice(0)) await deps.dispose?.();

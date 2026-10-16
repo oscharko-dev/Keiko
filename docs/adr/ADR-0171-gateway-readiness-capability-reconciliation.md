@@ -51,9 +51,16 @@ credential-setup chat checks populate the same generation-bound ledger and are r
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization. A fresh successful observation adds no per-question readiness request. A success
 expires at the exact five-minute boundary; malformed or future successful timestamps are unknown.
-The existing background queue renews success after two minutes, leaving the two-minute provider
-timeout floor plus one minute of margin before expiry, and uses the same generation/model
-in-flight map, two slots and recovery timers. Reload starts unknown or expired checks immediately
+The existing background queue renews success after two minutes and uses the same generation/model
+in-flight map, two slots and recovery timers. Automatic and on-demand probes share the interactive
+gateway's five-minute silence floor (#4038), preserving larger configured timeouts: a two-minute
+probe must not declare a model unavailable while an ordinary three-minute answer is still within
+its supported wait. The five-minute freshness interval remains unchanged. A renewal that outlives
+it remains shared by callers; expiry never grants unverified admission. Interactive admission uses
+the same five-minute aggregate wait across all candidate models, including the selected model;
+it must not abandon a healthy pending check after 45 seconds. Expiry stops that caller's wait,
+leaves the single shared probe owned by configuration, and does not authorize an unverified model.
+Reload starts unknown or expired checks immediately
 in the background, independently of held catalog discovery; selected requests join that same work.
 An expired success can share one selected-request renewal. Failed initialization remains
 visible. Inconclusive transport or provider failures recover through configuration-owned background
@@ -71,6 +78,11 @@ through the initial two-minute window, including when cached models already look
 minute for an unchanged catalog. Hidden tabs pause and catch up immediately on visibility or focus.
 Failed reads back off from five seconds to one minute and report one correlated transport failure
 per outage streak.
+Native Node HTTP cancellation wraps the signal reason in `AbortError` with `ABORT_ERR`; readiness
+unwraps its `DOMException` reason before classification and diagnostics. Deadline expiry and owner
+cancellation remain inconclusive, including on the native transport, and retain bounded recovery
+instead of becoming a conclusive capability rejection. The existing readiness completion event
+records the inconclusive-probe count without request or response bodies.
 A conversation's first provider dispatch still requires fresh readiness. A completed successful
 call gives only that turn's existing model-port wrapper a continuation witness, valid for the same
 five-minute interval from completion. A bounded follow-up or citation repair can use it when the

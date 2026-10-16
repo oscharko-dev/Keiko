@@ -109,14 +109,68 @@ no loss and no truncation. A preceding retest had retained the old frontend beca
 launcher fragment did not reload the document; it still reproduced the defect and is excluded
 from passing evidence.
 
-## Revised React skill: first fresh attempt
+## Revised React skill: fresh attempts
 
 Revision 2 was replaced and explicitly selected through the native skill UI in a fresh conversation.
 The unchanged generated file failed strict TypeScript checking because its promise resolver could
 be used before assignment (`TS2454`). Execution and mutation testing therefore did not proceed.
 It also repeated the earlier empty-input typing and disabled-button interaction patterns. This
-attempt does not establish an improvement; prompt delivery and further independent comparisons
-remain under investigation. The original answer and failed execution are retained privately.
+attempt does not establish an improvement. A second fresh selected-skill request also failed
+strict checking with `TS2454`, before execution. It produced four validated citations, whereas
+the first produced none after a rejected content-changing repair. A transient, bounded request
+observer confirmed the complete revision-2 skill occurred exactly once in the second provider
+request; only counts and digests were retained. Missing skill delivery does not explain that
+failure. The first fresh no-skill control passed typechecking but failed the same two interaction
+cases as initial tuning (three passed, two failed). The original answers and execution results
+remain private. These incomplete repetitions do not establish comparative effectiveness.
+
+## Readiness under shared gateway load
+
+Two concurrent native generation requests exposed another defect. A background readiness probe
+expired after 120 seconds while the actual answer completed after 208.5 seconds. Native Node HTTP
+wrapped the timeout reason in an `AbortError` with `ABORT_ERR`, which readiness treated as a
+conclusive failure. This also blocked the answer's citation-repair continuation. A new Chat window
+then showed model-unavailable guidance without a retry control; that recovery gap remains open.
+
+Automatic and on-demand readiness probes now use the interactive gateway's five-minute silence
+floor and preserve larger configured deadlines. Native cancellation errors retain their actual
+deadline/cancellation reason and count as inconclusive in the existing body-free completion event.
+Freshness remains five minutes, and background renewal remains two minutes. Renewal cadence is
+independent of the longer provider deadline, preventing continuous re-probes from a negative
+freshness-minus-deadline interval. Expired readiness still cannot authorize an unverified dispatch.
+
+Native cancellation and short-deadline regressions failed before the classification fix; two
+three-minute probe cases failed before the deadline-floor fix. All 95 targeted readiness and
+conversation-admission tests passed afterwards, including existing renewal and single-flight
+coverage. The first rebuilt browser exercise completed both delayed readiness probes in about
+183 seconds. Its retained time-window query is degraded because the
+running process and rebuilt query reader used different unreleased operation-catalog digests;
+that attempt is not counted as complete canonical evidence.
+
+A second exercise with matching runtime/reader catalogs retained complete canonical evidence,
+without loss or truncation. It also exposed a separate admission limit: a new Chat joined the
+existing probe but stopped waiting after 45 seconds and reported failed readiness while that probe
+was still pending. Increasing the probe deadline alone therefore does not qualify slow Chat
+creation. Two more failing-before tests cover explicit/default model admission; the corrected
+aggregate wait shares the five-minute interactive floor, with all 97 targeted tests passing.
+
+The native admission retest completed its shared probe in 181.3 seconds and a waiting creation in
+165.1 seconds. It exposed a further UI defect: repeated catalog updates during the wait caused five
+Chat-creation requests to complete together, instead of one. Other browser requests queued behind
+those held requests, temporarily showing unavailable version/diagnostics status. This is not a
+passing end-to-end latency result. Creation ownership across catalog updates and manual retry after
+failure remain open; the single shared provider probe itself did not duplicate. The canonical query
+was supported, complete, without loss/truncation, and reported two sequence anomalies, retained
+as an explicit evidence limitation.
+
+## CI feedback on the cancellation increment
+
+The bundle evidence measured locally under Node 24.21 did not match CI's pinned Node 24.18.0.
+Running the exact checker against the same built assets in the pinned developer container reproduced
+CI's fingerprint exactly; compression measurements differ between these runtimes. The evidence was
+regenerated and checked with Node 24.18.0. A separate macOS-x64 fixed-host EOF timeout did not
+reproduce on this arm64 host after installing the declared host dependencies: both its targeted
+regression and the complete 56-test host suite passed. This does not replace exact-platform CI.
 
 ## Open work
 
