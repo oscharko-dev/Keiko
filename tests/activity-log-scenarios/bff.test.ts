@@ -10,6 +10,8 @@ import { resetServerLogger } from "../support/activity-log-test-support.js";
 
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +66,71 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+
+import { createMemoryVault, MEMORY_DB_FILENAME } from "@oscharko-dev/keiko-memory-vault";
+import { makeMemoryRecord } from "@oscharko-dev/keiko-contracts/memory-fixtures";
+import { handleGetMemory } from "../../packages/keiko-server/src/memory-handlers.js";
+import {
+  buildRedactor,
+  createRunRegistry,
+  type UiHandlerDeps,
+} from "../../packages/keiko-server/src/index.js";
+import { createInMemoryUiStore } from "../../packages/keiko-server/src/store/index.js";
+import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
+
+function memoryRequest(id: string, correlationId: string): RouteContext {
+  return {
+    correlationId,
+    req: asRequest(new PassThrough()),
+    res: new PassThrough() as unknown as ServerResponse,
+    params: { id },
+    url: new URL("http://127.0.0.1/api/memory/:id"),
+  };
+}
+
+function memoryDeps(vault: ReturnType<typeof createMemoryVault>): UiHandlerDeps {
+  return {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
+    memoryVault: vault,
+  };
+}
+
+function driveStoredMemoryFailure(memoryDir: string, correlationId: string): void {
+  const vaultKey = randomBytes(32);
+  const open = (): ReturnType<typeof createMemoryVault> =>
+    createMemoryVault({ memoryDir, vaultKey, redactString: (value) => value });
+  const record = makeMemoryRecord({ body: "bff-private-memory-body-canary" });
+  const context = memoryRequest(record.id, correlationId);
+  const writer = open();
+  try {
+    writer.insertMemory(record);
+    expect(handleGetMemory(context, memoryDeps(writer)).status).toBe(200);
+  } finally {
+    writer.close();
+  }
+  const database = new DatabaseSync(join(memoryDir, MEMORY_DB_FILENAME));
+  try {
+    database.prepare("UPDATE memories SET schema_version = ? WHERE id = ?").run("2", record.id);
+  } finally {
+    database.close();
+  }
+  const reopened = open();
+  try {
+    expect(handleGetMemory(context, memoryDeps(reopened))).toEqual({
+      status: 500,
+      body: { error: { code: "MEMORY_ERROR", message: "Failed to read memory." } },
+    });
+  } finally {
+    reopened.close();
+  }
+}
 
 interface ManualWriterScenario {
   readonly deps: CreateHtmlManualPodDeps;
@@ -518,6 +585,35 @@ describe("Activity Log scenario: bff", () => {
       expect.arrayContaining(["server-diagnostic", "http-request"]),
     );
     expectDependencyFailureEvidence(stateDir, requestCorrelationId, secondCorrelationId);
+  });
+
+  it("reconstructs actual persisted Memory schema refusal through the handler diagnostic writer (#3918)", async () => {
+    const startedAtMs = Date.now();
+    const correlationId = "bff-memory-admission-request";
+    driveStoredMemoryFailure(join(stateDir, "memory"), correlationId);
+    const trace = await expectActivityLogScenario("bff.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["server.diagnostic.failure"],
+    });
+    expect(trace.failureClasses).toContain("server-diagnostic");
+    const text = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(text, "server.diagnostic.failure").map(parseLine);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      correlationId,
+      diagnosticOperation: "memory.get",
+      source: "memory-handlers.handleGetMemory",
+      errorKind: "internal",
+    });
+    for (const marker of [
+      "m-1",
+      "bff-private-memory-body-canary",
+      stateDir,
+      "schemaVersion must",
+      "Memory row",
+    ])
+      expect(text).not.toContain(marker);
   });
 
   it.each(["source-insert", "summary-update", "persisted-source"] as const)(
