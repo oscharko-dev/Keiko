@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { readWorkspaceFile, readWorkspaceFilePrefixForEvidence } from "./discovery.js";
 import { FileTooLargeError } from "./errors.js";
+import { findImportPathSuffix } from "./importPathSuffix.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
@@ -1152,10 +1153,7 @@ function resolveGoModuleTarget(
 }
 
 function suffixCandidate(pathSet: ReadonlySet<string>, suffix: string): string | undefined {
-  const normalized = normalizeScopePath(suffix).toLowerCase();
-  const matches = [...pathSet].filter((path) => path.toLowerCase().endsWith(normalized));
-  matches.sort((a, b) => a.length - b.length || (a < b ? -1 : 1));
-  return matches[0];
+  return findImportPathSuffix(pathSet, normalizeScopePath(suffix).toLowerCase());
 }
 
 function resolvePythonRelativeImport(

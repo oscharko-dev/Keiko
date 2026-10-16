@@ -375,6 +375,35 @@ remain intact. This closes a defensive internal invariant; no reachable mixed-qu
 capture has been demonstrated. The existing selected-count/confidence Activity Log events cover
 the selection result without new operations or raw query data.
 
+## Structural import scaling
+
+A separate retrieval-only run on the ordinary 100,000-file corpus observes a 47.4-second event-loop
+stall; a CPU-profiled repeat observes 47.9 seconds. The profile identifies repeated whole-inventory
+suffix scans among the principal costs, alongside other structural indexing stages. Each unresolved
+import previously copied, lowercased and scanned every indexed source path. The owning resolver now
+builds one reversed-path index per immutable inventory and locates suffix ranges by binary search.
+Shortest-path selection, case-insensitive matching and original-case lexical ties are preserved.
+Positive and negative resolutions cannot cross inventory identities.
+
+The deterministic regression exercises 100 distinct missing imports over 1,000 source paths. Before
+the fix it observes 100,000 path visits instead of the expected 1,000. Existing polyglot resolver
+tests and explicit suffix/tie-break controls protect behavior. This is one structural hotspot fix,
+not a claim that all large-search event-loop blocking is resolved. The existing retrieval completion
+event records elapsed time and structural work without source content.
+
+The profiled candidate repeat retains the same two current sources and 384 excerpt bytes, with
+56.2 seconds of retrieval and a 25.9-second maximum event-loop stall. Gate execution still overlaps
+this run, so the timing is comparative diagnostic evidence rather than an isolated benchmark.
+DTO pairing and per-file import binding scans remain visible hotspots; responsiveness is not yet
+qualified. The focused resolver, structural-context and Activity Log suites pass 255 tests.
+
+The broad package coverage run at `1dc875bff` completes with 55,241 passing tests, 61 skipped and
+one failure: the debug-launch policy test requires an exact approved Node/npm pair. A targeted
+rerun reproduces that failure under the host's newer Node patch. UI coverage at `1cd9659b1` passes
+10,629 tests with one skip. The debug-launch suite passes all 44 tests under the approved Node
+24.18.0 / npm 11.16.0 pair. Remaining coverage-lane outcomes are recorded separately; the aggregate
+quality command has not passed.
+
 ## CI feedback on the cancellation increment
 
 The bundle evidence measured locally under Node 24.21 did not match CI's pinned Node 24.18.0.

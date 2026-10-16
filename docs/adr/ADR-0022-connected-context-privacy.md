@@ -970,6 +970,12 @@ topic, even without a quoted or typed identifier, retains recursive discovery. A
 file cannot stop discovery for that independent topic. Sole named-file requests retain
 focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
+Structural import suffix resolution indexes each immutable, admitted source-path inventory once.
+Reversed, case-folded paths support binary prefix lookup while preserving the existing shortest-path
+and original-case lexical tie break, including partial-segment suffixes. Results and misses stay
+inside a weakly held inventory cache; another workspace or rebuild receives its own inventory.
+No source eligibility, retained-file budget, or resolved/heuristic classification changes. Existing
+retrieval completion timing and structural-build counters remain the body-free operational evidence.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget or retained query-result allowance, preserving primary root manifests
