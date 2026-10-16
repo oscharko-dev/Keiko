@@ -371,6 +371,11 @@ The unchanged admission contract rejects relative paths over 4096 UTF-8 bytes, b
 absolute or drive-prefixed paths, an initial `~`, and empty, `.` or `..` segments. The initial-tilde
 rule is positional: root `~notes.md` is excluded, while `src/~notes.md` is eligible.
 Optional structural and Git-history enrichment are separate from lexical coverage. Their planner
+requests Git history for explicit history/relationship questions and repository-wide diagnostics,
+including diagnostic follow-ups. A workspace-root selection alone does not request history: current
+policy and other factual questions must not acquire unrelated commit recency/churn evidence merely
+because the same files live in Git. Existing source-details/completion events retain the planned,
+executed and skipped-ring observations; diagnostic candidate scoping remains in force. Their planner
 slices retain finite scan counts (currently 614 and 307 files respectively) and finite returned
 matches; they do not cap the recursive lexical scan. An explicitly finite elapsed budget is sliced
 across rings, while the default `null` deadline remains uncapped. Retained lexical matches are
@@ -1180,8 +1185,8 @@ not prevent listing readable siblings. Combined diagnostics preserve both operat
 coverage reasons and search-work counts, so an earlier read failure cannot become complete coverage.
 These counts describe work across the two searches, not unique files: a path examined by each is
 counted twice. Planned rings are never presented as executed work in the diagnostic audit.
-Git-history discovery is not attempted for a folder without Git unless the question requests
-history or relationships. Requested definition, relationship, and history evidence retains its
+Git-history discovery is not dispatched for a folder without Git. Requested definition,
+relationship, and history evidence retains its
 existing retrieval path and reports genuine unavailability.
 Existing path denials, explicit ignore policy, output/model budgets and redaction remain enforced.
 Filesystem resource exhaustion remains a technical failure: for example, an installation's

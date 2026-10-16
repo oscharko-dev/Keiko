@@ -435,6 +435,32 @@ repeat retains the same two sources / 384 bytes in 27.3 seconds. Its maximum eve
 2.34 seconds (timer drift 2.32 seconds), with 22.8 ms at the 99th percentile. This still leaves a
 material residual stall requiring investigation; it is not native-browser responsiveness acceptance.
 
+The native browser repeat at `2235137f4` retrieves the same current backend/frontend pair in
+24.2 seconds and completes the local 8k Gemma answer in another 22.1 seconds. All five citations
+resolve without repair. The current 21-day / EUR 7,500 answer passes; the rejected archive proposal
+is still absent, and the answer retains its incomplete-evidence/low-confidence warning. While
+retrieval is active, a second Chat is created exactly once (HTTP 201, 3 ms server duration). Its
+draft remains editable and its Skills library opens during the subsequent model wait. The answer's
+canonical closure is supported and complete, without loss, truncation or sequence anomalies.
+This is a bounded concurrency probe, not full responsiveness acceptance. A separate timed profile
+still finds a 2.54-second event-loop delay, dominated by synchronous candidate discovery before
+the cooperative code-index builder. Source intake itself now yields.
+
+The current-policy Git discrepancy is reproduced at the planner and full retrieval boundaries:
+three planner assertions fail because a workspace-root selection implicitly adds Git history,
+and the paired ordinary/Git retrieval test observes an unrequested history-provider call. The
+planner now reserves implicit repository-wide history for diagnostic intent and keeps explicitly
+requested relationships/history. Ordinary current-policy questions retain source retrieval without
+unrelated commit metadata. All 608 planner and 247 orchestration/Activity Log tests pass. Two
+timeout tests now fake only timeout scheduling, allowing the deliberately cooperative index work
+to run before the deadline probe starts. Native paired verification and archive-ranking correction
+remain open.
+
+CI at `2235137f4` identifies two stale generated inventories after the suffix helper was added. Both
+failures reproduce locally; the existing support-code generator and source-inventory refresh repair
+them, with all 77 targeted tests passing. Coverage percentages and governed floors are unchanged;
+refreshing the source count is not a new coverage measurement.
+
 The broad package coverage run at `1dc875bff` completes with 55,241 passing tests, 61 skipped and
 one failure: the debug-launch policy test requires an exact approved Node/npm pair. A targeted
 rerun reproduces that failure under the host's newer Node patch. UI coverage at `1cd9659b1` passes
