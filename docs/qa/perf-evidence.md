@@ -463,6 +463,28 @@ scheduler cause, and it does not establish hardware-only causation. No sample wa
 calibration was repeated to replace a slow value, and no ceiling was hand-edited. Subsequent
 recalibration on this reference uses the existing shrink-only ratchet.
 
+**Ruler refresh measured, 2026-10-16 (PR #4013).** The diagnostic-forwarding repair in
+`productionOpenCodeBackend.functional/_support.ts` changed the measurement closure. The existing
+replacement reference above matched every environment field, including the payload and secure-read
+helper digests. On clean signed `fcc4a6974f9a7adf74ae2a920e67222eb14607c7`, the existing
+`--recalibrate` operation and one independent candidate each completed two warmups and thirty retained
+samples in one quiet window. Source digest
+`e56c203e7fb3d653e8353c52a1d4b22cdd3180ef44fe3b2197d795ea1c3a5063` and ruler digest
+`cb17ca87d406aba1e1e9caf2171c59bef1ca29ee4e34e307a0eb861715f86bd5` remained unchanged through
+both runs, and the strict source-freshness gate passed. No samples were removed or runs repeated.
+
+| Metric                | Previous ceiling | Refreshed ceiling | Candidate p95 |
+| --------------------- | ---------------- | ----------------- | ------------- |
+| `coldStartMs`         | 3337.702         | 1422.539          | 1293.756      |
+| `readinessMs`         | 3.250            | 3.250             | 1.968         |
+| `sseFirstByteMs`      | 4.073            | 4.073             | 2.566         |
+| `boundedThroughputMs` | 98.702           | 76.698            | 65.576        |
+
+Values are milliseconds, rounded for display; generated documents retain full precision. The
+existing shrink-only ratchet preserved or tightened every ceiling. This source/ruler refresh uses
+the same reference and does not establish a controlled performance improvement over the previous
+subject.
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for
