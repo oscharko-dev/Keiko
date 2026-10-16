@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import { fileURLToPath, URL } from "node:url";
 import { isMainModule } from "../lib/is-main-module.mjs";
 
+import { lastPolicyProgress } from "../lib/code-quality-policy.mjs";
+
 const executePolicy = promisify(execFile);
 export function closedChildStatus(value) {
   if (value === null || (typeof value === "number" && Number.isInteger(value))) return value;
@@ -15,7 +17,7 @@ export function capturedByteCount(value) {
   return typeof value === "string" ? Buffer.byteLength(value, "utf8") : "unavailable";
 }
 // Convert the actual child failure to closed causal facts before it can be printed.
-function policyChildFailure(error) {
+function policyChildFailure(error, progress) {
   const details = typeof error === "object" && error !== null ? error : {};
   const status = {
     code: closedChildStatus(details.code),
@@ -24,33 +26,39 @@ function policyChildFailure(error) {
     stdoutBytes: capturedByteCount(details.stdout),
     stderrBytes: capturedByteCount(details.stderr),
   };
+  if (progress) status.progress = lastPolicyProgress(details.stderr) ?? "unavailable";
   return new Error(`policy child failed: ${JSON.stringify(status)}`, { cause: status });
 }
-export async function executePolicyWithDiagnostics(args, options) {
+export async function executePolicyWithDiagnostics(args, options, progress = false) {
   try {
     return await executePolicy(process.execPath, args, options);
   } catch (error) {
-    throw policyChildFailure(error);
+    throw policyChildFailure(error, progress);
   }
 }
 
-export async function isolatedPolicyReport(repositoryRoot, timeout = 180_000) {
+export async function isolatedPolicyReport(repositoryRoot, timeout = 180_000, progress = false) {
   const entry = new URL("../check-code-quality-policy.mjs", import.meta.url);
+  const flags = ["--json", ...(progress ? ["--progress"] : [])];
   const args =
     repositoryRoot === undefined
-      ? [fileURLToPath(entry), "--json"]
+      ? [fileURLToPath(entry), ...flags]
       : [
           "--input-type=module",
           "-e",
-          `const { codeQualityPolicyMain } = await import(${JSON.stringify(entry.href)}); process.exitCode = await codeQualityPolicyMain(["--json"], ${JSON.stringify(repositoryRoot)});`,
+          `const { codeQualityPolicyMain } = await import(${JSON.stringify(entry.href)}); process.exitCode = await codeQualityPolicyMain(${JSON.stringify(flags)}, ${JSON.stringify(repositoryRoot)});`,
         ];
-  const { stdout } = await executePolicyWithDiagnostics(args, {
-    cwd: new URL("../../", import.meta.url),
-    encoding: "utf8",
-    timeout,
-    killSignal: "SIGKILL",
-    maxBuffer: 32 * 1024 * 1024,
-  });
+  const { stdout } = await executePolicyWithDiagnostics(
+    args,
+    {
+      cwd: new URL("../../", import.meta.url),
+      encoding: "utf8",
+      timeout,
+      killSignal: "SIGKILL",
+      maxBuffer: 32 * 1024 * 1024,
+    },
+    progress,
+  );
   return JSON.parse(stdout);
 }
 
@@ -96,7 +104,7 @@ if (isMainModule(import.meta.url)) {
     { timeout: 375_000 },
     async () => {
       // Complete four-CPU ARM evaluation measured 249s; retain a finite integration allowance.
-      const report = await isolatedPolicyReport(undefined, 360_000);
+      const report = await isolatedPolicyReport(undefined, 360_000, true);
       assertRepositoryPolicyReport(report);
     },
   );

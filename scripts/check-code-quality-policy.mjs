@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
@@ -10,7 +11,12 @@ import {
   selectPolicyScope,
 } from "./lib/code-quality-inventory.mjs";
 import { collectPolicyPackages } from "./lib/code-quality-packages.mjs";
-import { assessPolicyDiagnostics, validatePolicy } from "./lib/code-quality-policy.mjs";
+import {
+  assessPolicyDiagnostics,
+  validatePolicy,
+  POLICY_PROGRESS_LIMITS,
+  policyProgressLine,
+} from "./lib/code-quality-policy.mjs";
 import {
   adaptResponsibilityDiagnostics,
   assessPolicyResponsibilities,
@@ -92,6 +98,7 @@ export function parsePolicyArguments(args, ci = process.env.CI === "true") {
     if (supplied.has(key)) throw new TypeError("invalid-arguments");
     supplied.add(key);
     if (key === "--json") options.json = true;
+    else if (key === "--progress") options.progress = true;
     else if (key === "--qualify-responsibilities") options.qualifyResponsibilities = true;
     else {
       applyPolicyOption(options, key, args[++index]);
@@ -116,33 +123,127 @@ function applyPolicyOption(options, key, value) {
   options[key.slice(2)] = value;
 }
 
-export async function executeCodeQualityPolicy(options, repositoryRoot = root) {
+function createPolicyProgress(options) {
+  const started = options.progress === true ? performance.now() : 0;
+  let frames = 0;
+  return (phase, state) => {
+    if (options.progress !== true || frames >= POLICY_PROGRESS_LIMITS.frames) return;
+    frames += 1;
+    const line = policyProgressLine({
+      version: 1,
+      phase,
+      state,
+      elapsedMs: Math.floor(performance.now() - started),
+    });
+    if (line !== null) process.stderr.write(line);
+  };
+}
+
+function policyStep(progress, phase, run) {
+  progress(phase, "started");
+  const result = run();
+  progress(phase, "completed");
+  return result;
+}
+
+async function asyncPolicyStep(progress, phase, run) {
+  progress(phase, "started");
+  const result = await run();
+  progress(phase, "completed");
+  return result;
+}
+
+function validatedPolicy(repositoryRoot) {
   const source = readFileSync(resolve(repositoryRoot, "scripts/code-quality-policy.json"));
   const policy = JSON.parse(source);
   const errors = validatePolicy(policy, readPreviousPolicies(repositoryRoot));
   if (errors.length > 0) throw new TypeError(errors[0]);
+  return { source, policy };
+}
+
+export async function executeCodeQualityPolicy(
+  options,
+  repositoryRoot = root,
+  progress = createPolicyProgress(options),
+) {
+  const { source, policy } = policyStep(progress, "policy-validation", () =>
+    validatedPolicy(repositoryRoot),
+  );
   if (options.qualifyResponsibilities === true)
-    await buildSemanticPolicyPackages(options, policy, repositoryRoot, source);
-  const tools = runnerIdentity();
-  const subject = await collectPolicySubject(repositoryRoot);
+    await asyncPolicyStep(progress, "semantic-build", () =>
+      buildSemanticPolicyPackages(options, policy, repositoryRoot, source),
+    );
+  const tools = policyStep(progress, "tool-identity", runnerIdentity);
+  const subject = await asyncPolicyStep(progress, "subject-inventory", () =>
+    collectPolicySubject(repositoryRoot),
+  );
   const { inventory } = subject;
+  const { scope, pack } = policyScopeAndPack(repositoryRoot, inventory, policy, options, progress);
+  const scan = policyStep(progress, "native-scan", () =>
+    runNativePolicy(repositoryRoot, scope.files),
+  );
+  const inventorySha256 = policyDigest(JSON.stringify(inventory));
+  const rawAssessment = policyStep(progress, "raw-assessment", () =>
+    assessPolicyDiagnostics(scan.diagnostics, scope.files, policy),
+  );
+  let responsibilities = policyResponsibilities(options, subject, policy, progress);
+  if (options.qualifyResponsibilities === true) responsibilities = await responsibilities;
+  const assessed = policyStep(progress, "diagnostic-adaptation", () =>
+    responsibilities
+      ? adaptResponsibilityDiagnostics(rawAssessment, responsibilities)
+      : rawAssessment,
+  );
+  await asyncPolicyStep(progress, "final-currentness", () =>
+    assertPolicySubjectCurrent(repositoryRoot, source, inventorySha256),
+  );
+  return policyReport({
+    options,
+    policy,
+    source,
+    tools,
+    inventory,
+    scope,
+    pack,
+    scan,
+    assessed,
+    responsibilities,
+    inventorySha256,
+  });
+}
+
+function policyScopeAndPack(repositoryRoot, inventory, policy, options, progress) {
   const scope = selectPolicyScope(inventory.files, options.scope, process.env.CI === "true");
   validateActiveScopes(policy, inventory.files);
-  const pack = collectPolicyPackages(repositoryRoot, inventory.packages);
-  const scan = runNativePolicy(repositoryRoot, scope.files);
-  const inventorySha256 = policyDigest(JSON.stringify(inventory));
-  const rawAssessment = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
-  let responsibilities = null;
-  if (policy.version === 2) {
-    responsibilities =
-      options.qualifyResponsibilities === true
-        ? await qualifyPolicyResponsibilities(subject, policy)
-        : assessPolicyResponsibilities(subject, policy);
-  }
-  const assessed = responsibilities
-    ? adaptResponsibilityDiagnostics(rawAssessment, responsibilities)
-    : rawAssessment;
-  await assertPolicySubjectCurrent(repositoryRoot, source, inventorySha256);
+  const pack = policyStep(progress, "package-inventory", () =>
+    collectPolicyPackages(repositoryRoot, inventory.packages),
+  );
+  return { scope, pack };
+}
+
+function policyResponsibilities(options, subject, policy, progress) {
+  if (policy.version !== 2) return null;
+  if (options.qualifyResponsibilities === true)
+    return asyncPolicyStep(progress, "responsibilities", () =>
+      qualifyPolicyResponsibilities(subject, policy),
+    );
+  return policyStep(progress, "responsibilities", () =>
+    assessPolicyResponsibilities(subject, policy),
+  );
+}
+
+function policyReport({
+  options,
+  policy,
+  source,
+  tools,
+  inventory,
+  scope,
+  pack,
+  scan,
+  assessed,
+  responsibilities,
+  inventorySha256,
+}) {
   return {
     schemaVersion: policy.version,
     subject: inventory.subject,
@@ -239,9 +340,14 @@ function validateActiveScopes(policy, files) {
 export async function codeQualityPolicyMain(args = process.argv.slice(2), repositoryRoot = root) {
   try {
     const options = parsePolicyArguments(args);
-    const report = await executeCodeQualityPolicy(options, repositoryRoot);
-    if (options.json) console.log(JSON.stringify(report, null, 2));
-    else {
+    const progress = createPolicyProgress(options);
+    const report = await executeCodeQualityPolicy(options, repositoryRoot, progress);
+    if (options.json) {
+      const serialized = policyStep(progress, "report-serialization", () =>
+        JSON.stringify(report, null, 2),
+      );
+      console.log(serialized);
+    } else {
       console.log(
         `code-quality-policy: ${reportVerdict(report)} - ${report.counts.visited} files; ${report.counts.violations} active findings; ${report.scope.partial ? "partial" : "repository"}`,
       );

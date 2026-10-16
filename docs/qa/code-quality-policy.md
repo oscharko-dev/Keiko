@@ -522,7 +522,7 @@ counterfactual and restoration proofs remain separate acceptance obligations.
 
 `npm run check:code-quality-policy:repository` runs the real enforcing CLI with `--json` and checks
 its full repository scope, complete inventory visitation, package/rule counts, zero active
-violations, nine ready/pending responsibilities with zero qualified records and unexecuted proof
+violations, the complete current register of ready/pending responsibilities with zero qualified records and unexecuted proof
 facts, and complete package inventory. This complete-repository invocation uses a
 360000ms/SIGKILL/32MiB child allowance and 375000ms whole-test watchdog. The prior 180000ms
 allowance killed the correct full evaluation on both hosted ARM Node lines and in a local
@@ -535,6 +535,13 @@ finite integration allowances, not a product latency SLA. The general `isolatedP
 helper default remains 180000ms, and its genuine deadline-kill and output-limit regressions remain
 unchanged. Fresh hosted results are still required after this correction.
 
+The complete static smoke opts into the CLI's `--progress` diagnostics: bounded stderr observations
+contain only a closed version, phase, started/completed state and elapsed milliseconds. A completed
+state means that phase returned, not that policy passed or output was delivered. The shared child
+failure helper projects only the last validated complete observation; missing or malformed progress
+is unavailable, never raw stderr or an error body. Default CLI use stays quiet, JSON stdout remains
+byte-compatible, and progress changes no gate verdict, currentness check or resource allowance.
+
 The required static-policy matrix invokes this checked smoke once on each governed Node line on
 `ubuntu-24.04-arm`, using a fresh full-history checkout of the same immutable merge candidate,
 normal install/provision/build and exact toolchain verification. Both legs must succeed in the
@@ -544,7 +551,7 @@ retain their existing platforms. Both legs then unconditionally run `check:code-
 raw-reader semantic qualification previously embedded in the parallel responsibility suite. Its
 assertions and 195s watchdog remain unchanged; the other responsibility fixtures remain in Vitest.
 Local `npm run lint` executes the whole policy and that qualification before typed lint. This does
-not substitute for full nine-record semantic qualification. Hosted ARM results are required; a
+not substitute for semantic qualification of the complete current register. Hosted ARM results are required; a
 local ARM completion is not a hosted verdict. The smoke uses the existing direct-script pattern, is outside Vitest's `*.test.mjs`
 collection, and shares the actual closed child-error helper with the retained wiring fixture
 checks. No test is conditionally skipped, imported receipt reused, worker count changed, report

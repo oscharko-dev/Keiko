@@ -12,7 +12,12 @@ import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
 import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
 import { collectPolicyInventory, selectPolicyScope } from "../lib/code-quality-inventory.mjs";
-import { assessPolicyDiagnostics } from "../lib/code-quality-policy.mjs";
+import {
+  assessPolicyDiagnostics,
+  POLICY_PROGRESS_LIMITS,
+  policyProgressLine,
+  lastPolicyProgress,
+} from "../lib/code-quality-policy.mjs";
 import { runNativePolicy } from "../lib/code-quality-runner.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
 import {
@@ -460,4 +465,213 @@ describe("explicit responsibility qualification arguments", () => {
       parsePolicyArguments(["--mode", "census", "--qualify-responsibilities"], false),
     ).toThrow("invalid-mode");
   });
+});
+
+const progressObservation = Object.freeze({
+  version: 1,
+  phase: "native-scan",
+  state: "started",
+  elapsedMs: 9,
+});
+
+function malformedProgressLines(line) {
+  return [
+    line.slice(0, -1),
+    line.replace('"version":1', '"version":2'),
+    line.replace('"native-scan"', '"private-path"'),
+    line.replace('"started"', '"pending"'),
+    line.replace('"elapsedMs":9', '"elapsedMs":-1'),
+    line.replace('"elapsedMs":9', '"elapsedMs":0.5'),
+    line.replace('"elapsedMs":9', '"elapsedMs":null'),
+    line.replace('"elapsedMs":9', '"elapsedMs":NaN'),
+    line.replace('"elapsedMs":9', '"elapsedMs":Infinity'),
+    line.replace('"elapsedMs":9', '"elapsedMs":2147483648'),
+    line.replace('"elapsedMs":9', '"elapsedMs":"9"'),
+    line.replace("}", ',"path":"fixture-private-body"}'),
+    line.replace('"version":1', '"version":1,"version":1'),
+    line.replace('"elapsedMs":9', '"elapsedMs":9,"count":1'),
+    `${line.trimEnd()}${"x".repeat(POLICY_PROGRESS_LIMITS.line)}\n`,
+    `${line.trimEnd()}\r\n`,
+  ];
+}
+
+function progressChildSource() {
+  const entry = new URL("../lib/code-quality-policy.mjs", import.meta.url).href;
+  return `const { policyProgressLine } = await import(${JSON.stringify(entry)});
+    process.stderr.write(policyProgressLine(${JSON.stringify(progressObservation)}));
+    setInterval(() => undefined, 1000);`;
+}
+
+async function actualFixturePolicy(root, progress) {
+  const entry = new URL("../check-code-quality-policy.mjs", import.meta.url).href;
+  const flags = ["--json", ...(progress ? ["--progress"] : [])];
+  const source = `const { codeQualityPolicyMain } = await import(${JSON.stringify(entry)});
+    process.exitCode = await codeQualityPolicyMain(${JSON.stringify(flags)}, ${JSON.stringify(root)});`;
+  return executePolicyWithDiagnostics(["--input-type=module", "-e", source], {
+    encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+}
+
+describe("closed opt-in policy phase diagnostics", () => {
+  it("admits only the explicit progress switch and retains duplicate refusal", async () => {
+    const { parsePolicyArguments } = await import("../check-code-quality-policy.mjs");
+    expect(parsePolicyArguments(["--json", "--progress"], false)).toEqual({
+      mode: "enforce",
+      scope: "repository",
+      json: true,
+      progress: true,
+    });
+    expect(() => parsePolicyArguments(["--progress", "--progress"], false)).toThrow(
+      "invalid-arguments",
+    );
+    expect(() => parsePolicyArguments(["--progress", "yes"], false)).toThrow("invalid-arguments");
+  });
+
+  it("projects only the producer's complete four-field canonical frame", () => {
+    const line = policyProgressLine(progressObservation);
+    expect(lastPolicyProgress(line)).toEqual(progressObservation);
+    expect(Object.keys(lastPolicyProgress(line))).toEqual([
+      "version",
+      "phase",
+      "state",
+      "elapsedMs",
+    ]);
+    for (const invalid of malformedProgressLines(line))
+      expect(lastPolicyProgress(invalid)).toBeNull();
+    expect(
+      policyProgressLine({ ...progressObservation, extra: "fixture-private-body" }),
+    ).toBeNull();
+    expect(policyProgressLine({ ...progressObservation, elapsedMs: Number.NaN })).toBeNull();
+    expect(lastPolicyProgress(undefined)).toBeNull();
+    expect(lastPolicyProgress("fixture-private-body\n")).toBeNull();
+  });
+
+  it("keeps tail and line bounds and never reconstructs a truncated frame", () => {
+    const line = policyProgressLine(progressObservation);
+    const noise = "fixture-private-body".repeat(POLICY_PROGRESS_LIMITS.tail);
+    expect(lastPolicyProgress(noise + "\n" + line)).toEqual(progressObservation);
+    expect(lastPolicyProgress(line + noise)).toBeNull();
+    expect(lastPolicyProgress(noise + line.slice(1))).toBeNull();
+    const frames = Array.from({ length: POLICY_PROGRESS_LIMITS.frames + 1 }, (_, elapsedMs) =>
+      policyProgressLine({ ...progressObservation, elapsedMs }),
+    ).join("");
+    expect(lastPolicyProgress(frames)).toEqual({
+      ...progressObservation,
+      elapsedMs: POLICY_PROGRESS_LIMITS.frames,
+    });
+  });
+
+  it("retains the actual last phase after a real child reaches the deadline before JSON", async () => {
+    const failure = executePolicyWithDiagnostics(
+      ["--input-type=module", "-e", progressChildSource()],
+      {
+        encoding: "utf8",
+        timeout: 1000,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024,
+      },
+      true,
+    );
+    await expect(failure).rejects.toHaveProperty("cause.killed", true);
+    await expect(failure).rejects.toHaveProperty("cause.signal", "SIGKILL");
+    await expect(failure).rejects.toHaveProperty("cause.stdoutBytes", 0);
+    const cause = await failure.catch((error) => error.cause);
+    expect(cause.stderrBytes).toBeGreaterThan(0);
+    expect(cause.progress).toEqual(progressObservation);
+  });
+
+  it("retains unavailable progress rather than exposing actual malformed child stderr", async () => {
+    const line = policyProgressLine(progressObservation);
+    const malformed = malformedProgressLines(line)[11];
+    const source = `process.stderr.write(${JSON.stringify(malformed)}); process.exit(7);`;
+    const failure = executePolicyWithDiagnostics(
+      ["-e", source],
+      {
+        encoding: "utf8",
+        timeout: 1000,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024,
+      },
+      true,
+    );
+    await expect(failure).rejects.toHaveProperty("cause.progress", "unavailable");
+    await expect(failure).rejects.toHaveProperty("cause.code", 7);
+    try {
+      await failure;
+    } catch (error) {
+      expect(error.message).not.toContain("fixture-private-body");
+      expect(JSON.stringify(error.cause)).not.toContain("fixture-private-body");
+    }
+  });
+
+  it("passes the opt-in through the actual isolated CLI failure path", async () => {
+    const root = enforcingFixture();
+    const path = join(root, "scripts/code-quality-policy.json");
+    const policy = JSON.parse(readFileSync(path, "utf8"));
+    policy.version = -1;
+    writeFileSync(path, JSON.stringify(policy));
+    const failure = isolatedPolicyReport(root, 15_000, true);
+    await expect(failure).rejects.toHaveProperty("cause.code", 1);
+    await expect(failure).rejects.toHaveProperty("cause.stdoutBytes", 0);
+    await expect(failure).rejects.toHaveProperty("cause.progress", {
+      version: 1,
+      phase: "policy-validation",
+      state: "started",
+      elapsedMs: expect.any(Number),
+    });
+    const error = await failure.catch((value) => value);
+    expect(error.cause.stderrBytes).toBeGreaterThan(0);
+    expect(error.message).not.toContain(root);
+    expect(error.message).not.toContain("code-quality-policy: FAIL");
+  }, 20_000);
+
+  it("observes the actual in-process opt-in CLI writer without replacing the producer", async () => {
+    const root = enforcingFixture();
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(await codeQualityPolicyMain(["--json", "--progress"], root)).toBe(0);
+      expect(output.mock.calls).toHaveLength(1);
+      const report = JSON.parse(output.mock.calls[0][0]);
+      expect(report.counts.visited).toBe(report.counts.expected);
+      expect(report.enforcementOutcome).toBe("passed");
+      expect(stderr.mock.calls.length).toBeGreaterThan(0);
+      expect(stderr.mock.calls.length).toBeLessThanOrEqual(POLICY_PROGRESS_LIMITS.frames);
+      for (const [line] of stderr.mock.calls) {
+        expect(lastPolicyProgress(line)).not.toBeNull();
+      }
+      expect(lastPolicyProgress(stderr.mock.calls.map(([line]) => line).join(""))).toMatchObject({
+        phase: "report-serialization",
+        state: "completed",
+      });
+    } finally {
+      stderr.mockRestore();
+      output.mockRestore();
+    }
+  }, 20_000);
+
+  it("keeps actual fixture JSON stdout byte-identical and quiet by default", async () => {
+    const root = enforcingFixture();
+    const quiet = await actualFixturePolicy(root, false);
+    const observed = await actualFixturePolicy(root, true);
+    expect(quiet.stderr).toBe("");
+    expect(observed.stdout).toBe(quiet.stdout);
+    expect(JSON.parse(observed.stdout).counts.visited).toBe(
+      JSON.parse(quiet.stdout).counts.expected,
+    );
+    const lines = observed.stderr.split("\n").filter((line) => line.length > 0);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.length).toBeLessThanOrEqual(POLICY_PROGRESS_LIMITS.frames);
+    for (const line of lines) {
+      expect(line.length + 1).toBeLessThanOrEqual(POLICY_PROGRESS_LIMITS.line);
+      expect(lastPolicyProgress(`${line}\n`)).not.toBeNull();
+    }
+    expect(lastPolicyProgress(observed.stderr)).toMatchObject({
+      phase: "report-serialization",
+      state: "completed",
+    });
+  }, 40_000);
 });

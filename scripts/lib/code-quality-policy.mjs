@@ -356,3 +356,74 @@ export function assessPolicyDiagnostics(diagnostics, files, policy) {
   }
   return { census: diagnostics, violations };
 }
+
+// Optional gate progress is closed, bounded stderr metadata, never part of a policy verdict.
+export const POLICY_PROGRESS_LIMITS = Object.freeze({ frames: 32, line: 256, tail: 8192 });
+const POLICY_PROGRESS_PREFIX = "keiko-policy-progress:";
+const POLICY_PROGRESS_PHASES = new Set([
+  "policy-validation",
+  "semantic-build",
+  "tool-identity",
+  "subject-inventory",
+  "package-inventory",
+  "native-scan",
+  "raw-assessment",
+  "responsibilities",
+  "diagnostic-adaptation",
+  "final-currentness",
+  "report-serialization",
+]);
+
+function validPolicyProgressFields(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const fields = Object.keys(value);
+  return (
+    fields.length === 4 &&
+    fields.every((key) => ["version", "phase", "state", "elapsedMs"].includes(key))
+  );
+}
+
+function validPolicyProgress(value) {
+  return (
+    validPolicyProgressFields(value) &&
+    value.version === 1 &&
+    POLICY_PROGRESS_PHASES.has(value.phase) &&
+    ["started", "completed"].includes(value.state) &&
+    Number.isSafeInteger(value.elapsedMs) &&
+    value.elapsedMs >= 0 &&
+    value.elapsedMs <= 2_147_483_647
+  );
+}
+
+export function policyProgressLine(value) {
+  if (!validPolicyProgress(value)) return null;
+  const { version, phase, state, elapsedMs } = value;
+  const line = `${POLICY_PROGRESS_PREFIX}${JSON.stringify({ version, phase, state, elapsedMs })}\n`;
+  return line.length <= POLICY_PROGRESS_LIMITS.line ? line : null;
+}
+
+function parsePolicyProgressLine(line) {
+  if (line.length > POLICY_PROGRESS_LIMITS.line || !line.startsWith(POLICY_PROGRESS_PREFIX))
+    return null;
+  try {
+    const value = JSON.parse(line.slice(POLICY_PROGRESS_PREFIX.length));
+    // Only the producer's exact ASCII representation is eligible for projection.
+    return policyProgressLine(value) === `${line}\n` ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function lastPolicyProgress(stderr) {
+  if (typeof stderr !== "string") return null;
+  const tail = stderr.slice(-POLICY_PROGRESS_LIMITS.tail);
+  const lines = tail.split("\n");
+  if (tail.length !== stderr.length) lines.shift();
+  lines.pop(); // A partial final line is not a complete frame.
+  let last = null;
+  for (const line of lines.slice(-POLICY_PROGRESS_LIMITS.frames)) {
+    const parsed = parsePolicyProgressLine(line);
+    if (parsed) last = parsed;
+  }
+  return last;
+}
