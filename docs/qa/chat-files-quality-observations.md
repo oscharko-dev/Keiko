@@ -778,6 +778,20 @@ CI-pinned Node 24.18.0 runtime. Native browser navigation verifies independent f
 labels and absence of confirmation controls. Full pending-intent cancellation, delayed/failed
 ACK send-blocking and native N+1 model comparison/compaction remain separate qualifications.
 
+## Preview selection during background root refresh
+
+A native browser/session-repair observation exposed a mismatch: Files kept the file preview open,
+while a background root read reported a null active file and widened its connected scope to the
+containing directory. Two native-HTTP canonical/symlink controls reproduce the wrong callback;
+a mounted two-source AppShell control reproduces the erased active file with the other root still
+connected. The owning root-read callback now reports the current displayed selection only for the
+same resolved root. Held reads cannot revive a closed preview or cross an actual root switch.
+An unchanged configured path resolving to a different root also clears the previous directory and
+cached tree; its failure-first control catches the stale-directory callback independently. The
+focused Files, accessibility and scope-sync set passes 138 tests after both corrections.
+The existing Files navigation/read lifecycle and scope-decision Activity Log retain body-free
+observations; source contents are never diagnostic payloads.
+
 ## Open work
 
 Fresh skill/control repetitions, held-out tasks, larger Git/non-Git corpora, source freshness,

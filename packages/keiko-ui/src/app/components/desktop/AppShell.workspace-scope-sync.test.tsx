@@ -19,6 +19,7 @@ import { WindowFrame } from "./windows/WindowFrame";
 import { useLinkRevision } from "./hooks/useLinkRevision";
 import { nativeFilesChatFixture } from "../../../../../../tests/support/files-chat-native-support";
 import { usePublishChatWindowRuntime } from "./windows/chatWindowActivity";
+import { notifyWorkspaceFileMutated } from "./widgets/cards/workspace-file-events";
 
 const mocks = vi.hoisted(() => ({
   initialChat: undefined as Chat | undefined,
@@ -1098,4 +1099,55 @@ describe("AppShell canonical workspace scope synchronization", () => {
     ]);
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
   });
+});
+
+it("retains a displayed file and the other connected root through a background root refresh", async () => {
+  const native = await nativeFilesChatFixture();
+  try {
+    const secondRoot = `${native.root}/Beta`;
+    const initial = fixture([native.root, secondRoot]);
+    const files = initial.wins.find((win) => win.id === "files-0");
+    const target = initial.wins.find((win) => win.type === "chat");
+    if (files === undefined || target === undefined) throw new TypeError("Missing fixture windows");
+    files.cfg["activeDirectoryPath"] = "Alpha";
+    target.cfg["chatId"] = native.chat.id;
+    target.cfg["projectPath"] = native.root;
+    mocks.initialChat = (await native.patch([scope(native.root), scope(secondRoot)])).chat;
+    mocks.serverChat = mocks.initialChat;
+    mocks.renderFiles = true;
+    const refreshed = deferred<void>();
+    let observing = false;
+    mocks.fetchFilesTree.mockImplementation(async (root: string, path = "") => {
+      const result = await native.tree(root, path);
+      if (observing && root === native.root && path === "") refreshed.resolve();
+      return result;
+    });
+    mocks.updateChatConnectedScopes.mockImplementation(async (_id, scopes, identity) => {
+      const result = await native.patch(scopes, identity);
+      mocks.serverChat = result.chat;
+      return result;
+    });
+    persist(initial.wins, initial.conns);
+    render(<AppShell />);
+    fireEvent.click(await screen.findByRole("treeitem", { name: /one\.ts/u }));
+    await waitFor(() =>
+      expect(mocks.serverChat?.connectedScopes).toContainEqual(
+        expect.objectContaining({ kind: "files", relativePaths: ["Alpha/one.ts"] }),
+      ),
+    );
+    const before = mocks.serverChat?.connectedScopes;
+    observing = true;
+    await act(async () => {
+      notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });
+      await refreshed.promise;
+    });
+    expect(currentFilesWindow().cfg["activeFilePath"]).toBe("Alpha/one.ts");
+    expect(mocks.serverChat?.connectedScopes).toEqual(before);
+    expect(mocks.serverChat?.connectedScopes).toContainEqual(
+      expect.objectContaining({ kind: "workspace-root", root: secondRoot }),
+    );
+  } finally {
+    cleanup();
+    await native.close();
+  }
 });

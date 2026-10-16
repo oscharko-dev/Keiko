@@ -101,7 +101,10 @@ Connected Files windows follow their resolved visible selection independently: t
 subdirectory or open file. Existing acknowledgement ownership still determines the canonical
 source label. Opening a file never preserves a former folder through a saved pin; retired
 `keepFilesFolder` preferences are discarded on workspace restoration. Navigation requires neither
-confirmation nor a folder-restoration action. The header retains compact source labels,
+confirmation nor a folder-restoration action. Same-root background tree reads preserve the
+currently displayed file; a delayed refresh cannot restore a closed preview or cross a root
+change. A different resolved root clears the old preview and directory before either can supply
+source authority. The header retains compact source labels,
 disambiguating paths, disconnect controls and actual pending/error feedback. Generic explanation
 is available only on demand in the missing-evidence action. The existing `client.scope.notice`
 observer records body-free transitions without a duplicate live-region announcement.
