@@ -5,8 +5,8 @@ import ts from "typescript";
 import { collectPolicyMembership, policyDigest } from "./code-quality-inventory.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 
-// Byte witnesses remain private: exposed compiler metadata must not expose a mutable Buffer.
-const SNAPSHOT_UTF8_BYTES = new WeakMap();
+// Witnesses remain private: exposed compiler metadata cannot rewrite the admitted text or bytes.
+const SNAPSHOT_WITNESSES = new WeakMap();
 
 const DEFAULT_LIMITS = Object.freeze({
   programs: 2,
@@ -161,7 +161,7 @@ export function createCompilerContext(subject, options = {}, roots = []) {
       state.emissions.clear();
       state.declarations.clear();
       state.proofFailures.clear();
-      for (const previous of state.snapshots.values()) SNAPSHOT_UTF8_BYTES.delete(previous);
+      for (const previous of state.snapshots.values()) SNAPSHOT_WITNESSES.delete(previous);
       state.snapshots.clear();
       state.closed = true;
     },
@@ -179,7 +179,7 @@ function snapshot(state, absolute, text, digest = policyDigest(text)) {
     state.bytes += Buffer.byteLength(text);
     if (state.bytes > state.limits.sourceBytes) throw new TypeError("symbol-source-budget");
     const admitted = { digest };
-    SNAPSHOT_UTF8_BYTES.set(admitted, Buffer.from(text, "utf8"));
+    SNAPSHOT_WITNESSES.set(admitted, text.includes("\uFFFD") ? Buffer.from(text, "utf8") : text);
     state.snapshots.set(absolute, admitted);
   }
   return text;
@@ -316,18 +316,22 @@ function assertCurrent(state) {
   for (const [path, expected] of state.inputs) {
     const absolute = join(state.subject.root, path);
     regularSource(absolute);
-    if (!hasCurrentDigest(readFileSync(absolute), state.snapshots.get(absolute), expected))
+    if (!hasCurrentDigest(absolute, state.snapshots.get(absolute), expected))
       throw new TypeError("symbol-subject-changed");
   }
   for (const [path, previous] of state.snapshots) {
-    if (!hasCurrentDigest(readFileSync(path), previous, previous.digest))
+    if (!hasCurrentDigest(path, previous, previous.digest))
       throw new TypeError("symbol-subject-changed");
   }
 }
 
-function hasCurrentDigest(bytes, previous, expected) {
-  const utf8Bytes = SNAPSHOT_UTF8_BYTES.get(previous);
-  if (previous?.digest === expected && utf8Bytes !== undefined && bytes.equals(utf8Bytes))
+function hasCurrentDigest(path, previous, expected) {
+  const witness = SNAPSHOT_WITNESSES.get(previous);
+  // Invalid UTF8 decodes with U+FFFD, so it cannot equal an admitted string without that character.
+  if (previous?.digest === expected && typeof witness === "string")
+    return readFileSync(path, "utf8") === witness;
+  const bytes = readFileSync(path);
+  if (previous?.digest === expected && Buffer.isBuffer(witness) && bytes.equals(witness))
     return true;
   return policyDigest(bytes) === expected;
 }

@@ -1868,6 +1868,61 @@ async function currentnessFixture(prepare, options = {}) {
   return { ...own, compiler };
 }
 
+function currentnessTargetBufferAllocations(compiler, byteLength) {
+  const allocate = Buffer.allocUnsafe;
+  let allocations = 0;
+  const traced = vi.spyOn(Buffer, "allocUnsafe").mockImplementation((size) => {
+    if (size === byteLength) allocations += 1;
+    return Reflect.apply(allocate, Buffer, [size]);
+  });
+  try {
+    compiler.assertCurrent();
+    compiler.assertCurrent();
+  } finally {
+    traced.mockRestore();
+  }
+  return allocations;
+}
+
+// Work regression controls, not a newly discovered content-admission defect. The tracer delegates
+// every allocation to Node and observes only the byte length of the actual admitted fixture.
+describe("compiler lossless canonical currentness work", () => {
+  it.each(["plain", "é🙂"])(
+    "freshly observes admitted %s without allocating raw target buffers",
+    async (label) => {
+      const path = "src/currentness.ts";
+      const text = `export const label = "${label.repeat(10_007)}";\n`;
+      const own = await currentnessFixture(({ put }) => put(path, text));
+      const observed = own.compiler.read(path);
+      expect(observed).toBe(text);
+      expect(currentnessTargetBufferAllocations(own.compiler, Buffer.byteLength(observed))).toBe(0);
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, Buffer.concat([Buffer.from(observed), Buffer.from([0x80])]));
+      expect(readFileSync(absolute, "utf8")).toContain("\uFFFD");
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+
+  it.each(["input", "snapshot-only"])(
+    "keeps literal U+FFFD %s text on the fresh raw-byte fallback",
+    async (mode) => {
+      const input = "src/currentness.ts";
+      const text = `export const label = "${"\uFFFD".repeat(4_017)}";\n`;
+      const own = await currentnessFixture(({ put }) => put(input, text));
+      const path = mode === "input" ? input : "packages/alpha/dist/owner.d.ts";
+      const absolute = join(own.root, path);
+      if (mode === "snapshot-only") writeFileSync(absolute, text);
+      const observed = own.compiler.read(path);
+      expect(observed).toBe(text);
+      expect(
+        currentnessTargetBufferAllocations(own.compiler, Buffer.byteLength(observed)),
+      ).toBeGreaterThan(0);
+      writeFileSync(absolute, text.replace("\uFFFD", "\uFFFE"));
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+});
+
 describe("fresh compiler content observations (#3918)", () => {
   it.each(["plain", "é🙂"])("preserves unchanged %s text and repeated admission", async (label) => {
     const path = "src/currentness.ts";
