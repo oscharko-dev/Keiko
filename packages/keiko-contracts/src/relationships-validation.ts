@@ -144,10 +144,10 @@ function validateEndpointShape(
 }
 
 // ─── Structural prelude ───────────────────────────────────────────────────────
-// Returns null if the input is structurally usable (i.e. the kind/type/lifecycle slots
-// parse as the right primitive shape AND the top-level fields are present). On structural
-// failure returns an errors array and the caller short-circuits — any further check
-// would be meaningless (denial-reasons.md §"Resolution order" preface).
+// Returns the checked structural value with no errors when the required fields and
+// endpoint shapes are usable. On structural failure, omits the value and returns errors;
+// the caller short-circuits because further checks would be meaningless
+// (denial-reasons.md §"Resolution order" preface).
 type EndpointShape = Pick<ObjectReference, "id" | "workspaceId"> & { readonly kind: string };
 type RequiredFields = Pick<Relationship, "id" | "workspaceId" | "createdAt" | "updatedAt" | "etag">;
 type StructuralRecord = Record<string, unknown> &
@@ -219,10 +219,11 @@ function checkStructuralFields(
   return required && source && target;
 }
 
-function structuralPrelude(input: unknown): {
-  readonly errors: readonly RelationshipValidationError[];
-  readonly value?: StructuralInput;
-} {
+function structuralPrelude(
+  input: unknown,
+):
+  | { readonly errors: readonly RelationshipValidationError[]; readonly value?: never }
+  | { readonly errors: readonly []; readonly value: StructuralInput } {
   if (!isRecord(input)) {
     return {
       errors: [makeError("denied/invalid-structure", "relationship must be an object")],
