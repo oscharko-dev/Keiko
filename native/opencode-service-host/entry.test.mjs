@@ -177,6 +177,13 @@ async function finish(owned) {
   return waitForExit(owned);
 }
 
+async function observeStartupRefusal(owned, observeReadiness = ready) {
+  return Promise.race([
+    owned.exited,
+    observeReadiness(owned).then(() => ({ code: 0, stdout: "unexpected-ready", stderr: "" })),
+  ]);
+}
+
 function waitForExit(owned) {
   return Promise.race([
     owned.exited,
@@ -627,6 +634,62 @@ test("fixture finalization preserves the first cleanup failure when diagnostics 
   assert.deepEqual(seen, [1, 2, "files"]);
   assert.equal(diagnosticCount, 1);
 });
+
+function startupObservationControl(exited) {
+  const owned = observedControl(1);
+  let ended = false;
+  owned.exited = exited;
+  owned.child.stdin.end = () => {
+    ended = true;
+  };
+  return { owned, ended: () => ended };
+}
+
+test("startup refusal preserves the actual exit without ending the owned stdin", async () => {
+  const refusal = { code: 1, signal: null, stdout: "", stderr: "host-entry-refused\n" };
+  const control = startupObservationControl(Promise.resolve(refusal));
+  let observed = false;
+  const result = await observeStartupRefusal(control.owned, () => {
+    observed = true;
+    return new Promise(() => undefined);
+  });
+  assert.equal(result, refusal);
+  assert.equal(control.ended(), false);
+  assert.equal(observed, true);
+});
+
+test("startup refusal treats unexpected readiness as failure without cancelling acquisition", async () => {
+  let resolveExit;
+  const exited = new Promise((resolve) => {
+    resolveExit = resolve;
+  });
+  const control = startupObservationControl(exited);
+  let ended = false;
+  control.owned.child.stdin.end = () => {
+    ended = true;
+    resolveExit({ code: 1, stdout: "", stderr: "host-entry-refused\n" });
+  };
+  const result = await observeStartupRefusal(control.owned, () =>
+    Promise.resolve("http://127.0.0.1:1983"),
+  );
+  assert.deepEqual(result, { code: 0, stdout: "unexpected-ready", stderr: "" });
+  assert.equal(ended, false);
+});
+
+test("startup refusal retains a failed readiness observation without ending stdin", async () => {
+  const original = new Error("startup-observation-control");
+  const control = startupObservationControl(new Promise(() => undefined));
+  let ended = false;
+  control.owned.child.stdin.end = () => {
+    ended = true;
+    control.owned.exited = Promise.resolve({ code: 1 });
+  };
+  await assert.rejects(
+    observeStartupRefusal(control.owned, () => Promise.reject(original)),
+    (error) => error === original,
+  );
+  assert.equal(ended, false);
+});
 // Fixture finalization controls end.
 
 function authenticated(input) {
@@ -797,12 +860,14 @@ test(
     owned.child.stdin.write(text.slice(20) + " ".repeat(16383 - Buffer.byteLength(text)) + "\n");
     await ready(owned);
     assert.equal((await finish(owned)).code, 0);
+    const previousDatabaseDigest = sha(readFileSync(own.databasePath));
     const reused = start(own);
     reused.child.stdin.write(JSON.stringify(own.input) + "\n");
-    const result = await finish(reused);
+    const result = await observeStartupRefusal(reused);
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, "host-entry-refused\n");
+    assert.equal(sha(readFileSync(own.databasePath)), previousDatabaseDigest);
   }),
 );
 
@@ -837,10 +902,7 @@ test(
     writeFileSync(own.databasePath, "PRIVATE_PRIOR_NATIVE_STATE", { mode: 0o600 });
     const owned = start(own);
     owned.child.stdin.write(JSON.stringify(own.input) + "\n");
-    const result = await Promise.race([
-      owned.exited,
-      ready(owned).then(() => ({ code: 0, stdout: "unexpected-ready", stderr: "" })),
-    ]);
+    const result = await observeStartupRefusal(owned);
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, "host-entry-refused\n");
@@ -853,10 +915,7 @@ test(
   withFixture(async (own) => {
     const owned = start(own, [], {}, own.root);
     owned.child.stdin.write(JSON.stringify(own.input) + "\n");
-    const result = await Promise.race([
-      owned.exited,
-      ready(owned).then(() => ({ code: 0, stdout: "unexpected-ready", stderr: "" })),
-    ]);
+    const result = await observeStartupRefusal(owned);
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, "host-entry-refused\n");
