@@ -211,7 +211,9 @@ describe("C2 owning research domain admission", () => {
 type PublicResearchChannelParse =
   CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchChannelPayload>;
 
-export function parsePublicRuntimeResearchChannel(input: unknown): PublicResearchChannelParse {
+export function parsePublicRuntimeResearchChannel(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchChannelPayload> {
   const result = publicResearchChannel(input);
   return result;
 }

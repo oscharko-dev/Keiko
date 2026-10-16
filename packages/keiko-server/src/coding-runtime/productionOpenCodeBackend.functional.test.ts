@@ -244,8 +244,10 @@ describe("production OpenCode backend functional pipeline", () => {
       const failure = functionalScenarioFailure(fixture, pipeline, scripted, cause);
       expect(failure.cause).toBe(cause);
       expect(failure.message).toContain('"runnerCompletedCount":1');
+      expect(failure.message).toContain('"subscriberFailed":1');
       expect(failure.message).not.toContain(SECRET);
       expect(failure.message).not.toContain(fixture.workspace);
+      assertClosedDiagnosticFailures(fixture, pipeline, scripted, cause);
       const selected = pipeline.verification.activityLog.events.find(
         (event) => event.op === "editor.verification.execute" && event.extra?.state === "selected",
       );
@@ -552,6 +554,92 @@ function verificationActivityFacts(activityLog: BufferedServerLogSink): {
   return facts;
 }
 
+function verificationDiagnosticKind(
+  record: ServerDiagnosticRecord,
+): "subscriberFailed" | "signalAborted" | "guardRejected" | "runNotLive" | "unclassified" {
+  if (
+    record.operation === "editor.verification.subscriber" &&
+    record.source === "editor.verification-runner"
+  )
+    return "subscriberFailed";
+  if (
+    record.operation !== "coding-runtime.verification" ||
+    record.source !== "production-managed-worktree-tools.verification"
+  )
+    return "unclassified";
+  switch (record.code) {
+    case "signal-aborted":
+      return "signalAborted";
+    case "guard-rejected":
+      return "guardRejected";
+    case "run-not-live":
+      return "runNotLive";
+    default:
+      return "unclassified";
+  }
+}
+
+function verificationDiagnosticFacts(records: readonly ServerDiagnosticRecord[]): {
+  readonly subscriberFailed: number;
+  readonly signalAborted: number;
+  readonly guardRejected: number;
+  readonly runNotLive: number;
+  readonly unclassified: number;
+} {
+  const facts = {
+    subscriberFailed: 0,
+    signalAborted: 0,
+    guardRejected: 0,
+    runNotLive: 0,
+    unclassified: 0,
+  };
+  for (const record of records) facts[verificationDiagnosticKind(record)] += 1;
+  return facts;
+}
+
+function assertClosedDiagnosticFailures(
+  fixture: FunctionalWorkspaceFixture,
+  pipeline: FunctionalPipeline,
+  scripted: ScriptedOpenCodeHarness,
+  cause: Error,
+): void {
+  const captured = pipeline.diagnostics.find(
+    (record) => record.operation === "editor.verification.subscriber",
+  );
+  if (captured === undefined) throw new Error("subscriber diagnostic missing");
+  const op = "coding-runtime.verification";
+  const owner = "production-managed-worktree-tools.verification";
+  const cases = [
+    [op, owner, "signal-aborted", "signalAborted"],
+    [op, owner, "guard-rejected", "guardRejected"],
+    [op, owner, "run-not-live", "runNotLive"],
+    [op, owner, SECRET, "unclassified"],
+    [SECRET, owner, "signal-aborted", "unclassified"],
+    [op, fixture.workspace, "guard-rejected", "unclassified"],
+    ["editor.verification.subscriber", fixture.workspace, "run-not-live", "unclassified"],
+  ] as const;
+  for (const [operation, source, code, kind] of cases) {
+    const record = { ...captured, operation, source, code, correlationId: SECRET };
+    const failure = functionalScenarioFailure(
+      fixture,
+      { ...pipeline, diagnostics: [record] },
+      scripted,
+      cause,
+    );
+    expect(failure.cause).toBe(cause);
+    expect(failure.message).toContain(`"${kind}":1`);
+    expect(failure.message).not.toContain(SECRET);
+    expect(failure.message).not.toContain(fixture.workspace);
+  }
+  expect(verificationDiagnosticFacts([])).toEqual({
+    subscriberFailed: 0,
+    signalAborted: 0,
+    guardRejected: 0,
+    runNotLive: 0,
+    unclassified: 0,
+  });
+}
+
 function functionalScenarioFailure(
   fixture: FunctionalWorkspaceFixture,
   pipeline: FunctionalPipeline,
@@ -568,6 +656,7 @@ function functionalScenarioFailure(
       0,
     ),
     diagnosticCount: pipeline.diagnostics.length,
+    verificationDiagnostics: verificationDiagnosticFacts(pipeline.diagnostics),
     observationCount: pipeline.timeline.filter(
       (event) => event.kind === "runtime-event" && event.eventKind === "observation-streamed",
     ).length,

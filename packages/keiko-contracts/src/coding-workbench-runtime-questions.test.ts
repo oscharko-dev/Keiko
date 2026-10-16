@@ -432,17 +432,23 @@ type PublicQuestionsResponseParse =
 type PublicQuestionsChannelParse =
   CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsChannelPayload>;
 
-export function parsePublicRuntimeQuestionAnswer(input: unknown): PublicQuestionAnswerParse {
+export function parsePublicRuntimeQuestionAnswer(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionAnswerRequest> {
   const result = publicQuestionAnswer(input);
   return result;
 }
 
-export function parsePublicRuntimeQuestionsResponse(input: unknown): PublicQuestionsResponseParse {
+export function parsePublicRuntimeQuestionsResponse(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsResponse> {
   const result = publicQuestionsResponse(input);
   return result;
 }
 
-export function parsePublicRuntimeQuestionsChannel(input: unknown): PublicQuestionsChannelParse {
+export function parsePublicRuntimeQuestionsChannel(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsChannelPayload> {
   const result = publicQuestionsChannel(input);
   return result;
 }
