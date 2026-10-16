@@ -64,7 +64,7 @@
       "disposition": "boundary-scoped",
       "migrationIssue": 3918,
       "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
-      "activeScopes": []
+      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
     },
     {
       "id": "anti-slop/no-runtime-typeof",

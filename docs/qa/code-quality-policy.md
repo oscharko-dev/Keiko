@@ -9,14 +9,19 @@ npm run check:code-quality-policy
 npm run check:code-quality-policy -- --mode census --json
 npm run check:code-quality-policy -- --scope production
 npm run check:code-quality-policy -- --scope package:@oscharko-dev/keiko-contracts
+npm run check:code-quality-policy:repository
 ```
 
-The default is repository-wide enforcement. `npm run lint` builds packages and invokes the full
-policy smoke before the shared `lint:typed` ESLint and UI lint tail. Required CI runs that same
-policy smoke in a dedicated Linux ARM64 Node24/26 matrix; x64 Core quality depends on that matrix
-and runs the shared typed tail after its existing build/typecheck. This is the same policy and
-assertions on a supported native compiler host, not an alternate analyzer. Build packages first
-when invoking the policy command directly on a fresh checkout.
+The canonical default is repository-wide enforcement with semantic proofs pending. After contracts
+reflection activation, default repository/production/contracts scope invocations can correctly fail
+on the legitimate pending observation coordinate; they do not establish qualification or a green
+scope. Fresh `--qualify-responsibilities` execution is required to admit that exact observation.
+`npm run check:code-quality-policy:repository` selects complete current-subject qualification.
+Local `npm run lint` builds packages, runs the bounded default fixture, complete repository
+qualification, existing raw-reader qualification and then the shared `lint:typed` ESLint/UI tail.
+Required CI runs those three policy operations serially in the existing Linux ARM64 Node24/26
+matrix; x64 Core quality depends on that matrix and runs the typed tail after build/typecheck.
+Build packages first when invoking the canonical CLI directly on a fresh checkout.
 
 A local scope is explicitly partial. `repository`, `production`, `root-product`, `tooling`,
 `native-host`, `tests`, `declarations`, `documentary`, `fixtures` and `package:<manifest-name>`
@@ -50,6 +55,22 @@ other owners retain their separate migration obligations. A safety comment expla
 justified representation boundary, such as attaching a nominal brand after structural admission;
 it neither validates hostile input nor authorizes a chained assertion. These two syntax rules do
 not establish boundary/domain qualification or complete #3918.
+
+The same whole contracts production scope now activates `no-reflect-get`. It includes current,
+future and generated production members and the existing production-classified `vitest.config.ts`,
+while test/nonproduction and foreign package owners keep their distinct obligations. The prior
+`81d441d` inventory contained 244 contracts production members; the scope is not a fixed file list.
+The existing `support-raw-property-observation` record may admit only the private
+`runtimeProperty` operation in `observability.ts` (1374:29, source span 52211–52222 on that subject)
+after genuinely fresh semantic qualification of its exact 15 public proof selectors. Missing,
+pending, stale or failed proofs cannot adapt it, and another `Reflect.get` coordinate stays active.
+No own-property/descriptor/cache replacement, receiver/read-order change or domain typing is
+introduced. The runtime, registered evidence contract, record and proof bodies remain unchanged.
+The native census is preserved; only the one qualified active operation can become an adaptation.
+The final complete production gate must actually qualify all 49 records on its current candidate
+and cover the full contracts production inventory. An earlier qualified report or a constructed
+unit input cannot supply that execution. This activation does not complete the 170-owner domain
+migration or activate the remaining six boundary rules.
 
 Git status, diff, history, summary, remotes and sync preview/execute parsing reuse concrete admission
 in their owning contracts modules. The typed parsers return the original accepted value; legacy validators retain

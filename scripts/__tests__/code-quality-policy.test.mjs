@@ -544,34 +544,40 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     },
   );
 
-  it.each(ASSERTION_RULES)("enforces %s only on all current and future contracts members", (id) => {
-    const packages = [{ directory: "packages/contracts", name: "@oscharko-dev/keiko-contracts" }];
-    const owners = [
-      ...files,
-      ...["src/owner.ts", "src/future.generated.ts", "src/owner.test.ts"].map((suffix) => {
-        const path = `packages/contracts/${suffix}`;
-        return { path, ...classifyPolicyPath(path, packages) };
-      }),
-    ];
-    expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
-    const result = assessPolicyDiagnostics(
-      owners.map(({ path }) => diagnostic(path, id)),
-      owners,
-      policy,
-    );
-    expect(result.violations.map(({ path }) => path)).toEqual([
-      "packages/contracts/src/owner.ts",
-      "packages/contracts/src/future.generated.ts",
-    ]);
-    expect(result.census).toHaveLength(owners.length);
-    const removed = structuredClone(policy);
-    removed.rules.find((rule) => rule.id === id).activeScopes = [];
-    expect(validatePolicy(removed, [policy])).toContain("activation-shrank");
-    const broader = structuredClone(policy);
-    broader.rules.find((rule) => rule.id === id).activeScopes.push("production");
-    expect(validatePolicy(broader, [policy])).toEqual([]);
-    expect(validatePolicy(policy, [broader])).toContain("activation-shrank");
-  });
+  it.each([...ASSERTION_RULES, "anti-slop/no-reflect-get"])(
+    "enforces %s only on all current and future contracts members",
+    (id) => {
+      const packages = [{ directory: "packages/contracts", name: "@oscharko-dev/keiko-contracts" }];
+      const owners = [
+        ...files,
+        ...["src/owner.ts", "src/future.generated.ts", "vitest.config.ts", "src/owner.test.ts"].map(
+          (suffix) => {
+            const path = `packages/contracts/${suffix}`;
+            return { path, ...classifyPolicyPath(path, packages) };
+          },
+        ),
+      ];
+      expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
+      const result = assessPolicyDiagnostics(
+        owners.map(({ path }) => diagnostic(path, id)),
+        owners,
+        policy,
+      );
+      expect(result.violations.map(({ path }) => path)).toEqual([
+        "packages/contracts/src/owner.ts",
+        "packages/contracts/src/future.generated.ts",
+        "packages/contracts/vitest.config.ts",
+      ]);
+      expect(result.census).toHaveLength(owners.length);
+      const removed = structuredClone(policy);
+      removed.rules.find((rule) => rule.id === id).activeScopes = [];
+      expect(validatePolicy(removed, [policy])).toContain("activation-shrank");
+      const broader = structuredClone(policy);
+      broader.rules.find((rule) => rule.id === id).activeScopes.push("production");
+      expect(validatePolicy(broader, [policy])).toEqual([]);
+      expect(validatePolicy(policy, [broader])).toContain("activation-shrank");
+    },
+  );
 
   it.each([
     [
