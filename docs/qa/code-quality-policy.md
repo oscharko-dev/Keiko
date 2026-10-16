@@ -67,7 +67,7 @@ pending, stale or failed proofs cannot adapt it, and another `Reflect.get` coord
 No own-property/descriptor/cache replacement, receiver/read-order change or domain typing is
 introduced. The runtime, registered evidence contract, record and proof bodies remain unchanged.
 The native census is preserved; only the one qualified active operation can become an adaptation.
-The final complete production gate must actually qualify all 49 records on its current candidate
+The final complete production gate must actually qualify all 51 records on its current candidate
 and cover the full contracts production inventory. An earlier qualified report or a constructed
 unit input cannot supply that execution. This activation does not complete the 170-owner domain
 migration or activate the remaining six boundary rules.
@@ -686,3 +686,14 @@ live authority, authenticated reads and content-free unpaired projections. Valid
 payload structure grants no network, model or approval authority. No production API, resolver,
 rule scope or optional dictionary/typeof adaptation is added. Qualification of these exact roots
 does not establish domain zero or discharge the remaining accepted-owner obligations.
+
+Two governance public validators extend the register from 49 to 51 mandatory unknown-parameter
+obligations: GovernedActionV1 and CodeTaskExecutionV1. Their unknown input remains a genuine
+admission boundary. Direct public forwarding wrappers pin the canonical imported checked return
+alias, branded domain values, original and nested identity, absent fact-value omission, exact
+ordered refusals and the existing repeated getter phases. The real research-approval consumer
+retains healthy forwarding and refuses a malformed optional governed projection; grant registration
+precedes that projection, so this refusal neither revokes a grant nor supplies new research authority.
+No production API, runtime code, resolver, scope or optional dictionary/typeof grant changes.
+Qualification of these two roots does not establish governance domain zero or complete the remaining
+accepted-owner obligations.

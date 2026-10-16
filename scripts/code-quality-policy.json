@@ -2599,6 +2599,113 @@
           "testName": "coding runtime routes #2644: serves an approved research host only over the paired research channel"
         }
       ]
+    },
+    {
+      "id": "governed-action-v1-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "validateGovernedActionV1",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "validateGovernedActionV1"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "validateGovernedActionV1"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "parsePublicGovernedAction",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "packages/keiko-server/src/coding-runtime/researchApprovalIssuance.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "governed action public parser (#3918) retains original and nested identities with absent fact values omitted"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "governed action public parser (#3918) refuses malformed actions with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "governed action public parser (#3918) retains the second observed decision refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "governed action public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/researchApprovalIssuance.test.ts",
+          "testName": "registerApprovedResearchGrant emits the validated read-only-research GovernedActionV1 with the bound revision"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/researchApprovalIssuance.test.ts",
+          "testName": "registerApprovedResearchGrant refuses a malformed governed projection without undoing the registered grant"
+        }
+      ]
+    },
+    {
+      "id": "code-task-execution-v1-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "validateCodeTaskExecutionV1",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "validateCodeTaskExecutionV1"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "validateCodeTaskExecutionV1"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+        "exportName": "parsePublicCodeTaskExecution",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-governance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "code task execution public parser (#3918) retains original and nested identities with absent failure values omitted"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "code task execution public parser (#3918) refuses malformed executions with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "code task execution public parser (#3918) retains the second observed state refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "code task execution public parser (#3918) pins source public and forwarding checked return types"
+        }
+      ]
     }
   ]
 }

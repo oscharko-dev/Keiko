@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(49);
+    expect(production.responsibilities).toHaveLength(51);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -740,7 +740,7 @@ describe("closed opt-in policy phase diagnostics", () => {
 describe("Workbench question and research responsibility wiring (#3918)", () => {
   it("binds four public parameter-zero obligations to their actual public proofs", () => {
     const policy = JSON.parse(read("scripts/code-quality-policy.json"));
-    const records = policy.responsibilities.slice(-4);
+    const records = policy.responsibilities.slice(45, 49);
     expect(records.map((record) => record.id)).toEqual([
       "coding-runtime-question-answer-public-parser",
       "coding-runtime-questions-response-public-parser",
@@ -796,7 +796,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 49, incomplete: 0, invalid: 0, qualified: 49, pending: 0, rejected: 0 },
+      counts: { ready: 51, incomplete: 0, invalid: 0, qualified: 51, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -851,7 +851,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 49;
+        r.responsibilities.counts.pending = 51;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
@@ -980,4 +980,43 @@ describe("complete production qualification owner", () => {
       expect(() => assertPolicyOperationOrder(job)).toThrow();
     },
   );
+});
+
+describe("governance public parser wiring (#3918)", () => {
+  it("binds the public checked results and real optional projection consumer", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const records = policy.responsibilities.slice(49, 51);
+    expect(records.map(({ consumer }) => consumer.exportName)).toEqual([
+      "parsePublicGovernedAction",
+      "parsePublicCodeTaskExecution",
+    ]);
+    for (const record of records) {
+      expect(record.input.consumerPath).toBe(
+        "packages/keiko-contracts/src/code-task-governance.test.ts",
+      );
+      expect(record.input.specifier).toBe(
+        "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
+      );
+      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
+      expect(record.transform).toEqual(record.output);
+      expect(record.consumer).toMatchObject({
+        consumerPath: record.input.consumerPath,
+        specifier: record.input.specifier,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      for (const assertion of record.proofAssertions) {
+        expect(record.proofs).toContain(assertion.path);
+        expect(assertion.testName.length).toBeGreaterThan(0);
+      }
+    }
+    expect(records[0].proofAssertions).toContainEqual({
+      path: "packages/keiko-server/src/coding-runtime/researchApprovalIssuance.test.ts",
+      testName:
+        "registerApprovedResearchGrant refuses a malformed governed projection without undoing the registered grant",
+    });
+    expect(records[1].proofs).toEqual([
+      "packages/keiko-contracts/src/code-task-governance.test.ts",
+    ]);
+  });
 });

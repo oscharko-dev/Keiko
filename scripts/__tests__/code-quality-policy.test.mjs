@@ -234,6 +234,8 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "coding-runtime-questions-response-public-parser",
       "coding-runtime-questions-channel-public-parser",
       "coding-runtime-research-channel-public-parser",
+      "governed-action-v1-public-parser",
+      "code-task-execution-v1-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -815,6 +817,31 @@ describe("documentation request public parser obligations (#3918)", () => {
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual([record.input.consumerPath]);
+      const removed = structuredClone(policy);
+      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
+      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+    }
+  });
+});
+
+describe("governance public parser obligations (#3918)", () => {
+  it("pins two exact public parameter-zero roots without optional grants", () => {
+    const records = policy.responsibilities.slice(49, 51);
+    expect(records).toHaveLength(2);
+    expect(records.map(({ id }) => id)).toEqual([
+      "governed-action-v1-public-parser",
+      "code-task-execution-v1-public-parser",
+    ]);
+    expect(records.map(({ input }) => input.exportName)).toEqual([
+      "validateGovernedActionV1",
+      "validateCodeTaskExecutionV1",
+    ]);
+    for (const record of records) {
+      expect(record.kind).toBe("public-parser");
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input.parameterIndex).toBe(0);
+      expect(record.consumer.kind).toBe("public-api-proof");
       const removed = structuredClone(policy);
       removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
       expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
