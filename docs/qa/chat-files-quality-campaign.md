@@ -22,9 +22,12 @@ The native-answer obligations in issue #4017 remain separate and retain their or
 
 Only synthetic fixtures and suitable public repositories are campaign inputs. Store local
 credentials, pairing links, raw prompts/answers and private diagnostic artifacts outside the
-checkout. Public evidence contains reviewed counts, timings, digests and outcomes. Generated code
-runs in disposable unprivileged containers with no network and bounded resources after dependencies
-have been prepared. UI journeys use normal controls; direct API setup is labelled separately.
+checkout. Public evidence contains reviewed counts, timings, digests and outcomes. For both Java
+and frontend fixtures, dependency installation and package/build hooks run in disposable,
+unprivileged, resource-bounded containers or use a trusted prebuilt image; never prepare them on the
+host. Dependency preparation may access the official registries. Generated code runs separately in
+disposable unprivileged containers with no network and bounded resources, using those prepared
+dependencies. UI journeys use normal controls; direct API setup is labelled separately.
 
 ## Predeclared test matrix
 
@@ -45,6 +48,15 @@ corpora retain independent relevance oracles and multiple directory positions. S
 does not establish realism; public monorepo cases supplement it. Any unavailable scale remains open.
 
 ## Measurements and comparison rules
+
+The owner clarified the customer gateway requirement on 2026-10-16: shared remote LiteLLM servers
+can take one to three minutes to respond during peak use. Local inference speed does not qualify
+that deployment. Use the existing lab fault proxy to exercise 60/120/180-second response-start
+delays, slow/interrupted streams, transient 429/503 responses and bounded recovery. Record physical
+dispatch counts, Retry-After handling where supported, progress/wait presentation, cancellation,
+draft recovery and final settlement. Separate controlled transport evidence from real-model quality.
+Waiting must not create parallel duplicate submissions or a retry storm. Exhausted deadlines and
+budgets must settle honestly; the campaign does not authorize unlimited retries or wider grants.
 
 Before running a case, record its task, expected relevant paths/behaviors, permitted scope, model,
 source revision, context limits and resource grants. Distinguish discovered candidates, physically
@@ -111,7 +123,9 @@ Raw browser/answer artifacts remain private; reproducible corpus packaging is st
 
 No fixed wall-clock push deadline overrides required checks. Avoid accumulating unrelated repairs
 in one increment. Product fixes declare their actual release impact. Required CI is the final full
-matrix; it is not the local test loop. Merging and enabling auto-merge require separate authorization.
+matrix; it is not the local test loop. Only `oscharko` may authorize and execute integration into
+`dev`, including enabling native auto-merge. An agent acting under that account still requires the
+owner's explicit authorization; this campaign has no integration authorization.
 
 ## Research inputs
 
