@@ -128,15 +128,15 @@ function validPath(value) {
 }
 
 function validPublicParserRules(record) {
-  const allowed = [
+  const allowed = new Set([
     "anti-slop/no-unknown-parameters",
     "anti-slop/no-runtime-typeof",
     "anti-slop/no-unsafe-dictionary-type",
-  ];
+  ]);
   return (
     record.kind !== "public-parser" ||
-    (record.rules.includes(allowed[0]) &&
-      record.rules.every((rule) => allowed.includes(rule)) &&
+    (record.rules.includes("anti-slop/no-unknown-parameters") &&
+      record.rules.every((rule) => allowed.has(rule)) &&
       record.input?.parameterIndex === 0 &&
       (record.rules.length === 1 || record.proofAssertions?.length > 0))
   );

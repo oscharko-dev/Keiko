@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { types } from "node:util";
 import { policyDigest } from "./code-quality-inventory.mjs";
+import { compareStrings } from "./compare-strings.mjs";
 import { join, relative } from "node:path";
 import ts from "typescript";
 import {
@@ -1245,18 +1246,22 @@ function rawCallEdges(state, states, queue) {
   for (const call of stateCalls(state)) {
     const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
     if (!target || exportedDeclaration(target.declaration)) continue;
-    for (const [index, argument] of call.arguments.entries()) {
-      const edge = rawEdgeCandidate(state, target, index, argument);
-      if (!edge) continue;
-      const { candidate, origin } = edge;
-      if (!states.has(candidate.key)) {
-        if (state.collective && states.size >= state.compiler.state.limits.aliases)
-          throw new TypeError("symbol-alias-budget");
-        states.set(candidate.key, candidate);
-        queue.push(candidate);
-      }
-      states.get(candidate.key).incoming.push({ state: state.key, call, origin });
+    rawCallArguments(state, target, call, states, queue);
+  }
+}
+
+function rawCallArguments(state, target, call, states, queue) {
+  for (const [index, argument] of call.arguments.entries()) {
+    const edge = rawEdgeCandidate(state, target, index, argument);
+    if (!edge) continue;
+    const { candidate, origin } = edge;
+    if (!states.has(candidate.key)) {
+      if (state.collective && states.size >= state.compiler.state.limits.aliases)
+        throw new TypeError("symbol-alias-budget");
+      states.set(candidate.key, candidate);
+      queue.push(candidate);
     }
+    states.get(candidate.key).incoming.push({ state: state.key, call, origin });
   }
 }
 
@@ -1557,7 +1562,7 @@ function contributingRawRoots(key, states, roots, cache) {
             .get(key)
             .incoming.flatMap((edge) => contributingRawRoots(edge.state, states, roots, cache)),
         ),
-      ].sort(),
+      ].sort(compareStrings),
     );
   return cache.get(key);
 }
@@ -1595,7 +1600,7 @@ function collectiveRawCheckingSlots(compiler, requests, rule) {
     if (!qualified.has(state.key)) continue;
     const contributingResponsibilityIds = [
       ...new Set(contributingRawRoots(state.key, states, roots, dependencies)),
-    ].sort();
+    ].sort(compareStrings);
     slots.push(
       ...collectiveStateSlots(state)
         .filter((slot) => slot.rule === rule)
