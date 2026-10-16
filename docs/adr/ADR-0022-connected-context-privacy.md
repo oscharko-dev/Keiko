@@ -1229,6 +1229,21 @@ Metadata-only siblings keep their original scores.
 Different view identities merge only when their overlapping source lines agree;
 non-overlapping partial views never establish continuity by themselves.
 
+When relevant ordinary sources are available, final context selection omits incidental dependency
+lockfiles with the existing `low-relevance` reason instead of appending their bodies after source
+files. A shared directory name is not explicit lockfile intent. Named or selected lockfiles,
+dependency/version questions, and a relevant lockfile-only fallback remain eligible within their
+existing policy and budgets. When concrete sources are addressed, incidental lockfiles must belong
+to an ancestor module; explicitly selected lockfiles remain eligible. Dependency/version intent
+reuses canonical planner terms, including German. Validated query-origin source selections can seed
+ancestor metadata roots through the existing discovery path, but each added root must pass the
+selected-scope and denial predicate before directory IO. All roots share the existing traversal,
+deadline and retention controls. Assistant or diagnostic references do not seed those roots.
+Classification reuses the workspace ecosystem registry. This selection
+rule applies to Git repositories and ordinary folders without applying Git-specific directory
+exclusions to ordinary documents. The existing connected-context completion records actual selected
+and omitted counts and charged usage; no path or body enters that evidence.
+
 Canonical omission order and cache identity are independent of caller ordering. A successful
 selected-file read replaces an earlier omission for that exact file; invalid parent/child overlaps
 still fail validation. Read refusals retain their existing closed policy or budget reason.

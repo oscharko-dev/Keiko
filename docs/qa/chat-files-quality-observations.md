@@ -644,6 +644,52 @@ regenerated and checked with Node 24.18.0. A separate macOS-x64 fixed-host EOF t
 reproduce on this arm64 host after installing the declared host dependencies: both its targeted
 regression and the complete 56-test host suite passed. This does not replace exact-platform CI.
 
+## Explicit-source confirmation and lockfile precision
+
+The rebuilt native app at `8a2a0c46e` admitted all seven requested reservation sources, including
+`README.md`, beyond the six-reference planning preview. The answer's README citation opened the
+correct root and accepted requirements in the Editor. The source-admission repair does not establish
+generated-test correctness: strict TypeScript passed, but unchanged execution passed 12 of 13 tests.
+The blank numeric-input test expected an integer-refinement message that was not present. A separately
+labelled first repair round fixed mock typing and isolated invalid-input cases, but repeated that
+same failed assertion: again 12 of 13 passed. No mutation score is reported for either failing
+baseline. The repair's claim to have verified the blank-input explanation is unsupported.
+
+The repair took 416.9 seconds, including 154.2 seconds before response headers. Its stream completed
+without cancellation. During that request, the full-context model disappeared from the picker after
+an automatic readiness probe timed out inconclusively at 300 seconds. A bounded second probe
+completed successfully two seconds after the chat answer, and the selected model reappeared without
+human reselection. These observations do not establish that stale readiness may authorize a new
+request. Catalog presentation, admission, generation binding and recovery require separate tests.
+Canonical request and readiness queries report supported, complete evidence without loss or
+truncation and a sequence-anomaly count of one. Canonical manifests classify that count as the
+second segment's tolerated initial gap: the same process lifetime continues from sequence 1,160
+to 1,161 without a physical gap, duplicate, decrease or reset. The counter is retained, not zeroed.
+
+The source pack still contained a large incidental lockfile. A minimal regression reproduced this
+for an ordinary folder: all seven requested sources were retained, but a shared frontend directory
+and common test-library terms admitted unrelated lockfile content. The corresponding Git case
+already excluded it. Final candidate selection now omits incidental lockfiles when ordinary evidence
+is available, retains selected/named and dependency-version evidence, and preserves a relevant
+lockfile-only fallback. It reuses the ecosystem registry and existing low-relevance omissions;
+ordinary documents and the original read/token/output limits remain intact. Reviewer feedback
+reproduced a German intent regression before push; canonical planner terms preserve that intent.
+A separate mixed source/version query also failed on the unchanged previous head. Existing bounded
+metadata discovery now inspects ancestor module roots of validated query-origin sources, checking
+selected scope before directory IO. Relevance thresholds remain unchanged. Paired Git/ordinary
+fixtures verify final files, actual excerpt-byte accounting, body-free completion counts, explicit
+selection, sibling-module exclusion, finite budgets, restricted-directory IO and warm cache reuse.
+The final 19 focused cases and the broader 2,599-test Grounding suite pass, with one existing skip.
+A retrieval-only replay of the unchanged reservation request retains all seven requested sources
+in 5,350 excerpt bytes, down from 21,734 bytes including the incidental lockfile. That lockfile has
+the existing low-relevance omission; no requested source was removed. This correction still needs
+native confirmation before a new matched skill/control campaign.
+
+The current-head macOS-x64 CI failure is a readiness timeout before the fixed host's auth/routes/SSE
+assertions, distinct from the earlier EOF timeout. A targeted local run passes on arm64 with the
+qualified installed host dependencies. The first attempt lacked that dependency root and exited
+before readiness; neither local attempt reproduces or clears the x64 failure.
+
 ## Open work
 
 Fresh skill/control repetitions, held-out tasks, larger Git/non-Git corpora, source freshness,

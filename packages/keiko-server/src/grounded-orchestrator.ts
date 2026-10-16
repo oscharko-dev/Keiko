@@ -8,6 +8,7 @@ import {
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
   WorkspaceReadError,
+  isEcosystemLockfile,
   candidateBucketForPath,
   detectWorkspaceAt,
   decodeTextFileBytes,
@@ -3649,16 +3650,6 @@ const DOCUMENT_REFERENCE_SEARCH_LIMITS = {
   elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
 } as const;
 const SYMBOL_LINE_SCAN_BYTES_MAX = 2_097_152;
-const LOCKFILE_NAMES = new Set([
-  "package-lock.json",
-  "pnpm-lock.yaml",
-  "yarn.lock",
-  "bun.lock",
-  "bun.lockb",
-  "cargo.lock",
-  "composer.lock",
-  "gemfile.lock",
-]);
 
 function basename(scopePath: string): string {
   const index = scopePath.lastIndexOf("/");
@@ -3674,7 +3665,7 @@ function isKeikoEvidenceArtifact(scopePath: string): boolean {
 }
 
 function isLockfilePath(scopePath: string): boolean {
-  return LOCKFILE_NAMES.has(basename(scopePath).toLowerCase());
+  return isEcosystemLockfile(basename(scopePath));
 }
 
 function dirname(scopePath: string): string {
@@ -5443,6 +5434,7 @@ async function rootGlobManifestPaths(
 // the guarded fs, the traversal control and the shared existence cache stay in lockstep across
 // them instead of being re-threaded positionally into each pass.
 interface MetadataDiscoveryInputs {
+  readonly explicitSourcePaths?: readonly string[];
   readonly readableScopeManifest?: boolean;
   readonly input: OrchestratorInput;
   readonly intent: RetrievalIntent;
@@ -5537,6 +5529,24 @@ async function workspacePackageMetadataAtoms(
   return atoms;
 }
 
+function projectMetadataRoots(inputs: MetadataDiscoveryInputs): readonly string[] {
+  const roots = new Set(metadataRootsForScope(inputs.input.scope));
+  const query = extractRetrievalChannels(inputs.input.query.text, 8).questionText;
+  if (!requestsDependencyMetadata(query)) return [...roots];
+  for (const path of inputs.explicitSourcePaths ?? []) {
+    if (!isEcosystemSourceFile(path) && !isCanonicalMetadataFile(path)) continue;
+    let root = dirname(path);
+    while (
+      root.length > 0 &&
+      isAdmittedMetadataPath(root, inputs.searchScope, inputs.existsCache)
+    ) {
+      roots.add(root);
+      root = dirname(root);
+    }
+  }
+  return [...roots].sort((left, right) => left.localeCompare(right));
+}
+
 async function projectMetadataAtoms(
   inputs: MetadataDiscoveryInputs,
 ): Promise<readonly EvidenceAtom[]> {
@@ -5548,14 +5558,15 @@ async function projectMetadataAtoms(
     return [];
   }
   const context: MetadataAtomCollectionContext = { ...inputs, seen: new Set<string>() };
+  const roots = projectMetadataRoots(inputs);
   const retained = new MetadataRetention(
     inputs.maxResults,
     MAX_OMITTED_CONTEXT_ENTRIES,
-    metadataRootsForScope(input.scope),
+    roots,
     PROJECT_METADATA_FILENAMES,
   );
   inputs.existsCache.metadataRetention = retained;
-  for await (const _atoms of iterateSequentialResults(metadataRootsForScope(input.scope), (root) =>
+  for await (const _atoms of iterateSequentialResults(roots, (root) =>
     metadataTraversalCanContinue(control)
       ? projectMetadataRootAtoms(root, context)
       : Promise.resolve([]),
@@ -5668,6 +5679,9 @@ async function deterministicMetadataEvidence(
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs, recordUnavailable };
   const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
+    ...(inputs.explicitSourcePaths === undefined
+      ? {}
+      : { explicitSourcePaths: inputs.explicitSourcePaths }),
     ...(inputs.readableScopeManifest === true ? { readableScopeManifest: true } : {}),
     input,
     intent: plan.retrievalIntent,
@@ -5732,6 +5746,7 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
+  readonly explicitSourcePaths?: readonly string[];
   readonly readableScopeManifest?: boolean;
   readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
@@ -5815,7 +5830,11 @@ async function withDeterministicContextAtoms(
   inputs: DeterministicContextInputs,
 ): Promise<RingRunSummary> {
   markAugmentationUsed(rings);
-  const deterministic = await deterministicContextEvidence(inputs);
+  const explicitSourcePaths =
+    rings.explicitAdmission?.selections
+      .filter((selection) => selection.origin === "query")
+      .map((selection) => selection.path) ?? [];
+  const deterministic = await deterministicContextEvidence({ ...inputs, explicitSourcePaths });
   if (
     deterministic.atoms.length === 0 &&
     deterministic.uncertainty.length === 0 &&
@@ -5901,22 +5920,25 @@ function explicitlyTargetsLockfile(
   if (!isLockfilePath(scopePath)) {
     return false;
   }
-  const loweredQuery = queryText.toLowerCase();
-  if (
-    loweredQuery.includes("lockfile") ||
-    loweredQuery.includes("package manager") ||
-    loweredQuery.includes("packagemanager") ||
-    loweredQuery.includes("dependency version") ||
-    loweredQuery.includes("dependency versions") ||
-    loweredQuery.includes("resolved version") ||
-    loweredQuery.includes("resolved versions")
-  ) {
-    return true;
-  }
+  if (requestsDependencyMetadata(queryText)) return true;
   const path = scopePath.toLowerCase();
   const name = basename(scopePath).toLowerCase();
-  return queryTerms(queryText, anchors).some((term) => path.includes(term) || name === term);
+  return queryTerms(queryText, anchors).some((term) => path === term || name === term);
 }
+
+function requestsDependencyMetadata(queryText: string): boolean {
+  const loweredQuery = queryText.toLowerCase();
+  const metadataTerms = classifyRetrievalIntent(queryText).normalizedTerms;
+  return (
+    metadataTerms.some((term) => LOCKFILE_METADATA_TERMS.has(term)) ||
+    /\b(?:versions?|dependencies|dependency|transitive|resolved|locked)\b/u.test(loweredQuery) ||
+    loweredQuery.includes("lockfile") ||
+    loweredQuery.includes("package manager") ||
+    loweredQuery.includes("packagemanager")
+  );
+}
+
+const LOCKFILE_METADATA_TERMS = new Set(["version", "dependency", "package-manager"]);
 
 function refineCandidateOrdering(
   kept: readonly CandidateFile[],
@@ -5941,7 +5963,7 @@ function refineCandidateOrdering(
       runtimeArtifacts.push(candidate);
       continue;
     }
-    if (isLockfilePath(scopePath) && !explicitlyTargetsLockfile(scopePath, queryText, anchors)) {
+    if (isIncidentalLockfile(scopePath, queryText, anchors, addressedPaths)) {
       lockfiles.push(candidate);
       continue;
     }
@@ -5952,7 +5974,7 @@ function refineCandidateOrdering(
     return { kept, omitted };
   }
 
-  const nextOmitted = runtimeArtifactOmissions(omitted, runtimeArtifacts, nowMs);
+  const nextOmitted = runtimeArtifactOmissions(omitted, [...runtimeArtifacts, ...lockfiles], nowMs);
   const priorityPaths = new Set<string>();
   const useSearchOrder = candidateOrderingUsesSearchOrder(query, anchors, diagnostics);
   const orderedPreferred = useSearchOrder
@@ -5966,10 +5988,35 @@ function refineCandidateOrdering(
   );
   return {
     rankingObservation: distinct.observation,
-    kept: [...distinct.kept, ...lockfiles],
+    kept: distinct.kept,
     omitted: nextOmitted,
     priorityPaths,
   };
+}
+
+function isIncidentalLockfile(
+  scopePath: string,
+  queryText: string,
+  anchors: readonly SearchAnchor[],
+  addressedPaths: ReadonlySet<string>,
+): boolean {
+  return (
+    isLockfilePath(scopePath) &&
+    !addressedPaths.has(scopePath) &&
+    (!explicitlyTargetsLockfile(scopePath, queryText, anchors) ||
+      !lockfileMatchesAddressedSource(scopePath, addressedPaths))
+  );
+}
+
+function lockfileMatchesAddressedSource(
+  scopePath: string,
+  addressedPaths: ReadonlySet<string>,
+): boolean {
+  const sources = [...addressedPaths].filter(
+    (path) => isEcosystemSourceFile(path) || isCanonicalMetadataFile(path),
+  );
+  const root = dirname(scopePath);
+  return sources.length === 0 || root === "" || sources.some((path) => path.startsWith(`${root}/`));
 }
 
 function runtimeArtifactOmissions(
