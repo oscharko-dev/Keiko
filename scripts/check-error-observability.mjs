@@ -121,6 +121,10 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
+    "packages/keiko-contracts/src/git-editor.ts:parserInspectionClass",
+    "Pure hostile error classification returns the fixed unknown-error refusal without reading private fields. The parser propagates a closed rejection; UI failBffResponse reports the existing correlated contract-validation diagnostic and server blame admission uses its fixed BAD_REQUEST refusal. The classifier does not emit a separate logged fact.",
+  ],
+  [
     "packages/keiko-server/src/grounded-preselection-reranker.ts:rerankGroundedCandidates",
     "The catch preserves the original error in PreselectionRerankerResult.failure. The connected-context owner persists failureKind, frames and causeChain on selection-details; cancellation is rethrown.",
   ],
@@ -482,6 +486,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
 
 function isReviewedFailurePath(path, owner, node) {
   if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`)) return false;
+  if (path === "packages/keiko-contracts/src/git-editor.ts" && owner === "parserInspectionClass")
+    return exactFailureFallback(node, "unknown error");
   if (path !== "packages/keiko-contracts/src/observability.ts") return true;
   if (owner === "completeRegistrationShape") return exactFailureFallback(node, false);
   if (owner === "rejectedActivityLogEventKind")

@@ -823,3 +823,33 @@ known-value argument adaptation, including the captured-version recheck. The exi
 reader can structurally adapt its selected parameter while semantic proofs are pending; that is
 not executed runtime qualification or permission to activate the currently inactive unknown-parameter
 scope. Complete fresh qualification of all 66 records remains required independently.
+
+### Manual Git diff and blame public admission (#3918)
+
+Four existing Git diff/blame request and response parsers extend the cohort from 66 to 70 using
+`public-parser` and only `anti-slop/no-unknown-parameters` parameter zero. One canonical named public
+import supplies all four forwarding witnesses and their producer-owned `GitEditorParseResult<T>`
+result types. Strict source/public/witness type pins and canonical public normative proofs preserve
+original and nested identities, optional-path presence, caps and one-over refusals, ordered errors,
+staged/worktree separation, physical sparse/inherited collection behavior, final changing-files
+observations, blame privacy and throw-free getter handling. Existing source regression pins remain.
+
+UI diff/blame response consumers and the server blame-request consumer retain their existing
+owners; no active direct production caller is presumed for the symmetric diff-request parser.
+ADR-0061 retirement does not retire manual Git reads. The four private unsafe parser inputs remain
+separate raw boundaries. Registration adds no callback traversal, capability, export, authority,
+logging port or scope change; it selects the four public unknown inputs only;
+it supplies no optional dictionary, typeof or known-value grants. Actual reader eligibility and
+fresh complete qualification remain mandatory. Existing public-parser structural adaptation while
+proofs are pending does not establish runtime qualification or activate the inactive unknown-input
+scope. This cohort does not establish domain zero or complete the remaining accepted-owner work.
+
+The accompanying owning parser repair bounds inspection failures to fixed `TypeError`, `Error`, or
+`unknown error` tags without observing thrown names, messages, stacks or prototype chains. A guarded
+single immediate-prototype observation fails closed for hostile or revoked proxies. Its exact
+reviewed classifier catch accepts only the literal generic fallback; the existing legacy
+`parseSafely` catch entry is not enlarged. Additive canonical-public controls exercise all four
+entries, while UI structured-diff/blame consumers use the existing parsed-response transport so
+primitive, null, empty and object refusals retain their actual response correlation on the existing
+contract-validation diagnostic. This runtime repair and the public-parser registration require
+their own actual red/green, coverage and Activity Log evidence; registration alone supplies none.

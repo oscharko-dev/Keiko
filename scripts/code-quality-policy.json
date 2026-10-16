@@ -3653,6 +3653,278 @@
           "testName": "3918 captured document version public preserves fractional modifiedAt and copied field ordering"
         }
       ]
+    },
+    {
+      "id": "git-editor-diff-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorDiffRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorDiffRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorDiffRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parsePublicGitEditorDiffRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-editor.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffRequest public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffRequest public parser (#3918) closes hostile thrown values without reading private error fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffRequest public parser (#3918) retains original staged unstaged and optional-path presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffRequest public parser (#3918) preserves ordered schema scope and path refusals"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffRequest public parser (#3918) enforces the owning path byte cap and refuses traversal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffRequest public parser (#3918) refuses unknown fields and getter failures without retaining private text"
+        }
+      ]
+    },
+    {
+      "id": "git-editor-diff-response-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorDiffResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorDiffResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorDiffResponse"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parsePublicGitEditorDiffResponse",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-editor.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) closes hostile thrown values without reading private error fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) retains original response and nested collection references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) enforces the owning file cap and exact scope layer separation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) requires truthful totals and explicit byte truncation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) retains nested structural cap edges and refuses one over"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) refuses contradictory coordinates rename and binary payloads"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git DiffResponse public parser (#3918) refuses unknown response fields and closed getter failures"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public preserves healthy original diff and blame references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public preserves an inherited present line and its original array reference"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public refuses an absent file"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public refuses an absent nested hunk"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public refuses an absent nested line"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public refuses a physical malformed file even with overridden every"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 final Editor collection observation public preserves healthy changing final files observation and input reference"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 final Editor collection observation public refuses incomplete member at the final files observation"
+        }
+      ]
+    },
+    {
+      "id": "git-editor-blame-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorBlameRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorBlameRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorBlameRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parsePublicGitEditorBlameRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-editor.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameRequest public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameRequest public parser (#3918) closes hostile thrown values without reading private error fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameRequest public parser (#3918) retains original request at the positive range and cap boundaries"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameRequest public parser (#3918) preserves exact ordered invalid range and path errors"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameRequest public parser (#3918) refuses noninteger nonfinite and nonpositive ranges"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameRequest public parser (#3918) refuses unknown fields and getter failures without retaining private text"
+        }
+      ]
+    },
+    {
+      "id": "git-editor-blame-response-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorBlameResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorBlameResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parseGitEditorBlameResponse"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/git-editor.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        "exportName": "parsePublicGitEditorBlameResponse",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/git-editor.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameResponse public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameResponse public parser (#3918) closes hostile thrown values without reading private error fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameResponse public parser (#3918) retains original response and blame line collection references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameResponse public parser (#3918) enforces the owning line cap and explicit byte truncation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameResponse public parser (#3918) refuses email source bodies and malformed blame metadata"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "Git BlameResponse public parser (#3918) requires consistent totals and refuses hostile response getters"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public preserves healthy original diff and blame references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/git-editor.test.ts",
+          "testName": "G1 physical Git read collections public refuses an absent blame line"
+        }
+      ]
     }
   ]
 }

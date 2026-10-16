@@ -63,6 +63,13 @@ import {
 } from "../support/activity-log-scenario.js";
 import { fixtureEvent } from "../support/activity-log-segments.js";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
+import {
+  GIT_EDITOR_SCHEMA_VERSION,
+  GIT_EDITOR_DIFF_MAX_BYTES,
+  GIT_EDITOR_DIFF_MAX_FILES,
+  GIT_EDITOR_BLAME_MAX_BYTES,
+  GIT_EDITOR_BLAME_MAX_LINES,
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 
 // The ui scenarios write through the built package, so their incidents come from it too: one
 // Activity Log writer instance per process (activity-log-scenario.ts).
@@ -72,6 +79,16 @@ const PACKAGED_INCIDENTS: ScenarioIncidentRecorders = {
 };
 
 interface GitApiFixture {
+  readonly fetchGitStructuredDiff: (input: {
+    readonly root: string;
+    readonly scope: "staged";
+  }) => Promise<unknown>;
+  readonly fetchGitBlame: (input: {
+    readonly root: string;
+    readonly path: string;
+    readonly startLine: number;
+    readonly maxLines: number;
+  }) => Promise<unknown>;
   readonly fetchGitDiff: (input: { readonly root: string }) => Promise<unknown>;
   readonly fetchGitDeliverySyncExecute: (input: {
     readonly operation: "fetch";
@@ -107,6 +124,8 @@ async function loadGitDiagnosticFixture(): Promise<{
   if (
     ![
       api.fetchGitDiff,
+      api.fetchGitStructuredDiff,
+      api.fetchGitBlame,
       api.fetchGitDeliverySyncExecute,
       diagnostics.resetClientDiagnosticWriter,
       diagnostics.setClientDiagnosticWriter,
@@ -182,6 +201,89 @@ async function driveGitScopeRefusal(context: (body: string) => RouteContext): Pr
   expect(bodies[0]).not.toContain("private-git-root");
   expect(bodies[0]).not.toContain("private git diff body");
   expect(bodies[0]).not.toContain("scope invalid");
+}
+
+function structuredGitResponse(kind: "structured-diff" | "blame", malformed: boolean): Response {
+  const payload =
+    kind === "structured-diff"
+      ? {
+          schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+          scope: "staged",
+          files: [],
+          truncated: false,
+          totalFiles: 0,
+          totalBytes: 0,
+          maxBytes: GIT_EDITOR_DIFF_MAX_BYTES,
+          maxFiles: GIT_EDITOR_DIFF_MAX_FILES,
+        }
+      : {
+          schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+          path: "private-git-file",
+          startLine: 1,
+          lines: [],
+          truncated: false,
+          totalLines: 0,
+          totalBytes: 0,
+          maxBytes: GIT_EDITOR_BLAME_MAX_BYTES,
+          maxLines: GIT_EDITOR_BLAME_MAX_LINES,
+        };
+  return new Response(JSON.stringify(malformed ? "private-git-json-body" : payload), {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-Correlation-Id": `git-${kind}-response-scenario`,
+    },
+  });
+}
+
+async function driveStructuredGitRefusal(
+  context: (body: string) => RouteContext,
+  kind: "structured-diff" | "blame",
+): Promise<void> {
+  let malformed = false;
+  let delivery: Promise<Response> | undefined;
+  const bodies: string[] = [];
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      const prefix = kind === "structured-diff" ? "/api/git/diff/structured?" : "/api/git/blame?";
+      if (input.startsWith(prefix)) return structuredGitResponse(kind, malformed);
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  const read = (): Promise<unknown> =>
+    kind === "structured-diff"
+      ? api.fetchGitStructuredDiff({ root: "/private-git-root", scope: "staged" })
+      : api.fetchGitBlame({
+          root: "/private-git-root",
+          path: "private-git-file",
+          startLine: 1,
+          maxLines: 1,
+        });
+  await expect(read()).resolves.toMatchObject({ schemaVersion: GIT_EDITOR_SCHEMA_VERSION });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  const failure = await read().catch((error: unknown): unknown => error);
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(failure).toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: `git-${kind}-response-scenario`,
+  });
+  for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
+    expect(bodies[0]).not.toContain(value);
 }
 
 function gitSyncResponse(malformed: boolean): Response {
@@ -655,6 +757,52 @@ describe("Activity Log scenario: client-diagnostics", () => {
     expect(trace.failureClasses).toContain("client-diagnostic");
     expect(readPersistedActivityLog(stateDir)).not.toContain("private-git-root");
     expect(readPersistedActivityLog(stateDir)).not.toContain("private git diff body");
+  });
+
+  it("reconstructs actual structured-diff JSON refusal with its response correlation", async () => {
+    const startedAtMs = Date.now();
+    await driveStructuredGitRefusal(context, "structured-diff");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-structured-diff-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
+      expect(log).not.toContain(value);
+  });
+
+  it("reconstructs actual blame JSON refusal with its response correlation", async () => {
+    const startedAtMs = Date.now();
+    await driveStructuredGitRefusal(context, "blame");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "git-blame-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
+      expect(log).not.toContain(value);
   });
 
   it("persists a malformed Git sync response without replaying the mutation", async () => {

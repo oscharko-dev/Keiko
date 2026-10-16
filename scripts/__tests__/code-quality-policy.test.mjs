@@ -251,6 +251,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "actual-code-task-acceptance-raw-reader-return",
       "support-canonical-json-decoder-return",
       "editor-document-version-public-parser",
+      "git-editor-diff-request-public-parser",
+      "git-editor-diff-response-public-parser",
+      "git-editor-blame-request-public-parser",
+      "git-editor-blame-response-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1012,4 +1016,51 @@ describe("manual document version public parser obligation (#3918)", () => {
     expect(record.proofAssertions).toHaveLength(12);
     expect(validatePolicy(policy)).toEqual([]);
   });
+});
+
+describe("Git read public parser obligations (#3918)", () => {
+  it.each([
+    {
+      id: "git-editor-diff-request-public-parser",
+      producer: "parseGitEditorDiffRequest",
+      witness: "parsePublicGitEditorDiffRequest",
+      assertions: 6,
+    },
+    {
+      id: "git-editor-diff-response-public-parser",
+      producer: "parseGitEditorDiffResponse",
+      witness: "parsePublicGitEditorDiffResponse",
+      assertions: 16,
+    },
+    {
+      id: "git-editor-blame-request-public-parser",
+      producer: "parseGitEditorBlameRequest",
+      witness: "parsePublicGitEditorBlameRequest",
+      assertions: 6,
+    },
+    {
+      id: "git-editor-blame-response-public-parser",
+      producer: "parseGitEditorBlameResponse",
+      witness: "parsePublicGitEditorBlameResponse",
+      assertions: 8,
+    },
+  ])(
+    "retains only the required unknown input of $producer",
+    ({ id, producer, witness, assertions }) => {
+      const record = policy.responsibilities.find((entry) => entry.id === id);
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({
+        consumerPath: "packages/keiko-contracts/src/git-editor.test.ts",
+        specifier: "@oscharko-dev/keiko-contracts/runtime/git-editor",
+        exportName: producer,
+        parameterIndex: 0,
+      });
+      expect(record.transform).toEqual(record.output);
+      expect(record.consumer.exportName).toBe(witness);
+      expect(record.proofs).toEqual(["packages/keiko-contracts/src/git-editor.test.ts"]);
+      expect(record.proofAssertions).toHaveLength(assertions);
+      expect(validatePolicy(policy)).toEqual([]);
+    },
+  );
 });

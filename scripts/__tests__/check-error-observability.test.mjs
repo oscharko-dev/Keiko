@@ -4,6 +4,7 @@ import {
   MIN_STRATIFIED_SITES,
   SERVER_TOP_LEVEL_SITE_ID,
   SITE_PROBES,
+  unregisteredFailurePathViolations,
   main,
 } from "../check-error-observability.mjs";
 
@@ -231,6 +232,33 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
       expect(logSpy).not.toHaveBeenCalled();
     } finally {
       process.exitCode = originalExitCode;
+    }
+  });
+});
+
+describe("Git parser closed classification catch (#3918)", () => {
+  const path = "packages/keiko-contracts/src/git-editor.ts";
+  const source =
+    'function parserInspectionClass(error) { try { return error instanceof Error ? "Error" : "unknown error"; } catch { return "unknown error"; } }';
+  it("accepts only the exact reviewed owner and literal fallback", () => {
+    expect(unregisteredFailurePathViolations(source, path)).toEqual([]);
+    expect(unregisteredFailurePathViolations(source, "packages/fixture/src/other.ts")).toHaveLength(
+      1,
+    );
+    expect(
+      unregisteredFailurePathViolations(
+        source.replace("parserInspectionClass", "otherOwner"),
+        path,
+      ),
+    ).toHaveLength(1);
+    for (const fallback of [
+      "return error;",
+      'return "private-name";',
+      "",
+      'console.warn("private-name"); return "unknown error";',
+    ]) {
+      const changed = source.replace('return "unknown error"; } }', `${fallback} } }`);
+      expect(unregisteredFailurePathViolations(changed, path)).toHaveLength(1);
     }
   });
 });

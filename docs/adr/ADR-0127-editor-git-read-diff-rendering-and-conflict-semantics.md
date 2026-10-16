@@ -93,7 +93,13 @@ unless the separately governed Issue #2234 projection explicitly selects a bound
 
 All four wire parsers (diff request/response and blame request/response) are deterministic,
 closed-shape, all-errors-collected at the envelope level, and throw-free even for accessor-hostile
-input. Paths reject absolute, backslash-shaped, empty-segment, dot-segment, traversal-shaped, NUL,
+input. Inspection failures expose only fixed `TypeError`, `Error`, or `unknown error` tags. A single
+guarded immediate-prototype observation recognizes the ordinary built-in TypeError and Error;
+other prototypes, revoked proxies, and failed observations use the generic tag. The parser never
+reads thrown values' `name`, `message`, or `stack`, traverses their prototype chains, or reflects
+custom error labels. The leaf returns closed refusal data; UI response admission retains its
+existing correlated contract-validation diagnostic and server blame admission its fixed bad-request
+refusal. Paths reject absolute, backslash-shaped, empty-segment, dot-segment, traversal-shaped, NUL,
 and over-cap values. Issue #2228 parses unified diff server-side at the existing Git route boundary,
 after `keiko-git` membership and containment checks and before returning this contract. Blame needs
 no subcommand allowlist widening. Issue #2228 nevertheless hardens every local read against

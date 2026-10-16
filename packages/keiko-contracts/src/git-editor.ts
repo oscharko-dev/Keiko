@@ -321,15 +321,24 @@ export function isGitEditorBlameLine(value: unknown): value is GitEditorBlameLin
   );
 }
 
+function parserInspectionClass(error: unknown): "TypeError" | "Error" | "unknown error" {
+  if (typeof error !== "object" || error === null) return "unknown error";
+  try {
+    const prototype: unknown = Object.getPrototypeOf(error);
+    if (prototype === TypeError.prototype) return "TypeError";
+    return prototype === Error.prototype ? "Error" : "unknown error";
+  } catch {
+    return "unknown error";
+  }
+}
+
 function parseSafely<T>(parser: () => GitEditorParseResult<T>): GitEditorParseResult<T> {
   try {
     return parser();
   } catch (error: unknown) {
     return {
       ok: false,
-      errors: [
-        `payload could not be inspected: ${error instanceof Error ? error.name : "unknown error"}`,
-      ],
+      errors: [`payload could not be inspected: ${parserInspectionClass(error)}`],
     };
   }
 }
