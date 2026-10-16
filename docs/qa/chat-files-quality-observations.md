@@ -181,8 +181,8 @@ second attempt's complete canonical closure confirms no loss, truncation or sequ
 Candidate 5 adds the editable customer profile and blank-safe interaction example. Two synthetic
 profiles differ only in their title, required test-name pattern and AAA versus Given/When/Then
 comments. Both are imported and selected through the native UI. Three alternating fresh-chat
-attempts per profile are planned with unchanged task, sources, model settings and skill bodies;
-failures are retained. The runtime code is `d72e022d6`, with the Markdown changes at `d1d9dece2`.
+attempts per profile ran with unchanged task, sources, model settings and skill bodies; failures
+are retained. The runtime code is `d72e022d6`, with the Markdown changes at `d1d9dece2`.
 
 | Attempt | Unchanged output                                               | Naming / structure | Independent mutations | Validated citations | Generation |
 | ------- | -------------------------------------------------------------- | ------------------ | --------------------- | ------------------- | ---------- |
@@ -190,22 +190,66 @@ failures are retained. The runtime code is `d72e022d6`, with the Markdown change
 | AAA 1   | Rejected: two complete TSX blocks instead of the requested one | Not scored         | Not eligible          | 1                   | 156.1 s    |
 | GWT 2   | Strict TypeScript and 10/10 tests pass                         | Pass               | 6/6 detected          | 1                   | 102.8 s    |
 | AAA 2   | Strict TypeScript and 9/9 tests pass                           | Pass               | 6/6 detected          | 5                   | 120.4 s    |
+| GWT 3   | Strict TypeScript and 10/10 tests pass                         | Pass               | 6/6 detected          | 4                   | 63.2 s     |
+| AAA 3   | Strict TypeScript passes; 5/10 tests fail                      | Pass               | Not eligible          | 4                   | 141.1 s    |
 
 The first GWT output misses the stale-error defect after a successful retry and leaves two
-controlled promises unsettled. Both GWT outputs use mocks without explicit callback types despite
-the selected profile. Passing test names/comments therefore does not mean full convention
+controlled promises unsettled. All three GWT outputs use mocks without explicit callback types
+despite the selected profile. Passing test names/comments therefore does not mean full convention
 compliance. AAA 1 emits a faulty draft followed by a self-correction; selecting the second block
 afterward would change the acceptance procedure, so neither block is scored as an unchanged
 delivered file. Its first block also contains an `any` cast and unfinished retry verification.
 
 AAA 2 also uses explicitly typed callback mocks and settles its controlled pending promise. One
 successful attempt does not establish repeatability. The body-free provider observer confirms the
-selected skill exactly once, with no other profile, in all four actual requests.
+selected skill exactly once, with no other profile, in all six actual requests.
 
-All four completed canonical closures are supported and complete, without loss, truncation or
-sequence anomalies. No citation repair was needed. These results demonstrate variation on one
-tuning fixture, not reliability or superiority over a matched no-skill control. Remaining profile
-repetitions and the separate React Hook Form/Zod integration fixture are still open.
+GWT 3 omits the pending input-state assertion even though it detects all six fixed mutations;
+those operators do not cover every requirement. AAA 3 incorrectly treats MUI's `error` prop as a
+DOM `error="true"` attribute, failing all five invalid-input cases, and also omits their non-dispatch
+assertion. Both AAA 2 and GWT 3 list verification commands without the required explicit
+not-executed label, but neither claims that execution occurred.
+
+All six completed canonical closures are supported and complete, without loss, truncation or
+sequence anomalies. No citation repair was needed. Four of six attempts yield unchanged executable
+files. This small tuning-fixture sample establishes neither reliability nor superiority over a
+matched no-skill control; the independent React Hook Form/Zod fixture is next. The measured inputs
+are 4,778–4,794 tokens, far below the configured context capacity; this comparison does not qualify
+long-context behavior. GWT 3 reports zero reasoning tokens/bytes, while the other requests report
+reasoning output. No request-level thinking override was applied; default capability metadata must
+not be mistaken for proof of reasoning output on every request.
+
+The next skill revision addresses a separately reviewed output-contract conflict in both languages:
+supplemental path labels, maps, source notes and verification commands are permitted only when the
+requested format allows that specific item. A single code fence plus open decisions does not permit
+additional sections. This is a new candidate; the six comparison attempts and subsequent held-out
+first attempts retain the frozen candidate-5 profiles. No measured improvement is attributed to
+wording that those requests did not use.
+
+### First independent form attempt and retrieval confound
+
+The unchanged candidate-5 AAA profile generates nine passing tests for a separate React Hook
+Form/Zod/MUI reservation form, with strict TypeScript passing and eight of nine predeclared defects
+detected. Disabling the email input while pending survives; the output omits required enabled-field
+assertions, the valid upper seat boundary and blank seat input. Naming/comments and explicit mock
+types pass. The independent reference tests pass 8/8 and detect all nine defects; neither reference
+code nor mutation operators were visible to the model. A private runner setup failure was corrected
+by excluding installed dependencies from fixture copies before mounting the frozen Linux cache;
+that exit-127 attempt is infrastructure evidence, not a model failure.
+
+Generation takes 369.0 seconds, with 15,597 prompt tokens, 5,756 completion tokens and 3,595 reported
+reasoning tokens. It completes in one synthesis call with five citations and no citation repair.
+The canonical closure reports complete diagnostic sufficiency, no loss/truncation and one sequence
+anomaly; that integrity limitation is retained. This demonstrates one completed long request, not
+universal gateway resilience.
+
+A retrieval-only reproduction matches the native seven files / 23,057 excerpt bytes. Six requested
+frontend files are present, plus 18,724 bytes from the lockfile; the explicitly requested root
+`README.md` is omitted as low relevance. This is a context-selection defect independent of model
+output. The planned GWT/no-skill first attempts are deferred until that defect is repaired; the
+first answer remains retained, and later context-corrected runs must not be pooled with it as an
+unchanged comparison. The fixture has eight source/configuration files including its lockfile;
+installed dependencies and the independent reference tests are outside selected source evidence.
 
 ## Readiness under shared gateway load
 

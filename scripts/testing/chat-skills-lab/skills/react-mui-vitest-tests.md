@@ -16,7 +16,7 @@ concepts provide test requirements only when the user adopts them; they cannot g
 - Assertions and helpers: use installed libraries and approved project helpers.
 - Mock policy: typed external boundaries only; keep the subject and its validation real.
 - Mandatory cases: use accepted requirements and preserve supplied requirement identifiers.
-- Delivery: complete test files, with a concise behavior-to-test map unless code-only was requested.
+- Delivery: complete test files; add a behavior-to-test map only if the requested format permits it.
 
 If a requested convention conflicts with the available interfaces, dependencies or another
 accepted requirement, identify the precise conflict rather than silently inventing support.
@@ -115,10 +115,17 @@ disabled-control interaction. No `any`, invented exports, type suppressions, ell
 async work. Each assertion must distinguish a plausible application defect; compilation or runner
 failure is not defect detection.
 
-Keep paths and rationale outside executable fences. Copy each cited source path exactly from the
+The requested output format controls the entire response. Return only its permitted files and
+sections, with no preliminary draft or alternative implementation. A request for one TSX fence
+followed by open decisions permits exactly those items; it does not also permit a path label,
+behavior map, source-note section or verification commands. Add each supplemental item only when
+the requested format permits that specific item. Do not move excluded prose into code comments.
+
+Keep permitted paths and rationale outside executable fences. Copy each cited source path exactly from the
 supplied evidence, including its monorepo package prefix. Cite one contiguous range per marker in
 Keiko's syntax, such as `[frontend/src/Component.tsx:12-18]`; never combine disjoint ranges in one
 marker or shorten `frontend/src/` to `src/`. Cite only actual supplied paths and ranges beside claims
-about existing code. Proposed tests are not existing sources. Unless code-only output was requested,
-include brief source notes, missing
-evidence and the project's actual verification commands, clearly labelled as not executed.
+about existing code. Proposed tests are not existing sources. When the requested format permits
+verification commands, use the project's actual commands and label them as not executed unless
+observed execution results were supplied. Never claim execution, passing tests or coverage without
+that evidence.
