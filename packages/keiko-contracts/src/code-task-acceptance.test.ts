@@ -2026,6 +2026,10 @@ describe("C1A acceptance preservation", () => {
 import {
   ownField as publicOwnField,
   validateCodeTaskAcceptanceContribution as publicAcceptanceValidator,
+  validateCodeTaskQualificationFlowArtifact as publicQualificationFlow,
+  validateCodeTaskQualificationManifest as publicQualificationManifest,
+  type CodeTaskQualificationFlowArtifactV1 as PublicCodeTaskQualificationFlowArtifactV1,
+  type CodeTaskQualificationManifestV1 as PublicCodeTaskQualificationManifestV1,
 } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
 import type {
   CodingWorkbenchValidationResult,
@@ -2088,4 +2092,141 @@ it("keeps the source reader aligned with the actual public raw observations (#39
   expect(sourceOwnField(record, "value")).toBe(record.value);
   expect(sourceOwnField(record, "inherited")).toBeUndefined();
   expect(sourceOwnField(record, "absent")).toBeUndefined();
+});
+
+type SourceContributionParse = CodingWorkbenchValidationResult<CodeTaskAcceptanceContributionV1>;
+type PublicContributionParse =
+  CodingWorkbenchValidationResult<PublicCodeTaskAcceptanceContributionV1>;
+type SourceQualificationFlowParse =
+  CodingWorkbenchValidationResult<CodeTaskQualificationFlowArtifactV1>;
+type PublicQualificationFlowParse =
+  CodingWorkbenchValidationResult<PublicCodeTaskQualificationFlowArtifactV1>;
+type SourceQualificationManifestParse =
+  CodingWorkbenchValidationResult<CodeTaskQualificationManifestV1>;
+type PublicQualificationManifestParse =
+  CodingWorkbenchValidationResult<PublicCodeTaskQualificationManifestV1>;
+
+export function parsePublicQualificationFlow(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicCodeTaskQualificationFlowArtifactV1> {
+  const result = publicQualificationFlow(input);
+  return result;
+}
+
+export function parsePublicQualificationManifest(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicCodeTaskQualificationManifestV1> {
+  const result = publicQualificationManifest(input);
+  return result;
+}
+
+describe("acceptance contribution public parser (#3918)", () => {
+  it("retains original contribution and nested evidence through the existing witness", () => {
+    const input = validContribution();
+    const result = rawReaderAcceptanceWitness(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public contribution refused");
+    expect(result.value).toBe(input);
+    expect(result.value.scenarios).toBe(input.scenarios);
+    expect(result.value.salvage).toBe(input.salvage);
+    expect(result.value.cleanup).toBe(input.cleanup);
+    expect(rawReaderAcceptanceWitness(null)).toEqual({
+      ok: false,
+      errors: ["contribution must be an object"],
+    });
+  });
+
+  it("pins source public and existing witness checked return types", () => {
+    expectTypeOf(
+      validateCodeTaskAcceptanceContribution,
+    ).returns.toEqualTypeOf<SourceContributionParse>();
+    expectTypeOf(publicAcceptanceValidator).returns.toEqualTypeOf<PublicContributionParse>();
+    expectTypeOf(rawReaderAcceptanceWitness).returns.toEqualTypeOf<PublicContributionParse>();
+    const result = rawReaderAcceptanceWitness(validContribution());
+    if (!result.ok) throw new TypeError("healthy public contribution types refused");
+    expectTypeOf(result.value.sourceCommitSha).toEqualTypeOf<
+      PublicCodeTaskAcceptanceContributionV1["sourceCommitSha"]
+    >();
+    expectTypeOf(result.value.scenarios).toEqualTypeOf<
+      PublicCodeTaskAcceptanceContributionV1["scenarios"]
+    >();
+    type Failure = Extract<ReturnType<typeof publicAcceptanceValidator>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("qualification flow public parser (#3918)", () => {
+  it("retains original flow authority and transition references", () => {
+    const input = validQualificationFlow();
+    const result = parsePublicQualificationFlow(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public qualification flow refused");
+    expect(result.value).toBe(input);
+    expect(result.value.authorityObservation).toBe(input.authorityObservation);
+    expect(result.value.transitions).toBe(input.transitions);
+    expect(result.value.rubricReview).toBe(input.rubricReview);
+    expect(parsePublicQualificationFlow(null)).toEqual({
+      ok: false,
+      errors: ["flowArtifact must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodeTaskQualificationFlowArtifact,
+    ).returns.toEqualTypeOf<SourceQualificationFlowParse>();
+    expectTypeOf(publicQualificationFlow).returns.toEqualTypeOf<PublicQualificationFlowParse>();
+    expectTypeOf(
+      parsePublicQualificationFlow,
+    ).returns.toEqualTypeOf<PublicQualificationFlowParse>();
+    const result = parsePublicQualificationFlow(validQualificationFlow());
+    if (!result.ok) throw new TypeError("healthy public qualification flow types refused");
+    expectTypeOf(result.value.flowId).toEqualTypeOf<
+      PublicCodeTaskQualificationFlowArtifactV1["flowId"]
+    >();
+    expectTypeOf(result.value.transitions).toEqualTypeOf<
+      PublicCodeTaskQualificationFlowArtifactV1["transitions"]
+    >();
+    type Failure = Extract<ReturnType<typeof publicQualificationFlow>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("qualification manifest public parser (#3918)", () => {
+  it("retains original manifest scenarios flows and spend references", () => {
+    const input = validQualificationManifest();
+    const result = parsePublicQualificationManifest(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public qualification manifest refused");
+    expect(result.value).toBe(input);
+    expect(result.value.scenarios).toBe(input.scenarios);
+    expect(result.value.flows).toBe(input.flows);
+    expect(result.value.observedSpendUsd).toBe(input.observedSpendUsd);
+    expect(parsePublicQualificationManifest(null)).toEqual({
+      ok: false,
+      errors: ["manifest must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodeTaskQualificationManifest,
+    ).returns.toEqualTypeOf<SourceQualificationManifestParse>();
+    expectTypeOf(
+      publicQualificationManifest,
+    ).returns.toEqualTypeOf<PublicQualificationManifestParse>();
+    expectTypeOf(
+      parsePublicQualificationManifest,
+    ).returns.toEqualTypeOf<PublicQualificationManifestParse>();
+    const result = parsePublicQualificationManifest(validQualificationManifest());
+    if (!result.ok) throw new TypeError("healthy public qualification manifest types refused");
+    expectTypeOf(result.value.sourceTreeSha).toEqualTypeOf<
+      PublicCodeTaskQualificationManifestV1["sourceTreeSha"]
+    >();
+    expectTypeOf(result.value.flows).toEqualTypeOf<
+      PublicCodeTaskQualificationManifestV1["flows"]
+    >();
+    type Failure = Extract<ReturnType<typeof publicQualificationManifest>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
 });

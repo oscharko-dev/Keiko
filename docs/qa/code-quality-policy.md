@@ -67,7 +67,7 @@ pending, stale or failed proofs cannot adapt it, and another `Reflect.get` coord
 No own-property/descriptor/cache replacement, receiver/read-order change or domain typing is
 introduced. The runtime, registered evidence contract, record and proof bodies remain unchanged.
 The native census is preserved; only the one qualified active operation can become an adaptation.
-The final complete production gate must actually qualify all 54 records on its current candidate
+The final complete production gate must actually qualify all 59 records on its current candidate
 and cover the full contracts production inventory. An earlier qualified report or a constructed
 unit input cannot supply that execution. This activation does not complete the 170-owner domain
 migration or activate the remaining six boundary rules.
@@ -709,3 +709,15 @@ pins remain selected. These contracts grant no execution capability or authority
 capabilities remain unsupported or denied. No production API, runtime bytes, resolver, scope or
 optional dictionary/typeof grant changes. Qualification is limited to these three public roots and
 does not discharge domain zero or the remaining accepted-owner obligations.
+
+Five acceptance/auxiliary public validators extend the register from 54 to 59 mandatory
+unknown-parameter obligations: acceptance contributions, qualification flows/manifests, and auxiliary
+requests/outcomes. The contribution reuses its existing rawReaderAcceptanceWitness; four new
+test-only functions directly forward existing public parsers. Separate source/public nominal return
+pins and existing hostile-member, sparse-array, getter, identity and authority-binding proofs retain
+actual admission. Acceptance consumers are repository/qualification tooling; the active auxiliary
+callers remain untouched. Public parser proof does not certify those consumers' whole authority
+behavior, execute evidence, issue a grant or widen a child's derived parent authority. The separate
+raw-reader proof still covers ownField only; this cohort neither narrows its truthful unknown return
+nor grants dictionary/typeof adaptation. No runtime API, production bytes, scopes or proof/resource
+bounds change, and domain-zero/accepted-owner obligations remain independently open.

@@ -239,6 +239,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "run-control-snapshot-public-parser",
       "runtime-governance-request-public-parser",
       "runtime-governance-outcome-public-parser",
+      "code-task-acceptance-contribution-public-parser",
+      "code-task-qualification-flow-public-parser",
+      "code-task-qualification-manifest-public-parser",
+      "auxiliary-capability-request-public-parser",
+      "auxiliary-capability-outcome-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -865,6 +870,31 @@ describe("run control public parser obligations (#3918)", () => {
       "validateRunControlSnapshotV1",
       "validateRuntimeGovernanceRequestV1",
       "validateRuntimeGovernanceOutcomeV1",
+    ]);
+    for (const record of records) {
+      expect(record.kind).toBe("public-parser");
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input.parameterIndex).toBe(0);
+      expect(record.consumer.kind).toBe("public-api-proof");
+      expect(record.proofs).toEqual([record.input.consumerPath]);
+      const removed = structuredClone(policy);
+      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
+      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+    }
+  });
+});
+
+describe("acceptance and auxiliary public parser obligations (#3918)", () => {
+  it("pins five exact public parameter-zero roots without optional grants", () => {
+    const records = policy.responsibilities.slice(54, 59);
+    expect(records).toHaveLength(5);
+    expect(records.map(({ input }) => input.exportName)).toEqual([
+      "validateCodeTaskAcceptanceContribution",
+      "validateCodeTaskQualificationFlowArtifact",
+      "validateCodeTaskQualificationManifest",
+      "validateAuxiliaryCapabilityRequestV1",
+      "validateAuxiliaryCapabilityOutcomeV1",
     ]);
     for (const record of records) {
       expect(record.kind).toBe("public-parser");

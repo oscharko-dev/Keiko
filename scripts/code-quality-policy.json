@@ -2886,6 +2886,298 @@
           "testName": "C1A finite run-control discriminator observations preserves valid changing run-control fallback observations through public"
         }
       ]
+    },
+    {
+      "id": "code-task-acceptance-contribution-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskAcceptanceContribution",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskAcceptanceContribution"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskAcceptanceContribution"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "rawReaderAcceptanceWitness",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-acceptance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "acceptance contribution public parser (#3918) retains original contribution and nested evidence through the existing witness"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "acceptance contribution public parser (#3918) pins source public and existing witness checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "raw own-property reader public contract (#3918) checks the complete actual owning validator on healthy and malformed facts"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped contribution members case 1 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped contribution members case 3 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A acceptance preservation retains three accepted roots and nested identities through public"
+        }
+      ]
+    },
+    {
+      "id": "code-task-qualification-flow-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskQualificationFlowArtifact",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskQualificationFlowArtifact"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskQualificationFlowArtifact"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "parsePublicQualificationFlow",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-acceptance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "qualification flow public parser (#3918) retains original flow authority and transition references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "qualification flow public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped manifest and transition members case 6 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped authority fields case 1 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses missing authority slots without changing accounting case 1 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A acceptance preservation retains the whole-flow repository binding backstop through public"
+        }
+      ]
+    },
+    {
+      "id": "code-task-qualification-manifest-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskQualificationManifest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskQualificationManifest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskQualificationManifest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "parsePublicQualificationManifest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-acceptance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "qualification manifest public parser (#3918) retains original manifest scenarios flows and spend references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "qualification manifest public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped manifest and transition members case 1 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped manifest and transition members case 2 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped manifest and transition members case 3 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A acceptance preservation retains three accepted roots and nested identities through public"
+        }
+      ]
+    },
+    {
+      "id": "auxiliary-capability-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "validateAuxiliaryCapabilityRequestV1",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "validateAuxiliaryCapabilityRequestV1"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "validateAuxiliaryCapabilityRequestV1"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "parsePublicAuxiliaryRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-auxiliary.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "auxiliary request public parser (#3918) retains original research scope domain and digest references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "auxiliary request public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A auxiliary concrete admission refuses unchecked domain members case 1 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A auxiliary concrete admission refuses unchecked domain members case 2 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A auxiliary concrete admission retains request branch, repeated read and identity through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A finite auxiliary discriminator observations refuses an invalid observed child discriminator through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A finite auxiliary discriminator observations preserves a valid changing request's existing refusal through public"
+        }
+      ]
+    },
+    {
+      "id": "auxiliary-capability-outcome-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "validateAuxiliaryCapabilityOutcomeV1",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "validateAuxiliaryCapabilityOutcomeV1"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "validateAuxiliaryCapabilityOutcomeV1"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+        "exportName": "parsePublicAuxiliaryOutcome",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-auxiliary.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "auxiliary outcome public parser (#3918) retains original accepted outcome digest and explicit zero count references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "auxiliary outcome public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A auxiliary concrete admission retains accepted zero-child and rejected outcomes through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A finite auxiliary discriminator observations refuses a skipped accepted-body branch through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A finite auxiliary discriminator observations refuses an invalid observed accepted capability through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A finite auxiliary discriminator observations preserves valid changing auxiliary fallback observations through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A preserved auxiliary discriminator diagnostics reports one stable invalid status through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+          "testName": "C1A preserved auxiliary discriminator diagnostics reports one stable invalid accepted capability through public"
+        }
+      ]
     }
   ]
 }

@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  validateAuxiliaryCapabilityRequestV1 as publicAuxiliaryRequest,
+  validateAuxiliaryCapabilityOutcomeV1 as publicAuxiliaryOutcome,
+  type AuxiliaryCapabilityRequestV1 as PublicAuxiliaryCapabilityRequestV1,
+  type AuxiliaryCapabilityOutcomeV1 as PublicAuxiliaryCapabilityOutcomeV1,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 
 import {
   AUXILIARY_CAPABILITIES,
@@ -937,4 +944,100 @@ describe("C1A preserved auxiliary discriminator diagnostics", () => {
       expect(reads).toBe(2);
     },
   );
+});
+
+type SourceAuxiliaryRequestParse = CodingWorkbenchValidationResult<AuxiliaryCapabilityRequestV1>;
+type PublicAuxiliaryRequestParse =
+  CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityRequestV1>;
+type SourceAuxiliaryOutcomeParse = CodingWorkbenchValidationResult<AuxiliaryCapabilityOutcomeV1>;
+type PublicAuxiliaryOutcomeParse =
+  CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityOutcomeV1>;
+
+export function parsePublicAuxiliaryRequest(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityRequestV1> {
+  const result = publicAuxiliaryRequest(input);
+  return result;
+}
+
+export function parsePublicAuxiliaryOutcome(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityOutcomeV1> {
+  const result = publicAuxiliaryOutcome(input);
+  return result;
+}
+
+describe("auxiliary request public parser (#3918)", () => {
+  it("retains original research scope domain and digest references", () => {
+    const input = researchRequest();
+    const result = parsePublicAuxiliaryRequest(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.capability !== "research")
+      throw new TypeError("healthy public research request refused");
+    expect(result.value).toBe(input);
+    expect(result.value.research).toBe(input.research);
+    expect(result.value.research.domains).toBe(input.research.domains);
+    expect(result.value.research.queryTextDigest).toBe(input.research.queryTextDigest);
+    expect(parsePublicAuxiliaryRequest(null)).toEqual({
+      ok: false,
+      errors: ["auxiliary request must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateAuxiliaryCapabilityRequestV1,
+    ).returns.toEqualTypeOf<SourceAuxiliaryRequestParse>();
+    expectTypeOf(publicAuxiliaryRequest).returns.toEqualTypeOf<PublicAuxiliaryRequestParse>();
+    expectTypeOf(parsePublicAuxiliaryRequest).returns.toEqualTypeOf<PublicAuxiliaryRequestParse>();
+    const result = parsePublicAuxiliaryRequest(researchRequest());
+    if (!result.ok || result.value.capability !== "research")
+      throw new TypeError("healthy public research request types refused");
+    expectTypeOf(result.value.taskId).toEqualTypeOf<PublicAuxiliaryCapabilityRequestV1["taskId"]>();
+    expectTypeOf(result.value.research.domains).toEqualTypeOf<readonly string[]>();
+    type Failure = Extract<ReturnType<typeof publicAuxiliaryRequest>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("auxiliary outcome public parser (#3918)", () => {
+  it("retains original accepted outcome digest and explicit zero count references", () => {
+    const input = {
+      schemaVersion: 1,
+      status: "accepted",
+      capability: "child-agent",
+      resultDigest: { outcome: "known", value: DIGEST },
+      childResultCount: { outcome: "known", value: 0 },
+    };
+    const result = parsePublicAuxiliaryOutcome(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.status !== "accepted")
+      throw new TypeError("healthy public child outcome refused");
+    expect(result.value).toBe(input);
+    expect(result.value.resultDigest).toBe(input.resultDigest);
+    expect(result.value.childResultCount).toBe(input.childResultCount);
+    expect(parsePublicAuxiliaryOutcome(null)).toEqual({
+      ok: false,
+      errors: ["auxiliary outcome must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateAuxiliaryCapabilityOutcomeV1,
+    ).returns.toEqualTypeOf<SourceAuxiliaryOutcomeParse>();
+    expectTypeOf(publicAuxiliaryOutcome).returns.toEqualTypeOf<PublicAuxiliaryOutcomeParse>();
+    expectTypeOf(parsePublicAuxiliaryOutcome).returns.toEqualTypeOf<PublicAuxiliaryOutcomeParse>();
+    const result = parsePublicAuxiliaryOutcome({
+      schemaVersion: 1,
+      status: "denied",
+      capability: "research",
+      reasonCode: "scope-denied",
+    });
+    if (!result.ok || result.value.status !== "denied")
+      throw new TypeError("healthy public denied outcome types refused");
+    expectTypeOf(result.value.reasonCode).toEqualTypeOf<string>();
+    type Failure = Extract<ReturnType<typeof publicAuxiliaryOutcome>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
 });

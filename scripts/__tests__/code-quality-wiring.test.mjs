@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(54);
+    expect(production.responsibilities).toHaveLength(59);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -796,7 +796,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 54, incomplete: 0, invalid: 0, qualified: 54, pending: 0, rejected: 0 },
+      counts: { ready: 59, incomplete: 0, invalid: 0, qualified: 59, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -851,7 +851,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 54;
+        r.responsibilities.counts.pending = 59;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
@@ -1058,6 +1058,52 @@ describe("run control public parser wiring (#3918)", () => {
     expect(records[2].proofAssertions).toContainEqual({
       path: records[2].input.consumerPath,
       testName: "C1A run-control member admission refuses sparse lifecycle events through public",
+    });
+  });
+});
+
+describe("acceptance and auxiliary public parser wiring (#3918)", () => {
+  it("reuses the existing witness and binds four direct public forwarding proofs", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const records = policy.responsibilities.slice(54, 59);
+    expect(records.map(({ consumer }) => consumer.exportName)).toEqual([
+      "rawReaderAcceptanceWitness",
+      "parsePublicQualificationFlow",
+      "parsePublicQualificationManifest",
+      "parsePublicAuxiliaryRequest",
+      "parsePublicAuxiliaryOutcome",
+    ]);
+    expect(records.map(({ input }) => input.specifier)).toEqual([
+      "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+      "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+      "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+      "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+      "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
+    ]);
+    for (const record of records) {
+      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
+      expect(record.transform).toEqual(record.output);
+      expect(record.consumer).toMatchObject({
+        consumerPath: record.input.consumerPath,
+        specifier: record.input.specifier,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      expect(record.proofs).toEqual([record.input.consumerPath]);
+      for (const assertion of record.proofAssertions) {
+        expect(assertion.path).toBe(record.input.consumerPath);
+        expect(assertion.testName.length).toBeGreaterThan(0);
+      }
+    }
+    expect(records[1].proofAssertions).toContainEqual({
+      path: records[1].input.consumerPath,
+      testName:
+        "C1A acceptance preservation retains the whole-flow repository binding backstop through public",
+    });
+    expect(records[4].proofAssertions).toContainEqual({
+      path: records[4].input.consumerPath,
+      testName:
+        "C1A auxiliary concrete admission retains accepted zero-child and rejected outcomes through public",
     });
   });
 });
