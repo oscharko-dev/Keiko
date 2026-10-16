@@ -18,6 +18,7 @@ import type {
   CodingWorkbenchRuntimeQuestionRequest,
   CodingWorkbenchRuntimeSseEvent,
   EditorVerificationEvent,
+  VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -35,6 +36,10 @@ import { runMigrations } from "../store/schema.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { createVerificationRunnerManager } from "../editor/verificationRunner.js";
+import {
+  VERIFICATION_STATUS_VALUES,
+  VERIFICATION_COMPLETION_FIELD_CONTRACTS,
+} from "../editor/verificationExecutionLog.js";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../task-workspace/active-store.js";
 import { createWorkspaceLifecycleService } from "../task-workspace/lifecycle.js";
@@ -240,6 +245,10 @@ describe("production OpenCode backend functional pipeline", () => {
       expect(registered.selected).toBeGreaterThan(0);
       expect(registered.completed).toBeGreaterThan(0);
       expect(registered.rejected).toBe(0);
+      expect(registered).toHaveProperty(
+        "completion.verificationStatus",
+        outcome.report.overallStatus,
+      );
       const cause = new Error(`${SECRET}:${fixture.workspace}`);
       const failure = functionalScenarioFailure(fixture, pipeline, scripted, cause);
       expect(failure.cause).toBe(cause);
@@ -260,6 +269,39 @@ describe("production OpenCode backend functional pipeline", () => {
     } finally {
       logged.mockRestore();
     }
+  });
+
+  it("projects real failed verification completion without report or command bodies", async () => {
+    const fixture = await setupWorkspace();
+    writeFileSync(
+      join(fixture.workspace, "package.json"),
+      JSON.stringify({
+        scripts: { typecheck: 'node -e "process.exit(7)"' },
+        privateCanary: `${SECRET}:${fixture.workspace}`,
+      }),
+    );
+    const verification = createVerification(fixture.workspace);
+    expect(verificationActivityFacts(verification.activityLog).completion).toBe("unavailable");
+    const outcome = await verification.manager.runToReport(
+      { projectId: fixture.workspace, kinds: ["typecheck"] },
+      new AbortController().signal,
+    );
+    expect(outcome.report.overallStatus).toBe("failed");
+    const facts = verificationActivityFacts(verification.activityLog);
+    expect(facts).toMatchObject({
+      completed: 1,
+      rejected: 0,
+      completion: {
+        verificationStatus: outcome.report.overallStatus,
+        stepCount: outcome.report.results.length,
+        failedCount: outcome.report.counts.failed,
+        typecheckStatus: outcome.report.results[0]?.status,
+      },
+    });
+    expect(outcome.report.results[0]?.exitCode).toBe(7);
+    expect(JSON.stringify(facts)).not.toContain(SECRET);
+    expect(JSON.stringify(facts)).not.toContain(fixture.workspace);
+    assertRejectedCompletion(verification.activityLog, facts);
   });
 
   it("drives the managed OpenCode composition end to end with a scripted child and model gateway", async () => {
@@ -533,13 +575,159 @@ async function bootPipeline(
   };
 }
 
+function assertRejectedCompletion(
+  activityLog: BufferedServerLogSink,
+  expected: ReturnType<typeof verificationActivityFacts>,
+): void {
+  const completed = activityLog.events.find(
+    (event) => event.op === "editor.verification.execute" && event.extra?.state === "completed",
+  );
+  if (completed === undefined) throw new Error("registered completion missing");
+  const extra = completed.extra;
+  for (const replacement of [
+    { ...extra, raw: SECRET },
+    { ...extra, verificationStatus: SECRET },
+  ]) {
+    Object.defineProperty(completed, "extra", { value: replacement, configurable: true });
+    const rejected = verificationActivityFacts(activityLog);
+    expect(rejected.rejected).toBe(expected.rejected + 1);
+    expect(rejected.completed).toBe(0);
+    expect(rejected.completion).toBe("unavailable");
+    expect(JSON.stringify(rejected)).not.toContain(SECRET);
+  }
+  Object.defineProperty(completed, "extra", { value: extra, configurable: true });
+  expect(verificationActivityFacts(activityLog)).toEqual(expected);
+}
+
+interface FunctionalCompletionFacts {
+  readonly stepCount: number | "unavailable";
+  readonly passedCount: number | "unavailable";
+  readonly failedCount: number | "unavailable";
+  readonly skippedCount: number | "unavailable";
+  readonly deniedCount: number | "unavailable";
+  readonly timedOutCount: number | "unavailable";
+  readonly cancelledCount: number | "unavailable";
+  readonly resourceExceededCount: number | "unavailable";
+  readonly verificationStatus: VerificationStatus | "unavailable";
+  readonly typecheckStatus: VerificationStatus | "unavailable";
+  readonly testStatus: VerificationStatus | "unavailable";
+  readonly targetedTestStatus: VerificationStatus | "unavailable";
+  readonly lintStatus: VerificationStatus | "unavailable";
+  readonly buildStatus: VerificationStatus | "unavailable";
+  readonly dependencyBootstrap:
+    | (typeof VERIFICATION_COMPLETION_FIELD_CONTRACTS.dependencyBootstrap.values)[number]
+    | "unavailable";
+  readonly isolationBackend:
+    | (typeof VERIFICATION_COMPLETION_FIELD_CONTRACTS.isolationBackend.values)[number]
+    | "unavailable";
+  readonly networkEnforcement:
+    | (typeof VERIFICATION_COMPLETION_FIELD_CONTRACTS.networkEnforcement.values)[number]
+    | "unavailable";
+  readonly isolationAvailable: boolean | "unavailable";
+}
+
+function verificationCount(value: unknown): number | "unavailable" {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : "unavailable";
+}
+
+function verificationStatus(value: unknown): VerificationStatus | "unavailable" {
+  return VERIFICATION_STATUS_VALUES.find((status) => status === value) ?? "unavailable";
+}
+
+function verificationCompletionCounts(
+  extra: BufferedServerLogSink["events"][number]["extra"],
+): Pick<
+  FunctionalCompletionFacts,
+  | "stepCount"
+  | "passedCount"
+  | "failedCount"
+  | "skippedCount"
+  | "deniedCount"
+  | "timedOutCount"
+  | "cancelledCount"
+  | "resourceExceededCount"
+> {
+  return {
+    stepCount: verificationCount(extra?.stepCount),
+    passedCount: verificationCount(extra?.passedCount),
+    failedCount: verificationCount(extra?.failedCount),
+    skippedCount: verificationCount(extra?.skippedCount),
+    deniedCount: verificationCount(extra?.deniedCount),
+    timedOutCount: verificationCount(extra?.timedOutCount),
+    cancelledCount: verificationCount(extra?.cancelledCount),
+    resourceExceededCount: verificationCount(extra?.resourceExceededCount),
+  };
+}
+
+function verificationCompletionStatuses(
+  extra: BufferedServerLogSink["events"][number]["extra"],
+): Pick<
+  FunctionalCompletionFacts,
+  | "verificationStatus"
+  | "typecheckStatus"
+  | "testStatus"
+  | "targetedTestStatus"
+  | "lintStatus"
+  | "buildStatus"
+> {
+  return {
+    verificationStatus: verificationStatus(extra?.verificationStatus),
+    typecheckStatus: verificationStatus(extra?.typecheckStatus),
+    testStatus: verificationStatus(extra?.testStatus),
+    targetedTestStatus: verificationStatus(extra?.targetedTestStatus),
+    lintStatus: verificationStatus(extra?.lintStatus),
+    buildStatus: verificationStatus(extra?.buildStatus),
+  };
+}
+
+function verificationCompletionEnvironment(
+  extra: BufferedServerLogSink["events"][number]["extra"],
+): Pick<
+  FunctionalCompletionFacts,
+  "dependencyBootstrap" | "isolationBackend" | "networkEnforcement" | "isolationAvailable"
+> {
+  const dependencyBootstrap = extra?.dependencyBootstrap;
+  const isolationBackend = extra?.isolationBackend;
+  const networkEnforcement = extra?.networkEnforcement;
+  return {
+    dependencyBootstrap:
+      VERIFICATION_COMPLETION_FIELD_CONTRACTS.dependencyBootstrap.values.find(
+        (value) => value === dependencyBootstrap,
+      ) ?? "unavailable",
+    isolationBackend:
+      VERIFICATION_COMPLETION_FIELD_CONTRACTS.isolationBackend.values.find(
+        (value) => value === isolationBackend,
+      ) ?? "unavailable",
+    networkEnforcement:
+      VERIFICATION_COMPLETION_FIELD_CONTRACTS.networkEnforcement.values.find(
+        (value) => value === networkEnforcement,
+      ) ?? "unavailable",
+    isolationAvailable:
+      typeof extra?.isolationAvailable === "boolean" ? extra.isolationAvailable : "unavailable",
+  };
+}
+
+function verificationCompletionFacts(
+  extra: BufferedServerLogSink["events"][number]["extra"],
+): FunctionalCompletionFacts {
+  return {
+    ...verificationCompletionCounts(extra),
+    ...verificationCompletionStatuses(extra),
+    ...verificationCompletionEnvironment(extra),
+  };
+}
+
 function verificationActivityFacts(activityLog: BufferedServerLogSink): {
   readonly selected: number;
   readonly completed: number;
   readonly refused: number;
   readonly rejected: number;
+  readonly completion: FunctionalCompletionFacts | "unavailable";
 } {
   const facts = { selected: 0, completed: 0, refused: 0, rejected: 0 };
+  let completion: FunctionalCompletionFacts | "unavailable" = "unavailable";
   for (const event of activityLog.events) {
     if (event.op !== "editor.verification.execute") continue;
     try {
@@ -547,11 +735,12 @@ function verificationActivityFacts(activityLog: BufferedServerLogSink): {
       const state = event.extra?.state;
       if (state === "selected" || state === "completed" || state === "refused") facts[state] += 1;
       else facts.rejected += 1;
+      if (state === "completed") completion = verificationCompletionFacts(event.extra);
     } catch {
       facts.rejected += 1;
     }
   }
-  return facts;
+  return { ...facts, completion };
 }
 
 function verificationDiagnosticKind(
