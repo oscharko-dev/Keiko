@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import {
   readPreviousPolicies,
   selectPolicyScope,
 } from "../lib/code-quality-inventory.mjs";
+import * as policyMembership from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
 import { fileURLToPath, URL } from "node:url";
 
@@ -20,8 +21,16 @@ import {
 
 import { responsibilityRecord } from "./support/code-quality-responsibility-fixture.mjs";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
+const { execFileSync: actualExecFileSync } = await vi.importActual("node:child_process");
+
 const roots = [];
 afterEach(() => {
+  vi.mocked(execFileSync).mockReset();
+  vi.mocked(execFileSync).mockImplementation(actualExecFileSync);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function trackedRepository() {
@@ -413,4 +422,127 @@ describe("policy digest byte identity (#3918)", () => {
       );
     },
   );
+});
+
+function membershipGit(root, args, input) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", input });
+}
+
+function expectMembershipParity(root) {
+  const complete = policyMembership.collectPolicyMembership(root);
+  expect(policyMembership.collectPolicyPaths(root)).toEqual(complete.paths);
+  return complete;
+}
+
+describe("fresh paths-only actual Git membership (#3918)", () => {
+  it("preserves tracked, forced ignored, unusual and fresh path membership", () => {
+    const root = trackedRepository();
+    writeFileSync(join(root, ".gitignore"), "ignored-*\n");
+    membershipGit(root, ["config", "core.precomposeunicode", "false"]);
+    const blob = membershipGit(root, ["hash-object", "-w", "--stdin"], "tracked").trim();
+    membershipGit(root, ["update-index", "--index-info"], `100644 ${blob}\té.ts\n`);
+    const tracked = ["tracked space.ts", "ignored-tracked.ts"];
+    for (const path of tracked) {
+      writeFileSync(join(root, path), "tracked");
+      membershipGit(root, ["add", "-f", "--", path]);
+    }
+    const additions = ["fresh space.ts", "日本語.ts", "é.ts"];
+    for (const path of additions) writeFileSync(join(root, path), "fresh");
+    writeFileSync(join(root, "ignored-untracked.ts"), "ignored");
+    membershipGit(root, ["update-index", "--skip-worktree", "--", "ignored-tracked.ts"]);
+    unlinkSync(join(root, "ignored-tracked.ts"));
+    const complete = expectMembershipParity(root);
+    expect("é.ts".localeCompare("é.ts")).toBe(0);
+    expect(complete.tracked.has("ignored-tracked.ts")).toBe(true);
+    expect(complete.tracked.has("é.ts")).toBe(true);
+    expect(complete.paths).toContain("é.ts");
+    expect(complete.paths.indexOf("é.ts")).toBeLessThan(complete.paths.indexOf("é.ts"));
+    expect(complete.paths).not.toContain("ignored-untracked.ts");
+    for (const path of [...tracked, ...additions]) expect(complete.paths).toContain(path);
+    unlinkSync(join(root, additions[0]));
+    unlinkSync(join(root, tracked[0]));
+    const changed = expectMembershipParity(root);
+    expect(changed.paths).not.toContain(additions[0]);
+    expect(changed.paths).toContain(tracked[0]);
+    writeFileSync(join(root, "added-later.ts"), "later");
+    expect(expectMembershipParity(root).paths).toContain("added-later.ts");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves actual LF names through NUL delimiters",
+    () => {
+      const root = trackedRepository();
+      const tracked = "tracked\nline.ts";
+      const addition = "fresh\nline.ts";
+      writeFileSync(join(root, tracked), "tracked");
+      membershipGit(root, ["add", "--", tracked]);
+      writeFileSync(join(root, addition), "fresh");
+      const complete = expectMembershipParity(root);
+      expect(complete.tracked.has(tracked)).toBe(true);
+      expect(complete.paths).toContain(tracked);
+      expect(complete.paths).toContain(addition);
+    },
+  );
+
+  it("deduplicates actual unmerged index stages without losing path order", () => {
+    const root = trackedRepository();
+    const blob = membershipGit(root, ["hash-object", "-w", "--stdin"], "conflict").trim();
+    membershipGit(
+      root,
+      ["update-index", "--index-info"],
+      [1, 2, 3].map((stage) => `100644 ${blob} ${stage}\tconflict.ts\n`).join(""),
+    );
+    const complete = expectMembershipParity(root);
+    expect(complete.tracked.has("conflict.ts")).toBe(true);
+    expect(complete.paths.filter((path) => path === "conflict.ts")).toHaveLength(1);
+  });
+
+  it("returns an empty set for a real empty index and rejects a nonrepository", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-membership-empty-"));
+    roots.push(root);
+    membershipGit(root, ["init", "--initial-branch=fixture"]);
+    expect(expectMembershipParity(root).paths).toEqual([]);
+    rmSync(join(root, ".git"), { recursive: true });
+    expect(() => policyMembership.collectPolicyMembership(root)).toThrow();
+    expect(() => policyMembership.collectPolicyPaths(root)).toThrow();
+  });
+
+  it("rejects an unknown status injected after actual Git output", () => {
+    const root = trackedRepository();
+    let genuineOutput;
+    vi.mocked(execFileSync).mockImplementation((executable, args, options) => {
+      genuineOutput = actualExecFileSync(executable, args, options);
+      // Fault injection at the subprocess boundary, not a claim about normal Git output.
+      return `${genuineOutput}X hostile.ts\0`;
+    });
+    expect(() => policyMembership.collectPolicyPaths(root)).toThrow("invalid-membership-status");
+    expect(genuineOutput).toContain("H package.json\0");
+  });
+
+  it("uses one real bounded subprocess rather than the full producer's two", () => {
+    const root = trackedRepository();
+    vi.mocked(execFileSync).mockClear();
+    const complete = policyMembership.collectPolicyMembership(root);
+    expect(vi.mocked(execFileSync).mock.calls).toHaveLength(2);
+    vi.mocked(execFileSync).mockClear();
+    expect(policyMembership.collectPolicyPaths(root)).toEqual(complete.paths);
+    const calls = vi.mocked(execFileSync).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toEqual([
+      "ls-files",
+      "-z",
+      "-t",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+    ]);
+    expect(calls[0][2]).toMatchObject({
+      cwd: root,
+      encoding: "utf8",
+      timeout: 20_000,
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(vi.mocked(execFileSync).mock.results[0].type).toBe("return");
+  });
 });

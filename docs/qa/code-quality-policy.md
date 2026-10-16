@@ -150,10 +150,14 @@ Owner results and closed failures persist across program eviction only for the r
 preventing repeated compiler execution; both are cleared on close.
 These are finite resource ceilings, not acceptance thresholds. It rechecks source, configuration,
 manifest, declaration and dependency snapshots plus package/file ownership and effective
-context/output ownership before returning facts. The existing bounded Git membership producer is shared by collection and
-rechecking: changes to the enumerated tracked or nonignored path set invalidate the captured
-membership. This includes
-new root/package consumers and requires no second config, program, packaging or analyzer census.
+context/output ownership before returning facts. Collection retains the existing full tracked
+classification. Each currentness check freshly enumerates the same tracked or nonignored path set
+with one bounded, NUL-delimited Git query, using Git's status tags to preserve tracked-first
+ordering before deduplication and locale sorting. Changes to that path set invalidate the captured
+membership, including new root/package consumers, without a second config, program, packaging or
+analyzer census. Both ordered fresh content passes remain unchanged. The combined query retains
+the existing 20-second and 16-MiB subprocess bounds. That single output budget includes Git's status
+tags and is narrower than the full producer's two separately bounded outputs; no capacity is widened.
 Callers release retained graphs with `close`; released resolvers cannot be reused.
 Unsupported or unresolved semantic situations remain incomplete or fail closed. Runtime semantic qualification and further migration/scope activation remain subsequent #3918 checkpoints.
 

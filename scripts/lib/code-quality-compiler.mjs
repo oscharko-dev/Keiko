@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { readFileSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
-import { collectPolicyMembership, policyDigest } from "./code-quality-inventory.mjs";
+import { collectPolicyPaths, policyDigest } from "./code-quality-inventory.mjs";
 import { compareStrings } from "./compare-strings.mjs";
 
 // Witnesses remain private: exposed compiler metadata cannot rewrite the admitted text or bytes.
@@ -310,7 +310,7 @@ function assertCurrent(state) {
     throw new TypeError("symbol-proof-context-changed");
   if (subjectFingerprint(state.subject) !== state.fingerprint)
     throw new TypeError("symbol-context-changed");
-  const current = collectPolicyMembership(state.subject.root).paths;
+  const current = collectPolicyPaths(state.subject.root);
   if (current.join("\0") !== state.subject.membership.paths.join("\0"))
     throw new TypeError("symbol-membership-changed");
   for (const [path, expected] of state.inputs) {

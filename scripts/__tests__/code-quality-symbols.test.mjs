@@ -2288,3 +2288,30 @@ describe.skipIf(process.platform !== "linux")("compiler native path compatibilit
     }
   });
 });
+
+// Work regression control: every observed subprocess still executes the real Git executable.
+describe("one-query fresh currentness membership (#3918)", () => {
+  it("executes one bounded membership query on each currentness invocation", async () => {
+    const own = await currentnessFixture();
+    const observations = [];
+    for (let invocation = 0; invocation < 2; invocation += 1) {
+      vi.mocked(execFileSync).mockClear();
+      own.compiler.assertCurrent();
+      observations.push(
+        vi.mocked(execFileSync).mock.calls.filter(([, args]) => args[0] === "ls-files"),
+      );
+    }
+    expect(observations.map((calls) => calls.length)).toEqual([1, 1]);
+    for (const calls of observations) {
+      expect(calls[0][1]).toEqual([
+        "ls-files",
+        "-z",
+        "-t",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+      ]);
+      expect(calls[0][2]).toMatchObject({ timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
+    }
+  });
+});
