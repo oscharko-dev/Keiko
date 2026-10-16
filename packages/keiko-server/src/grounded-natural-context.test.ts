@@ -167,7 +167,7 @@ function partnerPolicyCorpus(): string {
 }
 
 it.each(["Maple-Partner", "Maple Partner"])(
-  "retains both current policy sources for the multilingual subject %s",
+  "retains current and rejected policy sources for the multilingual subject %s",
   async (subject) => {
     const root = partnerPolicyCorpus();
     const log = createBufferedServerLogSink();
@@ -184,11 +184,15 @@ it.each(["Maple-Partner", "Maple Partner"])(
       },
     );
     expect(pack.files.map((file) => file.scopePath)).toEqual(
-      expect.arrayContaining(["backend/RefundPolicy.java", "frontend/RefundSummary.tsx"]),
+      expect.arrayContaining([
+        "backend/RefundPolicy.java",
+        "frontend/RefundSummary.tsx",
+        "archive/RefundPolicy.java",
+      ]),
     );
     expect(pack.usage.filesRead).toBeLessThanOrEqual(8);
     expect(pack.usage.excerptBytes).toBeLessThanOrEqual(4096);
-    expect(pack.files).toHaveLength(2);
+    expect(pack.files).toHaveLength(3);
     expect(pack.diagnostics?.selection).toMatchObject({
       selectionConfidence: "low",
       keepOneFallbackApplied: false,

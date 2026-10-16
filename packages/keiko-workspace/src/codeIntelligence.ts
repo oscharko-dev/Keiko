@@ -5249,6 +5249,18 @@ function dtoTargetsForLanguage(
   return targets;
 }
 
+function firstLaterDtoTarget(targets: readonly IndexedDtoSymbol[], sourceIndex: number): number {
+  let low = 0;
+  let high = targets.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const target = targets[middle];
+    if (target === undefined || target.index > sourceIndex) high = middle;
+    else low = middle + 1;
+  }
+  return low;
+}
+
 // Retain source/target inventory order while excluding same-language pairs before the inner scan.
 // Only later targets can emit an edge, so every eligible unordered pair is still emitted once.
 function collectDtoContractEdgesFrom(
@@ -5258,9 +5270,10 @@ function collectDtoContractEdgesFrom(
   edges: DtoContractEdge[],
   control: StructuralExecutionControl,
 ): void {
-  for (const target of targets) {
+  for (let index = firstLaterDtoTarget(targets, sourceIndex); index < targets.length; index += 1) {
     if (structuralExecutionStopped(control)) break;
-    if (target.index <= sourceIndex) continue;
+    const target = targets[index];
+    if (target === undefined) continue;
     const edge = dtoContractEdgeFor(source, target.symbol);
     if (edge !== undefined) edges.push(edge);
   }

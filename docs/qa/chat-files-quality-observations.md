@@ -461,6 +461,37 @@ failures reproduce locally; the existing support-code generator and source-inven
 them, with all 77 targeted tests passing. Coverage percentages and governed floors are unchanged;
 refreshing the source count is not a new coverage measurement.
 
+At `d2ba1955d`, the native ordinary/Git 1,000-file comparison selects the same two current sources
+and 384 excerpt bytes. Retrieval takes 715 ms / 686 ms, and the local 8k Gemma answers take
+19.3 seconds / 21.1 seconds. Both answers state the correct current values and have five citations
+without repair. The backend citation opens the correct file and values in the selected Git root.
+Both canonical closures are supported and complete without loss, truncation or sequence anomalies.
+Both still declare the rejected proposal unavailable; that archive oracle remains failing here.
+
+The archive omission reproduces in both multilingual regression variants and a direct identity
+test: its retained content atom matches the same subject groups, but its path falls outside the
+25-entry ranking diagnostic preview used to capture fallback candidates. Capture now preserves
+same-query content peers from the already retained lexical result, after the reported producer
+seeds. Other groups/queries, malformed keys, semantic evidence and absent/replaced identities cannot
+gain peer status. The final three-source limit, admission checks, relevance floors, byte grants,
+reranker precedence and low-confidence warning remain unchanged. Retrieval-only repeats now retain
+the current backend/frontend plus rejected archive in both 1,000-file corpora. This does not claim
+general ranking quality or a native model distinction until those probes complete.
+
+The complete grounded suite passes 2,659 tests, with one existing skip, across 158 files using
+two workers. An earlier unrestricted-worker run exposed five stale implicit-history expectations
+and two timeouts with a subsequent fixture-cleanup collision. The expectations now reflect the
+intent-based Git policy and retain explicit-history/no-Git skip coverage. All 81 tests in the four
+affected files pass with one worker before the complete repeat. No timeout or product limit was
+relaxed; these runs do not establish the cause of the initial timeouts.
+
+A review also identifies redundant visits to earlier cross-language DTO targets. Grouped and
+interleaved 200-symbol regressions both fail before the correction with 20,200 deadline checks.
+Binary search now starts at the first later target while preserving eligible pair order and
+cancellation checks. All 137 code-intelligence tests pass, including the existing ordering and
+same-scope exclusions. Eligible cross-language pairing can still be quadratic; this correction
+removes the redundant prefix, not the inherent eligible-pair work.
+
 The broad package coverage run at `1dc875bff` completes with 55,241 passing tests, 61 skipped and
 one failure: the debug-launch policy test requires an exact approved Node/npm pair. A targeted
 rerun reproduces that failure under the host's newer Node patch. UI coverage at `1cd9659b1` passes

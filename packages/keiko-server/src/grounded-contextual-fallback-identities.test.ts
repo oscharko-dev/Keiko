@@ -41,6 +41,42 @@ function diagnostics(...paths: string[]): ContextPackDiagnostics {
 }
 
 describe("contextual fallback content identities", () => {
+  it("retains same-query content peers beyond the diagnostic preview without adding other groups", () => {
+    const current = lexicalAtom("current.md");
+    const archive = lexicalAtom("archive.md");
+    const unrelated = { ...lexicalAtom("other.md"), metrics: { lexicalQueryGroupKey: "4" } };
+    const otherQuery = {
+      ...lexicalAtom("other-query.md"),
+      provenance: { ...archive.provenance, queryFingerprint: "other-query" },
+    };
+    const atoms = [archive, unrelated, otherQuery, current];
+    const captured = captureContextualFallbackCandidates(atoms, diagnostics("current.md"));
+    expect(currentContextualFallbackOrder(captured, atoms)).toEqual(["current.md", "archive.md"]);
+    expect([...currentContextualFallbackGroups(captured, atoms)]).toEqual([
+      ["current.md", "3"],
+      ["archive.md", "3"],
+    ]);
+    expect(currentContextualFallbackOrder(captured, [current, unrelated, otherQuery])).toEqual([
+      "current.md",
+    ]);
+    expect(
+      currentContextualFallbackOrder(captured, [
+        current,
+        { ...archive, provenance: otherQuery.provenance },
+      ]),
+    ).toEqual(["current.md"]);
+  });
+
+  it.each([undefined, "", "invalid", "C"])(
+    "cannot extend a diagnostic seed with a missing or malformed group: %s",
+    (group) => {
+      const seed = { ...lexicalAtom("seed.md"), metrics: { lexicalQueryGroupKey: group } };
+      const peer = { ...lexicalAtom("peer.md"), metrics: { lexicalQueryGroupKey: group } };
+      const captured = captureContextualFallbackCandidates([seed, peer], diagnostics("seed.md"));
+      expect(currentContextualFallbackOrder(captured, [seed, peer])).toEqual(["seed.md"]);
+    },
+  );
+
   it("retains the actual producer's deterministic order with equal candidate scores", () => {
     const atoms = [lexicalAtom("a.md"), lexicalAtom("z.md")];
     const captured = captureContextualFallbackCandidates(atoms, diagnostics("z.md", "a.md"));

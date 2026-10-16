@@ -52,6 +52,34 @@ describe("cross-language DTO pairing work", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "does not revisit earlier cross-language targets (interleaved: %s)",
+    (interleaved) => {
+      const frontend = Array.from({ length: 100 }, (_, index) =>
+        symbol(`Frontend${String(index)}`, "typescript"),
+      );
+      const backend = Array.from({ length: 100 }, (_, index) =>
+        symbol(`Backend${String(index)}`, "java"),
+      );
+      const symbols = interleaved
+        ? frontend.flatMap((entry, index) => {
+            const other = backend[index];
+            return other === undefined ? [entry] : [entry, other];
+          })
+        : [...frontend, ...backend];
+      let workChecks = 0;
+      const edges = linkDtoContracts(symbols, {
+        deadlineAtMs: Infinity,
+        nowMs: (): number => {
+          workChecks += 1;
+          return 0;
+        },
+      });
+      expect(edges).toHaveLength(10_000);
+      expect(workChecks).toBeLessThan(15_000);
+    },
+  );
+
   it("stops pairing when the shared deadline or signal is already exhausted", () => {
     const symbols = [symbol("OrderDto", "typescript"), symbol("OrderRecord", "java")];
     expect(linkDtoContracts(symbols, { deadlineAtMs: 0, nowMs: () => 0 })).toEqual([]);

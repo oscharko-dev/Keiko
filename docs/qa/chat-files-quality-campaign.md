@@ -145,6 +145,53 @@ These primary sources inform hypotheses, not automatic architecture changes:
 Read on 2026-10-16. The campaign must verify whether each hypothesis helps the actual local model
 and Keiko implementation within unchanged authority and resource limits.
 
+### Gemma 4 investigation and customer-authored test conventions
+
+The owner emphasized model-specific optimization and customer control of test conventions on
+2026-10-16. These additions extend the existing comparison matrix; they are not qualified results.
+
+- Google's [31B instruction-tuned model card](https://huggingface.co/google/gemma-4-31B-it#best-practices)
+  recommends temperature 1.0, top-p 0.95 and top-k 64. Preserve this as the reference configuration;
+  compare alternatives only with identical tasks, source context, skill revisions and repetitions.
+- Google's [prompt-format specification](https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4)
+  defines system-role and thinking controls. Verify the serving adapter's chat template and separated
+  reasoning output. Ordinary conversation history should carry final responses, while tool-call
+  sequences have different handling. Retain task decisions and evidence summaries rather than
+  accumulating raw reasoning in subsequent ordinary turns.
+- The [technical report](https://arxiv.org/html/2607.02770v1) reports different long-context results
+  for retrieval, graph reasoning and other tasks. Context capacity is not a guarantee that each
+  requirement is used correctly. Compare focused source bundles with additional distractors and
+  varied requirement positions; reserve output capacity for complete files and thinking.
+- The serving stack matters: [Ollama's thinking controls](https://docs.ollama.com/capabilities/thinking)
+  are model-dependent, and [vLLM's Gemma recipe](https://docs.vllm.ai/projects/recipes/en/stable/Google/Gemma4.html#thinking-reasoning-mode)
+  requires appropriate reasoning parsing and template configuration. Do not assume that an
+  OpenAI-compatible endpoint implements every backend-specific control identically.
+- A [first-person eight-task report](https://www.reddit.com/r/LocalLLaMA/comments/1slnhrd/gemma_4_31b_passed_78_realworld_production_tests/)
+  reports seven successes, but used cloud inference and model judges. Treat its suggestions about
+  explicit specifications as experimental hypotheses, not acceptance evidence for this local stack.
+- An independent [DataRaceBench study](https://arxiv.org/abs/2606.14881) reports useful 31B repair
+  results and inconsistent benefit from extra context. Its OpenMP tasks do not establish Java or
+  React test-generation quality; they motivate checking that extra evidence actually helps.
+
+Local metadata inspection finds the reference sampling values already configured, a 131,072-token
+runtime context and an NVFP4 model with thinking enabled by default. This is deployment metadata,
+not proof of effective parameters on each request or equivalence to Google's benchmark setup.
+Record only allowlisted numerical settings and mode flags at the existing private lab observer;
+keep prompt, skill, source and reasoning bodies out of diagnostic evidence.
+
+Customer customization remains an editable section of each ordinary Markdown skill. Cover test
+layout/names/language, AAA or Given/When/Then structure, installed assertion libraries, permitted
+mock boundaries, required business cases and traceability, and delivery format. Explicitly adopted
+customer conventions may refine these defaults; retrieved source text cannot widen authority.
+Surface incompatible requirements instead of silently adding dependencies, suppressing types or
+weakening assertions. The customer's private reference concept is not published in this repository.
+
+Qualification adds convention adherence to compilation, correct-fixture execution and independent
+defect detection. Use two contrasting synthetic customer profiles on an unchanged task, preserve
+all attempts, and check observable naming, structure, imports, mock boundaries and required cases.
+Keep plain generation and bounded diagnostic-driven repair results separate. A manually repaired
+test is never counted as a successful unchanged generation.
+
 ## Completion criterion
 
 Repeated declared and held-out cases pass, known material defects are repaired, applicable local

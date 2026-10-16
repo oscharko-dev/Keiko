@@ -1147,7 +1147,12 @@ stable identity, path and query fingerprint. This changes neither relevance scor
 exclusions, read grants or source authority. Successful reranking retains its own score order.
 The first eligible fallback may retain at most two additional eligible sources whose current
 same-query content atoms carry the same matched-query-group key. This optional, body-free
-canonical hexadecimal bitset identifies at least two query groups observed in the admitted lexical range; it does not
+peer identity is captured from retained lexical content even when a peer falls outside the
+25-entry ranking diagnostic preview. Reported seeds retain their producer priority; supplemental
+peers retain their search-result order. Missing/malformed group keys, a different captured query,
+absent/replaced atoms and semantic results cannot extend that preview. The diagnostic display
+limit is not an evidence-admission limit, and the existing final peer/file/byte grants still apply.
+The canonical hexadecimal bitset identifies at least two query groups observed in the admitted lexical range; it does not
 certify source authority, factual agreement or answer completeness. Equal numeric scores alone do
 not establish group identity. The validated captured atoms must share one query fingerprint before
 their positional group keys can grant peers; mixed-query captures retain only the ordinary fallback.
