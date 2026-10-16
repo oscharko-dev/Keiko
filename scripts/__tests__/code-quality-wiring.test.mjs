@@ -11,13 +11,18 @@ import {
 import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
 import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
-import { collectPolicyInventory, selectPolicyScope } from "../lib/code-quality-inventory.mjs";
+import {
+  policyDigest,
+  collectPolicyInventory,
+  selectPolicyScope,
+} from "../lib/code-quality-inventory.mjs";
 import {
   assessPolicyDiagnostics,
   POLICY_PROGRESS_LIMITS,
   policyProgressLine,
   lastPolicyProgress,
 } from "../lib/code-quality-policy.mjs";
+import { assertRepositoryQualification } from "./code-quality-repository-qualification.mjs";
 import { runNativePolicy } from "../lib/code-quality-runner.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
 import {
@@ -378,14 +383,19 @@ describe("production code-quality invocation wiring (#3915)", () => {
     );
     const commands = manifest.scripts.lint.split(" && ");
     expect(manifest.scripts["check:code-quality-policy:repository"]).toBe(
+      "node scripts/__tests__/code-quality-repository-qualification.mjs",
+    );
+    expect(manifest.scripts["check:code-quality-policy:cli-smoke"]).toBe(
       "node --test scripts/__tests__/code-quality-wiring-smoke.mjs",
     );
-    expect(commands.indexOf("npm run check:code-quality-policy:repository")).toBe(1);
+    expect(commands.indexOf("npm run check:code-quality-policy:repository")).toBe(2);
     expect(
       commands.filter((command) => command === "npm run check:code-quality-policy"),
     ).toHaveLength(0);
     expect(commands[0]).toBe("npm run build:packages");
-    expect(commands.slice(2)).toEqual([
+    expect(commands.slice(1)).toEqual([
+      "npm run check:code-quality-policy:cli-smoke",
+      "npm run check:code-quality-policy:repository",
       "npm run check:code-quality-policy:raw-reader",
       "npm run lint:typed",
     ]);
@@ -403,7 +413,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(0);
   });
 
-  it("runs the uncollected repository smoke in both required hosted ARM policy legs", async () => {
+  it("runs bounded CLI integration then complete qualification in both required hosted ARM policy legs", async () => {
     const workflow = parse(read(".github/workflows/ci.yml"));
     const compatibility = workflow.jobs["node-26-compatibility"];
     const runs = compatibility.steps.map((step) => step.run);
@@ -424,6 +434,9 @@ describe("production code-quality invocation wiring (#3915)", () => {
       policyRuns.filter((run) => run?.includes("npm run check:code-quality-policy:repository")),
     ).toEqual([STATIC_POLICY_SMOKE_COMMAND]);
     const fullIndex = policyRuns.indexOf(STATIC_POLICY_SMOKE_COMMAND);
+    expect(policyRuns[fullIndex - 1]).toBe("npm run check:code-quality-policy:cli-smoke");
+    expect(policy.steps[fullIndex - 1].if).toBeUndefined();
+    expect(policy.steps[fullIndex - 1]["continue-on-error"]).toBeUndefined();
     expect(policyRuns[fullIndex + 1]).toBe("npm run check:code-quality-policy:raw-reader");
     expect(policy.steps[fullIndex + 1].if).toBeUndefined();
     expect(policy.steps[fullIndex + 1]["continue-on-error"]).toBeUndefined();
@@ -442,6 +455,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
       );
       for (const smokePath of [
         "scripts/__tests__/code-quality-wiring-smoke.mjs",
+        "scripts/__tests__/code-quality-repository-qualification.mjs",
         "scripts/__tests__/code-quality-raw-reader-smoke.mjs",
       ]) {
         expect(included.map((path) => path.replaceAll("\\", "/"))).not.toContain(smokePath);
@@ -722,4 +736,207 @@ describe("Workbench question and research responsibility wiring (#3918)", () => 
         "public runtime question response admission (#3918) refuses a real malformed runtime projection before returning a list",
     });
   });
+});
+
+// Constructed validator inputs test refusal only; they are never semantic-execution evidence.
+function qualificationValidatorFixture() {
+  const policyBytes = read("scripts/code-quality-policy.json");
+  const policy = JSON.parse(policyBytes);
+  const report = {
+    outcome: "passed",
+    enforcementOutcome: "passed",
+    mode: "enforce",
+    scope: { id: "repository", partial: false },
+    subject: "a".repeat(40),
+    policySha256: policyDigest(policyBytes),
+    inventory: { subject: "a".repeat(40), files: [{ path: "constructed.ts" }] },
+    counts: { expected: 1, visited: 1, packages: 27, violations: 0 },
+    pack: Array.from({ length: 27 }, () => ({})),
+    rules: policy.rules,
+    violations: [],
+    responsibilities: {
+      counts: { ready: 49, incomplete: 0, invalid: 0, qualified: 49, pending: 0, rejected: 0 },
+      assessments: policy.responsibilities.map((record) => ({
+        id: record.id,
+        owner: record.owner,
+        kind: record.kind,
+        rules: record.rules,
+        structural: "ready",
+        semantic: "qualified",
+        reasons: [],
+        obligations: [],
+        proofs: record.proofs.map((path) => ({ path, executed: true })),
+        proofAssertions: record.proofAssertions.map((selector) => ({
+          ...selector,
+          status: "passed",
+        })),
+      })),
+      execution: {
+        status: "passed",
+        invocationCount: 1,
+        process: { directChildClosed: true, groupAbsent: true },
+      },
+    },
+  };
+  return { report, policy, policyBytes };
+}
+
+function assertPolicyOperationOrder(job) {
+  const steps = job.steps.filter(({ run }) => run);
+  const full = steps.findIndex(({ run }) => run === STATIC_POLICY_SMOKE_COMMAND);
+  expect(full).toBeGreaterThan(0);
+  expect(
+    steps.filter(({ run }) => run?.includes("npm run check:code-quality-policy:repository")),
+  ).toHaveLength(1);
+  expect(steps.slice(full - 1, full + 2).map(({ run }) => run)).toEqual([
+    "npm run check:code-quality-policy:cli-smoke",
+    STATIC_POLICY_SMOKE_COMMAND,
+    "npm run check:code-quality-policy:raw-reader",
+  ]);
+  for (const step of steps.slice(full - 1, full + 2)) {
+    expect(step.if).toBeUndefined();
+    expect(step["continue-on-error"]).toBeUndefined();
+  }
+}
+
+describe("complete production qualification owner", () => {
+  it("admits a constructed exact validator shape without claiming proof execution", () => {
+    const { report, policy, policyBytes } = qualificationValidatorFixture();
+    expect(() => assertRepositoryQualification(report, policy, policyBytes)).not.toThrow();
+  });
+  it.each([
+    [
+      "default pending report",
+      (r) => {
+        r.outcome = "failed";
+        r.responsibilities.counts.qualified = 0;
+        r.responsibilities.counts.pending = 49;
+        for (const a of r.responsibilities.assessments) {
+          a.semantic = "pending";
+          a.proofs.forEach((p) => {
+            p.executed = false;
+          });
+        }
+      },
+    ],
+    [
+      "pending despite passing headline",
+      (r) => {
+        r.responsibilities.counts.pending = 1;
+      },
+    ],
+    [
+      "missing cohort record",
+      (r) => {
+        r.responsibilities.assessments.pop();
+      },
+    ],
+    [
+      "missing proof path",
+      (r) => {
+        r.responsibilities.assessments[0].proofs.pop();
+      },
+    ],
+    [
+      "unexecuted proof",
+      (r) => {
+        r.responsibilities.assessments[0].proofs[0].executed = false;
+      },
+    ],
+    [
+      "missing exact selector",
+      (r) => {
+        r.responsibilities.assessments[0].proofAssertions.pop();
+      },
+    ],
+    [
+      "nonpassing selected assertion",
+      (r) => {
+        r.responsibilities.assessments[0].proofAssertions[0].status = "failed";
+      },
+    ],
+    [
+      "wrong scope",
+      (r) => {
+        r.scope.id = "package:alpha";
+      },
+    ],
+    [
+      "partial scope",
+      (r) => {
+        r.scope.partial = true;
+      },
+    ],
+    [
+      "incomplete visitation",
+      (r) => {
+        r.counts.visited = 0;
+      },
+    ],
+    [
+      "failed execution",
+      (r) => {
+        r.responsibilities.execution.status = "failed";
+      },
+    ],
+    [
+      "duplicate invocation",
+      (r) => {
+        r.responsibilities.execution.invocationCount = 2;
+      },
+    ],
+    [
+      "unclosed child",
+      (r) => {
+        r.responsibilities.execution.process.directChildClosed = false;
+      },
+    ],
+    [
+      "unavailable drain",
+      (r) => {
+        r.responsibilities.execution.process.groupAbsent = null;
+      },
+    ],
+    [
+      "wrong policy digest",
+      (r) => {
+        r.policySha256 = "0".repeat(64);
+      },
+    ],
+  ])("refuses constructed %s", (_name, mutate) => {
+    const { report, policy, policyBytes } = qualificationValidatorFixture();
+    mutate(report);
+    expect(() => assertRepositoryQualification(report, policy, policyBytes)).toThrow();
+  });
+  it("retains finite fixture watchdogs and the full owner output cap without a replacement timer", () => {
+    const fixture = read("scripts/__tests__/code-quality-wiring-smoke.mjs");
+    expect(fixture).toContain("timeout = 180_000");
+    expect(fixture).toContain("{ timeout: 375_000 }");
+    expect(fixture).toContain("isolatedPolicyReport(own.root, 360_000, true)");
+    expect(fixture).toContain("maxBuffer: 32 * 1024 * 1024");
+    expect(fixture).toContain('createCollectiveParserFixture("direct")');
+    expect(fixture).toContain('throw new Error("default proof must not execute")');
+    const owner = read("scripts/__tests__/code-quality-repository-qualification.mjs");
+    expect(owner).toContain(
+      '[fileURLToPath(entry), "--qualify-responsibilities", "--json", "--progress"]',
+    );
+    expect(owner).toContain("maxBuffer: 32 * 1024 * 1024");
+    expect(owner).not.toContain("timeout:");
+  });
+  it("requires serial mandatory fixture full qualification and raw reader", () => {
+    assertPolicyOperationOrder(parse(read(".github/workflows/ci.yml")).jobs["code-quality-policy"]);
+  });
+  it.each(["missing", "conditional", "continued", "partial"])(
+    "refuses %s qualification workflow mutation",
+    (kind) => {
+      const job = parse(read(".github/workflows/ci.yml")).jobs["code-quality-policy"];
+      const index = job.steps.findIndex(({ run }) => run === STATIC_POLICY_SMOKE_COMMAND);
+      if (kind === "missing") job.steps.splice(index, 1);
+      if (kind === "conditional") job.steps[index].if = "false";
+      if (kind === "continued") job.steps[index]["continue-on-error"] = true;
+      if (kind === "partial")
+        job.steps[index].run = "npm run check:code-quality-policy -- --package alpha";
+      expect(() => assertPolicyOperationOrder(job)).toThrow();
+    },
+  );
 });

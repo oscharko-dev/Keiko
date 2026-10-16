@@ -388,7 +388,11 @@ jobs:
       - name: Provision the approved USearch native runtime
         run: npm run provision:usearch
       - run: npm run build:packages
-      - name: Run the complete static policy report smoke serially
+      - name: Check the bounded default CLI integration fixture serially
+        env:
+          NODE_OPTIONS: ${{ matrix.node == '24.18.0' && '--max-old-space-size=12288' || '' }}
+        run: npm run check:code-quality-policy:cli-smoke
+      - name: Qualify the complete current-subject policy serially
         # Preserve Core's Node24 heap and Node26's existing default heap. Product/native
         # qualification remains on the existing x64, Windows and macOS lanes.
         env:

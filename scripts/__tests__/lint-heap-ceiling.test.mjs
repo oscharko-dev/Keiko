@@ -34,7 +34,7 @@ describe("lint heap ceiling", () => {
     const stepCeilings = heapCeilings(steps[0]?.step.env?.NODE_OPTIONS);
 
     expect(scripts.lint).toBe(
-      "npm run build:packages && npm run check:code-quality-policy:repository && npm run check:code-quality-policy:raw-reader && npm run lint:typed",
+      "npm run build:packages && npm run check:code-quality-policy:cli-smoke && npm run check:code-quality-policy:repository && npm run check:code-quality-policy:raw-reader && npm run lint:typed",
     );
     expect(otherScriptCeilings).toStrictEqual([]);
     expect(stepCeilings).toStrictEqual([scriptCeiling]);

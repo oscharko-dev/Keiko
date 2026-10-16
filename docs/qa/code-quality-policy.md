@@ -522,60 +522,72 @@ unresolved or untyped counts are not cleared. This kind certifies no complete do
 closure and introduces no semantic cache. Owning runtime, public type, declaration/body
 counterfactual and restoration proofs remain separate acceptance obligations.
 
-### Serial complete-repository static smoke
+### Bounded default CLI regression and complete production qualification
 
-`npm run check:code-quality-policy:repository` runs the real enforcing CLI with `--json` and checks
-its full repository scope, complete inventory visitation, package/rule counts, zero active
-violations, the complete current register of ready/pending responsibilities with zero qualified records and unexecuted proof
-facts, and complete package inventory. This complete-repository invocation uses a
-360000ms/SIGKILL/32MiB child allowance and 375000ms whole-test watchdog. The prior 180000ms
-allowance killed the correct full evaluation on both hosted ARM Node lines and in a local
-four-CPU ARM reproduction. A [separate bounded measurement](https://github.com/oscharko-dev/Keiko/pull/4013#issuecomment-6176738539) on candidate `4887a278` completed the
-report and a fresh inventory comparison in 249s with approximately 2.1GiB peak child RSS:
-6200/6200 files visited, 27 packages, 22 rules, zero active violations and all eight responsibilities
-ready with semantic proofs still pending. The six-minute allowance provides headroom around that
-measured complete operation; it does not establish hosted performance equivalence. These are
-finite integration allowances, not a product latency SLA. The general `isolatedPolicyReport`
-helper default remains 180000ms, and its genuine deadline-kill and output-limit regressions remain
-unchanged. Fresh hosted results are still required after this correction.
+`npm run check:code-quality-policy:cli-smoke` exercises the real enforcing default CLI on the
+existing nonempty two-root collective-parser fixture. It checks full fixture visitation, its
+package inventory, all 22 rules, zero active violations, repository/nonpartial/enforce scope,
+both exact responsibilities ready and pending, zero qualified records and unexecuted declared
+proofs. A throwing proof-module sentinel must remain unexecuted. Fixture cleanup runs in
+`finally`. The existing 360000ms/SIGKILL/32MiB child allowance, 375000ms whole-test watchdog and
+`isolatedPolicyReport`'s 180000ms helper default remain unchanged, as do the genuine child-exit,
+deadline-kill and output-limit regression controls.
 
-The complete static smoke opts into the CLI's `--progress` diagnostics: bounded stderr observations
-contain only a closed version, phase, started/completed state and elapsed milliseconds. A completed
-state means that phase returned, not that policy passed or output was delivered. The shared child
-failure helper projects only the last validated complete observation; missing or malformed progress
-is unavailable, never raw stderr or an error body. Default CLI use stays quiet, JSON stdout remains
-byte-compatible, and progress changes no gate verdict, currentness check or resource allowance.
+`npm run check:code-quality-policy:repository` separately invokes the actual current-subject CLI
+with `--qualify-responsibilities --json --progress`. Its direct script validates complete actual
+inventory visitation, 27 inventory and packed packages, all 22 rules, zero active violations,
+passed enforcement and combined verdicts, the exact current checked-in responsibility cohort,
+ready/qualified records with no pending/invalid/incomplete/rejected records, every declared exact
+proof selector passed and every proof path executed. One successful invocation must have its direct
+child closed and owned process group absent. It retains 32MiB capture and all evaluator, compiler,
+currentness, semantic-child and resource limits. It adds no replacement whole-catalog timer: the
+existing 30-minute required job bounds this complete production operation. Local qualification
+must use an explicit operational runner/watchdog and report that environment honestly.
 
-The required static-policy matrix invokes this checked smoke once on each governed Node line on
-`ubuntu-24.04-arm`, using a fresh full-history checkout of the same immutable merge candidate,
-normal install/provision/build and exact toolchain verification. The same smoke step first prints
-one body-free Node `os` JSON object with `arch`, `logicalCpus`, `availableParallelism` and
-`totalMemoryBytes`, then invokes `/usr/bin/time -v npm run check:code-quality-policy:repository`
-exactly once as its last command. GNU time 1.9 is already present in the pinned Ubuntu ARM image;
-no installer, retry or threshold is added. The measured command's failure status propagates and
-skips the immediately following raw-reader step. CPU time, maximum RSS and context switches are
-command-level context, not a phase cause, a cgroup memory limit or a process-group-summed peak.
-Both legs must succeed in the `ci` aggregate and both exact job names must be proven before tree
-evidence is reused. Core typed quality and Node26 product shards remain on x64; the native-host,
-Windows and macOS ABI proofs retain their existing platforms. On smoke success, both legs then run
-`check:code-quality-policy:raw-reader`, the actual single-record raw-reader semantic qualification
-previously embedded in the parallel responsibility suite. Its
-assertions and 195s watchdog remain unchanged; the other responsibility fixtures remain in Vitest.
-Local `npm run lint` executes the whole policy and that qualification before typed lint. This does
-not substitute for semantic qualification of the complete current register. Hosted ARM results are required; a
-local ARM completion is not a hosted verdict. The smoke uses the existing direct-script pattern, is outside Vitest's `*.test.mjs`
-collection, and shares the actual closed child-error helper with the retained wiring fixture
-checks. No test is conditionally skipped, imported receipt reused, worker count changed, report
-assertion removed or compiler/currentness check bypassed. Native120s, declaration10s and explicit
-semantic-proof180s bounds are independent and unchanged. The canonical public
-`npm run check:code-quality-policy` command remains available unchanged.
+This decomposition follows the accepted October 13 amendment: a focused regression may replace
+an unnecessarily combined test only while genuine complete production qualification runs
+separately on the same candidate. Relocating 360000/375000ms to the fixture does **not** prove that
+the complete production catalog finishes within six minutes. Those finite integration allowances
+are not a product latency SLA, and no performance improvement or hosted equivalence is claimed.
+Historically the earlier 180000ms full-input allowance killed correct evaluation on both hosted
+ARM Node lines and a local four-CPU ARM reproduction. A
+[separate bounded measurement](https://github.com/oscharko-dev/Keiko/pull/4013#issuecomment-6176738539)
+on `4887a278` completed report and fresh inventory comparison in 249s, about 2.1GiB peak child RSS,
+6200/6200 files, 27 packages, 22 rules, zero active violations and eight ready/pending obligations.
+That historical measurement is retained as context, not a current gate verdict or timing promise.
+
+The default fixture and complete qualification opt into existing bounded `--progress` stderr
+observations: closed version, phase, started/completed state and elapsed milliseconds. A completed
+phase is not a passed policy or delivered output. The shared failure helper exposes only validated
+closed child/progress facts; malformed or absent observations remain unavailable. JSON stdout and
+all evaluation semantics remain unchanged.
+
+Both existing required Node24/Node26 policy jobs execute fixture integration, complete production
+qualification, then the existing actual raw-reader qualification serially and mandatorily on the
+same immutable candidate. Runner, matrix, normal install/provision/build, heap choices, job names,
+30-minute timeout, required dependencies and reuse checks remain unchanged. The genuine complete
+production step prints one body-free Node `os` JSON object (`arch`, `logicalCpus`,
+`availableParallelism`, `totalMemoryBytes`), then runs
+`/usr/bin/time -v npm run check:code-quality-policy:repository` exactly once as its last command.
+GNU time 1.9 is already in the pinned Ubuntu ARM image; no installer, threshold or retry is added.
+Its failure status propagates and skips the immediately following raw-reader step. CPU time,
+maximum RSS and context switches are command-level context, not phase cause, cgroup memory limit
+or process-group-summed peak. Hosted current-head results remain required; local ARM completion
+is not a hosted verdict.
+
+The existing raw-reader owner and 195s watchdog remain unchanged. Local `npm run lint` runs build,
+fixture integration, complete production qualification, raw-reader qualification and typed lint
+in that order. All three direct owners remain outside Vitest/coverage auto-collection. No pending
+observation is adapted without genuine complete semantic execution. Native120s, declaration10s,
+semantic-proof180s and all other operation-owned budgets remain independent and unchanged. The
+canonical `npm run check:code-quality-policy` CLI remains available unchanged.
 
 ### Explicit current-subject responsibility qualification
 
 `npm run check:code-quality-policy -- --qualify-responsibilities --json` selects an optional phase;
-default static invocations and the serial enforcing smoke do not execute business proof suites.
-The full-repository smoke's integration allowance is separate from the unchanged 180000ms semantic
-proof-child bound below. Qualification is enforce-only. V1, empty records and missing registered
+default static invocations and the bounded fixture smoke do not execute business proof suites.
+The required repository command explicitly selects qualification. The fixture integration allowance
+is separate from the unchanged 180000ms semantic proof-child bound below. Qualification is enforce-only. V1, empty records and missing registered
 exact selectors fail closed when selected. No active rule scope or existing responsibility identity
 is changed.
 

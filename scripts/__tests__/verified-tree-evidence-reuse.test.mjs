@@ -363,6 +363,7 @@ describe("required static policy matrix", () => {
       "npm ci --ignore-scripts",
       "npm run provision:usearch",
       "npm run build:packages",
+      "npm run check:code-quality-policy:cli-smoke",
       `node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
 /usr/bin/time -v npm run check:code-quality-policy:repository
 `,
