@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -408,6 +408,34 @@ describe("the aggregator still fails closed", () => {
       "${{ needs.portable-secure-read.result }}",
     );
   });
+  it("runs the original OpenCode host suites on every required native platform", () => {
+    const steps = jobs["portable-secure-read"].steps;
+    const build = steps.findIndex((step) => step.run === "npm run build:packages");
+    const install = steps.findIndex(
+      (step) =>
+        step.run ===
+        "npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false",
+    );
+    const qualify = steps.findIndex((step) => step.run === "npm run test:opencode-service-host");
+    expect(build).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(build);
+    expect(qualify).toBeGreaterThan(install);
+    for (const index of [build, install, qualify]) {
+      expect(steps[index].if).toBeUndefined();
+      expect(steps[index]["continue-on-error"]).toBeUndefined();
+    }
+  });
+
+  it("keeps every original OpenCode host suite reachable from the required command", () => {
+    const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+    const suites = readdirSync(join(repoRoot, "native/opencode-service-host"))
+      .filter((name) => name.endsWith(".test.mjs"))
+      .sort()
+      .map((name) => `native/opencode-service-host/${name}`);
+    expect(suites.length).toBeGreaterThan(0);
+    expect(manifest.scripts["test:opencode-service-host"]).toBe(`node --test ${suites.join(" ")}`);
+  });
+
   it("accepts a complete reuse claim whose gates were skipped by the guard", () => {
     expect(runAggregator(REUSING)).toBe(0);
   });

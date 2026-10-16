@@ -16,8 +16,9 @@ import { createHash } from "node:crypto";
 
 const { Request, Response, TextDecoder, AbortController, fetch } = globalThis;
 
-const moduleRoot = process.env.KEIKO_TEST_QUALIFIED_HOST_MODULE_ROOT;
-if (!moduleRoot) throw new TypeError("qualified-host-test-modules-required");
+const moduleRoot =
+  process.env.KEIKO_TEST_QUALIFIED_HOST_MODULE_ROOT ??
+  fileURLToPath(new URL("./node_modules", import.meta.url));
 const { Effect, References, Option, Context, Layer } = await import(
   pathToFileURL(join(moduleRoot, "effect/dist/index.js"))
 );
@@ -80,7 +81,7 @@ async function fixture(toolProfile = "direct") {
     mkdirSync(path, { recursive: true, mode: 0o700 });
   for (const name of ["host.mjs", "guard-seams.mjs", "entry.mjs"])
     copyFileSync(join(source, name), join(root, name));
-  symlinkSync(moduleRoot, join(root, "node_modules"));
+  symlinkSync(moduleRoot, join(root, "node_modules"), "junction");
   const codecAsset = artifact.createOpenCodeServiceHostNativeCodecAsset();
   copyFileSync(codecAsset.source, join(root, codecAsset.filename));
   for (const asset of artifact.createOpenCodeServiceHostNativePolicyAssets()) {

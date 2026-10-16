@@ -1,4 +1,4 @@
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 /** Fixed host capabilities. No native planner, interpreter or transport algorithm is replaced. */
 export function fixedPostTransport(raw, inputBinding) {
   const binding = copyBinding(inputBinding);
@@ -426,7 +426,7 @@ function initialReadFileString(path, original, environment) {
 function initialRelativePath(root, path) {
   if (typeof path !== "string" || !isAbsolute(path) || resolve(path) !== path) return undefined;
   const value = relative(root, path);
-  return value === ".." || value.startsWith("../") || isAbsolute(value) ? undefined : value;
+  return value === ".." || value.startsWith(`..${sep}`) || isAbsolute(value) ? undefined : value;
 }
 
 function initialRealPath(path, original, environment) {

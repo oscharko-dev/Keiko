@@ -1813,3 +1813,38 @@ provider-reported provenance flag. ROOT's two controls and scoped strict/lint/fo
 Final local gates, coverage, Sonar, regenerated package/UI evidence, exact-head CI, live sandbox
 qualification and the remaining review discussions are pending. These focused increments do not
 claim complete standalone OpenCode parity or release approval.
+
+### Epic #3897 / #3898: required original-service qualification (2026-10-16)
+
+The existing original-service suites were executable only through a manual Node invocation and
+were absent from required CI. A failing-first workflow regression demonstrates that omission.
+`npm run test:opencode-service-host` now runs every checked-in native host suite, using the private
+host's installed dependency tree by default. Missing dependencies fail the run; they do not skip
+qualification. Existing explicit test-module overrides remain supported. Fixture directory links
+use junctions so Windows qualification does not depend on privileged symbolic-link creation, and
+instruction fixtures construct native absolute paths.
+
+The existing required `portable-secure-read` matrix now builds the workspace producers, installs
+the private host's committed lockfile with lifecycle scripts and executable links disabled, and
+runs the original host suites before qualifying the native helper. These steps are unconditional
+within each matrix leg; the required aggregate retains its existing fail-closed checks. A second
+regression compares the npm command with the actual suite inventory to reject unreachable tests.
+
+Local qualification on macOS ARM64 (Node 24.21.0) and in a clean
+`node:24.18.0-bookworm` Linux ARM64 container passes all 51 tests with no skips on each platform.
+The suites exercise the actual original service graph, authentication, routes, SSE, PTY attachment,
+instruction boundary, transport guards and owned entry-process shutdown.
+
+Preparing Windows qualification exposed an original private-host metadata containment bug:
+`..\\` was not recognized as a parent-directory escape. The owning check now uses the native path
+separator. A failing-first test loads the complete original boundary with Node's Windows path
+implementation, proves an accepted nested path still works, and rejects sibling roots before
+filesystem access. Native Windows execution remains separately required. This private host remains
+inactive; the repair neither activates a product execution path nor changes Activity Log operations.
+Any later activation requires fresh source-bound artifacts under #3898 / #3899.
+
+The required hosted Linux x64, Windows x64, macOS ARM64 and macOS Intel results remain separate
+platform evidence. These local runs do not qualify macOS 13, a published installation, native
+service activation, a live model task or complete parity. #3898 stays open. Full local LiteLLM/Gemma
+qualification precedes Azure; independently authored representative fixtures replace unavailable
+customer-specific fixtures. No Azure credentials or requests are used in this increment.

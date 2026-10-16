@@ -1,9 +1,13 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { setImmediate } from "node:timers";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fixedPostTransport, denyAmbientFetch } from "./guard-seams.mjs";
 
 const { Response, Headers, Request, AbortController, TextEncoder } = globalThis;
+const workspace = resolve("/accepted");
+const foreign = resolve("/foreign");
 
 const binding = {
   url: "http://127.0.0.1:1/api/coding-sidecar/tool",
@@ -171,22 +175,23 @@ test("a Request body cannot silently become a different empty provider request",
   await assert.rejects(send(input, init), /host-purpose-denied/);
 });
 
-async function initialFixture(send) {
-  const { pathToFileURL } = await import("node:url");
-  const { join } = await import("node:path");
-  const moduleRoot = process.env.KEIKO_TEST_QUALIFIED_HOST_MODULE_ROOT;
-  if (!moduleRoot) throw new TypeError("qualified-host-test-modules-required");
+async function initialFixture(send, options = {}) {
+  const { fileURLToPath, pathToFileURL } = await import("node:url");
+  const moduleRoot =
+    process.env.KEIKO_TEST_QUALIFIED_HOST_MODULE_ROOT ??
+    fileURLToPath(new URL("./node_modules", import.meta.url));
   const runtime = await import(pathToFileURL(join(moduleRoot, "effect/dist/index.js")));
   const codec =
     await import("../../packages/keiko-server/dist/coding-runtime/secureWorkspaceTextReadProtocol.js");
   const { isDenied } = await import("../../packages/keiko-workspace/dist/ignore.js");
   const { createInitialInstructionBoundary } = await import("./guard-seams.mjs");
   const host = {
-    workspace: "/accepted",
-    stateRoot: "/accepted/.keiko/private",
+    workspace,
+    stateRoot: join(workspace, ".keiko", "private"),
     facadeURL: binding.url,
     facadeCapability: binding.capability,
     runId: "run-initial",
+    ...options.binding,
   };
   const phases = [];
   const fetch = fixedPostTransport(async (_url, init) => {
@@ -197,7 +202,8 @@ async function initialFixture(send) {
     if (packet.phase === "end") return initialJSON({ ok: true });
     return send(packet, init, codec);
   }, binding);
-  const owner = createInitialInstructionBoundary(host, fetch, codec, {
+  const createBoundary = options.createBoundary ?? createInitialInstructionBoundary;
+  const owner = createBoundary(host, fetch, codec, {
     ...runtime,
     isDenied,
     config: "fixed-constructor-config",
@@ -232,7 +238,7 @@ test("initial scope copies a real canonical decoder view before wiping the frame
   const { Effect } = own;
   const fs = own.owner.filesystem(unavailableFilesystem(Effect));
   const result = await Effect.runPromise(
-    Effect.scoped(own.owner.wrap(() => fs.readFileString("/accepted/AGENTS.md"))({})),
+    Effect.scoped(own.owner.wrap(() => fs.readFileString(join(workspace, "AGENTS.md")))({})),
   );
   assert.equal(result, "original instruction");
   assert.deepEqual(own.phases, ["begin", "readBytes", "end"]);
@@ -248,13 +254,13 @@ test("a captured original fiber context and a replayed generation cannot reopen 
   const wrapped = own.owner.wrap(() =>
     Effect.gen(function* () {
       context = yield* Effect.context();
-      return yield* fs.exists("/accepted/AGENTS.md");
+      return yield* fs.exists(join(workspace, "AGENTS.md"));
     }),
   );
   assert.equal(await Effect.runPromise(Effect.scoped(wrapped({}))), true);
   const before = own.phases.length;
   await assert.rejects(
-    Effect.runPromise(fs.exists("/accepted/AGENTS.md").pipe(Effect.provideContext(context))),
+    Effect.runPromise(fs.exists(join(workspace, "AGENTS.md")).pipe(Effect.provideContext(context))),
   );
   await assert.rejects(Effect.runPromise(Effect.scoped(wrapped({}))));
   assert.equal(own.phases.length, before);
@@ -274,21 +280,21 @@ test("closed bootstrap permits only constructor-owned metadata and already attes
   });
   assert.equal(
     await Effect.runPromise(
-      fs.readFileString(own.host.stateRoot + "/config/opencode/opencode.json"),
+      fs.readFileString(join(own.host.stateRoot, "config", "opencode", "opencode.json")),
     ),
     "fixed-constructor-config",
   );
   assert.equal(
-    await Effect.runPromise(fs.realPath(own.host.stateRoot + "/home")),
-    own.host.stateRoot + "/home",
+    await Effect.runPromise(fs.realPath(join(own.host.stateRoot, "home"))),
+    join(own.host.stateRoot, "home"),
   );
   for (const path of [
-    "/accepted/AGENTS.md",
-    "/foreign/AGENTS.md",
-    own.host.stateRoot + "/config/opencode/AGENTS.md",
+    join(workspace, "AGENTS.md"),
+    join(foreign, "AGENTS.md"),
+    join(own.host.stateRoot, "config", "opencode", "AGENTS.md"),
   ])
     await assert.rejects(Effect.runPromise(fs.readFileString(path)));
-  await assert.rejects(Effect.runPromise(fs.realPath("/foreign")));
+  await assert.rejects(Effect.runPromise(fs.realPath(foreign)));
   assert.equal(metadata, 1);
   assert.deepEqual(own.phases, []);
 });
@@ -299,7 +305,7 @@ test("technical refusal remains an error while genuine absence is false", async 
     const { Effect } = own;
     const fs = own.owner.filesystem(unavailableFilesystem(Effect));
     const work = Effect.runPromise(
-      Effect.scoped(own.owner.wrap(() => fs.exists("/accepted/AGENTS.md"))({})),
+      Effect.scoped(own.owner.wrap(() => fs.exists(join(workspace, "AGENTS.md")))({})),
     );
     if (reason === "not-found") assert.equal(await work, false);
     else await assert.rejects(work);
@@ -312,7 +318,9 @@ test("outside root, malformed response and oversized frame refuse inside the rea
   const { Effect } = own;
   const fs = own.owner.filesystem(unavailableFilesystem(Effect));
   await assert.rejects(
-    Effect.runPromise(Effect.scoped(own.owner.wrap(() => fs.exists("/foreign/AGENTS.md"))({}))),
+    Effect.runPromise(
+      Effect.scoped(own.owner.wrap(() => fs.exists(join(foreign, "AGENTS.md")))({})),
+    ),
   );
   assert.deepEqual(own.phases, ["begin", "end"]);
   for (const response of [
@@ -326,7 +334,7 @@ test("outside root, malformed response and oversized frame refuse inside the rea
     const file = bad.owner.filesystem(unavailableFilesystem(bad.Effect));
     await assert.rejects(
       bad.Effect.runPromise(
-        bad.Effect.scoped(bad.owner.wrap(() => file.exists("/accepted/AGENTS.md"))({})),
+        bad.Effect.scoped(bad.owner.wrap(() => file.exists(join(workspace, "AGENTS.md")))({})),
       ),
     );
     assert.deepEqual(bad.phases, ["begin", "stat", "end"]);
@@ -350,7 +358,7 @@ test("interruption closes before end and withholds bytes from an uncooperative r
   const fs = own.owner.filesystem(unavailableFilesystem(Effect));
   const controller = new AbortController();
   const work = Effect.runPromise(
-    Effect.scoped(own.owner.wrap(() => fs.readFileString("/accepted/AGENTS.md"))({})),
+    Effect.scoped(own.owner.wrap(() => fs.readFileString(join(workspace, "AGENTS.md")))({})),
     { signal: controller.signal },
   );
   const stopped = assert.rejects(work);
@@ -360,7 +368,7 @@ test("interruption closes before end and withholds bytes from an uncooperative r
   assert.deepEqual(own.phases, ["begin", "readBytes", "end"]);
   release();
   await new Promise((resolve) => setImmediate(resolve));
-  await assert.rejects(Effect.runPromise(fs.readFileString("/accepted/AGENTS.md")));
+  await assert.rejects(Effect.runPromise(fs.readFileString(join(workspace, "AGENTS.md"))));
   assert.deepEqual(own.phases, ["begin", "readBytes", "end"]);
 });
 
@@ -377,10 +385,13 @@ test("startup-only metadata proves a nested canonical root and permanently close
       return Effect.succeed(path);
     },
   });
-  assert.equal(await Effect.runPromise(fs.realPath("/accepted/deep")), "/accepted/deep");
-  const work = own.owner.wrap(() => fs.exists("/accepted/AGENTS.md"));
+  assert.equal(
+    await Effect.runPromise(fs.realPath(join(workspace, "deep"))),
+    join(workspace, "deep"),
+  );
+  const work = own.owner.wrap(() => fs.exists(join(workspace, "AGENTS.md")));
   assert.equal(await Effect.runPromise(Effect.scoped(work({}))), true);
-  for (const path of ["/accepted", "/accepted/deep", own.host.stateRoot + "/home"])
+  for (const path of [workspace, join(workspace, "deep"), join(own.host.stateRoot, "home")])
     await assert.rejects(Effect.runPromise(fs.realPath(path)));
   assert.equal(metadata, 1);
   assert.deepEqual(own.phases, ["begin", "stat", "end"]);
@@ -394,13 +405,50 @@ test("startup metadata rejects denied namespaces and canonical link escapes befo
     ...unavailableFilesystem(Effect),
     realPath: () => {
       metadata++;
-      return Effect.succeed("/foreign/target");
+      return Effect.succeed(join(foreign, "target"));
     },
   });
-  for (const path of ["/foreign", "/accepted/.git", "/accepted/nested/.env", "/accepted/.ssh"])
+  for (const path of [
+    foreign,
+    join(workspace, ".git"),
+    join(workspace, "nested", ".env"),
+    join(workspace, ".ssh"),
+  ])
     await assert.rejects(Effect.runPromise(fs.realPath(path)));
   assert.equal(metadata, 0);
-  await assert.rejects(Effect.runPromise(fs.realPath("/accepted/link")));
+  await assert.rejects(Effect.runPromise(fs.realPath(join(workspace, "link"))));
+  assert.equal(metadata, 1);
+  assert.deepEqual(own.phases, []);
+});
+
+test("Windows startup metadata refuses sibling roots before filesystem access", async () => {
+  const pathModule = `data:text/javascript,${encodeURIComponent(
+    'import { win32 } from "node:path"; export const { isAbsolute, join, relative, resolve, sep } = win32;',
+  )}`;
+  const source = readFileSync(new URL("./guard-seams.mjs", import.meta.url), "utf8");
+  const windows = await import(
+    `data:text/javascript;base64,${Buffer.from(
+      source.replace('"node:path"', JSON.stringify(pathModule)),
+    ).toString("base64")}`
+  );
+  const own = await initialFixture(() => assert.fail("content IO"), {
+    createBoundary: windows.createInitialInstructionBoundary,
+    binding: { workspace: "C:\\accepted", stateRoot: "C:\\accepted\\.keiko\\private" },
+  });
+  let metadata = 0;
+  const fs = own.owner.filesystem({
+    ...unavailableFilesystem(own.Effect),
+    realPath: (path) => {
+      metadata++;
+      return own.Effect.succeed(path);
+    },
+  });
+  assert.equal(
+    await own.Effect.runPromise(fs.realPath("C:\\accepted\\deep")),
+    "C:\\accepted\\deep",
+  );
+  for (const path of ["C:\\foreign", "C:\\accepted-other", "D:\\accepted"])
+    await assert.rejects(own.Effect.runPromise(fs.realPath(path)));
   assert.equal(metadata, 1);
   assert.deepEqual(own.phases, []);
 });
@@ -418,15 +466,17 @@ test("a pending constructor metadata resolution is refused once the genuine init
     ...unavailableFilesystem(Effect),
     realPath: () => Effect.promise(() => pending),
   });
-  const result = Effect.runPromise(fs.realPath("/accepted/deep"));
+  const result = Effect.runPromise(fs.realPath(join(workspace, "deep")));
   const refused = assert.rejects(result);
   await Effect.runPromise(
-    Effect.scoped(own.owner.wrap(() => fs.exists("/accepted/AGENTS.md"))({})),
+    Effect.scoped(own.owner.wrap(() => fs.exists(join(workspace, "AGENTS.md")))({})),
   );
-  release("/accepted/deep");
+  release(join(workspace, "deep"));
   await refused;
   await assert.rejects(
-    Effect.runPromise(fs.readFileString(own.host.stateRoot + "/config/opencode/opencode.json")),
+    Effect.runPromise(
+      fs.readFileString(join(own.host.stateRoot, "config", "opencode", "opencode.json")),
+    ),
   );
   assert.deepEqual(own.phases, ["begin", "stat", "end"]);
 });
@@ -445,12 +495,12 @@ test("a live original scoped child inherits the permanently closed initial refer
         yield* own.owner.wrap(() =>
           Effect.gen(function* () {
             yield* Deferred.await(trigger).pipe(
-              Effect.andThen(fs.exists("/accepted/AGENTS.md")),
+              Effect.andThen(fs.exists(join(workspace, "AGENTS.md"))),
               Effect.exit,
               Effect.flatMap((exit) => Deferred.succeed(settled, exit)),
               Effect.forkScoped,
             );
-            return yield* fs.exists("/accepted/AGENTS.md");
+            return yield* fs.exists(join(workspace, "AGENTS.md"));
           }),
         )({});
         assert.deepEqual(own.phases, ["begin", "stat", "end"]);
