@@ -616,3 +616,11 @@ The actual Memory checker retains pin/unpin as public unknown-parameter obligati
 shared overloaded helper receives no dictionary adaptation. Retrieval's two narrowed typeof
 operands and the numeric countUpdatePatches helper remain unadapted. The other nine new roots
 may qualify only the exact dictionary slots admitted by their original same-source closure.
+
+The documentation navigation and manual-proposal request parsers add two mandatory public
+unknown-parameter obligations, bringing the register to 45. Their public wrappers prove normalized
+fresh output, bounded primitives, optional-field normalization, exact eager refusals and original
+getter phases. The existing BFF consumers use checked target, port and advisory reason fields;
+healthy and refused real-server controls preserve redaction and the absence of persistent or model
+work. A client-reported lastNavigationReason grants no consent or crawl authority. Optional typeof
+and dictionary adaptations remain withheld pending actual checker eligibility. No scope is activated.

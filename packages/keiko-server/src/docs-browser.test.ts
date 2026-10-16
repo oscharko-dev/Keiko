@@ -431,3 +431,14 @@ describe("POST /api/docs-browser/navigate — request validation and CSRF", () =
     expect(res.status).toBe(413);
   });
 });
+
+describe("documentation checked navigation consumer (#3918)", () => {
+  it("refuses malformed ports before the existing backend probe", async () => {
+    const fx = await fixture();
+    const response = await navigate(fx, { target: "http://127.0.0.1:8080/docs", cdpPort: 65536 });
+    expect(response.status).toBe(400);
+    const body: unknown = await response.json();
+    expect(body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    expect(fx.fakeBrowser.checkedPorts).toEqual([]);
+  });
+});

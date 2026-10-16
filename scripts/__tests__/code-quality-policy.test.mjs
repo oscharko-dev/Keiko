@@ -153,6 +153,8 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "memory-forget-public-parser",
       "memory-audit-record-public-parser",
       "memory-retrieval-request-public-parser",
+      "documentation-navigation-request-public-parser",
+      "documentation-manual-proposal-request-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -691,7 +693,7 @@ describe("closed public parser schema (#3918)", () => {
 
 describe("remaining Memory public parser obligations (#3918)", () => {
   it("pins all eleven public roots and exact proof selectors without activating scopes", () => {
-    const records = policy.responsibilities.slice(32);
+    const records = policy.responsibilities.slice(32, 43);
     const unknownOnly = new Set(["memory-pin-public-parser", "memory-unpin-public-parser"]);
     expect(records).toHaveLength(11);
     for (const record of records) {
@@ -710,6 +712,24 @@ describe("remaining Memory public parser obligations (#3918)", () => {
         "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics",
         "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission",
       ]);
+      const removed = structuredClone(policy);
+      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
+      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+    }
+  });
+});
+
+describe("documentation request public parser obligations (#3918)", () => {
+  it("pins two exact unknown-parameter roots without optional rule grants", () => {
+    const records = policy.responsibilities.slice(43);
+    expect(records).toHaveLength(2);
+    for (const record of records) {
+      expect(record.kind).toBe("public-parser");
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input.parameterIndex).toBe(0);
+      expect(record.consumer.kind).toBe("public-api-proof");
+      expect(record.proofs).toEqual([record.input.consumerPath]);
       const removed = structuredClone(policy);
       removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
       expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");

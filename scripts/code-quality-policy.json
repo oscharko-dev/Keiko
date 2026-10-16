@@ -2243,6 +2243,118 @@
           "testName": "remaining memory DTO physical admission (#3918) refuses public physical type filter hidden by iterator"
         }
       ]
+    },
+    {
+      "id": "documentation-navigation-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-browser.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-browser",
+        "exportName": "parseDocumentationNavigationRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-browser.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-browser",
+        "exportName": "parseDocumentationNavigationRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-browser.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-browser",
+        "exportName": "parseDocumentationNavigationRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-browser.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-browser",
+        "exportName": "parsePublicDocumentationNavigation",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/documentation-browser.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/documentation-browser.test.ts",
+          "testName": "documentation navigation public parser (#3918) normalizes fresh request primitives and optional port presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-browser.test.ts",
+          "testName": "documentation navigation public parser (#3918) refuses malformed input with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-browser.test.ts",
+          "testName": "documentation navigation public parser (#3918) retains exact producer and forwarding result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-browser.test.ts",
+          "testName": "public navigation admitted observations preserves a healthy getter request and its normalized primitive values"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-browser.test.ts",
+          "testName": "public navigation admitted observations preserves required second-port refusal after established presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-browser.test.ts",
+          "testName": "public navigation admitted observations preserves optional final captured port absence after healthy initial reads"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-browser.test.ts",
+          "testName": "public navigation admitted observations preserves omitted and explicit undefined port normalization"
+        }
+      ]
+    },
+    {
+      "id": "documentation-manual-proposal-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal",
+        "exportName": "parseManualProposalRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal",
+        "exportName": "parseManualProposalRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal",
+        "exportName": "parseManualProposalRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal",
+        "exportName": "parsePublicDocumentationManualProposal",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/documentation-manual-proposal.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+          "testName": "documentation manual public parser (#3918) normalizes fresh primitives and absent advisory reasons without consent"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+          "testName": "documentation manual public parser (#3918) refuses malformed input with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+          "testName": "documentation manual public parser (#3918) retains exact producer forwarding and advisory reason types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+          "testName": "public manual proposal admission preservation captures target once and preserves omitted versus undefined optional reason normalization"
+        },
+        {
+          "path": "packages/keiko-contracts/src/documentation-manual-proposal.test.ts",
+          "testName": "public manual proposal admission preservation preserves known reasons and distinguishes refusal from approval authority"
+        }
+      ]
     }
   ]
 }

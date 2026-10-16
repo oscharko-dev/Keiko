@@ -336,6 +336,7 @@ describe("buildDocumentationNavigationResult", () => {
 import {
   parseDocumentationNavigationRequest as publicNavigationRequest,
   mapBrowserErrorToDocumentationReason as publicBrowserErrorReason,
+  type DocumentationNavigationParse as PublicNavigationParse,
 } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
 
 describe.each([
@@ -478,4 +479,68 @@ it("retains public navigation primitive guarantees for the direct result consume
   expect(publicNavigationTarget(input)).toBe("https://example.test/docs");
   input.target = "";
   expect(publicNavigationTarget(input)).toBeUndefined();
+});
+
+export function parsePublicDocumentationNavigation(input: unknown): PublicNavigationParse {
+  const result = publicNavigationRequest(input);
+  return result;
+}
+
+describe("documentation navigation public parser (#3918)", () => {
+  it("normalizes fresh request primitives and optional port presence", () => {
+    for (const cdpPort of [1024, 65535]) {
+      const input = { target: "https://example.test/docs", cdpPort, schemaVersion: "hostile" };
+      const parsed = parsePublicDocumentationNavigation(input);
+      expect(parsed).toEqual({
+        ok: true,
+        value: { schemaVersion: "1", target: input.target, cdpPort },
+      });
+      if (!parsed.ok) throw new TypeError("healthy public navigation refused");
+      expect(parsed.value).not.toBe(input);
+    }
+    for (const input of [{ target: "x" }, { target: "x", cdpPort: undefined }]) {
+      const parsed = parsePublicDocumentationNavigation(input);
+      expect(parsed).toEqual({ ok: true, value: { schemaVersion: "1", target: "x" } });
+      if (!parsed.ok) throw new TypeError("healthy optional public navigation refused");
+      expect(Object.hasOwn(parsed.value, "cdpPort")).toBe(false);
+    }
+    expect(parsePublicDocumentationNavigation({ target: "x".repeat(4096) }).ok).toBe(true);
+  });
+
+  it("refuses malformed input with exact eager ordered diagnostics", () => {
+    for (const input of [null, [], "target", 12]) {
+      expect(parsePublicDocumentationNavigation(input)).toEqual({
+        ok: false,
+        errors: ["request must be an object"],
+      });
+    }
+    expect(parsePublicDocumentationNavigation({ target: "", cdpPort: 1023 })).toEqual({
+      ok: false,
+      errors: [
+        "target must be a non-empty string",
+        "cdpPort must be an integer in the range 1024-65535",
+      ],
+    });
+    expect(parsePublicDocumentationNavigation({ target: "x".repeat(4097) })).toEqual({
+      ok: false,
+      errors: ["target must be at most 4096 characters"],
+    });
+    for (const cdpPort of [null, "9222", 65536, 1024.5, Number.NaN]) {
+      expect(parsePublicDocumentationNavigation({ target: "x", cdpPort })).toEqual({
+        ok: false,
+        errors: ["cdpPort must be an integer in the range 1024-65535"],
+      });
+    }
+  });
+
+  it("retains exact producer and forwarding result types", () => {
+    expectTypeOf(publicNavigationRequest).returns.toEqualTypeOf<PublicNavigationParse>();
+    expectTypeOf(parsePublicDocumentationNavigation).returns.toEqualTypeOf<PublicNavigationParse>();
+    const result = parsePublicDocumentationNavigation({ target: "x", cdpPort: 9222 });
+    if (!result.ok) throw new TypeError("healthy public navigation types refused");
+    expectTypeOf(result.value.target).toEqualTypeOf<string>();
+    expectTypeOf(result.value.cdpPort).toEqualTypeOf<number | undefined>();
+    expectTypeOf(result.value.schemaVersion).toEqualTypeOf<"1">();
+    expect(result.value.cdpPort).toBe(9222);
+  });
 });
