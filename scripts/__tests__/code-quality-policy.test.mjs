@@ -248,6 +248,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "task-workspace-transition-to-typed-recheck",
       "task-workspace-next-from-typed-recheck",
       "task-workspace-cleanup-value-typed-recheck",
+      "actual-code-task-acceptance-raw-reader-return",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);

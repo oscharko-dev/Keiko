@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(63);
+    expect(production.responsibilities).toHaveLength(64);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -796,7 +796,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 63, incomplete: 0, invalid: 0, qualified: 63, pending: 0, rejected: 0 },
+      counts: { ready: 64, incomplete: 0, invalid: 0, qualified: 64, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -851,7 +851,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 63;
+        r.responsibilities.counts.pending = 64;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {

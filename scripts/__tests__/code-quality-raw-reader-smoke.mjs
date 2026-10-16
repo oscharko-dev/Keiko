@@ -38,38 +38,21 @@ function actualRawReaderAssertions() {
   return names.map((testName) => ({ path: ACTUAL_RAW_READER_PROOF, testName }));
 }
 
-function actualRawReaderRecord() {
-  const selector = (exportName) => ({
-    consumerPath: ACTUAL_RAW_READER_PROOF,
-    specifier: "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
-    exportName,
-  });
-  return {
-    id: "actual-code-task-acceptance-raw-reader-return",
-    owner: "@oscharko-dev/keiko-contracts",
-    kind: "raw-own-property-reader",
-    rules: [ACTUAL_RAW_READER_RULE],
-    input: { ...selector("ownField"), parameterIndex: 0 },
-    transform: selector("ownField"),
-    output: selector("validateCodeTaskAcceptanceContribution"),
-    consumer: {
-      ...selector("rawReaderAcceptanceWitness"),
-      kind: "public-api-proof",
-      owner: "@oscharko-dev/keiko-contracts",
-    },
-    proofs: [ACTUAL_RAW_READER_PROOF],
-    proofAssertions: actualRawReaderAssertions(),
-  };
-}
-
 async function actualRawReaderSubject() {
   const { fileURLToPath } = await import("node:url");
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const current = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
-  const record = actualRawReaderRecord();
-  const policy = { ...current, responsibilities: [...current.responsibilities, record] };
+  const matches = current.responsibilities.filter(
+    (entry) => entry.id === "actual-code-task-acceptance-raw-reader-return",
+  );
+  assert.equal(matches.length, 1);
+  const [record] = matches;
+  assert.equal(record.kind, "raw-own-property-reader");
+  assert.deepEqual(record.rules, [ACTUAL_RAW_READER_RULE]);
+  assert.deepEqual(record.proofAssertions, actualRawReaderAssertions());
+  const policy = current;
   assert.deepEqual(validatePolicy(policy, [current]), []);
-  assert.deepEqual(policy.responsibilities.slice(0, -1), current.responsibilities);
+  assert.deepEqual(policy.responsibilities, current.responsibilities);
   assert.deepEqual(policy.rules, current.rules);
   assert.equal(
     policy.responsibilities
@@ -153,9 +136,9 @@ async function assertActualRawReaderQualified(own, scan, qualified, adapt) {
   assertActualRawReaderPending(fresh, after, again, adapt);
 }
 
-// This scoped regression targets the new RETURN and preserves the current policy cohort below.
+// Qualify the registered reader independently of the complete production cohort.
 function rawReaderStaticPolicy(own) {
-  assert.deepEqual(own.policy.responsibilities.slice(0, -1), own.current.responsibilities);
+  assert.deepEqual(own.policy.responsibilities, own.current.responsibilities);
   assert.deepEqual(own.policy.rules, own.current.rules);
   return { ...own.policy, responsibilities: [own.record] };
 }

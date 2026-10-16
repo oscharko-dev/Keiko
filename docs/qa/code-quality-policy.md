@@ -67,7 +67,7 @@ pending, stale or failed proofs cannot adapt it, and another `Reflect.get` coord
 No own-property/descriptor/cache replacement, receiver/read-order change or domain typing is
 introduced. The runtime, registered evidence contract, record and proof bodies remain unchanged.
 The native census is preserved; only the one qualified active operation can become an adaptation.
-The final complete production gate must actually qualify all 63 records on its current candidate
+The final complete production gate must actually qualify all 64 records on its current candidate
 and cover the full contracts production inventory. An earlier qualified report or a constructed
 unit input cannot supply that execution. This activation does not complete the 170-owner domain
 migration or activate the remaining six boundary rules.
@@ -745,3 +745,19 @@ argument coordinate; ready/pending records cannot. Predicate bodies, unknown ann
 other arguments, dictionary/typeof/return/variable/property sites gain no exemption. Existing
 membership, emission, source-currentness, proof-process and resource limits still apply.
 This bounded pilot neither completes the 170-owner migration nor activates remaining rules.
+
+### Registered acceptance raw reader
+
+The checked-in `actual-code-task-acceptance-raw-reader-return` record extends the cohort from
+63 to 64 using the existing `raw-own-property-reader` kind. It selects the actual public
+`ownField`, its complete owning acceptance validator and the existing public proof consumer.
+Its fifteen existing owning proof selectors cover the truthful unknown result, own versus
+inherited properties, getter failures and complete acceptance admission. Only the reader's exact
+`no-unknown-returns` coordinate can be adapted after fresh qualification.
+
+The raw-reader smoke now selects this authoritative policy record instead of appending another
+definition. It still proves that pending evaluation preserves the native return finding and that
+actual selected proof execution adapts exactly that coordinate, without changing the census or
+checked-in policy. Complete production qualification separately proves all 64 records. This
+registration preserves the previous 63 records, all rule scopes, production code and public types;
+the unknown-return rule remains inactive until the other legitimate raw returns are ready.

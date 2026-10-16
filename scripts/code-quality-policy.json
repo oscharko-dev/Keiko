@@ -3381,6 +3381,98 @@
           "testName": "isCleanupEligibleLifecycleState admits exactly the settled/disposal states"
         }
       ]
+    },
+    {
+      "id": "actual-code-task-acceptance-raw-reader-return",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "raw-own-property-reader",
+      "rules": ["anti-slop/no-unknown-returns"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "ownField",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "ownField"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "validateCodeTaskAcceptanceContribution"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance",
+        "exportName": "rawReaderAcceptanceWitness",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-acceptance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "raw own-property reader public contract (#3918) preserves unknown without any at the actual built public reader"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "raw own-property reader public contract (#3918) reads own values and refuses inherited and absent values"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "raw own-property reader public contract (#3918) propagates an own getter failure and never invokes an inherited getter"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "raw own-property reader public contract (#3918) checks the complete actual owning validator on healthy and malformed facts"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "keeps the source reader aligned with the actual public raw observations (#3918)"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829) rejects a fact's inherited non-enumerable value on the known branch"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829) rejects a fact's inherited non-enumerable outcome discriminator on an empty object"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829) rejects an inherited non-enumerable top-level header field"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829) still accepts a legitimate contribution once Object.prototype is restored"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "factErrors collects every violation instead of stopping at the first (KfQ 3789542365) reports both the disallowed value and the unrelated extra key on a non-known outcome"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "factErrors collects every violation instead of stopping at the first (KfQ 3789542365) reports both the invalid value and the unrelated extra key on a known outcome"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped contribution members case 1 through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped contribution members case 1 through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped contribution members case 2 through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+          "testName": "C1A concrete acceptance member admission refuses skipped contribution members case 2 through public"
+        }
+      ]
     }
   ]
 }
