@@ -76,6 +76,30 @@ missing interfaces rather than invent them, and separate evidence from assumptio
 Optimize instructions using measured failures, not length. Skills must not claim execution tools
 that Chat does not have, fabricate passing results or override Keiko authority and source boundaries.
 
+Initial candidates (effectiveness is not yet qualified):
+
+- [Java/Spring Boot skill](../../scripts/testing/chat-skills-lab/skills/java-spring-unit-tests.md).
+- [React/MUI/Vitest skill](../../scripts/testing/chat-skills-lab/skills/react-mui-vitest-tests.md).
+
+Both were imported through the actual Chat file picker and rendered in Preview without activation.
+They retain project-version checks, observable assertions, explicit missing evidence and honest
+execution reporting. Compare them against no-skill controls before claiming an improvement.
+
+## Initial observations — incomplete campaign
+
+The first native Gemma question used six synthetic files in one ordinary folder: Java service,
+React component, quantity parser, dependency metadata, accepted requirements and a rejected proposal.
+The UI selected the requested folder, connected it to Chat and displayed Live Files context.
+All six files were recursively checked and sent; five distinct citation ranges were validated.
+Canonical Activity Log correlation closure reported complete diagnostic sufficiency, no loss and
+no truncation. Retrieval took 94.057 ms; one model call took 57,272.624 ms, with 3,779 reported prompt
+tokens and 1,417 completion tokens. No citation repair or follow-up synthesis was needed.
+
+Four of five predeclared answer facts were stated correctly. The answer did not explicitly explain
+that the frontend delegates monetary calculation. Retain that omission; this single result is not
+full semantic acceptance, scale evidence, a skill comparison or proof of test-generation quality.
+Raw browser/answer artifacts remain private; reproducible corpus packaging is still pending.
+
 ## Iteration and verification
 
 1. Exercise the UI and record the outcome; read canonical Activity Log evidence first on failure.
