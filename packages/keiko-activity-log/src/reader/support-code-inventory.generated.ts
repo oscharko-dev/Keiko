@@ -2479,6 +2479,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-workflows/planner/intent",
   "keiko-workflows/planner/plan",
   "keiko-workflows/planner/references",
+  "keiko-workflows/planner/request-command-patterns",
   "keiko-workflows/promptEnhancer/index",
   "keiko-workflows/promptEnhancer/markdownSkillDraft",
   "keiko-workflows/promptEnhancer/markdownSkillSources",

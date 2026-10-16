@@ -135,6 +135,8 @@ describe("lockfile evidence in final connected context", () => {
     "Keep dependencies unchanged and explain which React version is resolved.",
     "Don't update dependencies and explain the resolved React version.",
     "Do not change dependencies and describe the installed React version.",
+    "Do not change dependencies and tell me the installed React version.",
+    "Do not change dependencies and tell us the resolved React version.",
     "Without changing dependencies, explain the resolved React version.",
     "Do not change dependency versions; report the resolved React version.",
     "Don't update dependencies, but report the resolved React version.",

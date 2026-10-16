@@ -381,7 +381,8 @@ export function requestsDependencyMetadata(queryText: string): boolean {
   );
 }
 
-const METADATA_REQUEST_ACTION_RE = /^(?:report|list|check|verify|nenne|ermittle|prüfe|pruefe)\b/iu;
+const METADATA_REQUEST_ACTION_RE =
+  /^(?:tell\s+(?:me|us)|report|list|check|verify|nenne|ermittle|prüfe|pruefe)\b/iu;
 const METADATA_REQUEST_QUESTION_RE =
   /^[^,;.!?\n]*\b(?:which|what|how|why|whether|welche[rns]?|was|wie|warum|ob)\b/iu;
 const COMPLETE_PRESERVATION_RE =
