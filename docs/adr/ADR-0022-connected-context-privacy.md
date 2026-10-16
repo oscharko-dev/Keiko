@@ -1248,6 +1248,14 @@ rule applies to Git repositories and ordinary folders without applying Git-speci
 exclusions to ordinary documents. The existing connected-context completion records actual selected
 and omitted counts and charged usage; no path or body enters that evidence.
 
+Dependency intent excludes preservation constraints and source data in quoted text, code, paths or
+diagnostic frames. A separate affirmative dependency question remains eligible alongside a
+constraint, while a negated reporting request does not promote metadata. The planner owns this
+predicate and reuses its existing request-command grammar. Explicit canonical dotted metadata and
+lockfile basenames are references through the ecosystem registry, not a general JSON-file rule;
+existing extensionless selectors retain their meaning. Basename discovery still obeys selected
+scope, exclusions, its finite match grant and the shared search/read budgets before source IO.
+
 Canonical omission order and cache identity are independent of caller ordering. A successful
 selected-file read replaces an earlier omission for that exact file; invalid parent/child overlaps
 still fail validation. Read refusals retain their existing closed policy or budget reason.

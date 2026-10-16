@@ -39,6 +39,7 @@ import {
   type SearchReference,
 } from "./references.js";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
+import { REQUEST_COMMAND_PATTERNS } from "./request-command-patterns.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -426,10 +427,6 @@ const INDEPENDENT_REQUEST_GRAMMAR_PATTERNS = [
   /\b(?:as well as|along with|alongside|together with|and|or|but|while|whilst|whereas|also|besides|plus)\b/iu,
   /\b(?:then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während)\b/iu,
   /\b(?:außerdem|zudem|zusätzlich|auch|dann|sowie|was|welche|wo|wie|warum)\b/iu,
-];
-const REQUEST_COMMAND_PATTERNS = [
-  /\b(?:read|show|open|explain|describe|summarize|inspect|find|search|locate)(?:s|ed|ing)?\b/iu,
-  /\b(?:lies|zeige|öffne|erkläre|erklären|erklärst|beschreibe|beschreiben|suche|finde)\b/iu,
 ];
 
 function matchesQueryPattern(text: string, patterns: readonly RegExp[]): boolean {

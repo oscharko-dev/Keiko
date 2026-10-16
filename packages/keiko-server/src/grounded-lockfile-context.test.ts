@@ -6,6 +6,10 @@ import { createMicroIndex } from "@oscharko-dev/keiko-workflows";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { materializeConnectedFixture, runConnectedRetrievalEval } from "./grounded-eval-support.js";
 import { retrieveConnectedContextPack, type OrchestratorInput } from "./grounded-orchestrator.js";
 
@@ -39,6 +43,7 @@ const FILES = {
     2,
   ),
 };
+const TEST_GENERATION_QUERY = `Generate one complete Vitest and React Testing Library integration test file for frontend/src/OrderForm.tsx. Inspect ${Object.keys(SOURCES).slice(1).join(", ")}. Use the real React Hook Form, Zod resolver and MUI controls. Cover missing/invalid email, missing acceptance of terms, quantity boundaries 1 and 6 and invalid blank/fractional/0/7 values, selecting the afternoon session, the validated callback payload, pending control states, displaying the returned confirmation, and a failed order followed by a successful retry while retaining user input and clearing the old error. Put the test at frontend/src/OrderForm.test.tsx. Return exactly one complete TSX code block, followed by a short source note and any missing evidence. Do not modify production code or claim tests were executed.`;
 const roots: string[] = [];
 const answerer = {
   answer: (): Promise<never> => Promise.reject(new TypeError("No model call is permitted.")),
@@ -81,13 +86,87 @@ function request(root: string, text: string, paths: string[] = []): Orchestrator
 }
 
 describe("lockfile evidence in final connected context", () => {
+  it.each(
+    [
+      "Keep dependencies unchanged.",
+      "Do not change dependency versions.",
+      "Don't update dependencies.",
+      "Do not change dependencies and do not report which versions are installed.",
+      "Do not change dependencies, but do not report which versions are installed.",
+      "Fix the test without changing production code, dependencies, or accepted requirements.",
+      "Ändere keine Abhängigkeiten oder Paketversionen.",
+      "Lass die Versionen der Abhängigkeiten unverändert.",
+    ].flatMap((constraint) => [
+      { constraint, git: false },
+      { constraint, git: true },
+    ]),
+  )("does not promote lockfiles for $constraint (Git: $git)", async ({ constraint, git }) => {
+    const query = `${TEST_GENERATION_QUERY} ${constraint}`;
+    const log = createBufferedServerLogSink();
+    const { pack } = await runConnectedRetrievalEval({
+      files: { ...FILES, ...(git ? { ".git/HEAD": "ref: refs/heads/main\n" } : {}) },
+      query,
+      activityLog: log,
+      correlationId: "dependency-preservation",
+    });
+    expect(pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining(Object.keys(SOURCES)),
+    );
+    expect(pack.files.map((file) => file.scopePath)).not.toContain(LOCKFILE);
+    if (!git)
+      expect(pack.omitted).toContainEqual(
+        expect.objectContaining({ scopePath: LOCKFILE, reason: "low-relevance" }),
+      );
+    expect(pack.files).toHaveLength(Object.keys(SOURCES).length);
+    const completed = log.events.find((event) => event.op === "search.connected-context.completed");
+    const line = formatActivityLogProofLine(completed ?? {});
+    const proof = expectActivityLogProof("search.connected-context.completed.line", line);
+    expect(proof).toMatchObject({
+      selectedFileCount: pack.files.length,
+      omittedCount: pack.omitted.length,
+    });
+    expect(line).not.toContain(constraint);
+    expect(line).not.toContain(LOCKFILE);
+  });
+
+  it.each([
+    "Keep dependencies unchanged, but report the resolved React version.",
+    "Keep dependencies unchanged and tell me which React version is resolved.",
+    "Keep dependencies unchanged and explain which React version is resolved.",
+    "Don't update dependencies and explain the resolved React version.",
+    "Do not change dependencies and describe the installed React version.",
+    "Without changing dependencies, explain the resolved React version.",
+    "Do not change dependency versions; report the resolved React version.",
+    "Don't update dependencies, but report the resolved React version.",
+    "Ändere keine Abhängigkeiten, aber nenne die aufgelöste React-Version.",
+    "Lass die Versionen der Abhängigkeiten unverändert und nenne die aufgelöste React-Version.",
+  ])("retains affirmative dependency evidence alongside a constraint: %s", async (question) => {
+    const { pack } = await runConnectedRetrievalEval({
+      files: FILES,
+      query: `Inspect frontend/src/OrderForm.tsx. ${question}`,
+    });
+    expect(pack.files.map((file) => file.scopePath)).toContain(LOCKFILE);
+  });
+
+  it.each([
+    'The failed assertion is `expect(value).toBe("locked")`.',
+    'The failure text is "expected version 2 but received 1".',
+    "The affected source is frontend/src/version.ts.",
+  ])("does not infer package metadata from source or diagnostic data: %s", async (detail) => {
+    const { pack } = await runConnectedRetrievalEval({
+      files: { ...FILES, "frontend/src/version.ts": "export const version = 2;\n" },
+      query: `${TEST_GENERATION_QUERY} ${detail}`,
+    });
+    expect(pack.files.map((file) => file.scopePath)).not.toContain(LOCKFILE);
+  });
+
   it.each([false, true])(
     "keeps all seven requested sources without incidental lockfile context (Git: %s)",
     async (git) => {
       const log = createBufferedServerLogSink();
       const { pack } = await runConnectedRetrievalEval({
         files: { ...FILES, ...(git ? { ".git/HEAD": "ref: refs/heads/main\n" } : {}) },
-        query: `Generate one complete Vitest and React Testing Library integration test file for frontend/src/OrderForm.tsx. Inspect ${Object.keys(SOURCES).slice(1).join(", ")}. Use the real React Hook Form, Zod resolver and MUI controls. Cover missing/invalid email, missing acceptance of terms, quantity boundaries 1 and 6 and invalid blank/fractional/0/7 values, selecting the afternoon session, the validated callback payload, pending control states, displaying the returned confirmation, and a failed order followed by a successful retry while retaining user input and clearing the old error. Put the test at frontend/src/OrderForm.test.tsx. Return exactly one complete TSX code block, followed by a short source note and any missing evidence. Do not modify production code or claim tests were executed.`,
+        query: TEST_GENERATION_QUERY,
         activityLog: log,
         correlationId: "lockfile-source-focus",
       });
@@ -118,6 +197,7 @@ describe("lockfile evidence in final connected context", () => {
     "Which exact resolved React version is locked for this frontend, rather than the declared range?",
     "Show the transitive dependency versions for the frontend React test setup.",
     "Inspect package-lock.json alongside frontend/package.json.",
+    'Keep dependencies unchanged, but inspect "package-lock.json".',
     "Welche tatsächlich aufgelösten Versionen von React und seinen transitiven Abhängigkeiten nutzt das Frontend?",
     "Erzeuge Tests für frontend/src/OrderForm.tsx mit den aufgelösten Versionen der Abhängigkeiten.",
   ])("retains resolved dependency evidence for %s", async (query) => {

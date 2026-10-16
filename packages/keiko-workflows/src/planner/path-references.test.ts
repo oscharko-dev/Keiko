@@ -3,6 +3,18 @@ import { extractAnchors } from "./anchors.js";
 import { extractPathReferences, extractRetrievalChannels } from "./references.js";
 
 describe("literal bracket path references precede anchor fragmentation", () => {
+  it.each(["package-lock.json", "npm-shrinkwrap.json", "package.json", "tsconfig.json"])(
+    "preserves a named ecosystem metadata basename %s for bounded admission",
+    (path) => {
+      expect(extractPathReferences(`Inspect "${path}".`)).toEqual([{ path, origin: "query" }]);
+      expect(extractPathReferences(`Inspect ${path}.`)).toEqual([{ path, origin: "query" }]);
+    },
+  );
+
+  it("does not infer a filename from an unknown bare JSON value", () => {
+    expect(extractPathReferences('The diagnostic says "unknown-value.json".')).toEqual([]);
+  });
+
   it.each([
     "app/z-users/[id]/page.tsx",
     "app/z-users/[...slug]/page.tsx",

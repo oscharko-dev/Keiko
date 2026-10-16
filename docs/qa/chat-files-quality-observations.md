@@ -719,12 +719,25 @@ The reference, private profile, prompts and raw outputs remain local.
 
 The feedback request also exposes a context-precision issue: a constraint to leave dependencies
 unchanged admits 34,197 lockfile excerpt bytes out of 39,039 total, while requirements, test setup
-and runner configuration are omitted for low relevance. This remains open pending a focused
-regression. Its single physical generation reports 31,939 input and 5,344 completion tokens; no
+and runner configuration are omitted for low relevance. Its single physical generation reports
+31,939 input and 5,344 completion tokens; no
 automatic citation repair is needed. The model picker temporarily loses its label during the wait.
 Canonical evidence is complete with no reported loss or truncation and retains one sequence
 anomaly for investigation. Brief focused local test runs overlapped generation, so these durations
 are operational observations, not isolated provider benchmarks.
+
+The dependency-preservation issue now has failure-first final-pack regressions. Its correction
+excludes negative constraints and quoted/code/path evidence from metadata intent, preserves separate
+affirmative questions, and shares the planner's request-command grammar. Reviewer cases exposed
+additional mixed-request and negated-reporting failures before publication; these now pass alongside
+the original controls. A separate canonical-basename gap also failed before correction. It now uses
+the ecosystem registry without broadening arbitrary JSON references or extensionless selectors.
+The 656 planner tests and 74 final-pack/security tests pass. Canonical basename controls include
+multiple matches, the finite discovery grant, restricted-directory reads and a one-file read budget.
+The broader Grounding suite passes 2,651 tests with one existing skip across 158 files. A paired
+retrieval-only replay retains all seven requested synthetic sources in 7,176 bytes for both the
+original request and dependency-preservation variants. A separate affirmative version question
+still selects lockfile evidence. Native model confirmation of this increment remains pending.
 
 ## Open work
 

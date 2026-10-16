@@ -49,6 +49,28 @@ does not establish realism; public monorepo cases supplement it. Any unavailable
 
 ## Measurements and comparison rules
 
+### Live connected Files acceptance clarification
+
+The owner confirmed these requirements on 2026-10-16; implementation and qualification remain open:
+
+- Each explicitly connected Files window follows its displayed resolved root, subdirectory or single
+  file immediately, including widening on navigation back. Remove the dismiss/keep-folder notice
+  and legacy folder pin behavior. The normal Chat header identifies the actual connected sources
+  concisely, retaining accessible disconnect and truthful pending/refused states.
+- Multiple connected windows contribute independent scopes. Qualify file-plus-repository,
+  repository comparisons, same-name files in different roots, overlapping sources and independent
+  navigation/addition/removal. Unconnected windows grant no scope; overlapping evidence must not be
+  needlessly duplicated. Scope changes retain the original authority and read/budget boundaries.
+- Changing connected sources cancels the active answer. Old in-flight results must not publish into
+  the new scope. Test delayed and out-of-order acknowledgements, failed updates, repeated navigation,
+  close/reconnect and chat switching through the real cancellation and update routes.
+- Completed messages and learned findings remain ordinary conversation history and continue normal
+  compaction. Fresh retrieved Files excerpts remain separate from that history lane. Historical
+  findings never restore current filesystem authority. Repeat comparisons and scope transitions
+  after actual compaction; distinguish current evidence from historical conversation references.
+
+These are acceptance requirements, not evidence that the present implementation passes them.
+
 The owner clarified the customer gateway requirement on 2026-10-16: shared remote LiteLLM servers
 can take one to three minutes to respond during peak use. Local inference speed does not qualify
 that deployment. Use the existing lab fault proxy to exercise 60/120/180-second response-start

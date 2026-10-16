@@ -195,6 +195,7 @@ import {
   assembleContextPack,
   canContinue,
   classifyRetrievalIntent,
+  requestsDependencyMetadata,
   complete,
   contextPackIndexKey,
   extractAnchors,
@@ -5916,29 +5917,16 @@ function explicitlyTargetsLockfile(
   scopePath: string,
   queryText: string,
   anchors: readonly SearchAnchor[],
+  dependencyMetadataRequested: boolean,
 ): boolean {
   if (!isLockfilePath(scopePath)) {
     return false;
   }
-  if (requestsDependencyMetadata(queryText)) return true;
+  if (dependencyMetadataRequested) return true;
   const path = scopePath.toLowerCase();
   const name = basename(scopePath).toLowerCase();
   return queryTerms(queryText, anchors).some((term) => path === term || name === term);
 }
-
-function requestsDependencyMetadata(queryText: string): boolean {
-  const loweredQuery = queryText.toLowerCase();
-  const metadataTerms = classifyRetrievalIntent(queryText).normalizedTerms;
-  return (
-    metadataTerms.some((term) => LOCKFILE_METADATA_TERMS.has(term)) ||
-    /\b(?:versions?|dependencies|dependency|transitive|resolved|locked)\b/u.test(loweredQuery) ||
-    loweredQuery.includes("lockfile") ||
-    loweredQuery.includes("package manager") ||
-    loweredQuery.includes("packagemanager")
-  );
-}
-
-const LOCKFILE_METADATA_TERMS = new Set(["version", "dependency", "package-manager"]);
 
 function refineCandidateOrdering(
   kept: readonly CandidateFile[],
@@ -5949,32 +5937,14 @@ function refineCandidateOrdering(
   nowMs: number,
   addressedPaths: ReadonlySet<string>,
 ): CandidateOrdering {
-  const queryText = query.text;
-  const preferred: CandidateFile[] = [];
-  const lockfiles: CandidateFile[] = [];
-  const runtimeArtifacts: CandidateFile[] = [];
-
-  for (const candidate of kept) {
-    const scopePath = candidate.scopePath;
-    if (
-      isKeikoEvidenceArtifact(scopePath) &&
-      !explicitlyTargetsRuntimeArtifact(scopePath, queryText, anchors)
-    ) {
-      runtimeArtifacts.push(candidate);
-      continue;
-    }
-    if (isIncidentalLockfile(scopePath, queryText, anchors, addressedPaths)) {
-      lockfiles.push(candidate);
-      continue;
-    }
-    preferred.push(candidate);
-  }
-
-  if (preferred.length === 0) {
-    return { kept, omitted };
-  }
-
-  const nextOmitted = runtimeArtifactOmissions(omitted, [...runtimeArtifacts, ...lockfiles], nowMs);
+  const { preferred, incidental } = partitionIncidentalCandidates(
+    kept,
+    query,
+    anchors,
+    addressedPaths,
+  );
+  if (preferred.length === 0) return { kept, omitted };
+  const nextOmitted = runtimeArtifactOmissions(omitted, incidental, nowMs);
   const priorityPaths = new Set<string>();
   const useSearchOrder = candidateOrderingUsesSearchOrder(query, anchors, diagnostics);
   const orderedPreferred = useSearchOrder
@@ -5994,16 +5964,56 @@ function refineCandidateOrdering(
   };
 }
 
+function partitionIncidentalCandidates(
+  kept: readonly CandidateFile[],
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  addressedPaths: ReadonlySet<string>,
+): { readonly preferred: CandidateFile[]; readonly incidental: CandidateFile[] } {
+  const queryText = query.text;
+  const dependencyMetadataRequested = requestsDependencyMetadata(queryText);
+  const preferred: CandidateFile[] = [];
+  const lockfiles: CandidateFile[] = [];
+  const runtimeArtifacts: CandidateFile[] = [];
+
+  for (const candidate of kept) {
+    const scopePath = candidate.scopePath;
+    if (
+      isKeikoEvidenceArtifact(scopePath) &&
+      !explicitlyTargetsRuntimeArtifact(scopePath, queryText, anchors)
+    ) {
+      runtimeArtifacts.push(candidate);
+      continue;
+    }
+    if (
+      isIncidentalLockfile(
+        scopePath,
+        queryText,
+        anchors,
+        addressedPaths,
+        dependencyMetadataRequested,
+      )
+    ) {
+      lockfiles.push(candidate);
+      continue;
+    }
+    preferred.push(candidate);
+  }
+
+  return { preferred, incidental: [...runtimeArtifacts, ...lockfiles] };
+}
+
 function isIncidentalLockfile(
   scopePath: string,
   queryText: string,
   anchors: readonly SearchAnchor[],
   addressedPaths: ReadonlySet<string>,
+  dependencyMetadataRequested: boolean,
 ): boolean {
   return (
     isLockfilePath(scopePath) &&
     !addressedPaths.has(scopePath) &&
-    (!explicitlyTargetsLockfile(scopePath, queryText, anchors) ||
+    (!explicitlyTargetsLockfile(scopePath, queryText, anchors, dependencyMetadataRequested) ||
       !lockfileMatchesAddressedSource(scopePath, addressedPaths))
   );
 }
