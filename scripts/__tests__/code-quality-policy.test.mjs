@@ -78,6 +78,9 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "atlassian-sync-change-summary-public-parser",
       "atlassian-sync-job-state-public-parser",
       "atlassian-connector-pod-source-public-parser",
+      "atlassian-connector-descriptor-public-parser",
+      "atlassian-sync-bounds-public-parser",
+      "atlassian-sync-scope-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -338,6 +341,51 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         const changed = structuredClone(policy);
         if (mode === "removed") changed.responsibilities.splice(index, 1);
         else changed.responsibilities[index].consumer.exportName = "unreviewedAtlassianParser";
+        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
+      }
+    },
+  );
+
+  it.each([
+    [
+      "connector-descriptor",
+      "validateAtlassianConnectorDescriptor",
+      "parsePublicAtlassianConnectorDescriptor",
+    ],
+    ["sync-bounds", "validateAtlassianSyncBounds", "parsePublicAtlassianSyncBounds"],
+    ["sync-scope", "validateAtlassianSyncScope", "parsePublicAtlassianSyncScope"],
+  ])(
+    "pins the additive Atlassian approved-scope %s parser and retains prior obligations",
+    (kind, producer, consumer) => {
+      const index = policy.responsibilities.findIndex(
+        (record) => record.id === `atlassian-${kind}-public-parser`,
+      );
+      const record = policy.responsibilities[index];
+      const path = "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts";
+      const selector = {
+        consumerPath: path,
+        specifier: "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        exportName: producer,
+      };
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
+      expect(record.transform).toEqual(selector);
+      expect(record.output).toEqual(selector);
+      expect(record.consumer).toEqual({
+        ...selector,
+        exportName: consumer,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      expect(record.proofs).toEqual([path]);
+      expect(record.proofAssertions).toHaveLength(3);
+      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
+      for (const mode of ["removed", "rebound"]) {
+        const changed = structuredClone(policy);
+        if (mode === "removed") changed.responsibilities.splice(index, 1);
+        else changed.responsibilities[index].consumer.exportName = "unreviewedApprovedScopeParser";
         expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
       }
     },

@@ -1,11 +1,17 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  validateAtlassianConnectorDescriptor as validatePublicDescriptor,
+  validateAtlassianSyncBounds as validatePublicSyncBounds,
+  validateAtlassianSyncScope as validatePublicSyncScope,
   validateAtlassianSyncChangeSummary as validatePublicSyncSummary,
   validateAtlassianSyncJobState as validatePublicSyncJob,
   validateAtlassianConnectorPodSource as validatePublicPodSource,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import type {
   AtlassianConnectorValidation as PublicValidation,
+  AtlassianConnectorDescriptor as PublicDescriptor,
+  AtlassianSyncBounds as PublicSyncBounds,
+  AtlassianSyncScope as PublicSyncScope,
   AtlassianSyncChangeSummary as PublicSyncSummary,
   AtlassianSyncJobState as PublicSyncJob,
   AtlassianConnectorPodSource as PublicPodSource,
@@ -25,6 +31,7 @@ import {
   type AtlassianConnectorValidation,
 } from "./atlassian-connectors-validation.js";
 import {
+  DEFAULT_ATLASSIAN_SYNC_BOUNDS,
   ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   ATLASSIAN_JQL_MAX_CHARS,
@@ -1675,6 +1682,125 @@ describe("Atlassian sync public parsers (#3918)", () => {
     >();
     expectTypeOf(parsePublicAtlassianConnectorPodSource).returns.toEqualTypeOf<
       PublicValidation<PublicPodSource>
+    >();
+  });
+});
+
+export function parsePublicAtlassianConnectorDescriptor(
+  input: unknown,
+): PublicValidation<PublicDescriptor> {
+  const result = validatePublicDescriptor(input);
+  return result;
+}
+
+export function parsePublicAtlassianSyncBounds(input: unknown): PublicValidation<PublicSyncBounds> {
+  const result = validatePublicSyncBounds(input);
+  return result;
+}
+
+export function parsePublicAtlassianSyncScope(input: unknown): PublicValidation<PublicSyncScope> {
+  const result = validatePublicSyncScope(input);
+  return result;
+}
+
+describe("Atlassian approved-scope public parsers (#3918)", () => {
+  it("preserves descriptor bounds and provider-scope identities and optional presence", () => {
+    const input = descriptor();
+    const narrowBounds = bounds({ maxItems: 1 });
+    const confluence = confluenceScope({ bounds: narrowBounds });
+    const jira = jiraScope({ jql: undefined });
+    const parsedDescriptor = parsePublicAtlassianConnectorDescriptor(input);
+    const parsedBounds = parsePublicAtlassianSyncBounds(narrowBounds);
+    const parsedConfluence = parsePublicAtlassianSyncScope(confluence);
+    const parsedJira = parsePublicAtlassianSyncScope(jira);
+    if (!parsedDescriptor.ok || !parsedBounds.ok || !parsedConfluence.ok || !parsedJira.ok)
+      throw new TypeError("healthy approved-scope public parser refused");
+    expect(parsedDescriptor.value).toBe(input);
+    expect(parsedBounds.value).toBe(narrowBounds);
+    expect(parsedConfluence.value).toBe(confluence);
+    expect(parsedConfluence.value.bounds).toBe(narrowBounds);
+    expect(parsedJira.value).toBe(jira);
+    if (parsedConfluence.value.provider !== "confluence" || parsedJira.value.provider !== "jira")
+      throw new TypeError("healthy scope discriminator changed");
+    expect(parsedConfluence.value.spaceKeys).toBe(confluence.spaceKeys);
+    expect(parsedJira.value.projectKeys).toBe(jira.projectKeys);
+    expect(Object.hasOwn(parsedJira.value, "jql")).toBe(true);
+    const absent = parsePublicAtlassianSyncScope(jiraScope());
+    if (!absent.ok) throw new TypeError("healthy absent-JQL scope refused");
+    expect(absent.value).not.toHaveProperty("jql");
+  });
+
+  it("refuses closed-field bound and cross-provider violations with owning reasons", () => {
+    for (const input of [undefined, null, [], 12, "descriptor"]) {
+      expect(parsePublicAtlassianConnectorDescriptor(input).ok).toBe(false);
+      expect(parsePublicAtlassianSyncBounds(input).ok).toBe(false);
+      expect(parsePublicAtlassianSyncScope(input).ok).toBe(false);
+    }
+    const input = descriptor({
+      unexpected: "private-field-canary",
+      schemaVersion: "2",
+      provider: "github",
+    });
+    expect(parsePublicAtlassianConnectorDescriptor(input)).toEqual({
+      ok: false,
+      errors: [
+        "descriptor must not include unexpected",
+        'descriptor.schemaVersion must be the literal "1"',
+        "descriptor.provider must be confluence or jira",
+      ],
+    });
+    expect(parsePublicAtlassianConnectorDescriptor(input)).toEqual(
+      validateAtlassianConnectorDescriptor(input),
+    );
+    const widened = bounds({ maxItems: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxItems + 1 });
+    expect(parsePublicAtlassianSyncBounds(widened)).toEqual({
+      ok: false,
+      errors: ["bounds.maxItems must be a positive integer that does not widen the D5 default"],
+    });
+    const crossed = confluenceScope({ projectKeys: ["PROJ"] });
+    expect(parsePublicAtlassianSyncScope(crossed)).toEqual({
+      ok: false,
+      errors: ["scope must not include projectKeys"],
+    });
+    expect(parsePublicAtlassianSyncScope(crossed)).toEqual(validateAtlassianSyncScope(crossed));
+  });
+
+  it("retains narrow-only JQL boundaries and exact public domain result types", () => {
+    expect(parsePublicAtlassianSyncBounds(DEFAULT_ATLASSIAN_SYNC_BOUNDS)).toEqual({
+      ok: true,
+      value: DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+    });
+    for (const input of [
+      bounds({ maxItems: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxItems + 1 }),
+      bounds({ maxBytes: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxBytes + 1 }),
+      bounds({ maxDurationMs: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxDurationMs + 1 }),
+      bounds({ maxConcurrency: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxConcurrency + 1 }),
+    ])
+      expect(parsePublicAtlassianSyncBounds(input).ok).toBe(false);
+    for (const jql of ["   ", "1=1) OR (project = SECRET", "x".repeat(ATLASSIAN_JQL_MAX_CHARS + 1)])
+      expect(parsePublicAtlassianSyncScope(jiraScope({ jql })).ok).toBe(false);
+    const balanced = jiraScope({ jql: 'labels = auth AND text ~ "log(in"' });
+    expect(parsePublicAtlassianSyncScope(balanced)).toEqual({ ok: true, value: balanced });
+    expect(parsePublicAtlassianSyncScope(confluenceScope({ spaceKeys: ["ENG", "ENG"] })).ok).toBe(
+      false,
+    );
+    expectTypeOf(validatePublicDescriptor).returns.toEqualTypeOf<
+      PublicValidation<PublicDescriptor>
+    >();
+    expectTypeOf(validatePublicSyncBounds).returns.toEqualTypeOf<
+      PublicValidation<PublicSyncBounds>
+    >();
+    expectTypeOf(validatePublicSyncScope).returns.toEqualTypeOf<
+      PublicValidation<PublicSyncScope>
+    >();
+    expectTypeOf(parsePublicAtlassianConnectorDescriptor).returns.toEqualTypeOf<
+      PublicValidation<PublicDescriptor>
+    >();
+    expectTypeOf(parsePublicAtlassianSyncBounds).returns.toEqualTypeOf<
+      PublicValidation<PublicSyncBounds>
+    >();
+    expectTypeOf(parsePublicAtlassianSyncScope).returns.toEqualTypeOf<
+      PublicValidation<PublicSyncScope>
     >();
   });
 });

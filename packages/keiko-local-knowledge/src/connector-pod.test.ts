@@ -31,12 +31,14 @@ import {
   applyConnectorSyncRun,
   createConnectorPodShell,
   recordUnappliedConnectorSyncRun,
+  requireConnectorSourceMetadata,
   type ConnectorPodIndexingDeps,
   type ConnectorSyncContentItem,
 } from "./connector-pod.js";
 import { readConnectorItemFingerprints } from "./connector-item-fingerprints.js";
 import {
   readConnectorSourceMetadata,
+  listConnectorSourceMetadata,
   resolveConnectorCitationTarget,
 } from "./connector-source-metadata.js";
 import { buildKnowledgePodSummary, listKnowledgePodSummaries } from "./knowledge-pods.js";
@@ -926,3 +928,65 @@ function storedSummaryBytes(
     mode === "invalid-summary" ? { ...summary, schemaVersion: "future" } : summary,
   );
 }
+
+describe("persisted connector bound admission (#3918)", () => {
+  it.each([
+    { column: "max_items", value: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxItems, admitted: true },
+    { column: "max_items", value: 1, admitted: true },
+    { column: "max_items", value: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxItems + 1, admitted: false },
+    { column: "max_bytes", value: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxBytes + 1, admitted: false },
+    {
+      column: "max_duration_ms",
+      value: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxDurationMs + 1,
+      admitted: false,
+    },
+    {
+      column: "max_concurrency",
+      value: DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxConcurrency + 1,
+      admitted: false,
+    },
+  ])("preserves reopened $column=$value admission=$admitted", ({ column, value, admitted }) => {
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "keiko-connector-bounds-"));
+    const dbPath = join(directory, "capsules.db");
+    const open = (): KnowledgeStore =>
+      openKnowledgeStore({ dbPath, clock: () => 1_700_000_000_000 });
+    try {
+      writeUnappliedSummary(open());
+      const database = new DatabaseSync(dbPath);
+      try {
+        database
+          .prepare(
+            `UPDATE connector_sources SET ${column} = ? WHERE capsule_id = ? AND source_id = ?`,
+          )
+          .run(value, CAPSULE_ID, SOURCE_ID);
+      } finally {
+        database.close();
+      }
+      const reopened = open();
+      try {
+        if (admitted) {
+          const metadata = requireConnectorSourceMetadata(reopened, CAPSULE_ID, SOURCE_ID);
+          expect(metadata.bounds.maxItems).toBe(value);
+          expect(readConnectorSourceMetadata(reopened, CAPSULE_ID, SOURCE_ID)).toEqual(metadata);
+          expect(listConnectorSourceMetadata(reopened, CAPSULE_ID)).toEqual([metadata]);
+          expect(metadata.scopeKeys).toEqual(["ENG"]);
+          expect(metadata.lastSyncStatus).toBe("cancelled");
+        } else {
+          expect(() => requireConnectorSourceMetadata(reopened, CAPSULE_ID, SOURCE_ID)).toThrow(
+            /bounds are invalid/u,
+          );
+          expect(() => readConnectorSourceMetadata(reopened, CAPSULE_ID, SOURCE_ID)).toThrow(
+            /bounds are invalid/u,
+          );
+          expect(() => listConnectorSourceMetadata(reopened, CAPSULE_ID)).toThrow(
+            /bounds are invalid/u,
+          );
+        }
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

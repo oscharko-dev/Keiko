@@ -1319,6 +1319,138 @@
           "testName": "Atlassian sync public parsers (#3918) retains lifecycle counts failure reasons and literal domain result identities"
         }
       ]
+    },
+    {
+      "id": "atlassian-connector-descriptor-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorDescriptor",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorDescriptor"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorDescriptor"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicAtlassianConnectorDescriptor",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) preserves descriptor bounds and provider-scope identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) refuses closed-field bound and cross-provider violations with owning reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) retains narrow-only JQL boundaries and exact public domain result types"
+        }
+      ]
+    },
+    {
+      "id": "atlassian-sync-bounds-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianSyncBounds",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianSyncBounds"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianSyncBounds"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicAtlassianSyncBounds",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) preserves descriptor bounds and provider-scope identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) refuses closed-field bound and cross-provider violations with owning reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) retains narrow-only JQL boundaries and exact public domain result types"
+        }
+      ]
+    },
+    {
+      "id": "atlassian-sync-scope-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianSyncScope",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianSyncScope"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianSyncScope"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicAtlassianSyncScope",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) preserves descriptor bounds and provider-scope identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) refuses closed-field bound and cross-provider violations with owning reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian approved-scope public parsers (#3918) retains narrow-only JQL boundaries and exact public domain result types"
+        }
+      ]
     }
   ]
 }

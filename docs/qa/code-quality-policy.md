@@ -424,6 +424,15 @@ Only the existing checker-supported helper closure can qualify exact raw-input s
 these records nor their public forwarding proofs classify an entire validator body, callback
 graph, connector store or remaining domain scope.
 
+Three further approved-scope Atlassian parser records select the existing descriptor, sync-bounds
+and provider-scope validators. They preserve the preceding 24 records and every rule disposition.
+Only bounds has the direct persisted metadata consumer: it forwards the validator's checked value
+when reconstructing the approved scope. Descriptor and whole-scope records are public-parser
+proofs; the existing route keeps its separate wire admission. Public identity, optional-property,
+ordered-error, provider-key, JQL-nesting and narrow-only default-ceiling proofs remain distinct
+from real writer/close/SQLite/reopen preservation. These records do not widen scope, add egress,
+classify every raw candidate or activate the remaining contracts domain rules.
+
 Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require
