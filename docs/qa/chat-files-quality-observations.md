@@ -682,13 +682,49 @@ selection, sibling-module exclusion, finite budgets, restricted-directory IO and
 The final 19 focused cases and the broader 2,599-test Grounding suite pass, with one existing skip.
 A retrieval-only replay of the unchanged reservation request retains all seven requested sources
 in 5,350 excerpt bytes, down from 21,734 bytes including the incidental lockfile. That lockfile has
-the existing low-relevance omission; no requested source was removed. This correction still needs
-native confirmation before a new matched skill/control campaign.
+the existing low-relevance omission; no requested source was removed.
 
-The current-head macOS-x64 CI failure is a readiness timeout before the fixed host's auth/routes/SSE
-assertions, distinct from the earlier EOF timeout. A targeted local run passes on arm64 with the
-qualified installed host dependencies. The first attempt lacked that dependency root and exited
-before readiness; neither local attempt reproduces or clears the x64 failure.
+Native confirmation at `d9ef42bea` retains those seven complete sources, verified against their
+whole-file hashes. One physical model call completes in 133.3 seconds with three recognized
+citations and no repair. Canonical evidence is complete without loss, truncation or sequence
+anomalies. Its unchanged test output fails strict TypeScript on a malformed generic annotation;
+runtime and mutation scoring therefore remain unavailable. This confirms source delivery, not
+test-generation quality or a matched skill comparison.
+
+The macOS-x64 CI failure at `8a2a0c46e` is a readiness timeout before the fixed host's auth/routes/SSE
+assertions. At `d9ef42bea`, the fragmented-packet case fails at EOF instead. A targeted local run
+passes on arm64 with the qualified installed host dependencies. The earlier local attempt lacking
+that dependency root exited before readiness. Neither local platform result clears the x64 failure.
+
+## Repair eligibility and further synthetic React qualification
+
+A reviewer identified a deterministic wasted-call case: the citation validator rejects text above
+131,072 UTF-16 code units, but dispatch previously invoked repair anyway. Five regression cases
+fail before the correction. The dispatcher now reuses the validator's size predicate and records
+the existing `skipped-capability` disposition, retaining original content, charged usage and uncited
+uncertainty. The 52 focused tests and 365 affected shared-consumer tests pass. Boundary cases include
+astral Unicode, file and numeric citations, unchanged earlier not-needed decisions, call/token/time
+limits, cancellation and the real body-free Activity Log formatter. Exactly-at-limit dispatch
+retains its prior behavior; this is not a claim that every impossible repair is precluded.
+
+An independent synthetic form reference passes 17 tests and detects all nine predeclared mutations.
+The first native generation using a private local profile completes in 232.7 seconds, with all
+seven requested source files complete and five recognized citations. Strict typing passes, but
+unchanged execution passes only 6/10 tests. Failures involve a non-native combobox value matcher,
+empty keyboard input and shared callback state. A separate feedback repair completes in 521.5
+seconds and passes strict typing plus 8/10 tests. It retains an invalid no-call assertion on a valid
+input and introduces an over-escaped error-message regex. Neither failing baseline receives a
+mutation score; the repair does not replace the first-attempt result or establish profile readiness.
+The reference, private profile, prompts and raw outputs remain local.
+
+The feedback request also exposes a context-precision issue: a constraint to leave dependencies
+unchanged admits 34,197 lockfile excerpt bytes out of 39,039 total, while requirements, test setup
+and runner configuration are omitted for low relevance. This remains open pending a focused
+regression. Its single physical generation reports 31,939 input and 5,344 completion tokens; no
+automatic citation repair is needed. The model picker temporarily loses its label during the wait.
+Canonical evidence is complete with no reported loss or truncation and retains one sequence
+anomaly for investigation. Brief focused local test runs overlapped generation, so these durations
+are operational observations, not isolated provider benchmarks.
 
 ## Open work
 

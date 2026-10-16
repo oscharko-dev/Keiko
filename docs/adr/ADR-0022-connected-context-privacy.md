@@ -923,6 +923,10 @@ The observation carries no memory content or answer text.
 Citation repair is decided from the current answer: a substantive source answer without markers
 may use the single bounded repair even if earlier answers from the same model cited reliably.
 Historical citation observations remain descriptive and cannot waive current source validation.
+The repair dispatcher and validator share the same 131,072 UTF-16-code-unit text limit. An
+original answer above that supported size skips the extra model call as `skipped-capability`;
+it retains its original content, usage and uncited uncertainty. File and numeric citation paths
+use the same eligibility check, and the bound is not an additional token grant.
 The existing Activity Log records the actual repair disposition and final citation behaviour;
 clarifications and already cited answers do not acquire an extra model call.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
