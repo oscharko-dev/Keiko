@@ -176,6 +176,37 @@ with four attached citations. Candidate 4 therefore passes compilation and corre
 in two of three attempts; it is not reliable acceptance or a controlled superiority result. The
 second attempt's complete canonical closure confirms no loss, truncation or sequence anomalies.
 
+## Customer convention profiles: frozen repeated comparison
+
+Candidate 5 adds the editable customer profile and blank-safe interaction example. Two synthetic
+profiles differ only in their title, required test-name pattern and AAA versus Given/When/Then
+comments. Both are imported and selected through the native UI. Three alternating fresh-chat
+attempts per profile are planned with unchanged task, sources, model settings and skill bodies;
+failures are retained. The runtime code is `d72e022d6`, with the Markdown changes at `d1d9dece2`.
+
+| Attempt | Unchanged output                                               | Naming / structure | Independent mutations | Validated citations | Generation |
+| ------- | -------------------------------------------------------------- | ------------------ | --------------------- | ------------------- | ---------- |
+| GWT 1   | Strict TypeScript and 9/9 tests pass                           | Pass               | 5/6 detected          | 8                   | 109.6 s    |
+| AAA 1   | Rejected: two complete TSX blocks instead of the requested one | Not scored         | Not eligible          | 1                   | 156.1 s    |
+| GWT 2   | Strict TypeScript and 10/10 tests pass                         | Pass               | 6/6 detected          | 1                   | 102.8 s    |
+| AAA 2   | Strict TypeScript and 9/9 tests pass                           | Pass               | 6/6 detected          | 5                   | 120.4 s    |
+
+The first GWT output misses the stale-error defect after a successful retry and leaves two
+controlled promises unsettled. Both GWT outputs use mocks without explicit callback types despite
+the selected profile. Passing test names/comments therefore does not mean full convention
+compliance. AAA 1 emits a faulty draft followed by a self-correction; selecting the second block
+afterward would change the acceptance procedure, so neither block is scored as an unchanged
+delivered file. Its first block also contains an `any` cast and unfinished retry verification.
+
+AAA 2 also uses explicitly typed callback mocks and settles its controlled pending promise. One
+successful attempt does not establish repeatability. The body-free provider observer confirms the
+selected skill exactly once, with no other profile, in all four actual requests.
+
+All four completed canonical closures are supported and complete, without loss, truncation or
+sequence anomalies. No citation repair was needed. These results demonstrate variation on one
+tuning fixture, not reliability or superiority over a matched no-skill control. Remaining profile
+repetitions and the separate React Hook Form/Zod integration fixture are still open.
+
 ## Readiness under shared gateway load
 
 Two concurrent native generation requests exposed another defect. A background readiness probe
