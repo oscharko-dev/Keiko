@@ -225,7 +225,7 @@ function validateBffResponse<T>(
   path: string,
   value: unknown,
   validator: ResponseValidator,
-  correlationId: string | null = null,
+  correlationId: string | null,
 ): T {
   const validation = validator(value);
   if (validation.ok) return value as T;
@@ -2116,13 +2116,14 @@ export async function fetchGitStructuredDiff(
   params.set("scope", input.scope);
   if (input.path !== undefined) params.set("path", input.path);
   const path = `/api/git/diff/structured?${params.toString()}`;
-  const [value, contracts] = await Promise.all([
-    fetchJson<unknown>(path, signal === undefined ? undefined : { signal }),
-    import("@oscharko-dev/keiko-contracts/git-editor"),
-  ]);
-  const result = contracts.parseGitEditorDiffResponse(value);
-  return validateBffResponse<GitEditorDiffResponse>(path, value, () =>
-    result.ok ? { ok: true } : { ok: false, reasons: result.errors },
+  const contracts = await import("@oscharko-dev/keiko-contracts/git-editor");
+  return fetchParsedJson<GitEditorDiffResponse>(
+    path,
+    signal === undefined ? undefined : { signal },
+    (value) => {
+      const result = contracts.parseGitEditorDiffResponse(value);
+      return result.ok ? result : { ok: false, reasons: result.errors };
+    },
   );
 }
 
@@ -2138,14 +2139,11 @@ export async function fetchGitBlame(input: {
   params.set("startLine", input.startLine.toString());
   params.set("maxLines", input.maxLines.toString());
   const path = `/api/git/blame?${params.toString()}`;
-  const [value, contracts] = await Promise.all([
-    fetchJson<unknown>(path),
-    import("@oscharko-dev/keiko-contracts/git-editor"),
-  ]);
-  const result = contracts.parseGitEditorBlameResponse(value);
-  return validateBffResponse<GitEditorBlameResponse>(path, value, () =>
-    result.ok ? { ok: true } : { ok: false, reasons: result.errors },
-  );
+  const contracts = await import("@oscharko-dev/keiko-contracts/git-editor");
+  return fetchParsedJson<GitEditorBlameResponse>(path, undefined, (value) => {
+    const result = contracts.parseGitEditorBlameResponse(value);
+    return result.ok ? result : { ok: false, reasons: result.errors };
+  });
 }
 
 export interface GitBranchListEntry {
