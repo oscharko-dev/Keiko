@@ -23,7 +23,6 @@ import {
   type CodingWorkbenchConnectorScope,
   type CodingWorkbenchMode,
   type CodingWorkbenchPolicyDenialReason,
-  type CodingWorkbenchPolicyEffect,
   type CodingWorkbenchPolicyResourceScope,
   type CodingWorkbenchSupervisedActionKind,
 } from "./coding-workbench.js";
@@ -644,10 +643,15 @@ function atlassianClassAdmission(
   workbenchClass: CodingWorkbenchActionClass,
   connectorScopes: readonly CodingWorkbenchConnectorScope[],
   envelopeActionClasses: readonly CodingWorkbenchActionClass[] | undefined,
-): {
-  readonly effect: CodingWorkbenchPolicyEffect;
-  readonly denyReason: CodingWorkbenchPolicyDenialReason;
-} {
+):
+  | {
+      readonly effect: "denied";
+      readonly denyReason: CodingWorkbenchPolicyDenialReason;
+    }
+  | {
+      readonly effect: "allowed";
+      readonly denyReason: "connector-access-denied";
+    } {
   const classDecision = decideCodingWorkbenchActionForMode(mode, workbenchClass, connectorScopes);
   if (!classDecision.allowed) {
     return { effect: "denied", denyReason: classDecision.reasonCode };
