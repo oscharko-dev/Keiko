@@ -403,6 +403,17 @@ function linesWithOp(stateDir: string, op: string): Record<string, unknown>[] {
   return readLines(stateDir).filter((line) => line.op === op);
 }
 
+function hasBudgetPrune(stateDir: string, budget: number): boolean {
+  return linesWithOp(stateDir, "activity-log.retention.pruned").some(
+    (line) =>
+      line.retentionBudgetBytes === budget &&
+      typeof line.prunedByBudgetCount === "number" &&
+      line.prunedByBudgetCount > 0 &&
+      typeof line.prunedBytes === "number" &&
+      line.prunedBytes > 0,
+  );
+}
+
 function segmentFiles(
   stateDir: string,
   kind?: ActivityLogFileInfo["kind"],
@@ -3070,13 +3081,17 @@ describe("activity log store policy", () => {
       }),
     );
 
-    // Well past the new, smaller budget but far below the first: only the replaced policy prunes.
+    // The first actual budget prune proves application; the cap still detects a stale policy.
     for (let index = 150; index < 2_500; index += 1) {
       sink.write({ category: "http", op: "after.replacement", extra: { index } });
+      if (index % 150 === 149 && hasBudgetPrune(stateDir, secondBudget)) break;
     }
-    expect(linesWithOp(stateDir, "activity-log.retention.pruned").at(-1)).toMatchObject({
+    const pruned = linesWithOp(stateDir, "activity-log.retention.pruned").at(-1);
+    expect(pruned).toMatchObject({
       retentionBudgetBytes: secondBudget,
     });
+    expect(pruned?.prunedByBudgetCount).toBeGreaterThan(0);
+    expect(pruned?.prunedBytes).toBeGreaterThan(0);
   });
 
   it("refuses to replace the stored policy while a live peer still holds an active segment", async () => {
