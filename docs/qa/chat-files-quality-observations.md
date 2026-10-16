@@ -120,9 +120,23 @@ strict checking with `TS2454`, before execution. It produced four validated cita
 the first produced none after a rejected content-changing repair. A transient, bounded request
 observer confirmed the complete revision-2 skill occurred exactly once in the second provider
 request; only counts and digests were retained. Missing skill delivery does not explain that
-failure. The first fresh no-skill control passed typechecking but failed the same two interaction
-cases as initial tuning (three passed, two failed). The original answers and execution results
-remain private. These incomplete repetitions do not establish comparative effectiveness.
+failure. The third fresh selected-skill answer passed typechecking and four of five tests, but
+still attempted to click a disabled MUI button. All three selected revision-2 attempts therefore
+failed the unchanged-output acceptance bar; none qualified for mutation scoring.
+
+Three completed no-skill controls also failed: the first passed typechecking but failed two of
+five tests; the next completed output passed typechecking but failed two of four tests; the last
+contained invalid TypeScript syntax and could not execute. The execution failures repeated empty
+input typing and disabled-button interaction mistakes. A fourth control request disconnected
+before producing an answer, shortly before the host entered idle sleep. It remains a separate
+transport failure in the denominator, not a model-quality failure or an erased attempt. Its
+replacement required 165.4 seconds for generation and another 230.9 seconds for a citation repair
+that was rejected for changing content. The original answer remained uncited. Its canonical
+closure was supported and complete, without loss/truncation, with one sequence anomaly.
+
+The original answers and execution results remain private. These small tuning-set repetitions
+show neither reliable generation nor comparative skill effectiveness. Held-out evaluation remains
+required before any superiority claim.
 
 ## Readiness under shared gateway load
 
@@ -130,7 +144,8 @@ Two concurrent native generation requests exposed another defect. A background r
 expired after 120 seconds while the actual answer completed after 208.5 seconds. Native Node HTTP
 wrapped the timeout reason in an `AbortError` with `ABORT_ERR`, which readiness treated as a
 conclusive failure. This also blocked the answer's citation-repair continuation. A new Chat window
-then showed model-unavailable guidance without a retry control; that recovery gap remains open.
+then showed model-unavailable guidance without a retry control. The subsequent UI repair below
+addresses that recovery gap.
 
 Automatic and on-demand readiness probes now use the interactive gateway's five-minute silence
 floor and preserve larger configured deadlines. Native cancellation errors retain their actual
@@ -158,10 +173,40 @@ The native admission retest completed its shared probe in 181.3 seconds and a wa
 165.1 seconds. It exposed a further UI defect: repeated catalog updates during the wait caused five
 Chat-creation requests to complete together, instead of one. Other browser requests queued behind
 those held requests, temporarily showing unavailable version/diagnostics status. This is not a
-passing end-to-end latency result. Creation ownership across catalog updates and manual retry after
-failure remain open; the single shared provider probe itself did not duplicate. The canonical query
+passing end-to-end latency result. The single shared provider probe itself did not duplicate. The canonical query
 was supported, complete, without loss/truncation, and reported two sequence anomalies, retained
 as an explicit evidence limitation.
+
+## Chat creation ownership and recovery
+
+The initial unbound-window request identity previously changed whenever a model-catalog refresh
+replaced its creation callback. The existing creation owner now retains that identity throughout
+a pending attempt. A callback change can still retry a settled failure, preserving capability
+recovery behavior. The regression reproduces duplicate creation before this change and checks
+both restored windows and explicit creation requests afterwards.
+
+A failed unbound window now offers the existing translated Retry control. It clears the old error
+and gives the existing owner a new request identity; the control is absent during a pending
+attempt and from bound chats. Failed creation also ends the opening placeholder, allowing the
+next attempt to record its own existing body-free chat-bind lifecycle. Regression cases cover
+both a structured model-unavailable error and a failure without a session error.
+
+In the rebuilt native app, an injected HTTP 503 produced the error and Retry control. A click
+before the UI catalog recovered remained a visible failure. After background readiness and the
+catalog recovered, another click opened the same window without reloading the page. Exactly one
+successful `POST /api/desktop/chats` was recorded; the failed attempts did not dispatch a creation.
+
+The restored-window retest held both configured-model probes for 180 seconds before forwarding.
+The selected shared probe completed after 182.6 seconds; its joining Chat creation returned 201
+after 174.1 seconds. Exactly one creation request completed, compared with five before the fix.
+The Skills dialog opened and loaded during the wait, and the version indicator stayed available.
+The creation's canonical closure is supported, complete, without loss, truncation or sequence
+anomalies. The wider time-window query includes two sequence anomalies across process restarts;
+that wider evidence limitation remains recorded separately.
+
+All 93 workspace-host tests pass. Full UI coverage passes 551 files with 10,629 passing tests and
+one existing skip. Strict typechecking, UI lint, formatting, architecture checks, Activity Log
+inventory, i18n, pinned-runtime editor bundle evidence and the real local Sonar analyzer pass.
 
 ## CI feedback on the cancellation increment
 
