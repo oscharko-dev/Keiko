@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9d86e10a80eb3224abd93fd0bcf37a252782812826f773a891f44ebe84b555d6",
+    "catalogDigest": "b9f8b200288b2472539fc3ad23f20cda5a9e34da4811e1b6a1ff2014a942e6b2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1903,7 +1903,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["applied", "conflict"]
+            "values": ["applied", "conflict", "cancellation-requested"]
           },
           "expectedScopeDigest": {
             "type": "string",
@@ -1937,6 +1937,11 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "cancelledGenerationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -1946,7 +1951,7 @@
         "proofIds": ["chat.scope.update.outcome"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-scope-update-log.ts:13",
-        "emitterSites": ["packages/keiko-server/src/chat-scope-update-log.ts:53"]
+        "emitterSites": ["packages/keiko-server/src/chat-scope-update-log.ts:55"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18873,8 +18878,8 @@
         "failureClasses": ["git-change-chat-connect", "git-change-chat-refresh"],
         "proofIds": ["git-change.chat.blocked.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:131",
-        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:526"]
+        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:132",
+        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:527"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18923,8 +18928,8 @@
         "failureClasses": ["git-change-chat-connect"],
         "proofIds": ["git-change.chat.connected.scope"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:73",
-        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:540"]
+        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:74",
+        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:541"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18991,8 +18996,8 @@
         "failureClasses": ["git-change-chat-refresh"],
         "proofIds": ["git-change.chat.refreshed.scope"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:94",
-        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:559"]
+        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:95",
+        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:560"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -19031,8 +19036,8 @@
         "failureClasses": ["git-change-chat-refresh"],
         "proofIds": ["git-change.chat.stale.scope"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:112",
-        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:569"]
+        "registrationSite": "packages/keiko-server/src/gitChangeRoutes.ts:113",
+        "emitterSites": ["packages/keiko-server/src/gitChangeRoutes.ts:570"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27996,8 +28001,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:96",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:539"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:105",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:548"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -48890,6 +48895,12 @@
                   "type": "string",
                   "dataClass": "digest",
                   "required": true
+                },
+                {
+                  "name": "cancelledGenerationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "connectedSourceCount",
@@ -90969,7 +90980,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1707",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1708",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91177,7 +91188,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1276",
+      "site": "packages/keiko-server/src/store-handlers.ts:1312",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91413,7 +91424,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2056",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2057",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91468,7 +91479,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1402",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1403",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92952,13 +92963,13 @@
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:134",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:135",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.connected",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:76",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:77",
       "package": "keiko-server"
     },
     {
@@ -92970,13 +92981,13 @@
     {
       "op": "git-change.chat.refreshed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:97",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:98",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.stale",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:115",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:116",
       "package": "keiko-server"
     },
     {
@@ -93441,7 +93452,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3544",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3552",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -93780,21 +93791,21 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:412",
-      "sourceKind": "diagnostic-operation",
-      "package": "keiko-server"
-    },
-    {
-      "op": "project.workspace.reconnect",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:555",
+      "site": "packages/keiko-server/src/store-handlers.ts:421",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:99",
+      "site": "packages/keiko-server/src/store-handlers.ts:108",
+      "package": "keiko-server"
+    },
+    {
+      "op": "project.workspace.reconnect",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/store-handlers.ts:564",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {

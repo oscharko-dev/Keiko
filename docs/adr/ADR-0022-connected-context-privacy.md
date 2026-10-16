@@ -73,6 +73,30 @@ and bind final source-warning decisions to canonical scope/query digests. Unknow
 observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
 observations even when a separate labelled assessment is allowed.
 
+### D1.1 — Changing sources cancels the current answer
+
+A validated change to the canonical grounding identity cancels the current generation and any
+already queued generation for that chat. This includes adding, removing, narrowing or widening
+Files or Knowledge sources, and successfully connecting or refreshing a Git comparison. Identity
+comparison excludes source timestamps, list order, duplicates and Git description metadata.
+Malformed, inaccessible, conflicting, over-budget or effectively unchanged patches do not cancel
+an answer. PATCH revalidates its precondition and access at the serialized write boundary.
+
+Cancellation belongs to the existing per-chat turn serializer. It reaches grounded, buffered,
+streaming and regeneration requests, including requests waiting for shared gateway readiness.
+Cancelling one readiness waiter must not cancel the configuration-owned probe used by other chats.
+The underlying turn retains its gate until it actually settles; an uncooperative provider cannot
+publish a late assistant answer or admit a stale queued generation. A pending PATCH is not an
+acknowledged source update. Successful Git comparison mutations keep their existing transactional
+relationship compensation and notify the same cancellation owner only after success.
+
+Completed messages and learned findings remain in the conversation and follow normal history
+compaction. Connected Files excerpts are assembled separately for each question, not inserted as
+a persistent document lane into history compaction. Historical answers, including quoted code,
+remain historical conversation; they do not grant current filesystem authority. Existing
+`chat.scope.update` evidence records cancellation requests with canonical identity digests and
+counts only, never source bodies, user text or paths.
+
 ### D2 — Per-answer summary is wire-only
 
 The wire response carries `contextPack: GroundedAnswerContextPackSummary` on every

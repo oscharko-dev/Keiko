@@ -1,3 +1,4 @@
+import { raceAbort } from "./abort-race.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import {
   gitDescriptionSkillRefusal,
@@ -3742,17 +3743,6 @@ export const createHandleGitChangeReviewDescription = (
   };
 };
 
-async function admitPreparedDesktopChatSend(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  prepared: PreparedDesktopChatSend,
-): Promise<RouteResult | undefined> {
-  if (activeGitChangeScope(prepared.chat) === undefined) {
-    await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
-  }
-  return admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
-}
-
 export async function handleSendDesktopChat(
   ctx: RouteContext,
   requestDeps: UiHandlerDeps,
@@ -3765,7 +3755,7 @@ export async function handleSendDesktopChat(
     if (isRouteResult(parsed)) return parsed;
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
-    const gitChangeDenial = await admitPreparedDesktopChatSend(ctx, deps, prepared);
+    const gitChangeDenial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
     if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
     if (inspection.kind === "replay")
@@ -3775,7 +3765,13 @@ export async function handleSendDesktopChat(
       deps,
       parsed.request.chatId,
       cancellation.signal,
-      () => {
+      async () => {
+        if (activeGitChangeScope(prepared.chat) === undefined) {
+          await raceAbort(
+            awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId),
+            cancellation.signal,
+          );
+        }
         const current = validateCurrentDesktopChatSend(parsed, deps);
         if (isRouteResult(current)) return current;
         // Re-derived immediately before dispatch (not only at the earlier fast-fail check above):
@@ -3786,6 +3782,7 @@ export async function handleSendDesktopChat(
           ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId, ctx.req)
           : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
       },
+      cancellation.controller,
     );
     const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
     return logChatResponse(response, ctx.correlationId);
@@ -4332,17 +4329,19 @@ export async function handleRegenerateDesktopChat(
     const prepared = await parseDesktopChatRegenerate(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(prepared)) return prepared;
-    await awaitInitializedConversationReadiness(
-      deps,
-      prepared.request.modelId ?? prepared.chat.selectedModel,
-      ctx.correlationId,
-    );
-    if (requestSignalAborted(cancellation.signal)) return requestCancelledResult();
     const result = await runSerializedChatTurn(
       deps,
       prepared.request.chatId,
       cancellation.signal,
-      () => {
+      async () => {
+        await raceAbort(
+          awaitInitializedConversationReadiness(
+            deps,
+            prepared.request.modelId ?? prepared.chat.selectedModel,
+            ctx.correlationId,
+          ),
+          cancellation.signal,
+        );
         const current = prepareDesktopChatRegenerateRequest(
           prepared.request,
           deps,
@@ -4358,6 +4357,7 @@ export async function handleRegenerateDesktopChat(
               ctx.req,
             );
       },
+      cancellation.controller,
     );
     const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
     return logChatResponse(response, ctx.correlationId);

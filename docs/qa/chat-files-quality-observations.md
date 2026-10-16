@@ -739,6 +739,28 @@ retrieval-only replay retains all seven requested synthetic sources in 7,176 byt
 original request and dependency-preservation variants. A separate affirmative version question
 still selects lockfile evidence. Native model confirmation of this increment remains pending.
 
+## Connected-source cancellation
+
+A real HTTP regression first reproduces a source PATCH waiting behind a held provider response.
+Source changes now interrupt active and queued generation through the existing per-chat serializer.
+Canonical validation precedes interruption; unchanged, inaccessible, invalid or conflicting patches
+leave the active answer intact. Buffered, streamed and regenerated requests also register before
+waiting on shared gateway readiness. Three deferred-readiness cases fail before that correction
+and pass afterward without aborting the shared probe. Git connect and changed-comparison refresh
+have separate failure-first route proofs; unchanged refresh does not cancel.
+
+The focused set passes 651 tests. A separate, overlapping 13-suite transport/history run passes
+572 tests; the serializer and scope-log coverage reports 96.42% statements, 95.55% branches,
+100% functions and 97.29% lines. Real fixture-owned HTTP tests verify upstream connection closure,
+cancelled request/stream disposition, persisted turn state, retained completed history and no new
+answer evidence. The next request's captured provider body contains the new selected-file excerpt
+and excludes the old excerpt, with the preceding request as a positive control. This uses a local
+synthetic provider, not a Gemma quality or remote-gateway latency benchmark.
+
+The complete Activity Log gate passes its seven checks. The separate browser source-transition,
+N+1 comparison/compaction matrix and simplified header remain open. This server increment alone
+does not qualify immediate UI cancellation, pending-state send blocking or removal of legacy pins.
+
 ## Open work
 
 Fresh skill/control repetitions, held-out tasks, larger Git/non-Git corpora, source freshness,

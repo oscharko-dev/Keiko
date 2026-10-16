@@ -1029,15 +1029,13 @@ function combinedSourceCap(options?: UpdateChatOptions): number {
 }
 
 function validateTotalSourceCap(
-  db: DatabaseSync,
-  id: string,
+  existing: Chat | undefined,
   patch: UpdateChatPatch,
   options?: UpdateChatOptions,
 ): void {
   const nextConnected = resolveScopePatch(patch);
   const nextLk = resolveLocalKnowledgeScopePatch(patch);
   if (nextConnected === undefined && nextLk === undefined) return;
-  const existing = findChatById(db, id);
   if (existing === undefined) return; // the UPDATE below raises notFound
   const prevConnected =
     existing.connectedScopes ??
@@ -1054,6 +1052,36 @@ function validateTotalSourceCap(
       `A chat may connect at most ${String(cap)} sources in total (folders, files, repositories, and knowledge connectors combined).`,
     );
   }
+}
+
+/** Validate without writing, so source changes can interrupt a turn before acquiring its gate. */
+export function previewChatScopeUpdate(
+  existing: Chat,
+  patch: UpdateChatPatch,
+  options?: UpdateChatOptions,
+): Chat {
+  validateChatUpdate(existing, patch, options);
+  const connected = resolveScopePatch(patch);
+  const local = resolveLocalKnowledgeScopePatch(patch);
+  const git = resolveGitChangeScopePatch(patch);
+  // Explicit empty lists supersede legacy singular fields in the canonical identity.
+  return {
+    ...existing,
+    ...(connected === undefined ? {} : { connectedScopes: connected ?? [] }),
+    ...(local === undefined ? {} : { localKnowledgeScopes: local ?? [] }),
+    ...(git === undefined ? {} : { gitChangeScopes: git ?? [] }),
+  };
+}
+
+function validateChatUpdate(
+  existing: Chat | undefined,
+  patch: UpdateChatPatch,
+  options?: UpdateChatOptions,
+): void {
+  validateChatPatch(patch, options);
+  validateTotalSourceCap(existing, patch, options);
+  if (patch.title !== undefined) validateChatTitle(patch.title);
+  if (patch.selectedModel !== undefined) validateSelectedModel(patch.selectedModel);
 }
 
 /**
@@ -1099,10 +1127,7 @@ export function updateChat(
   now: number,
   options?: UpdateChatOptions,
 ): Chat {
-  validateChatPatch(patch, options);
-  validateTotalSourceCap(db, id, patch, options);
-  if (patch.title !== undefined) validateChatTitle(patch.title);
-  if (patch.selectedModel !== undefined) validateSelectedModel(patch.selectedModel);
+  validateChatUpdate(findChatById(db, id), patch, options);
   const titleParam = patch.title ?? null;
   const modelParam = patch.selectedModel ?? null;
   const branchParam = patch.branchLabel ?? null;
