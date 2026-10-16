@@ -94,7 +94,7 @@ export function queryIdentityFor(
           matchingSettings: {
             ...matchingSettings,
             ...(query.kind === "natural-language" && interpretation === undefined
-              ? { subjectNormalizationRevision: 4 }
+              ? { subjectNormalizationRevision: 6 }
               : {}),
           },
         }),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { memFs } from "./_memfs.js";
 import { DEFAULT_SEARCH_LIMITS, searchText, type SearchScope } from "./repoSearch.js";
+import { createWorkspaceIndex } from "./workspaceIndex.js";
 
 const TARGETS = ["backend/RefundPolicy.java", "frontend/RefundSummary.tsx"];
 
@@ -34,6 +35,38 @@ function corpus(): Record<string, string> {
 }
 
 describe("word compounds through bounded repository search", () => {
+  it.each([null, 100])(
+    "preserves query-group evidence across cold and warm scans with cap %s",
+    async (maxFilesScanned) => {
+      const fs = memFs("/ws", {
+        "backend/current.java": "Maple partner refunds.\n",
+        "frontend/current.tsx": "Maple partner refunds.\n",
+        "different.md": "Warehouse limit documented.\n",
+      });
+      const query = {
+        kind: "natural-language" as const,
+        text: "Maple Partner Warehouse limit",
+        caseSensitive: false,
+        maxResults: 20,
+        emittedAtMs: 0,
+      };
+      const workspaceIndex = createWorkspaceIndex();
+      const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned };
+      const cold = await searchText(scope(), query, limits, { fs, workspaceIndex, nowMs: () => 0 });
+      const warm = await searchText(scope(), query, limits, { fs, workspaceIndex, nowMs: () => 0 });
+      const identities = new Map(
+        cold.atoms.map((atom) => [atom.scopePath, atom.metrics?.lexicalQueryGroupKey]),
+      );
+      expect(identities.get("backend/current.java")).toMatch(/^[1-9a-f][a-f0-9]{0,31}$/u);
+      expect(identities.get("frontend/current.tsx")).toBe(identities.get("backend/current.java"));
+      expect(identities.get("different.md")).toMatch(/^[1-9a-f][a-f0-9]{0,31}$/u);
+      expect(identities.get("different.md")).not.toBe(identities.get("backend/current.java"));
+      expect(new Set(cold.atoms.map((atom) => atom.score)).size).toBe(1);
+      expect(warm.atoms).toEqual(cold.atoms);
+      expect(warm.workspaceIndex?.reusedRecords).toBeGreaterThan(0);
+    },
+  );
+
   it.each([null, 100])(
     "keeps both subject sources ahead of generic fragments with scan cap %s",
     async (maxFilesScanned) => {
