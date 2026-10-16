@@ -32,7 +32,11 @@ and fresh locally owned accumulation remain valid. The separate native
 ownership qualification. A fixed-state copy is not automatically quadratic, and mutation of a
 frozen or shared accumulator is never a valid repair.
 
-All 22 rules run in one syntax census. Only explicitly activated scopes enforce a rule. The
+All 22 rules run in one syntax census. At the public assessment boundary, diagnostics are ordered
+by the supplied subject inventory, then numeric line and column, then rule id using deterministic
+UTF-16 code-unit comparison. The census retains every original diagnostic and duplicate without
+mutating the analyzer input; active violations retain that same order. Native worker arrival order
+does not affect serialized report bytes. Only explicitly activated scopes enforce a rule. The
 remaining production assertion scopes activate as their owning workstreams migrate; the final
 qualification requires all of them. Boundary bans are adapted to validated domain contracts,
 module interception belongs to the test-seam migration, Effect rules apply only to the qualified

@@ -1,3 +1,5 @@
+import { compareStrings } from "./compare-strings.mjs";
+
 export const UPSTREAM_COMMIT = "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b";
 export const RUNNER_VERSION = "1.78.0";
 export const UPSTREAM_VERSION = "0.1.2";
@@ -344,17 +346,37 @@ function isRuleActive(rule, file) {
   );
 }
 
+function orderedDiagnostics(assessed) {
+  return assessed.sort(
+    (left, right) =>
+      left.inventoryIndex - right.inventoryIndex ||
+      left.diagnostic.line - right.diagnostic.line ||
+      left.diagnostic.column - right.diagnostic.column ||
+      compareStrings(left.diagnostic.rule, right.diagnostic.rule),
+  );
+}
+
 export function assessPolicyDiagnostics(diagnostics, files, policy) {
-  const inventory = new Map(files.map((file) => [file.path, file]));
+  const inventory = new Map(files.map((file, index) => [file.path, { file, index }]));
   const rules = new Map(policy.rules.map((rule) => [rule.id, rule]));
-  const violations = [];
+  const assessed = [];
   for (const diagnostic of diagnostics) {
-    const file = inventory.get(diagnostic.path);
+    const entry = inventory.get(diagnostic.path);
     const rule = rules.get(diagnostic.rule);
-    if (file === undefined || rule === undefined) throw new TypeError("unknown-diagnostic");
-    if (isRuleActive(rule, file)) violations.push(diagnostic);
+    if (entry === undefined || rule === undefined) throw new TypeError("unknown-diagnostic");
+    assessed.push({
+      diagnostic,
+      inventoryIndex: entry.index,
+      active: isRuleActive(rule, entry.file),
+    });
   }
-  return { census: diagnostics, violations };
+  const census = [];
+  const violations = [];
+  for (const { diagnostic, active } of orderedDiagnostics(assessed)) {
+    census.push(diagnostic);
+    if (active) violations.push(diagnostic);
+  }
+  return { census, violations };
 }
 
 // Optional gate progress is closed, bounded stderr metadata, never part of a policy verdict.

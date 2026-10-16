@@ -487,7 +487,7 @@ function malformedProgressLines(line) {
     line.replace('"elapsedMs":9', '"elapsedMs":Infinity'),
     line.replace('"elapsedMs":9', '"elapsedMs":2147483648'),
     line.replace('"elapsedMs":9', '"elapsedMs":"9"'),
-    line.replace("}", ',"path":"fixture-private-body"}'),
+    line.replaceAll("}", ',"path":"fixture-private-body"}'),
     line.replace('"version":1', '"version":1,"version":1'),
     line.replace('"elapsedMs":9', '"elapsedMs":9,"count":1'),
     `${line.trimEnd()}${"x".repeat(POLICY_PROGRESS_LIMITS.line)}\n`,

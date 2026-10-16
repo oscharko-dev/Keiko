@@ -75,6 +75,81 @@ describe("public parser optional raw admission rules (#3918)", () => {
   });
 });
 
+describe("canonical policy report diagnostic order", () => {
+  it("retains activation for each occurrence of the same diagnostic object", () => {
+    let reads = 0;
+    const repeated = {
+      path: files[0].path,
+      line: 1,
+      column: 1,
+      get rule() {
+        reads += 1;
+        return reads === 1 ? "anti-slop/no-reflect-apply" : "anti-slop/no-known-value-widening";
+      },
+    };
+    const result = assessPolicyDiagnostics([repeated, repeated], files, policy);
+    expect(result.census).toHaveLength(2);
+    expect(result.census.every((entry) => entry === repeated)).toBe(true);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toBe(repeated);
+  });
+
+  it("retains inventory order and every active/inactive duplicate across input permutations", () => {
+    const owners = [files[0], files[2], files[1]];
+    const activeRule = "anti-slop/no-reflect-apply";
+    const otherRule = "anti-slop/no-widen-then-assert";
+    const inactiveRule = "anti-slop/no-known-value-widening";
+    const first = Object.freeze(diagnostic(owners[0].path, activeRule));
+    const duplicate = Object.freeze({ ...first });
+    const other = Object.freeze(diagnostic(owners[0].path, otherRule));
+    const column = Object.freeze({ ...first, column: 3 });
+    const line = Object.freeze({ ...first, line: 2 });
+    const laterLine = Object.freeze({ ...first, line: 10 });
+    const inactive = Object.freeze(diagnostic(owners[0].path, inactiveRule));
+    const testOnly = Object.freeze(diagnostic(owners[1].path, activeRule));
+    const packageOnly = Object.freeze(diagnostic(owners[2].path, activeRule));
+    const expected = [
+      inactive,
+      first,
+      duplicate,
+      other,
+      column,
+      line,
+      laterLine,
+      testOnly,
+      packageOnly,
+    ];
+    const permutations = [
+      [packageOnly, laterLine, other, testOnly, line, inactive, column, first, duplicate],
+      [testOnly, column, duplicate, inactive, packageOnly, first, other, laterLine, line],
+    ];
+    for (const permutation of permutations) {
+      const input = Object.freeze(permutation);
+      const before = [...input];
+      const result = assessPolicyDiagnostics(input, owners, policy);
+      expect(result.census).toEqual(expected);
+      expect(result.violations).toEqual([
+        first,
+        duplicate,
+        other,
+        column,
+        line,
+        laterLine,
+        packageOnly,
+      ]);
+      expect(result.census).toHaveLength(input.length);
+      expect(result.census.filter((entry) => entry === first)).toHaveLength(1);
+      expect(result.census.filter((entry) => entry === duplicate)).toHaveLength(1);
+      expect(result.census).toContain(inactive);
+      expect(result.census).toContain(testOnly);
+      expect(result.violations).not.toContain(inactive);
+      expect(result.violations).not.toContain(testOnly);
+      expect(input).toEqual(before);
+      expect(owners).toEqual([files[0], files[2], files[1]]);
+    }
+  });
+});
+
 describe("code-quality policy fail-closed contract (#3915)", () => {
   it("activates the qualified Effect rules only for the exact native host owner (#3988)", () => {
     const effects = policy.rules.filter(({ id }) => id.startsWith("anti-slop-effect/"));
