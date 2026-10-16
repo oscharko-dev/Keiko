@@ -247,6 +247,23 @@ failure separately from initial ranking. Both forms fall below the final absolut
 and trigger a single-file low-confidence fallback. Fixing initial ordering alone is insufficient;
 the next regression must assert retained final source evidence as well as top-k ranking.
 
+The first repair separates alphabetic hyphen-compound words into independent query groups while
+preserving known domain aliases, numbered identifiers and explicit literal/exact-symbol behavior.
+The two generic-fragment regressions fail before the repair and pass afterward. Both bounded and
+uncapped facade traversals retain the backend and frontend sources with a two-result cap amid forty
+generic distractors. Persistent natural-language match identity advances so old cached scores cannot
+survive the change. The second, final-context regression remains failing and is retained privately
+for the next repair; this increment does not claim that native multi-source retrieval is fixed.
+The existing registered completion proof now checks selected-source/read/byte counts and body
+redaction on a real compound-source retrieval. Repeating the direct facade diagnostic over the
+1,000-file corpus ranks both current sources 1/2 for both spellings (996 scanned files, 20 retained
+atoms; 384/282 ms). This is an API diagnostic, not a completed native Chat retest.
+
+Two review corrections to the current React skill make control states conditional on the actual
+component contract and use the resolved callback result type for deferred promises. The recorded
+candidate-three digest and failed native output remain immutable evidence of that earlier candidate;
+the corrected current file is not qualified by those results.
+
 ## CI feedback on the cancellation increment
 
 The bundle evidence measured locally under Node 24.21 did not match CI's pinned Node 24.18.0.
