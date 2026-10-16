@@ -76,7 +76,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(45);
+    expect(production.responsibilities).toHaveLength(49);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -680,4 +680,46 @@ describe("closed opt-in policy phase diagnostics", () => {
       state: "completed",
     });
   }, 40_000);
+});
+
+describe("Workbench question and research responsibility wiring (#3918)", () => {
+  it("binds four public parameter-zero obligations to their actual public proofs", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const records = policy.responsibilities.slice(-4);
+    expect(records.map((record) => record.id)).toEqual([
+      "coding-runtime-question-answer-public-parser",
+      "coding-runtime-questions-response-public-parser",
+      "coding-runtime-questions-channel-public-parser",
+      "coding-runtime-research-channel-public-parser",
+    ]);
+    expect(records.map((record) => record.consumer.exportName)).toEqual([
+      "parsePublicRuntimeQuestionAnswer",
+      "parsePublicRuntimeQuestionsResponse",
+      "parsePublicRuntimeQuestionsChannel",
+      "parsePublicRuntimeResearchChannel",
+    ]);
+    for (const record of records) {
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input.parameterIndex).toBe(0);
+      expect(record.transform).toEqual(record.output);
+      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
+      expect(record.consumer).toMatchObject({
+        consumerPath: record.input.consumerPath,
+        specifier: record.input.specifier,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      expect(record.proofs).toContain(record.input.consumerPath);
+      for (const assertion of record.proofAssertions) {
+        expect(record.proofs).toContain(assertion.path);
+        expect(assertion.testName.length).toBeGreaterThan(0);
+      }
+    }
+    expect(records[1].proofAssertions).toContainEqual({
+      path: "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.test.ts",
+      testName:
+        "public runtime question response admission (#3918) refuses a real malformed runtime projection before returning a list",
+    });
+  });
 });

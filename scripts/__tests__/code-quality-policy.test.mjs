@@ -230,6 +230,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "memory-retrieval-request-public-parser",
       "documentation-navigation-request-public-parser",
       "documentation-manual-proposal-request-public-parser",
+      "coding-runtime-question-answer-public-parser",
+      "coding-runtime-questions-response-public-parser",
+      "coding-runtime-questions-channel-public-parser",
+      "coding-runtime-research-channel-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -796,7 +800,7 @@ describe("remaining Memory public parser obligations (#3918)", () => {
 
 describe("documentation request public parser obligations (#3918)", () => {
   it("pins two exact unknown-parameter roots without optional rule grants", () => {
-    const records = policy.responsibilities.slice(43);
+    const records = policy.responsibilities.slice(43, 45);
     expect(records).toHaveLength(2);
     for (const record of records) {
       expect(record.kind).toBe("public-parser");

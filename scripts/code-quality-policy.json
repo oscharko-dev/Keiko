@@ -2355,6 +2355,250 @@
           "testName": "public manual proposal admission preservation preserves known reasons and distinguishes refusal from approval authority"
         }
       ]
+    },
+    {
+      "id": "coding-runtime-question-answer-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "parseCodingWorkbenchRuntimeQuestionAnswerRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "parseCodingWorkbenchRuntimeQuestionAnswerRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "parseCodingWorkbenchRuntimeQuestionAnswerRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "parsePublicRuntimeQuestionAnswer",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question answer public parser (#3918) forwards the checked original answer and nested selections"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question answer public parser (#3918) refuses malformed bodies with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question answer public parser (#3918) retains the public second revision observation refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime question answer public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts",
+          "testName": "CodingRuntimeOperationCoordinator rejects malformed answers before touching the question surface"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts",
+          "testName": "CodingRuntimeOperationCoordinator answers a question with the requestId/expectedRevision/questionId binding folded into the contract parse (KEIKO-0411)"
+        }
+      ]
+    },
+    {
+      "id": "coding-runtime-questions-response-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "validateCodingWorkbenchRuntimeQuestionsResponse",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "validateCodingWorkbenchRuntimeQuestionsResponse"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "validateCodingWorkbenchRuntimeQuestionsResponse"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "parsePublicRuntimeQuestionsResponse",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime questions response public parser (#3918) retains the admitted response and nested question references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime questions response public parser (#3918) refuses malformed responses with exact ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime questions response public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.test.ts",
+          "testName": "public runtime question response admission (#3918) refuses a real malformed runtime projection before returning a list"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.test.ts",
+          "testName": "public runtime question response admission (#3918) returns the real healthy projected list and original nested questions"
+        }
+      ]
+    },
+    {
+      "id": "coding-runtime-questions-channel-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "validateCodingWorkbenchRuntimeQuestionsChannelPayload",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "validateCodingWorkbenchRuntimeQuestionsChannelPayload"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "validateCodingWorkbenchRuntimeQuestionsChannelPayload"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions",
+        "exportName": "parsePublicRuntimeQuestionsChannel",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime questions channel public parser (#3918) retains active and unpaired payload identity and optional flag presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime questions channel public parser (#3918) refuses malformed and content-bearing unpaired channels"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+          "testName": "runtime questions channel public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+          "testName": "coding runtime routes #2478: serves the paired question list as the channel payload with the active session facet"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+          "testName": "coding runtime routes #2478: an unpaired question list yields the one constant content-free projection before any run resolution"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+          "testName": "coding runtime routes #2478: a rotated-away or revoked cookie loses the question read authority"
+        }
+      ]
+    },
+    {
+      "id": "coding-runtime-research-channel-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research",
+        "exportName": "validateCodingWorkbenchRuntimeResearchChannelPayload",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research",
+        "exportName": "validateCodingWorkbenchRuntimeResearchChannelPayload"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research",
+        "exportName": "validateCodingWorkbenchRuntimeResearchChannelPayload"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research",
+        "exportName": "parsePublicRuntimeResearchChannel",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+          "testName": "runtime research channel public parser (#3918) retains checked pending and grant values and nested identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+          "testName": "runtime research channel public parser (#3918) retains omitted versus own undefined optional state on active and unpaired payloads"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+          "testName": "runtime research channel public parser (#3918) refuses malformed payloads with exact eager ordered diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+          "testName": "runtime research channel public parser (#3918) refuses research state on the unpaired public channel"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+          "testName": "runtime research channel public parser (#3918) retains the second observed pending-field refusal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+          "testName": "runtime research channel public parser (#3918) pins source public and forwarding checked return types"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+          "testName": "coding runtime routes #2387: the paired research route shows the operator the exact host and request line"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+          "testName": "coding runtime routes #2387: an unpaired research read yields the constant content-free projection, never the host"
+        },
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+          "testName": "coding runtime routes #2644: serves an approved research host only over the paired research channel"
+        }
+      ]
     }
   ]
 }

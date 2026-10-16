@@ -225,7 +225,11 @@ interface InternalParseOk<T> {
 
 type InternalParseResult<T> = InternalParseOk<T> | GitRepositoryAgentParseFail;
 
-function validateEnvelope(input: unknown): InternalParseResult<Readonly<Record<string, unknown>>> {
+function validateEnvelope(
+  input: unknown,
+): InternalParseResult<
+  Readonly<Partial<Record<keyof GitRepositoryAgentOperationRequest, unknown>>>
+> {
   if (!isRecord(input)) return parseFail("bad-request", "Request body must be an object.");
   if (containsDirectShellShape(input)) {
     return parseFail(

@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 
 const { fetch, AbortSignal, TextDecoder } = globalThis;
@@ -46,7 +46,7 @@ const source = dirname(fileURLToPath(import.meta.url));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function fixture(toolProfile = "direct") {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-fixed-entry-test-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-fixed-entry-test-#-")));
   const workspace = join(root, "workspace");
   const stateRoot = join(workspace, ".keiko", "runtime-test");
   mkdirSync(workspace, { recursive: true, mode: 0o700 });
@@ -172,8 +172,10 @@ function authenticated(input) {
 test("readiness uses the pinned predicate and refuses unsupported addresses without publishing", async () => {
   const own = fixture();
   try {
-    const { publishFixedHostReadiness } = await import(join(own.root, "entry.mjs"));
-    const { Cause, Effect, Exit } = await import(join(moduleRoot, "effect/dist/index.js"));
+    const { publishFixedHostReadiness } = await import(pathToFileURL(join(own.root, "entry.mjs")));
+    const { Cause, Effect, Exit } = await import(
+      pathToFileURL(join(moduleRoot, "effect/dist/index.js"))
+    );
     const endpoints = [];
     const ready = (endpoint) => endpoints.push(endpoint);
     const supported = await Effect.runPromiseExit(

@@ -211,7 +211,12 @@ export function isTaskWorkspaceTransitionPrecondition(
 // `*->cleanup-pending` transitions require operator-approval. Illegal transitions never reach this
 // table — they are rejected first by validateTaskWorkspaceTransition.
 const TASK_WORKSPACE_TRANSITION_PRECONDITION_TABLE: Readonly<
-  Record<string, readonly TaskWorkspaceTransitionPrecondition[]>
+  Partial<
+    Record<
+      `${TaskWorkspaceLifecycleState}->${TaskWorkspaceLifecycleState}`,
+      readonly TaskWorkspaceTransitionPrecondition[]
+    >
+  >
 > = {
   "provisioning->active": ["lock-held-by-actor", "path-contained", "branch-ready"],
   "provisioning->recovery-required": ["lock-held-by-actor"],

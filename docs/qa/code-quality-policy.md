@@ -642,3 +642,14 @@ getter phases. The existing BFF consumers use checked target, port and advisory 
 healthy and refused real-server controls preserve redaction and the absence of persistent or model
 work. A client-reported lastNavigationReason grants no consent or crawl authority. Optional typeof
 and dictionary adaptations remain withheld pending actual checker eligibility. No scope is activated.
+
+Four Workbench question/research public parsers extend the register from 45 to 49 mandatory
+unknown-parameter obligations: answer admission, runtime list response, questions channel and
+research channel. Their existing unknown inputs and raw helper dictionaries remain intentional
+trust boundaries. Test-only public wrappers pin source/public return types, original and nested
+identity, optional presence, exact eager errors and existing getter phases. The actual runtime
+list port rejects malformed projections; coordinator and route proofs retain revision/replay,
+live authority, authenticated reads and content-free unpaired projections. Validating research
+payload structure grants no network, model or approval authority. No production API, resolver,
+rule scope or optional dictionary/typeof adaptation is added. Qualification of these exact roots
+does not establish domain zero or discharge the remaining accepted-owner obligations.

@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  parseCodingWorkbenchRuntimeQuestionAnswerRequest as publicQuestionAnswer,
+  validateCodingWorkbenchRuntimeQuestionsChannelPayload as publicQuestionsChannel,
+  validateCodingWorkbenchRuntimeQuestionsResponse as publicQuestionsResponse,
+  type CodingWorkbenchRuntimeQuestionAnswerRequest,
+  type CodingWorkbenchRuntimeQuestionsChannelPayload,
+  type CodingWorkbenchRuntimeQuestionsResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import {
   parseCodingWorkbenchRuntimeQuestionAnswerRequest,
@@ -414,4 +423,196 @@ describe("C2 owning question member admissions", () => {
       expect(reads).toBe(2);
     },
   );
+});
+
+type PublicQuestionAnswerParse =
+  CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionAnswerRequest>;
+type PublicQuestionsResponseParse =
+  CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsResponse>;
+type PublicQuestionsChannelParse =
+  CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsChannelPayload>;
+
+export function parsePublicRuntimeQuestionAnswer(input: unknown): PublicQuestionAnswerParse {
+  const result = publicQuestionAnswer(input);
+  return result;
+}
+
+export function parsePublicRuntimeQuestionsResponse(input: unknown): PublicQuestionsResponseParse {
+  const result = publicQuestionsResponse(input);
+  return result;
+}
+
+export function parsePublicRuntimeQuestionsChannel(input: unknown): PublicQuestionsChannelParse {
+  const result = publicQuestionsChannel(input);
+  return result;
+}
+
+describe("runtime question answer public parser (#3918)", () => {
+  it("forwards the checked original answer and nested selections", () => {
+    const input = { ...VALID_ANSWER_BASE, answers: [["Continue"]] };
+    const result = parsePublicRuntimeQuestionAnswer(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public answer refused");
+    expect(result.value).toBe(input);
+    expect(result.value.answers).toBe(input.answers);
+    expect(result.value.answers[0]).toBe(input.answers[0]);
+  });
+
+  it("refuses malformed bodies with exact eager ordered diagnostics", () => {
+    for (const input of [null, [], "answer", 1])
+      expect(parsePublicRuntimeQuestionAnswer(input)).toEqual({
+        ok: false,
+        errors: ["question answer must be an object"],
+      });
+    expect(
+      parsePublicRuntimeQuestionAnswer({
+        requestId: "!",
+        expectedRevision: -1,
+        questionId: "",
+        answers: "invalid",
+        extra: true,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "questionAnswer.extra is not allowed",
+        "requestId must be a bounded safe identifier",
+        "expectedRevision must be a non-negative safe integer",
+        "questionId is invalid",
+        "answers must be a bounded non-empty array",
+      ],
+    });
+  });
+
+  it("retains the public second revision observation refusal", () => {
+    let reads = 0;
+    const input = {
+      ...VALID_ANSWER_BASE,
+      answers: [["Continue"]],
+      get expectedRevision(): unknown {
+        return ++reads === 1 ? 0 : "0";
+      },
+    };
+    expect(parsePublicRuntimeQuestionAnswer(input)).toEqual({
+      ok: false,
+      errors: ["expectedRevision must be a non-negative safe integer"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest,
+    ).returns.toEqualTypeOf<PublicQuestionAnswerParse>();
+    expectTypeOf(publicQuestionAnswer).returns.toEqualTypeOf<PublicQuestionAnswerParse>();
+    expectTypeOf(
+      parsePublicRuntimeQuestionAnswer,
+    ).returns.toEqualTypeOf<PublicQuestionAnswerParse>();
+    const result = parsePublicRuntimeQuestionAnswer({
+      ...VALID_ANSWER_BASE,
+      answers: [["Continue"]],
+    });
+    if (!result.ok) throw new TypeError("healthy public answer types refused");
+    expectTypeOf(result.value.expectedRevision).toEqualTypeOf<number>();
+    expectTypeOf(result.value.answers).toEqualTypeOf<readonly (readonly string[])[]>();
+    type Failure = Extract<ReturnType<typeof publicQuestionAnswer>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("runtime questions response public parser (#3918)", () => {
+  it("retains the admitted response and nested question references", () => {
+    const result = parsePublicRuntimeQuestionsResponse(response);
+    expect(result).toEqual({ ok: true, value: response });
+    if (!result.ok) throw new TypeError("healthy public response refused");
+    expect(result.value).toBe(response);
+    expect(result.value.questions).toBe(response.questions);
+    expect(result.value.questions[0]?.questions).toBe(response.questions[0]?.questions);
+  });
+
+  it("refuses malformed responses with exact ordered diagnostics", () => {
+    for (const input of [null, [], "response", 1])
+      expect(parsePublicRuntimeQuestionsResponse(input)).toEqual({
+        ok: false,
+        errors: ["questions response must be an object"],
+      });
+    expect(parsePublicRuntimeQuestionsResponse({ questions: "invalid", extra: true })).toEqual({
+      ok: false,
+      errors: ["questionsResponse.extra is not allowed", "questions must be a bounded array"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodingWorkbenchRuntimeQuestionsResponse,
+    ).returns.toEqualTypeOf<PublicQuestionsResponseParse>();
+    expectTypeOf(publicQuestionsResponse).returns.toEqualTypeOf<PublicQuestionsResponseParse>();
+    expectTypeOf(
+      parsePublicRuntimeQuestionsResponse,
+    ).returns.toEqualTypeOf<PublicQuestionsResponseParse>();
+    type Success = Extract<ReturnType<typeof publicQuestionsResponse>, { readonly ok: true }>;
+    expectTypeOf<Success["value"]>().toEqualTypeOf<CodingWorkbenchRuntimeQuestionsResponse>();
+    type Failure = Extract<ReturnType<typeof publicQuestionsResponse>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("runtime questions channel public parser (#3918)", () => {
+  it("retains active and unpaired payload identity and optional flag presence", () => {
+    const base = { question: "Continue?", header: "Action", options: [] };
+    for (const question of [base, { ...base, multiple: undefined, custom: undefined }]) {
+      const input = { session: "active", questions: [{ id: "que_1", questions: [question] }] };
+      const result = parsePublicRuntimeQuestionsChannel(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (!result.ok) throw new TypeError("healthy public channel refused");
+      expect(result.value).toBe(input);
+      const observed = result.value.questions[0]?.questions[0];
+      expect(observed).toBe(question);
+      expect(Object.hasOwn(observed ?? {}, "multiple")).toBe(Object.hasOwn(question, "multiple"));
+      expect(Object.hasOwn(observed ?? {}, "custom")).toBe(Object.hasOwn(question, "custom"));
+    }
+    const unpaired = unpairedCodingWorkbenchRuntimeQuestionsChannelPayload();
+    const result = parsePublicRuntimeQuestionsChannel(unpaired);
+    expect(result).toEqual({ ok: true, value: { session: "unpaired", questions: [] } });
+    if (!result.ok) throw new TypeError("healthy unpaired public channel refused");
+    expect(result.value).toBe(unpaired);
+  });
+
+  it("refuses malformed and content-bearing unpaired channels", () => {
+    for (const input of [null, [], "channel", 1])
+      expect(parsePublicRuntimeQuestionsChannel(input)).toEqual({
+        ok: false,
+        errors: ["questions channel payload must be an object"],
+      });
+    expect(
+      parsePublicRuntimeQuestionsChannel({ session: "guest", questions: "invalid", extra: true }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "questionsChannelPayload.extra is not allowed",
+        "questionsChannelPayload.session is invalid",
+        "questions must be a bounded array",
+      ],
+    });
+    expect(
+      parsePublicRuntimeQuestionsChannel({ session: "unpaired", questions: response.questions }),
+    ).toEqual({
+      ok: false,
+      errors: ["questionsChannelPayload.questions must be empty when the session is unpaired"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload,
+    ).returns.toEqualTypeOf<PublicQuestionsChannelParse>();
+    expectTypeOf(publicQuestionsChannel).returns.toEqualTypeOf<PublicQuestionsChannelParse>();
+    expectTypeOf(
+      parsePublicRuntimeQuestionsChannel,
+    ).returns.toEqualTypeOf<PublicQuestionsChannelParse>();
+    type Success = Extract<ReturnType<typeof publicQuestionsChannel>, { readonly ok: true }>;
+    expectTypeOf<Success["value"]>().toEqualTypeOf<CodingWorkbenchRuntimeQuestionsChannelPayload>();
+    type Failure = Extract<ReturnType<typeof publicQuestionsChannel>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
 });

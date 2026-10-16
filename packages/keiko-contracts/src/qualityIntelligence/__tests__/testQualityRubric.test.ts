@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
   TEST_QUALITY_RUBRIC_DIMENSIONS,
 } from "../testQualityRubric.js";
 import type { TestQualityDimensionName } from "../testQualityRubric.js";
+import { TEST_QUALITY_JUDGE_RESPONSE_SCHEMA as publicSchema } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 // Behavioural contract for TEST_QUALITY_JUDGE_RESPONSE_SCHEMA (same bug class as
 // command-runner.ts's COMMAND_TASK_RULES, KEIKO-0139):
@@ -21,35 +22,24 @@ import type { TestQualityDimensionName } from "../testQualityRubric.js";
 // ../testQualityRubric.ts) — the bounds are enforced where the model's output is consumed. This
 // suite only pins the schema's own shape and immutability, never the model's runtime behaviour.
 
-interface TestQualityJudgeResponseSchemaShape {
-  readonly type: string;
-  readonly additionalProperties: boolean;
-  readonly required: readonly string[];
-  readonly properties: {
-    readonly dimensions: {
-      readonly type: string;
-      readonly items: {
-        readonly type: string;
-        readonly additionalProperties: boolean;
-        readonly required: readonly string[];
-        readonly properties: {
-          readonly name: {
-            readonly type: string;
-            readonly enum: readonly TestQualityDimensionName[];
-          };
-          readonly score: { readonly type: string };
-          readonly rationale: { readonly type: string };
-        };
-      };
-    };
-    readonly overallRationale: { readonly type: string };
-  };
-}
-
-const schema = TEST_QUALITY_JUDGE_RESPONSE_SCHEMA as unknown as TestQualityJudgeResponseSchemaShape;
+const schema = TEST_QUALITY_JUDGE_RESPONSE_SCHEMA;
 const dimensionItemProperties = schema.properties.dimensions.items.properties;
 
 describe("TEST_QUALITY_JUDGE_RESPONSE_SCHEMA", () => {
+  it("retains source and public schema field, literal and enum types", () => {
+    expectTypeOf(schema).toEqualTypeOf<typeof publicSchema>();
+    expectTypeOf(schema.properties).toEqualTypeOf<typeof publicSchema.properties>();
+    expectTypeOf<keyof typeof schema.properties>().toEqualTypeOf<
+      "dimensions" | "overallRationale"
+    >();
+    expectTypeOf(schema.type).toEqualTypeOf<"object">();
+    expectTypeOf(publicSchema.type).toEqualTypeOf<"object">();
+    expectTypeOf(schema.additionalProperties).toEqualTypeOf<false>();
+    expectTypeOf(dimensionItemProperties.name.enum).toEqualTypeOf<
+      typeof TEST_QUALITY_RUBRIC_DIMENSIONS
+    >();
+  });
+
   it("declares exactly the live TEST_QUALITY_RUBRIC_DIMENSIONS set in its name enum, both directions", () => {
     // Spread the real export — never restate the dimension list — so this test tracks the source
     // of truth instead of a second copy of it.
@@ -91,11 +81,7 @@ describe("TEST_QUALITY_JUDGE_RESPONSE_SCHEMA", () => {
     expect(Object.isFrozen(TEST_QUALITY_JUDGE_RESPONSE_SCHEMA.properties)).toBe(true);
     expect(
       Object.isFrozen(
-        (
-          TEST_QUALITY_JUDGE_RESPONSE_SCHEMA.properties as {
-            dimensions: { items: { properties: { score: unknown } } };
-          }
-        ).dimensions.items.properties.score,
+        TEST_QUALITY_JUDGE_RESPONSE_SCHEMA.properties.dimensions.items.properties.score,
       ),
     ).toBe(true);
     expect(Object.isFrozen(dimensionItemProperties.name.enum)).toBe(true);
