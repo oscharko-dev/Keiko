@@ -31,6 +31,7 @@ import {
   createDiagnosticFixture,
   createDictionaryEnforcementFixture,
   createRawHelperEnforcementFixture,
+  createCollectiveParserFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 import {
   createPublicParserFixture,
@@ -1886,6 +1887,143 @@ function currentnessTargetBufferAllocations(compiler, byteLength) {
 
 // Work regression controls, not a newly discovered content-admission defect. The tracer delegates
 // every allocation to Node and observes only the byte length of the actual admitted fixture.
+async function collectiveSymbolFixture(variant = "direct", options = {}) {
+  const own = createCollectiveParserFixture(variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    {
+      owner: "packages/alpha",
+      paths: ["packages/alpha/src/proof.test.ts"],
+    },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+  return own;
+}
+
+describe("collective exact raw symbol closure (#3918)", () => {
+  it("preserves existing const callable producer coordinates without public-proof certification", async () => {
+    const own = createCollectiveParserFixture("public-const-alias");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const roots = own.records.map((record) => ({
+      identity: own.resolver.resolveExport({ ...record.input, consumerPath: "src/consumer.ts" })
+        .identities[0],
+      index: 0,
+      recordId: record.id,
+    }));
+    expect(roots[0].identity.producer.kind).toBe("VariableDeclaration");
+    expect(roots[2].identity.producer).toEqual(roots[0].identity.producer);
+    const slots = own.resolver.collectiveRawCheckingSlots(roots, "anti-slop/no-unknown-parameters");
+    const variable = slots.filter(
+      (slot) => slot.producerIdentity.producer.kind === "VariableDeclaration",
+    );
+    expect(variable).toHaveLength(1);
+    expect(variable[0].producerIdentity.producer).toEqual(roots[0].identity.producer);
+  }, 30_000);
+
+  it("withholds empty, typed and written roots and bounds the incoming root set", async () => {
+    const own = await collectiveSymbolFixture("domain");
+    expect(own.resolver.collectiveRawCheckingSlots([], "anti-slop/no-runtime-typeof")).toEqual([]);
+    const domain = own.resolver.resolveProofExport({
+      ...own.records[0].input,
+      exportName: "domain",
+    }).identities[0];
+    expect(
+      own.resolver.collectiveRawCheckingSlots(
+        [{ identity: domain, index: 0, recordId: "domain" }],
+        "anti-slop/no-runtime-typeof",
+      ),
+    ).toEqual([]);
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(
+        Array(65).fill(own.rawRoots[0]),
+        "anti-slop/no-runtime-typeof",
+      ),
+    ).toThrow("symbol-alias-budget");
+    const written = await collectiveSymbolFixture("root-write");
+    expect(
+      written.resolver.collectiveRawCheckingSlots(
+        [written.rawRoots[0]],
+        "anti-slop/no-runtime-typeof",
+      ),
+    ).toEqual([]);
+  }, 30_000);
+
+  it("preserves legacy second-caller refusal and closes only canonical registered roots", async () => {
+    const own = await collectiveSymbolFixture();
+    const legacy = own.resolver.rawCheckingSlots(own.rawRoots[0].identity, 0);
+    expect(legacy.filter(({ rule }) => rule === "anti-slop/no-unknown-parameters")).toHaveLength(1);
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots).toHaveLength(4);
+    expect(
+      slots.filter(
+        ({ contributingResponsibilityIds }) => contributingResponsibilityIds.length === 2,
+      ),
+    ).toHaveLength(2);
+    expect(
+      own.resolver
+        .collectiveRawCheckingSlots([...own.rawRoots].reverse(), "anti-slop/no-unknown-parameters")
+        .sort((a, b) => a.start - b.start),
+    ).toEqual(slots.sort((a, b) => a.start - b.start));
+  }, 30_000);
+
+  it.each(["counterfeit", "alias-member"])(
+    "does not grant intrinsic dictionary slots to %s members",
+    async (variant) => {
+      const own = await collectiveSymbolFixture(variant);
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unsafe-dictionary-type",
+      );
+      if (variant === "counterfeit") expect(slots).toEqual([]);
+      else expect(slots).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it("keeps narrowed call operands and nonraw second parameters outside the closure", async () => {
+    const own = await collectiveSymbolFixture("narrowed");
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const start = source.indexOf("input: unknown", source.indexOf("function primitive")) + 7;
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots.some((slot) => slot.start === start)).toBe(false);
+    const second = await collectiveSymbolFixture("second-parameter");
+    expect(
+      second.resolver
+        .collectiveRawCheckingSlots(second.rawRoots, "anti-slop/no-unknown-parameters")
+        .some((slot) => slot.index === 1),
+    ).toBe(false);
+  }, 30_000);
+
+  it("rejects collective cycles, existing alias budget exhaustion and fresh source mutation", async () => {
+    const cycle = await collectiveSymbolFixture("cycle");
+    expect(() =>
+      cycle.resolver.collectiveRawCheckingSlots(cycle.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("unsupported-raw-helper-cycle");
+    const bounded = await collectiveSymbolFixture("direct", { aliases: 2 });
+    expect(() =>
+      bounded.resolver.collectiveRawCheckingSlots(bounded.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-alias-budget");
+    const changed = await collectiveSymbolFixture();
+    const path = join(changed.root, "packages/alpha/src/owner.ts");
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() =>
+      changed.resolver.collectiveRawCheckingSlots(changed.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-subject-changed");
+  }, 30_000);
+});
+
 describe("compiler lossless canonical currentness work", () => {
   it.each(["plain", "é🙂"])(
     "freshly observes admitted %s without allocating raw target buffers",

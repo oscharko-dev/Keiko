@@ -19,6 +19,62 @@ const ASSERTION_RULES = [
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
 
+describe("public parser optional raw admission rules (#3918)", () => {
+  it.each([
+    { rules: ["anti-slop/no-runtime-typeof"] },
+    { rules: ["anti-slop/no-unsafe-dictionary-type"] },
+    { rules: ["anti-slop/no-runtime-typeof", "anti-slop/no-unsafe-dictionary-type"] },
+  ])("admits only explicit additional raw rules $rules with exact proof selectors", ({ rules }) => {
+    const record = publicParserRecord();
+    expect(validatePolicy({ ...policy, responsibilities: [record] })).toEqual([]);
+    record.rules.push(...rules);
+    record.proofAssertions = [{ path: record.proofs[0], testName: "actual public refusal" }];
+    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters", ...rules]);
+    const candidate = { ...policy, responsibilities: [record] };
+    expect(validatePolicy(candidate)).toEqual([]);
+  });
+
+  it.each([
+    "missing-proof",
+    "empty-proof",
+    "foreign-proof",
+    "duplicate-proof",
+    "wrong-index",
+    "missing-unknown",
+    "return",
+    "widening",
+  ])("refuses incomplete or unrelated public parser rules: %s", (variant) => {
+    const record = publicParserRecord();
+    record.rules.push("anti-slop/no-runtime-typeof");
+    record.proofAssertions = [{ path: record.proofs[0], testName: "actual public refusal" }];
+    if (variant === "missing-proof") delete record.proofAssertions;
+    if (variant === "empty-proof") record.proofAssertions = [];
+    if (variant === "foreign-proof") record.proofAssertions[0].path = "unregistered.test.ts";
+    if (variant === "duplicate-proof")
+      record.proofAssertions.push({ ...record.proofAssertions[0] });
+    if (variant === "wrong-index") record.input.parameterIndex = 1;
+    if (variant === "missing-unknown") record.rules.shift();
+    if (variant === "return") record.rules.push("anti-slop/no-unknown-returns");
+    if (variant === "widening") record.rules.push("anti-slop/no-known-value-widening");
+    expect(validatePolicy({ ...policy, responsibilities: [record] })).toContain(
+      "invalid-responsibilities",
+    );
+  });
+
+  it("retains additive rules and proof selectors in complete policy history", () => {
+    const record = publicParserRecord();
+    const original = { ...policy, responsibilities: [structuredClone(record)] };
+    record.rules.push("anti-slop/no-runtime-typeof");
+    record.proofAssertions = [{ path: record.proofs[0], testName: "actual public refusal" }];
+    const extended = { ...policy, responsibilities: [record] };
+    expect(validatePolicy(extended, [original])).toEqual([]);
+    expect(validatePolicy(original, [extended])).toContain("responsibility-shrank");
+    const rebound = structuredClone(extended);
+    rebound.responsibilities[0].proofAssertions[0].testName = "unrelated proof";
+    expect(validatePolicy(rebound, [extended])).toContain("responsibility-shrank");
+  });
+});
+
 describe("code-quality policy fail-closed contract (#3915)", () => {
   it("activates the qualified Effect rules only for the exact native host owner (#3988)", () => {
     const effects = policy.rules.filter(({ id }) => id.startsWith("anti-slop-effect/"));

@@ -258,6 +258,8 @@ function assessRecord(subject, resolver, record, files) {
 }
 
 function adaptedFinding(finding, assessments) {
+  const collective = collectiveAdaptation(finding, assessments);
+  if (collective) return collective;
   for (const assessment of assessments) {
     if (assessment.structural !== "ready") continue;
     if (
@@ -267,6 +269,22 @@ function adaptedFinding(finding, assessments) {
       continue;
     const slot = assessment.slots.find(
       (candidate) =>
+        candidate.path === finding.path &&
+        candidate.rule === finding.rule &&
+        candidate.line === finding.line &&
+        candidate.column === finding.column,
+    );
+    if (slot) return { finding, responsibilityId: assessment.id, slot };
+  }
+  return null;
+}
+
+function collectiveAdaptation(finding, assessments) {
+  for (const assessment of assessments) {
+    if (assessment.kind !== "public-parser" || assessment.structural !== "ready") continue;
+    const slot = assessment.slots.find(
+      (candidate) =>
+        candidate.contributingResponsibilityIds?.[0] === assessment.id &&
         candidate.path === finding.path &&
         candidate.rule === finding.rule &&
         candidate.line === finding.line &&
@@ -337,9 +355,52 @@ function responsibilityResolver(subject, policy, executeProofs = false) {
 }
 
 function responsibilityAssessment(subject, policy, files, resolver) {
-  return (policy.responsibilities ?? []).map((record) =>
+  const assessments = (policy.responsibilities ?? []).map((record) =>
     assessRecord(subject, resolver, record, files),
   );
+  joinPublicParserSlots(policy, assessments, resolver);
+  return assessments;
+}
+
+function collectiveParserGroups(policy, assessments) {
+  const groups = new Map();
+  for (const record of policy.responsibilities ?? []) {
+    const assessment = assessments.find((entry) => entry.id === record.id);
+    if (
+      record.kind !== "public-parser" ||
+      assessment.structural !== "ready" ||
+      !record.proofAssertions?.length
+    )
+      continue;
+    const identity = assessment.roles.input.identities[0];
+    for (const rule of record.rules) {
+      const key = JSON.stringify([identity.owner, identity.producer.path, rule]);
+      const group = groups.get(key) ?? { rule, roots: [] };
+      group.roots.push({ identity, index: record.input.parameterIndex, recordId: record.id });
+      groups.set(key, group);
+    }
+  }
+  return groups;
+}
+
+function joinPublicParserSlots(policy, assessments, resolver) {
+  const groups = collectiveParserGroups(policy, assessments);
+  for (const { roots, rule } of groups.values()) {
+    // A single root already has the unchanged legacy closure; only a join needs another graph.
+    if (roots.length < 2) continue;
+    const slots = resolver.collectiveRawCheckingSlots(roots, rule);
+    for (const slot of slots) {
+      const assessment = assessments.find(
+        (entry) => entry.id === slot.contributingResponsibilityIds[0],
+      );
+      const existing = assessment.slots.findIndex(
+        (entry) =>
+          entry.path === slot.path && entry.rule === slot.rule && entry.start === slot.start,
+      );
+      if (existing === -1) assessment.slots.push(slot);
+      else assessment.slots[existing] = slot;
+    }
+  }
 }
 
 function responsibilityReport(assessments) {

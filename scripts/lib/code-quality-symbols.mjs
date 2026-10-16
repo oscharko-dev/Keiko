@@ -1187,7 +1187,12 @@ function localRawCallable(compiler, context, source, expression) {
   return null;
 }
 
-function rawState(compiler, context, source, nodes, target, index) {
+function canonicalRawStateKey(identity, index) {
+  const { path, start, end, kind } = identity.producer;
+  return JSON.stringify([identity.owner, path, start, end, kind, index]);
+}
+
+function rawState(compiler, context, source, nodes, target, index, collective = false) {
   const parameter = target.callable.parameters[index];
   if (!parameter || !ts.isIdentifier(parameter.name) || parameter.dotDotDotToken) return null;
   return {
@@ -1198,7 +1203,10 @@ function rawState(compiler, context, source, nodes, target, index) {
     nodes,
     index,
     parameterSymbol: context.checker.getSymbolAtLocation(parameter.name),
-    key: `${target.identity.producer.start}:${index}`,
+    key: collective
+      ? canonicalRawStateKey(target.identity, index)
+      : `${target.identity.producer.start}:${index}`,
+    collective,
     incoming: [],
   };
 }
@@ -1213,23 +1221,37 @@ function stateCalls(state) {
   );
 }
 
+function collectiveRawArgument(state, argument) {
+  const facts = typeFacts(state.context.checker.getTypeAtLocation(argument));
+  return facts.kind === "unknown" || facts.indexes?.some((index) => index.kind === "unknown");
+}
+
+function rawEdgeCandidate(state, target, index, argument) {
+  const origin = rawOrigin(state, argument);
+  if (!origin || (state.collective && !collectiveRawArgument(state, argument))) return null;
+  const candidate = rawState(
+    state.compiler,
+    state.context,
+    state.source,
+    state.nodes,
+    target,
+    index,
+    state.collective,
+  );
+  return candidate ? { candidate, origin } : null;
+}
+
 function rawCallEdges(state, states, queue) {
   for (const call of stateCalls(state)) {
     const target = localRawCallable(state.compiler, state.context, state.source, call.expression);
     if (!target || exportedDeclaration(target.declaration)) continue;
     for (const [index, argument] of call.arguments.entries()) {
-      const origin = rawOrigin(state, argument);
-      if (!origin) continue;
-      const candidate = rawState(
-        state.compiler,
-        state.context,
-        state.source,
-        state.nodes,
-        target,
-        index,
-      );
-      if (!candidate) continue;
+      const edge = rawEdgeCandidate(state, target, index, argument);
+      if (!edge) continue;
+      const { candidate, origin } = edge;
       if (!states.has(candidate.key)) {
+        if (state.collective && states.size >= state.compiler.state.limits.aliases)
+          throw new TypeError("symbol-alias-budget");
         states.set(candidate.key, candidate);
         queue.push(candidate);
       }
@@ -1300,22 +1322,17 @@ function assertRawAcyclic(states) {
   for (const key of states.keys()) visit(key, new Set());
 }
 
-function qualifiedRawStates(root, states) {
+function qualifiedRawStates(root, states, roots = new Set([root.key])) {
   const qualified = new Set(states.keys());
   for (const state of states.values()) {
-    if (state === root) continue;
-    if (
-      state.nodes.some(
-        (node) => helperReference(state, node) && !permittedHelperReference(state, node),
-      )
-    )
-      qualified.delete(state.key);
+    if (roots.has(state.key)) continue;
+    if (rawStateHasUnsupportedUse(state)) qualified.delete(state.key);
   }
   let changed = true;
   while (changed) {
     changed = false;
     for (const state of states.values()) {
-      if (state === root || !qualified.has(state.key)) continue;
+      if (roots.has(state.key) || !qualified.has(state.key)) continue;
       if (state.incoming.some((edge) => !qualified.has(edge.state))) {
         qualified.delete(state.key);
         changed = true;
@@ -1323,6 +1340,15 @@ function qualifiedRawStates(root, states) {
     }
   }
   return qualified;
+}
+
+function rawStateHasUnsupportedUse(state) {
+  return (
+    (state.collective && writtenSymbol(state.context, state.nodes, state.parameterSymbol)) ||
+    state.nodes.some(
+      (node) => helperReference(state, node) && !permittedHelperReference(state, node),
+    )
+  );
 }
 
 function rawOperationSlot(state, node, rule, kind, origin) {
@@ -1474,6 +1500,110 @@ function rawCheckingSlots(compiler, identity, index) {
       ...rawDictionaryAnnotations(state),
       ...rawTypeofSlots(state),
       ...rawPredicateSlots(state, states, qualified),
+    );
+  }
+  compiler.assertCurrent();
+  return slots;
+}
+
+function collectiveRawRoot(compiler, request) {
+  const owned = declarationCallable(compiler, request.identity);
+  const nodes = sourceNodes(compiler, owned.source);
+  const state = rawState(
+    compiler,
+    owned.context,
+    owned.source,
+    nodes,
+    {
+      callable: owned.callable,
+      identity: { ...request.identity, entry: null },
+      declaration: owned.callable,
+    },
+    request.index,
+    true,
+  );
+  if (!state || writtenSymbol(state.context, nodes, state.parameterSymbol)) return null;
+  const parameter = state.callable.parameters[state.index];
+  return typeFacts(state.context.checker.getTypeAtLocation(parameter)).kind === "unknown"
+    ? state
+    : null;
+}
+
+function collectiveRawGraph(compiler, requests) {
+  const states = new Map();
+  const roots = new Map();
+  for (const request of requests) {
+    const state = collectiveRawRoot(compiler, request);
+    if (!state) continue;
+    if (!states.has(state.key) && states.size >= compiler.state.limits.aliases)
+      throw new TypeError("symbol-alias-budget");
+    states.set(state.key, state);
+    roots.set(state.key, [...(roots.get(state.key) ?? []), request.recordId]);
+  }
+  const queue = [...states.values()];
+  for (const state of queue) rawCallEdges(state, states, queue);
+  assertRawAcyclic(states);
+  return { states, roots };
+}
+
+function contributingRawRoots(key, states, roots, cache) {
+  if (roots.has(key)) return roots.get(key);
+  if (!cache.has(key))
+    cache.set(
+      key,
+      [
+        ...new Set(
+          states
+            .get(key)
+            .incoming.flatMap((edge) => contributingRawRoots(edge.state, states, roots, cache)),
+        ),
+      ].sort(),
+    );
+  return cache.get(key);
+}
+
+function collectiveStateSlots(state) {
+  const parameter = state.callable.parameters[state.index];
+  const annotation = annotationSlot(
+    state.context,
+    state.source,
+    parameter.type,
+    state.identity,
+    "parameter",
+    state.index,
+  );
+  return [
+    ...(annotation?.type.kind === "unknown"
+      ? [{ ...annotation, rule: "anti-slop/no-unknown-parameters" }]
+      : []),
+    ...rawDictionaryAnnotations(state),
+    ...rawTypeofSlots(state),
+  ];
+}
+
+function collectiveRawCheckingSlots(compiler, requests, rule) {
+  compiler.assertCurrent();
+  if (requests.length === 0) return [];
+  if (requests.length > compiler.state.limits.aliases) throw new TypeError("symbol-alias-budget");
+  const { states, roots } = collectiveRawGraph(compiler, requests);
+  if (roots.size === 0) return [];
+  const first = states.get(roots.keys().next().value);
+  const qualified = qualifiedRawStates(first, states, new Set(roots.keys()));
+  const slots = [];
+  const dependencies = new Map();
+  for (const state of states.values()) {
+    if (!qualified.has(state.key)) continue;
+    const contributingResponsibilityIds = [
+      ...new Set(contributingRawRoots(state.key, states, roots, dependencies)),
+    ].sort();
+    slots.push(
+      ...collectiveStateSlots(state)
+        .filter((slot) => slot.rule === rule)
+        .map((slot) => ({
+          ...slot,
+          producerIdentity: state.identity,
+          contributingResponsibilityIds,
+        })),
     );
   }
   compiler.assertCurrent();
@@ -1938,6 +2068,7 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
       if (!rawSlots.has(key)) rawSlots.set(key, rawCheckingSlots(compiler, identity, index));
       return structuredClone(rawSlots.get(key));
     },
+    collectiveRawCheckingSlots: (roots, rule) => collectiveRawCheckingSlots(compiler, roots, rule),
     consumerCalls: (identity, producer, expectedOwner) =>
       consumerCalls(compiler, identity, producer, expectedOwner),
     expressionFactsAt: (request) => expressionFactsAt(compiler, request),

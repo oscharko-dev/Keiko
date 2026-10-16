@@ -1,7 +1,11 @@
 import { readFileSync, symlinkSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import { createSymbolFixture, emitSymbolFixture } from "./code-quality-symbol-fixture.mjs";
+import {
+  createSymbolFixture,
+  emitSymbolFixture,
+  publicParserRecord,
+} from "./code-quality-symbol-fixture.mjs";
 
 import { fixtureOwnedPolicy } from "./code-quality-fixture.mjs";
 
@@ -11,6 +15,148 @@ function assembleResponsibilityFixture(prepare, additionalOwners = []) {
 
 export function responsibilityPolicy(records = []) {
   return fixtureOwnedPolicy(records);
+}
+
+export function createCollectiveParserFixture(variant = "direct", rules = []) {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", collectiveParserOwner(variant));
+    own.put("packages/alpha/src/index.ts", 'export { first as parse } from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { first } from "alpha/runtime"; import { parse } from "alpha"; export const value = first(1); export const alias = parse(1);\n',
+    );
+    own.put("packages/alpha/src/proof.test.ts", collectiveParserProof(variant));
+    const records = ["first", "second"].map((name) => collectiveParserRecord(name, rules));
+    if (["public-alias", "public-const-alias"].includes(variant)) {
+      const alias = collectiveParserRecord("firstAlias", rules);
+      for (const role of ["input", "transform", "output"])
+        Object.assign(alias[role], { specifier: "alpha", exportName: "parse" });
+      alias.consumer.specifier = "alpha";
+      records.push(alias);
+    }
+    const policy = responsibilityPolicy(records);
+    for (const record of records) activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { records, policy });
+  });
+}
+
+function collectiveParserRecord(name, rules) {
+  const record = publicParserRecord();
+  record.id = `fixture-${name}`;
+  record.rules.push(...rules);
+  for (const role of ["input", "transform", "output"]) record[role].exportName = name;
+  record.consumer.exportName = `public${name}`;
+  record.proofAssertions = ["healthy", "malformed"].map((kind) => ({
+    path: record.consumer.consumerPath,
+    testName: `${name} ${kind}`,
+  }));
+  return record;
+}
+
+function collectiveParserOwner(variant) {
+  const helper =
+    variant === "unsafe"
+      ? "return finite(input.value) || true;"
+      : 'return finite(input.value) && typeof input.value === "number";';
+  const third =
+    variant === "third-caller"
+      ? "export function third(input: unknown): boolean { return isRecord(input); }\n"
+      : "";
+  const source = `// Multibyte coordinate control: é\n
+export type ParseResult = { ok: true; value: number } | { ok: false; errors: readonly string[] };
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+function fields(input: Record<string, unknown>): input is Record<string, unknown> & { value: number } {
+  ${helper}
+}
+function finite(/* é */ input: unknown): boolean { return typeof input === "number" && Number.isFinite(input); }
+export function first(input: unknown): ParseResult {
+  if (!isRecord(input) || !fields(input)) return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: input.value };
+}
+export function second(input: unknown): ParseResult {
+  if (!isRecord(input) || !fields(input)) return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: input.value };
+}
+${third}`;
+  return collectiveParserVariant(source, variant);
+}
+
+function collectiveParserVariant(source, variant) {
+  const variants = {
+    "public-alias": source,
+    "public-const-alias": source
+      .replace(
+        "export function first(input: unknown): ParseResult {",
+        "export const first = (input: unknown): ParseResult => {",
+      )
+      .replace("\n}\nexport function second", "\n};\nexport function second"),
+    domain:
+      source +
+      '\nexport function domain(input: Record<string, unknown>): boolean { return typeof input.value === "number"; }\n',
+    "second-parameter": source
+      .replace(
+        "fields(input: Record<string, unknown>)",
+        "fields(input: Record<string, unknown>, known: unknown)",
+      )
+      .replaceAll("fields(input)", "fields(input, 42)"),
+    narrowed:
+      source.replaceAll(
+        "if (!isRecord(input)",
+        'if (typeof input === "number") primitive(input); if (!isRecord(input)',
+      ) + '\nfunction primitive(input: unknown): boolean { return typeof input === "number"; }\n',
+    counterfeit: "type Record<K extends string, V> = { [P in K]: V };\n" + source,
+    "alias-member":
+      "type Raw = Record<string, unknown>;\n" +
+      source.replace("fields(input: Record<string, unknown>)", "fields(input: Raw)"),
+    "export-helper": source.replace("function isRecord", "export function isRecord"),
+    "reexport-helper": source + "\nexport { isRecord };\n",
+    "typed-caller":
+      source + "\nexport function third(input: number): boolean { return isRecord(input); }\n",
+    callback: source + "\nconst callbacks = [isRecord];\n",
+    "return-escape": source + "\nexport function escaped(): typeof isRecord { return isRecord; }\n",
+    "mutable-alias": source + "\nlet check = isRecord;\n",
+    deferred: source + "\nconst delayed = (): boolean => isRecord({});\n",
+  };
+  return variants[variant] ?? collectiveParserMutation(source, variant);
+}
+
+function collectiveParserMutation(source, variant) {
+  const variants = {
+    "helper-write": source.replace(
+      'return typeof input === "object"',
+      'input = {}; return typeof input === "object"',
+    ),
+    "root-write": source.replace(
+      "export function first(input: unknown): ParseResult {",
+      "export function first(input: unknown): ParseResult { input = { value: 1 };",
+    ),
+    cycle:
+      source.replace(
+        'return typeof input === "object"',
+        'return cycle(input) && typeof input === "object"',
+      ) + "\nfunction cycle(input: unknown): boolean { return isRecord(input); }\n",
+  };
+  return variants[variant] ?? source;
+}
+
+function collectiveParserProof(variant) {
+  const hasAlias = ["public-alias", "public-const-alias"].includes(variant);
+  const alias = hasAlias ? 'import { parse as firstAlias } from "alpha";\n' : "";
+  const proof = `import { first, second, type ParseResult } from "alpha/runtime";
+${alias}
+export function publicfirst(input: unknown): ParseResult { const result = first(input); return result; }
+export function publicsecond(input: unknown): ParseResult { const result = second(input); return result; }
+`;
+  return hasAlias
+    ? proof +
+        "export function publicfirstAlias(input: unknown): ParseResult { const result = firstAlias(input); return result; }\n"
+    : proof;
 }
 
 export function responsibilityRecord(kind = "validator") {

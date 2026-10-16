@@ -128,11 +128,17 @@ function validPath(value) {
 }
 
 function validPublicParserRules(record) {
+  const allowed = [
+    "anti-slop/no-unknown-parameters",
+    "anti-slop/no-runtime-typeof",
+    "anti-slop/no-unsafe-dictionary-type",
+  ];
   return (
     record.kind !== "public-parser" ||
-    (record.rules.length === 1 &&
-      record.rules[0] === "anti-slop/no-unknown-parameters" &&
-      record.input?.parameterIndex === 0)
+    (record.rules.includes(allowed[0]) &&
+      record.rules.every((rule) => allowed.includes(rule)) &&
+      record.input?.parameterIndex === 0 &&
+      (record.rules.length === 1 || record.proofAssertions?.length > 0))
   );
 }
 

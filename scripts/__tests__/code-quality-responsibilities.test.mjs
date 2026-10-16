@@ -31,6 +31,7 @@ import {
   replaceEnforcementOwner,
   replaceConsumerCallFixture,
   createRawHelperEnforcementFixture,
+  createCollectiveParserFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 
 function executeCensusChild(root, ci) {
@@ -83,6 +84,196 @@ const roots = [];
 afterEach(() => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("collective public parser structural roots (#3918)", () => {
+  it("joins the complete registered incoming roots without qualifying their pending proofs", async () => {
+    const own = createCollectiveParserFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.counts).toMatchObject({ ready: 2, qualified: 0, pending: 2 });
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const start = source.indexOf("input: unknown", source.indexOf("function isRecord")) + 7;
+    const slots = report.assessments.flatMap((record) => record.slots);
+    expect(slots).toContainEqual(
+      expect.objectContaining({
+        start,
+        rule: "anti-slop/no-unknown-parameters",
+        contributingResponsibilityIds: ["fixture-first", "fixture-second"],
+      }),
+    );
+    expect(
+      report.assessments.every((record) => record.proofs.every((proof) => !proof.executed)),
+    ).toBe(true);
+  }, 30_000);
+
+  it.each([
+    "third-caller",
+    "typed-caller",
+    "export-helper",
+    "reexport-helper",
+    "callback",
+    "return-escape",
+    "mutable-alias",
+    "deferred",
+    "helper-write",
+    "root-write",
+  ])(
+    "withholds the shared helper for %s without invalidating its public roots",
+    async (variant) => {
+      const own = createCollectiveParserFixture(variant);
+      roots.push(own.root);
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.counts.ready).toBe(2);
+      const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+      const start = source.indexOf("input: unknown", source.indexOf("function isRecord")) + 7;
+      expect(
+        report.assessments.flatMap((record) => record.slots).some((slot) => slot.start === start),
+      ).toBe(false);
+    },
+    30_000,
+  );
+
+  it.each([
+    "missing-record",
+    "missing-rule",
+    "incomplete-root",
+    "invalid-root",
+    "missing-selector",
+  ])(
+    "retains shared diagnostics when a contributing root is %s",
+    async (variant) => {
+      const rule = "anti-slop/no-runtime-typeof";
+      const own = createCollectiveParserFixture("direct", [rule]);
+      roots.push(own.root);
+      if (variant === "missing-record") own.policy.responsibilities.pop();
+      if (variant === "missing-rule") own.records[1].rules = ["anti-slop/no-unknown-parameters"];
+      if (variant === "incomplete-root") own.records[1].consumer.exportName = "absent";
+      if (variant === "invalid-root") own.records[1].consumer.owner = "beta";
+      if (variant === "missing-selector") delete own.records[1].proofAssertions;
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+      const start = source.indexOf("typeof input");
+      expect(
+        report.assessments
+          .flatMap((record) => record.slots ?? [])
+          .some((slot) => slot.start === start && slot.rule === rule),
+      ).toBe(false);
+      expect(report.assessments[0].structural).toBe("ready");
+    },
+    30_000,
+  );
+
+  it("makes native structural adaptations deterministic while leaving semantic execution pending", async () => {
+    const own = createCollectiveParserFixture("direct", [
+      "anti-slop/no-runtime-typeof",
+      "anti-slop/no-unsafe-dictionary-type",
+    ]);
+    roots.push(own.root);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(await codeQualityPolicyMain(["--json"], own.root)).toBe(0);
+    const report = JSON.parse(log.mock.calls[0][0]);
+    expect(report.enforcementOutcome).toBe("passed");
+    expect(report.outcome).toBe("failed");
+    expect(report.counts.visited).toBe(report.counts.expected);
+    expect(report.responsibilities.counts).toMatchObject({ ready: 2, pending: 2, qualified: 0 });
+    const shared = report.adaptations.filter(
+      ({ slot }) => slot.contributingResponsibilityIds?.length === 2,
+    );
+    expect(new Set(shared.map(({ finding }) => finding.rule))).toEqual(
+      new Set([
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ]),
+    );
+    expect(shared.every(({ responsibilityId }) => responsibilityId === "fixture-first")).toBe(true);
+    own.policy.responsibilities.reverse();
+    own.put("scripts/code-quality-policy.json", own.policy);
+    log.mockClear();
+    expect(await codeQualityPolicyMain(["--json"], own.root)).toBe(0);
+    const reversed = JSON.parse(log.mock.calls[0][0]);
+    expect(reversed.adaptations).toEqual(report.adaptations);
+  }, 60_000);
+
+  it.each(["anti-slop/no-runtime-typeof", "anti-slop/no-unsafe-dictionary-type"])(
+    "retains the real native domain diagnostic for %s alongside raw adaptations",
+    async (rule) => {
+      const own = createCollectiveParserFixture("domain", [rule]);
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(
+        { mode: "enforce", scope: "repository", json: true },
+        own.root,
+      );
+      const domainLine =
+        readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8")
+          .split("\n")
+          .findIndex((line) => line.includes("function domain")) + 1;
+      expect(report.violations).toContainEqual(expect.objectContaining({ rule, line: domainLine }));
+      expect(
+        report.adaptations.some(
+          ({ finding }) => finding.rule === rule && finding.line !== domainLine,
+        ),
+      ).toBe(true);
+      expect(report.enforcementOutcome).toBe("failed");
+    },
+    30_000,
+  );
+
+  it("withholds a join when the actual producer source is outside the selected scope", async () => {
+    const own = createCollectiveParserFixture();
+    roots.push(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const files = subject.inventory.files.filter(
+      (file) => file.path !== "packages/alpha/src/owner.ts",
+    );
+    const report = assessPolicyResponsibilities(subject, own.policy, files);
+    expect(report.counts).toMatchObject({ ready: 0, incomplete: 2, qualified: 0, pending: 2 });
+    expect(
+      report.assessments.every((record) => record.reasons.includes("partial-responsibility-scope")),
+    ).toBe(true);
+  }, 30_000);
+
+  it("makes canonical producer metadata independent of supported public alias record order", async () => {
+    const own = createCollectiveParserFixture("public-alias", ["anti-slop/no-runtime-typeof"]);
+    roots.push(own.root);
+    const options = { mode: "enforce", scope: "repository", json: true };
+    const report = await executeCodeQualityPolicy(options, own.root);
+    expect(report.responsibilities.counts).toMatchObject({ ready: 3, qualified: 0, pending: 3 });
+    const producer = report.responsibilities.assessments[0].roles.input.identities[0].producer;
+    expect(producer.kind).toBe("FunctionDeclaration");
+    const rootSlot = report.adaptations.find(
+      ({ slot }) =>
+        slot.contributingResponsibilityIds?.join(",") === "fixture-first,fixture-firstAlias",
+    );
+    expect(rootSlot.slot.producerIdentity.producer).toEqual(producer);
+    const shared = report.adaptations.filter(
+      ({ slot }) => slot.contributingResponsibilityIds?.length === 3,
+    );
+    expect(shared.length).toBeGreaterThan(0);
+    expect(
+      shared.every(
+        ({ slot }) =>
+          slot.contributingResponsibilityIds.join(",") ===
+          "fixture-first,fixture-firstAlias,fixture-second",
+      ),
+    ).toBe(true);
+    own.policy.responsibilities.reverse();
+    own.put("scripts/code-quality-policy.json", own.policy);
+    const reversed = await executeCodeQualityPolicy(options, own.root);
+    expect(reversed.responsibilities.counts).toMatchObject({ ready: 3, qualified: 0, pending: 3 });
+    expect(reversed.adaptations).toEqual(report.adaptations);
+  }, 60_000);
+
+  it("retains the existing const producer public-proof refusal", async () => {
+    const own = createCollectiveParserFixture("public-const-alias");
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.counts).toMatchObject({ ready: 1, incomplete: 2, qualified: 0, pending: 3 });
+    expect(report.assessments[0].reasons).toContain("unresolved-responsibility-facts");
+    expect(report.assessments[2].reasons).toContain("unresolved-responsibility-facts");
+  }, 30_000);
 });
 
 function responsibilityOwnerCensus(report) {
@@ -1749,9 +1940,8 @@ it.skipIf(process.platform === "win32")(
 
 import { qualifyPolicyResponsibilities } from "../lib/code-quality-responsibilities.mjs";
 
-async function directSemanticQualifierFixture(mode) {
+async function installSemanticFixtureTools(own) {
   const { symlinkSync } = await import("node:fs");
-  const own = createEnforcementFixture();
   roots.push(own.root);
   const tools = new URL("../../", import.meta.url);
   mkdirSync(join(own.root, "node_modules/.bin"));
@@ -1766,6 +1956,11 @@ async function directSemanticQualifierFixture(mode) {
     join(own.root, "node_modules/.bin/vitest"),
   );
   own.put("package-lock.json", readFileSync(new URL("package-lock.json", tools), "utf8"));
+}
+
+async function directSemanticQualifierFixture(mode) {
+  const own = createEnforcementFixture();
+  await installSemanticFixtureTools(own);
   const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
   config.exclude = ["**/*.test.ts"];
   own.put("packages/alpha/tsconfig.json", config);
@@ -1842,23 +2037,13 @@ describe("direct semantic responsibility qualification", () => {
 
 async function embeddedSemanticCliFixture(kind) {
   const { unlinkSync } = await import("node:fs");
-  const { nativeCompilerExecutable } = await import("../lib/code-quality-provenance.mjs");
   const own = await directSemanticQualifierFixture("healthy");
   const args =
     kind === "healthy"
       ? ["-b", "packages/alpha/tsconfig.json", "--force"]
       : ["-p", "packages/alpha/tsconfig.json"];
   if (kind === "missing-runtime") args.push("--emitDeclarationOnly");
-  own.put(
-    "scripts/semantic-fixture-build.mjs",
-    `import { execFileSync } from "node:child_process";
-execFileSync(${JSON.stringify(nativeCompilerExecutable())}, ${JSON.stringify(args)}, {
-  cwd: process.cwd(), timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
-});`,
-  );
-  const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
-  manifest.scripts = { "build:packages": "node scripts/semantic-fixture-build.mjs" };
-  own.put("package.json", manifest);
+  await installSemanticFixtureBuild(own, args);
   if (kind === "legacy") {
     delete own.policy.responsibilities;
     own.policy.version = 1;
@@ -1874,9 +2059,121 @@ execFileSync(${JSON.stringify(nativeCompilerExecutable())}, ${JSON.stringify(arg
   return { ...own, emittedRuntime };
 }
 
+async function installSemanticFixtureBuild(own, args) {
+  const { nativeCompilerExecutable } = await import("../lib/code-quality-provenance.mjs");
+  own.put(
+    "scripts/semantic-fixture-build.mjs",
+    `import { execFileSync } from "node:child_process";
+execFileSync(${JSON.stringify(nativeCompilerExecutable())}, ${JSON.stringify(args)}, {
+  cwd: process.cwd(), timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
+});`,
+  );
+  const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+  manifest.scripts = { "build:packages": "node scripts/semantic-fixture-build.mjs" };
+  own.put("package.json", manifest);
+}
+
 function embeddedSemanticOptions() {
   return { mode: "enforce", scope: "repository", json: true, qualifyResponsibilities: true };
 }
+
+async function collectiveSemanticFixture(variant) {
+  const own = createCollectiveParserFixture(variant, [
+    "anti-slop/no-runtime-typeof",
+    "anti-slop/no-unsafe-dictionary-type",
+  ]);
+  await installSemanticFixtureTools(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  // Actual Vitest declarations require browser globals even for this Node-only runtime proof.
+  config.compilerOptions.lib.push("DOM");
+  own.put("packages/alpha/tsconfig.json", config);
+  const path = own.records[0].proofs[0];
+  const wrappers = readFileSync(join(own.root, path), "utf8");
+  own.put(
+    path,
+    wrappers +
+      '\nimport { it, expect } from "vitest";\n' +
+      ["first", "second"]
+        .map(
+          (name) => `
+it("${name} healthy", () => { expect(public${name}({ value: 3 })).toEqual({ ok: true, value: 3 }); });
+it("${name} malformed", () => { expect(public${name}({ value: "wrong" }).ok).toBe(false); });
+`,
+        )
+        .join("\n"),
+  );
+  if (variant === "missing-assertion")
+    own.records[1].proofAssertions[1].testName = "absent assertion";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);
+  return own;
+}
+
+describe("collective public parser actual CLI qualification (#3918)", () => {
+  it.skipIf(process.platform === "win32")(
+    "executes both bound public roots once before granting semantics",
+    async () => {
+      const own = await collectiveSemanticFixture("direct");
+      const report = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
+      expect(report.responsibilities.assessments.map((record) => record.reasons)).toEqual([[], []]);
+      expect(report.violations).toEqual([]);
+      expect(report.outcome).toBe("passed");
+      expect(report.responsibilities.counts).toMatchObject({ ready: 2, qualified: 2, pending: 0 });
+      expect(report.responsibilities.execution).toMatchObject({
+        status: "passed",
+        invocationCount: 1,
+        process: { directChildClosed: true, groupAbsent: true },
+      });
+      expect(
+        report.responsibilities.assessments.every((record) =>
+          record.proofAssertions.every((proof) => proof.status === "passed"),
+        ),
+      ).toBe(true);
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32").each(["unsafe", "missing-assertion"])(
+    "returns a real nonzero CLI verdict for %s despite complete structural applicability",
+    async (variant) => {
+      const own = await collectiveSemanticFixture(variant);
+      const staticReport = await executeCodeQualityPolicy(
+        { mode: "enforce", scope: "repository", json: true },
+        own.root,
+      );
+      expect(staticReport.responsibilities.assessments.map((record) => record.reasons)).toEqual([
+        [],
+        [],
+      ]);
+      expect(staticReport.violations).toEqual([]);
+      expect(staticReport.enforcementOutcome).toBe("passed");
+      expect(staticReport.responsibilities.counts).toMatchObject({
+        ready: 2,
+        qualified: 0,
+        pending: 2,
+      });
+      const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const code = await codeQualityPolicyMain(
+          ["--json", "--qualify-responsibilities"],
+          own.root,
+        );
+        expect(code).toBe(1);
+        expect(stdout.mock.calls.join(" ")).not.toContain('"outcome":"passed"');
+        expect(stderr.mock.calls.join(" ")).toContain(
+          variant === "unsafe"
+            ? "semantic-proof-execution-failed"
+            : "semantic-proof-assertion-missing",
+        );
+      } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
+      }
+    },
+    195_000,
+  );
+});
 
 describe("explicit semantic CLI build and admission", () => {
   it.skipIf(process.platform === "win32")(

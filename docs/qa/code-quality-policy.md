@@ -346,6 +346,31 @@ owner. Existing public package/declaration/map/runtime, strict proof-program, cu
 and cumulative resource guards remain mandatory. No production record or scope is activated by
 supporting this kind.
 
+A public-parser record may additionally opt into exactly `anti-slop/no-runtime-typeof` and/or
+`anti-slop/no-unsafe-dictionary-type`, retaining the unknown-parameter obligation and parameter
+zero. These additions require nonempty, exact declared `proofAssertions`. They authorize only the
+existing checker-unknown operands and intrinsic dictionary members described above; they grant no
+return, body-wide, known-value-widening or typed-domain exemption. Supporting these optional rules
+does not change any production record or activate a scope.
+
+The collective raw-helper closure can account for multiple public parsers in the same source. For
+each rule, every contributing root must be structurally ready with its canonical producer/public
+proof binding, declared proof selectors and current source facts, and must explicitly declare that
+rule. Every helper runtime reference must belong to the closed direct raw-origin graph or an
+eligible immutable local alias. An unregistered, incomplete, invalid or differently opted-in
+caller, export, escape, mutation, cycle or exhausted existing budget withholds the affected helper
+and its downstream slots. A sound public root remains ready when a helper cannot join; its unmatched
+diagnostics stay enforced. Helper state identity includes the canonical owner/source/declaration
+and parameter, not only a source offset. Shared slots retain all contributing responsibility ids
+in sorted order and use deterministic attribution independent of record order.
+
+This is structural applicability: default static reports still have pending semantics, zero
+qualified records and unexecuted proofs. Fresh actual public runtime qualification remains required
+before scope activation or acceptance. The legacy single-root closure and its second-caller refusal
+are retained, and raw-reader/property-observation slots keep their separate semantic-only condition.
+Dynamic numeric indexed origin, new responsibility kinds and additional rule scopes are outside this
+capability.
+
 The proof consumer makes exactly one named public import call with its unchanged unknown parameter,
 binds the result to an unannotated immutable identifier and returns that identifier unchanged. Its
 explicit return type is the actual producer-owned result in the same checker and instantiation.
@@ -377,9 +402,10 @@ the injected UI callback graph or complete the remaining boundary/domain migrati
 The sync preview and execute records add exactly two slots: the unknown input parameter of
 `parseGitSyncPreview` and `parseGitSyncExecuteResponse`. Their public proofs preserve identity,
 optional presence, ordered refusals, the executable gate and closed outcomes, and reject malformed
-upstream data through the existing guard. Shared private helpers, exported operation/outcome guards,
-the imported upstream guard and the injected UI callback graph receive no additional classification
-from these records. The actual browser transport and physical writer/analyzer proofs remain
+upstream data through the existing guard. Shared private helper slots qualify only when the complete
+canonical per-rule incoming closure admits them; the actual helper-inclusive report supplies the
+evidence. Exported operation/outcome guards, the imported upstream guard and the injected UI callback
+graph receive no blanket classification from these records. The actual browser transport and physical writer/analyzer proofs remain
 separate acceptance evidence.
 The two Knowledge catalog parsers likewise return the original admitted capsule-list or
 capsule-set-list response. Their concrete catalog wire types include the existing legacy case
