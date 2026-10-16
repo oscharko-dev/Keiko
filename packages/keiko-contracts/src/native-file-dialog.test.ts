@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   NATIVE_FILE_DIALOG_MAX_SELECTIONS,
+  NATIVE_FILE_DIALOG_MODES,
+  type NativeFileDialogMode,
   nativeFileDialogExpectedKind,
   nativeFileDialogSelectionBounds,
   validateNativeFileDialogRequest,
 } from "./native-file-dialog.js";
+import {
+  NATIVE_FILE_DIALOG_MAX_SELECTIONS as publicMaxSelections,
+  nativeFileDialogSelectionBounds as publicSelectionBounds,
+} from "@oscharko-dev/keiko-contracts/runtime/native-file-dialog";
 
 describe("validateNativeFileDialogRequest", () => {
   it("accepts a bounded open-directory request and trims hint fields", () => {
@@ -182,6 +188,46 @@ describe("validateNativeFileDialogRequest", () => {
 });
 
 describe("nativeFileDialogSelectionBounds", () => {
+  it("pins source and canonical public signatures to the finite selection bounds", () => {
+    expectTypeOf(nativeFileDialogSelectionBounds).parameters.toEqualTypeOf<
+      [NativeFileDialogMode]
+    >();
+    expectTypeOf(publicSelectionBounds).parameters.toEqualTypeOf<[NativeFileDialogMode]>();
+    expectTypeOf(publicMaxSelections).toEqualTypeOf<typeof NATIVE_FILE_DIALOG_MAX_SELECTIONS>();
+    expectTypeOf(nativeFileDialogSelectionBounds).returns.toEqualTypeOf<
+      | { readonly min: 1; readonly max: 1 }
+      | { readonly min: 1; readonly max: typeof NATIVE_FILE_DIALOG_MAX_SELECTIONS }
+    >();
+    expectTypeOf(publicSelectionBounds).returns.toEqualTypeOf<
+      | { readonly min: 1; readonly max: 1 }
+      | { readonly min: 1; readonly max: typeof NATIVE_FILE_DIALOG_MAX_SELECTIONS }
+    >();
+    expectTypeOf(nativeFileDialogSelectionBounds).returns.not.toBeAny();
+    expectTypeOf(publicSelectionBounds).returns.not.toBeAny();
+    expectTypeOf<ReturnType<typeof nativeFileDialogSelectionBounds>["min"]>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof nativeFileDialogSelectionBounds>["max"]>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof publicSelectionBounds>["min"]>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof publicSelectionBounds>["max"]>().not.toBeAny();
+  });
+
+  it.each(NATIVE_FILE_DIALOG_MODES)(
+    "matches the actual public and source bounds for %s",
+    (mode) => {
+      expect(publicSelectionBounds(mode)).toEqual(nativeFileDialogSelectionBounds(mode));
+      expect(publicSelectionBounds(mode)).not.toBe(publicSelectionBounds(mode));
+      expect(nativeFileDialogSelectionBounds(mode)).not.toBe(nativeFileDialogSelectionBounds(mode));
+    },
+  );
+
+  it("preserves canonical public single and multi selection bounds", () => {
+    expect(publicSelectionBounds("open-file")).toEqual({ min: 1, max: 1 });
+    expect(publicSelectionBounds("open-directory")).toEqual({ min: 1, max: 1 });
+    expect(publicSelectionBounds("open-files")).toEqual({
+      min: 1,
+      max: NATIVE_FILE_DIALOG_MAX_SELECTIONS,
+    });
+  });
+
   it("bounds single-selection modes to exactly one path", () => {
     expect(nativeFileDialogSelectionBounds("open-file")).toEqual({ min: 1, max: 1 });
     expect(nativeFileDialogSelectionBounds("open-directory")).toEqual({ min: 1, max: 1 });

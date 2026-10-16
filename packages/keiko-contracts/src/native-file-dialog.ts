@@ -264,10 +264,11 @@ export function validateNativeFileDialogRequest(input: unknown): NativeFileDialo
 
 // Expected selection count for a mode, enforced by the server against adapter output:
 // exactly one for single-selection modes, 1..NATIVE_FILE_DIALOG_MAX_SELECTIONS for `open-files`.
-export function nativeFileDialogSelectionBounds(mode: NativeFileDialogMode): {
-  readonly min: number;
-  readonly max: number;
-} {
+export function nativeFileDialogSelectionBounds(
+  mode: NativeFileDialogMode,
+):
+  | { readonly min: 1; readonly max: 1 }
+  | { readonly min: 1; readonly max: typeof NATIVE_FILE_DIALOG_MAX_SELECTIONS } {
   if (mode === "open-files") return { min: 1, max: NATIVE_FILE_DIALOG_MAX_SELECTIONS };
   return { min: 1, max: 1 };
 }
