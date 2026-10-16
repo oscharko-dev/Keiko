@@ -33,9 +33,18 @@ it and produce a discriminating requirement test; do not rewrite application cod
 
 Create userEvent.setup() for each test and await its interactions. Await appearance with findBy
 queries; use waitFor for an eventual assertion, keeping side effects outside its retry callback.
+For blank input, clear the control or leave it empty; never call userEvent.type with an empty
+string. Prefer separate parameterized cases so one invalid interaction cannot hide later cases.
 Use queryBy for absence. Assert observable state, not just a mock's existence or a broad truthy
 value. Resolve controlled promises explicitly to prove loading, disabled, success, error and retry
 states. Avoid arbitrary sleeps and immediately resolved promises when testing an in-flight state.
+
+Respect disabled controls: MUI may apply pointer-events: none, so userEvent.click on a disabled
+button can throw before reaching the application. Prove pending controls are disabled and the
+dispatch count stays unchanged; do not disable pointer checks or force an impossible human click.
+If the contract separately requires a programmatic form-submit guard, test that event explicitly
+and distinguish it from a user interaction. Settle controlled promises even when checking pending
+behavior, using act when resolving them directly outside a Testing Library interaction.
 
 Prefer real timers. When time is the behavior, use Vitest fake timers with user-event's advanceTimers
 option supported by the installed versions; do not disable event delays to conceal a timeout.
@@ -55,6 +64,10 @@ Use real imports and strict TypeScript with no any or suppressions hiding a mism
 complete test files, with necessary setup only when it is not already provided. Put file paths,
 source citations and rationale outside executable fences. Do not include ellipses or invented
 helpers. Follow a code-only response request exactly.
+
+Use Keiko's supplied citation syntax, for example [src/Component.tsx:12-18], immediately beside
+claims about existing code. Cite only actual supplied paths and line ranges. A bare filename with
+a detached numeric range is not a source citation. Proposed test code is not an existing source.
 
 Otherwise provide a compact behavior-to-test map, the compatible typecheck and Vitest commands,
 and any missing evidence. Label commands as suggested unless their execution was observed. Chat

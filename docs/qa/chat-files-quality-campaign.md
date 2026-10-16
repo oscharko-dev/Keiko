@@ -112,6 +112,10 @@ that the frontend delegates monetary calculation. Retain that omission; this sin
 full semantic acceptance, scale evidence, a skill comparison or proof of test-generation quality.
 Raw browser/answer artifacts remain private; reproducible corpus packaging is still pending.
 
+Subsequent native generation runs and the packed ten-file monorepo are recorded in the
+[incremental observations](chat-files-quality-observations.md). These are tuning observations,
+not the predeclared repeated comparison or a campaign closeout.
+
 ## Iteration and verification
 
 1. Exercise the UI and record the outcome; read canonical Activity Log evidence first on failure.
