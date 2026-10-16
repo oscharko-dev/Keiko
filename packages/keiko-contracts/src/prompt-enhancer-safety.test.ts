@@ -3,7 +3,7 @@
 // the prohibited-trusted-section defense in depth (AC3), the human-review / least-privilege derivation,
 // and the wire validator's cross-field invariants.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
   EnhancedPrompt,
   PromptSafetyAssessment,
@@ -656,4 +656,54 @@ describe("complete prompt least-privilege member admission", () => {
       expect(validate(input).ok).toBe(false);
     },
   );
+});
+
+import { summarizePromptSafety as publicSafetySummary } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety";
+
+type ExpectedSafetySummary =
+  | { readonly decision: "rejected"; readonly verificationStatus: "failed" }
+  | {
+      readonly decision: "requires-human-review";
+      readonly verificationStatus: "passed-with-review";
+    }
+  | { readonly decision: "accepted"; readonly verificationStatus: "passed" };
+
+describe("prompt safety correlated public result (#3918)", () => {
+  it("retains exactly the three successful result pairs without a cross product", () => {
+    expectTypeOf(publicSafetySummary).returns.toEqualTypeOf<ExpectedSafetySummary>();
+    expectTypeOf(summarizePromptSafety).returns.toEqualTypeOf<ExpectedSafetySummary>();
+    expectTypeOf<{
+      readonly decision: "accepted";
+      readonly verificationStatus: "failed";
+    }>().not.toExtend<ReturnType<typeof publicSafetySummary>>();
+    expectTypeOf<{
+      readonly decision: "rejected";
+      readonly verificationStatus: "passed";
+    }>().not.toExtend<ReturnType<typeof publicSafetySummary>>();
+    expectTypeOf<{
+      readonly decision: "requires-human-review";
+      readonly verificationStatus: "failed";
+    }>().not.toExtend<ReturnType<typeof publicSafetySummary>>();
+    expect(publicSafetySummary([], false)).toEqual({
+      decision: "accepted",
+      verificationStatus: "passed",
+    });
+    expect(publicSafetySummary([], true)).toEqual({
+      decision: "requires-human-review",
+      verificationStatus: "passed-with-review",
+    });
+  });
+
+  it("keeps public blocking precedence over requested review", () => {
+    const finding: PromptSafetyFinding = {
+      code: "missing-untrusted-marker",
+      ruleId: "untrusted-content-marked",
+      severity: "blocking",
+      detail: PROMPT_SAFETY_VIOLATION_DETAILS["missing-untrusted-marker"],
+    };
+    expect(publicSafetySummary([finding], true)).toEqual({
+      decision: "rejected",
+      verificationStatus: "failed",
+    });
+  });
 });

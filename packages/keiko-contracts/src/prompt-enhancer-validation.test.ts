@@ -2,7 +2,7 @@
 // Covers happy-path acceptance, per-invariant rejection, and the Ok|Fail discriminated result so
 // downstream packages can rely on the wire-shape guarantees without re-validating.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 import type { EnhancedPrompt, GroundingPlan, PromptEnhancementRequest } from "./index.js";
 import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
@@ -11,6 +11,7 @@ import {
   validatePromptEnhancerIdString,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   RAG_EVALUATION_DIMENSIONS,
+  PROMPT_SIGNAL_DIMENSIONS,
 } from "./prompt-enhancer.js";
 import { planGrounding } from "./prompt-enhancer-grounding.js";
 import {
@@ -843,4 +844,32 @@ describe("complete prompt nested member admission", () => {
       if (result.ok) expect(result.value.context).toBe(context);
     },
   );
+});
+
+import { validatePromptTaskAnalysis as publicSignalAnalysis } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+import type { PromptSignalDimension } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+
+it("admits actual analyzer signals across all six public dimensions and refuses foreign keys (#3918)", () => {
+  const seen = new Set<PromptSignalDimension>();
+  for (const text of ["do it", "Run this command to fetch the latest results."]) {
+    const input = analyzePrompt({ ...validRequest(), input: { text, hasConnectedContext: false } });
+    const parsed = publicSignalAnalysis(input);
+    if (!parsed.ok) throw new TypeError("actual public analyzer signal fixture refused");
+    expect(parsed.value).toBe(input);
+    expect(parsed.value.signals).toBe(input.signals);
+    for (const signal of parsed.value.signals) {
+      expectTypeOf(signal.dimension).toEqualTypeOf<PromptSignalDimension>();
+      seen.add(signal.dimension);
+    }
+    const refused = publicSignalAnalysis({
+      ...input,
+      signals: [{ dimension: "constructor", code: "invalid" }],
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok)
+      expect(refused.errors).toContain(
+        "analysis.signals must be an array of {dimension, code} records",
+      );
+  }
+  expect([...seen].sort()).toEqual([...PROMPT_SIGNAL_DIMENSIONS].sort());
 });

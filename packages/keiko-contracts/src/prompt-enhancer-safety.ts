@@ -325,6 +325,14 @@ export function requiresHumanReviewForAnalysis(analysis: PromptTaskAnalysis): bo
   );
 }
 
+type PromptSafetySummary =
+  | { readonly decision: "rejected"; readonly verificationStatus: "failed" }
+  | {
+      readonly decision: "requires-human-review";
+      readonly verificationStatus: "passed-with-review";
+    }
+  | { readonly decision: "accepted"; readonly verificationStatus: "passed" };
+
 /**
  * Reduce a finding set and the human-review flag to the decision + verification status. Pure. Shared
  * by the structural assessor and the gateway validate stage (which adds security findings first).
@@ -332,10 +340,7 @@ export function requiresHumanReviewForAnalysis(analysis: PromptTaskAnalysis): bo
 export function summarizePromptSafety(
   findings: readonly PromptSafetyFinding[],
   requiresHumanReview: boolean,
-): {
-  readonly decision: PromptSafetyDecision;
-  readonly verificationStatus: PromptSafetyVerificationStatus;
-} {
+): PromptSafetySummary {
   if (findings.some((finding) => finding.severity === "blocking")) {
     return { decision: "rejected", verificationStatus: "failed" };
   }

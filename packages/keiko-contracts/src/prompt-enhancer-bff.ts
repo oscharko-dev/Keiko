@@ -397,8 +397,23 @@ const WIRE_FIELD_VALIDATORS: readonly WireFieldValidator[] = [
   validateCandidateCountField,
 ];
 
-// Assemble the validated wire request, omitting absent optionals so exactOptionalPropertyTypes holds.
-function buildWireRequestValue(input: Record<string, unknown>): Record<string, unknown> {
+interface CapturedPromptEnhancementWireRequest {
+  readonly text: unknown;
+  readonly outputKind?: unknown;
+  readonly profilePreference?: unknown;
+  readonly missingInformationStrategy?: unknown;
+  readonly hasConnectedContext?: unknown;
+  readonly attachmentCount?: unknown;
+  readonly locale?: unknown;
+  readonly modelId?: unknown;
+  readonly candidateCount?: unknown;
+}
+
+// Capture raw observed wire fields, omitting absent optionals.
+// The existing second admission check below validates this captured value.
+function buildWireRequestValue(
+  input: Record<string, unknown>,
+): CapturedPromptEnhancementWireRequest {
   return {
     text: input.text,
     ...(input.outputKind === undefined ? {} : { outputKind: input.outputKind }),

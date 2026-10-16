@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   EnhancedPrompt,
   PromptCandidateScorecard,
@@ -455,4 +455,23 @@ describe("complete prompt selection member admission", () => {
     const input = { ...validSelection(), [field]: Array<unknown>(1) };
     expect(validate(input).ok).toBe(false);
   });
+});
+
+import { PROMPT_CANDIDATE_RANKING_FIXTURE as publicRankingFixture } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-ranking-fixture";
+import type { PromptCriticDimension } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-critic";
+
+it("preserves the public ranking fixture data and closed dimension values (#3918)", () => {
+  expect(publicRankingFixture).toEqual(PROMPT_CANDIDATE_RANKING_FIXTURE);
+  expect(Object.isFrozen(publicRankingFixture)).toBe(true);
+  expect(publicRankingFixture.length).toBeGreaterThan(0);
+  for (const card of publicRankingFixture) {
+    expect(card.dimensionScores.map(({ dimension }) => dimension)).toEqual(
+      PROMPT_CRITIC_DIMENSIONS,
+    );
+    for (const score of card.dimensionScores) {
+      expectTypeOf(score.dimension).toEqualTypeOf<PromptCriticDimension>();
+      expectTypeOf(score.score).toEqualTypeOf<number>();
+      expect(Number.isFinite(score.score)).toBe(true);
+    }
+  }
 });

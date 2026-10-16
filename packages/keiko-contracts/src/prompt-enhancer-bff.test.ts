@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
@@ -438,4 +438,57 @@ describe("private skill output kind", () => {
       false,
     );
   });
+});
+
+import {
+  validatePromptEnhancementWireRequest as publicWireCapture,
+  type PromptEnhancementWireRequest as PublicWireRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
+import type { PromptEnhancerValidation as PublicPromptValidation } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+
+it("retains truthful public raw input and admitted wire key types (#3918)", () => {
+  expectTypeOf(publicWireCapture).parameter(0).toEqualTypeOf<unknown>();
+  expectTypeOf(publicWireCapture).returns.toEqualTypeOf<
+    PublicPromptValidation<PublicWireRequest>
+  >();
+  expectTypeOf<keyof PublicWireRequest>().toEqualTypeOf<
+    | "text"
+    | "outputKind"
+    | "profilePreference"
+    | "missingInformationStrategy"
+    | "hasConnectedContext"
+    | "attachmentCount"
+    | "locale"
+    | "modelId"
+    | "candidateCount"
+  >();
+});
+
+it("preserves the public nine-field copy after actual admission (#3918)", () => {
+  const input = {
+    text: "Synthetic complete document",
+    outputKind: "markdown-skill",
+    profilePreference: "precise",
+    missingInformationStrategy: "clarify",
+    hasConnectedContext: true,
+    attachmentCount: 2,
+    locale: "en-US",
+    modelId: "example-chat-model",
+    candidateCount: 2,
+  };
+  const parsed = publicWireCapture(input);
+  if (!parsed.ok) throw new TypeError("healthy public wire capture refused");
+  expect(parsed.value).toEqual(input);
+  expect(parsed.value).not.toBe(input);
+  expect(Object.keys(parsed.value)).toEqual([
+    "text",
+    "outputKind",
+    "profilePreference",
+    "missingInformationStrategy",
+    "hasConnectedContext",
+    "attachmentCount",
+    "locale",
+    "modelId",
+    "candidateCount",
+  ]);
 });

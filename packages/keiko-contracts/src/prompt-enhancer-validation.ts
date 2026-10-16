@@ -20,6 +20,7 @@ import {
   type GroundingStrategy,
   type PromptEnhancementRequest,
   type PromptTaskAnalysis,
+  type PromptSignalDimension,
   type RagEvaluationHint,
   type RecencyExpectation,
   CITATION_DISCIPLINES,
@@ -445,7 +446,9 @@ function isCodeWithMember(code: string, prefix: string, allowed: readonly string
   return code.startsWith(prefix) && allowed.includes(code.slice(prefix.length));
 }
 
-const SIGNAL_CODE_VALIDATORS: Readonly<Record<string, (code: string) => boolean>> = {
+const SIGNAL_CODE_VALIDATORS: Readonly<
+  Partial<Record<PromptSignalDimension, (code: string) => boolean>>
+> = {
   "task-class": (code) => isCodeWithMember(code, "class:", PROMPT_TASK_CLASSES),
   domain: (code) => isCodeWithMember(code, "domain:", PROMPT_DOMAINS),
   grounding: (code) =>
@@ -456,7 +459,7 @@ const SIGNAL_CODE_VALIDATORS: Readonly<Record<string, (code: string) => boolean>
     isCodeWithMember(code, "hint:", OUTPUT_FORMAT_HINTS),
   risk: (code) => isCodeWithMember(code, "risk:", PROMPT_RISK_CLASSES),
   "missing-context": (code) => isCodeWithMember(code, "topic:", MISSING_CONTEXT_TOPICS),
-};
+} satisfies Readonly<Record<PromptSignalDimension, (code: string) => boolean>>;
 
 function isValidSignal(signal: Record<string, unknown>): boolean {
   if (
