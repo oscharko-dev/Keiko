@@ -85,10 +85,43 @@ calls and `citationRepairDisposition: rejected-content-changed`; React records o
 and no repair. Raw answers, screenshots, copied code, execution output and correlation closures
 remain outside the checkout.
 
+## Slow gateway and cancellation, 2026-10-16
+
+The existing loopback chaos proxy delayed forwarding a real Chat completion to local LiteLLM
+by 180 seconds. The actual Chat dispatch was correlated with that injection; the gateway recorded
+one stream start and completion in 185,945 ms, with no retry. The browser remained usable and
+retained an independently typed draft. This qualifies one delayed response-start case, not shared
+production capacity, interrupted streams or all retry conditions.
+
+Cancelling another delayed request exposed a product defect: if the user had already typed the
+next draft, clicking **Cancel response** cancelled the current request and immediately submitted
+that draft. The same DOM button changed from `type="button"` to `type="submit"` during the click.
+The fix prevents default click activation before cancellation changes the render. It records the
+closed `send-cancel-requested` activity through the existing Composer diagnostic path without
+including either draft or response content.
+
+A regression test reproduced the unwanted `sendMessage` invocation before the fix and passed
+afterwards. Its synchronous state transition models the browser's discrete-event commit before
+default activation. In the rebuilt, fully reloaded native app, the repeated delayed request was
+cancelled after 19,053 ms: one stream start, one cancellation, one Composer cancellation event,
+and the second draft remained unsent. The canonical time-window query reported complete evidence,
+no loss and no truncation. A preceding retest had retained the old frontend because reopening a
+launcher fragment did not reload the document; it still reproduced the defect and is excluded
+from passing evidence.
+
+## Revised React skill: first fresh attempt
+
+Revision 2 was replaced and explicitly selected through the native skill UI in a fresh conversation.
+The unchanged generated file failed strict TypeScript checking because its promise resolver could
+be used before assignment (`TS2454`). Execution and mutation testing therefore did not proceed.
+It also repeated the earlier empty-input typing and disabled-button interaction patterns. This
+attempt does not establish an improvement; prompt delivery and further independent comparisons
+remain under investigation. The original answer and failed execution are retained privately.
+
 ## Open work
 
 Fresh skill/control repetitions, held-out tasks, larger Git/non-Git corpora, source freshness,
-context pressure, prompt-injection cases, and shared-gateway delay/failure/cancellation are open.
+context pressure, prompt-injection cases, and the remaining shared-gateway failure matrix are open.
 An initial one-shot proxy delay was consumed by a background model request and cancelled during
 test-instance restart; it is not evidence of a three-minute Chat wait. Subsequent latency cases
 must correlate the actual Chat dispatch with the injected delay before claiming a result.

@@ -2369,6 +2369,16 @@ function sendButtonTip(noEligibleModels: boolean, loading: boolean, t: I18nTrans
   return t("chat.send.label");
 }
 
+function cancelComposerSend(event: SyntheticEvent, cancelSend: () => void): void {
+  // Cancellation can synchronously turn this same DOM button into a submit button. Prevent the
+  // click's default activation before that render so it cannot submit a waiting draft (#4038).
+  event.preventDefault();
+  cancelSend();
+  reportClientDiagnostic("Keiko composer cancellation requested.", {
+    composerActivity: "send-cancel-requested",
+  });
+}
+
 // Extracted from ComposerBar (SonarCloud S3776) — the primary action button, which flips between
 // "cancel in-flight send" and "submit" (Issue #152). Same markup/behavior, now isolated so the
 // sending/type/data-tip branching lives in one small component instead of inline in ComposerBar.
@@ -2400,7 +2410,7 @@ function ComposerSendButton({
         data-on
         aria-label={t("chat.send.cancel")}
         data-tip={t("chat.send.cancel")}
-        onClick={cancelSend}
+        onClick={(event) => cancelComposerSend(event, cancelSend)}
       >
         <CloseIcon size={16} />
       </button>

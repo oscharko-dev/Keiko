@@ -3173,6 +3173,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "send-failure-skipped-owner",
           "send-failure-skipped-draft",
           "send-failure-skipped-unproven",
+          "send-cancel-requested",
           "equivalent-edit-ignored",
           "stale-draft-echo-ignored",
           "non-text-paste-ignored",

@@ -8,6 +8,7 @@ import {
   connectedInspectionManifest,
 } from "./connectedEvidenceInspection.test-fixtures";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
+import { flushSync } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CapsuleSetId,
@@ -1090,6 +1091,57 @@ describe("ChatWindow cancel button", () => {
     );
     await user.click(screen.getByRole("button", { name: "Cancel grounded request" }));
     expect(cancelGrounded).toHaveBeenCalledOnce();
+  });
+
+  it("does not submit a waiting draft when cancellation changes the button into Send", async () => {
+    const user = userEvent.setup();
+    const cancelSend = vi.fn();
+    const sendMessage = vi.fn();
+    function CancellingWindow(): React.JSX.Element {
+      const [sending, setSending] = useState(true);
+      const session = makeSession({
+        activeChat: makeChat(),
+        draft: "Keep this draft unsent",
+        sending,
+        sendStatus: sending ? "streaming" : "cancelled",
+        sendMessage,
+        cancelSend: () => {
+          cancelSend();
+          // Match the native browser's discrete-event commit before click default activation.
+          flushSync(() => setSending(false));
+        },
+      });
+      return (
+        <ChatSessionProvider value={session}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      );
+    }
+    render(<CancellingWindow />);
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    try {
+      await user.click(screen.getByRole("button", { name: "Cancel response" }));
+
+      expect(cancelSend).toHaveBeenCalledOnce();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+        "Keep this draft unsent",
+      );
+      const cancellations = reports.filter(
+        (report) => report.meta?.composerActivity === "send-cancel-requested",
+      );
+      expect(cancellations).toEqual([
+        {
+          message: "Keiko composer cancellation requested.",
+          meta: { composerActivity: "send-cancel-requested" },
+        },
+      ]);
+      await expectDiagnosticWireAccepted(cancellations);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 });
 
