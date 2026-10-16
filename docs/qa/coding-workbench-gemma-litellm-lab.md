@@ -1859,3 +1859,10 @@ These are additional compatibility proofs, not newly fixed behavior. They do not
 issuerless or static MCP configuration, the upstream YAML CLI, or an active MCP integration.
 The expanded command passes all 55 tests without skips on macOS ARM64 and in a fresh Linux ARM64
 container. Its 125 owning workflow/unused-code-inventory tests and the full unused-code gate pass.
+
+The owner bounded PR #4036 to this qualification slice of #3898 on 2026-10-16. Its completion
+boundary is the required host-test wiring, the Windows metadata containment repair, the four
+dependency-consumer controls and their applicable local/hosted checks. Further work in this PR is
+limited to findings caused by this slice. Original-service activation, version-boundary redesign,
+new native capabilities, credential migration and live-model parity belong to separate follow-up
+changes. Neither #3898 nor Epic #3897 is closed by this slice.
