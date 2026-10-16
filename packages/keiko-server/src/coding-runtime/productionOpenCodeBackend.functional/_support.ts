@@ -208,6 +208,7 @@ export function createFunctionalRuntimeResolver(
     ...(input.verifiedCommit === undefined ? {} : { verifiedCommit: input.verifiedCommit }),
     ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
     backend: functionalBackend(input, readiness),
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
     editorAgentClient: functionalEditorAgentClient(activeRoot, input.runtimeMutationLeaseBroker),
     verificationRunner: input.verificationRunner,

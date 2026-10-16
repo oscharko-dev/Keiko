@@ -106,7 +106,9 @@ export interface PrDescriptionArtifactEvidence {
 /** One domain-separated producer for hashing and later apply-time integrity checks. */
 export function prDescriptionArtifactDigestFields(
   artifact: Omit<PrDescriptionArtifact, "artifactDigest">,
-): Readonly<Record<string, unknown>> {
+): Readonly<
+  Omit<PrDescriptionArtifact, "artifactDigest"> & { readonly domain: "keiko-pr-description-v1" }
+> {
   return {
     domain: "keiko-pr-description-v1",
     schemaVersion: artifact.schemaVersion,

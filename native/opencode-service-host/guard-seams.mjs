@@ -1,4 +1,4 @@
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 /** Fixed host capabilities. No native planner, interpreter or transport algorithm is replaced. */
 export function fixedPostTransport(raw, inputBinding) {
   const binding = copyBinding(inputBinding);
@@ -426,7 +426,7 @@ function initialReadFileString(path, original, environment) {
 function initialRelativePath(root, path) {
   if (typeof path !== "string" || !isAbsolute(path) || resolve(path) !== path) return undefined;
   const value = relative(root, path);
-  return value === ".." || value.startsWith("../") || isAbsolute(value) ? undefined : value;
+  return value === ".." || value.startsWith(`..${sep}`) || isAbsolute(value) ? undefined : value;
 }
 
 function initialRealPath(path, original, environment) {
@@ -460,11 +460,15 @@ function initialStartupRealPath(path, original, environment) {
       );
     const lexical = initialRelativePath(binding.workspace, path);
     if (lexical === undefined || isDenied(lexical))
-      return yield* Effect.fail(initialUnavailable("realPath", "denied", PlatformError));
+      return yield* Effect.fail(
+        initialUnavailable("realPath", "startup-path-denied", PlatformError),
+      );
     const canonical = yield* original.realPath(path);
     const resolved = initialRelativePath(binding.workspace, canonical);
     if (resolved === undefined || isDenied(resolved) || !environment.startupMetadata.open)
-      return yield* Effect.fail(initialUnavailable("realPath", "denied", PlatformError));
+      return yield* Effect.fail(
+        initialUnavailable("realPath", "startup-canonical-denied", PlatformError),
+      );
     return canonical;
   });
 }
@@ -474,7 +478,9 @@ function privateInitialMetadata(path, original, environment, isOpen) {
   return Effect.gen(function* () {
     const canonical = yield* original.realPath(path);
     if (canonical !== path || !isOpen())
-      return yield* Effect.fail(initialUnavailable("realPath", "denied", PlatformError));
+      return yield* Effect.fail(
+        initialUnavailable("realPath", "private-metadata-denied", PlatformError),
+      );
     return canonical;
   });
 }
@@ -485,6 +491,7 @@ function initialUnavailable(method, reason, PlatformError, cause) {
       _tag: reason === "not-found" ? "NotFound" : "Unknown",
       module: "FileSystem",
       method,
+      description: reason,
       ...(cause === undefined ? {} : { cause }),
     }),
   );

@@ -82,7 +82,14 @@
       "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
     },
     "native/opencode-service-host": {
-      "entry": ["host.mjs", "entry.mjs", "entry.test.mjs", "guard-seams.test.mjs", "host.test.mjs"],
+      "entry": [
+        "host.mjs",
+        "entry.mjs",
+        "compatibility.test.mjs",
+        "entry.test.mjs",
+        "guard-seams.test.mjs",
+        "host.test.mjs"
+      ],
       "project": ["*.mjs"],
       "vitest": false,
       "ignoreDependencies": ["@effect/platform-node-shared"],

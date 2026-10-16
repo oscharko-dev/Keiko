@@ -548,11 +548,18 @@ byte-compatible, and progress changes no gate verdict, currentness check or reso
 
 The required static-policy matrix invokes this checked smoke once on each governed Node line on
 `ubuntu-24.04-arm`, using a fresh full-history checkout of the same immutable merge candidate,
-normal install/provision/build and exact toolchain verification. Both legs must succeed in the
-`ci` aggregate and both exact job names must be proven before tree evidence is reused. Core typed
-quality and Node26 product shards remain on x64; the native-host, Windows and macOS ABI proofs
-retain their existing platforms. Both legs then unconditionally run `check:code-quality-policy:raw-reader`, the actual single-record
-raw-reader semantic qualification previously embedded in the parallel responsibility suite. Its
+normal install/provision/build and exact toolchain verification. The same smoke step first prints
+one body-free Node `os` JSON object with `arch`, `logicalCpus`, `availableParallelism` and
+`totalMemoryBytes`, then invokes `/usr/bin/time -v npm run check:code-quality-policy:repository`
+exactly once as its last command. GNU time 1.9 is already present in the pinned Ubuntu ARM image;
+no installer, retry or threshold is added. The measured command's failure status propagates and
+skips the immediately following raw-reader step. CPU time, maximum RSS and context switches are
+command-level context, not a phase cause, a cgroup memory limit or a process-group-summed peak.
+Both legs must succeed in the `ci` aggregate and both exact job names must be proven before tree
+evidence is reused. Core typed quality and Node26 product shards remain on x64; the native-host,
+Windows and macOS ABI proofs retain their existing platforms. On smoke success, both legs then run
+`check:code-quality-policy:raw-reader`, the actual single-record raw-reader semantic qualification
+previously embedded in the parallel responsibility suite. Its
 assertions and 195s watchdog remain unchanged; the other responsibility fixtures remain in Vitest.
 Local `npm run lint` executes the whole policy and that qualification before typed lint. This does
 not substitute for semantic qualification of the complete current register. Hosted ARM results are required; a

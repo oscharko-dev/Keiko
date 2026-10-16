@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   validatePrDescriptionCandidate,
   prDescriptionArtifactDigestFields,
@@ -292,6 +292,69 @@ describe("G2 original positive reference extent condition", () => {
         reason: "invalid-model-output",
       });
       expect(reads).toBe(1);
+    });
+  }
+});
+
+describe("PR description digest field evidence", () => {
+  it("retains the closed owner-derived source and public return types", () => {
+    type Fields = Readonly<
+      Omit<PrDescriptionArtifact, "artifactDigest"> & { readonly domain: "keiko-pr-description-v1" }
+    >;
+    type Source = ReturnType<typeof prDescriptionArtifactDigestFields>;
+    type Public = ReturnType<typeof g2PublicDescription.prDescriptionArtifactDigestFields>;
+    expectTypeOf<Source>().toEqualTypeOf<Fields>();
+    expectTypeOf<Public>().toEqualTypeOf<Fields>();
+    expectTypeOf<keyof Source>().toEqualTypeOf<keyof Fields>();
+    expectTypeOf<keyof Public>().toEqualTypeOf<keyof Fields>();
+    expectTypeOf<Source["domain"]>().toEqualTypeOf<"keiko-pr-description-v1">();
+    expectTypeOf<Public["binding"]>().toEqualTypeOf<PrDescriptionArtifact["binding"]>();
+    expectTypeOf<Source["candidate"]>().toEqualTypeOf<PrDescriptionArtifact["candidate"]>();
+    expectTypeOf<Public["coverage"]>().toEqualTypeOf<PrDescriptionArtifact["coverage"]>();
+  });
+
+  const artifactKeys = [
+    "schemaVersion",
+    "renderingVersion",
+    "binding",
+    "language",
+    "outcome",
+    "reason",
+    "coverage",
+    "candidate",
+    "markdown",
+  ] as const;
+
+  for (const [surface, project] of [
+    ["source", prDescriptionArtifactDigestFields],
+    ["public", g2PublicDescription.prDescriptionArtifactDigestFields],
+  ] as const) {
+    it(`${surface} retains projection order, single observations and nested identities`, () => {
+      const value = artifact();
+      const expected = prDescriptionArtifactDigestFields(value);
+      const reads: string[] = [];
+      for (const key of artifactKeys) {
+        const captured = value[key];
+        Object.defineProperty(value, key, {
+          get: (): typeof captured => {
+            reads.push(key);
+            return captured;
+          },
+        });
+      }
+      Object.defineProperty(value, "artifactDigest", {
+        get: (): never => {
+          throw new Error("digest projection must not read its output digest");
+        },
+      });
+      const fields = project(value);
+      expect(reads).toEqual(artifactKeys);
+      expect(Object.keys(fields)).toEqual(["domain", ...artifactKeys]);
+      expect(fields).not.toHaveProperty("artifactDigest");
+      expect(fields.binding).toBe(expected.binding);
+      expect(fields.coverage).toBe(expected.coverage);
+      expect(fields.candidate).toBe(expected.candidate);
+      expect(JSON.stringify(fields)).toBe(JSON.stringify(expected));
     });
   }
 });

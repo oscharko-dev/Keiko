@@ -88,7 +88,9 @@ const RECEIPT_ID = /^[A-Za-z0-9_.-]{1,128}$/u;
 function requireReceipt(condition: boolean): asserts condition {
   if (!condition) throw new TypeError("Invalid tool invocation receipt");
 }
-function receiptFields(value: unknown): Record<string, unknown> {
+function receiptFields(
+  value: unknown,
+): Readonly<Partial<Record<keyof ToolInvocationReceipt, unknown>>> {
   requireReceipt(typeof value === "object" && value !== null);
   const prototype: unknown = Object.getPrototypeOf(value);
   requireReceipt(prototype === Object.prototype || prototype === null);
@@ -111,7 +113,9 @@ function isReceiptStatus(value: unknown): value is ToolResultStatus {
 }
 const COMMIT_DISPOSITIONS = new Set(["committed", "commit-uncertain"]);
 const UNCERTAIN_DISPOSITIONS = new Set(["commit-uncertain", "release-uncertain"]);
-function validateReceiptAccounting(receipt: Record<string, unknown>): void {
+function validateReceiptAccounting(
+  receipt: Readonly<Partial<Record<keyof ToolInvocationReceipt, unknown>>>,
+): void {
   if (receipt.budgetDisposition === "not-reserved")
     requireReceipt(receipt.reservationId === null && !receipt.effectStarted);
   else

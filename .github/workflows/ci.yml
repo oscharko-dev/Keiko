@@ -393,7 +393,9 @@ jobs:
         # qualification remains on the existing x64, Windows and macOS lanes.
         env:
           NODE_OPTIONS: ${{ matrix.node == '24.18.0' && '--max-old-space-size=12288' || '' }}
-        run: npm run check:code-quality-policy:repository
+        run: |
+          node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+          /usr/bin/time -v npm run check:code-quality-policy:repository
       - name: Qualify the actual raw-reader responsibility serially
         run: npm run check:code-quality-policy:raw-reader
 
@@ -946,6 +948,10 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
+      - name: Build workspace producers for the original OpenCode host
+        run: npm run build:packages
+      - name: Install locked original OpenCode host dependencies
+        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
       # Reassembly happens before ANY evaluation, and the `needs:` edges above make that ordering
       # structural rather than a convention: a per-file floor read off one shard's partial summary
       # would silently under-report, so no gate below ever sees a shard-local view.
@@ -1029,6 +1035,11 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The same native merge reconstructs the second coverage scope in its own report directory.
         run: npm run test:coverage:scripts:merge
+      # The native Node reporter appends to the final LCOV once, after Vitest regenerates it from
+      # both script blobs. Appending inside a shard would be discarded by the later blob merge.
+      - name: Add measured original host coverage to the script report
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:coverage:opencode-service-host
       - name: Discard the shard blobs now that the merged coverage exists
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
@@ -1191,6 +1202,12 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Build workspace producers for the original OpenCode host
+        run: npm run build:packages
+      - name: Install the locked private OpenCode host graph
+        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
+      - name: Qualify the original OpenCode service, transport and process lifecycle
+        run: npm run test:opencode-service-host
       - name: Compile and functionally qualify the real secure-read helper
         run: node scripts/qualify-portable-secure-read.mjs ${{ matrix.platform_target }}
 

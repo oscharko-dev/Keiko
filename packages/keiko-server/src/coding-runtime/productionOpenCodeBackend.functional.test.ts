@@ -7,6 +7,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
+import { formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
 
 import type {
   CodingAppSessionChannelSnapshot,
@@ -92,9 +97,14 @@ interface FunctionalVerificationFixture {
   readonly manager: VerificationRunnerManager;
   readonly evidence: ReturnType<typeof createInMemoryEvidenceStore>;
   readonly events: EditorVerificationEvent[];
+  readonly activityLog: BufferedServerLogSink;
 }
 
+type FunctionalScenarioStage =
+  "not-started" | "starting" | "question" | "answer" | "verification" | "activity" | "completed";
+
 interface FunctionalPipeline {
+  scenarioStage: FunctionalScenarioStage;
   readonly baseUrl: string;
   readonly deps: UiHandlerDeps;
   readonly orchestrator: CodingRuntimeOrchestrator;
@@ -195,6 +205,61 @@ describe("production OpenCode backend functional pipeline", () => {
     }
   }, 60_000);
 
+  it("captures a real verification subscriber diagnostic through the functional composition", async () => {
+    const fixture = await setupWorkspace();
+    const scripted = createScriptedOpenCodeHarness();
+    disposers.push(() => scripted.closeAll());
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const pipeline = await bootPipeline(
+        fixture,
+        scriptedFunctionalPortable(fixture.root),
+        scripted.createSupervisor,
+        { mirrorDiagnosticsToDefaultLog: true },
+      );
+      pipeline.verification.manager.subscribe((event) => {
+        if (event.kind === "run-started") throw new Error(`${SECRET}:${fixture.workspace}`);
+      });
+      const outcome = await pipeline.verification.manager.runToReport(
+        { projectId: fixture.workspace, kinds: ["typecheck"] },
+        new AbortController().signal,
+      );
+      expect(outcome.report.overallStatus).toBe("passed");
+      expect(pipeline.verification.events.some((event) => event.kind === "run-completed")).toBe(
+        true,
+      );
+      expect(JSON.stringify(logged.mock.calls)).toContain("editor.verification.subscriber");
+      expect(
+        pipeline.diagnostics.some(
+          (record) => record.operation === "editor.verification.subscriber",
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(pipeline.diagnostics)).not.toContain(SECRET);
+      expect(JSON.stringify(pipeline.diagnostics)).not.toContain(fixture.workspace);
+      const registered = verificationActivityFacts(pipeline.verification.activityLog);
+      expect(registered.selected).toBeGreaterThan(0);
+      expect(registered.completed).toBeGreaterThan(0);
+      expect(registered.rejected).toBe(0);
+      const cause = new Error(`${SECRET}:${fixture.workspace}`);
+      const failure = functionalScenarioFailure(fixture, pipeline, scripted, cause);
+      expect(failure.cause).toBe(cause);
+      expect(failure.message).toContain('"runnerCompletedCount":1');
+      expect(failure.message).not.toContain(SECRET);
+      expect(failure.message).not.toContain(fixture.workspace);
+      const selected = pipeline.verification.activityLog.events.find(
+        (event) => event.op === "editor.verification.execute" && event.extra?.state === "selected",
+      );
+      if (selected === undefined) throw new Error("registered selection missing");
+      Object.defineProperty(selected, "extra", { value: { ...selected.extra, raw: SECRET } });
+      expect(verificationActivityFacts(pipeline.verification.activityLog).rejected).toBe(1);
+      expect(functionalScenarioFailure(fixture, pipeline, scripted, cause).message).not.toContain(
+        SECRET,
+      );
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it("drives the managed OpenCode composition end to end with a scripted child and model gateway", async () => {
     const fixture = await setupWorkspace();
     const scripted = createScriptedOpenCodeHarness();
@@ -208,12 +273,7 @@ describe("production OpenCode backend functional pipeline", () => {
       try {
         await runProductiveScenario(fixture, pipeline);
       } catch (error) {
-        throw new Error(
-          `functional-scenario-failed:${scripted.children
-            .flatMap((child) => child.fixtureFailures())
-            .join(",")};diagnostics=${pipeline.diagnostics.map((record) => record.code).join(",")}`,
-          { cause: error },
-        );
+        throw functionalScenarioFailure(fixture, pipeline, scripted, error);
       }
       await runAuthorityScenarios(fixture, pipeline);
       await runRejectedQuestionScenario(fixture, pipeline, scripted);
@@ -317,6 +377,7 @@ async function bootDiscoveryPipeline(
     timeline,
     verification,
     evidenceBodies: new Map<string, string>(),
+    scenarioStage: "not-started",
     diagnostics: [],
     subscribeTimeline: (runId): void => {
       const subscribed = eventHub.subscribe(runId, undefined, {
@@ -393,7 +454,6 @@ async function bootPipeline(
   createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>,
   options: { readonly mirrorDiagnosticsToDefaultLog?: boolean } = {},
 ): Promise<FunctionalPipeline> {
-  const verification = createVerification(fixture.workspace);
   const evidenceBodies = new Map<string, string>();
   const runtimeEvidence = createCodingRuntimeEvidenceAggregator(memoryEvidence(evidenceBodies));
   const diagnosticRecords: ServerDiagnosticRecord[] = [];
@@ -405,6 +465,7 @@ async function bootPipeline(
       }
     },
   };
+  const verification = createVerification(fixture.workspace, diagnostics);
   const port = await reserveLoopbackPort();
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createFunctionalRuntimeResolver({
@@ -455,6 +516,7 @@ async function bootPipeline(
     timeline,
     verification,
     evidenceBodies,
+    scenarioStage: "not-started",
     diagnostics: diagnosticRecords,
     subscribeTimeline: (runId): void => {
       const subscribed = eventHub.subscribe(runId, undefined, {
@@ -469,10 +531,70 @@ async function bootPipeline(
   };
 }
 
+function verificationActivityFacts(activityLog: BufferedServerLogSink): {
+  readonly selected: number;
+  readonly completed: number;
+  readonly refused: number;
+  readonly rejected: number;
+} {
+  const facts = { selected: 0, completed: 0, refused: 0, rejected: 0 };
+  for (const event of activityLog.events) {
+    if (event.op !== "editor.verification.execute") continue;
+    try {
+      formatActivityLogProofLine(event);
+      const state = event.extra?.state;
+      if (state === "selected" || state === "completed" || state === "refused") facts[state] += 1;
+      else facts.rejected += 1;
+    } catch {
+      facts.rejected += 1;
+    }
+  }
+  return facts;
+}
+
+function functionalScenarioFailure(
+  fixture: FunctionalWorkspaceFixture,
+  pipeline: FunctionalPipeline,
+  scripted: ScriptedOpenCodeHarness,
+  cause: unknown,
+): Error {
+  const facts = {
+    stage: pipeline.scenarioStage,
+    modelCalls: fixture.script.calls,
+    verificationIssued: fixture.script.verificationIssued ?? "unavailable",
+    childCount: scripted.children.length,
+    fixtureFailureCount: scripted.children.reduce(
+      (count, child) => count + child.fixtureFailures().length,
+      0,
+    ),
+    diagnosticCount: pipeline.diagnostics.length,
+    observationCount: pipeline.timeline.filter(
+      (event) => event.kind === "runtime-event" && event.eventKind === "observation-streamed",
+    ).length,
+    verificationSummaryCount: pipeline.timeline.filter(
+      (event) => event.kind === "runtime-event" && event.eventKind === "verification-summarized",
+    ).length,
+    runnerStartedCount: pipeline.verification.events.filter((event) => event.kind === "run-started")
+      .length,
+    runnerCompletedCount: pipeline.verification.events.filter(
+      (event) => event.kind === "run-completed",
+    ).length,
+    runnerFailedCount: pipeline.verification.events.filter((event) => event.kind === "run-failed")
+      .length,
+    runnerCancelledCount: pipeline.verification.events.filter(
+      (event) => event.kind === "run-cancelled",
+    ).length,
+    registeredVerification: verificationActivityFacts(pipeline.verification.activityLog),
+    orchestratorLogCapture: "unavailable",
+  };
+  return new Error(`functional-scenario-failed:${JSON.stringify(facts)}`, { cause });
+}
+
 async function runProductiveScenario(
   fixture: FunctionalWorkspaceFixture,
   pipeline: FunctionalPipeline,
 ): Promise<void> {
+  pipeline.scenarioStage = "starting";
   const sessionCookie = await pipelineSessionCookie(pipeline.baseUrl);
   const started = await post(
     pipeline.baseUrl,
@@ -483,6 +605,7 @@ async function runProductiveScenario(
   const run = (await started.json()) as { runId: string; state: string };
   expect(run.state).toBe("running");
   pipeline.subscribeTimeline(run.runId);
+  pipeline.scenarioStage = "question";
   const question = await waitForQuestion(pipeline.orchestrator, run.runId, "productive-question");
   expect(question.questions).toHaveLength(1);
   expect(question.questions[0]?.question).toBe("Approve?");
@@ -502,10 +625,12 @@ async function runProductiveScenario(
     },
     { timeout: 30_000, interval: 100 },
   );
+  pipeline.scenarioStage = "answer";
   const answered = await answerQuestion(pipeline.orchestrator, run.runId, question.id, [
     ["Approve"],
   ]);
   expect(answered).toBe(true);
+  pipeline.scenarioStage = "verification";
   await vi.waitFor(
     () => {
       expect(readFile(fixture.target)).toBe(NEW);
@@ -521,6 +646,7 @@ async function runProductiveScenario(
     },
     { timeout: 30_000, interval: 100 },
   );
+  pipeline.scenarioStage = "activity";
   const activity = await waitForSafeActivity(pipeline.baseUrl, sessionCookie);
   expect(activity).toContain(SECRET);
   expect(activity).toContain(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX);
@@ -556,6 +682,7 @@ async function runProductiveScenario(
     schemaVersion: "1",
     content: null,
   });
+  pipeline.scenarioStage = "completed";
 }
 
 async function pairAppSession(baseUrl: string): Promise<string> {
@@ -857,18 +984,24 @@ function setupWorkspace(
     });
 }
 
-function createVerification(workspace: string): FunctionalVerificationFixture {
+function createVerification(
+  workspace: string,
+  diagnostics?: ServerDiagnosticSink,
+): FunctionalVerificationFixture {
   const store = createInMemoryUiStore();
   store.createProject(workspace, "functional");
   const evidence = createInMemoryEvidenceStore();
   const events: EditorVerificationEvent[] = [];
+  const activityLog = createBufferedServerLogSink();
   const manager = createVerificationRunnerManager({
+    diagnostics,
+    activityLog,
     store,
     evidenceStore: evidence,
     isWorkspaceTrustedForPackageScripts: () => true,
   });
   manager.subscribe((event) => events.push(event));
-  return { manager, evidence, events };
+  return { manager, evidence, events, activityLog };
 }
 
 function startBody(requestId: string): {

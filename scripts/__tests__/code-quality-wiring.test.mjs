@@ -52,6 +52,9 @@ function enforcingFixture() {
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 const CONTRACTS_SCOPE = "package:@oscharko-dev/keiko-contracts";
+const STATIC_POLICY_SMOKE_COMMAND = `node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+/usr/bin/time -v npm run check:code-quality-policy:repository
+`;
 
 function contractsAssertionFixture() {
   const root = enforcingFixture();
@@ -412,15 +415,18 @@ describe("production code-quality invocation wiring (#3915)", () => {
       EXPECTED_NODE_BASELINE,
       EXPECTED_NODE_COMPATIBILITY_BASELINE,
     ]);
-    const smoke = policy.steps.filter(
-      (step) => step.run === "npm run check:code-quality-policy:repository",
-    );
+    const smoke = policy.steps.filter((step) => step.run === STATIC_POLICY_SMOKE_COMMAND);
     expect(smoke).toHaveLength(1);
     expect(smoke[0].if).toBeUndefined();
+    expect(smoke[0]["continue-on-error"]).toBeUndefined();
     const policyRuns = policy.steps.map((step) => step.run);
-    const fullIndex = policyRuns.indexOf("npm run check:code-quality-policy:repository");
+    expect(
+      policyRuns.filter((run) => run?.includes("npm run check:code-quality-policy:repository")),
+    ).toEqual([STATIC_POLICY_SMOKE_COMMAND]);
+    const fullIndex = policyRuns.indexOf(STATIC_POLICY_SMOKE_COMMAND);
     expect(policyRuns[fullIndex + 1]).toBe("npm run check:code-quality-policy:raw-reader");
     expect(policy.steps[fullIndex + 1].if).toBeUndefined();
+    expect(policy.steps[fullIndex + 1]["continue-on-error"]).toBeUndefined();
     expect(workflow.jobs.ci.needs).toContain("code-quality-policy");
     const cwd = fileURLToPath(new URL("../../", import.meta.url));
     for (const name of [

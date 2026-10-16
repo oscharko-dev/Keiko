@@ -114,6 +114,18 @@ describe("isValidNetworkGatewayPolicy", () => {
     expect(reads).toBe(0);
   });
 
+  it("preserves null-prototype input and refuses an incomplete string capture with a symbol", () => {
+    const policy = { ...valid };
+    Object.setPrototypeOf(policy, null);
+    expect(copyNetworkGatewayPolicy(policy)).toEqual(valid);
+    const incomplete = {
+      mode: valid.mode,
+      host: valid.host,
+      [Symbol("port")]: valid.port,
+    };
+    expect(copyNetworkGatewayPolicy(incomplete)).toBeUndefined();
+  });
+
   it("returns an immutable data-only policy copy", () => {
     const copied = copyNetworkGatewayPolicy(valid);
     expect(copied).toEqual(valid);
