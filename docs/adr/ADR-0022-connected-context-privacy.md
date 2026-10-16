@@ -982,6 +982,12 @@ name/field confidence rules and shared execution-control checks for eligible pai
 Import and re-export binding projection groups resolved edges once per immutable edge inventory,
 then visits only the current source file's edges. Original edge order, kind filtering and final
 specifier precedence remain unchanged; a new inventory cannot inherit targets or misses.
+The request-local code index retains one shared promise and drains the same build steps as the
+synchronous compatibility entry point, yielding to the event loop after at most 32 source visits
+and between graph stages. Descriptor reads, root containment, source admission, shared cancellation
+and the absolute deadline remain the owners. Expiration after the final stage is checked before
+reporting coverage or caching an index. Existing completion/truncation diagnostics describe the
+actual outcome; yielding does not widen intake or claim complete corpus coverage.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget or retained query-result allowance, preserving primary root manifests

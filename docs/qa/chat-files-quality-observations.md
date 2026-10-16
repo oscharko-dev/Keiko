@@ -422,6 +422,19 @@ The combined candidate repeat retains the same two sources / 384 bytes in 34.8 s
 public-surface, source-reuse and source-admission tests pass. Cooperative scheduling of the remaining
 synchronous work is still open; reduced elapsed time alone does not qualify responsiveness.
 
+The request-local builder now yields after at most 32 source visits and between graph stages, using
+the same build steps as the synchronous compatibility path and the existing shared execution control.
+Failure-first tests show that the previous implementation completes all 512 source reads before an
+event-loop cancellation can execute, and prevents unrelated event-loop work until completion. Both
+tests pass with cooperative intake. A separate deadline sweep exposes expiration after the final
+stage; the final coverage/cache decision now checks that boundary too. Existing semantic equivalence,
+source reuse/admission and Activity Log suites pass 277 tests; typecheck and scoped lint pass.
+
+With no concurrent campaign gate or native model request, the ordinary 100,000-file retrieval-only
+repeat retains the same two sources / 384 bytes in 27.3 seconds. Its maximum event-loop delay is
+2.34 seconds (timer drift 2.32 seconds), with 22.8 ms at the 99th percentile. This still leaves a
+material residual stall requiring investigation; it is not native-browser responsiveness acceptance.
+
 The broad package coverage run at `1dc875bff` completes with 55,241 passing tests, 61 skipped and
 one failure: the debug-launch policy test requires an exact approved Node/npm pair. A targeted
 rerun reproduces that failure under the host's newer Node patch. UI coverage at `1cd9659b1` passes

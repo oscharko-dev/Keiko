@@ -4,6 +4,7 @@ import { memFs } from "./_memfs.js";
 import {
   buildCodeIntelligenceIndex,
   buildCodeIntelligenceIndexFromCandidates,
+  buildCodeIntelligenceIndexFromCandidatesAsync,
 } from "./codeIntelligence.js";
 import { endpointContractAdapter } from "./endpointContractAdapter.js";
 import { PathEscapeError } from "./errors.js";
@@ -110,6 +111,93 @@ function manySourceFiles(count: number): Readonly<Record<string, string>> {
       `export const value${index.toString()} = ${index.toString()};`,
     ]),
   );
+}
+
+describe("cooperative code-index construction", () => {
+  it("never reports complete coverage when its deadline expires between build stages", async () => {
+    for (let deadlineAtMs = 1; deadlineAtMs <= 20; deadlineAtMs += 1) {
+      const result = await buildWhileEventLoopClockAdvances(deadlineAtMs);
+      expect(result.index.candidateLimitReached, `deadline ${String(deadlineAtMs)}`).toBe(
+        result.now >= deadlineAtMs,
+      );
+    }
+  });
+  it("lets unrelated event-loop work run before a large shared build completes", async () => {
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      limits(512),
+      memFs(ROOT, manySourceFiles(512)),
+      { nowMs: FIXED_NOW },
+    );
+    context.candidatePaths();
+    let completed = false;
+    const first = context.codeIntelligenceIndex();
+    const pending = first.then((index) => {
+      completed = true;
+      return index;
+    });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(completed).toBe(false);
+      expect(context.codeIntelligenceIndex()).toBe(first);
+    } finally {
+      const index = await pending;
+      expect(index.filesIndexed).toBe(512);
+      expect(index.candidateLimitReached).toBe(false);
+    }
+    expect(context.diagnostics().codeIndexBuildCount).toBe(1);
+  });
+
+  it("observes cancellation delivered by the event loop during source intake", async () => {
+    const controller = new AbortController();
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      limits(512),
+      memFs(ROOT, manySourceFiles(512)),
+      { nowMs: FIXED_NOW, signal: controller.signal },
+    );
+    context.candidatePaths();
+    const pending = context.codeIntelligenceIndex();
+    await new Promise<void>((resolve) =>
+      setImmediate(() => {
+        controller.abort();
+        resolve();
+      }),
+    );
+    const index = await pending;
+    expect(index.filesIndexed).toBeGreaterThan(0);
+    expect(index.filesIndexed).toBeLessThan(512);
+    expect(index.candidateLimitReached).toBe(true);
+  });
+});
+
+async function buildWhileEventLoopClockAdvances(deadlineAtMs: number): Promise<{
+  readonly index: Awaited<ReturnType<typeof buildCodeIntelligenceIndexFromCandidatesAsync>>;
+  readonly now: number;
+}> {
+  const fs = memFs(ROOT, {});
+  const searchScope = scope();
+  const candidates = gatherCandidates(searchScope, BOUNDED_REQUEST_LIMITS, fs);
+  let now = 0;
+  let finished = false;
+  const tick = (): void => {
+    if (finished) return;
+    now += 1;
+    setImmediate(tick);
+  };
+  setImmediate(tick);
+  try {
+    const index = await buildCodeIntelligenceIndexFromCandidatesAsync(
+      searchScope,
+      BOUNDED_REQUEST_LIMITS,
+      fs,
+      candidates,
+      { disableCache: true, executionControl: { nowMs: () => now, deadlineAtMs } },
+    );
+    return { index, now };
+  } finally {
+    finished = true;
+  }
 }
 
 function countingFs(files: Readonly<Record<string, string>> = FILES): {

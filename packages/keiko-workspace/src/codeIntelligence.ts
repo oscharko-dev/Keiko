@@ -5536,7 +5536,7 @@ function readCandidateInto(args: SourceReadArgs, relativePath: string): Candidat
   }
 }
 
-function readSources(
+function* readSources(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
@@ -5544,12 +5544,7 @@ function readSources(
   control: StructuralExecutionControl,
   readCompleteSource: InternalBuildDeps["readSource"],
   assertSourceAllowed: InternalBuildDeps["assertSourceAllowed"],
-): {
-  files: readonly SourceFile[];
-  skipped: number;
-  partiallyIndexed: number;
-  truncated: boolean;
-} {
+): Generator<"source", SourceReadTally, void> {
   const tally: SourceReadTally = { files: [], skipped: 0, partiallyIndexed: 0, truncated: false };
   const args: SourceReadArgs = {
     scope,
@@ -5568,6 +5563,7 @@ function readSources(
     if (readCandidateInto(args, candidate.relativePath) === "stop") {
       break;
     }
+    yield "source";
   }
   return tally;
 }
@@ -5651,6 +5647,42 @@ export function buildCodeIntelligenceIndexFromCandidates(
   candidateSet: CandidateSet,
   deps?: InternalBuildDeps,
 ): CodeIntelligenceIndex {
+  const steps = codeIntelligenceBuildSteps(scope, limits, fs, candidateSet, deps);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+// Request-local callers already share one promise. Yield between bounded source batches and
+// graph stages without splitting the index or weakening the descriptor/authority checks.
+export async function buildCodeIntelligenceIndexFromCandidatesAsync(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  deps?: InternalBuildDeps,
+): Promise<CodeIntelligenceIndex> {
+  const steps = codeIntelligenceBuildSteps(scope, limits, fs, candidateSet, deps);
+  let step = steps.next();
+  let batchSize = 0;
+  while (!step.done) {
+    batchSize += 1;
+    if (step.value === "stage" || batchSize >= 32) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      batchSize = 0;
+    }
+    step = steps.next();
+  }
+  return step.value;
+}
+
+function* codeIntelligenceBuildSteps(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  deps?: InternalBuildDeps,
+): Generator<"source" | "stage", CodeIntelligenceIndex, void> {
   const executionControl =
     deps?.executionControl ??
     createStructuralExecutionControl(limits.elapsedMsMax, deps?.nowMs ?? Date.now, deps?.signal);
@@ -5723,7 +5755,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
       indexCache.delete(cacheKey);
     }
   }
-  const { files, skipped, partiallyIndexed, truncated } = readSources(
+  const { files, skipped, partiallyIndexed, truncated } = yield* readSources(
     scope,
     limits,
     fs,
@@ -5732,6 +5764,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
     deps?.readSource,
     deps?.assertSourceAllowed,
   );
+  yield "stage";
   const pathSet = new Set(files.map((file) => file.scopePath));
   const importResolver = collectTsImportResolverConfig(
     scope,
@@ -5742,33 +5775,39 @@ export function buildCodeIntelligenceIndexFromCandidates(
   const buildState: ControlledBuildState = {
     truncated: truncated || importResolver.truncated,
   };
+  yield "stage";
   const packageDependencies = controlledBuild(
     executionControl,
     buildState,
     [] as readonly PackageDependencyEdge[],
     () => linkPackageDependencies(importResolver.packages),
   );
+  yield "stage";
   const imports = controlledBuild(
     executionControl,
     buildState,
     [] as readonly CodeImportEdge[],
     () => files.flatMap((file) => collectImportEdges(file, pathSet, importResolver)),
   );
+  yield "stage";
   const symbols = controlledBuild(executionControl, buildState, [] as readonly CodeSymbol[], () =>
     files.flatMap((file) => collectSymbols(file)),
   );
+  yield "stage";
   const reExports = controlledBuild(
     executionControl,
     buildState,
     [] as readonly TypescriptReExportBinding[],
     () => files.flatMap((file) => collectTypescriptReExportBindings(file, imports)),
   );
+  yield "stage";
   const defaultExports = controlledBuild(
     executionControl,
     buildState,
     [] as readonly TypescriptDefaultExport[],
     () => files.flatMap((file) => collectTypescriptDefaultExports(file)),
   );
+  yield "stage";
   const reExportResolver = buildTypescriptReExportResolverContext(
     reExports,
     defaultExports,
@@ -5777,6 +5816,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
     executionControl,
     certifiedModuleImportsByFile(imports, pathSet, importResolver, executionControl),
   );
+  yield "stage";
   const importBindings = controlledBuild(
     executionControl,
     buildState,
@@ -5788,33 +5828,40 @@ export function buildCodeIntelligenceIndexFromCandidates(
           : collectTypescriptImportBindings(file, imports, reExportResolver),
       ),
   );
+  yield "stage";
   const calls = controlledBuild(executionControl, buildState, [] as readonly CodeCallEdge[], () =>
     collectCalls(files, symbols, imports, importBindings),
   );
+  yield "stage";
   const references = controlledBuild(
     executionControl,
     buildState,
     [] as readonly CodeReferenceEdge[],
     () => collectReferences(files, symbols, importBindings),
   );
+  yield "stage";
   const endpoints = controlledBuild(
     executionControl,
     buildState,
     [] as readonly ApiEndpoint[],
     () => files.flatMap((file) => collectEndpoints(file)),
   );
+  yield "stage";
   const apiContracts = controlledBuild(
     executionControl,
     buildState,
     [] as readonly ApiContractEdge[],
     () => linkApiContracts(endpoints, executionControl),
   );
+  yield "stage";
   const dtoContracts = controlledBuild(
     executionControl,
     buildState,
     [] as readonly DtoContractEdge[],
     () => linkDtoContracts(symbols, executionControl),
   );
+  yield "stage";
+  if (structuralExecutionStopped(executionControl)) buildState.truncated = true;
   const index: CodeIntelligenceIndex = {
     imports,
     symbols,
