@@ -147,6 +147,35 @@ the remaining execution failure still disqualifies the candidate. Generation too
 followed by a 209.2-second rejected content-changing citation repair. The original uncited answer
 was retained. Its canonical closure is complete without loss, truncation or sequence anomalies.
 
+Candidate 4 adds an explicit one-click pending-submit example. In its first fresh native attempt
+at `d72e022d6`, the complete skill digest occurs exactly once in the provider request. The request
+uses the larger local Gemma profile, an 8,192-token output limit and nine source excerpts
+(4,689 bytes), with no request-level sampling or reasoning override. Retrieval takes 133 ms;
+generation takes 93.4 seconds and reports 998 reasoning tokens. The unchanged output passes strict
+TypeScript and all four generated tests in the isolated offline container. Six independently
+predeclared production mutations each trigger an appropriate assertion failure: upper boundary,
+exponential notation, submitted quantity, pending submit state, missing result and stale retry
+error. No test code is repaired for either baseline or mutation execution.
+
+This first passing candidate still violates the separate-invalid-case instruction, leaves mocks
+without explicit callback types and supplies shortened/malformed source markers. Citation
+reconciliation attaches none (`dangling-only`, no repair); its canonical closure is complete without
+loss, truncation or sequence anomalies. Repetitions and held-out qualification remain open. The
+next candidate adds editable customer test conventions and exact monorepo path/range guidance;
+its quality is not established by candidate 4's result.
+
+The second unchanged candidate-4 attempt passes TypeScript but fails one of four tests because it
+again calls `user.type` with an empty string. It fixes the disabled-button interaction but does not
+reliably retain the blank-input rule. Generation takes 105.7 seconds, followed by a 112.7-second
+citation repair rejected for changing content. The original answer remains uncited. This failure
+stays in the denominator and is not eligible for mutation scoring. The next candidate adds a
+blank-safe positive interaction example and explicitly parameterizes separate invalid cases.
+
+The third fresh candidate-4 output passes strict TypeScript and all five generated tests unchanged,
+with four attached citations. Candidate 4 therefore passes compilation and correct-fixture execution
+in two of three attempts; it is not reliable acceptance or a controlled superiority result. The
+second attempt's complete canonical closure confirms no loss, truncation or sequence anomalies.
+
 ## Readiness under shared gateway load
 
 Two concurrent native generation requests exposed another defect. A background readiness probe
@@ -491,6 +520,15 @@ Binary search now starts at the first later target while preserving eligible pai
 cancellation checks. All 137 code-intelligence tests pass, including the existing ordering and
 same-scope exclusions. Eligible cross-language pairing can still be quadratic; this correction
 removes the redundant prefix, not the inherent eligible-pair work.
+
+Native fresh-chat verification at `d72e022d6` passes the current-versus-rejected oracle in both the
+Git and ordinary 1,000-file corpora. Both answers correctly distinguish the current 21-day /
+EUR 7,500 rule from the rejected 14-day / EUR 9,000 proposal. They include three source files and
+five validated citations without repair; the Git archive citation opens the correct root and
+rejected source text. Retrieval takes 592 ms / 438 ms and generation 22.6 seconds / 22.5 seconds
+(Git / ordinary). Both canonical closures are supported and complete, without loss, truncation or
+sequence anomalies. Larger archive corpora remain unqualified, and partial-coverage/low-confidence
+warnings remain visible.
 
 The broad package coverage run at `1dc875bff` completes with 55,241 passing tests, 61 skipped and
 one failure: the debug-launch policy test requires an exact approved Node/npm pair. A targeted

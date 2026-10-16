@@ -179,6 +179,12 @@ not proof of effective parameters on each request or equivalence to Google's ben
 Record only allowlisted numerical settings and mode flags at the existing private lab observer;
 keep prompt, skill, source and reasoning bodies out of diagnostic evidence.
 
+This deployment advertises boolean thinking controls. In Ollama 0.35.1's
+[OpenAI compatibility implementation](https://github.com/ollama/ollama/blob/v0.35.1/openai/openai.go),
+recognized effort aliases enable thinking for boolean-only models; `none` disables it. Do not
+present low/medium/high as three measured reasoning depths for this profile. Any on/off comparison
+must use the compatible request field and confirm response reasoning metadata through LiteLLM.
+
 Customer customization remains an editable section of each ordinary Markdown skill. Cover test
 layout/names/language, AAA or Given/When/Then structure, installed assertion libraries, permitted
 mock boundaries, required business cases and traceability, and delivery format. Explicitly adopted
