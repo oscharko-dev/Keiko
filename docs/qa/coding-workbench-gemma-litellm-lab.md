@@ -1867,7 +1867,7 @@ limited to findings caused by this slice. Original-service activation, version-b
 new native capabilities, credential migration and live-model parity belong to separate follow-up
 changes. Neither #3898 nor Epic #3897 is closed by this slice.
 
-PR #4036 stabilization records two failures from the first required hosted matrix: Windows
+PR #4036 stabilization records two failures from the first required CI matrix: Windows
 location construction returned an opaque `FileSystem.realPath` refusal in five host controls,
 and Sonar received no coverage for the native boundary. Linux x64, macOS ARM64 and macOS Intel
 host controls passed. The scripts coverage lane now installs the same locked host dependencies
@@ -1876,3 +1876,14 @@ A failing-first workflow regression pins that measurement before artifact upload
 boundary now preserves closed failure categories in its existing platform error, without paths,
 content or credentials, so Windows failures can distinguish startup containment from lifecycle
 closure. Windows qualification remains incomplete until the repaired head passes its native leg.
+
+The Windows refusal was `startup-path-denied`: the original instruction plugin resolves
+`Global.home`, which uses `os.homedir()`. On Windows that reads `USERPROFILE`, while the host
+previously bound only `HOME`. The host now binds both to its private home and restores the prior
+profile on scope release. The original-server regression seeds an unrelated synthetic profile,
+fails before the fix, and proves the private binding and restoration afterward. No containment
+check is relaxed. The complete local scripts coverage producer passes 7,303 tests (27 existing
+skips), followed by all 56 native tests with zero skips. Measured boundary coverage is 89.40%
+lines; all 21 changed boundary lines/conditions are covered. Native host modules executed from
+materialized fixtures remain functional evidence; their temporary copies are not relabeled as
+source coverage. Final Windows success still requires the native CI result.

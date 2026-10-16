@@ -156,6 +156,9 @@ function run(effect) {
 test("the original authenticated server retains its scoped generic-fetch guard and private SQLite IO", async () => {
   const own = await fixture();
   const previous = globalThis.fetch;
+  const previousProfile = process.env.USERPROFILE;
+  const ambientProfile = join(own.root, "ambient-profile");
+  process.env.USERPROFILE = ambientProfile;
   globalThis.fetch = () => assert.fail("outbound-transport-forbidden");
   const original = globalThis.fetch;
   try {
@@ -163,6 +166,7 @@ test("the original authenticated server retains its scoped generic-fetch guard a
       Effect.scoped(
         Effect.gen(function* () {
           const handle = yield* own.host.makeFixedOpenCodeServiceHost(own.input);
+          assert.equal(process.env.USERPROFILE, join(own.stateRoot, "home"));
           assert.notEqual(globalThis.fetch, original);
           yield* Effect.promise(() =>
             assert.rejects(globalThis.fetch(own.input.facadeURL), /host-model-fetch-denied/),
@@ -186,12 +190,15 @@ test("the original authenticated server retains its scoped generic-fetch guard a
       ),
     );
     assert.equal(globalThis.fetch, original);
+    assert.equal(process.env.USERPROFILE, ambientProfile);
     await assert.rejects(
       run(Effect.scoped(own.host.makeFixedOpenCodeServiceHost(own.input))),
       /host-state-not-fresh/,
     );
   } finally {
     globalThis.fetch = previous;
+    if (previousProfile === undefined) Reflect.deleteProperty(process.env, "USERPROFILE");
+    else process.env.USERPROFILE = previousProfile;
     own.cleanup();
   }
 });
