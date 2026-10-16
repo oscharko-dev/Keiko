@@ -1126,7 +1126,9 @@ The first eligible fallback may retain at most two additional eligible sources w
 same-query content atoms carry the same matched-query-group key. This optional, body-free
 canonical hexadecimal bitset identifies at least two query groups observed in the admitted lexical range; it does not
 certify source authority, factual agreement or answer completeness. Equal numeric scores alone do
-not establish group identity. Missing/invalid metadata, a changed atom/query identity, semantic
+not establish group identity. The validated captured atoms must share one query fingerprint before
+their positional group keys can grant peers; mixed-query captures retain only the ordinary fallback.
+Missing/invalid metadata, a changed atom/query identity, semantic
 evidence or successful reranking cannot grant peers. The persistent match identity advances, and
 both live and cached lexical producers preserve the bounded key. Exclusions, the absolute and
 relative scoring floors, and read/byte/time grants remain unchanged; peers share the existing

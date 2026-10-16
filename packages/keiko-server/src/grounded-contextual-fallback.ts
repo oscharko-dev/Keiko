@@ -69,8 +69,12 @@ export function currentContextualFallbackGroups(
   candidates: readonly ContextualFallbackCandidate[],
   atoms: readonly EvidenceAtom[],
 ): ReadonlyMap<string, string> {
+  const current = currentContextualFallbackAtoms(candidates, atoms);
+  if (new Set(current.map((atom) => atom.provenance.queryFingerprint)).size !== 1) {
+    return new Map();
+  }
   return new Map(
-    currentContextualFallbackAtoms(candidates, atoms).flatMap((atom) => {
+    current.flatMap((atom) => {
       const group = atom.metrics?.lexicalQueryGroupKey;
       return group === undefined ? [] : [[atom.scopePath, group] as const];
     }),

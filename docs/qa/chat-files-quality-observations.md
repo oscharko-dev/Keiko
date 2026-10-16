@@ -337,7 +337,43 @@ corpora can qualify; this checkpoint does not claim that fix.
 A public Spring Framework checkout supplements synthetic scale at commit
 `5208d3ba1c417be6390c3f9400b13db699d638fd` (11,459 tracked files). Its independently inspected
 RestClient oracle covers default status-handler registration, 4xx/5xx exception mapping and the
-existing 404/500 integration tests. The native question has been submitted; its answer and semantic acceptance remain pending.
+existing 404/500 integration tests. The native run scans 11,341 files and retains 537 files / 131,072 excerpt bytes in 35.9 seconds.
+Its provider request contains 332,929 bytes (82,227 provider-counted prompt tokens; 107,594 under
+Keiko's conservative admission accounting). The model attempt times out after 300 seconds.
+The existing synthesis usage reservation refuses a second physical answer request because the
+first attempt's output usage is unknown. The UI preserves the draft and shows the attempt-limit
+error. No answer is produced, so semantic acceptance fails. Two subsequent readiness probes for
+the large-context profile also time out; the local 8k profile continues responding. The profile
+and upstream have not been restarted to manufacture a successful recovery.
+
+The native 100,000-file ordinary-folder question uses that available `gemma-4-31b-it-8k` profile,
+explicitly separate from the earlier large-context-profile runs. It scans 99,996 files, discovers
+99,997 and retains the two current sources / 384 excerpt bytes. Retrieval takes 182.0 seconds
+and the model call 125.4 seconds. The unchanged answer cites the correct current backend/frontend
+values, has three distinct citations and requires no citation repair. The rejected archive remains
+missing. The UI marks the answer for review with partial coverage and low confidence. Canonical
+closure is supported and complete without loss or truncation; two tolerated segment-leading
+sequence gaps are reported. These measurements overlap local gate execution and a separate
+retrieval diagnostic, so they are not isolated performance benchmarks.
+
+During that large search, another newly opened Chat window times out and shows `signal timed out`
+without a Retry control. The global version/status requests also temporarily become unavailable;
+the original search later completes. This is a responsiveness/recovery defect requiring a focused
+reproduction, not evidence that a slow search is harmless. A retrieval-only comparison over the
+paired 100,000-file corpora retains the current pair in both cases. Git history is output-bounded
+and cannot be assumed available at this size, so this result does not cancel the reproduced
+1,000-file Git ranking failure.
+
+## Mixed-query fallback defense
+
+The matched-query-group key is positional, so equal keys from different query fingerprints cannot
+establish peer identity. A regression supplies two individually valid captured atoms from different
+queries and fails before the guard (two peer identities instead of zero). The mapper now requires
+one fingerprint across the surviving captured atoms before exposing peer groups; the existing
+single fallback order remains available. Same-query positive controls and stale-identity controls
+remain intact. This closes a defensive internal invariant; no reachable mixed-query production
+capture has been demonstrated. The existing selected-count/confidence Activity Log events cover
+the selection result without new operations or raw query data.
 
 ## CI feedback on the cancellation increment
 

@@ -68,6 +68,33 @@ describe("contextual fallback content identities", () => {
     expect(currentContextualFallbackOrder(captured, [])).toEqual([]);
   });
 
+  it("does not equate positional group keys captured from different queries", () => {
+    const first = lexicalAtom("first.md");
+    const second = lexicalAtom("second.md");
+    const otherQuery = {
+      ...second,
+      provenance: { ...second.provenance, queryFingerprint: "other-query" },
+    };
+    const atoms = [first, otherQuery];
+    const captured = captureContextualFallbackCandidates(
+      atoms,
+      diagnostics("first.md", "second.md"),
+    );
+    expect(currentContextualFallbackOrder(captured, atoms)).toEqual(["first.md", "second.md"]);
+    expect(currentContextualFallbackGroups(captured, atoms).size).toBe(0);
+
+    const sameQuery = captureContextualFallbackCandidates(
+      [first, second],
+      diagnostics("first.md", "second.md"),
+    );
+    expect([
+      ...currentContextualFallbackGroups(sameQuery, [first, second, lexicalAtom("unselected.md")]),
+    ]).toEqual([
+      ["first.md", "3"],
+      ["second.md", "3"],
+    ]);
+  });
+
   it("does not borrow lexical diagnostic order for semantic, listing, or structural atoms", () => {
     const atom = lexicalAtom("current.md");
     for (const changed of [
