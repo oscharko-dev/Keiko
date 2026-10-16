@@ -1772,7 +1772,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
-  "chat.grounding.label": "Grounding",
+  "chat.grounding.label": "Wissensquellen",
   "chat.grounding.mode": "Grounding-Modus",
   "chat.grounding.strategy": "Strategie",
   "chat.grounding.modelOnly": "Nur Modell",

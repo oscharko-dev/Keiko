@@ -5253,23 +5253,6 @@ function copyTestGroundedAnswer(content: string, sentReferenceCount: number): Gr
   };
 }
 
-it("explains repository grounding whenever a folder scope is connected", () => {
-  renderWindow(
-    makeSession({
-      activeChat: makeChat({
-        connectedScopes: [
-          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
-        ],
-      }),
-    }),
-  );
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent(
-    "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment.",
-  );
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent("The model has no file tools.");
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
-});
-
 it("loads answer-bound read metadata before opening evidence and again after reload", async () => {
   const answer = connectedInspectionAnswer();
   vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: connectedInspectionManifest() });
@@ -5560,4 +5543,25 @@ describe("ChatWindow private draft and skill recovery", () => {
     await userEvent.click(screen.getByRole("button", { name: "Keep this draft" }));
     expect(keepLocal).toHaveBeenCalledOnce();
   });
+});
+
+it("keeps connected Files sources visible without explanatory paragraphs", async () => {
+  const sources = [
+    {
+      kind: "files" as const,
+      root: "/repo-a",
+      relativePaths: ["src/example.ts"],
+      connectedAtMs: 1,
+    },
+    { kind: "workspace-root" as const, root: "/repo-b", relativePaths: [], connectedAtMs: 2 },
+  ];
+  renderWindow(makeSession({ activeChat: makeChat({ connectedScopes: sources }) }));
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toBeEnabled(),
+  );
+  expect(screen.getByTitle("/repo-a/src/example.ts")).toBeVisible();
+  expect(screen.getByTitle("/repo-b")).toBeVisible();
+  expect(screen.queryByTestId("grounding-help")).toBeNull();
+  expect(screen.queryByText("No ready Knowledge Pods or Pod Sets are available.")).toBeNull();
+  expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
 });

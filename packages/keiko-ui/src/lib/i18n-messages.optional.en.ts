@@ -1706,7 +1706,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.error.send": "Could not send message.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
-  "chat.grounding.label": "Grounding",
+  "chat.grounding.label": "Sources",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
   "chat.grounding.modelOnly": "Model only",

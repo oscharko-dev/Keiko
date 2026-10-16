@@ -345,11 +345,11 @@ afterEach((): void => {
 type NativeFilesSession = Awaited<ReturnType<typeof nativeFilesChatFixture>>;
 type FilesSelection = "file" | "directory" | "keep-folder";
 
-function assertKeepFolderPreference(selection: FilesSelection): void {
+function assertRetiredFolderPreference(selection: FilesSelection): void {
   if (selection !== "keep-folder") return;
-  expect(mocks.workspace?.wins?.find((win) => win.type === "chat")?.cfg).toMatchObject({
-    keepFilesFolder: true,
-  });
+  expect(
+    mocks.workspace?.wins?.find((win) => win.type === "chat")?.cfg["keepFilesFolder"],
+  ).toBeUndefined();
 }
 
 async function mountNativeFilesSession(
@@ -396,13 +396,13 @@ describe("AppShell canonical workspace scope synchronization", () => {
       const native = await nativeFilesChatFixture();
       try {
         await mountNativeFilesSession(native, kind, selection);
-        assertKeepFolderPreference(selection);
+        assertRetiredFolderPreference(selection);
         fireEvent.pointerDown(screen.getByRole("button", { name: "Connect Files" }));
         fireEvent.pointerDown(screen.getByRole("button", { name: "Confirm Chat" }));
         await waitFor(() => expect(mocks.workspace?.conns[0]?.boundScopeKind).toBe("directory"));
         if (selection !== "directory")
           fireEvent.click(await screen.findByRole("treeitem", { name: /one\.ts/u }));
-        const expectedKind = selection === "file" ? "files" : "directory";
+        const expectedKind = selection === "directory" ? "directory" : "files";
         await waitFor(() => expect(mocks.workspace?.conns[0]?.boundScopeKind).toBe(expectedKind));
         await waitFor(() => expect(currentFilesWindow().cfg["root"]).toBe(native.root));
         await act(async () => {
@@ -422,7 +422,7 @@ describe("AppShell canonical workspace scope synchronization", () => {
           expect.objectContaining({
             root: native.root,
             kind: expectedKind,
-            relativePaths: [selection === "file" ? "Alpha/one.ts" : "Alpha"],
+            relativePaths: [selection === "directory" ? "Alpha" : "Alpha/one.ts"],
           }),
         ]);
         expect(currentFilesWindow().cfg).toMatchObject({

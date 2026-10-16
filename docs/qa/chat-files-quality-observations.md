@@ -761,6 +761,23 @@ The complete Activity Log gate passes its seven checks. The separate browser sou
 N+1 comparison/compaction matrix and simplified header remain open. This server increment alone
 does not qualify immediate UI cancellation, pending-state send blocking or removal of legacy pins.
 
+## Automatic Files views and compact header
+
+Four failure-first cases reproduce the obsolete confirmation UI, verbose connected-source header,
+and folder-pin behavior for canonical and symlink roots. The replacement follows an open file even
+when the restored workspace contained a former folder pin. The native fixture-owned HTTP tests
+retain canonical root attribution and deny sibling content; the seven-suite UI/session set passes
+518 tests. Completed chat history and post-answer refresh ownership remain intact; the former
+folder-restoration ACK race is now exercised through the same canonical mutation helper as Files
+navigation. A review regression proves that an unchanged same-root file must not misclassify
+another window's directory narrowing as widening; both list orders fail before and pass afterward.
+The full UI lane passes 550 suites / 10,624 tests with one existing skip, reporting 91.48%
+statements, 84.74% branches, 92.94% functions and 94.17% lines. The eight-test updater evidence
+producer and freshness check pass; the existing editor bundle measurement is checked with the
+CI-pinned Node 24.18.0 runtime. Native browser navigation verifies independent file-plus-root
+labels and absence of confirmation controls. Full pending-intent cancellation, delayed/failed
+ACK send-blocking and native N+1 model comparison/compaction remain separate qualifications.
+
 ## Open work
 
 Fresh skill/control repetitions, held-out tasks, larger Git/non-Git corpora, source freshness,

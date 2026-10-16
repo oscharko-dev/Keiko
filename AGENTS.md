@@ -814,11 +814,13 @@ system that exists, never beside it:
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
   and originating request retain the existing causal link. Candidate counts and model-authored
   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
-  `client.scope.notice` records scope narrowing, widening, folder pinning and adding missing
+  `client.scope.notice` records scope narrowing, widening and adding missing
   evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
   `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
   `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
-  The existing timeline carries these dispositions and counts without scope paths or notice text.
+  `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
+  folder or asks for confirmation. The existing timeline carries these dispositions and counts
+  without scope paths or notice text.
   `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
   `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
   `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch
