@@ -79,7 +79,7 @@ function assertRepositoryPolicyReport(report) {
       pending: report.responsibilities.counts.pending,
       qualified: report.responsibilities.counts.qualified,
     },
-    { ready: 27, pending: 27, qualified: 0 },
+    { ready: 32, pending: 32, qualified: 0 },
   );
   assert.equal(
     report.responsibilities.assessments.every(({ proofs }) =>

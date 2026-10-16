@@ -1,5 +1,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  validateJiraLiveSearchRequest as validatePublicLiveRequest,
+  validateJiraLiveSearchResult as validatePublicLiveResult,
+  validateAtlassianConnectorActivityRecord as validatePublicActivity,
+  validateAtlassianConnectorPendingApproval as validatePublicApproval,
+  validateAtlassianConnectorActionExecutionResult as validatePublicExecution,
   validateAtlassianConnectorDescriptor as validatePublicDescriptor,
   validateAtlassianSyncBounds as validatePublicSyncBounds,
   validateAtlassianSyncScope as validatePublicSyncScope,
@@ -9,6 +14,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import type {
   AtlassianConnectorValidation as PublicValidation,
+  JiraLiveSearchRequest as PublicLiveRequest,
+  JiraLiveSearchResult as PublicLiveResult,
+  AtlassianConnectorActivityRecord as PublicActivity,
+  AtlassianConnectorPendingApproval as PublicApproval,
+  AtlassianConnectorActionExecutionResult as PublicExecution,
   AtlassianConnectorDescriptor as PublicDescriptor,
   AtlassianSyncBounds as PublicSyncBounds,
   AtlassianSyncScope as PublicSyncScope,
@@ -32,6 +42,8 @@ import {
 } from "./atlassian-connectors-validation.js";
 import {
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+  decideAtlassianConnectorAction,
+  ATLASSIAN_CONNECTOR_ACTION_PROVIDER,
   ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   ATLASSIAN_JQL_MAX_CHARS,
@@ -1802,5 +1814,302 @@ describe("Atlassian approved-scope public parsers (#3918)", () => {
     expectTypeOf(parsePublicAtlassianSyncScope).returns.toEqualTypeOf<
       PublicValidation<PublicSyncScope>
     >();
+  });
+});
+
+export function parsePublicAtlassianConnectorActivityRecord(
+  input: unknown,
+): PublicValidation<PublicActivity> {
+  const result = validatePublicActivity(input);
+  return result;
+}
+
+export function parsePublicAtlassianConnectorPendingApproval(
+  input: unknown,
+): PublicValidation<PublicApproval> {
+  const result = validatePublicApproval(input);
+  return result;
+}
+
+export function parsePublicAtlassianConnectorActionExecutionResult(
+  input: unknown,
+): PublicValidation<PublicExecution> {
+  const result = validatePublicExecution(input);
+  return result;
+}
+
+function pendingApproval(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const decision = decideAtlassianConnectorAction("create-issue", "governed-assist", [
+    "issue-tracker.write",
+  ]);
+  if (decision.disposition !== "review-required")
+    throw new TypeError("expected the owning create decision to require review");
+  return {
+    schemaVersion: "1",
+    approvalId: "approval-1",
+    connectorId: "conn-jira-prod",
+    provider: ATLASSIAN_CONNECTOR_ACTION_PROVIDER[decision.actionType],
+    actionType: decision.actionType,
+    actionClass: decision.actionClass,
+    requiredScope: decision.requiredScope,
+    risk: decision.risk,
+    reviewReason: decision.reviewReason,
+    correlationId: "corr-1",
+    requestedAt: 1,
+    expiresAt: 1,
+    ...overrides,
+  };
+}
+
+function assertGovernedPublicTypes(): void {
+  expectTypeOf(validatePublicActivity).returns.toEqualTypeOf<PublicValidation<PublicActivity>>();
+  expectTypeOf(validatePublicApproval).returns.toEqualTypeOf<PublicValidation<PublicApproval>>();
+  expectTypeOf(validatePublicExecution).returns.toEqualTypeOf<PublicValidation<PublicExecution>>();
+  expectTypeOf(parsePublicAtlassianConnectorActivityRecord).returns.toEqualTypeOf<
+    PublicValidation<PublicActivity>
+  >();
+  expectTypeOf(parsePublicAtlassianConnectorPendingApproval).returns.toEqualTypeOf<
+    PublicValidation<PublicApproval>
+  >();
+  expectTypeOf(parsePublicAtlassianConnectorActionExecutionResult).returns.toEqualTypeOf<
+    PublicValidation<PublicExecution>
+  >();
+}
+
+describe("Atlassian governed-action public parsers (#3918)", () => {
+  it("preserves activity approval and execution identities and optional presence", () => {
+    const summary = changeSummary("partial");
+    const record = activity({
+      actionType: "sync-project",
+      actionClass: "connector-access",
+      syncSummary: summary,
+      targetRef: undefined,
+    });
+    const approval = pendingApproval({
+      contentPreview: "Review this change",
+      targetRef: undefined,
+    });
+    const execution = { status: "succeeded", version: 1, targetRef: undefined };
+    const parsedRecord = parsePublicAtlassianConnectorActivityRecord(record);
+    const parsedApproval = parsePublicAtlassianConnectorPendingApproval(approval);
+    const parsedExecution = parsePublicAtlassianConnectorActionExecutionResult(execution);
+    if (!parsedRecord.ok || !parsedApproval.ok || !parsedExecution.ok)
+      throw new TypeError("healthy governed-action public parser refused");
+    expect(parsedRecord.value).toBe(record);
+    expect(parsedRecord.value.syncSummary).toBe(summary);
+    expect(parsedRecord.value.syncSummary?.counts).toBe(summary.counts);
+    expect(parsedApproval.value).toBe(approval);
+    expect(parsedApproval.value.contentPreview).toBe("Review this change");
+    expect(parsedExecution.value).toBe(execution);
+    for (const value of [parsedRecord.value, parsedApproval.value, parsedExecution.value])
+      expect(Object.hasOwn(value, "targetRef")).toBe(true);
+    const minimalApproval = parsePublicAtlassianConnectorPendingApproval(pendingApproval());
+    const minimalExecution = parsePublicAtlassianConnectorActionExecutionResult({
+      status: "succeeded",
+    });
+    if (!minimalApproval.ok || !minimalExecution.ok)
+      throw new TypeError("healthy minimal governed projection refused");
+    expect(minimalApproval.value).not.toHaveProperty("targetRef");
+    expect(minimalApproval.value).not.toHaveProperty("contentPreview");
+    expect(minimalExecution.value).not.toHaveProperty("targetRef");
+    expect(minimalExecution.value).not.toHaveProperty("version");
+  });
+
+  it("refuses malformed governed projections with exact owning diagnostics", () => {
+    for (const input of [null, undefined, [], 12, "activity"]) {
+      expect(parsePublicAtlassianConnectorActivityRecord(input).ok).toBe(false);
+      expect(parsePublicAtlassianConnectorPendingApproval(input).ok).toBe(false);
+      expect(parsePublicAtlassianConnectorActionExecutionResult(input).ok).toBe(false);
+    }
+    expect(
+      parsePublicAtlassianConnectorActivityRecord(
+        activity({ body: "private-body-canary", actionClass: "connector-access" }),
+      ),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "activity must not include body",
+        "activity.actionClass must match the D4 table for the action type",
+      ],
+    });
+    expect(
+      parsePublicAtlassianConnectorPendingApproval(pendingApproval({ risk: "low", expiresAt: 0 })),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "approval.risk must match the D4 table for the action type",
+        "approval.expiresAt must not precede approval.requestedAt",
+      ],
+    });
+    expect(
+      parsePublicAtlassianConnectorActionExecutionResult({
+        status: "failed",
+        reason: "conflict",
+        httpStatus: 1.5,
+        body: "private-response-canary",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "executionResult must not include body",
+        "executionResult.httpStatus must be an integer status code when set",
+      ],
+    });
+  });
+
+  it("retains authority evidence and exact public domain result types", () => {
+    const failed = activity({ outcome: "failed", reasonCode: "human-initiated" });
+    expect(parsePublicAtlassianConnectorActivityRecord(failed)).toEqual({
+      ok: false,
+      errors: ["activity.reasonCode must be an execution failure reason for a failed attempt"],
+    });
+    const unavailable = pendingApproval({ contentPreviewUnavailable: true });
+    expect(parsePublicAtlassianConnectorPendingApproval(unavailable)).toEqual({
+      ok: true,
+      value: unavailable,
+    });
+    expect(
+      parsePublicAtlassianConnectorPendingApproval({ ...unavailable, contentPreview: "Review" }),
+    ).toEqual({
+      ok: false,
+      errors: ["approval.contentPreview and approval.contentPreviewUnavailable are exclusive"],
+    });
+    for (const reason of ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS) {
+      const input = { status: "failed", reason, httpStatus: -1 };
+      const parsed = parsePublicAtlassianConnectorActionExecutionResult(input);
+      if (!parsed.ok) throw new TypeError("existing integer-status failure projection refused");
+      expect(parsed.value).toBe(input);
+      if (parsed.value.status !== "failed") throw new TypeError("failure discriminator changed");
+      expect(parsed.value.reason).toBe(reason);
+    }
+    assertGovernedPublicTypes();
+  });
+});
+
+export function parsePublicJiraLiveSearchRequest(
+  input: unknown,
+): PublicValidation<PublicLiveRequest> {
+  const result = validatePublicLiveRequest(input);
+  return result;
+}
+
+export function parsePublicJiraLiveSearchResult(
+  input: unknown,
+): PublicValidation<PublicLiveResult> {
+  const result = validatePublicLiveResult(input);
+  return result;
+}
+
+function assertLivePublicTypes(): void {
+  expectTypeOf(validatePublicLiveRequest).returns.toEqualTypeOf<
+    PublicValidation<PublicLiveRequest>
+  >();
+  expectTypeOf(validatePublicLiveResult).returns.toEqualTypeOf<
+    PublicValidation<PublicLiveResult>
+  >();
+  expectTypeOf(parsePublicJiraLiveSearchRequest).returns.toEqualTypeOf<
+    PublicValidation<PublicLiveRequest>
+  >();
+  expectTypeOf(parsePublicJiraLiveSearchResult).returns.toEqualTypeOf<
+    PublicValidation<PublicLiveResult>
+  >();
+}
+
+describe("Atlassian live-query public parsers (#3918)", () => {
+  it("preserves live request result and nested issue identities and optional presence", () => {
+    const request = { jql: "labels = urgent ORDER BY updated DESC", maxResults: undefined };
+    const issue = liveIssue();
+    const issues = [issue];
+    const result = liveResult({ issues, totalMatched: undefined });
+    const parsedRequest = parsePublicJiraLiveSearchRequest(request);
+    const parsedResult = parsePublicJiraLiveSearchResult(result);
+    if (!parsedRequest.ok || !parsedResult.ok)
+      throw new TypeError("healthy live public parser refused");
+    expect(parsedRequest.value).toBe(request);
+    expect(Object.hasOwn(parsedRequest.value, "maxResults")).toBe(true);
+    expect(parsedResult.value).toBe(result);
+    expect(parsedResult.value.issues).toBe(issues);
+    expect(parsedResult.value.issues[0]).toBe(issue);
+    expect(parsedResult.value.issues[0]?.metadata).toBe(issue.metadata);
+    expect(Object.hasOwn(parsedResult.value, "totalMatched")).toBe(true);
+    const template = { templateId: "assigned-to-me-open" };
+    const minimal = parsePublicJiraLiveSearchRequest(template);
+    if (!minimal.ok) throw new TypeError("healthy live template refused");
+    expect(minimal.value).toBe(template);
+    expect(minimal.value).not.toHaveProperty("jql");
+    expect(minimal.value).not.toHaveProperty("maxResults");
+    const truncated = parsePublicJiraLiveSearchResult({ ...result, truncated: true });
+    if (!truncated.ok) throw new TypeError("healthy truncated result refused");
+    expect(truncated.value.issues).toBe(issues);
+  });
+
+  it("refuses malformed live boundaries with exact owning diagnostics", () => {
+    for (const input of [null, undefined, [], 12, "jql"]) {
+      expect(parsePublicJiraLiveSearchRequest(input).ok).toBe(false);
+      expect(parsePublicJiraLiveSearchResult(input).ok).toBe(false);
+    }
+    expect(
+      parsePublicJiraLiveSearchRequest({
+        jql: "",
+        templateId: "all-issues",
+        maxResults: ATLASSIAN_LIVE_SEARCH_MAX_RESULTS + 1,
+        fields: "private",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "liveSearchRequest must not include fields",
+        "liveSearchRequest must carry exactly one of jql or templateId",
+        `liveSearchRequest.jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
+        "liveSearchRequest.templateId must be one of assigned-to-me-open",
+        `liveSearchRequest.maxResults must be a positive integer of at most ${String(ATLASSIAN_LIVE_SEARCH_MAX_RESULTS)}`,
+      ],
+    });
+    expect(
+      parsePublicJiraLiveSearchResult(
+        liveResult({
+          source: "synced",
+          jqlDigest: "bad",
+          issues: [liveIssue({ metadata: { issueKey: "OTHER-1" } })],
+          totalMatched: 7,
+        }),
+      ),
+    ).toEqual({
+      ok: false,
+      errors: [
+        'liveResult.source must be the literal "live"',
+        "liveResult.jqlDigest must be a 64-character lowercase hex digest",
+        "liveResult.issues[0].metadata.issueKey must equal liveResult.issues[0].key",
+        "liveResult.totalMatched must equal the returned issue count",
+      ],
+    });
+  });
+
+  it("retains opaque queries bounded results and exact public domain result types", () => {
+    for (const jql of [" ", "1=1) OR (project = SECRET", "x".repeat(ATLASSIAN_JQL_MAX_CHARS)]) {
+      const request = { jql };
+      const parsed = parsePublicJiraLiveSearchRequest(request);
+      if (!parsed.ok) throw new TypeError("existing opaque live JQL refused");
+      expect(parsed.value).toBe(request);
+      expect(parsed.value.jql).toBe(jql);
+    }
+    for (const maxResults of [1, ATLASSIAN_LIVE_SEARCH_MAX_RESULTS])
+      expect(
+        parsePublicJiraLiveSearchRequest({ templateId: "assigned-to-me-open", maxResults }).ok,
+      ).toBe(true);
+    expect(
+      parsePublicJiraLiveSearchRequest({ jql: "x".repeat(ATLASSIAN_JQL_MAX_CHARS + 1) }).ok,
+    ).toBe(false);
+    expect(
+      parsePublicJiraLiveSearchRequest({
+        jql: "query",
+        maxResults: ATLASSIAN_LIVE_SEARCH_MAX_RESULTS + 1,
+      }).ok,
+    ).toBe(false);
+    expect(parsePublicJiraLiveSearchResult(liveResult({ truncated: true }))).toEqual({
+      ok: false,
+      errors: ["liveResult.totalMatched is only allowed for a complete (not truncated) result"],
+    });
+    assertLivePublicTypes();
   });
 });

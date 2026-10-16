@@ -1451,6 +1451,226 @@
           "testName": "Atlassian approved-scope public parsers (#3918) retains narrow-only JQL boundaries and exact public domain result types"
         }
       ]
+    },
+    {
+      "id": "atlassian-connector-activity-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorActivityRecord",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorActivityRecord"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorActivityRecord"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicAtlassianConnectorActivityRecord",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) preserves activity approval and execution identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) refuses malformed governed projections with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) retains authority evidence and exact public domain result types"
+        }
+      ]
+    },
+    {
+      "id": "atlassian-connector-pending-approval-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorPendingApproval",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorPendingApproval"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorPendingApproval"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicAtlassianConnectorPendingApproval",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) preserves activity approval and execution identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) refuses malformed governed projections with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) retains authority evidence and exact public domain result types"
+        }
+      ]
+    },
+    {
+      "id": "atlassian-connector-action-execution-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorActionExecutionResult",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorActionExecutionResult"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateAtlassianConnectorActionExecutionResult"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicAtlassianConnectorActionExecutionResult",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) preserves activity approval and execution identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) refuses malformed governed projections with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian governed-action public parsers (#3918) retains authority evidence and exact public domain result types"
+        }
+      ]
+    },
+    {
+      "id": "jira-live-search-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateJiraLiveSearchRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateJiraLiveSearchRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateJiraLiveSearchRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicJiraLiveSearchRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian live-query public parsers (#3918) preserves live request result and nested issue identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian live-query public parsers (#3918) refuses malformed live boundaries with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian live-query public parsers (#3918) retains opaque queries bounded results and exact public domain result types"
+        }
+      ]
+    },
+    {
+      "id": "jira-live-search-result-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateJiraLiveSearchResult",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateJiraLiveSearchResult"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "validateJiraLiveSearchResult"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+        "exportName": "parsePublicJiraLiveSearchResult",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/atlassian-connectors-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian live-query public parsers (#3918) preserves live request result and nested issue identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian live-query public parsers (#3918) refuses malformed live boundaries with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts",
+          "testName": "Atlassian live-query public parsers (#3918) retains opaque queries bounded results and exact public domain result types"
+        }
+      ]
     }
   ]
 }

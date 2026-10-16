@@ -433,6 +433,27 @@ ordered-error, provider-key, JQL-nesting and narrow-only default-ceiling proofs 
 from real writer/close/SQLite/reopen preservation. These records do not widen scope, add egress,
 classify every raw candidate or activate the remaining contracts domain rules.
 
+Three further governed-action Atlassian parser records select the existing activity, pending-approval
+and action-execution validators. They append to the prior 27 records without changing any rule
+or activating the remaining contracts scopes. These validators are public-only parser responsibilities;
+actual routes produce their public projection types without calling these validators. Public proofs
+retain reference identity, optional presence, D4 row and reason pairing, ordered refusals, preview
+exclusivity and exact domain result types. Actual handler controls separately exercise zero-fetch
+approval parking, one-time execution, typed success/failure and content-free correlated activity.
+Pending approvals and their activity ring are bounded process state, not a persisted decoder or the
+registered Activity Log. A bounded interactive approval preview never becomes permanent activity.
+Only a fresh complete checker run can qualify eligible parameter slots; shared helpers and raw
+body findings remain assigned unless the existing resolver explicitly classifies their exact slots.
+
+The same bounded batch adds the existing live-search request and result public parsers. The actual
+route admits a live request through its checked value; the result parser has a public proof and
+an actual connector producer, without claiming a validated UI transport. Free live JQL remains
+opaque bounded text, distinct from approved sync-scope grammar. Public and actual producer/route
+controls preserve request XOR, templates, default/narrowed caps, result/issue/metadata identities,
+ordered errors and total/truncation pairing. Existing sparse/spoofed-array and ephemeral/no-store
+proofs remain intact. These five additions retain the committed 27 obligations and all rule
+objects; candidate registration alone does not qualify 32 records or the shared helper graph.
+
 Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require
