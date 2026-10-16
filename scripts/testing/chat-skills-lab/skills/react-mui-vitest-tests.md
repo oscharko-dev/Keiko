@@ -12,8 +12,9 @@ observed execution results.
 2. A disabled MUI button is not a clickable user target. Assert `toBeDisabled()` and the unchanged
    dispatch count. Do not call `user.click` again while it is disabled, bypass pointer checks, or
    replace the real MUI component. A programmatic submit guard is a separate contract/test.
-3. Hold a promise pending to observe loading, then settle it inside `act` and verify the result and
-   enabled controls. Never leave a resolver uninitialized or a promise rejection unobserved.
+3. When the contract exposes a pending state, hold a promise pending to observe it. Settle it inside
+   `act`, then verify the result and contract-defined control state. Never leave a resolver
+   uninitialized or a promise rejection unobserved.
 
 A strict-safe helper, when the project has no equivalent:
 
@@ -29,8 +30,9 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 ```
 
-Use the callback's real return type for `T`. After submission, assert disabled controls and exactly
-one dispatch; then `await act(async () => { pending.resolve(actualResult); });`. Await the visible
+Use the callback's resolved result type for `T`, such as `Awaited<ReturnType<typeof callback>>`.
+After submission, assert disabled controls only when the contract requires them and verify the
+expected dispatch count; then `await act(async () => { pending.resolve(actualResult); });`. Await the visible
 result with a `findBy` query. For a separate failure/retry case, use a typed mock with
 `mockRejectedValueOnce` followed by `mockResolvedValueOnce`, using the real result shape.
 
