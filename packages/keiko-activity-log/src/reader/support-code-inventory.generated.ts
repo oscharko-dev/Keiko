@@ -2543,6 +2543,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-workspace/ignore",
   "keiko-workspace/importGraph",
   "keiko-workspace/importGraphEdges",
+  "keiko-workspace/importPathSuffix",
   "keiko-workspace/index",
   "keiko-workspace/languageClassification",
   "keiko-workspace/ownedRoot",
