@@ -3473,6 +3473,106 @@
           "testName": "C1A concrete acceptance member admission refuses skipped contribution members case 2 through public"
         }
       ]
+    },
+    {
+      "id": "support-canonical-json-decoder-return",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "raw-canonical-json-decoder",
+      "rules": ["anti-slop/no-unknown-returns"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/support-report-json.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "parseCanonicalSupportJson",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/support-report-json.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "parseCanonicalSupportJson"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/support-report-json.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "canonicalSupportJson"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/support-report-json.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/observability",
+        "exportName": "canonicalDecoderPublicWitness",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/support-report-json.test.ts",
+        "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        "packages/keiko-activity-log/src/reader/support-report-browser.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+          "testName": "keeps source and actual public canonical parser results unknown"
+        },
+        {
+          "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+          "testName": "canonical JSON decoder public responsibility (#3918) pins actual source public and witness signatures"
+        },
+        {
+          "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+          "testName": "canonical JSON decoder public responsibility (#3918) preserves canonical scalar and nested bytes through the public witness"
+        },
+        {
+          "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+          "testName": "canonical JSON decoder public responsibility (#3918) refuses noncanonical unsafe and over-budget text at the direct decoder and witness"
+        },
+        {
+          "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+          "testName": "canonical support JSON ordering uses ascending array-index keys before UTF-16-sorted ordinary object keys"
+        },
+        {
+          "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+          "testName": "canonical support JSON ordering keeps the ECMAScript array-index boundary and nested ordering deterministic"
+        },
+        {
+          "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+          "testName": "public: canonical array validation cannot skip an unsafe leaf through caller map"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report.test.ts",
+          "testName": "canonical body-free offline report roundtrips a production incident and query, preserving reconstruction and unknown authenticity"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report.test.ts",
+          "testName": "canonical body-free offline report refuses tamper, truncation, duplicate keys, and unknown sections before rendering"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report.test.ts",
+          "testName": "lazy validated support analysis rejects malformed or tampered input before consulting lazy options"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report.test.ts",
+          "testName": "hostile report admission refuses prohibited event fields even when an attacker recomputes every digest"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report.test.ts",
+          "testName": "hostile report admission refuses trailing compressed bytes rather than accepting an opaque auxiliary payload"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report.test.ts",
+          "testName": "hostile report admission bounds decompression independently of the sender's declared section size"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report.test.ts",
+          "testName": "received-report audit hardening (#3534) bounds containers, values and object keys before parsing a small expanding payload"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report-browser.test.ts",
+          "testName": "shared canonical browser report producer keeps strict canonical parsing and digest rejection"
+        },
+        {
+          "path": "packages/keiko-activity-log/src/reader/support-report-browser.test.ts",
+          "testName": "shared canonical browser report producer charges UTF-8 bytes identically to Node for \ud83d\ude00"
+        }
+      ]
     }
   ]
 }

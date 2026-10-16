@@ -154,6 +154,16 @@ function validRawReaderRules(record) {
   );
 }
 
+function validCanonicalDecoderRules(record) {
+  return (
+    record.kind !== "raw-canonical-json-decoder" ||
+    (record.rules.length === 1 &&
+      record.rules[0] === "anti-slop/no-unknown-returns" &&
+      record.input?.parameterIndex === 0 &&
+      record.proofAssertions?.length > 0)
+  );
+}
+
 function validObservationRules(record) {
   const rules = [
     "anti-slop/no-object-parameters",
@@ -185,6 +195,7 @@ function validResponsibilityConsumer(record) {
     "raw-own-property-reader",
     "raw-property-observation",
     "typed-parameter-recheck",
+    "raw-canonical-json-decoder",
   ].includes(record.kind)
     ? validDiagnosticConsumer(record.consumer)
     : validConsumerSelector(record.consumer);
@@ -219,10 +230,12 @@ function validResponsibilityIdentity(record) {
       "raw-own-property-reader",
       "raw-property-observation",
       "typed-parameter-recheck",
+      "raw-canonical-json-decoder",
     ].includes(record.kind) &&
     validResponsibilityRules(record.rules) &&
     validPublicParserRules(record) &&
     validRawReaderRules(record) &&
+    validCanonicalDecoderRules(record) &&
     validObservationRules(record) &&
     validTypedRecheckRules(record)
   );

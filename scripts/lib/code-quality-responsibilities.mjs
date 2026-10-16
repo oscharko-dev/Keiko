@@ -16,6 +16,7 @@ function proofConsumerKind(record) {
     "raw-own-property-reader",
     "raw-property-observation",
     "typed-parameter-recheck",
+    "raw-canonical-json-decoder",
   ].includes(record.kind);
 }
 
@@ -62,8 +63,19 @@ function ownershipReasons(subject, record, roles) {
   return reasons;
 }
 
+function pairedProofProducer(record) {
+  return ["raw-own-property-reader", "raw-canonical-json-decoder"].includes(record.kind);
+}
+
+function canonicalDecoderIdentityReasons(record, roles, reasons) {
+  if (record.kind !== "raw-canonical-json-decoder") return;
+  if (JSON.stringify(roles.input.identities) !== JSON.stringify(roles.transform.identities))
+    reasons.push("mismatched-canonical-decoder-producer");
+  if (record.consumer.owner !== record.owner) reasons.push("foreign-responsibility-owner");
+}
+
 function diagnosticIdentityReasons(record, roles, reasons) {
-  if (proofConsumerKind(record) && record.kind !== "raw-own-property-reader") {
+  if (proofConsumerKind(record) && !pairedProofProducer(record)) {
     const producer = JSON.stringify(
       roles.input.identities.map(({ owner, producer }) => ({ owner, producer })),
     );
@@ -96,6 +108,7 @@ function signatureReasons(record, roles) {
   const reasons = [];
   diagnosticIdentityReasons(record, roles, reasons);
   rawReaderIdentityReasons(record, roles, reasons);
+  canonicalDecoderIdentityReasons(record, roles, reasons);
   const output = roles.output.signatures[0]?.result.kind;
   if (record.kind === "validator" && ["unknown", "any"].includes(output))
     reasons.push("unchecked-validator-output");
@@ -144,6 +157,10 @@ function responsibilitySlots(resolver, record, roles) {
     return resolver.propertyObservationFacts(roles.input.identities[0]).slots;
   if (record.kind === "typed-parameter-recheck")
     return resolver.typedRecheckFacts(roles.input.identities[0], record.input.parameterIndex).slots;
+  if (record.kind === "raw-canonical-json-decoder")
+    return [
+      resolver.canonicalDecoderFacts(roles.input.identities[0], roles.output.identities[0]).slot,
+    ];
   return rawResponsibilitySlots(resolver, record, roles);
 }
 
@@ -184,6 +201,16 @@ function rawReaderConsumer(resolver, record, roles, reasons) {
   };
 }
 
+function typedOrCanonicalConsumer(resolver, record, roles) {
+  return record.kind === "typed-parameter-recheck"
+    ? resolver.typedRecheckBinding(record.consumer, roles.transform.identities[0])
+    : resolver.canonicalDecoderBinding(
+        record.consumer,
+        roles.transform.identities[0],
+        roles.output.identities[0],
+      );
+}
+
 function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   if (consumerReason || reasons.length) return null;
   if (record.kind === "raw-own-property-reader")
@@ -195,8 +222,8 @@ function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   }
   if (record.kind === "public-parser")
     return publicParserConsumer(resolver, record, roles, reasons);
-  if (record.kind === "typed-parameter-recheck")
-    return resolver.typedRecheckBinding(record.consumer, roles.transform.identities[0]);
+  if (["typed-parameter-recheck", "raw-canonical-json-decoder"].includes(record.kind))
+    return typedOrCanonicalConsumer(resolver, record, roles);
   const binding =
     record.kind === "diagnostic-checker"
       ? resolver.diagnosticBinding(record.consumer, roles.transform.identities[0])
@@ -216,11 +243,12 @@ function bindingConsumerReason(record, binding, consumerReason) {
       ? "unsupported-raw-reader-public-proof-binding"
       : "unsupported-raw-reader-validator-witness";
   if (record.kind === "typed-parameter-recheck") return "unsupported-typed-recheck-binding";
+  if (record.kind === "raw-canonical-json-decoder") return "unsupported-canonical-decoder-binding";
   return record.kind === "public-parser" ? "unsupported-public-parser-binding" : consumerReason;
 }
 
 function proofScopeIdentities(record, roles) {
-  return record.kind === "raw-own-property-reader"
+  return pairedProofProducer(record)
     ? [...roles.input.identities, ...roles.output.identities]
     : roles.input.identities;
 }
@@ -272,9 +300,12 @@ function adaptedFinding(finding, assessments) {
   for (const assessment of assessments) {
     if (assessment.structural !== "ready") continue;
     if (
-      ["raw-own-property-reader", "raw-property-observation", "typed-parameter-recheck"].includes(
-        assessment.kind,
-      ) &&
+      [
+        "raw-own-property-reader",
+        "raw-property-observation",
+        "typed-parameter-recheck",
+        "raw-canonical-json-decoder",
+      ].includes(assessment.kind) &&
       assessment.semantic !== "qualified"
     )
       continue;
@@ -443,7 +474,7 @@ export function assessPolicyResponsibilities(subject, policy, files = subject.in
 function proofRuntimeWitness(subject, resolver, assessments) {
   const producers = new Set(
     assessments.flatMap((record) =>
-      (record.kind === "raw-own-property-reader"
+      (pairedProofProducer(record)
         ? [...record.roles.input.identities, ...record.roles.output.identities]
         : record.roles.input.identities
       ).map((identity) => identity.producer.path),

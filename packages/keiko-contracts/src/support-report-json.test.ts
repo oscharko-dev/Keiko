@@ -173,6 +173,68 @@ for (const { name, canonical, parse } of canonicalSurfaces) {
   });
 }
 
+export function canonicalDecoderPublicWitness(text: string, maxBytes: number): string {
+  const raw = publicParseCanonicalSupportJson(text, maxBytes);
+  const result = publicCanonicalSupportJson(raw);
+  return result;
+}
+
+describe("canonical JSON decoder public responsibility (#3918)", () => {
+  it("pins actual source public and witness signatures", () => {
+    expectTypeOf(parseCanonicalSupportJson).parameters.toEqualTypeOf<[string, number]>();
+    expectTypeOf(publicParseCanonicalSupportJson).parameters.toEqualTypeOf<[string, number]>();
+    expectTypeOf(canonicalDecoderPublicWitness).parameters.toEqualTypeOf<[string, number]>();
+    expectTypeOf(parseCanonicalSupportJson).returns.toBeUnknown();
+    expectTypeOf(parseCanonicalSupportJson).returns.not.toBeAny();
+    expectTypeOf(publicParseCanonicalSupportJson).returns.toBeUnknown();
+    expectTypeOf(publicParseCanonicalSupportJson).returns.not.toBeAny();
+    expectTypeOf(canonicalDecoderPublicWitness).returns.toEqualTypeOf<string>();
+    expectTypeOf(publicCanonicalSupportJson).parameters.toEqualTypeOf<[unknown]>();
+    expectTypeOf(publicCanonicalSupportJson).returns.toEqualTypeOf<string>();
+  });
+
+  it("preserves canonical scalar and nested bytes through the public witness", () => {
+    for (const text of ["null", "true", "1", '"token"', '{"a":[null,true,1],"z":{"x":"value"}}']) {
+      expect(canonicalDecoderPublicWitness(text, MAX_SUPPORT_REPORT_EVENT_BYTES)).toBe(text);
+    }
+    const text = '{"a":[null,true,1],"z":{"x":"value"}}';
+    const expected = { a: [null, true, 1], z: { x: "value" } };
+    expect(parseCanonicalSupportJson(text, MAX_SUPPORT_REPORT_EVENT_BYTES)).toEqual(expected);
+    expect(publicParseCanonicalSupportJson(text, MAX_SUPPORT_REPORT_EVENT_BYTES)).toEqual(expected);
+  });
+
+  it("refuses noncanonical unsafe and over-budget text at the direct decoder and witness", () => {
+    const cases: readonly { text: string; reason: string }[] = [
+      { text: "{", reason: "corrupt-report" },
+      { text: '{"a":1,"a":2}', reason: "corrupt-report" },
+      { text: " null", reason: "corrupt-report" },
+      { text: "1.0", reason: "corrupt-report" },
+      { text: '"\\u0061"', reason: "corrupt-report" },
+      { text: '"\\u0000"', reason: "unsafe-report" },
+      { text: '"\\ud800"', reason: "unsafe-report" },
+    ];
+    for (const parse of [
+      parseCanonicalSupportJson,
+      publicParseCanonicalSupportJson,
+      canonicalDecoderPublicWitness,
+    ]) {
+      for (const { text, reason } of cases) {
+        expect(() => parse(text, MAX_SUPPORT_REPORT_EVENT_BYTES)).toThrow(
+          expect.objectContaining({ reason }),
+        );
+      }
+      expect(() => parse('"é"', 4)).toThrow(expect.objectContaining({ reason: "unsafe-report" }));
+      expect(() => parse('"é"', 3)).toThrow(
+        expect.objectContaining({ reason: "report-budget-exceeded" }),
+      );
+      expect(() => parse("null", 4)).not.toThrow();
+      expect(() => parse("null", 3)).toThrow(
+        expect.objectContaining({ reason: "report-budget-exceeded" }),
+      );
+    }
+  });
+});
+
 it("keeps source and actual public canonical parser results unknown", () => {
   expectTypeOf(parseCanonicalSupportJson("null", MAX_SUPPORT_REPORT_EVENT_BYTES)).toBeUnknown();
   expectTypeOf(

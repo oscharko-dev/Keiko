@@ -33,6 +33,7 @@ import {
   createRawHelperEnforcementFixture,
   createCollectiveParserFixture,
   createTypedRecheckFixture,
+  createCanonicalDecoderFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 
 function executeCensusChild(root, ci) {
@@ -3060,6 +3061,132 @@ describe("typed public recheck fresh semantic qualification (#3918)", () => {
       const own = await typedSemanticFixture(mode);
       const subject = await collectPolicySubject(own.root);
       await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(reason);
+    },
+    195_000,
+  );
+});
+
+// Original-current39b engine counterfactual reaches the closed-kind assertion after the SAME real native
+// fixture assembly; missing named exports/imports cannot manufacture the intended failure.
+describe("raw canonical JSON decoder responsibilities (#3918)", () => {
+  it("recognizes the closed decoder kind while preserving its pending native unknown return", async () => {
+    const own = createCanonicalDecoderFixture();
+    roots.push(own.root);
+    expect(validatePolicy(own.policy)).toEqual([]);
+    const subject = await collectPolicySubject(own.root);
+    const assessment = assessPolicyResponsibilities(subject, own.policy);
+    expect(assessment.counts).toMatchObject({ ready: 1, pending: 1, qualified: 0 });
+    expect(assessment.assessments[0].slots).toHaveLength(1);
+    const slot = assessment.assessments[0].slots[0];
+    expect(slot).toMatchObject({ rule: "anti-slop/no-unknown-returns", kind: "return" });
+    const report = await executeCodeQualityPolicy(
+      { mode: "enforce", scope: "repository" },
+      own.root,
+    );
+    expect(report.violations).toContainEqual(
+      expect.objectContaining({
+        path: slot.path,
+        rule: slot.rule,
+        line: slot.line,
+        column: slot.column,
+      }),
+    );
+    expect(report.adaptations).toEqual([]);
+    expect(report.enforcementOutcome).toBe("failed");
+  }, 30_000);
+
+  it.each(["transform", "output", "consumer"])(
+    "withholds a rebound %s role",
+    async (role) => {
+      const own = createCanonicalDecoderFixture();
+      roots.push(own.root);
+      const record = own.records[0];
+      if (role === "consumer") record.consumer.owner = "foreign";
+      else
+        record[role].exportName =
+          role === "output" ? "parseCanonicalSupportJson" : "canonicalSupportJson";
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.counts.ready).toBe(0);
+      expect(report.assessments[0].slots ?? []).toEqual([]);
+    },
+    30_000,
+  );
+});
+
+async function canonicalDecoderSemanticFixture(mode = "healthy") {
+  const own = createCanonicalDecoderFixture(mode === "lying" ? "lying-canonicalizer" : "direct");
+  await installSemanticFixtureTools(own);
+  await installTypedFixtureNodeTypes(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  config.compilerOptions.types = ["node"];
+  own.put("packages/alpha/tsconfig.json", config);
+  const path = own.records[0].proofs[0];
+  const target = join(own.root, "packages/alpha/src/owner.ts");
+  const stale =
+    mode === "stale"
+      ? `writeFileSync(${JSON.stringify(target)}, ${JSON.stringify(readFileSync(target, "utf8") + "\n")});`
+      : "";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") +
+      `
+import { it, expect } from "vitest";
+import { writeFileSync } from "node:fs";
+it${mode === "skip" ? ".skip" : ""}("actual public canonical decoder admission", () => {
+  expect(publicCanonicalDecoderWitness('{"a":[null,true,1]}', 64)).toBe(${mode === "failed" ? "'null'" : "'{\"a\":[null,true,1]}'"});
+  expect(publicDecode("true", 4)).toBe(true);
+  expect(publicDecode("null", 4)).toBeNull();
+  expect(() => publicDecode(" null", 64)).toThrow(expect.objectContaining({reason:"corrupt-report"}));
+  expect(() => publicDecode('"é"', 3)).toThrow(expect.objectContaining({reason:"report-budget-exceeded"}));
+  ${stale}
+});
+`,
+  );
+  if (mode === "missing")
+    own.records[0].proofAssertions[0].testName = "absent canonical decoder assertion";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);
+  return own;
+}
+
+describe("raw canonical JSON decoder fresh semantic qualification (#3918)", () => {
+  it.skipIf(process.platform === "win32")(
+    "grants only the exact return after fresh public admission proofs pass",
+    async () => {
+      const own = await canonicalDecoderSemanticFixture();
+      const pending = await executeCodeQualityPolicy(
+        { mode: "enforce", scope: "repository" },
+        own.root,
+      );
+      expect(pending.responsibilities.counts).toMatchObject({ ready: 1, pending: 1, qualified: 0 });
+      expect(pending.adaptations).toEqual([]);
+      const report = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
+      expect(report.responsibilities.counts).toMatchObject({ ready: 1, pending: 0, qualified: 1 });
+      expect(report.responsibilities.execution).toMatchObject({
+        status: "passed",
+        invocationCount: 1,
+        process: { directChildClosed: true, groupAbsent: true },
+      });
+      expect(report.adaptations).toHaveLength(1);
+      expect(report.adaptations[0].finding.rule).toBe("anti-slop/no-unknown-returns");
+      expect(report.violations).toEqual([]);
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["lying", "semantic-proof-execution-failed"],
+    ["failed", "semantic-proof-execution-failed"],
+    ["missing", "semantic-proof-assertion-missing"],
+    ["skip", "semantic-proof-assertion-missing"],
+    ["stale", "symbol-subject-changed"],
+  ])(
+    "refuses %s proof without adapting a raw return",
+    async (mode, reason) => {
+      const own = await canonicalDecoderSemanticFixture(mode);
+      await expect(
+        qualifyPolicyResponsibilities(await collectPolicySubject(own.root), own.policy),
+      ).rejects.toThrow(reason);
     },
     195_000,
   );

@@ -196,6 +196,11 @@ function selectedPublicEntry(compiler, specifier, resolved, path, mode) {
 
 function publicDeclarationSource(compiler, context, path) {
   compiler.assertCurrent();
+  const runtime = path.replace(/\.d\.([cm]?)ts$/u, ".$1js");
+  const outputs = compiler.state.subject.outputs;
+  if (runtime === path || !outputs.has(path) || outputs.get(runtime) !== outputs.get(path))
+    throw new TypeError("unqualified-public-declaration-entry");
+  compiler.read(runtime);
   const cached = compiler.state.declarations.get(path);
   if (cached) return cached;
   const { declarationText } = qualifiedDeclarationBytes(compiler, path);
@@ -249,12 +254,47 @@ function namedValueReexport(node, entry) {
   );
 }
 
-function publicDeclaration(compiler, context, path, name, seen) {
-  if (seen.has(path) || seen.size >= compiler.state.limits.aliases)
-    throw new TypeError("symbol-alias-budget");
-  seen.add(path);
-  const source = publicDeclarationSource(compiler, context, path);
-  const { functions, exports } = publicExportCandidates(source, name);
+function publicBindingName(name, requested) {
+  if (ts.isIdentifier(name)) return name.text === requested;
+  return name.elements.some(
+    (element) => ts.isBindingElement(element) && publicBindingName(element.name, requested),
+  );
+}
+
+function unsupportedExplicitPublicExport(source, name) {
+  return source.statements.some((node) => {
+    if (ts.isExportDeclaration(node))
+      return Boolean(
+        node.exportClause &&
+        ts.isNamespaceExport(node.exportClause) &&
+        node.exportClause.name.text === name,
+      );
+    if (!node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword))
+      return false;
+    if (ts.isFunctionDeclaration(node)) return false;
+    if (ts.isVariableStatement(node))
+      return node.declarationList.declarations.some((entry) => publicBindingName(entry.name, name));
+    return node.name && ts.isIdentifier(node.name) && node.name.text === name;
+  });
+}
+
+function publicStarDeclaration(compiler, context, source, name, seen) {
+  let found = null;
+  for (const node of source.statements) {
+    if (!ts.isExportDeclaration(node) || node.isTypeOnly || node.exportClause) continue;
+    if (!node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier))
+      throw new TypeError("unsupported-public-declaration-entry");
+    const path = declarationModule(compiler, context, source, node.moduleSpecifier);
+    const candidate = publicDeclarationCandidate(compiler, context, path, name, seen);
+    if (candidate === null) continue;
+    if (found !== null) throw new TypeError("ambiguous-public-declaration-entry");
+    found = candidate;
+  }
+  return found;
+}
+
+function publicExplicitDeclaration(compiler, context, source, candidates, seen) {
+  const { functions, exports } = candidates;
   if (functions.length === 1 && exports.length === 0)
     return canonicalDeclaration(compiler, functions[0], null);
   if (functions.length || exports.length !== 1)
@@ -268,6 +308,25 @@ function publicDeclaration(compiler, context, path, name, seen) {
     entry.propertyName?.text ?? entry.name.text,
     seen,
   );
+}
+
+function publicDeclarationCandidate(compiler, context, path, name, seen) {
+  if (seen.has(path) || seen.size >= compiler.state.limits.aliases)
+    throw new TypeError("symbol-alias-budget");
+  seen.add(path);
+  const source = publicDeclarationSource(compiler, context, path);
+  const candidates = publicExportCandidates(source, name);
+  if (unsupportedExplicitPublicExport(source, name))
+    throw new TypeError("unsupported-public-declaration-entry");
+  if (candidates.functions.length === 0 && candidates.exports.length === 0)
+    return publicStarDeclaration(compiler, context, source, name, seen);
+  return publicExplicitDeclaration(compiler, context, source, candidates, seen);
+}
+
+function publicDeclaration(compiler, context, path, name, seen) {
+  const result = publicDeclarationCandidate(compiler, context, path, name, seen);
+  if (result === null) throw new TypeError("unsupported-public-declaration-entry");
+  return result;
 }
 
 function qualifyPublicEntry(compiler, context, source, references, request, facts) {
@@ -1122,6 +1181,493 @@ function typedRecheckBinding(compiler, request, producer) {
     status: "ready",
     implementation: canonicalDeclaration(compiler, callable, null),
     calls: [{ path: request.consumerPath, start: flow.call.getStart(), end: flow.call.end }],
+  };
+}
+
+function decoderNamedDeclaration(callable) {
+  if (!callable || !ts.isFunctionDeclaration(callable) || !callable.name || !callable.type)
+    return false;
+  return (
+    !callable.typeParameters?.length &&
+    !callable.asteriskToken &&
+    !callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+  );
+}
+
+function decoderPrimitiveDeclaration(callable, parameters, result) {
+  return (
+    decoderNamedDeclaration(callable) &&
+    callable.type.kind === result &&
+    callable.parameters.length === parameters.length &&
+    callable.parameters.every(
+      (parameter, index) =>
+        typedRequiredParameter(parameter) && parameter.type.kind === parameters[index],
+    )
+  );
+}
+
+function decoderPrimitiveSignature(context, callable, parameters, result) {
+  if (!decoderPrimitiveDeclaration(callable, parameters, result)) return false;
+  const symbol = context.checker.getSymbolAtLocation(callable.name);
+  const signatures =
+    symbol && context.checker.getTypeOfSymbolAtLocation(symbol, callable).getCallSignatures();
+  return (
+    symbol?.declarations?.length === 1 &&
+    signatures?.length === 1 &&
+    typedSingleSignature(signatures[0])
+  );
+}
+
+function decoderSameSymbol(context, left, right) {
+  if (!left || !right || !ts.isIdentifier(left) || !ts.isIdentifier(right)) return false;
+  const symbol = context.checker.getSymbolAtLocation(left);
+  return Boolean(symbol && symbol === context.checker.getSymbolAtLocation(right));
+}
+
+function decoderParameter(state, expression, index) {
+  return decoderSameSymbol(state.context, expression, state.callable.parameters[index].name);
+}
+
+function decoderOwnedFunction(context, symbol, declaration, count) {
+  const signatures = context.checker
+    .getTypeOfSymbolAtLocation(symbol, declaration)
+    .getCallSignatures();
+  return Boolean(
+    decoderNamedDeclaration(declaration) &&
+    declaration.body &&
+    declaration.parameters.length === count &&
+    declaration.parameters.every(typedRequiredParameter) &&
+    symbol.declarations.length === 1 &&
+    signatures.length === 1 &&
+    typedSingleSignature(signatures[0]),
+  );
+}
+
+function decoderOwnedCall(state, call, name, count) {
+  if (!typedForwardCall(call) || call.arguments.length !== count) return null;
+  const symbol = state.context.checker.getSymbolAtLocation(call.expression);
+  const declaration = symbol?.valueDeclaration;
+  return declaration &&
+    ts.isFunctionDeclaration(declaration) &&
+    declaration.name?.text === name &&
+    declaration.getSourceFile() === state.source &&
+    decoderOwnedFunction(state.context, symbol, declaration, count)
+    ? declaration
+    : null;
+}
+
+function decoderErrorArguments(value, reason) {
+  return (
+    !value.typeArguments?.length &&
+    value.arguments?.length === 1 &&
+    ts.isStringLiteral(value.arguments[0]) &&
+    value.arguments[0].text === reason
+  );
+}
+
+function decoderErrorConstructor(state, value) {
+  const declaration = state.context.checker.getSymbolAtLocation(value.expression)?.valueDeclaration;
+  return Boolean(
+    declaration &&
+    ts.isClassDeclaration(declaration) &&
+    declaration.getSourceFile() === state.source &&
+    declaration.name?.text === "SupportReportError",
+  );
+}
+
+function decoderErrorExpression(state, value, reason) {
+  return Boolean(
+    value &&
+    ts.isNewExpression(value) &&
+    ts.isIdentifier(value.expression) &&
+    decoderErrorArguments(value, reason) &&
+    decoderErrorConstructor(state, value),
+  );
+}
+
+function decoderError(state, statement, reason) {
+  return (
+    ts.isThrowStatement(statement) && decoderErrorExpression(state, statement.expression, reason)
+  );
+}
+
+function decoderBudgetThrow(state, statement) {
+  if (!ts.isThrowStatement(statement)) return false;
+  const declaration = decoderOwnedCall(state, statement.expression, "budgetExceeded", 0);
+  return Boolean(
+    declaration?.body.statements.length === 1 &&
+    ts.isReturnStatement(declaration.body.statements[0]) &&
+    decoderErrorExpression(
+      state,
+      declaration.body.statements[0].expression,
+      "report-budget-exceeded",
+    ),
+  );
+}
+
+function decoderGreaterLimit(state, expression) {
+  return (
+    ts.isBinaryExpression(expression) &&
+    expression.operatorToken.kind === ts.SyntaxKind.GreaterThanToken &&
+    decoderParameter(state, expression.right, 1)
+  );
+}
+
+function decoderTextLength(state, expression) {
+  return (
+    ts.isPropertyAccessExpression(expression) &&
+    expression.name.text === "length" &&
+    decoderParameter(state, expression.expression, 0)
+  );
+}
+
+function decoderDefaultValue(context, expression, name) {
+  const symbol = context.checker.getSymbolAtLocation(expression);
+  const declaration = symbol?.valueDeclaration;
+  return (
+    ts.isIdentifier(expression) &&
+    expression.text === name &&
+    Boolean(declaration) &&
+    context.program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+  );
+}
+
+function decoderBuiltinEncoder(state, construct) {
+  return (
+    ts.isNewExpression(construct) &&
+    !construct.typeArguments?.length &&
+    (construct.arguments?.length ?? 0) === 0 &&
+    decoderDefaultValue(state.context, construct.expression, "TextEncoder")
+  );
+}
+
+function decoderEncodingCall(state, call) {
+  if (
+    !ts.isCallExpression(call) ||
+    call.typeArguments?.length ||
+    call.arguments.length !== 1 ||
+    !decoderParameter(state, call.arguments[0], 0)
+  )
+    return false;
+  return (
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "encode" &&
+    decoderBuiltinEncoder(state, call.expression.expression)
+  );
+}
+
+function decoderByteLength(state, expression) {
+  return (
+    ts.isPropertyAccessExpression(expression) &&
+    expression.name.text === "byteLength" &&
+    decoderEncodingCall(state, expression.expression)
+  );
+}
+
+function decoderBudgetGuard(state, statement) {
+  if (!ts.isIfStatement(statement) || statement.elseStatement) return false;
+  const expression = statement.expression;
+  return (
+    ts.isBinaryExpression(expression) &&
+    expression.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
+    decoderGreaterLimit(state, expression.left) &&
+    decoderGreaterLimit(state, expression.right) &&
+    decoderTextLength(state, expression.left.left) &&
+    decoderByteLength(state, expression.right.left) &&
+    decoderBudgetThrow(state, statement.thenStatement)
+  );
+}
+
+function decoderShapePreflight(state, statement) {
+  if (!ts.isExpressionStatement(statement)) return false;
+  const call = statement.expression;
+  const declaration = decoderOwnedCall(state, call, "checkJsonShape", 1);
+  return Boolean(
+    declaration &&
+    decoderParameter(state, call.arguments[0], 0) &&
+    decoderPrimitiveSignature(
+      state.context,
+      declaration,
+      [ts.SyntaxKind.StringKeyword],
+      ts.SyntaxKind.VoidKeyword,
+    ),
+  );
+}
+
+function decoderRawLocal(statement) {
+  if (
+    !ts.isVariableStatement(statement) ||
+    statement.declarationList.flags !== ts.NodeFlags.Let ||
+    statement.declarationList.declarations.length !== 1
+  )
+    return null;
+  const local = statement.declarationList.declarations[0];
+  return ts.isIdentifier(local.name) &&
+    !local.initializer &&
+    local.type?.kind === ts.SyntaxKind.UnknownKeyword
+    ? local
+    : null;
+}
+
+function decoderBuiltinJsonTarget(state, target) {
+  return (
+    ts.isPropertyAccessExpression(target) &&
+    target.name.text === "parse" &&
+    ts.isIdentifier(target.expression) &&
+    target.expression.text === "JSON" &&
+    defaultLibrarySymbol(
+      state.context,
+      state.context.checker.getSymbolAtLocation(target.expression),
+    ) &&
+    defaultLibrarySymbol(state.context, state.context.checker.getSymbolAtLocation(target.name))
+  );
+}
+
+function decoderBuiltinParse(state, call) {
+  return (
+    ts.isCallExpression(call) &&
+    !call.typeArguments?.length &&
+    call.arguments.length === 1 &&
+    decoderParameter(state, call.arguments[0], 0) &&
+    decoderBuiltinJsonTarget(state, call.expression)
+  );
+}
+
+function decoderJsonAssignment(state, statement, local) {
+  if (!ts.isExpressionStatement(statement) || !ts.isBinaryExpression(statement.expression))
+    return false;
+  const assignment = statement.expression;
+  return (
+    assignment.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    decoderSameSymbol(state.context, assignment.left, local.name) &&
+    decoderBuiltinParse(state, assignment.right)
+  );
+}
+
+function decoderCatch(state, caught) {
+  return Boolean(
+    caught &&
+    !caught.variableDeclaration &&
+    caught.block.statements.length === 1 &&
+    decoderError(state, caught.block.statements[0], "corrupt-report"),
+  );
+}
+
+function decoderTryAssignment(state, statement, local) {
+  return (
+    ts.isTryStatement(statement) &&
+    !statement.finallyBlock &&
+    statement.tryBlock.statements.length === 1 &&
+    decoderJsonAssignment(state, statement.tryBlock.statements[0], local) &&
+    decoderCatch(state, statement.catchClause)
+  );
+}
+
+function decoderCanonicalCall(state, call, local, canonicalizer) {
+  if (
+    !typedForwardCall(call) ||
+    call.arguments.length !== 1 ||
+    !decoderSameSymbol(state.context, call.arguments[0], local.name)
+  )
+    return false;
+  const declaration = state.context.checker.getSymbolAtLocation(call.expression)?.valueDeclaration;
+  return Boolean(
+    declaration &&
+    declaration.getSourceFile() === state.source &&
+    sameProducer(canonicalDeclaration(state.compiler, declaration, null), canonicalizer),
+  );
+}
+
+function decoderCanonicalGuard(state, statement, local, canonicalizer) {
+  if (!ts.isIfStatement(statement) || statement.elseStatement) return false;
+  const expression = statement.expression;
+  return (
+    ts.isBinaryExpression(expression) &&
+    expression.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+    decoderParameter(state, expression.right, 0) &&
+    decoderCanonicalCall(state, expression.left, local, canonicalizer) &&
+    decoderError(state, statement.thenStatement, "corrupt-report")
+  );
+}
+
+function decoderSourceFlow(state, canonicalizer) {
+  const statements = state.callable.body.statements;
+  if (statements.length !== 6) return false;
+  const local = decoderRawLocal(statements[2]);
+  return Boolean(
+    local &&
+    decoderBudgetGuard(state, statements[0]) &&
+    decoderShapePreflight(state, statements[1]) &&
+    decoderTryAssignment(state, statements[3], local) &&
+    decoderCanonicalGuard(state, statements[4], local, canonicalizer) &&
+    ts.isReturnStatement(statements[5]) &&
+    decoderSameSymbol(state.context, statements[5].expression, local.name),
+  );
+}
+
+function canonicalDecoderFacts(compiler, identity, canonicalizer) {
+  const state = { ...declarationCallable(compiler, identity), compiler };
+  const output = declarationCallable(compiler, canonicalizer);
+  if (
+    identity.owner !== canonicalizer.owner ||
+    !typedCallableShape(state.callable) ||
+    !typedCallableShape(output.callable) ||
+    !exportedDeclaration(state.callable) ||
+    !exportedDeclaration(output.callable) ||
+    !decoderPrimitiveSignature(
+      state.context,
+      state.callable,
+      [ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NumberKeyword],
+      ts.SyntaxKind.UnknownKeyword,
+    ) ||
+    !decoderPrimitiveSignature(
+      output.context,
+      output.callable,
+      [ts.SyntaxKind.UnknownKeyword],
+      ts.SyntaxKind.StringKeyword,
+    ) ||
+    !decoderSourceFlow(state, canonicalizer)
+  )
+    throw new TypeError("unsupported-raw-canonical-json-decoder");
+  return {
+    producer: identity,
+    canonicalizer,
+    preflight: [
+      "text-length",
+      "utf8-bytes",
+      "json-shape",
+      "builtin-json-parse",
+      "canonical-comparison",
+    ],
+    slot: { ...callableSlots(compiler, identity).result, rule: "anti-slop/no-unknown-returns" },
+  };
+}
+
+function decoderWitnessLocal(statement) {
+  if (
+    !ts.isVariableStatement(statement) ||
+    statement.declarationList.flags !== ts.NodeFlags.Const ||
+    statement.declarationList.declarations.length !== 1
+  )
+    return null;
+  const local = statement.declarationList.declarations[0];
+  return ts.isIdentifier(local.name) && !local.type && typedForwardCall(local.initializer)
+    ? { local, call: local.initializer }
+    : null;
+}
+
+function decoderWitnessFlow(context, callable) {
+  if (callable.body.statements.length !== 3) return null;
+  const [rawStatement, resultStatement, returned] = callable.body.statements;
+  const raw = decoderWitnessLocal(rawStatement);
+  const result = decoderWitnessLocal(resultStatement);
+  if (
+    !raw ||
+    !result ||
+    !constAssignmentAndIdentifierReturn(resultStatement, returned) ||
+    result.call.arguments.length !== 1 ||
+    !decoderSameSymbol(context, result.call.arguments[0], raw.local.name) ||
+    !decoderSameSymbol(context, returned.expression, result.local.name)
+  )
+    return null;
+  return { raw, result, returned: returned.expression };
+}
+
+function decoderPublicCall(compiler, context, call, request, producer, parameters, result) {
+  if (
+    !parserImport(context, call, request.specifier) ||
+    !directDiagnosticProducer(compiler, context, call, producer)
+  )
+    return false;
+  const signatures = context.checker.getTypeAtLocation(call.expression).getCallSignatures();
+  const declaration = context.checker.getResolvedSignature(call)?.declaration;
+  return (
+    signatures.length === 1 &&
+    declaration &&
+    decoderPrimitiveSignature(context, declaration, parameters, result)
+  );
+}
+
+function decoderWitnessCalls(compiler, context, callable, flow, request, producer, canonicalizer) {
+  return (
+    decoderPublicCall(
+      compiler,
+      context,
+      flow.raw.call,
+      request,
+      producer,
+      [ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NumberKeyword],
+      ts.SyntaxKind.UnknownKeyword,
+    ) &&
+    decoderPublicCall(
+      compiler,
+      context,
+      flow.result.call,
+      request,
+      canonicalizer,
+      [ts.SyntaxKind.UnknownKeyword],
+      ts.SyntaxKind.StringKeyword,
+    ) &&
+    flow.raw.call.arguments.length === 2 &&
+    flow.raw.call.arguments.every((argument, index) =>
+      decoderParameter({ context, callable }, argument, index),
+    )
+  );
+}
+
+function canonicalDecoderBinding(compiler, request, producer, canonicalizer) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+  const module = context.checker.getSymbolAtLocation(source);
+  const symbol = context.checker
+    .getExportsOfModule(module)
+    .find((entry) => entry.name === request.exportName);
+  const callable = symbol?.declarations?.length === 1 ? symbol.declarations[0] : null;
+  if (
+    !typedCallableShape(callable) ||
+    !decoderPrimitiveSignature(
+      context,
+      callable,
+      [ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NumberKeyword],
+      ts.SyntaxKind.StringKeyword,
+    )
+  )
+    return { bound: false, status: "incomplete" };
+  const flow = decoderWitnessFlow(context, callable);
+  if (
+    !flow ||
+    !decoderWitnessCalls(compiler, context, callable, flow, request, producer, canonicalizer)
+  )
+    return { bound: false, status: "incomplete" };
+  return {
+    bound: true,
+    status: "ready",
+    implementation: canonicalDeclaration(compiler, callable, null),
+    calls: [flow.raw.call, flow.result.call].map((call) => ({
+      path: request.consumerPath,
+      start: call.getStart(),
+      end: call.end,
+    })),
+  };
+}
+
+function canonicalDecoderOperations(compiler) {
+  return {
+    canonicalDecoderFacts: (identity, canonicalizer) => {
+      compiler.assertCurrent();
+      try {
+        return canonicalDecoderFacts(compiler, identity, canonicalizer);
+      } finally {
+        compiler.assertCurrent();
+      }
+    },
+    canonicalDecoderBinding: (request, producer, canonicalizer) => {
+      compiler.assertCurrent();
+      try {
+        return canonicalDecoderBinding(compiler, request, producer, canonicalizer);
+      } finally {
+        compiler.assertCurrent();
+      }
+    },
   };
 }
 
@@ -2597,6 +3143,7 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
     parserBinding: (request, producer) => parserBinding(compiler, request, producer),
     ...typedRecheckOperations(compiler),
+    ...canonicalDecoderOperations(compiler),
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
     rawReaderFacts: (identity) => rawReaderFacts(compiler, identity),

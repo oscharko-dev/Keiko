@@ -249,6 +249,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "task-workspace-next-from-typed-recheck",
       "task-workspace-cleanup-value-typed-recheck",
       "actual-code-task-acceptance-raw-reader-return",
+      "support-canonical-json-decoder-return",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -948,4 +949,41 @@ describe("typed task public recheck obligations (#3918)", () => {
       }
     }
   });
+});
+
+describe("canonical JSON decoder closed responsibility schema (#3918)", () => {
+  it("retains the exact sole return rule and bounded real proof owners", () => {
+    const record = policy.responsibilities.at(-1);
+    expect(record.id).toBe("support-canonical-json-decoder-return");
+    expect(record.kind).toBe("raw-canonical-json-decoder");
+    expect(record.rules).toEqual(["anti-slop/no-unknown-returns"]);
+    expect(record.input.parameterIndex).toBe(0);
+    expect(record.transform.exportName).toBe("parseCanonicalSupportJson");
+    expect(record.output.exportName).toBe("canonicalSupportJson");
+    expect(record.proofs).toEqual([
+      "packages/keiko-contracts/src/support-report-json.test.ts",
+      "packages/keiko-activity-log/src/reader/support-report.test.ts",
+      "packages/keiko-activity-log/src/reader/support-report-browser.test.ts",
+    ]);
+    expect(record.proofAssertions).toHaveLength(16);
+    expect(validatePolicy(policy)).toEqual([]);
+  });
+
+  it.each(["wrong-rule", "extra-rule", "wrong-index", "no-proof", "proof-overflow"])(
+    "refuses %s without widening an existing responsibility kind",
+    (variant) => {
+      const changed = structuredClone(policy);
+      const record = changed.responsibilities.at(-1);
+      if (variant === "wrong-rule") record.rules = ["anti-slop/no-unknown-parameters"];
+      if (variant === "extra-rule") record.rules.push("anti-slop/no-runtime-typeof");
+      if (variant === "wrong-index") record.input.parameterIndex = 1;
+      if (variant === "no-proof") delete record.proofAssertions;
+      if (variant === "proof-overflow")
+        record.proofAssertions.push({
+          path: record.proofs[0],
+          testName: "extra canonical assertion",
+        });
+      expect(validatePolicy(changed)).toContain("invalid-responsibilities");
+    },
+  );
 });

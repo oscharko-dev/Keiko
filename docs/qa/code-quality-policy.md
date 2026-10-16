@@ -761,3 +761,18 @@ actual selected proof execution adapts exactly that coordinate, without changing
 checked-in policy. Complete production qualification separately proves all 64 records. This
 registration preserves the previous 63 records, all rule scopes, production code and public types;
 the unknown-return rule remains inactive until the other legitimate raw returns are ready.
+
+The closed `raw-canonical-json-decoder` responsibility registers the existing contracts
+`parseCanonicalSupportJson` return without narrowing its truthful `unknown` result. It admits
+only the exact return annotation after fresh semantic qualification. The decoder retains its
+ordered text/UTF-8/shape preflight, builtin JSON parsing, canonical comparison and unchanged raw
+return. A same-owner strict public witness forwards the actual string/number parameters to that
+decoder, then the actual raw result to the canonicalizer. Canonical bytes are not SupportReport
+schema admission: the existing Activity Log reader and browser proof owners remain required.
+
+This registration extends 64 records to 65 and activates no new scope. The existing maximum16
+selected assertions remains unchanged; all three declared proof owners execute completely, with
+unselected existing tests retained as owning-suite regressions. Pending, failed or stale proofs
+cannot adapt the return; no parameter, helper, dictionary or other return gains an exemption.
+Caller `maxBytes` remains a numeric input, not a universal validated ceiling; the existing actual
+consumers retain their fixed repository byte limits. The original unknown-result pin is unchanged.

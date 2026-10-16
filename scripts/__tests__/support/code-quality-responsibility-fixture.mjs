@@ -1,11 +1,13 @@
 import { readFileSync, symlinkSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, URL } from "node:url";
 import { join } from "node:path";
 import {
   createSymbolFixture,
   emitSymbolFixture,
   publicParserRecord,
 } from "./code-quality-symbol-fixture.mjs";
+
+import ts from "typescript";
 
 import { fixtureOwnedPolicy } from "./code-quality-fixture.mjs";
 
@@ -927,4 +929,285 @@ export function publiceligible(value: State): boolean { const result = eligible(
       '\ntype State = "ready" | "done";\n',
   };
   return replacements[variant] ?? source;
+}
+
+// Preserve the actual producer and its constants in the native-emitted fixture; do not copy its
+// canonicalization or budget formulas into test expectations.
+export function createCanonicalDecoderFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    config.compilerOptions.lib.push("DOM");
+    own.put("packages/alpha/tsconfig.json", config);
+    const original = readFileSync(
+      new URL("../../../packages/keiko-contracts/src/support-report-json.ts", import.meta.url),
+      "utf8",
+    );
+    own.put("packages/alpha/src/owner.ts", canonicalDecoderVariant(original, variant));
+    own.put("packages/alpha/src/support-report.ts", canonicalDecoderConstants());
+    own.put("packages/alpha/src/index.ts", 'export * from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { parseCanonicalSupportJson } from "alpha/runtime"; export const value = parseCanonicalSupportJson("null", 4);\n',
+    );
+    own.put("packages/alpha/src/proof.test.ts", canonicalDecoderProof(variant));
+    const record = canonicalDecoderRecord();
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { records: [record], policy });
+  });
+}
+
+function canonicalDecoderConstants() {
+  const path = new URL("../../../packages/keiko-contracts/src/support-report.ts", import.meta.url);
+  const text = readFileSync(path, "utf8");
+  const source = ts.createSourceFile(path.pathname, text, ts.ScriptTarget.Latest, true);
+  const names = new Set([
+    "MAX_SUPPORT_REPORT_BYTES",
+    "MAX_SUPPORT_REPORT_CONTAINERS",
+    "MAX_SUPPORT_REPORT_DEPTH",
+    "MAX_SUPPORT_REPORT_OBJECT_KEYS",
+    "MAX_SUPPORT_REPORT_RECORDS",
+    "MAX_SUPPORT_REPORT_VALUES",
+    "SUPPORT_REPORT_FAILURES",
+    "SupportReportFailure",
+  ]);
+  const selected = source.statements.filter((statement) => {
+    if (ts.isTypeAliasDeclaration(statement)) return names.has(statement.name.text);
+    return (
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (declaration) => ts.isIdentifier(declaration.name) && names.has(declaration.name.text),
+      )
+    );
+  });
+  if (selected.length !== names.size) throw new TypeError("canonical-decoder-fixture-constants");
+  return selected.map((statement) => statement.getText(source)).join("\n");
+}
+
+function canonicalDecoderReplacement(variant) {
+  return {
+    "decoder-generic": [
+      "function parseCanonicalSupportJson(",
+      "function parseCanonicalSupportJson<T>(",
+    ],
+    "decoder-default": ["text: string, maxBytes: number", "text: string, maxBytes: number = 64"],
+    "canonicalizer-generic": [
+      "function canonicalSupportJson(",
+      "function canonicalSupportJson<T>(",
+    ],
+    "coerced-parse": ["JSON.parse(text)", "JSON.parse(String(text))"],
+    "removed-preflight": ["  checkJsonShape(text);\n", ""],
+    "removed-byte-budget": [
+      "text.length > maxBytes || new TextEncoder().encode(text).byteLength > maxBytes",
+      "text.length > maxBytes",
+    ],
+    "bypassed-canonicality": [
+      '  if (canonicalSupportJson(value) !== text) throw new SupportReportError("corrupt-report");',
+      "",
+    ],
+    "lying-decoder": ["    value = JSON.parse(text);", "    value = null;"],
+  }[variant];
+}
+
+function canonicalDecoderPreflightStatement(statement) {
+  return (
+    ts.isExpressionStatement(statement) &&
+    ts.isCallExpression(statement.expression) &&
+    ts.isIdentifier(statement.expression.expression) &&
+    statement.expression.expression.text === "checkJsonShape"
+  );
+}
+
+function canonicalDecoderControlNodes(source) {
+  const parsed = ts.createSourceFile("owner.ts", source, ts.ScriptTarget.Latest, true);
+  const declarations = parsed.statements.filter(
+    (statement) =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === "parseCanonicalSupportJson",
+  );
+  if (declarations.length !== 1 || !declarations[0].body)
+    throw new TypeError("canonical-decoder-fixture-declaration");
+  const decoder = declarations[0];
+  const statements = decoder.body.statements;
+  const returned = statements.at(-1);
+  const preflights = statements.filter(canonicalDecoderPreflightStatement);
+  if (statements.length !== 6 || !ts.isReturnStatement(returned) || !returned.expression)
+    throw new TypeError("canonical-decoder-fixture-return");
+  if (preflights.length !== 1) throw new TypeError("canonical-decoder-fixture-preflight");
+  return { parsed, decoder, statements, returned, preflight: preflights[0] };
+}
+
+function canonicalDecoderControlText(before, source, variant) {
+  const start = before.decoder.getStart(before.parsed);
+  const text = source.slice(start, before.decoder.end);
+  const relative = (node) => node.getStart(before.parsed) - start;
+  if (variant === "reordered-preflight") {
+    return (
+      text.slice(0, relative(before.preflight)) +
+      text.slice(before.preflight.end - start, relative(before.returned)) +
+      before.preflight.getText(before.parsed) +
+      "\n  " +
+      text.slice(relative(before.returned))
+    );
+  }
+  const expression = before.returned.expression;
+  const raw = expression.getText(before.parsed);
+  const replacement = variant === "captured-return" ? `(() => ${raw})()` : `{ ${raw} }`;
+  return text.slice(0, relative(expression)) + replacement + text.slice(expression.end - start);
+}
+
+function canonicalDecoderControlShape(before, after, variant) {
+  const original = before.statements.map((statement) => statement.getText(before.parsed));
+  const changed = after.statements.map((statement) => statement.getText(after.parsed));
+  if (variant === "reordered-preflight") {
+    const expected = [original[0], original[2], original[3], original[4], original[1], original[5]];
+    return JSON.stringify(changed) === JSON.stringify(expected);
+  }
+  if (JSON.stringify(changed.slice(0, -1)) !== JSON.stringify(original.slice(0, -1))) return false;
+  const raw = before.returned.expression.getText(before.parsed);
+  const expression = after.returned.expression;
+  const expected = variant === "captured-return" ? `(() => ${raw})()` : `{ ${raw} }`;
+  const expectedKind =
+    variant === "captured-return"
+      ? ts.SyntaxKind.CallExpression
+      : ts.SyntaxKind.ObjectLiteralExpression;
+  return expression?.kind === expectedKind && expression.getText(after.parsed) === expected;
+}
+
+function canonicalDecoderControlVariant(source, variant) {
+  const before = canonicalDecoderControlNodes(source);
+  if (!ts.isIdentifier(before.returned.expression) || before.statements[1] !== before.preflight)
+    throw new TypeError("canonical-decoder-fixture-original-shape");
+  const start = before.decoder.getStart(before.parsed);
+  const replacement = canonicalDecoderControlText(before, source, variant);
+  const prefix = source.slice(0, start);
+  const suffix = source.slice(before.decoder.end);
+  const changed = prefix + replacement + suffix;
+  const after = canonicalDecoderControlNodes(changed);
+  if (
+    changed === source ||
+    changed.slice(0, after.decoder.getStart(after.parsed)) !== prefix ||
+    changed.slice(after.decoder.end) !== suffix ||
+    !canonicalDecoderControlShape(before, after, variant)
+  )
+    throw new TypeError("canonical-decoder-fixture-mutation-target");
+  return changed;
+}
+
+function canonicalDecoderBudgetVariant(source, variant) {
+  const parsed = ts.createSourceFile("owner.ts", source, ts.ScriptTarget.Latest, true);
+  const name = variant === "budget-outer-return" ? "parseCanonicalSupportJson" : "budgetExceeded";
+  const declarations = parsed.statements.filter(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+  );
+  if (declarations.length !== 1 || !declarations[0].body)
+    throw new TypeError("canonical-decoder-budget-fixture-owner");
+  const owner = declarations[0];
+  const original = owner.body.getText(parsed);
+  const replacements = {
+    "budget-helper-throws": '{ throw new SupportReportError("report-budget-exceeded"); }',
+    "budget-helper-wrong-reason": '{ return new SupportReportError("corrupt-report"); }',
+    "budget-helper-extra-statement":
+      '{ void 0; return new SupportReportError("report-budget-exceeded"); }',
+    "budget-outer-return": original.replace("throw budgetExceeded();", "return budgetExceeded();"),
+  };
+  const replacement = replacements[variant];
+  if (!replacement || replacement === original)
+    throw new TypeError("canonical-decoder-budget-fixture-unchanged");
+  return canonicalDecoderBudgetTarget(source, parsed, owner, replacement);
+}
+
+function canonicalDecoderBudgetTarget(source, parsed, owner, replacement) {
+  const name = owner.name.text;
+  const start = owner.body.getStart(parsed);
+  const prefix = source.slice(0, start);
+  const suffix = source.slice(owner.body.end);
+  const changed = prefix + replacement + suffix;
+  const after = ts.createSourceFile("owner.ts", changed, ts.ScriptTarget.Latest, true);
+  const updated = after.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+  );
+  if (
+    !updated?.body ||
+    updated.body.getText(after) !== replacement ||
+    changed.slice(0, updated.body.getStart(after)) !== prefix ||
+    changed.slice(updated.body.end) !== suffix
+  )
+    throw new TypeError("canonical-decoder-budget-fixture-target");
+  return changed;
+}
+
+function canonicalDecoderVariant(source, variant) {
+  if (variant.startsWith("budget-")) return canonicalDecoderBudgetVariant(source, variant);
+  if (["captured-return", "cloned-return", "reordered-preflight"].includes(variant))
+    return canonicalDecoderControlVariant(source, variant);
+  if (variant === "lying-canonicalizer") {
+    const parsed = ts.createSourceFile("owner.ts", source, ts.ScriptTarget.Latest, true);
+    const canonicalizer = parsed.statements.find(
+      (statement) =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === "canonicalSupportJson",
+    );
+    if (!canonicalizer?.body) throw new TypeError("canonical-decoder-fixture-canonicalizer");
+    return (
+      source.slice(0, canonicalizer.body.getStart(parsed)) +
+      '{ return "null"; }' +
+      source.slice(canonicalizer.body.end)
+    );
+  }
+
+  if (variant === "shadowed-json")
+    source =
+      "const JSON = { parse: (text: string): unknown => globalThis.JSON.parse(text), stringify: globalThis.JSON.stringify };\n" +
+      source;
+  if (variant === "shadowed-encoder")
+    source =
+      "class TextEncoder { encode(text: string): Uint8Array { return new globalThis.TextEncoder().encode(text); } }\n" +
+      source;
+  const replacement = canonicalDecoderReplacement(variant);
+  if (replacement) source = source.replace(...replacement);
+  return source;
+}
+
+function canonicalDecoderRecord() {
+  const path = "packages/alpha/src/proof.test.ts";
+  const decoder = {
+    consumerPath: path,
+    specifier: "alpha/runtime",
+    exportName: "parseCanonicalSupportJson",
+  };
+  return {
+    id: "canonical-json-decoder",
+    owner: "alpha",
+    kind: "raw-canonical-json-decoder",
+    rules: ["anti-slop/no-unknown-returns"],
+    input: { ...decoder, parameterIndex: 0 },
+    transform: decoder,
+    output: { ...decoder, exportName: "canonicalSupportJson" },
+    consumer: {
+      ...decoder,
+      kind: "public-api-proof",
+      owner: "alpha",
+      exportName: "publicCanonicalDecoderWitness",
+    },
+    proofs: [path],
+    proofAssertions: [{ path, testName: "actual public canonical decoder admission" }],
+  };
+}
+
+function canonicalDecoderProof(variant) {
+  const rawCall =
+    variant === "wrong-argument"
+      ? 'publicDecode("null", maxBytes)'
+      : "publicDecode(text, maxBytes)";
+  const resultCall = variant === "raw-alias" ? "publicCanonical({ raw })" : "publicCanonical(raw)";
+  const result = variant === "wrong-result" ? '"null"' : "result";
+  const declaration = variant === "mutable-raw" ? "let" : "const";
+  return `import { parseCanonicalSupportJson as publicDecode, canonicalSupportJson as publicCanonical } from "alpha/runtime";
+export function publicCanonicalDecoderWitness(text: string, maxBytes: number): string {
+  ${declaration} raw = ${rawCall};
+  const result = ${resultCall};
+  return ${result};
+}
+`;
 }

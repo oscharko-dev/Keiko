@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(64);
+    expect(production.responsibilities).toHaveLength(65);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -796,7 +796,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 64, incomplete: 0, invalid: 0, qualified: 64, pending: 0, rejected: 0 },
+      counts: { ready: 65, incomplete: 0, invalid: 0, qualified: 65, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -851,7 +851,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 64;
+        r.responsibilities.counts.pending = 65;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
@@ -1162,5 +1162,104 @@ describe("typed Task public recheck cohort wiring (#3918)", () => {
         record.input.exportName === "isCleanupEligibleLifecycleState" ? [task, health] : [task],
       );
     }
+  });
+});
+
+describe("canonical JSON decoder production responsibility wiring (#3918)", () => {
+  it("binds the exact decoder canonicalizer witness and sixteen actual proof selectors", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const record = policy.responsibilities.at(-1);
+    expect(record.id).toBe("support-canonical-json-decoder-return");
+    expect(record.kind).toBe("raw-canonical-json-decoder");
+    expect(record.input).toEqual({
+      consumerPath: "packages/keiko-contracts/src/support-report-json.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/observability",
+      exportName: "parseCanonicalSupportJson",
+      parameterIndex: 0,
+    });
+    expect(record.output.exportName).toBe("canonicalSupportJson");
+    expect(record.consumer.exportName).toBe("canonicalDecoderPublicWitness");
+    expect(record.rules).toEqual(["anti-slop/no-unknown-returns"]);
+    expect(record.proofAssertions).toEqual([
+      {
+        path: "packages/keiko-contracts/src/support-report-json.test.ts",
+        testName: "keeps source and actual public canonical parser results unknown",
+      },
+      {
+        path: "packages/keiko-contracts/src/support-report-json.test.ts",
+        testName:
+          "canonical JSON decoder public responsibility (#3918) pins actual source public and witness signatures",
+      },
+      {
+        path: "packages/keiko-contracts/src/support-report-json.test.ts",
+        testName:
+          "canonical JSON decoder public responsibility (#3918) preserves canonical scalar and nested bytes through the public witness",
+      },
+      {
+        path: "packages/keiko-contracts/src/support-report-json.test.ts",
+        testName:
+          "canonical JSON decoder public responsibility (#3918) refuses noncanonical unsafe and over-budget text at the direct decoder and witness",
+      },
+      {
+        path: "packages/keiko-contracts/src/support-report-json.test.ts",
+        testName:
+          "canonical support JSON ordering uses ascending array-index keys before UTF-16-sorted ordinary object keys",
+      },
+      {
+        path: "packages/keiko-contracts/src/support-report-json.test.ts",
+        testName:
+          "canonical support JSON ordering keeps the ECMAScript array-index boundary and nested ordering deterministic",
+      },
+      {
+        path: "packages/keiko-contracts/src/support-report-json.test.ts",
+        testName:
+          "public: canonical array validation cannot skip an unsafe leaf through caller map",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        testName:
+          "canonical body-free offline report roundtrips a production incident and query, preserving reconstruction and unknown authenticity",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        testName:
+          "canonical body-free offline report refuses tamper, truncation, duplicate keys, and unknown sections before rendering",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        testName:
+          "lazy validated support analysis rejects malformed or tampered input before consulting lazy options",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        testName:
+          "hostile report admission refuses prohibited event fields even when an attacker recomputes every digest",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        testName:
+          "hostile report admission refuses trailing compressed bytes rather than accepting an opaque auxiliary payload",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        testName:
+          "hostile report admission bounds decompression independently of the sender's declared section size",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report.test.ts",
+        testName:
+          "received-report audit hardening (#3534) bounds containers, values and object keys before parsing a small expanding payload",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report-browser.test.ts",
+        testName:
+          "shared canonical browser report producer keeps strict canonical parsing and digest rejection",
+      },
+      {
+        path: "packages/keiko-activity-log/src/reader/support-report-browser.test.ts",
+        testName:
+          "shared canonical browser report producer charges UTF-8 bytes identically to Node for 😀",
+      },
+    ]);
   });
 });
