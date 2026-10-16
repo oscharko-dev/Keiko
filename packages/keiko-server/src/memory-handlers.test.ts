@@ -2248,3 +2248,54 @@ describe("memory request response-shape isolation", () => {
     },
   );
 });
+
+describe("checked Memory acceptance override consumer (#3918)", () => {
+  it("forwards the checked override into the real accepted memory", async () => {
+    const vault = makeVault();
+    const proposal = vault.insertMemory(
+      makeMemory("override-3918", "original fixture body", {
+        status: "proposed",
+      }),
+    );
+    const result = await handleAcceptMemoryProposal(
+      makeCtx(
+        `/api/memory/proposals/${proposal.id}/accept`,
+        {
+          bodyOverride: "reviewed fixture body 3918",
+        },
+        { id: proposal.id },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(proposal.id)).toMatchObject({
+      status: "accepted",
+      body: "reviewed fixture body 3918",
+    });
+  });
+
+  it.each([null, 12, "\u0000"])(
+    "refuses malformed override %j before mutation",
+    async (bodyOverride) => {
+      const vault = makeVault();
+      const proposal = vault.insertMemory(
+        makeMemory("override-refusal-3918", "original fixture body", {
+          status: "proposed",
+        }),
+      );
+      const before = vault.getMemory(proposal.id);
+      const result = await handleAcceptMemoryProposal(
+        makeCtx(
+          `/api/memory/proposals/${proposal.id}/accept`,
+          { bodyOverride },
+          { id: proposal.id },
+        ),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+      expect(vault.getMemory(proposal.id)).toEqual(before);
+      expect(vault.listOutgoingEdges(proposal.id)).toEqual([]);
+    },
+  );
+});

@@ -1671,6 +1671,578 @@
           "testName": "Atlassian live-query public parsers (#3918) retains opaque queries bounded results and exact public domain result types"
         }
       ]
+    },
+    {
+      "id": "memory-proposal-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryProposal",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryProposal"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryProposal"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryProposal",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryProposal accepts the happy proposal"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryProposal rejects initialStatus != 'proposed'"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "remaining memory DTO physical admission (#3918) retains public healthy envelope references"
+        }
+      ]
+    },
+    {
+      "id": "memory-acceptance-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryAcceptance",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryAcceptance"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryAcceptance"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryAcceptance",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryAcceptance accepts a happy acceptance and rejects empty IDs"
+        }
+      ]
+    },
+    {
+      "id": "memory-rejection-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRejection",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRejection"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRejection"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryRejection",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryRejection requires a non-empty reason"
+        }
+      ]
+    },
+    {
+      "id": "memory-update-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryUpdate",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryUpdate"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryUpdate"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryUpdate",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryUpdate rejects a no-op update (no patches set)"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryUpdate accepts a single-field patch"
+        }
+      ]
+    },
+    {
+      "id": "memory-supersession-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemorySupersession",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemorySupersession"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemorySupersession"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemorySupersession",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemorySupersession rejects same old/new IDs and missing reason"
+        }
+      ]
+    },
+    {
+      "id": "memory-pin-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryPin",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryPin"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryPin"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryPin",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryPin and validateMemoryUnpin accept happy envelopes"
+        }
+      ]
+    },
+    {
+      "id": "memory-unpin-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryUnpin",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryUnpin"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryUnpin"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryUnpin",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryPin and validateMemoryUnpin accept happy envelopes"
+        }
+      ]
+    },
+    {
+      "id": "memory-archive-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryArchive",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryArchive"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryArchive"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryArchive",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryArchive accepts the happy envelope"
+        }
+      ]
+    },
+    {
+      "id": "memory-forget-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryForget",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryForget"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryForget"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryForget",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryForget requires the destructive acknowledgement to be true"
+        }
+      ]
+    },
+    {
+      "id": "memory-audit-record-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryAuditRecord",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryAuditRecord"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryAuditRecord"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryAuditRecord",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "validateMemoryAuditRecord accepts the happy audit record"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "validateMemoryAuditRecord rejects actionKind / action.kind mismatch"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "validateMemoryAuditRecord requires the kind-specific fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "validateMemoryAuditRecord rejects a summary that looks like a credential"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "remaining memory DTO physical admission (#3918) rejects public own undefined required audit proposalId"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "remaining memory DTO physical admission (#3918) refuses public malformed physical retrieved audit scope hidden by iterator"
+        }
+      ]
+    },
+    {
+      "id": "memory-retrieval-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRetrievalRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRetrievalRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRetrievalRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryRetrievalRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryRetrievalRequest requires a non-empty scopes array"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "operation validators validateMemoryRetrievalRequest enforces enum filters and positive limits"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "remaining memory DTO physical admission (#3918) refuses public malformed physical retrieval scope hidden by iterator"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "remaining memory DTO physical admission (#3918) refuses public physical type filter hidden by iterator"
+        }
+      ]
     }
   ]
 }

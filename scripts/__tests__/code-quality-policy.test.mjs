@@ -142,6 +142,17 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "atlassian-connector-action-execution-public-parser",
       "jira-live-search-request-public-parser",
       "jira-live-search-result-public-parser",
+      "memory-proposal-public-parser",
+      "memory-acceptance-public-parser",
+      "memory-rejection-public-parser",
+      "memory-update-public-parser",
+      "memory-supersession-public-parser",
+      "memory-pin-public-parser",
+      "memory-unpin-public-parser",
+      "memory-archive-public-parser",
+      "memory-forget-public-parser",
+      "memory-audit-record-public-parser",
+      "memory-retrieval-request-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -676,4 +687,32 @@ describe("closed public parser schema (#3918)", () => {
       expect(validatePolicy(candidate, [baseline]).length).toBeGreaterThan(0);
     },
   );
+});
+
+describe("remaining Memory public parser obligations (#3918)", () => {
+  it("pins all eleven public roots and exact proof selectors without activating scopes", () => {
+    const records = policy.responsibilities.slice(32);
+    const unknownOnly = new Set(["memory-pin-public-parser", "memory-unpin-public-parser"]);
+    expect(records).toHaveLength(11);
+    for (const record of records) {
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.kind).toBe("public-parser");
+      expect(record.input.parameterIndex).toBe(0);
+      expect(record.rules).toEqual(
+        unknownOnly.has(record.id)
+          ? ["anti-slop/no-unknown-parameters"]
+          : ["anti-slop/no-unknown-parameters", "anti-slop/no-unsafe-dictionary-type"],
+      );
+      expect(record.consumer.kind).toBe("public-api-proof");
+      expect(record.proofs).toEqual(["packages/keiko-contracts/src/memory.test.ts"]);
+      expect(record.proofAssertions.slice(0, 3).map(({ testName }) => testName)).toEqual([
+        "Memory remaining public parsers (#3918) preserves operation audit and retrieval identities and optional presence",
+        "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics",
+        "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission",
+      ]);
+      const removed = structuredClone(policy);
+      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
+      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+    }
+  });
 });

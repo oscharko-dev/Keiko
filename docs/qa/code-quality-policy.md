@@ -601,3 +601,18 @@ adapts nothing. The raw census does not change. Other object parameters, returns
 assertions, caller/domain findings and unresolved incoming uses retain their obligations. In
 particular the direct parent-correlation reflection is outside this helper shape. Existing
 resource, currentness, two-pass and proof-process limits remain unchanged. No rule scope is activated.
+
+The remaining eleven public Memory operation, audit and retrieval validators extend the existing
+public-parser obligations to 43 records. Their runtime/memory wrappers retain original objects,
+optional presence, branded result contracts, exact eager refusals and physical array admission.
+Acceptance has a checked bodyOverride field consumer; the other lifecycle builders validate and
+return their original envelopes. Rejection, audit-record and contracts retrieval remain public
+proof surfaces; the active MemoryAuditEvent ledger and retrieval engine use distinct contracts.
+Optional dictionary or typeof slots require the existing exact same-source checker closure and
+executed public proofs. Numeric patch counters and already narrowed operands remain outside it.
+No rule scope, authority, persistence decoder or logging surface changes in this batch.
+
+The actual Memory checker retains pin/unpin as public unknown-parameter obligations only; its
+shared overloaded helper receives no dictionary adaptation. Retrieval's two narrowed typeof
+operands and the numeric countUpdatePatches helper remain unadapted. The other nine new roots
+may qualify only the exact dictionary slots admitted by their original same-source closure.
