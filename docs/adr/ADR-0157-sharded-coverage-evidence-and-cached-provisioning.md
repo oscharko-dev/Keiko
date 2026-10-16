@@ -114,6 +114,28 @@ three suites shared one step. On a pull request against that branch the jobs sti
 report `success` with no suite executed. That lane's semantics are unchanged by this record, and no
 lane targeting `dev` has that property.
 
+The Firefox smoke matrix applies the same fail-closed scheduling rule. Two legs run on separate
+`ubuntu-latest` runner VMs, each with its own immutable candidate checkout, locked dependencies,
+sandbox, build, server, durable state and output directory. Playwright's native `--shard=1/2` and
+`--shard=2/2` partition the existing complete smoke selection with one worker and unchanged test,
+expect and smoke-step limits. Each matrix job is bounded to 20 minutes including setup. The
+existing required `ui` job retains its 60-minute limit and all other work, depends on the complete
+matrix and rejects any non-success matrix result before executing candidate code. `ci` continues
+to require `ui`. No protected context is added.
+
+The existing Editor fast path remains step-scoped: Firefox browser installation and smoke execution
+skip on pull requests against `feat/keiko-editor`; the matrix jobs still execute their preparation
+and report their actual result. A skipped matrix job is never accepted by `ui`. Exact-tree reuse
+skips both the matrix and `ui` only through ADR-0178's existing guard. Cancellation uses
+`!cancelled()` throughout, not `always()`, so superseded runs do not retain their runner work.
+
+This is a scheduling-capacity change after repeated aggregate Firefox deadlines, alongside
+successful serial observations on the same immutable tree; it establishes no browser defect or
+product-performance regression. Native collection must prove a nonempty, disjoint, complete union,
+including whole-file recovery-case grouping. Local qualification retains its actual platform and
+isolation limits; complete hosted evidence on the new candidate remains required. Previously
+withdrawn local isolation experiments supply no qualification evidence.
+
 ADR-0135 D3 is unaffected. `Coverage and SonarCloud` is not itself a required status check; the
 14 required contexts are listed in `CONTRIBUTING.md`, and `ci` — the in-workflow fail-closed
 aggregate ADR-0131 D1 already established — is the one that observes it. No required check depends

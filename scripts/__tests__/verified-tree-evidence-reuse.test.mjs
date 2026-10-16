@@ -78,6 +78,7 @@ const GATED_JOBS = Object.freeze([
   "cross-platform-smoke",
   "node-26-compatibility",
   "portable-secure-read",
+  "firefox-smoke",
   "ui",
 ]);
 
@@ -194,6 +195,7 @@ const EXPECTED_CONDITIONS = Object.freeze({
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
   "node-26-compatibility": COND(DOC_ONLY_CLAUSE),
   "portable-secure-read": COND(DOC_ONLY_CLAUSE),
+  "firefox-smoke": COND(),
   ui: COND(),
 });
 
@@ -643,4 +645,125 @@ describe("acceptMergedPullCandidate", () => {
       expect(acceptMergedPullCandidate(candidate, SHA)).toBeNull();
     },
   );
+});
+
+/**
+ * Execute the real dependency check before candidate code.
+ * @param {Record<string, string>} overrides
+ * @returns {number}
+ */
+function runFirefoxDependency(overrides) {
+  const step = jobs.ui.steps[0];
+  try {
+    execFileSync("bash", ["-e", "-c", step.run], {
+      env: {
+        ...process.env,
+        KEIKO_FIREFOX_RESULT: "success",
+        KEIKO_EVENT_NAME: "pull_request",
+        KEIKO_BASE_REF: "dev",
+        ...overrides,
+      },
+      stdio: "pipe",
+    });
+    return 0;
+  } catch (error) {
+    return typeof error.status === "number" ? error.status : 1;
+  }
+}
+
+describe("complete isolated Firefox smoke shards", () => {
+  it("keeps both mandatory partitions and the unchanged literal smoke command", () => {
+    const job = jobs["firefox-smoke"];
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 2,
+      matrix: { shard: [1, 2] },
+    });
+    expect(gatedDisplayNames("firefox-smoke")).toEqual([
+      "Firefox smoke (shard 1/2)",
+      "Firefox smoke (shard 2/2)",
+    ]);
+    expect(job["runs-on"]).toBe("ubuntu-latest");
+    expect(job["timeout-minutes"]).toBe(20);
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(job.steps.filter((step) => step.run).map((step) => step.run)).toEqual([
+      "node scripts/check-ci-merge-candidate.mjs",
+      "node scripts/check-runtime-toolchain.mjs --exact",
+      "npm ci --ignore-scripts",
+      "npm run build:packages",
+      "npm run build --workspace @oscharko-dev/keiko-ui",
+      "./node_modules/.bin/playwright install --with-deps firefox",
+      "npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/2",
+    ]);
+    expect(job.steps.find((step) => step.name === "Release smoke E2E (Firefox)")).toMatchObject({
+      "timeout-minutes": 20,
+    });
+    for (const step of job.steps) {
+      expect(step["continue-on-error"]).toBeUndefined();
+      if (step.name === "Upload Firefox smoke traces on failure") continue;
+      if (
+        new Set(["Install locked Playwright Firefox", "Release smoke E2E (Firefox)"]).has(step.name)
+      ) {
+        expect(step.if).toBe("${{ " + EDITOR_CLAUSE.slice(1, -1) + " }}");
+        continue;
+      }
+      if (step.name !== "Verify pull-request merge candidate consistency") {
+        expect(step.if).toBeUndefined();
+      }
+    }
+  });
+
+  it("keeps isolated sandbox setup and failure artifacts for each runner", () => {
+    const steps = jobs["firefox-smoke"].steps;
+    expect(steps.some((step) => step.uses === "./.github/actions/setup-sandbox-isolation")).toBe(
+      true,
+    );
+    const upload = steps.find((step) => step.name === "Upload Firefox smoke traces on failure");
+    expect(upload.if).toBe("${{ failure() }}");
+    expect(upload.with).toEqual({
+      name: "playwright-smoke-firefox-shard-${{ matrix.shard }}-of-2",
+      path: "test-results/",
+      "if-no-files-found": "ignore",
+      "retention-days": 7,
+    });
+  });
+
+  it("requires both shards before the existing protected UI work", () => {
+    expect(jobs.ui.needs).toEqual(["verified-tree", "firefox-smoke"]);
+    expect(jobs.ui["timeout-minutes"]).toBe(60);
+    expect(jobs.ci.needs).toContain("ui");
+    expect(jobs.ui.steps[0].name).toBe("Require complete Firefox smoke shards");
+    expect(jobs.ui.steps[0].if).toBeUndefined();
+    expect(jobs.ui.steps[0].env).toEqual({
+      KEIKO_FIREFOX_RESULT: "${{ needs.firefox-smoke.result }}",
+    });
+    expect(jobs.ui.steps.some((step) => step.run?.includes("test:e2e:smoke:firefox"))).toBe(false);
+  });
+
+  it.each(["pull_request", "push", "merge_group", "workflow_dispatch"])(
+    "accepts completed shards for %s",
+    (event) => {
+      expect(runFirefoxDependency({ KEIKO_EVENT_NAME: event })).toBe(0);
+    },
+  );
+
+  it.each(["failure", "cancelled", "skipped", "", "unknown"])(
+    "fails UI closed on every non-success matrix result: %s",
+    (result) => {
+      for (const event of ["pull_request", "push", "merge_group", "workflow_dispatch"]) {
+        expect(
+          runFirefoxDependency({ KEIKO_FIREFOX_RESULT: result, KEIKO_EVENT_NAME: event }),
+        ).toBe(1);
+      }
+    },
+  );
+
+  it("rejects an unexpected skipped matrix even on the editor fast path", () => {
+    expect(
+      runFirefoxDependency({
+        KEIKO_FIREFOX_RESULT: "skipped",
+        KEIKO_BASE_REF: "feat/keiko-editor",
+      }),
+    ).toBe(1);
+  });
 });

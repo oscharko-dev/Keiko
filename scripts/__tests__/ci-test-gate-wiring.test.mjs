@@ -538,9 +538,10 @@ describe("CI test/gate wiring guard", () => {
     // Issue #3594 adds the required customer-shape qualification job to the release workflow.
     // It uses the same pinned Node 24 setup and toolchain verification before staging the package.
     // The portable secure-read matrix adds one governed Node 24 lane for all four native targets.
-    expect(node24SetupCount).toBe(32);
+    // The isolated Firefox smoke matrix adds one governed Node 24 setup definition.
+    expect(node24SetupCount).toBe(33);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(33);
+    expect(nodeSetupCount).toBe(34);
     expect(verificationCount).toBe(nodeSetupCount + 1);
     expect(ci).toContain("node-version: ${{ matrix.node }}");
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);

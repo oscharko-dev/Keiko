@@ -1642,15 +1642,82 @@ jobs:
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
         run: npm run smoke:install:optional
 
+  firefox-smoke:
+    name: Firefox smoke (shard ${{ matrix.shard }}/2)
+    needs: verified-tree
+    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install workspaces (single root lockfile after #167)
+        run: npm ci --ignore-scripts
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Build internal packages
+        run: npm run build:packages
+      - name: Build UI (static export)
+        run: npm run build --workspace @oscharko-dev/keiko-ui
+      - name: Install locked Playwright Firefox
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: ./node_modules/.bin/playwright install --with-deps firefox
+      # Each matrix leg runs on its own hosted runner VM and owns its checkout, server,
+      # durable state and test-results directory. This does not promise same-host isolation.
+      # Keep one worker and the existing complete smoke selection and per-test limits.
+      - name: Release smoke E2E (Firefox)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/2
+      - name: Upload Firefox smoke traces on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-smoke-firefox-shard-${{ matrix.shard }}-of-2
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   ui:
     name: ui
-    needs: verified-tree
+    needs: [verified-tree, firefox-smoke]
     if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - name: Require complete Firefox smoke shards
+        env:
+          KEIKO_FIREFOX_RESULT: ${{ needs.firefox-smoke.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$KEIKO_FIREFOX_RESULT" == "success" ]]; then
+            exit 0
+          fi
+          echo "Firefox smoke shards did not succeed: $KEIKO_FIREFOX_RESULT"
+          exit 1
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # The immutable D12 evidence gate recomputes the subject for its pinned baseline commit.
@@ -1745,12 +1812,6 @@ jobs:
         run: |
           npm run check:update-ui-evidence
           npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
-      # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
-      # attributable at a glance instead of hiding inside the Chromium run's report.
-      - name: Release smoke E2E (Firefox)
-        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        timeout-minutes: 20
-        run: npm run test:e2e:smoke:firefox
       # Same functional @smoke journeys on WebKit. This is a Safari engine proxy, not evidence for
       # Apple-platform integration that Playwright's patched Linux runtime cannot reproduce.
       - name: Release smoke E2E (WebKit Safari proxy)

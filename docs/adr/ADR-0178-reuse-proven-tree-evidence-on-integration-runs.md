@@ -54,7 +54,7 @@ An integration run (`push` to a protected integration branch, or `merge_group`) 
 gate starts, whether this commit's tree is already bound to complete green evidence. When it is, the
 jobs whose verdict that evidence carries do not run: `semantic-duplication`, `core-quality`, `code-quality-policy`,
 `coverage-packages`, `coverage-ui`, `coverage-scripts`, `coverage-sonar`, `build-scan-sbom-smoke`,
-`cross-platform-smoke`, `node-26-compatibility`, `portable-secure-read`, and `ui`.
+`cross-platform-smoke`, `node-26-compatibility`, `portable-secure-read`, `firefox-smoke`, and `ui`.
 
 `protected-branch-gate`, `secret-scan`, `change-scope`, and the resolver itself always run: they cost
 under two minutes in total and they judge the integration commit's own identity and history rather
@@ -100,6 +100,11 @@ not merely one matching matrix prefix. Missing or unsuccessful evidence for eith
 architecture, Linux x64, or Windows x64 forces fresh execution. Its fixture is shared with the
 post-merge portable workflow, while archive identity, staging, signing, and attestation remain
 release-specific proofs outside this reuse claim.
+
+The Firefox smoke matrix requires successful evidence for both exact names,
+`Firefox smoke (shard 1/2)` and `Firefox smoke (shard 2/2)`. Missing, failed, cancelled or skipped
+evidence for either leg forces fresh execution. A duplicate first leg, an unrelated name sharing
+the prefix or a successful `ui` aggregate cannot substitute for either partition.
 
 ### D3 — Every uncertainty runs the full matrix
 
