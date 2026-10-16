@@ -6,6 +6,7 @@ import type {
 import {
   captureContextualFallbackCandidates,
   currentContextualFallbackOrder,
+  currentContextualFallbackGroups,
 } from "./grounded-contextual-fallback.js";
 
 function lexicalAtom(scopePath: string): EvidenceAtom {
@@ -15,6 +16,7 @@ function lexicalAtom(scopePath: string): EvidenceAtom {
     scopePath,
     lineRange: { startLine: 1, endLine: 2 },
     score: 0.1,
+    metrics: { lexicalQueryGroupKey: "3" },
     provenance: {
       kind: "lexical-search",
       tool: "repo.searchText",
@@ -43,6 +45,10 @@ describe("contextual fallback content identities", () => {
     const atoms = [lexicalAtom("a.md"), lexicalAtom("z.md")];
     const captured = captureContextualFallbackCandidates(atoms, diagnostics("z.md", "a.md"));
     expect(currentContextualFallbackOrder(captured, atoms)).toEqual(["z.md", "a.md"]);
+    expect([...currentContextualFallbackGroups(captured, atoms)]).toEqual([
+      ["z.md", "3"],
+      ["a.md", "3"],
+    ]);
     expect(captureContextualFallbackCandidates(atoms, undefined)).toEqual([]);
   });
 
@@ -55,8 +61,10 @@ describe("contextual fallback content identities", () => {
       { ...atom, lineRange: undefined },
       { ...atom, provenance: { ...atom.provenance, queryFingerprint: "other-query" } },
       { ...atom, provenance: { ...atom.provenance, tool: "repo.symbolFileDiscovery" } },
-    ])
+    ]) {
       expect(currentContextualFallbackOrder(captured, [changed])).toEqual([]);
+      expect(currentContextualFallbackGroups(captured, [changed]).size).toBe(0);
+    }
     expect(currentContextualFallbackOrder(captured, [])).toEqual([]);
   });
 
@@ -82,6 +90,7 @@ describe("contextual fallback content identities", () => {
       captureContextualFallbackCandidates([atom, semantic], diagnostics(atom.scopePath)),
     ).toEqual([]);
     expect(currentContextualFallbackOrder(captured, [atom, semantic])).toEqual([]);
+    expect(currentContextualFallbackGroups(captured, [atom, semantic]).size).toBe(0);
     expect(captureContextualFallbackCandidates([atom], diagnostics("absent.md"))).toEqual([]);
   });
 });

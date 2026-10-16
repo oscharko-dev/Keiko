@@ -38,23 +38,41 @@ export function captureContextualFallbackCandidates(
   });
 }
 
+function currentContextualFallbackAtoms(
+  candidates: readonly ContextualFallbackCandidate[],
+  atoms: readonly EvidenceAtom[],
+): readonly EvidenceAtom[] {
+  if (atoms.some((atom) => atom.provenance.tool.startsWith("repo.semanticSearch"))) return [];
+  const current = new Map(atoms.map((atom) => [atom.stableId, atom]));
+  return candidates.flatMap((candidate) => {
+    const atom = current.get(candidate.stableId);
+    return atom?.scopePath === candidate.scopePath &&
+      atom.lineRange !== undefined &&
+      atom.provenance.kind === "lexical-search" &&
+      atom.provenance.tool === "repo.searchText" &&
+      atom.provenance.queryFingerprint === candidate.queryFingerprint
+      ? [atom]
+      : [];
+  });
+}
+
 /** An omitted/replaced atom or a different query cannot inherit the earlier producer's position. */
 export function currentContextualFallbackOrder(
   candidates: readonly ContextualFallbackCandidate[],
   atoms: readonly EvidenceAtom[],
 ): readonly string[] {
-  if (atoms.some((atom) => atom.provenance.tool.startsWith("repo.semanticSearch"))) return [];
-  const current = new Map(atoms.map((atom) => [atom.stableId, atom]));
-  return candidates
-    .filter((candidate) => {
-      const atom = current.get(candidate.stableId);
-      return (
-        atom?.scopePath === candidate.scopePath &&
-        atom.lineRange !== undefined &&
-        atom.provenance.kind === "lexical-search" &&
-        atom.provenance.tool === "repo.searchText" &&
-        atom.provenance.queryFingerprint === candidate.queryFingerprint
-      );
-    })
-    .map((candidate) => candidate.scopePath);
+  return currentContextualFallbackAtoms(candidates, atoms).map((atom) => atom.scopePath);
+}
+
+/** A peer must match the same query groups, not merely the same number of unrelated groups. */
+export function currentContextualFallbackGroups(
+  candidates: readonly ContextualFallbackCandidate[],
+  atoms: readonly EvidenceAtom[],
+): ReadonlyMap<string, string> {
+  return new Map(
+    currentContextualFallbackAtoms(candidates, atoms).flatMap((atom) => {
+      const group = atom.metrics?.lexicalQueryGroupKey;
+      return group === undefined ? [] : [[atom.scopePath, group] as const];
+    }),
+  );
 }

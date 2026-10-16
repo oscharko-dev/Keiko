@@ -143,6 +143,70 @@ function compoundDocumentCorpus(): string {
   return root;
 }
 
+function partnerPolicyCorpus(): string {
+  const root = ordinaryApp();
+  const sources = {
+    "backend/RefundPolicy.java":
+      "// Approved Maple partner refund policy: 21 calendar days, EUR 7500 inclusive.\npublic final class RefundPolicy {}\n",
+    "frontend/RefundSummary.tsx":
+      'export const summary = "Maple partner refunds: 21 calendar days, up to EUR 7500 inclusive.";\n',
+    "archive/RefundPolicy.java": "// REJECTED Maple partner refund proposal: 14 days, EUR 9000.\n",
+  };
+  for (const [path, text] of Object.entries(sources)) {
+    mkdirSync(join(root, path, ".."), { recursive: true });
+    writeFileSync(join(root, path), text);
+  }
+  mkdirSync(join(root, "modules/backend"), { recursive: true });
+  for (let index = 0; index < 40; index += 1) {
+    writeFileSync(
+      join(root, "modules/backend", `Catalog${String(index)}.java`),
+      `// Inventory catalogue ${String(index)}: unrelated to partner refunds.\n`.repeat(50),
+    );
+  }
+  return root;
+}
+
+it.each(["Maple-Partner", "Maple Partner"])(
+  "retains both current policy sources for the multilingual subject %s",
+  async (subject) => {
+    const root = partnerPolicyCorpus();
+    const log = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: log, level: "info" }));
+    const question = `Welche aktuell freigegebene Rückerstattungsfrist und welcher Höchstbetrag gelten für ${subject}? Prüfe Backend und Frontend und unterscheide abgelehnte Vorschläge. Belege die Antwort mit Quellen.`;
+    const { pack } = await retrieve(
+      root,
+      question,
+      {},
+      {
+        ...DEFAULT_EXPLORATION_BUDGET,
+        filesReadMax: 8,
+        excerptBytesMax: 4096,
+      },
+    );
+    expect(pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining(["backend/RefundPolicy.java", "frontend/RefundSummary.tsx"]),
+    );
+    expect(pack.usage.filesRead).toBeLessThanOrEqual(8);
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(4096);
+    expect(pack.files).toHaveLength(2);
+    expect(pack.diagnostics?.selection).toMatchObject({
+      selectionConfidence: "low",
+      keepOneFallbackApplied: false,
+      fallbackRankingSource: "lexical-producer",
+    });
+    expect(pack.uncertainty.some((marker) => marker.kind === "low-confidence-selection")).toBe(
+      true,
+    );
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+    ).toMatchObject({ selectedFileCount: pack.files.length });
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.selection-details")?.extra,
+    ).toMatchObject({ selectionConfidence: "low", keepOneFallbackApplied: false });
+    expect(log.lines().join("\n")).not.toContain(subject);
+  },
+);
+
 function minimumFittedBudget(question: string, pack: ConnectedContextPack): number {
   let low = 1;
   let high = pack.budget.modelInputTokensMax;

@@ -264,6 +264,46 @@ component contract and use the resolved callback result type for deferred promis
 candidate-three digest and failed native output remain immutable evidence of that earlier candidate;
 the corrected current file is not qualified by those results.
 
+## Bounded multi-source fallback repair
+
+When every ordinary candidate falls below the existing relevance floor, the lexical fallback can
+retain its first source and at most two eligible peers with the same current matched-query-group
+identity. A peer must retain the captured content atom's stable identity, path and query fingerprint;
+equal numeric relevance alone is insufficient. Semantic evidence or an applied reranker disables
+this lexical peer grant. Existing exclusions, read/byte/time budgets and low-confidence warnings
+remain in force. Final-context and filter regressions fail before the repair and pass afterwards;
+existing UTF-8/UTF-16 and hash-algorithm distractor controls remain green.
+
+The optional metadata uses a canonical hexadecimal bitset of at least two and at most 128 query
+groups, with no source text. Cold and warm producers preserve it, malformed persisted identities
+fail closed, and the match-cache revision advances. An intermediate digest representation exceeded
+the existing 8 KiB record limit for dense matching files. The compact representation restores the
+existing cache-save and cancellation regressions without raising that limit. Capacity, encrypted
+persistence, invalid identities, duplicate groups and the highest admitted group are covered.
+
+A fresh native Chat on the rebuilt compact implementation, using the unchanged German question and
+local Gemma 4, retained both current sources from the same 1,000-file ordinary folder. Retrieval took
+842 ms (996 scanned files, two excerpt reads, 384 excerpt bytes); the model call took 23.2 seconds.
+The unchanged answer correctly cited both backend and frontend for the current 21-calendar-day,
+EUR 7,500 inclusive policy. Three distinct citations were displayed; citation repair was unnecessary.
+The existing selection evidence records two sources, low confidence and no single-source fallback.
+The canonical closure is supported and complete without loss, truncation or sequence anomalies.
+An earlier prototype also retained both sources (780 ms retrieval, 20.8-second model call); only the
+fresh compact implementation is the final runtime retest.
+
+The rejected-policy archive still fails its separate source oracle. The answer explicitly states
+that the supplied sources do not establish rejected proposals, and the UI retains partial-coverage
+and low-confidence indicators. This repairs current backend/frontend retention; it does not qualify
+archive comparison, larger corpora or general retrieval completeness.
+
+Validation passes 11,698 domain tests across 403 files and 2,557 grounded tests across 156 files
+(one existing skip), plus strict typechecking/lint, formatting, architecture/negative checks,
+retrieval/grounded/faithfulness/context gates, clean assembled-package verification and local Sonar.
+The Activity Log catalog is regenerated for shifted emitter locations; no operation or field is
+added. The first post-assembly Activity Log build reported TS5055; an unchanged retry built
+successfully. Catalog drift was separately reproduced and corrected with the repository generator.
+The complete Activity Log gate then passed all seven checks over the registered inventory.
+
 ## CI feedback on the cancellation increment
 
 The bundle evidence measured locally under Node 24.21 did not match CI's pinned Node 24.18.0.

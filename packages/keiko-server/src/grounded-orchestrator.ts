@@ -115,6 +115,7 @@ import {
 import {
   captureContextualFallbackCandidates,
   currentContextualFallbackOrder,
+  currentContextualFallbackGroups,
   type ContextualFallbackCandidate,
 } from "./grounded-contextual-fallback.js";
 import {
@@ -9223,6 +9224,9 @@ function finalCandidateFilter(
     fallbackOrder: reranker.reranked
       ? []
       : currentContextualFallbackOrder(rings.contextualFallbackCandidates ?? [], atoms),
+    fallbackPeerGroups: reranker.reranked
+      ? undefined
+      : currentContextualFallbackGroups(rings.contextualFallbackCandidates ?? [], atoms),
   };
 }
 

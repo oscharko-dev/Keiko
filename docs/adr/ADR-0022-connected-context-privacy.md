@@ -1118,12 +1118,23 @@ recorded as failed, rather than applied. Attempted calls still consume the call 
 deadline stops subsequent reads, including when a late reranker result would otherwise arrive;
 identity fallback is pinned on the preselection producer, and orchestration pins enforce no
 post-deadline work. For contextual natural-language requests without semantic evidence or an
-applied reranker, the ordinary keep-one fallback preserves the first lexical producer's ordering
+applied reranker, the ordinary below-floor fallback preserves the first lexical producer's ordering
 among eligible content candidates. Each retained position must still match the actual atom's
 stable identity, path and query fingerprint. This changes neither relevance scores nor floors,
 exclusions, read grants or source authority. Successful reranking retains its own score order.
-The existing selection-details event records the closed fallback ranking source. Ordinary keep-one
-fallback records low selection confidence and the
+The first eligible fallback may retain at most two additional eligible sources whose current
+same-query content atoms carry the same matched-query-group key. This optional, body-free
+canonical hexadecimal bitset identifies at least two query groups observed in the admitted lexical range; it does not
+certify source authority, factual agreement or answer completeness. Equal numeric scores alone do
+not establish group identity. Missing/invalid metadata, a changed atom/query identity, semantic
+evidence or successful reranking cannot grant peers. The persistent match identity advances, and
+both live and cached lexical producers preserve the bounded key. Exclusions, the absolute and
+relative scoring floors, and read/byte/time grants remain unchanged; peers share the existing
+below-floor fallback and remain low confidence. A higher-confidence ordinary selection does not
+admit them. The existing selected-file count records actual retained size, while
+`keepOneFallbackApplied` is true only for a single retained fallback source.
+The existing selection-details event records the closed fallback ranking source. Ordinary fallback
+records low selection confidence and the
 `low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,
 and log. Selection-details carries the calibrated floor, confidence, disposition, failed-call,
 and safe platform failure evidence. Wire semantic/scope dispositions are actual observations,
