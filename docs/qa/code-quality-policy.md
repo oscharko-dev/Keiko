@@ -806,3 +806,20 @@ An earlier qualified report, a default pending scan or a constructed unit report
 that result. This activation does not complete the 170-owner migration, activate the five remaining
 boundary rules, or close #3918. The ordinary default can correctly fail until fresh qualification;
 `:repository` remains the genuine complete semantic operation.
+
+### Manual document-version public admission (#3918)
+
+The `editor-document-version-public-parser` record extends the cohort from 65 to 66 using the
+existing `public-parser` kind and only `anti-slop/no-unknown-parameters`. Its canonical public
+forwarder returns the existing `EditorSessionValidation<EditorDocumentVersion>` unchanged.
+Source/public/forwarding type pins and public runtime proofs retain the copied scalar fields,
+extra-key normalization, unfrozen fresh output, zero size, finite fractional modification times,
+ordered refusals and the existing changing-getter admission pins. The active manual Files save
+consumers remain unchanged; ordinary Editor agent retirement does not retire manual saves.
+
+This records a genuine unknown-input boundary, without changing product code, public exports,
+parser machinery, authority or rule scopes. It grants no optional dictionary, typeof or
+known-value argument adaptation, including the captured-version recheck. The existing public-parser
+reader can structurally adapt its selected parameter while semantic proofs are pending; that is
+not executed runtime qualification or permission to activate the currently inactive unknown-parameter
+scope. Complete fresh qualification of all 66 records remains required independently.

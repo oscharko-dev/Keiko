@@ -250,6 +250,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "task-workspace-cleanup-value-typed-recheck",
       "actual-code-task-acceptance-raw-reader-return",
       "support-canonical-json-decoder-return",
+      "editor-document-version-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -953,7 +954,9 @@ describe("typed task public recheck obligations (#3918)", () => {
 
 describe("canonical JSON decoder closed responsibility schema (#3918)", () => {
   it("retains the exact sole return rule and bounded real proof owners", () => {
-    const record = policy.responsibilities.at(-1);
+    const record = policy.responsibilities.find(
+      ({ id }) => id === "support-canonical-json-decoder-return",
+    );
     expect(record.id).toBe("support-canonical-json-decoder-return");
     expect(record.kind).toBe("raw-canonical-json-decoder");
     expect(record.rules).toEqual(["anti-slop/no-unknown-returns"]);
@@ -973,7 +976,9 @@ describe("canonical JSON decoder closed responsibility schema (#3918)", () => {
     "refuses %s without widening an existing responsibility kind",
     (variant) => {
       const changed = structuredClone(policy);
-      const record = changed.responsibilities.at(-1);
+      const record = changed.responsibilities.find(
+        ({ id }) => id === "support-canonical-json-decoder-return",
+      );
       if (variant === "wrong-rule") record.rules = ["anti-slop/no-unknown-parameters"];
       if (variant === "extra-rule") record.rules.push("anti-slop/no-runtime-typeof");
       if (variant === "wrong-index") record.input.parameterIndex = 1;
@@ -986,4 +991,25 @@ describe("canonical JSON decoder closed responsibility schema (#3918)", () => {
       expect(validatePolicy(changed)).toContain("invalid-responsibilities");
     },
   );
+});
+
+describe("manual document version public parser obligation (#3918)", () => {
+  it("retains one existing parser boundary without optional rule grants", () => {
+    const record = policy.responsibilities.find(
+      ({ id }) => id === "editor-document-version-public-parser",
+    );
+    expect(record.kind).toBe("public-parser");
+    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+    expect(record.input).toEqual({
+      consumerPath: "packages/keiko-contracts/src/editor-session.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/editor-session",
+      exportName: "parseEditorDocumentVersion",
+      parameterIndex: 0,
+    });
+    expect(record.transform).toEqual(record.output);
+    expect(record.consumer.exportName).toBe("parsePublicEditorDocumentVersion");
+    expect(record.proofs).toEqual(["packages/keiko-contracts/src/editor-session.test.ts"]);
+    expect(record.proofAssertions).toHaveLength(12);
+    expect(validatePolicy(policy)).toEqual([]);
+  });
 });

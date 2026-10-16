@@ -3573,6 +3573,86 @@
           "testName": "shared canonical browser report producer charges UTF-8 bytes identically to Node for \ud83d\ude00"
         }
       ]
+    },
+    {
+      "id": "editor-document-version-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/editor-session.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/editor-session",
+        "exportName": "parseEditorDocumentVersion",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/editor-session.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/editor-session",
+        "exportName": "parseEditorDocumentVersion"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/editor-session.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/editor-session",
+        "exportName": "parseEditorDocumentVersion"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/editor-session.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/editor-session",
+        "exportName": "parsePublicEditorDocumentVersion",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/editor-session.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) normalizes extra keys into a fresh unfrozen scalar copy"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) retains zero size and finite fractional modification times"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) refuses noninteger nonfinite negative and nonnumeric byte sizes"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) refuses nonfinite negative and nonnumeric modification times"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) admits only lowercase sixty-four-character hexadecimal hashes"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) retains exact ordered errors for missing and malformed members"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "editor document version public parser (#3918) refuses nonrecord inputs before field observation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "3918 captured document version public refuses actual copied sizeBytes"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "3918 captured document version public refuses actual copied modifiedAt"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "3918 captured document version public refuses actual copied contentHash"
+        },
+        {
+          "path": "packages/keiko-contracts/src/editor-session.test.ts",
+          "testName": "3918 captured document version public preserves fractional modifiedAt and copied field ordering"
+        }
+      ]
     }
   ]
 }

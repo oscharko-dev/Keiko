@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(65);
+    expect(production.responsibilities).toHaveLength(66);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -844,7 +844,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 65, incomplete: 0, invalid: 0, qualified: 65, pending: 0, rejected: 0 },
+      counts: { ready: 66, incomplete: 0, invalid: 0, qualified: 66, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -899,7 +899,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 65;
+        r.responsibilities.counts.pending = 66;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
@@ -1216,7 +1216,9 @@ describe("typed Task public recheck cohort wiring (#3918)", () => {
 describe("canonical JSON decoder production responsibility wiring (#3918)", () => {
   it("binds the exact decoder canonicalizer witness and sixteen actual proof selectors", () => {
     const policy = JSON.parse(read("scripts/code-quality-policy.json"));
-    const record = policy.responsibilities.at(-1);
+    const record = policy.responsibilities.find(
+      ({ id }) => id === "support-canonical-json-decoder-return",
+    );
     expect(record.id).toBe("support-canonical-json-decoder-return");
     expect(record.kind).toBe("raw-canonical-json-decoder");
     expect(record.input).toEqual({
