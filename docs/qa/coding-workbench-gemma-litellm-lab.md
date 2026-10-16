@@ -1843,8 +1843,8 @@ filesystem access. Native Windows execution remains separately required. This pr
 inactive; the repair neither activates a product execution path nor changes Activity Log operations.
 Any later activation requires fresh source-bound artifacts under #3898 / #3899.
 
-The required hosted Linux x64, Windows x64, macOS ARM64 and macOS Intel results remain separate
-platform evidence. These local runs do not qualify macOS 13, a published installation, native
+Results from the required CI runs on Linux x64, Windows x64, macOS ARM64 and macOS Intel remain
+separate platform evidence. These local runs do not qualify macOS 13, a published installation, native
 service activation, a live model task or complete parity. #3898 stays open. Full local LiteLLM/Gemma
 qualification precedes Azure; independently authored representative fixtures replace unavailable
 customer-specific fixtures. No Azure credentials or requests are used in this increment.
@@ -1866,3 +1866,13 @@ dependency-consumer controls and their applicable local/hosted checks. Further w
 limited to findings caused by this slice. Original-service activation, version-boundary redesign,
 new native capabilities, credential migration and live-model parity belong to separate follow-up
 changes. Neither #3898 nor Epic #3897 is closed by this slice.
+
+PR #4036 stabilization records two failures from the first required hosted matrix: Windows
+location construction returned an opaque `FileSystem.realPath` refusal in five host controls,
+and Sonar received no coverage for the native boundary. Linux x64, macOS ARM64 and macOS Intel
+host controls passed. The scripts coverage lane now installs the same locked host dependencies
+and appends Node's measured LCOV output from all native suites to its existing Sonar report.
+A failing-first workflow regression pins that measurement before artifact upload. The inactive
+boundary now preserves closed failure categories in its existing platform error, without paths,
+content or credentials, so Windows failures can distinguish startup containment from lifecycle
+closure. Windows qualification remains incomplete until the repaired head passes its native leg.

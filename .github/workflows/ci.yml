@@ -785,9 +785,14 @@ jobs:
       # packages by bare specifier, which resolve to `dist`.
       - name: Build internal packages so workspace dist resolves
         run: npm run build:packages
+      - name: Install locked original OpenCode host dependencies
+        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
       - name: Measure script coverage
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:scripts
+      - name: Add measured original host coverage to the script report
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:coverage:opencode-service-host
       - name: Upload script coverage evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -453,6 +453,21 @@ test("Windows startup metadata refuses sibling roots before filesystem access", 
   assert.deepEqual(own.phases, []);
 });
 
+test("private metadata refusals retain a body-free failure category", async () => {
+  const own = await initialFixture(() => assert.fail("content IO"));
+  const fs = own.owner.filesystem({
+    ...unavailableFilesystem(own.Effect),
+    realPath: () => own.Effect.succeed(foreign),
+  });
+  await assert.rejects(own.Effect.runPromise(fs.realPath(own.host.stateRoot)), (error) => {
+    assert.equal(error.reason.description, "private-metadata-denied");
+    assert.equal(error.reason.pathOrDescriptor, undefined);
+    assert.equal(error.reason.cause, undefined);
+    return true;
+  });
+  assert.deepEqual(own.phases, []);
+});
+
 test("a pending constructor metadata resolution is refused once the genuine initial scope closes", async () => {
   const own = await initialFixture((_packet, _init, codec) =>
     initialBinary(codec, new Uint8Array()),
