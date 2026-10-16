@@ -10,7 +10,7 @@
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "5c2f42e25ec35b7ab63fa95976b9d677f99ec3e78eb8d43eb0a1e6ae8122c4db",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
     "packages/keiko-ui/src/app/globals.css": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
-    "packages/keiko-ui/src/lib/api.ts": "55e037689255fb94f2cb4cbfdb879b34517db1479b145d910e9c791d24363eef",
+    "packages/keiko-ui/src/lib/api.ts": "11aec68cb1c7dc2620d1eb4cf9781571fdb02e775445b4f5f8a807c8dd8f00e1",
     "packages/keiko-ui/src/lib/i18n-messages.de.ts": "f648332bb5226dda39d99201a4c1d0584574cf17a80eabc92a83a7f35d5fe5bb",
     "packages/keiko-ui/src/lib/i18n-messages.en.ts": "62ba4504ea975f1cff45d1b240276999f8b7edfcb7c036c3227d39e804860920"
   },
