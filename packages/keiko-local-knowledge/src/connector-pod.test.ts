@@ -15,6 +15,10 @@ import { addSourceToCapsule } from "./source-lifecycle.js";
 // indexing-call-count evidence → removals leave the index → degradation and redaction.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type {
   DocumentId,
@@ -35,13 +39,13 @@ import {
   readConnectorSourceMetadata,
   resolveConnectorCitationTarget,
 } from "./connector-source-metadata.js";
-import { buildKnowledgePodSummary } from "./knowledge-pods.js";
+import { buildKnowledgePodSummary, listKnowledgePodSummaries } from "./knowledge-pods.js";
 import { getCapsule } from "./capsule-lifecycle.js";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import { runLocalKnowledgeRetrieval } from "./retrieval/index.js";
 import { scriptedAdapter } from "./testing.js";
-import type { KnowledgeStore } from "./store.js";
+import { openKnowledgeStore, type KnowledgeStore } from "./store.js";
 
 const CAPSULE_ID = "cap-connector" as KnowledgeCapsuleId;
 const SOURCE_ID = "src-connector" as KnowledgeSourceId;
@@ -97,9 +101,9 @@ function pageItem(
   };
 }
 
-function createShell(): void {
+function createShell(targetStore: KnowledgeStore = store): void {
   createConnectorPodShell(
-    { store, capsuleId: CAPSULE_ID, sourceId: SOURCE_ID },
+    { store: targetStore, capsuleId: CAPSULE_ID, sourceId: SOURCE_ID },
     {
       definition: {
         provider: "confluence",
@@ -850,3 +854,75 @@ describe("connector summary evidence", () => {
     ).toEqual([expect.objectContaining({ correlationId: "connector-summary-rejection" })]);
   });
 });
+
+describe("persisted connector summary admission (#3918)", () => {
+  it.each(["healthy", "absent", "invalid-json", "invalid-summary"])(
+    "preserves the actual producer and reopened projection for %s bytes",
+    (mode) => {
+      const directory = mkdtempSync(join(realpathSync(tmpdir()), "keiko-connector-admission-"));
+      const dbPath = join(directory, "capsules.db");
+      const open = (): KnowledgeStore =>
+        openKnowledgeStore({ dbPath, clock: () => 1_700_000_000_000 });
+      try {
+        const writer = open();
+        const produced = writeUnappliedSummary(writer);
+        const bytes = storedSummaryBytes(mode, produced.changeSummary);
+        const database = new DatabaseSync(dbPath);
+        try {
+          database
+            .prepare(
+              "UPDATE connector_sources SET last_change_summary_json = ? WHERE capsule_id = ? AND source_id = ?",
+            )
+            .run(bytes, CAPSULE_ID, SOURCE_ID);
+        } finally {
+          database.close();
+        }
+        const reopened = open();
+        try {
+          const capsule = getCapsule(reopened, CAPSULE_ID);
+          if (capsule === undefined) throw new TypeError("healthy persisted capsule missing");
+          const projected = buildKnowledgePodSummary(reopened, capsule);
+          const listed = listKnowledgePodSummaries(reopened).find((item) => item.id === CAPSULE_ID);
+          const expected = mode === "healthy" ? produced.changeSummary : undefined;
+          expect(projected.connectorSource?.lastChangeSummary).toEqual(expected);
+          expect(listed?.connectorSource?.lastChangeSummary).toEqual(expected);
+          expect(projected.readiness).toBe(produced.summary.readiness);
+          expect(projected.connectorSource?.scopeLabels).toEqual(["ENG"]);
+          expect(
+            readConnectorSourceMetadata(reopened, CAPSULE_ID, SOURCE_ID)?.lastChangeSummaryJson,
+          ).toBe(bytes ?? undefined);
+          expect(JSON.stringify(projected)).not.toContain("private-invalid-json-canary");
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+function writeUnappliedSummary(
+  targetStore: KnowledgeStore,
+): ReturnType<typeof recordUnappliedConnectorSyncRun> {
+  try {
+    createShell(targetStore);
+    return recordUnappliedConnectorSyncRun(
+      { store: targetStore, capsuleId: CAPSULE_ID, sourceId: SOURCE_ID },
+      { runId: "run-admission", outcome: "cancelled" },
+    );
+  } finally {
+    targetStore.close();
+  }
+}
+
+function storedSummaryBytes(
+  mode: string,
+  summary: ReturnType<typeof recordUnappliedConnectorSyncRun>["changeSummary"],
+): string | null {
+  if (mode === "absent") return null;
+  if (mode === "invalid-json") return "{private-invalid-json-canary";
+  return JSON.stringify(
+    mode === "invalid-summary" ? { ...summary, schemaVersion: "future" } : summary,
+  );
+}

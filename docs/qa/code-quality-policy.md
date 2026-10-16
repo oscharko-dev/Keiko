@@ -414,6 +414,16 @@ actual handler reports its existing correlated opaque error through the register
 writer, and its dependency-failure scenario reconstructs that evidence with the support analyzer.
 No new log operation, encryption format, database migration or storage policy is introduced.
 
+Three further Atlassian public-parser records select the existing sync change-summary, sync-job
+and connector-pod-source validators through the named public runtime import and exact public-root
+validation/domain types. They preserve the preceding 21 records and every rule disposition.
+Actual producer, close/reopen SQLite and pod-summary projection controls separately preserve
+healthy summary bytes and the established absent/malformed/refused-summary omission. They retain
+job lifecycle/count/failure pairing, nested references, optional presence and ordered diagnostics.
+Only the existing checker-supported helper closure can qualify exact raw-input slots; neither
+these records nor their public forwarding proofs classify an entire validator body, callback
+graph, connector store or remaining domain scope.
+
 Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require

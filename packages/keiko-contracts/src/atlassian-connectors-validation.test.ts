@@ -1,4 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  validateAtlassianSyncChangeSummary as validatePublicSyncSummary,
+  validateAtlassianSyncJobState as validatePublicSyncJob,
+  validateAtlassianConnectorPodSource as validatePublicPodSource,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
+import type {
+  AtlassianConnectorValidation as PublicValidation,
+  AtlassianSyncChangeSummary as PublicSyncSummary,
+  AtlassianSyncJobState as PublicSyncJob,
+  AtlassianConnectorPodSource as PublicPodSource,
+} from "@oscharko-dev/keiko-contracts";
 import {
   validateAtlassianConnectorActionExecutionResult,
   validateAtlassianConnectorActivityRecord,
@@ -1552,3 +1563,118 @@ it.each(["source", "public"])(
     expect(reads).toBe(2);
   },
 );
+
+export function parsePublicAtlassianSyncChangeSummary(
+  input: unknown,
+): PublicValidation<PublicSyncSummary> {
+  const result = validatePublicSyncSummary(input);
+  return result;
+}
+
+export function parsePublicAtlassianSyncJobState(input: unknown): PublicValidation<PublicSyncJob> {
+  const result = validatePublicSyncJob(input);
+  return result;
+}
+
+export function parsePublicAtlassianConnectorPodSource(
+  input: unknown,
+): PublicValidation<PublicPodSource> {
+  const result = validatePublicPodSource(input);
+  return result;
+}
+
+describe("Atlassian sync public parsers (#3918)", () => {
+  it("preserves accepted summary job and pod-source references and optional presence", () => {
+    const summary = changeSummary("partial");
+    const partial = job("partial", { changeSummary: summary, failureReasons: ["timeout"] });
+    const source = podSource({ lastSyncAt: undefined, lastChangeSummary: summary });
+    const parsedSummary = parsePublicAtlassianSyncChangeSummary(summary);
+    const parsedJob = parsePublicAtlassianSyncJobState(partial);
+    const parsedSource = parsePublicAtlassianConnectorPodSource(source);
+    if (!parsedSummary.ok || !parsedJob.ok || !parsedSource.ok)
+      throw new TypeError("healthy public sync parser refused");
+    expect(parsedSummary.value).toBe(summary);
+    expect(parsedSummary.value.counts).toBe(summary.counts);
+    expect(parsedJob.value).toBe(partial);
+    expect(parsedJob.value.progress).toBe(partial.progress);
+    expect(parsedSource.value).toBe(source);
+    expect(parsedSource.value.lastChangeSummary).toBe(summary);
+    expect(Object.hasOwn(parsedSource.value, "lastSyncAt")).toBe(true);
+    const minimal = parsePublicAtlassianConnectorPodSource(podSource());
+    expect(minimal.ok).toBe(true);
+    if (!minimal.ok) throw new TypeError("minimal public pod source refused");
+    expect(minimal.value).not.toHaveProperty("lastSyncAt");
+    expect(minimal.value).not.toHaveProperty("lastChangeSummary");
+  });
+
+  it("refuses malformed members with exact owning diagnostics", () => {
+    for (const input of [null, undefined, [], 12, "summary"]) {
+      expect(parsePublicAtlassianSyncChangeSummary(input).ok).toBe(false);
+      expect(parsePublicAtlassianSyncJobState(input).ok).toBe(false);
+      expect(parsePublicAtlassianConnectorPodSource(input).ok).toBe(false);
+    }
+    const summary = changeSummary("succeeded", {
+      body: "private-body-canary",
+      fingerprintSetDigest: "bad",
+    });
+    expect(parsePublicAtlassianSyncChangeSummary(summary)).toEqual({
+      ok: false,
+      errors: [
+        "changeSummary must not include body",
+        "changeSummary.fingerprintSetDigest must be a 64-character lowercase hex digest",
+      ],
+    });
+    expect(parsePublicAtlassianSyncChangeSummary(summary)).toEqual(
+      validateAtlassianSyncChangeSummary(summary),
+    );
+    const partial = job("partial", { failureReasons: ["timeout", "timeout"] });
+    expect(parsePublicAtlassianSyncJobState(partial)).toEqual({
+      ok: false,
+      errors: ["syncJob.failureReasons entries must be unique"],
+    });
+    const source = podSource({ lastChangeSummary: summary });
+    expect(parsePublicAtlassianConnectorPodSource(source)).toEqual(
+      validateAtlassianConnectorPodSource(source),
+    );
+    expect(parsePublicAtlassianConnectorPodSource(source).ok).toBe(false);
+  });
+
+  it("retains lifecycle counts failure reasons and literal domain result identities", () => {
+    for (const status of ["pending", "running", "succeeded", "partial", "failed", "cancelled"]) {
+      const input = job(status);
+      const result = parsePublicAtlassianSyncJobState(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy lifecycle refused");
+      expect(result.value).toBe(input);
+    }
+    const failed = changeSummary("failed", { counts: changeCounts({ addedItems: 1 }) });
+    expect(parsePublicAtlassianSyncChangeSummary(failed)).toEqual({
+      ok: false,
+      errors: ["changeSummary.counts.addedItems must be 0 for a failed run"],
+    });
+    expect(
+      parsePublicAtlassianSyncJobState(job("failed", { changeSummary: changeSummary("succeeded") }))
+        .ok,
+    ).toBe(false);
+    expect(parsePublicAtlassianSyncJobState(job("partial", { failureReasons: [] })).ok).toBe(false);
+    expect(
+      parsePublicAtlassianConnectorPodSource(podSource({ scopeLabels: ["ENG", "ENG"] })).ok,
+    ).toBe(false);
+    expectTypeOf(validatePublicSyncSummary).returns.toEqualTypeOf<
+      PublicValidation<PublicSyncSummary>
+    >();
+    expectTypeOf(validatePublicSyncJob).returns.toEqualTypeOf<PublicValidation<PublicSyncJob>>();
+    expectTypeOf(validatePublicPodSource).returns.toEqualTypeOf<
+      PublicValidation<PublicPodSource>
+    >();
+    expectTypeOf(parsePublicAtlassianSyncChangeSummary).returns.toEqualTypeOf<
+      PublicValidation<PublicSyncSummary>
+    >();
+    expectTypeOf(parsePublicAtlassianSyncJobState).returns.toEqualTypeOf<
+      PublicValidation<PublicSyncJob>
+    >();
+    expectTypeOf(parsePublicAtlassianConnectorPodSource).returns.toEqualTypeOf<
+      PublicValidation<PublicPodSource>
+    >();
+  });
+});
