@@ -13,9 +13,10 @@ npm run check:code-quality-policy:repository
 ```
 
 The canonical default is repository-wide enforcement with semantic proofs pending. After contracts
-reflection activation, default repository/production/contracts scope invocations can correctly fail
-on the legitimate pending observation coordinate; they do not establish qualification or a green
-scope. Fresh `--qualify-responsibilities` execution is required to admit that exact observation.
+reflection and unknown-return activation, default repository/production/contracts scope invocations
+can correctly fail on legitimate pending observation/return coordinates; they do not establish
+qualification or a green scope. Fresh `--qualify-responsibilities` execution is required to admit
+those exact coordinates.
 `npm run check:code-quality-policy:repository` selects complete current-subject qualification.
 Local `npm run lint` builds packages, runs the bounded default fixture, complete repository
 qualification, existing raw-reader qualification and then the shared `lint:typed` ESLint/UI tail.
@@ -67,10 +68,10 @@ pending, stale or failed proofs cannot adapt it, and another `Reflect.get` coord
 No own-property/descriptor/cache replacement, receiver/read-order change or domain typing is
 introduced. The runtime, registered evidence contract, record and proof bodies remain unchanged.
 The native census is preserved; only the one qualified active operation can become an adaptation.
-The final complete production gate must actually qualify all 64 records on its current candidate
-and cover the full contracts production inventory. An earlier qualified report or a constructed
-unit input cannot supply that execution. This activation does not complete the 170-owner domain
-migration or activate the remaining six boundary rules.
+The reflection activation checkpoint required the final complete production gate to qualify all
+then-registered records on its candidate and cover the full contracts production inventory. An earlier qualified
+report or a constructed unit input could not supply that execution. That activation did not complete
+the 170-owner domain migration or activate the remaining six boundary rules.
 
 Git status, diff, history, summary, remotes and sync preview/execute parsing reuse concrete admission
 in their owning contracts modules. The typed parsers return the original accepted value; legacy validators retain
@@ -618,7 +619,7 @@ The selected phase builds packages through the canonical wrapper, captures the c
 
 The same-library child helper uses the existing180000ms/SIGKILL/32MiB owner bounds and POSIX detached group. Timeout/output overflow kills the owned group and destroys its owned pipe readers before awaiting actual direct close and observing group absence; the failure remains failed. Unsupported/incomplete drain fails closed; no Windows taskkill or new dependency is introduced. This does not promise containment of a deliberately escaped descendant. Default static platform support is unchanged. Structured process/report failures remain body-free and explicit selected-phase failure exits nonzero even when static enforcement passed. No automatic retries, arbitrary policy commands, extra CLI-owner loop or performance qualification are supplied.
 
-Qualified records prove only their reviewed exact runtime/consumer assertions on this assessed subject. Injected route services prove admission/checked forwarding, actual SQLite tests prove physical refusal, and registered physical writer/analyzer scenarios supply their separate evidence. Declaration/body counterfactual controls and independent review remain acceptance obligations; qualified records do not complete the170-owner/domain migration. Ordinary local scope contracts do not create a mounted server local-manual feature. Optional workspace prototype hardening stays deferred.
+Qualified records prove only their reviewed exact runtime/consumer assertions on this assessed subject. Injected route services prove admission/checked forwarding, actual SQLite tests prove physical refusal, and registered physical writer/analyzer scenarios supply their separate evidence. Declaration/body counterfactual controls and independent review remain acceptance obligations; qualified records do not complete the 170-owner/domain migration. Ordinary local scope contracts do not create a mounted server local-manual feature. Optional workspace prototype hardening stays deferred.
 
 The actual JSON reporter file is fresh in an owner-private temporary directory and is admitted only after the child closes. The report and captured pipe bytes together must fit the existing32MiB bound. This is post-close report admission, not an instantaneous disk quota. Successful phase output carries actual direct-close/group-absence facts; no arbitrary report body is printed or attached. Installed tool entrypoints and their package/lock identities are checked before and after; this does not attest every transitive npm/Vitest implementation file.
 
@@ -758,9 +759,10 @@ inherited properties, getter failures and complete acceptance admission. Only th
 The raw-reader smoke now selects this authoritative policy record instead of appending another
 definition. It still proves that pending evaluation preserves the native return finding and that
 actual selected proof execution adapts exactly that coordinate, without changing the census or
-checked-in policy. Complete production qualification separately proves all 64 records. This
-registration preserves the previous 63 records, all rule scopes, production code and public types;
-the unknown-return rule remains inactive until the other legitimate raw returns are ready.
+checked-in policy. At that registration checkpoint, complete production qualification separately
+proved all 64 records. The registration preserved the previous 63 records, all rule scopes,
+production code and public types; the unknown-return rule remained inactive until the other
+legitimate raw returns were ready.
 
 The closed `raw-canonical-json-decoder` responsibility registers the existing contracts
 `parseCanonicalSupportJson` return without narrowing its truthful `unknown` result. It admits
@@ -776,3 +778,31 @@ unselected existing tests retained as owning-suite regressions. Pending, failed 
 cannot adapt the return; no parameter, helper, dictionary or other return gains an exemption.
 Caller `maxBytes` remains a numeric input, not a universal validated ceiling; the existing actual
 consumers retain their fixed repository byte limits. The original unknown-result pin is unchanged.
+
+### Contracts unknown-return activation
+
+After the complete 65-record decoder checkpoint, the whole contracts production scope also activates
+`anti-slop/no-unknown-returns`. Current, future and generated production sources and the existing
+production-classified `vitest.config.ts` are included; canonical nonproduction and foreign owners
+retain their separate obligations. The prior a41655f inventory contained 244 such members, not a
+fixed file allowlist. All 65 responsibility objects, every other policy field across the 22 rules, product source,
+public types and proof bodies remain unchanged by this activation.
+
+The three legitimate raw returns stay truthful `unknown` values. Only fresh semantic qualification
+can admit the exact selected return annotation of `ownField` in `code-task-acceptance.ts`
+(284:73, source span 14800–14807), `runtimeProperty` in `observability.ts` (1373:60, source span 52173–52180), and
+`parseCanonicalSupportJson` in `support-report-json.ts` (248:76, source span 8281–8288), at their source bytes on
+that subject. Their existing records are respectively
+`actual-code-task-acceptance-raw-reader-return`, `support-raw-property-observation`, and
+`support-canonical-json-decoder-return`, with 15/15/16 declared selectors. No static, pending,
+missing, skipped, stale or failed proof admits a return. An unrelated return stays active even in
+an otherwise qualified file; no body/helper/parameter/dictionary exemption is added.
+
+The native raw census is preserved. The genuine final complete repository qualifier must freshly
+qualify all 65 records on the activation candidate, cover the full current contracts production
+inventory and yield exactly those three unknown-return adaptations plus the existing exact
+reflection adaptation, with zero active violations and a passed, closed/drained proof invocation.
+An earlier qualified report, a default pending scan or a constructed unit report cannot supply
+that result. This activation does not complete the 170-owner migration, activate the five remaining
+boundary rules, or close #3918. The ordinary default can correctly fail until fresh qualification;
+`:repository` remains the genuine complete semantic operation.

@@ -560,7 +560,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     },
   );
 
-  it.each([...ASSERTION_RULES, "anti-slop/no-reflect-get"])(
+  it.each([...ASSERTION_RULES, "anti-slop/no-reflect-get", "anti-slop/no-unknown-returns"])(
     "enforces %s only on all current and future contracts members",
     (id) => {
       const packages = [{ directory: "packages/contracts", name: "@oscharko-dev/keiko-contracts" }];
