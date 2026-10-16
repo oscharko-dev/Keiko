@@ -15,6 +15,7 @@ function proofConsumerKind(record) {
     "public-parser",
     "raw-own-property-reader",
     "raw-property-observation",
+    "typed-parameter-recheck",
   ].includes(record.kind);
 }
 
@@ -141,6 +142,12 @@ function responsibilitySlots(resolver, record, roles) {
     return [resolver.rawReaderFacts(roles.input.identities[0]).slot];
   if (record.kind === "raw-property-observation")
     return resolver.propertyObservationFacts(roles.input.identities[0]).slots;
+  if (record.kind === "typed-parameter-recheck")
+    return resolver.typedRecheckFacts(roles.input.identities[0], record.input.parameterIndex).slots;
+  return rawResponsibilitySlots(resolver, record, roles);
+}
+
+function rawResponsibilitySlots(resolver, record, roles) {
   const input = resolver.callableSlots(roles.input.identities[0]);
   const parameter = input.parameters[record.input.parameterIndex];
   if (parameter?.type.kind !== "unknown")
@@ -188,6 +195,8 @@ function bindConsumer(resolver, record, roles, consumerReason, reasons) {
   }
   if (record.kind === "public-parser")
     return publicParserConsumer(resolver, record, roles, reasons);
+  if (record.kind === "typed-parameter-recheck")
+    return resolver.typedRecheckBinding(record.consumer, roles.transform.identities[0]);
   const binding =
     record.kind === "diagnostic-checker"
       ? resolver.diagnosticBinding(record.consumer, roles.transform.identities[0])
@@ -201,13 +210,13 @@ function bindConsumer(resolver, record, roles, consumerReason, reasons) {
 }
 
 function bindingConsumerReason(record, binding, consumerReason) {
-  if (record.kind === "raw-own-property-reader" && binding?.status === "incomplete")
+  if (binding?.status !== "incomplete") return consumerReason;
+  if (record.kind === "raw-own-property-reader")
     return binding.readerWitness.bound
       ? "unsupported-raw-reader-public-proof-binding"
       : "unsupported-raw-reader-validator-witness";
-  return record.kind === "public-parser" && binding?.status === "incomplete"
-    ? "unsupported-public-parser-binding"
-    : consumerReason;
+  if (record.kind === "typed-parameter-recheck") return "unsupported-typed-recheck-binding";
+  return record.kind === "public-parser" ? "unsupported-public-parser-binding" : consumerReason;
 }
 
 function proofScopeIdentities(record, roles) {
@@ -263,7 +272,9 @@ function adaptedFinding(finding, assessments) {
   for (const assessment of assessments) {
     if (assessment.structural !== "ready") continue;
     if (
-      ["raw-own-property-reader", "raw-property-observation"].includes(assessment.kind) &&
+      ["raw-own-property-reader", "raw-property-observation", "typed-parameter-recheck"].includes(
+        assessment.kind,
+      ) &&
       assessment.semantic !== "qualified"
     )
       continue;

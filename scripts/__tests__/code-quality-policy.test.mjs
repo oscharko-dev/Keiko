@@ -244,6 +244,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "code-task-qualification-manifest-public-parser",
       "auxiliary-capability-request-public-parser",
       "auxiliary-capability-outcome-public-parser",
+      "task-workspace-transition-from-typed-recheck",
+      "task-workspace-transition-to-typed-recheck",
+      "task-workspace-next-from-typed-recheck",
+      "task-workspace-cleanup-value-typed-recheck",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -906,6 +910,41 @@ describe("acceptance and auxiliary public parser obligations (#3918)", () => {
       const removed = structuredClone(policy);
       removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
       expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+    }
+  });
+});
+
+describe("typed task public recheck obligations (#3918)", () => {
+  it("pins four selected parameters without changing activation or granting unrelated raw rules", () => {
+    const records = policy.responsibilities.slice(59, 63);
+    expect(records).toHaveLength(4);
+    expect(records.map(({ input }) => [input.exportName, input.parameterIndex])).toEqual([
+      ["isLegalTaskWorkspaceTransition", 0],
+      ["isLegalTaskWorkspaceTransition", 1],
+      ["nextLegalTaskWorkspaceStates", 0],
+      ["isCleanupEligibleLifecycleState", 0],
+    ]);
+    for (const record of records) {
+      expect(record.kind).toBe("typed-parameter-recheck");
+      expect(record.rules).toEqual(["anti-slop/no-known-value-widening"]);
+      expect(record.input).toEqual({
+        ...record.transform,
+        parameterIndex: record.input.parameterIndex,
+      });
+      expect(record.output).toEqual(record.transform);
+      expect(record.consumer.kind).toBe("public-api-proof");
+      const removed = structuredClone(policy);
+      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
+      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+      for (const rules of [
+        [],
+        ["anti-slop/no-unknown-parameters"],
+        [...record.rules, "anti-slop/no-runtime-typeof"],
+      ]) {
+        const changed = structuredClone(policy);
+        changed.responsibilities.find(({ id }) => id === record.id).rules = rules;
+        expect(validatePolicy(changed)).toContain("invalid-responsibilities");
+      }
     }
   });
 });

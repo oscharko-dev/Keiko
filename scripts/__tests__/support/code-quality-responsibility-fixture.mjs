@@ -759,3 +759,172 @@ function dictionaryDispatchVariants(source) {
     ].join("\n"),
   };
 }
+
+// One actual native-emitted owner shared by typed-origin resolver/evaluator controls.
+// Existing raw fixture defaults and their assembly path remain unchanged.
+export function createTypedRecheckFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", typedRecheckOwner(variant));
+    if (variant === "foreign")
+      own.put(
+        "packages/alpha/src/foreign.ts",
+        'import type { State } from "./owner.js"; export function foreign(value: unknown): value is State { return value === "ready" || value === "done"; }\n',
+      );
+    own.put("packages/alpha/src/index.ts", 'export * from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { transition } from "alpha/runtime"; export const value = transition("ready", "done");\n',
+    );
+    own.put("packages/alpha/src/proof.test.ts", typedRecheckProof(variant));
+    const records = [
+      ["transition", 0],
+      ["transition", 1],
+      ["next", 0],
+      ["eligible", 0],
+    ].map(([name, index]) => typedRecheckRecord(name, index));
+    const policy = responsibilityPolicy(records);
+    for (const record of records) activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { records, policy });
+  });
+}
+
+function typedRecheckRecord(name, index) {
+  const path = "packages/alpha/src/proof.test.ts";
+  const selector = { consumerPath: path, specifier: "alpha/runtime", exportName: name };
+  return {
+    id: `typed-${name}-${index}`,
+    owner: "alpha",
+    kind: "typed-parameter-recheck",
+    rules: ["anti-slop/no-known-value-widening"],
+    input: { ...selector, parameterIndex: index },
+    transform: selector,
+    output: selector,
+    consumer: {
+      ...selector,
+      exportName: `public${name}`,
+      kind: "public-api-proof",
+      owner: "alpha",
+    },
+    proofs: [path],
+    proofAssertions: [{ path, testName: "typed public finite admission" }],
+  };
+}
+
+function typedRecheckOwner(variant) {
+  const source = `export type State = "ready" | "done";
+export function isState(value: unknown): value is State { return value === "ready" || value === "done"; }
+const TABLE: Readonly<Record<State, readonly State[]>> = { ready: ["done"], done: [] };
+const ELIGIBLE: readonly State[] = ["done"];
+export function transition(from: State, to: State): boolean {
+  if (!isState(from) || !isState(to)) return false;
+  return TABLE[from].includes(to);
+}
+export function next(from: State): readonly State[] {
+  if (!isState(from)) return [];
+  return TABLE[from];
+}
+export function eligible(value: State): boolean {
+  return isState(value) && ELIGIBLE.includes(value);
+}
+`;
+  return typedRecheckOwnerMutation(source, variant);
+}
+
+function typedRecheckOwnerMutation(source, variant) {
+  const start = "if (!isState(from) || !isState(to)) return false;";
+  const replacements = {
+    removed: "if (!isState(to)) return false;",
+    "removed-to": "if (!isState(from)) return false;",
+    inert: "isState(from); if (!isState(to)) return false;",
+    alias: "const alias = from; if (!isState(alias) || !isState(to)) return false;",
+    written: 'from = "ready"; ' + start,
+    deferred:
+      "const later = (): boolean => isState(from); if (!later() || !isState(to)) return false;",
+    duplicate: "if (!isState(from) || !isState(from) || !isState(to)) return false;",
+
+    asserted: "if (!isState(from as State) || !isState(to)) return false;",
+    rebound: "if (!check(from) || !isState(to)) return false;",
+  };
+  if (replacements[variant]) source = source.replace(start, replacements[variant]);
+  if (variant === "forwarding")
+    source =
+      source.replace("return TABLE[from].includes(to);", "return consume(from);") +
+      'function consume(value: unknown): boolean { return value === "ready"; }\n';
+  if (variant === "captured-tail")
+    source = source.replace(
+      "return TABLE[from].includes(to);",
+      "return (() => TABLE[from].includes(to))();",
+    );
+  if (variant === "asserted-tail")
+    source = source.replace(
+      "return TABLE[from].includes(to);",
+      "return TABLE[from as State].includes(to);",
+    );
+  if (variant === "mutated-tail")
+    source = source.replace(
+      "return TABLE[from].includes(to);",
+      'return TABLE[(from = "ready")].includes(to);',
+    );
+  if (variant === "rebound") source += "const check = isState;\n";
+  return typedRecheckPredicateMutation(source, variant);
+}
+
+function typedRecheckPredicateMutation(source, variant) {
+  if (variant === "foreign-domain")
+    source =
+      source.replace("value is State", "value is OtherState") + "\ntype OtherState = State;\n";
+  if (variant === "lying")
+    source = source.replace('return value === "ready" || value === "done";', "return true;");
+  if (variant === "foreign")
+    source =
+      'import { foreign } from "./foreign.js";\n' +
+      source.replaceAll("!isState(from)", "!foreign(from)");
+  if (variant === "wrong-index")
+    source =
+      source.replace(
+        "if (!isState(from) || !isState(to))",
+        'if (!second("ready", from) || !isState(to))',
+      ) +
+      "\nfunction second(other: State, value: unknown): value is State { return other === value; }\n";
+  if (variant === "overloaded")
+    source = source.replace(
+      "export function isState(value: unknown): value is State {",
+      "export function isState(value: unknown): value is State;\nexport function isState(value: unknown): value is State {",
+    );
+  if (variant === "generic")
+    source = source.replace("isState(value: unknown)", "isState<T>(value: unknown)");
+  return source;
+}
+
+function typedRecheckProof(variant) {
+  const source = `import { transition, next, eligible, type State } from "alpha/runtime";
+export function publictransition(from: State, to: State): boolean { const result = transition(from, to); return result; }
+export function publicnext(from: State): readonly State[] { const result = next(from); return result; }
+export function publiceligible(value: State): boolean { const result = eligible(value); return result; }
+`;
+  const replacements = {
+    "proof-swapped": source.replace("transition(from, to)", "transition(to, from)"),
+    "proof-constant": source.replace("transition(from, to)", 'transition("ready", to)'),
+    "proof-result": source.replace("return result;", "return true;"),
+    "proof-wide-result": source.replace("to: State): boolean", "to: State): unknown"),
+    "proof-clone": source.replace(
+      "const result = next(from); return result;",
+      "const result = next(from); return [...result];",
+    ),
+    "proof-alias": source.replace(
+      "const result = transition",
+      "const original = from; const result = transition",
+    ),
+    "proof-wide": source
+      .replace("publictransition(from: State", "publictransition(from: State | undefined")
+      .replace("transition(from, to)", 'transition(from ?? "ready", to)'),
+    "proof-counterfeit":
+      source.replace("type State }", "type State as ImportedState }") +
+      '\ntype State = "ready" | "done";\n',
+  };
+  return replacements[variant] ?? source;
+}

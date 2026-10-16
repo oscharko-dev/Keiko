@@ -32,6 +32,7 @@ import {
   createDictionaryEnforcementFixture,
   createRawHelperEnforcementFixture,
   createCollectiveParserFixture,
+  createTypedRecheckFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 import {
   createPublicParserFixture,
@@ -2314,4 +2315,175 @@ describe("one-query fresh currentness membership (#3918)", () => {
       expect(calls[0][2]).toMatchObject({ timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
     }
   });
+});
+
+async function typedSymbolFixture(variant = "direct", options = {}) {
+  const own = createTypedRecheckFixture(variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    { owner: "packages/alpha", paths: own.records[0].proofs },
+  ]);
+  return own;
+}
+
+// These controls use native-emitted public declarations, not fabricated checker facts.
+describe("typed finite public recheck symbols (#3918)", () => {
+  it("admits only each actual guarded argument and immutable full-argument public forwarding", async () => {
+    const own = await typedSymbolFixture();
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    for (const record of own.records) {
+      const identity = own.resolver.resolveProofExport(record.input).identities[0];
+      const facts = own.resolver.typedRecheckFacts(identity, record.input.parameterIndex);
+      expect(facts.slots).toHaveLength(1);
+      const [slot] = facts.slots;
+      expect(slot).toMatchObject({
+        kind: "argument",
+        rule: record.rules[0],
+        parameterIndex: record.input.parameterIndex,
+      });
+      expect(source.slice(slot.start, slot.end)).toBe(
+        record.input.exportName === "eligible"
+          ? "value"
+          : record.input.parameterIndex
+            ? "to"
+            : "from",
+      );
+      expect(source.slice(facts.predicate.producer.start, facts.predicate.producer.end)).toContain(
+        "function isState",
+      );
+      expect(own.resolver.typedRecheckBinding(record.consumer, identity)).toMatchObject({
+        bound: true,
+        status: "ready",
+      });
+    }
+  }, 30_000);
+
+  it.each([
+    "removed",
+    "inert",
+    "alias",
+    "written",
+    "deferred",
+    "duplicate",
+    "forwarding",
+    "captured-tail",
+    "asserted-tail",
+    "mutated-tail",
+    "asserted",
+    "rebound",
+    "generic",
+    "foreign",
+    "foreign-domain",
+    "wrong-index",
+    "overloaded",
+  ])(
+    "refuses the actual %s selected-argument guard",
+    async (variant) => {
+      const own = await typedSymbolFixture(variant);
+      const identity = own.resolver.resolveProofExport(own.records[0].input).identities[0];
+      expect(() => own.resolver.typedRecheckFacts(identity, 0)).toThrow(/typed-recheck/);
+    },
+    30_000,
+  );
+
+  it.each([
+    "proof-swapped",
+    "proof-constant",
+    "proof-result",
+    "proof-wide-result",
+    "proof-alias",
+    "proof-wide",
+    "proof-counterfeit",
+  ])(
+    "refuses %s public forwarding without granting a typed slot",
+    async (variant) => {
+      const own = await typedSymbolFixture(variant);
+      const record = own.records[0];
+      const identity = own.resolver.resolveProofExport(record.input).identities[0];
+      expect(own.resolver.typedRecheckBinding(record.consumer, identity)).toEqual({
+        bound: false,
+        status: "incomplete",
+      });
+    },
+    30_000,
+  );
+
+  it("does not certify predicate truth and still revalidates source on every public operation", async () => {
+    const own = await typedSymbolFixture("lying");
+    const identity = own.resolver.resolveProofExport(own.records[0].input).identities[0];
+    expect(own.resolver.typedRecheckFacts(identity, 0).slots).toHaveLength(1);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8") + "\n",
+    );
+    expect(() => own.resolver.typedRecheckFacts(identity, 0)).toThrow("symbol-subject-changed");
+    expect(() => own.resolver.typedRecheckBinding(own.records[0].consumer, identity)).toThrow(
+      "symbol-subject-changed",
+    );
+  }, 30_000);
+});
+
+describe("typed recheck shared resolver refusal bounds (#3918)", () => {
+  it.each([{ sourceBytes: 1 }, { nodes: 1 }, { emitBytes: 1 }, { aliases: 1 }])(
+    "retains the existing shared bound %j",
+    async (limits) => {
+      const own = await typedSymbolFixture("direct", limits);
+      if (limits.aliases) {
+        own.resolver.close();
+        own.put(
+          "src/namespace-alias.ts",
+          'import * as ns from "alpha/runtime"; const first = ns.transition; const second = first; export const result = second("ready", "done");\n',
+        );
+        own.subject = await collectPolicySubject(own.root);
+        own.resolver = createSymbolResolver(own.subject, limits);
+        const identity = own.resolver.resolveExport({
+          ...own.records[0].input,
+          consumerPath: "src/namespace-alias.ts",
+        }).identities[0];
+        expect(() => own.resolver.incomingUses(identity)).toThrow("symbol-alias-budget");
+        own.resolver.close();
+        own.resolver = createSymbolResolver(own.subject);
+        expect(
+          own.resolver
+            .incomingUses(identity)
+            .uses.filter((use) => use.path === "src/namespace-alias.ts" && use.kind === "call"),
+        ).toHaveLength(1);
+        return;
+      }
+      expect(() => own.resolver.resolveProofExport(own.records[0].input)).toThrow();
+    },
+    30_000,
+  );
+
+  it("refuses a producer identity rebound to a different owner", async () => {
+    const own = await typedSymbolFixture();
+    const identity = own.resolver.resolveProofExport(own.records[0].input).identities[0];
+    expect(() => own.resolver.typedRecheckFacts({ ...identity, owner: "foreign" }, 0)).toThrow(
+      "mismatched-responsibility-producer",
+    );
+  }, 30_000);
+});
+
+describe("selected typed parameter guard identity (#3918)", () => {
+  it("withholds a missing second guard even when includes still refuses malformed values", async () => {
+    const own = await typedSymbolFixture("removed-to");
+    const identity = own.resolver.resolveProofExport(own.records[1].input).identities[0];
+    expect(() => own.resolver.typedRecheckFacts(identity, 1)).toThrow(
+      "ambiguous-typed-recheck-guard",
+    );
+    expect(own.resolver.typedRecheckFacts(identity, 0).slots).toHaveLength(1);
+  }, 30_000);
+});
+
+describe("canonical typed list forwarding result (#3918)", () => {
+  it("refuses a type-correct cloned list rather than certifying unchanged result identity", async () => {
+    const own = await typedSymbolFixture("proof-clone");
+    const record = own.records[2];
+    const identity = own.resolver.resolveProofExport(record.input).identities[0];
+    expect(own.resolver.typedRecheckBinding(record.consumer, identity)).toEqual({
+      bound: false,
+      status: "incomplete",
+    });
+  }, 30_000);
 });

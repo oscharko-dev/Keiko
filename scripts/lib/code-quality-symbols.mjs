@@ -600,6 +600,531 @@ function parserBinding(compiler, request, producer) {
   };
 }
 
+function typedRequiredParameter(parameter) {
+  return Boolean(
+    parameter?.type &&
+    ts.isIdentifier(parameter.name) &&
+    parameter.name.text !== "this" &&
+    !parameter.questionToken &&
+    !parameter.initializer &&
+    !parameter.dotDotDotToken,
+  );
+}
+
+function typedFunctionDeclaration(callable) {
+  return Boolean(callable && ts.isFunctionDeclaration(callable) && callable.name && callable.body);
+}
+
+function typedCallableShape(callable) {
+  if (!typedFunctionDeclaration(callable)) return false;
+  return Boolean(
+    callable.type &&
+    !callable.typeParameters?.length &&
+    !callable.asteriskToken &&
+    !callable.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
+    callable.parameters.length &&
+    callable.parameters.every(typedRequiredParameter),
+  );
+}
+
+function typedSingleSignature(signature) {
+  return Boolean(
+    signature &&
+    !signature.typeParameters?.length &&
+    !signature.thisParameter &&
+    signature.declaration &&
+    !signature.declaration.typeParameters?.length &&
+    signature.declaration.parameters.every(typedRequiredParameter),
+  );
+}
+
+function typedNamedCallable(context, callable) {
+  if (!typedCallableShape(callable)) return null;
+  const symbol = context.checker.getSymbolAtLocation(callable.name);
+  const signatures =
+    symbol && context.checker.getTypeOfSymbolAtLocation(symbol, callable).getCallSignatures();
+  return symbol?.declarations?.length === 1 &&
+    signatures?.length === 1 &&
+    typedSingleSignature(signatures[0])
+    ? signatures[0]
+    : null;
+}
+
+function finiteStringType(type) {
+  const members = type.isUnion() ? type.types : [type];
+  return (
+    members.length > 0 &&
+    members.every((member) => (member.flags & ts.TypeFlags.StringLiteral) !== 0)
+  );
+}
+
+function typedDomainAlias(compiler, context, annotation) {
+  if (
+    !annotation ||
+    !ts.isTypeReferenceNode(annotation) ||
+    !ts.isIdentifier(annotation.typeName) ||
+    annotation.typeArguments?.length
+  )
+    return null;
+  const symbol = context.checker.getSymbolAtLocation(annotation.typeName);
+  if (!symbol) return null;
+  const target = qualifiedAlias(context, symbol, compiler.state.limits.aliases);
+  return { symbol, target };
+}
+
+function typedDomainDeclaration(target) {
+  const declaration = target.declarations?.length === 1 && target.declarations[0];
+  return declaration &&
+    ts.isTypeAliasDeclaration(declaration) &&
+    !declaration.typeParameters?.length
+    ? declaration
+    : null;
+}
+
+function typedDomain(compiler, context, annotation) {
+  const alias = typedDomainAlias(compiler, context, annotation);
+  const declaration = alias && typedDomainDeclaration(alias.target);
+  if (!declaration) return null;
+  const type = context.checker.getTypeAtLocation(annotation);
+  if (!finiteStringType(type)) return null;
+  const identity = canonicalDeclaration(compiler, declaration, null);
+  const file = compiler.state.subject.inventory.files.find(
+    (entry) => entry.path === identity.producer.path,
+  );
+  return file?.production ? { type, identity, symbol: alias.symbol } : null;
+}
+
+function typedPredicateCall(call) {
+  return (
+    ts.isCallExpression(call) &&
+    ts.isIdentifier(call.expression) &&
+    !call.typeArguments?.length &&
+    call.arguments.length === 1 &&
+    ts.isIdentifier(call.arguments[0])
+  );
+}
+
+function typedPredicateDeclaration(owned, call) {
+  const symbol = owned.context.checker.getSymbolAtLocation(call.expression);
+  const declaration = symbol?.valueDeclaration;
+  return symbol?.declarations?.length === 1 &&
+    declaration &&
+    ts.isFunctionDeclaration(declaration) &&
+    declaration.getSourceFile() === owned.source &&
+    declaration.parameters.length === 1
+    ? declaration
+    : null;
+}
+
+function typedIdentifierPredicate(context, declaration, signature) {
+  const predicate = context.checker.getTypePredicateOfSignature(signature);
+  return predicate?.kind === ts.TypePredicateKind.Identifier &&
+    predicate.parameterIndex === 0 &&
+    ts.isTypePredicateNode(declaration.type) &&
+    ts.isIdentifier(declaration.type.parameterName)
+    ? predicate
+    : null;
+}
+
+function typedDirectPredicate(compiler, owned, call) {
+  if (!typedPredicateCall(call)) return null;
+  const declaration = typedPredicateDeclaration(owned, call);
+  const signature = declaration && typedNamedCallable(owned.context, declaration);
+  if (
+    !signature ||
+    owned.context.checker.getResolvedSignature(call) !== signature ||
+    !requiredUnknownParserParameter(owned.context, signature.parameters[0])
+  )
+    return null;
+  const predicate = typedIdentifierPredicate(owned.context, declaration, signature);
+  const domain = predicate && typedDomain(compiler, owned.context, declaration.type.type);
+  return domain && predicate.type === domain.type
+    ? {
+        domain,
+        identity: canonicalDeclaration(compiler, declaration, null),
+      }
+    : null;
+}
+
+function typedNegativeCalls(expression) {
+  expression = rawParentheses(expression);
+  if (
+    ts.isPrefixUnaryExpression(expression) &&
+    expression.operator === ts.SyntaxKind.ExclamationToken &&
+    ts.isCallExpression(expression.operand)
+  )
+    return [expression.operand];
+  if (
+    ts.isBinaryExpression(expression) &&
+    expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+  ) {
+    const left = typedNegativeCalls(expression.left);
+    const right = typedNegativeCalls(expression.right);
+    return left && right ? [...left, ...right] : null;
+  }
+  return null;
+}
+
+function typedAndParts(expression) {
+  expression = rawParentheses(expression);
+  return ts.isBinaryExpression(expression) &&
+    expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+    ? [...typedAndParts(expression.left), ...typedAndParts(expression.right)]
+    : [expression];
+}
+
+function typedRefusal(statement) {
+  if (ts.isBlock(statement) && statement.statements.length === 1)
+    [statement] = statement.statements;
+  return (
+    ts.isReturnStatement(statement) &&
+    statement.expression &&
+    (statement.expression.kind === ts.SyntaxKind.FalseKeyword ||
+      (ts.isArrayLiteralExpression(statement.expression) &&
+        statement.expression.elements.length === 0))
+  );
+}
+
+function typedIfGuard(statements) {
+  return (
+    statements.length === 2 &&
+    ts.isIfStatement(statements[0]) &&
+    !statements[0].elseStatement &&
+    typedRefusal(statements[0].thenStatement) &&
+    ts.isReturnStatement(statements[1]) &&
+    statements[1].expression
+  );
+}
+
+function typedGuardCalls(callable) {
+  const statements = callable.body.statements;
+  if (typedIfGuard(statements)) return typedNegativeCalls(statements[0].expression);
+  if (statements.length !== 1 || !ts.isReturnStatement(statements[0]) || !statements[0].expression)
+    return null;
+  const parts = typedAndParts(statements[0].expression);
+  return parts.length > 1 && parts.slice(0, -1).every(ts.isCallExpression)
+    ? parts.slice(0, -1)
+    : null;
+}
+
+function typedParameterDomains(compiler, owned, signature) {
+  return owned.callable.parameters.map((parameter, index) => {
+    const domain = typedDomain(compiler, owned.context, parameter.type);
+    if (
+      !domain ||
+      domain.identity.owner !== owned.identity.owner ||
+      domain.identity.producer.path !== owned.identity.producer.path ||
+      signature.parameters[index]?.valueDeclaration !== parameter
+    )
+      throw new TypeError("unsupported-typed-recheck-domain");
+    return {
+      ...domain,
+      parameter,
+      symbol: owned.context.checker.getSymbolAtLocation(parameter.name),
+    };
+  });
+}
+
+function typedGuardWitness(compiler, owned, domains) {
+  const calls = typedGuardCalls(owned.callable);
+  if (!calls?.length) throw new TypeError("unsupported-typed-recheck-guard");
+  return calls.map((call) => {
+    const predicate = typedDirectPredicate(compiler, owned, call);
+    const symbol = owned.context.checker.getSymbolAtLocation(call.arguments[0]);
+    const parameter = domains.find((domain) => domain.symbol === symbol);
+    if (
+      !predicate ||
+      !parameter ||
+      !sameProducer(predicate.domain.identity, parameter.identity) ||
+      predicate.domain.type !== parameter.type
+    )
+      throw new TypeError("unsupported-typed-recheck-predicate");
+    return { call, parameter, predicate };
+  });
+}
+
+function typedReadonlyArray(context, type) {
+  return (
+    context.checker.isArrayType(type) &&
+    type.symbol?.name === "ReadonlyArray" &&
+    type.symbol.declarations?.every((declaration) =>
+      context.program.isSourceFileDefaultLibrary(declaration.getSourceFile()),
+    )
+  );
+}
+
+function typedStableReceiver(context, expression) {
+  if (ts.isElementAccessExpression(expression))
+    return typedStableReceiver(context, expression.expression);
+  if (!ts.isIdentifier(expression)) return false;
+  const declaration = context.checker.getSymbolAtLocation(expression)?.valueDeclaration;
+  return Boolean(
+    declaration &&
+    ts.isVariableDeclaration(declaration) &&
+    declaration.parent.flags === ts.NodeFlags.Const &&
+    declaration.parent.parent.parent === declaration.getSourceFile(),
+  );
+}
+
+function typedIncludesCall(node) {
+  const call = node.parent;
+  return ts.isCallExpression(call) &&
+    call.arguments.length === 1 &&
+    call.arguments[0] === node &&
+    !call.typeArguments?.length &&
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "includes"
+    ? call
+    : null;
+}
+
+function typedIncludesUse(owned, domain, node) {
+  const call = typedIncludesCall(node);
+  if (!call || !typedStableReceiver(owned.context, call.expression.expression)) return false;
+  const receiver = owned.context.checker.getTypeAtLocation(call.expression.expression);
+  const member = owned.context.checker.getSymbolAtLocation(call.expression.name);
+  const element =
+    typedReadonlyArray(owned.context, receiver) &&
+    owned.context.checker.getTypeArguments(receiver)[0];
+  return Boolean(
+    element === domain.type &&
+    member?.declarations?.length &&
+    member.declarations.every((declaration) =>
+      owned.context.program.isSourceFileDefaultLibrary(declaration.getSourceFile()),
+    ),
+  );
+}
+
+function typedTableUse(owned, domain, node) {
+  const access = node.parent;
+  if (
+    !ts.isElementAccessExpression(access) ||
+    access.argumentExpression !== node ||
+    !typedStableReceiver(owned.context, access.expression)
+  )
+    return false;
+  const type = owned.context.checker.getTypeAtLocation(access.expression);
+  const members = domain.type.isUnion() ? domain.type.types : [domain.type];
+  return (
+    !type.getStringIndexType() &&
+    !type.getNumberIndexType() &&
+    members.every((member) => {
+      const property = type.getProperty(member.value);
+      return (
+        property &&
+        (property.flags & ts.SymbolFlags.Optional) === 0 &&
+        !rawErasure(owned.context, access)
+      );
+    })
+  );
+}
+
+function typedParameterUses(owned, nodes, domain, witness) {
+  const uses = nodes.filter(
+    (node) =>
+      ts.isIdentifier(node) &&
+      node.getStart() >= owned.callable.body.getStart() &&
+      node.end <= owned.callable.body.end &&
+      owned.context.checker.getSymbolAtLocation(node) === domain.symbol,
+  );
+  if (writtenSymbol(owned.context, nodes, domain.symbol)) return false;
+  return uses.every(
+    (node) =>
+      directRawBody(node, owned.callable) &&
+      (witness.some(({ call }) => call.arguments[0] === node) ||
+        typedIncludesUse(owned, domain, node) ||
+        typedTableUse(owned, domain, node)),
+  );
+}
+
+function typedEntryResult(compiler, owned, signature, domain) {
+  const annotation = owned.callable.type;
+  const type = owned.context.checker.getReturnTypeOfSignature(signature);
+  if (annotation.kind === ts.SyntaxKind.BooleanKeyword)
+    return (type.flags & ts.TypeFlags.Boolean) !== 0;
+  if (
+    !ts.isTypeOperatorNode(annotation) ||
+    annotation.operator !== ts.SyntaxKind.ReadonlyKeyword ||
+    !ts.isArrayTypeNode(annotation.type) ||
+    !typedReadonlyArray(owned.context, type)
+  )
+    return false;
+  const element = typedDomain(compiler, owned.context, annotation.type.elementType);
+  return (
+    element &&
+    sameProducer(element.identity, domain.identity) &&
+    owned.context.checker.getTypeArguments(type)[0] === domain.type
+  );
+}
+
+function typedRecheckFacts(compiler, identity, index) {
+  const owned = { ...declarationCallable(compiler, identity), identity };
+  const signature = typedNamedCallable(owned.context, owned.callable);
+  if (!signature || !exportedDeclaration(owned.callable))
+    throw new TypeError("unsupported-typed-recheck-entry");
+  const domains = typedParameterDomains(compiler, owned, signature);
+  const domain = domains[index];
+  if (!domain || !typedEntryResult(compiler, owned, signature, domain))
+    throw new TypeError("unsupported-typed-recheck-parameter");
+  const witness = typedGuardWitness(compiler, owned, domains);
+  const selected = witness.filter((entry) => entry.parameter.symbol === domain.symbol);
+  if (selected.length !== 1) throw new TypeError("ambiguous-typed-recheck-guard");
+  const nodes = sourceNodes(compiler, owned.source);
+  if (!typedParameterUses(owned, nodes, domain, witness))
+    throw new TypeError("unsupported-typed-recheck-use");
+  const entry = selected[0];
+  const argument = entry.call.arguments[0];
+  return {
+    producer: identity,
+    predicate: entry.predicate.identity,
+    slots: [
+      {
+        kind: "argument",
+        path: identity.producer.path,
+        rule: "anti-slop/no-known-value-widening",
+        ...nativeDiagnosticPosition(owned.source, argument.getStart()),
+        start: argument.getStart(),
+        end: argument.end,
+        parameterIndex: index,
+        origin: { kind: "typed-parameter-recheck", index },
+      },
+    ],
+  };
+}
+
+function typedForwardStatements(assignment, returned) {
+  return (
+    ts.isVariableStatement(assignment) &&
+    assignment.declarationList.flags === ts.NodeFlags.Const &&
+    assignment.declarationList.declarations.length === 1 &&
+    ts.isReturnStatement(returned) &&
+    returned.expression &&
+    ts.isIdentifier(returned.expression)
+  );
+}
+
+function typedForwardCall(call) {
+  return (
+    call &&
+    ts.isCallExpression(call) &&
+    ts.isIdentifier(call.expression) &&
+    !call.typeArguments?.length &&
+    call.arguments.every(ts.isIdentifier)
+  );
+}
+
+function typedForwardResult(callable) {
+  if (callable.body.statements.length !== 2) return null;
+  const [assignment, returned] = callable.body.statements;
+  if (!typedForwardStatements(assignment, returned)) return null;
+  const local = assignment.declarationList.declarations[0];
+  const call = local.initializer;
+  return ts.isIdentifier(local.name) && !local.type && typedForwardCall(call)
+    ? { local, call, returned: returned.expression }
+    : null;
+}
+
+function typedImportedDomain(compiler, context, annotation, specifier) {
+  const domain = typedDomain(compiler, context, annotation);
+  const imported = domain?.symbol.declarations?.[0];
+  if (!domain || !ts.isImportSpecifier(imported)) return null;
+  const statement = imported.parent.parent.parent;
+  return ts.isImportDeclaration(statement) && statement.moduleSpecifier.text === specifier
+    ? domain
+    : null;
+}
+
+function typedProofParameters(compiler, context, callable, signature, request) {
+  if (callable.parameters.length !== signature.parameters.length) return false;
+  return callable.parameters.every((parameter, index) => {
+    const domain = typedImportedDomain(compiler, context, parameter.type, request.specifier);
+    const actual = signature.parameters[index]?.valueDeclaration;
+    const expected = actual && typedDomain(compiler, context, actual.type);
+    return (
+      domain &&
+      expected &&
+      sameProducer(domain.identity, expected.identity) &&
+      domain.type === expected.type
+    );
+  });
+}
+
+function typedForwardType(compiler, context, annotation, expected, specifier) {
+  if (annotation.kind === ts.SyntaxKind.BooleanKeyword)
+    return (
+      (expected.flags & ts.TypeFlags.Boolean) !== 0 &&
+      context.checker.getTypeAtLocation(annotation) === expected
+    );
+  if (
+    !ts.isTypeOperatorNode(annotation) ||
+    annotation.operator !== ts.SyntaxKind.ReadonlyKeyword ||
+    !ts.isArrayTypeNode(annotation.type) ||
+    !typedReadonlyArray(context, expected)
+  )
+    return false;
+  const domain = typedImportedDomain(compiler, context, annotation.type.elementType, specifier);
+  return (
+    domain &&
+    context.checker.getTypeArguments(expected)[0] === domain.type &&
+    context.checker.getTypeAtLocation(annotation) === expected
+  );
+}
+
+function typedForwardArguments(context, callable, flow) {
+  return (
+    flow.call.arguments.length === callable.parameters.length &&
+    flow.call.arguments.every(
+      (argument, index) =>
+        context.checker.getSymbolAtLocation(argument) ===
+        context.checker.getSymbolAtLocation(callable.parameters[index].name),
+    ) &&
+    context.checker.getSymbolAtLocation(flow.returned) ===
+      context.checker.getSymbolAtLocation(flow.local.name)
+  );
+}
+
+function typedPublicForward(compiler, context, callable, flow, request) {
+  const signatures = context.checker.getTypeAtLocation(flow.call.expression).getCallSignatures();
+  const signature = context.checker.getResolvedSignature(flow.call);
+  return (
+    signatures.length === 1 &&
+    typedSingleSignature(signature) &&
+    typedProofParameters(compiler, context, callable, signature, request) &&
+    typedForwardArguments(context, callable, flow) &&
+    typedForwardType(
+      compiler,
+      context,
+      callable.type,
+      context.checker.getReturnTypeOfSignature(signature),
+      request.specifier,
+    )
+  );
+}
+
+function typedRecheckBinding(compiler, request, producer) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+  const module = context.checker.getSymbolAtLocation(source);
+  const symbol = context.checker
+    .getExportsOfModule(module)
+    .find((entry) => entry.name === request.exportName);
+  const callable = symbol?.declarations?.length === 1 ? symbol.declarations[0] : null;
+  const ownSignature = callable && typedNamedCallable(context, callable);
+  const flow = ownSignature && typedForwardResult(callable);
+  if (
+    !flow ||
+    !parserImport(context, flow.call, request.specifier) ||
+    !directDiagnosticProducer(compiler, context, flow.call, producer) ||
+    !typedPublicForward(compiler, context, callable, flow, request)
+  )
+    return { bound: false, status: "incomplete" };
+  return {
+    bound: true,
+    status: "ready",
+    implementation: canonicalDeclaration(compiler, callable, null),
+    calls: [{ path: request.consumerPath, start: flow.call.getStart(), end: flow.call.end }],
+  };
+}
+
 function describeAt(compiler, request) {
   const { context, source } = ownedSource(compiler, request.path);
   const node = compilerNodeAt(compiler, source, request.offset);
@@ -2051,6 +2576,27 @@ function createExportFactCache(compiler) {
   };
 }
 
+function typedRecheckOperations(compiler) {
+  return {
+    typedRecheckFacts: (identity, index) => {
+      compiler.assertCurrent();
+      try {
+        return typedRecheckFacts(compiler, identity, index);
+      } finally {
+        compiler.assertCurrent();
+      }
+    },
+    typedRecheckBinding: (request, producer) => {
+      compiler.assertCurrent();
+      try {
+        return typedRecheckBinding(compiler, request, producer);
+      } finally {
+        compiler.assertCurrent();
+      }
+    },
+  };
+}
+
 export function createSymbolResolver(subject, options = {}, proofRoots = []) {
   const compiler = createCompilerContext(subject, options, proofRoots);
   const rawSlots = new Map();
@@ -2061,6 +2607,7 @@ export function createSymbolResolver(subject, options = {}, proofRoots = []) {
     resolveProofConsumer: (request) => resolveProofConsumer(compiler, request),
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
     parserBinding: (request, producer) => parserBinding(compiler, request, producer),
+    ...typedRecheckOperations(compiler),
     describeAt: (request) => describeAt(compiler, request),
     incomingUses: (identity, paths) => incomingUses(compiler, identity, paths),
     rawReaderFacts: (identity) => rawReaderFacts(compiler, identity),

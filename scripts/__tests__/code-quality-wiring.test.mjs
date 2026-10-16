@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(59);
+    expect(production.responsibilities).toHaveLength(63);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -796,7 +796,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 59, incomplete: 0, invalid: 0, qualified: 59, pending: 0, rejected: 0 },
+      counts: { ready: 63, incomplete: 0, invalid: 0, qualified: 63, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -851,7 +851,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 59;
+        r.responsibilities.counts.pending = 63;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
@@ -1105,5 +1105,62 @@ describe("acceptance and auxiliary public parser wiring (#3918)", () => {
       testName:
         "C1A auxiliary concrete admission retains accepted zero-child and rejected outcomes through public",
     });
+  });
+});
+
+describe("typed Task public recheck cohort wiring (#3918)", () => {
+  it("binds four exact typed arguments to three public forwarding witnesses", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const records = policy.responsibilities.slice(59, 63);
+    expect(records.map(({ consumer }) => consumer.exportName)).toEqual([
+      "recheckPublicWorkspaceTransition",
+      "recheckPublicWorkspaceTransition",
+      "recheckPublicWorkspaceNext",
+      "recheckPublicWorkspaceCleanup",
+    ]);
+    const task = "packages/keiko-contracts/src/task-workspace.test.ts";
+    const health = "packages/keiko-contracts/src/task-workspace-health.test.ts";
+    const common = [
+      "typed public workspace rechecks (#3918) pins canonical source public and forwarding parameter and result contracts",
+      "typed public workspace rechecks (#3918) preserves every finite transition row reference and cleanup disposition through public forwarding",
+      "typed public workspace rechecks (#3918) refuses actual hostile typed argument corruption at every public parameter",
+    ].map((testName) => ({ path: task, testName }));
+    const transitions = [
+      "permits representative legal transitions",
+      "rejects representative illegal transitions",
+    ].map((title) => ({ path: task, testName: `legal transition matrix ${title}` }));
+    const expected = [
+      [...common, ...transitions],
+      [...common, ...transitions],
+      [
+        ...common,
+        {
+          path: task,
+          testName: "legal transition matrix nextLegalTaskWorkspaceStates returns the matrix row",
+        },
+      ],
+      [
+        ...common,
+        {
+          path: health,
+          testName: "isCleanupEligibleLifecycleState admits exactly the settled/disposal states",
+        },
+      ],
+    ];
+    expect(records.map(({ proofAssertions }) => proofAssertions)).toEqual(expected);
+    for (const record of records) {
+      expect(record.input.consumerPath).toBe("packages/keiko-contracts/src/task-workspace.test.ts");
+      expect(record.input.specifier).toBe("@oscharko-dev/keiko-contracts/runtime/task-workspace");
+      expect(record.consumer).toMatchObject({
+        consumerPath: record.input.consumerPath,
+        specifier: record.input.specifier,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+
+      expect(record.proofs).toEqual(
+        record.input.exportName === "isCleanupEligibleLifecycleState" ? [task, health] : [task],
+      );
+    }
   });
 });

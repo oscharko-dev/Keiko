@@ -67,7 +67,7 @@ pending, stale or failed proofs cannot adapt it, and another `Reflect.get` coord
 No own-property/descriptor/cache replacement, receiver/read-order change or domain typing is
 introduced. The runtime, registered evidence contract, record and proof bodies remain unchanged.
 The native census is preserved; only the one qualified active operation can become an adaptation.
-The final complete production gate must actually qualify all 59 records on its current candidate
+The final complete production gate must actually qualify all 63 records on its current candidate
 and cover the full contracts production inventory. An earlier qualified report or a constructed
 unit input cannot supply that execution. This activation does not complete the 170-owner domain
 migration or activate the remaining six boundary rules.
@@ -721,3 +721,27 @@ behavior, execute evidence, issue a grant or widen a child's derived parent auth
 raw-reader proof still covers ownField only; this cohort neither narrows its truthful unknown return
 nor grants dictionary/typeof adaptation. No runtime API, production bytes, scopes or proof/resource
 bounds change, and domain-zero/accepted-owner obligations remain independently open.
+
+### Typed finite public entry rechecks (#3918)
+
+The closed `typed-parameter-recheck` responsibility kind supports only
+`anti-slop/no-known-value-widening`. It records a selected required typed parameter of a
+non-generic synchronous named public producer. Its declared domain must be a canonical finite
+string union owned by the same source. A direct same-source checker-bound Identifier predicate
+must accept unknown, assert that exact domain and control the synchronous admission guard.
+Discarded calls, aliases, mutations, captures, deferred calls and raw forwarding refuse admission.
+Later typed table lookups and intrinsic readonly-array `includes` remain valid domain uses.
+This capability does not certify predicate truth: actual healthy and hostile public runtime
+assertions are mandatory, along with strict canonical public parameter and result type pins.
+
+Four Task workspace records extend the cohort from 59 to 63: the two transition arguments,
+the next-state argument and the cleanup-state argument. Three public forwarding proofs pass
+every real parameter in order and return the actual result unchanged. Forwarding expectations call
+the public producers; selected independent existing legal/illegal transition, next-row and
+five-state cleanup proofs retain normative behavior checks. Task runtime source,
+authority, cleanup semantics and existing hostile-input regression pins remain unchanged.
+No new rule scope activates. Only fresh semantic qualification can adapt each selected native
+argument coordinate; ready/pending records cannot. Predicate bodies, unknown annotations,
+other arguments, dictionary/typeof/return/variable/property sites gain no exemption. Existing
+membership, emission, source-currentness, proof-process and resource limits still apply.
+This bounded pilot neither completes the 170-owner migration nor activates remaining rules.

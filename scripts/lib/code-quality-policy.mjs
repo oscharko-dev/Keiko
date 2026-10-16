@@ -169,12 +169,22 @@ function validObservationRules(record) {
   );
 }
 
+function validTypedRecheckRules(record) {
+  return (
+    record.kind !== "typed-parameter-recheck" ||
+    (record.rules.length === 1 &&
+      record.rules[0] === "anti-slop/no-known-value-widening" &&
+      record.proofAssertions?.length > 0)
+  );
+}
+
 function validResponsibilityConsumer(record) {
   return [
     "diagnostic-checker",
     "public-parser",
     "raw-own-property-reader",
     "raw-property-observation",
+    "typed-parameter-recheck",
   ].includes(record.kind)
     ? validDiagnosticConsumer(record.consumer)
     : validConsumerSelector(record.consumer);
@@ -208,11 +218,13 @@ function validResponsibilityIdentity(record) {
       "public-parser",
       "raw-own-property-reader",
       "raw-property-observation",
+      "typed-parameter-recheck",
     ].includes(record.kind) &&
     validResponsibilityRules(record.rules) &&
     validPublicParserRules(record) &&
     validRawReaderRules(record) &&
-    validObservationRules(record)
+    validObservationRules(record) &&
+    validTypedRecheckRules(record)
   );
 }
 

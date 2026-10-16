@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   TASK_WORKSPACE_LIFECYCLE_STATES,
@@ -15,6 +15,7 @@ import {
   TASK_WORKSPACE_OPERATIONS,
   TASK_WORKSPACE_DELEGATED_SUBSYSTEMS,
   isTaskWorkspaceLifecycleState,
+  isCleanupEligibleLifecycleState,
   isLegalTaskWorkspaceTransition,
   nextLegalTaskWorkspaceStates,
   isTaskWorkspaceTransitionPrecondition,
@@ -1032,4 +1033,92 @@ describe("#3918 workspace binding revision observation admission", () => {
       expect(fixture.readCount()).toBe(reads);
     },
   );
+});
+
+import {
+  isLegalTaskWorkspaceTransition as publicTransition,
+  nextLegalTaskWorkspaceStates as publicNext,
+  isCleanupEligibleLifecycleState as publicCleanupEligible,
+  TASK_WORKSPACE_LIFECYCLE_STATES as publicStates,
+  type TaskWorkspaceLifecycleState as PublicWorkspaceState,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import type { TaskWorkspaceLifecycleState as SourceWorkspaceState } from "./task-workspace.js";
+
+export function recheckPublicWorkspaceTransition(
+  from: PublicWorkspaceState,
+  to: PublicWorkspaceState,
+): boolean {
+  const result = publicTransition(from, to);
+  return result;
+}
+
+export function recheckPublicWorkspaceNext(
+  from: PublicWorkspaceState,
+): readonly PublicWorkspaceState[] {
+  const result = publicNext(from);
+  return result;
+}
+
+export function recheckPublicWorkspaceCleanup(value: PublicWorkspaceState): boolean {
+  const result = publicCleanupEligible(value);
+  return result;
+}
+
+describe("typed public workspace rechecks (#3918)", () => {
+  it("pins canonical source public and forwarding parameter and result contracts", () => {
+    expectTypeOf(isLegalTaskWorkspaceTransition).parameters.toEqualTypeOf<
+      [SourceWorkspaceState, SourceWorkspaceState]
+    >();
+    expectTypeOf(publicTransition).parameters.toEqualTypeOf<
+      [PublicWorkspaceState, PublicWorkspaceState]
+    >();
+    expectTypeOf(recheckPublicWorkspaceTransition).parameters.toEqualTypeOf<
+      [PublicWorkspaceState, PublicWorkspaceState]
+    >();
+    expectTypeOf(isLegalTaskWorkspaceTransition).returns.toEqualTypeOf<boolean>();
+    expectTypeOf(publicTransition).returns.toEqualTypeOf<boolean>();
+    expectTypeOf(recheckPublicWorkspaceTransition).returns.toEqualTypeOf<boolean>();
+    expectTypeOf(nextLegalTaskWorkspaceStates).parameters.toEqualTypeOf<[SourceWorkspaceState]>();
+    expectTypeOf(publicNext).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
+    expectTypeOf(recheckPublicWorkspaceNext).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
+    expectTypeOf(nextLegalTaskWorkspaceStates).returns.toEqualTypeOf<
+      readonly SourceWorkspaceState[]
+    >();
+    expectTypeOf(publicNext).returns.toEqualTypeOf<readonly PublicWorkspaceState[]>();
+    expectTypeOf(recheckPublicWorkspaceNext).returns.toEqualTypeOf<
+      readonly PublicWorkspaceState[]
+    >();
+    expectTypeOf(isCleanupEligibleLifecycleState).parameters.toEqualTypeOf<
+      [SourceWorkspaceState]
+    >();
+    expectTypeOf(isCleanupEligibleLifecycleState).returns.toEqualTypeOf<boolean>();
+    expectTypeOf(publicCleanupEligible).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
+    expectTypeOf(recheckPublicWorkspaceCleanup).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
+    expectTypeOf(publicCleanupEligible).returns.toEqualTypeOf<boolean>();
+    expectTypeOf(recheckPublicWorkspaceCleanup).returns.toEqualTypeOf<boolean>();
+  });
+
+  it("preserves every finite transition row reference and cleanup disposition through public forwarding", () => {
+    for (const from of publicStates) {
+      expect(publicNext(from)).toEqual(nextLegalTaskWorkspaceStates(from));
+      expect(publicCleanupEligible(from)).toBe(isCleanupEligibleLifecycleState(from));
+      expect(recheckPublicWorkspaceNext(from)).toBe(publicNext(from));
+      expect(recheckPublicWorkspaceCleanup(from)).toBe(publicCleanupEligible(from));
+      for (const to of publicStates) {
+        expect(publicTransition(from, to)).toBe(isLegalTaskWorkspaceTransition(from, to));
+        expect(recheckPublicWorkspaceTransition(from, to)).toBe(publicTransition(from, to));
+      }
+    }
+  });
+
+  it("refuses actual hostile typed argument corruption at every public parameter", () => {
+    for (const hostile of [null, undefined, 1, "", "__proto__", "constructor", {}, []]) {
+      const box: { value: PublicWorkspaceState } = { value: "active" };
+      Object.defineProperty(box, "value", { value: hostile });
+      expect(recheckPublicWorkspaceTransition(box.value, "active")).toBe(false);
+      expect(recheckPublicWorkspaceTransition("active", box.value)).toBe(false);
+      expect(recheckPublicWorkspaceNext(box.value)).toEqual([]);
+      expect(recheckPublicWorkspaceCleanup(box.value)).toBe(false);
+    }
+  });
 });

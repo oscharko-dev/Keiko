@@ -32,6 +32,7 @@ import {
   replaceConsumerCallFixture,
   createRawHelperEnforcementFixture,
   createCollectiveParserFixture,
+  createTypedRecheckFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 
 function executeCensusChild(root, ci) {
@@ -2841,4 +2842,225 @@ describe("private raw property observation witness", () => {
       qualified.violations.some((finding) => finding.rule === "anti-slop/no-object-parameters"),
     ).toBe(true);
   });
+});
+
+function legacyTypedFixturePolicy(own) {
+  const old = structuredClone(own.policy);
+  const record = old.responsibilities[0];
+  record.kind = "validator";
+  delete record.consumer.kind;
+  for (const role of ["input", "transform", "output", "consumer"]) {
+    record[role].consumerPath = "src/consumer.ts";
+  }
+  record.transform.exportName = "isState";
+  record.output.exportName = "isState";
+  record.consumer.exportName = "transition";
+  return old;
+}
+
+// Original-engine counterfactual: the original closed schema must reject this new kind;
+// it cannot pass this assertion through a missing named resolver import or setup failure.
+describe("typed finite entry responsibilities (#3918)", () => {
+  it("recognizes the explicit new kind while old raw-root ownership remains ineligible", async () => {
+    const own = createTypedRecheckFixture();
+    roots.push(own.root);
+    expect(validatePolicy(own.policy)).toEqual([]);
+    const subject = await collectPolicySubject(own.root);
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.counts).toMatchObject({ ready: 4, pending: 4, qualified: 0 });
+    expect(report.assessments.flatMap((record) => record.slots)).toHaveLength(4);
+    const old = legacyTypedFixturePolicy(own);
+    const legacyResolver = createSymbolResolver(subject);
+    try {
+      const roles = resolveRoles(legacyResolver, old.responsibilities[0]);
+      for (const role of ["input", "transform", "output", "consumer"]) {
+        expect(roles[role].identities).toHaveLength(1);
+        expect(roles[role].identities[0].owner).toBe("alpha");
+        expect(roles[role].identities[0].producer.path).toBe("packages/alpha/src/owner.ts");
+      }
+      expect(
+        legacyResolver.callableSlots(roles.input.identities[0]).parameters[0].type,
+      ).toMatchObject({ kind: "union", members: 2, containsUnknown: false });
+      const binding = legacyResolver.consumerCalls(
+        roles.consumer.identities[0],
+        roles.transform.identities[0],
+        "alpha",
+      );
+      expect(binding.bound).toBe(true);
+      expect(binding.calls).toHaveLength(2);
+    } finally {
+      legacyResolver.close();
+    }
+
+    const legacy = assessPolicyResponsibilities(subject, old);
+    expect(legacy.assessments[0].structural).toBe("incomplete");
+    expect(legacy.assessments[0].slots ?? []).toEqual([]);
+    own.put("scripts/code-quality-policy.json", old);
+    const nativeLegacy = await executeCodeQualityPolicy(
+      { mode: "enforce", scope: "repository" },
+      own.root,
+    );
+    const slot = report.assessments[0].slots[0];
+    expect(nativeLegacy.violations).toContainEqual(
+      expect.objectContaining({
+        path: slot.path,
+        rule: slot.rule,
+        line: slot.line,
+        column: slot.column,
+      }),
+    );
+    expect(
+      nativeLegacy.violations.filter(
+        (finding) => finding.rule === "anti-slop/no-known-value-widening",
+      ),
+    ).toHaveLength(4);
+    expect(nativeLegacy.adaptations).toEqual([]);
+    expect(nativeLegacy.enforcementOutcome).toBe("failed");
+  }, 30_000);
+
+  it.each(["removed", "inert", "proof-swapped", "proof-result"])(
+    "keeps %s obligations incomplete rather than granting a declaration-shaped waiver",
+    async (variant) => {
+      const own = createTypedRecheckFixture(variant);
+      roots.push(own.root);
+      const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+      expect(report.assessments[0].structural).toBe("incomplete");
+      expect(report.assessments[0].slots ?? []).toEqual([]);
+    },
+    30_000,
+  );
+
+  it("requires the sole exact rule and real named proof selectors", () => {
+    const own = createTypedRecheckFixture();
+    roots.push(own.root);
+    for (const rules of [
+      [],
+      ["anti-slop/no-runtime-typeof"],
+      [...own.records[0].rules, "anti-slop/no-unknown-parameters"],
+    ]) {
+      const policy = structuredClone(own.policy);
+      policy.responsibilities[0].rules = rules;
+      expect(validatePolicy(policy)).toContain("invalid-responsibilities");
+    }
+    const policy = structuredClone(own.policy);
+    delete policy.responsibilities[0].proofAssertions;
+    expect(validatePolicy(policy)).toContain("invalid-responsibilities");
+  }, 30_000);
+});
+
+async function installTypedFixtureNodeTypes(own) {
+  const { symlinkSync: linkTypes } = await import("node:fs");
+  const tools = new URL("../../", import.meta.url);
+  mkdirSync(join(own.root, "node_modules/@types"));
+  linkTypes(
+    new URL("node_modules/@types/node", tools),
+    join(own.root, "node_modules/@types/node"),
+    "junction",
+  );
+}
+
+async function typedSemanticFixture(mode = "healthy") {
+  const own = createTypedRecheckFixture(mode === "lying" ? "lying" : "direct");
+  await installSemanticFixtureTools(own);
+  await installTypedFixtureNodeTypes(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  config.compilerOptions.lib.push("DOM");
+  config.compilerOptions.types = ["node"];
+  own.put("packages/alpha/tsconfig.json", config);
+  const path = own.records[0].proofs[0];
+  const wrappers = readFileSync(join(own.root, path), "utf8");
+  const target = join(own.root, "packages/alpha/src/owner.ts");
+  const stale =
+    mode === "stale"
+      ? `writeFileSync(${JSON.stringify(target)}, ${JSON.stringify(readFileSync(target, "utf8") + "\n")});`
+      : "";
+  own.put(
+    path,
+    wrappers +
+      `
+import { it, expect } from "vitest";
+import { writeFileSync } from "node:fs";
+it${mode === "skip" ? ".skip" : ""}("typed public finite admission", () => {
+  expect(publictransition("ready", "done")).toBe(${mode === "failed" ? "false" : "true"});
+  expect(publictransition("done", "ready")).toBe(false);
+  expect(publicnext("ready")).toBe(next("ready"));
+  expect(publiceligible("done")).toBe(true);
+  expect(publiceligible("ready")).toBe(false);
+  for (const hostile of [null, 1, "__proto__", "constructor"]) {
+    const box: { value: State } = { value: "ready" };
+    Object.defineProperty(box, "value", { value: hostile });
+    expect(publictransition(box.value, "done")).toBe(false);
+    expect(publictransition("ready", box.value)).toBe(false);
+    expect(publicnext(box.value)).toEqual([]);
+    expect(publiceligible(box.value)).toBe(false);
+  }
+  ${stale}
+});
+`,
+  );
+  if (mode === "missing") own.records[0].proofAssertions[0].testName = "absent typed assertion";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);
+  return own;
+}
+
+describe("typed public recheck fresh semantic qualification (#3918)", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains pending native arguments then qualifies all four exact coordinates through real public proofs",
+    async () => {
+      const own = await typedSemanticFixture();
+      const pending = await executeCodeQualityPolicy(
+        { mode: "enforce", scope: "repository" },
+        own.root,
+      );
+      expect(pending.responsibilities.counts).toMatchObject({ ready: 4, pending: 4, qualified: 0 });
+      const selected = pending.responsibilities.assessments.flatMap((entry) => entry.slots);
+      expect(selected).toHaveLength(4);
+      for (const slot of selected) {
+        expect(pending.violations).toContainEqual(
+          expect.objectContaining({
+            path: slot.path,
+            rule: slot.rule,
+            line: slot.line,
+            column: slot.column,
+          }),
+        );
+      }
+      const qualified = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
+      expect(qualified.responsibilities.counts).toMatchObject({
+        ready: 4,
+        qualified: 4,
+        pending: 0,
+      });
+      expect(qualified.responsibilities.execution).toMatchObject({
+        status: "passed",
+        invocationCount: 1,
+        process: { directChildClosed: true, groupAbsent: true },
+      });
+      expect(qualified.adaptations).toHaveLength(4);
+      expect(
+        qualified.adaptations.every(
+          ({ finding }) => finding.rule === "anti-slop/no-known-value-widening",
+        ),
+      ).toBe(true);
+      expect(qualified.violations).toEqual([]);
+    },
+    195_000,
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["lying", "semantic-proof-execution-failed"],
+    ["failed", "semantic-proof-execution-failed"],
+    ["missing", "semantic-proof-assertion-missing"],
+    ["skip", "semantic-proof-assertion-missing"],
+    ["stale", "symbol-subject-changed"],
+  ])(
+    "refuses %s actual proofs without granting typed adaptation",
+    async (mode, reason) => {
+      const own = await typedSemanticFixture(mode);
+      const subject = await collectPolicySubject(own.root);
+      await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(reason);
+    },
+    195_000,
+  );
 });

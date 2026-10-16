@@ -3178,6 +3178,209 @@
           "testName": "C1A preserved auxiliary discriminator diagnostics reports one stable invalid accepted capability through public"
         }
       ]
+    },
+    {
+      "id": "task-workspace-transition-from-typed-recheck",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "typed-parameter-recheck",
+      "rules": ["anti-slop/no-known-value-widening"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isLegalTaskWorkspaceTransition",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isLegalTaskWorkspaceTransition"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isLegalTaskWorkspaceTransition"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "recheckPublicWorkspaceTransition",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/task-workspace.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) pins canonical source public and forwarding parameter and result contracts"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) preserves every finite transition row reference and cleanup disposition through public forwarding"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) refuses actual hostile typed argument corruption at every public parameter"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "legal transition matrix permits representative legal transitions"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "legal transition matrix rejects representative illegal transitions"
+        }
+      ]
+    },
+    {
+      "id": "task-workspace-transition-to-typed-recheck",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "typed-parameter-recheck",
+      "rules": ["anti-slop/no-known-value-widening"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isLegalTaskWorkspaceTransition",
+        "parameterIndex": 1
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isLegalTaskWorkspaceTransition"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isLegalTaskWorkspaceTransition"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "recheckPublicWorkspaceTransition",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/task-workspace.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) pins canonical source public and forwarding parameter and result contracts"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) preserves every finite transition row reference and cleanup disposition through public forwarding"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) refuses actual hostile typed argument corruption at every public parameter"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "legal transition matrix permits representative legal transitions"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "legal transition matrix rejects representative illegal transitions"
+        }
+      ]
+    },
+    {
+      "id": "task-workspace-next-from-typed-recheck",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "typed-parameter-recheck",
+      "rules": ["anti-slop/no-known-value-widening"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "nextLegalTaskWorkspaceStates",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "nextLegalTaskWorkspaceStates"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "nextLegalTaskWorkspaceStates"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "recheckPublicWorkspaceNext",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/task-workspace.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) pins canonical source public and forwarding parameter and result contracts"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) preserves every finite transition row reference and cleanup disposition through public forwarding"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) refuses actual hostile typed argument corruption at every public parameter"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "legal transition matrix nextLegalTaskWorkspaceStates returns the matrix row"
+        }
+      ]
+    },
+    {
+      "id": "task-workspace-cleanup-value-typed-recheck",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "typed-parameter-recheck",
+      "rules": ["anti-slop/no-known-value-widening"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isCleanupEligibleLifecycleState",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isCleanupEligibleLifecycleState"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "isCleanupEligibleLifecycleState"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/task-workspace.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/task-workspace",
+        "exportName": "recheckPublicWorkspaceCleanup",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/task-workspace.test.ts",
+        "packages/keiko-contracts/src/task-workspace-health.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) pins canonical source public and forwarding parameter and result contracts"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) preserves every finite transition row reference and cleanup disposition through public forwarding"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace.test.ts",
+          "testName": "typed public workspace rechecks (#3918) refuses actual hostile typed argument corruption at every public parameter"
+        },
+        {
+          "path": "packages/keiko-contracts/src/task-workspace-health.test.ts",
+          "testName": "isCleanupEligibleLifecycleState admits exactly the settled/disposal states"
+        }
+      ]
     }
   ]
 }
