@@ -251,6 +251,26 @@ first answer remains retained, and later context-corrected runs must not be pool
 unchanged comparison. The fixture has eight source/configuration files including its lockfile;
 installed dependencies and the independent reference tests are outside selected source evidence.
 
+The omission is reproduced with a root README and a nested requirements document, each named
+after six other files: both regressions fail before the repair. The owning admission layer now
+uses all bounded, explicitly named question paths while retaining the six-reference planning
+preview and primary diagnostic priority. It reuses the existing scope/classification checks and
+search/file/byte/token grants. No extra diagnostic frames or conversation references are admitted.
+The existing body-free source-details event records seven admissions alongside six planning
+references. Controls cover different file orders, cold/warm cache results, denied/escaped/ignored/
+generated paths and exhausted grants, including basename discovery. The focused ten-file suite
+passes 145 tests; root typecheck and scoped strict lint pass.
+The broader Grounding run passes 2,580 tests with one existing skip across 156 files; its two
+Local Knowledge consumers pass another 94 tests. Architecture positive/negative, retrieval,
+grounded retrieval, faithfulness, context quality, ADR index, the full registered Activity Log
+gate and real local Sonar also pass. No timeout, coverage floor or planning-reference regression
+pin is relaxed.
+
+Retrieval-only verification against the same reservation source now retains the requested README
+and all six frontend files. The pack contains eight files / 21,734 excerpt bytes, with no omissions.
+It still includes 16,384 lockfile bytes, so source precision remains a separate open issue.
+This is retrieval evidence; a native answer under the repaired context is still pending.
+
 ## Readiness under shared gateway load
 
 Two concurrent native generation requests exposed another defect. A background readiness probe

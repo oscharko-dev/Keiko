@@ -858,6 +858,15 @@ bounded failure parser and an independent six-reference channel, leaving eight u
 available. Within that unchanged cap, the primary local diagnostic frame precedes explicit
 question paths and supplied query references; secondary frames and conversation referents follow.
 A long trace therefore cannot consume every slot before the user's separately named file.
+The six-reference planning channel is not a cap on explicit source admission. Admission retains
+the primary diagnostic frame first, then every unique path explicitly named in the independent
+question, followed by the remaining planned references. It uses the existing extraction metadata
+bound, selected-scope policy, classification/search reservations, deadline and file/byte/token
+grants. It does not admit additional diagnostic frames or conversation referents beyond the planned
+channel. A seventh requested file must not silently lose explicit-file priority merely because
+the planning preview is full. The existing source-detail counters distinguish the bounded
+`referenceChannelCount` from actual admitted/rejected paths; exhausted grants remain visible as
+budget omissions/uncertainty rather than an assertion that the requested source is absent.
 External runtime/generated frames are removed before the reference cap. Original path
 casing and numeric source locations survive admission; the primary frame and its existing
 structural test/source pair receive the same eligibility and read-budget checks. Ordinary lexical
