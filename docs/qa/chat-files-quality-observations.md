@@ -138,6 +138,15 @@ The original answers and execution results remain private. These small tuning-se
 show neither reliable generation nor comparative skill effectiveness. Held-out evaluation remains
 required before any superiority claim.
 
+Candidate 3 puts the interaction rules first and supplies an initialized, typed deferred-promise
+example. Its changed title creates a separate native skill entry at version 1; campaign candidate
+numbers are not the store's revision numbers. The complete candidate occurred once in the fresh
+provider request. The unchanged output passed TypeScript and three of four tests, but again tried
+to click a disabled MUI button. It adopted the deferred helper and fixed the blank-input action;
+the remaining execution failure still disqualifies the candidate. Generation took 100.5 seconds,
+followed by a 209.2-second rejected content-changing citation repair. The original uncited answer
+was retained. Its canonical closure is complete without loss, truncation or sequence anomalies.
+
 ## Readiness under shared gateway load
 
 Two concurrent native generation requests exposed another defect. A background readiness probe
@@ -207,6 +216,36 @@ that wider evidence limitation remains recorded separately.
 All 93 workspace-host tests pass. Full UI coverage passes 551 files with 10,629 passing tests and
 one existing skip. Strict typechecking, UI lint, formatting, architecture checks, Activity Log
 inventory, i18n, pinned-runtime editor bundle evidence and the real local Sonar analyzer pass.
+
+Additional fake-clock checks pin the aggregate admission deadline immediately before and at expiry.
+Selected and default-model admission also prove that one expiring waiter leaves a shared probe
+alive for a later waiter, which receives its eventual successful observation. The two affected
+readiness suites pass 39 tests. Existing coverage separately bounds eight configured models to two
+active probes and prevents queued old-generation dispatch after configuration replacement.
+
+## First recursive-search scale failure
+
+A native German question over a synthetic ordinary folder with 1,000 regular files missed both
+required current refund sources. Only an unrelated pricing-service file reached the model. The
+answer correctly declined to invent refund values, but the retrieval result failed the independent
+source oracle. Retrieval took 699 ms; generation took 207.7 seconds while another local answer was
+also pending. The UI reported partial coverage. The canonical closure is complete without loss,
+truncation or sequence anomalies.
+
+A direct diagnostic through the existing search facade isolates a wording sensitivity: a hyphenated
+partner name yields backend/frontend target ranks 2/absent in the first 20 results, whereas the
+same question with a space yields ranks 1/2. An English wording yields ranks 1/3. Common fragments
+of a compound currently receive the same query-group match as its full subject. This is an open
+retrieval defect; the corpus also contains rejected-policy, ignored, oversized, binary, denied-path,
+external-symlink and source-instruction distractors. Their presence does not constitute a passed
+hardening test.
+
+The fresh native space-separated control retrieved in 677 ms and answered in 21.7 seconds. It
+reported the correct backend values with two citations, but still lacked frontend and rejected-policy
+evidence: only one file reached the model. Direct retrieval-pack diagnostics reproduce this second
+failure separately from initial ranking. Both forms fall below the final absolute relevance floor
+and trigger a single-file low-confidence fallback. Fixing initial ordering alone is insufficient;
+the next regression must assert retained final source evidence as well as top-k ranking.
 
 ## CI feedback on the cancellation increment
 

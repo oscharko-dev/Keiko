@@ -12,6 +12,7 @@ import {
   type UiHandlerDeps,
 } from "./deps.js";
 import {
+  CHAT_MODEL_WALK_BUDGET_MS,
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
   initializeConfiguredConversationReadiness,
@@ -68,6 +69,47 @@ it.each([
   },
 );
 
+it.each([
+  ["selected", awaitInitializedConversationReadiness],
+  ["default", awaitAnyInitializedConversationReadyChatModel],
+] as const)("keeps a shared probe alive after one %s waiter expires", async (_name, join) => {
+  const deps = composition();
+  vi.useFakeTimers();
+  let release: ((response: Response) => void) | undefined;
+  const fetch = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-long-probe", CHAT_MODEL_WALK_BUDGET_MS * 2);
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  let firstSettled = false;
+  const first = join(deps, "chat-model", "corr-first-waiter").then(() => {
+    firstSettled = true;
+  });
+  await vi.advanceTimersByTimeAsync(60_000);
+  let laterSettled = false;
+  const later = join(deps, "chat-model", "corr-later-waiter").then(() => {
+    laterSettled = true;
+  });
+  await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS - 60_001);
+  expect(firstSettled).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  await first;
+  expect(firstSettled).toBe(true);
+  expect(laterSettled).toBe(false);
+  expect(currentConversationReady(deps, "chat-model")).toBe(false);
+  release?.(chatProbeAnswer());
+  await later;
+  expect(laterSettled).toBe(true);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(currentConversationReady(deps, "chat-model")).toBe(true);
+});
+
 afterEach(async (): Promise<void> => {
   for (const deps of compositions.splice(0)) await deps.dispose?.();
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -90,7 +132,7 @@ function composition(): UiHandlerDeps {
   return deps;
 }
 
-function configure(deps: UiHandlerDeps, correlationId: string): void {
+function configure(deps: UiHandlerDeps, correlationId: string, timeoutMs = 1000): void {
   deps.gatewayConfig?.set(
     parseGatewayConfig({
       providers: [
@@ -98,7 +140,7 @@ function configure(deps: UiHandlerDeps, correlationId: string): void {
           modelId: "chat-model",
           baseUrl: "https://provider.example.invalid/v1",
           apiKey: "throwaway-key",
-          timeoutMs: 1000,
+          timeoutMs,
           maxRetries: 0,
           retryBaseDelayMs: 1,
         },
