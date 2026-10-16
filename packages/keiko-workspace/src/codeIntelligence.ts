@@ -1472,14 +1472,40 @@ function collectTypescriptImportEdges(
   return edges;
 }
 
+const resolvedImportsByInventory = new WeakMap<
+  readonly CodeImportEdge[],
+  ReadonlyMap<string, readonly CodeImportEdge[]>
+>();
+
+// Internal immutable-inventory seam; absent from the public package surface.
+export function resolvedImportEdgesForFile(
+  scopePath: string,
+  imports: readonly CodeImportEdge[],
+): readonly CodeImportEdge[] {
+  let byFile = resolvedImportsByInventory.get(imports);
+  if (byFile === undefined) {
+    const grouped = new Map<string, CodeImportEdge[]>();
+    for (const edge of imports) {
+      if (edge.targetPath === undefined) continue;
+      const importerPath = edge.importerPath;
+      const fileEdges = grouped.get(importerPath) ?? [];
+      fileEdges.push(edge);
+      grouped.set(importerPath, fileEdges);
+    }
+    byFile = grouped;
+    resolvedImportsByInventory.set(imports, byFile);
+  }
+  return byFile.get(scopePath) ?? [];
+}
+
 function resolvedTargetsBySpecifier(
   file: SourceFile,
   imports: readonly CodeImportEdge[],
   kind?: CodeImportEdge["kind"],
 ): ReadonlyMap<string, string> {
   const targets = new Map<string, string>();
-  for (const edge of imports) {
-    if (edge.importerPath !== file.scopePath || edge.targetPath === undefined) continue;
+  for (const edge of resolvedImportEdgesForFile(file.scopePath, imports)) {
+    if (edge.targetPath === undefined) continue;
     if (kind !== undefined && edge.kind !== kind) continue;
     targets.set(edge.specifier, edge.targetPath);
   }
@@ -1637,8 +1663,8 @@ function buildPythonTargetBySpecifier(
   imports: readonly CodeImportEdge[],
 ): ReadonlyMap<string, string> {
   const targetBySpecifier = new Map<string, string>();
-  for (const edge of imports) {
-    if (edge.importerPath === scopePath && edge.targetPath !== undefined) {
+  for (const edge of resolvedImportEdgesForFile(scopePath, imports)) {
+    if (edge.targetPath !== undefined) {
       targetBySpecifier.set(edge.specifier, edge.targetPath);
     }
   }

@@ -979,6 +979,9 @@ retrieval completion timing and structural-build counters remain the body-free o
 DTO contract pairing excludes same-language candidates before pair traversal, with one candidate
 projection per encountered language. It preserves original source/target order, same-scope exclusion,
 name/field confidence rules and shared execution-control checks for eligible pairs.
+Import and re-export binding projection groups resolved edges once per immutable edge inventory,
+then visits only the current source file's edges. Original edge order, kind filtering and final
+specifier precedence remain unchanged; a new inventory cannot inherit targets or misses.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget or retained query-result allowance, preserving primary root manifests

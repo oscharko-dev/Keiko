@@ -412,12 +412,25 @@ cost; source decoding and repeated import-binding scans remain. The same overlap
 applies. The embedded test browser temporarily becomes unavailable through its control interface,
 so this result remains retrieval-only evidence until native verification can resume.
 
+A third deterministic regression exercises import binding projection for 100 files over 1,000
+resolved edges. The previous implementation reads 100,000 importer paths. A weakly held projection
+now groups resolved edges once per immutable inventory and preserves per-file import/export order,
+specifier precedence and unresolved-target exclusion. Independent inventories cannot reuse stale
+targets. The index, suffix/DTO regressions, structural-context and Activity Log suites pass 258 tests.
+The combined candidate repeat retains the same two sources / 384 bytes in 34.8 seconds, with a
+9.7-second maximum event-loop stall. Source reads dominate the remaining profile. Another 32
+public-surface, source-reuse and source-admission tests pass. Cooperative scheduling of the remaining
+synchronous work is still open; reduced elapsed time alone does not qualify responsiveness.
+
 The broad package coverage run at `1dc875bff` completes with 55,241 passing tests, 61 skipped and
 one failure: the debug-launch policy test requires an exact approved Node/npm pair. A targeted
 rerun reproduces that failure under the host's newer Node patch. UI coverage at `1cd9659b1` passes
 10,629 tests with one skip. The debug-launch suite passes all 44 tests under the approved Node
 24.18.0 / npm 11.16.0 pair. Script coverage under that approved pair passes 7,303 tests with 27
 skipped. These are separate lane results; the aggregate quality command has not passed.
+The coverage ratchet over those lane reports passes all 27 package floors, both strict release
+targets and all 73 governed file floors. It does not replace a fresh aggregate run after the
+subsequent structural performance changes.
 
 ## CI feedback on the cancellation increment
 
