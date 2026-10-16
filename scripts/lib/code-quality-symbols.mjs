@@ -992,7 +992,7 @@ function typedRecheckFacts(compiler, identity, index) {
   };
 }
 
-function typedForwardStatements(assignment, returned) {
+function constAssignmentAndIdentifierReturn(assignment, returned) {
   return (
     ts.isVariableStatement(assignment) &&
     assignment.declarationList.flags === ts.NodeFlags.Const &&
@@ -1016,7 +1016,7 @@ function typedForwardCall(call) {
 function typedForwardResult(callable) {
   if (callable.body.statements.length !== 2) return null;
   const [assignment, returned] = callable.body.statements;
-  if (!typedForwardStatements(assignment, returned)) return null;
+  if (!constAssignmentAndIdentifierReturn(assignment, returned)) return null;
   const local = assignment.declarationList.declarations[0];
   const call = local.initializer;
   return ts.isIdentifier(local.name) && !local.type && typedForwardCall(call)
@@ -2338,21 +2338,10 @@ function observationCall(state, call) {
   );
 }
 
-function observationAssignment(assignment, returned) {
-  return (
-    ts.isVariableStatement(assignment) &&
-    assignment.declarationList.flags === ts.NodeFlags.Const &&
-    assignment.declarationList.declarations.length === 1 &&
-    ts.isReturnStatement(returned) &&
-    returned.expression &&
-    ts.isIdentifier(returned.expression)
-  );
-}
-
 function observationBody(state) {
   if (state.callable.body?.statements.length !== 2) return null;
   const [assignment, returned] = state.callable.body.statements;
-  if (!observationAssignment(assignment, returned)) return null;
+  if (!constAssignmentAndIdentifierReturn(assignment, returned)) return null;
   const local = assignment.declarationList.declarations[0];
   if (
     !ts.isIdentifier(local.name) ||
