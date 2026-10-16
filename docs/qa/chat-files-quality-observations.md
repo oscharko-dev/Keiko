@@ -304,6 +304,41 @@ added. The first post-assembly Activity Log build reported TS5055; an unchanged 
 successfully. Catalog drift was separately reproduced and corrected with the repository generator.
 The complete Activity Log gate then passed all seven checks over the registered inventory.
 
+## Scale and Git comparison checkpoint
+
+The same unchanged native question over the paired 10,000-file ordinary folder retains both
+current sources. The answer cites the correct 21-day and EUR 7,500 inclusive rules from backend
+and frontend. Retrieval scans 9,996 files, discovers 9,997 and reports no depth/file-count pruning;
+it takes 6.7 seconds, followed by a 29.9-second model call. Two excerpt reads contribute 384 bytes
+and three distinct citations; citation repair is unnecessary. The canonical closure is supported
+and complete without loss, truncation or sequence anomalies. Archive comparison remains missing.
+
+A targeted follow-up in the 1,000-file ordinary-folder conversation asks for the rejected archive
+proposal and its difference from the current values. It instead selects 76 files / 11,813 excerpt
+bytes, sending a 53,754-byte provider request. Retrieval takes 1.1 seconds and the model call
+completes normally after 230.4 seconds. The app remains usable and allows opening another Files
+window during the wait. The answer correctly refuses to invent the missing proposal, but fails
+the archive oracle. Its selection is marked high confidence despite the missing requested source.
+This is a context-precision failure, not a successful archive search. Canonical evidence is complete
+with no loss, truncation or sequence anomalies. These are observed timings during qualification
+work, including concurrent local gate execution, not isolated performance benchmarks.
+
+The matched 1,000-file Git corpus contains identical source bytes but produces a different failure:
+36 files / 9,059 excerpt bytes are selected. The current backend/frontend sources disappear while
+the rejected archive is admitted. The unchanged answer correctly labels the archive's 14-day /
+EUR 9,000 proposal as rejected, but cannot establish the current rule. Retrieval takes 832 ms and
+the model call 92.2 seconds; canonical evidence is complete with no loss, truncation or sequence
+anomalies. A retrieval-only reproduction confirms two current sources without Git versus 36
+sources with Git and only the archived policy among the target files. The strongest ordinary score
+rises from 24 to 165 permille and selection confidence changes from low to high. The existing
+Git-history augmentation and its relevance contribution require correction before larger Git
+corpora can qualify; this checkpoint does not claim that fix.
+
+A public Spring Framework checkout supplements synthetic scale at commit
+`5208d3ba1c417be6390c3f9400b13db699d638fd` (11,459 tracked files). Its independently inspected
+RestClient oracle covers default status-handler registration, 4xx/5xx exception mapping and the
+existing 404/500 integration tests. The native question has been submitted; its answer and semantic acceptance remain pending.
+
 ## CI feedback on the cancellation increment
 
 The bundle evidence measured locally under Node 24.21 did not match CI's pinned Node 24.18.0.
