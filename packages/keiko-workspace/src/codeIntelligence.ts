@@ -5204,33 +5204,56 @@ function dtoContractEdgeFor(source: CodeSymbol, target: CodeSymbol): DtoContract
   };
 }
 
-// Pairs are unordered, so the inner scan starts past the source index and every pair is visited
-// exactly once.
-function collectDtoContractEdgesFrom(
+interface IndexedDtoSymbol {
+  readonly symbol: CodeSymbol;
+  readonly index: number;
+}
+
+function dtoTargetsForLanguage(
   typed: readonly CodeSymbol[],
+  language: CodeLanguage,
+  cache: Map<CodeLanguage, readonly IndexedDtoSymbol[]>,
+): readonly IndexedDtoSymbol[] {
+  const cached = cache.get(language);
+  if (cached !== undefined) return cached;
+  const targets = typed.flatMap((symbol, index) =>
+    symbol.language === language ? [] : [{ symbol, index }],
+  );
+  cache.set(language, targets);
+  return targets;
+}
+
+// Retain source/target inventory order while excluding same-language pairs before the inner scan.
+// Only later targets can emit an edge, so every eligible unordered pair is still emitted once.
+function collectDtoContractEdgesFrom(
+  source: CodeSymbol,
   sourceIndex: number,
+  targets: readonly IndexedDtoSymbol[],
   edges: DtoContractEdge[],
   control: StructuralExecutionControl,
 ): void {
-  const source = typed[sourceIndex];
-  for (let j = sourceIndex + 1; j < typed.length; j += 1) {
+  for (const target of targets) {
     if (structuralExecutionStopped(control)) break;
-    const target = typed[j];
-    if (source === undefined || target === undefined) continue;
-    const edge = dtoContractEdgeFor(source, target);
+    if (target.index <= sourceIndex) continue;
+    const edge = dtoContractEdgeFor(source, target.symbol);
     if (edge !== undefined) edges.push(edge);
   }
 }
 
-function linkDtoContracts(
+// Internal export for deterministic work-bound tests; absent from the public package surface.
+export function linkDtoContracts(
   symbols: readonly CodeSymbol[],
   control: StructuralExecutionControl,
 ): readonly DtoContractEdge[] {
   const typed = symbols.filter((symbol) => symbol.fields.length > 0);
   const edges: DtoContractEdge[] = [];
+  const targetsByLanguage = new Map<CodeLanguage, readonly IndexedDtoSymbol[]>();
   for (let i = 0; i < typed.length; i += 1) {
     if (structuralExecutionStopped(control)) break;
-    collectDtoContractEdgesFrom(typed, i, edges, control);
+    const source = typed[i];
+    if (source === undefined) continue;
+    const targets = dtoTargetsForLanguage(typed, source.language, targetsByLanguage);
+    collectDtoContractEdgesFrom(source, i, targets, edges, control);
   }
   return edges;
 }

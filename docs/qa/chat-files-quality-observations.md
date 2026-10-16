@@ -397,12 +397,27 @@ this run, so the timing is comparative diagnostic evidence rather than an isolat
 DTO pairing and per-file import binding scans remain visible hotspots; responsiveness is not yet
 qualified. The focused resolver, structural-context and Activity Log suites pass 255 tests.
 
+The next profile attributes 8.7 seconds to DTO pairing, dominated by checks of same-language pairs
+that cannot produce contracts under the existing rule. A deterministic regression over 1,000
+TypeScript shapes fails before the fix with 500,500 work-control checks. Candidate projection now
+excludes that language before pair traversal and is reused for subsequent symbols of the same
+language. Mixed Java/Kotlin/TypeScript controls preserve unordered-pair order, confidence and
+same-scope exclusion; exhausted deadlines and cancellation still stop pairing. The focused index,
+structural-context and Activity Log suites pass 247 tests. Large-search responsiveness still requires
+further measurement and native browser verification.
+
+The combined suffix/DTO candidate repeat retains the same two sources / 384 bytes in 47.3 seconds,
+with a 15.9-second maximum event-loop stall. The profile no longer shows DTO pairing as a principal
+cost; source decoding and repeated import-binding scans remain. The same overlapping-gate caveat
+applies. The embedded test browser temporarily becomes unavailable through its control interface,
+so this result remains retrieval-only evidence until native verification can resume.
+
 The broad package coverage run at `1dc875bff` completes with 55,241 passing tests, 61 skipped and
 one failure: the debug-launch policy test requires an exact approved Node/npm pair. A targeted
 rerun reproduces that failure under the host's newer Node patch. UI coverage at `1cd9659b1` passes
 10,629 tests with one skip. The debug-launch suite passes all 44 tests under the approved Node
-24.18.0 / npm 11.16.0 pair. Remaining coverage-lane outcomes are recorded separately; the aggregate
-quality command has not passed.
+24.18.0 / npm 11.16.0 pair. Script coverage under that approved pair passes 7,303 tests with 27
+skipped. These are separate lane results; the aggregate quality command has not passed.
 
 ## CI feedback on the cancellation increment
 

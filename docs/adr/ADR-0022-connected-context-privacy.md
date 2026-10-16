@@ -976,6 +976,9 @@ and original-case lexical tie break, including partial-segment suffixes. Results
 inside a weakly held inventory cache; another workspace or rebuild receives its own inventory.
 No source eligibility, retained-file budget, or resolved/heuristic classification changes. Existing
 retrieval completion timing and structural-build counters remain the body-free operational evidence.
+DTO contract pairing excludes same-language candidates before pair traversal, with one candidate
+projection per encountered language. It preserves original source/target order, same-scope exclusion,
+name/field confidence rules and shared execution-control checks for eligible pairs.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget or retained query-result allowance, preserving primary root manifests
