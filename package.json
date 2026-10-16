@@ -36,7 +36,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "test:opencode-service-host": "node --test native/opencode-service-host/entry.test.mjs native/opencode-service-host/guard-seams.test.mjs native/opencode-service-host/host.test.mjs",
+    "test:opencode-service-host": "node --test native/opencode-service-host/compatibility.test.mjs native/opencode-service-host/entry.test.mjs native/opencode-service-host/guard-seams.test.mjs native/opencode-service-host/host.test.mjs",
     "build:packages": "npm run check:typescript-toolchain && node scripts/build-packages.mjs",
     "build": "npm run build:packages && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
     "keiko:start": "node dist/cli/index.js start",

@@ -1848,3 +1848,14 @@ platform evidence. These local runs do not qualify macOS 13, a published install
 service activation, a live model task or complete parity. #3898 stays open. Full local LiteLLM/Gemma
 qualification precedes Azure; independently authored representative fixtures replace unavailable
 customer-specific fixtures. No Azure credentials or requests are used in this increment.
+
+The next increment adopts four repeatable compatibility controls into the same required command.
+They exercise the installed original OpenCode MCP provider with its locked SDK: issuer-bound
+refresh, credential serialization and restoration, refusal of foreign-issuer credentials before
+token transport, and callback issuer mismatch refusal. A fourth control exercises the actual
+gray-matter consumer's YAML parse/stringify and malformed-input refusal. All transports are
+fixture-owned functions with synthetic credentials; no provider or authorization server is called.
+These are additional compatibility proofs, not newly fixed behavior. They do not qualify legacy
+issuerless or static MCP configuration, the upstream YAML CLI, or an active MCP integration.
+The expanded command passes all 55 tests without skips on macOS ARM64 and in a fresh Linux ARM64
+container. Its 125 owning workflow/unused-code-inventory tests and the full unused-code gate pass.
