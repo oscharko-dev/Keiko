@@ -297,3 +297,34 @@ describe("Command parser closed inspection catches (#3918)", () => {
     });
   }
 });
+
+describe("Prompt parser closed inspection catches (#3918)", () => {
+  const path = "packages/keiko-contracts/src/prompt-enhancer-validation.ts";
+  const refusal = 'return { ok: false, errors: ["payload could not be inspected"] };';
+  for (const owner of ["validatePromptCandidateScorecard", "validatePromptCandidateSelection"]) {
+    it(`accepts only the exact closed inspection refusal for ${owner}`, () => {
+      const source = `function ${owner}(input) { try { return input.value; } catch { ${refusal} } }`;
+      expect(unregisteredFailurePathViolations(source, path)).toEqual([]);
+      expect(
+        unregisteredFailurePathViolations(source, "packages/fixture/src/other.ts"),
+      ).toHaveLength(1);
+      expect(
+        unregisteredFailurePathViolations(source.replace(owner, "otherOwner"), path),
+      ).toHaveLength(1);
+      for (const fallback of [
+        "",
+        "return input;",
+        'console.warn("private"); ' + refusal,
+        'return { ok: true, errors: ["payload could not be inspected"] };',
+        'return { ok: false, errors: ["private"] };',
+        "return { ok: false, errors: [message] };",
+        'return { ok: false, errors: ["payload could not be inspected", "extra"] };',
+        'return { ...input, ok: false, errors: ["payload could not be inspected"] };',
+        'return { ["ok"]: false, errors: ["payload could not be inspected"] };',
+      ])
+        expect(
+          unregisteredFailurePathViolations(source.replace(refusal, fallback), path),
+        ).toHaveLength(1);
+    });
+  }
+});

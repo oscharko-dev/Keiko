@@ -1118,9 +1118,13 @@ function collectScorecardErrors(
 export function validatePromptCandidateScorecard(
   input: unknown,
 ): PromptEnhancerValidation<PromptCandidateScorecard> {
-  const errors: string[] = [];
-  if (!collectScorecardErrors(input, "scorecard", errors)) return { ok: false, errors };
-  return { ok: true, value: input };
+  try {
+    const errors: string[] = [];
+    if (!collectScorecardErrors(input, "scorecard", errors)) return { ok: false, errors };
+    return { ok: true, value: input };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
+  }
 }
 
 function collectRejectionErrors(
@@ -1616,7 +1620,11 @@ function admitsPromptCandidateSelection(
 export function validatePromptCandidateSelection(
   input: unknown,
 ): PromptEnhancerValidation<PromptCandidateSelection> {
-  const errors: string[] = [];
-  if (!admitsPromptCandidateSelection(input, errors)) return { ok: false, errors };
-  return { ok: true, value: input };
+  try {
+    const errors: string[] = [];
+    if (!admitsPromptCandidateSelection(input, errors)) return { ok: false, errors };
+    return { ok: true, value: input };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
+  }
 }

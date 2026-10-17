@@ -234,6 +234,11 @@ generated prompt is data, not a capability grant.
   durable evidence examples.
 - **Safe errors.** Enhancer errors adopt a `qi/*`-style safe-error taxonomy: no error carries
   secrets, raw user input, untrusted-evidence text, or provider/deployment endpoints.
+  The pure scorecard and selection validators uphold their documented nonthrowing boundary when
+  inspecting an unreadable artifact: they return the fixed `payload could not be inspected` refusal
+  without inspecting the thrown value. Their existing field observations, successful original-object
+  identity and ordinary ordered validation errors remain unchanged. This closed artifact validation
+  result performs no I/O and does not substitute for redaction or introduce a leaf logging port.
 - **Evidence integrity.** Prompt version, applied rules, candidate scores, and evaluation results are
   traceable through the existing `EvidenceStore`, redacted and hashed (`canonicalise` + `sha256Hex`),
   with retention governed by the existing `RetentionPolicy` model.

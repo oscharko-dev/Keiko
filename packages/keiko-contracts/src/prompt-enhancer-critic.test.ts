@@ -475,3 +475,31 @@ it("preserves the public ranking fixture data and closed dimension values (#3918
     }
   }
 });
+
+import {
+  validatePromptCandidateScorecard as publicPromptScorecard,
+  validatePromptCandidateSelection as publicPromptSelection,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+
+describe("Prompt documented nonthrowing admission (#3918)", () => {
+  for (const seam of ["source", "public"]) {
+    it(`${seam} scorecard inspection returns only the fixed refusal`, () => {
+      const validate = seam === "source" ? validatePromptCandidateScorecard : publicPromptScorecard;
+      const input = {
+        get schemaVersion(): never {
+          throw new TypeError("fixture-private-prompt-inspection");
+        },
+      };
+      expect(validate(input)).toEqual({ ok: false, errors: ["payload could not be inspected"] });
+    });
+    it(`${seam} selection inspection returns only the fixed refusal`, () => {
+      const validate = seam === "source" ? validatePromptCandidateSelection : publicPromptSelection;
+      const input = {
+        get schemaVersion(): never {
+          throw new TypeError("fixture-private-prompt-inspection");
+        },
+      };
+      expect(validate(input)).toEqual({ ok: false, errors: ["payload could not be inspected"] });
+    });
+  }
+});

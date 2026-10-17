@@ -121,6 +121,14 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateScorecard",
+    "Pure scorecard inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
+  ],
+  [
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateSelection",
+    "Pure selection inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
+  ],
+  [
     "packages/keiko-contracts/src/command-runner.ts:parseCommandTaskRunRequest",
     "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
   ],
@@ -501,6 +509,8 @@ function isReviewedFailurePath(path, owner, node) {
   if (path === "packages/keiko-contracts/src/git-editor.ts" && owner === "parserInspectionClass")
     return exactFailureFallback(node, "unknown error");
   if (path === "packages/keiko-contracts/src/command-runner.ts")
+    return exactCommandInspectionRefusal(node);
+  if (path === "packages/keiko-contracts/src/prompt-enhancer-validation.ts")
     return exactCommandInspectionRefusal(node);
   if (path !== "packages/keiko-contracts/src/observability.ts") return true;
   if (owner === "completeRegistrationShape") return exactFailureFallback(node, false);
