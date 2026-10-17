@@ -413,7 +413,7 @@ function collectiveParserGroups(policy, assessments) {
   for (const record of policy.responsibilities ?? []) {
     const assessment = assessments.find((entry) => entry.id === record.id);
     if (
-      record.kind !== "public-parser" ||
+      (record.kind !== "public-parser" && record.kind !== "diagnostic-checker") ||
       assessment.structural !== "ready" ||
       !record.proofAssertions?.length
     )

@@ -1235,3 +1235,149 @@ export function publicCanonicalDecoderWitness(text: string, maxBytes: number): s
 }
 `;
 }
+
+export function createContextDiagnosticFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => {
+    configureDiagnosticFixture(own);
+    if (variant === "foreign-alias") configureForeignContextResult(own);
+    own.put("packages/alpha/src/owner.ts", contextDiagnosticOwner(variant));
+    own.put("packages/alpha/src/proof.test.ts", contextDiagnosticProof(variant));
+    own.record.proofAssertions = ["healthy", "malformed"].map((kind) => ({
+      path: own.record.consumer.consumerPath,
+      testName: `context diagnostics ${kind}`,
+    }));
+    own.put("scripts/code-quality-policy.json", own.policy);
+  });
+}
+
+function contextDiagnosticType(variant) {
+  const types = {
+    direct: "{ readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] }",
+    erased: "any",
+    "unknown-reasons":
+      "{ readonly ok: true } | { readonly ok: false; readonly reasons: readonly unknown[] }",
+    "mutable-array": "{ readonly ok: true } | { readonly ok: false; readonly reasons: string[] }",
+    "mutable-property":
+      "{ readonly ok: true } | { readonly ok: false; reasons: readonly string[] }",
+    "mutable-ok": "{ ok: true } | { ok: false; readonly reasons: readonly string[] }",
+    "nonstring-reasons":
+      "{ readonly ok: true } | { readonly ok: false; readonly reasons: readonly number[] }",
+    "optional-reasons":
+      "{ readonly ok: true } | { readonly ok: false; readonly reasons?: readonly string[] }",
+    "optional-ok":
+      "{ readonly ok?: true } | { readonly ok: false; readonly reasons: readonly string[] }",
+    index:
+      "{ readonly ok: true; readonly [key: string]: unknown } | { readonly ok: false; readonly reasons: readonly string[]; readonly [key: string]: unknown }",
+    "success-value":
+      "{ readonly ok: true; readonly value: number } | { readonly ok: false; readonly reasons: readonly string[] }",
+    unrelated:
+      "{ readonly valid: true } | { readonly valid: false; readonly reasons: readonly string[] }",
+  };
+  return types[variant] ?? types.direct;
+}
+
+function contextDiagnosticOwner(variant) {
+  const type = contextDiagnosticType(variant);
+  const declaration =
+    variant === "foreign-alias"
+      ? 'import type { ContextValidationResult } from "beta";'
+      : `export type ContextValidationResult = ${type};`;
+  const discriminant = variant === "unrelated" ? "valid" : "ok";
+  const extra = variant === "success-value" ? ", value: 1" : "";
+  const reason = variant === "nonstring-reasons" ? "1" : '"invalid"';
+  const annotation = variant === "unaliased" ? type : "ContextValidationResult";
+  return `${declaration}
+export function validate(input: unknown): ${annotation} {
+  ${variant === "unsafe-body" ? "return { ok: true };" : `return typeof input === "number" ? { ${discriminant}: true${extra} } : { ${discriminant}: false, reasons: [${reason}] };`}
+}
+${variant === "wrong-producer" ? "export function other(input: unknown): ContextValidationResult { return validate(input); }" : ""}
+`;
+}
+
+function contextDiagnosticProof(variant) {
+  const prefix = 'import { parse as check } from "alpha";\n';
+  const normal =
+    "const diagnostics = check(input); return diagnostics.ok ? 0 : diagnostics.reasons.length;";
+  const bodies = {
+    constant: "const diagnostics = check(input); return 0;",
+    polarity:
+      "const diagnostics = check(input); return diagnostics.ok ? 1 : diagnostics.reasons.length;",
+    fabricated: "const diagnostics = check(input); return diagnostics.ok ? 0 : 1;",
+    negated:
+      "const diagnostics = check(input); return !diagnostics.ok ? diagnostics.reasons.length : 0;",
+    input: "const diagnostics = check(1); return diagnostics.ok ? 0 : diagnostics.reasons.length;",
+    local: "const diagnostics = check(input); return other.ok ? 0 : other.reasons.length;",
+    "optional-reasons":
+      "const diagnostics = check(input); return diagnostics.ok ? 0 : (diagnostics.reasons?.length ?? 0);",
+    "optional-ok":
+      "const diagnostics = check(input); return diagnostics.ok === false ? diagnostics.reasons.length : 0;",
+    unrelated:
+      "const diagnostics = check(input); return diagnostics.valid ? 0 : diagnostics.reasons.length;",
+    "wrong-producer":
+      "const diagnostics = otherCheck(input); return diagnostics.ok ? 0 : diagnostics.reasons.length;",
+    annotated:
+      "const diagnostics: ReturnType<typeof check> = check(input); return diagnostics.ok ? 0 : diagnostics.reasons.length;",
+  };
+  const extra =
+    variant === "local"
+      ? 'const other = { ok: false, reasons: ["invalid"] };\n'
+      : variant === "wrong-producer"
+        ? 'import { other as otherCheck } from "alpha/runtime";\n'
+        : "";
+  const returnType = variant === "numeric-erasure" ? "any" : "number";
+  return (
+    prefix +
+    extra +
+    `export function countDiagnostics(input: unknown): ${returnType} { ${bodies[variant] ?? normal} }\n`
+  );
+}
+
+function configureForeignContextResult(own) {
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+  own.put("packages/beta/tsconfig.json", config);
+  own.put("packages/beta/package.json", {
+    name: "beta",
+    version: "0.0.0",
+    type: "module",
+    exports: { ".": { types: "./dist/owner.d.ts", import: "./dist/owner.js" } },
+  });
+  own.put(
+    "packages/beta/src/owner.ts",
+    `export type ContextValidationResult = ${contextDiagnosticType("direct")};\n`,
+  );
+  symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
+  emitSymbolFixture(own.root, "packages/beta");
+}
+
+export function createCollectiveContextDiagnosticFixture(variant = "direct") {
+  const own = createCollectiveParserFixture(variant === "cardinality" ? variant : "direct", [
+    "anti-slop/no-runtime-typeof",
+  ]);
+  const path = "packages/alpha/src/owner.ts";
+  let source = readFileSync(join(own.root, path), "utf8");
+  source = source
+    .replace(
+      "{ ok: true; value: number } | { ok: false; errors: readonly string[] }",
+      contextDiagnosticType("direct"),
+    )
+    .replaceAll('errors: ["invalid"]', 'reasons: ["invalid"]')
+    .replaceAll("{ ok: true, value: input.value }", "{ ok: true }");
+  source =
+    source.replaceAll(
+      "if (!isRecord(input)",
+      'if (diagnosticIssues(input).length !== 0) return { ok: false, reasons: ["invalid"] }; if (!isRecord(input)',
+    ) +
+    '\nfunction diagnosticIssues(input: unknown): string[] { return typeof input === "object" && input !== null ? [] : ["invalid"]; }\n';
+  own.put(path, source);
+  own.put(
+    "packages/alpha/src/proof.test.ts",
+    `import { first, second } from "alpha/runtime";
+export function publicfirst(input: unknown): number { const result = first(input); return result.ok ? 0 : result.reasons.length; }
+export function publicsecond(input: unknown): number { const result = second(input); return result.ok ? 0 : result.reasons.length; }
+`,
+  );
+  for (const record of own.records) record.kind = "diagnostic-checker";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}

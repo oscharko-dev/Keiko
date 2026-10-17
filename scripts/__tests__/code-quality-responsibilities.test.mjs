@@ -20,6 +20,8 @@ import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/rela
 import {
   createConsumerSeamFixture,
   createDiagnosticFixture,
+  createContextDiagnosticFixture,
+  createCollectiveContextDiagnosticFixture,
   createDictionaryEnforcementFixture,
   createForeignDiagnosticFixture,
   responsibilityPolicy,
@@ -3359,3 +3361,109 @@ describe("collective capacity partial applicability (#3918)", () => {
     195_000,
   );
 });
+
+describe("closed context diagnostic responsibility capability (#3918)", () => {
+  it("keeps envelope root semantics pending without changing the existing diagnostic kind", async () => {
+    const own = createContextDiagnosticFixture();
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.counts).toMatchObject({ ready: 1, pending: 1, qualified: 0 });
+    const [record] = report.assessments;
+    expect(record.kind).toBe("diagnostic-checker");
+    expect(record.reasons).toEqual([]);
+    expect(record.proofs.every((proof) => !proof.executed)).toBe(true);
+    expect(record.slots).toContainEqual(
+      expect.objectContaining({
+        rule: "anti-slop/no-unknown-parameters",
+        index: 0,
+      }),
+    );
+    expect(Object.hasOwn(record, "helperClosures")).toBe(false);
+  }, 30_000);
+
+  it("collectively owns only direct private string-array diagnostic collectors", async () => {
+    const own = createCollectiveContextDiagnosticFixture();
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.counts).toMatchObject({ ready: 2, pending: 2, qualified: 0 });
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const start = source.indexOf("input: unknown", source.indexOf("function diagnosticIssues")) + 7;
+    expect(report.assessments.flatMap((record) => record.slots)).toContainEqual(
+      expect.objectContaining({
+        start,
+        contributingResponsibilityIds: ["fixture-first", "fixture-second"],
+      }),
+    );
+    expect(report.assessments.every((record) => !Object.hasOwn(record, "helperClosures"))).toBe(
+      true,
+    );
+  }, 30_000);
+
+  it("preserves the published whole-group budget withholding for diagnostic envelopes", async () => {
+    const own = createCollectiveContextDiagnosticFixture("cardinality");
+    roots.push(own.root);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.counts).toMatchObject({ ready: 2, pending: 2, qualified: 0 });
+    for (const record of report.assessments) {
+      expectWithheldCapacity(record);
+      expect(record.reasons).toEqual([]);
+      expect(
+        record.slots.every((slot) => !Object.hasOwn(slot, "contributingResponsibilityIds")),
+      ).toBe(true);
+    }
+    expect(JSON.parse(JSON.stringify(report))).toEqual(report);
+  }, 60_000);
+});
+
+async function contextEnvelopeSemanticFixture(variant = "direct") {
+  const own = createContextDiagnosticFixture(variant);
+  await installSemanticFixtureTools(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  config.compilerOptions.lib.push("DOM");
+  own.put("packages/alpha/tsconfig.json", config);
+  const path = own.record.proofs[0];
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") +
+      `
+import { it, expect } from "vitest";
+it("context diagnostics healthy", () => { expect(countDiagnostics(3)).toBe(0); });
+it("context diagnostics malformed", () => { expect(countDiagnostics("wrong")).toBe(1); });
+`,
+  );
+  await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);
+  return own;
+}
+
+describe("closed context diagnostic actual proof capability (#3918)", () => {
+  it.skipIf(process.platform === "win32")(
+    "executes the actual public diagnostic count before root qualification",
+    async () => {
+      const own = await contextEnvelopeSemanticFixture();
+      roots.push(own.root);
+      const report = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
+      expect(report.responsibilities.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+      const [record] = report.responsibilities.assessments;
+      expect(record.kind).toBe("diagnostic-checker");
+      expect(record.reasons).toEqual([]);
+      expect(record.obligations).toEqual([]);
+      expect(record.proofAssertions.every((assertion) => assertion.status === "passed")).toBe(true);
+      expect(record.proofs.every((proof) => proof.executed)).toBe(true);
+    },
+    195_000,
+  );
+});
+
+it.skipIf(process.platform === "win32")(
+  "rejects a same-type public diagnostic body through its actual malformed count proof (#3918)",
+  async () => {
+    const own = await contextEnvelopeSemanticFixture("unsafe-body");
+    roots.push(own.root);
+    const before = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(before.counts).toMatchObject({ ready: 1, qualified: 0 });
+    await expect(executeCodeQualityPolicy(embeddedSemanticOptions(), own.root)).rejects.toThrow(
+      "semantic-proof-execution-failed",
+    );
+  },
+  195_000,
+);

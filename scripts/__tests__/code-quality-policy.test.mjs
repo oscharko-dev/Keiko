@@ -274,6 +274,13 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "enhanced-prompt-public-parser",
       "prompt-scorecard-public-parser",
       "prompt-selection-public-parser",
+      "context-provenance-ref-diagnostic-public-proof",
+      "context-preserved-fact-diagnostic-public-proof",
+      "context-assumption-diagnostic-public-proof",
+      "context-command-outcome-diagnostic-public-proof",
+      "context-invalidation-key-diagnostic-public-proof",
+      "context-rehydration-handle-diagnostic-public-proof",
+      "context-compaction-record-diagnostic-public-proof",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1339,4 +1346,79 @@ describe("Prompt family raw input responsibilities (#3918)", () => {
       expect(validatePolicy(policy)).toEqual([]);
     },
   );
+});
+
+describe("Context compaction diagnostic responsibility provenance", () => {
+  it.each([
+    {
+      id: "context-provenance-ref-diagnostic-public-proof",
+      producer: "validateContextProvenanceRef",
+      witness: "countPublicContextProvenanceRefDiagnostics",
+    },
+    {
+      id: "context-preserved-fact-diagnostic-public-proof",
+      producer: "validateContextPreservedFact",
+      witness: "countPublicContextPreservedFactDiagnostics",
+    },
+    {
+      id: "context-assumption-diagnostic-public-proof",
+      producer: "validateContextAssumption",
+      witness: "countPublicContextAssumptionDiagnostics",
+    },
+    {
+      id: "context-command-outcome-diagnostic-public-proof",
+      producer: "validateContextCommandOutcome",
+      witness: "countPublicContextCommandOutcomeDiagnostics",
+    },
+    {
+      id: "context-invalidation-key-diagnostic-public-proof",
+      producer: "validateContextInvalidationKey",
+      witness: "countPublicContextInvalidationKeyDiagnostics",
+    },
+    {
+      id: "context-rehydration-handle-diagnostic-public-proof",
+      producer: "validateContextRehydrationHandle",
+      witness: "countPublicContextRehydrationHandleDiagnostics",
+    },
+    {
+      id: "context-compaction-record-diagnostic-public-proof",
+      producer: "validateContextCompactionRecord",
+      witness: "countPublicContextCompactionRecordDiagnostics",
+    },
+  ])("retains the exact existing checker role for $producer", ({ id, producer, witness }) => {
+    const record = policy.responsibilities.find((entry) => entry.id === id);
+    expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+    expect(record.kind).toBe("diagnostic-checker");
+    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+    expect(record.input).toEqual({
+      consumerPath: "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+      exportName: producer,
+      parameterIndex: 0,
+    });
+    expect(record.transform).toEqual({
+      consumerPath: "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+      exportName: producer,
+    });
+    expect(record.output).toEqual(record.transform);
+    expect(record.consumer).toEqual({
+      kind: "public-api-proof",
+      owner: record.owner,
+      consumerPath: "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+      exportName: witness,
+    });
+    expect(record.proofs).toEqual([
+      "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+    ]);
+    expect(record.proofAssertions).toHaveLength(3);
+    expect(
+      record.proofAssertions.every(
+        (proof) =>
+          proof.path === "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+      ),
+    ).toBe(true);
+    expect(validatePolicy(policy)).toEqual([]);
+  });
 });

@@ -29,6 +29,7 @@ import {
   replaceConsumerCallFixture,
   replaceEnforcementOwner,
   createDiagnosticFixture,
+  createContextDiagnosticFixture,
   createDictionaryEnforcementFixture,
   createRawHelperEnforcementFixture,
   createCollectiveParserFixture,
@@ -2820,5 +2821,74 @@ describe("owner-tagged collective cardinality errors (#3918)", () => {
       expect(error.message).toBe("unsupported-raw-helper-cycle");
       expect(collectiveHelperBudgetDetails(error)).toBeNull();
     }
+  }, 30_000);
+});
+
+async function contextEnvelopeSymbolFixture(variant = "direct") {
+  const own = createContextDiagnosticFixture(variant);
+  fixtures.push(own);
+  own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+    { owner: "packages/alpha", paths: own.record.proofs },
+  ]);
+  own.producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+  return own;
+}
+
+describe("closed context diagnostic envelope binding (#3918)", () => {
+  it("binds the exact owned closed diagnostic envelope without inventing a value", async () => {
+    const own = await contextEnvelopeSymbolFixture();
+    const binding = own.resolver.diagnosticBinding(own.record.consumer, own.producer);
+    expect(binding.bound).toBe(true);
+    expect(binding.calls).toHaveLength(1);
+    expect(binding.implementation.owner).toBe("alpha");
+    const legacy = createDiagnosticFixture();
+    fixtures.push(legacy);
+    legacy.resolver = createSymbolResolver(await collectPolicySubject(legacy.root), {}, [
+      { owner: "packages/alpha", paths: legacy.record.proofs },
+    ]);
+    const producer = legacy.resolver.resolveProofExport(legacy.record.input).identities[0];
+    expect(legacy.resolver.diagnosticBinding(legacy.record.consumer, producer).bound).toBe(true);
+  }, 30_000);
+
+  it.each([
+    "erased",
+    "unknown-reasons",
+    "mutable-array",
+    "mutable-property",
+    "mutable-ok",
+    "nonstring-reasons",
+    "optional-reasons",
+    "optional-ok",
+    "index",
+    "success-value",
+    "unrelated",
+    "unaliased",
+    "foreign-alias",
+    "constant",
+    "polarity",
+    "fabricated",
+    "negated",
+    "input",
+    "local",
+    "wrong-producer",
+    "annotated",
+    "numeric-erasure",
+  ])(
+    "rejects the noncanonical diagnostic envelope or flow: %s",
+    async (variant) => {
+      const own = await contextEnvelopeSymbolFixture(variant);
+      expect(own.resolver.diagnosticBinding(own.record.consumer, own.producer).bound).toBe(false);
+    },
+    30_000,
+  );
+
+  it("refuses source drift before reusing a closed envelope proof binding", async () => {
+    const own = await contextEnvelopeSymbolFixture();
+    expect(own.resolver.diagnosticBinding(own.record.consumer, own.producer).bound).toBe(true);
+    const path = join(own.root, own.record.consumer.consumerPath);
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() => own.resolver.diagnosticBinding(own.record.consumer, own.producer)).toThrow(
+      "symbol-subject-changed",
+    );
   }, 30_000);
 });

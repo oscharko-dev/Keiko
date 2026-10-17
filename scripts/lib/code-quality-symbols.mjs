@@ -468,7 +468,7 @@ function readonlyDiagnosticResult(context, call) {
   );
 }
 
-function diagnosticBinding(compiler, request, producer) {
+function arrayDiagnosticBinding(compiler, request, producer) {
   const { context, source } = ownedSource(compiler, request.consumerPath, true);
   const callable = diagnosticCallable(context, source, request.exportName);
   const result = callable && diagnosticResult(callable);
@@ -488,6 +488,130 @@ function diagnosticBinding(compiler, request, producer) {
     bound,
     implementation: canonicalDeclaration(compiler, callable, null),
     calls: [{ path: request.consumerPath, start: call.getStart(), end: call.end }],
+  };
+}
+
+function diagnosticBinding(compiler, request, producer) {
+  const legacy = arrayDiagnosticBinding(compiler, request, producer);
+  if (legacy.bound) return legacy;
+  return envelopeDiagnosticBinding(compiler, request, producer) ?? legacy;
+}
+
+function diagnosticEnvelopeAssignment(callable) {
+  const [assignment, returned] = callable.body.statements;
+  if (
+    !ts.isVariableStatement(assignment) ||
+    assignment.declarationList.flags !== ts.NodeFlags.Const ||
+    assignment.declarationList.declarations.length !== 1 ||
+    !ts.isReturnStatement(returned) ||
+    !returned.expression ||
+    !ts.isConditionalExpression(returned.expression)
+  )
+    return null;
+  return { local: assignment.declarationList.declarations[0], result: returned.expression };
+}
+
+function diagnosticOkCondition(node) {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    node.name.text === "ok" &&
+    ts.isIdentifier(node.expression)
+  );
+}
+
+function diagnosticReasonsLength(node) {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    node.name.text === "length" &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "reasons" &&
+    ts.isIdentifier(node.expression.expression)
+  );
+}
+
+function numericDiagnosticWitness(callable) {
+  return callable.type?.kind === ts.SyntaxKind.NumberKeyword;
+}
+
+function diagnosticEnvelopeResult(callable) {
+  if (!numericDiagnosticWitness(callable)) return null;
+  const assignment = diagnosticEnvelopeAssignment(callable);
+  if (!assignment) return null;
+  const { local, result } = assignment;
+  if (
+    !ts.isIdentifier(local.name) ||
+    local.type ||
+    !directDiagnosticCall(local.initializer) ||
+    !diagnosticOkCondition(result.condition) ||
+    !ts.isNumericLiteral(result.whenTrue) ||
+    result.whenTrue.text !== "0" ||
+    !diagnosticReasonsLength(result.whenFalse)
+  )
+    return null;
+  return { local, call: local.initializer, result };
+}
+
+function sameDiagnosticEnvelopeFlow(context, callable, result) {
+  const symbol = context.checker.getSymbolAtLocation(result.local.name);
+  return (
+    context.checker.getSymbolAtLocation(result.call.arguments[0]) ===
+      context.checker.getSymbolAtLocation(callable.parameters[0].name) &&
+    context.checker.getSymbolAtLocation(result.result.condition.expression) === symbol &&
+    context.checker.getSymbolAtLocation(result.result.whenFalse.expression.expression) === symbol
+  );
+}
+
+function readonlyEnvelopeFields(type) {
+  return type.getProperties().every((property) => {
+    const declarations = property.declarations ?? [];
+    return (
+      declarations.length === 1 &&
+      ts.isPropertySignature(declarations[0]) &&
+      (ts.getCombinedModifierFlags(declarations[0]) & ts.ModifierFlags.Readonly) !== 0
+    );
+  });
+}
+
+function diagnosticFailureArm(context, type, call) {
+  return (
+    requiredParserFields(type, ["ok", "reasons"]) &&
+    intrinsicParserErrors(context, parserProperty(context, type, "reasons", call))
+  );
+}
+
+function diagnosticEnvelopeArm(context, type, call) {
+  const ok = parserProperty(context, type, "ok", call);
+  if (!ok || (ok.flags & ts.TypeFlags.BooleanLiteral) === 0 || !readonlyEnvelopeFields(type))
+    return null;
+  if (ok.intrinsicName === "true" && requiredParserFields(type, ["ok"])) return "success";
+  if (ok.intrinsicName === "false" && diagnosticFailureArm(context, type, call)) return "failure";
+  return null;
+}
+
+function closedDiagnosticEnvelope(compiler, context, call) {
+  const signature = parserSignature(context, call);
+  if (!signature?.declaration?.type) return false;
+  const type = producerParserResult(compiler, context, signature.declaration, signature);
+  if (!type?.isUnion() || type.types.length !== 2) return false;
+  const arms = new Set(type.types.map((arm) => diagnosticEnvelopeArm(context, arm, call)));
+  return arms.has("success") && arms.has("failure");
+}
+
+function envelopeDiagnosticBinding(compiler, request, producer) {
+  const { context, source } = ownedSource(compiler, request.consumerPath, true);
+  const callable = diagnosticCallable(context, source, request.exportName);
+  const result = callable && diagnosticEnvelopeResult(callable);
+  if (!result) return null;
+  const bound =
+    parserImport(context, result.call, request.specifier) &&
+    directDiagnosticProducer(compiler, context, result.call, producer) &&
+    sameDiagnosticEnvelopeFlow(context, callable, result) &&
+    closedDiagnosticEnvelope(compiler, context, result.call);
+  compiler.assertCurrent();
+  return {
+    bound,
+    implementation: canonicalDeclaration(compiler, callable, null),
+    calls: [{ path: request.consumerPath, start: result.call.getStart(), end: result.call.end }],
   };
 }
 

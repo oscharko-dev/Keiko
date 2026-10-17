@@ -337,6 +337,23 @@ counterfeits, wrappers, extra statements, mutable/destructured aliases, dynamic 
 assertions and overloaded callables do not qualify this bounded shape. This grants no typed
 data output, array-return exemption, dictionary waiver or complete incoming-use proof.
 
+The same existing kind also accepts the exact closed diagnostic envelope used by
+`ContextValidationResult`: readonly literal `ok: true` with no value, or readonly literal
+`ok: false` plus readonly `reasons: readonly string[]`, with no optional, extra or indexed fields.
+The producer must retain its canonical owned alias and its one required unknown parameter. The
+additional witness is exactly two statements: `const result = publicValidator(input); return
+result.ok ? 0 : result.reasons.length;`, with an explicit numeric return. The call, input and both
+property receivers must bind to the same canonical producer/parameter/local. An erased result,
+mutable/nonstring reasons, unrelated discriminator, fabricated count, changed polarity or foreign
+alias/producer does not qualify. This preserves the existing readonly-string-array witness unchanged;
+it does not manufacture a parsed value or grant type-predicate behavior to a diagnostic collector.
+
+Structurally bound diagnostic roots with declared proof selectors may participate in the same
+owner/source/rule collective helper join as public parsers. The existing direct raw-origin,
+all-incoming-use, currentness and whole-group budget-withholding rules remain unchanged. Private
+string-array collectors already fit that direct raw traversal; this adds no callback, exported-helper,
+mutation, indexed-origin or body-wide permission. Structural applicability still leaves proofs pending.
+
 One resolver derives a detached owner-to-selected-test-root manifest before assessment. Proof
 contexts retain the owner's original production roots, strict options and project references,
 adding only declared owning test roots and `noEmit: true`. Production contexts and Native
@@ -383,7 +400,8 @@ existing checker-unknown operands and intrinsic dictionary members described abo
 return, body-wide, known-value-widening or typed-domain exemption. Supporting these optional rules
 does not change any production record or activate a scope.
 
-The collective raw-helper closure can account for multiple public parsers in the same source. For
+The collective raw-helper closure can account for multiple public parsers or diagnostic checkers
+in the same source. For
 each rule, every contributing root must be structurally ready with its canonical producer/public
 proof binding, declared proof selectors and current source facts, and must explicitly declare that
 rule. Every helper runtime reference must belong to the closed direct raw-origin graph or an
@@ -960,3 +978,21 @@ Their original operation order, admitted identity and ordered ordinary errors re
 This declaration grants no universal hostile-accessor promise to the other four validators and
 changes no runtime behavior. The separate collective graph-budget refusal must be resolved through
 its owning implementation before these six records can be assessed and qualified.
+
+## Context compaction diagnostic ownership
+
+Seven compaction diagnostic validators use the existing `diagnostic-checker` role
+with a closed `ContextValidationResult` envelope. Their canonical same-owner public
+proofs count actual failure reasons through `result.ok ? 0 : result.reasons.length`;
+there is no parsed value, new public export, or production behavior change.
+The records authorize only unknown parameter zero, subject to actual capability
+assessment and proof qualification. Source preparation alone does not establish
+readiness, helper closure completion, activation, or a green 96-record inventory.
+
+Production provenance remains distinct from these public API proof bindings:
+`validateContextCompactionRecord` is used by `buildCompactionRecords` in workflows
+and by server conversation compaction; `validateContextPreservedFact` is used by
+`projectFacts` through its private projection. Other roots retain public API proof
+consumers. Existing direct collector, callback, imported-helper and accumulator
+limits remain authoritative; unsupported slots remain raw rather than gaining an
+implicit family-wide exemption.

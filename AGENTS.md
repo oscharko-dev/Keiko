@@ -1187,6 +1187,11 @@ These cost real time when rediscovered. They are all real and current.
   check the provenance hardware in the document before believing it: comparing a local document
   against a hosted run is comparing two machine classes. See
   [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md).
+- **Source-bound policy qualification needs a stable checkout.** `npm run arch:check:negative`
+  temporarily writes `packages/keiko-security/src/__arch_check_negative_bare_specifier_probe__.ts`.
+  Finish that probe before starting `npm run check:code-quality-policy:repository`; overlapping
+  them correctly fails the qualifier's source-membership guard. Keep other checkout edits and
+  builds outside the qualification run too. This is execution order, not a gate exemption.
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
   packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
   surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes

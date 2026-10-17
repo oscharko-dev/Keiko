@@ -4837,6 +4837,314 @@
           "testName": "Prompt documented nonthrowing admission (#3918) public selection inspection returns only the fixed refusal"
         }
       ]
+    },
+    {
+      "id": "context-provenance-ref-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextProvenanceRef",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextProvenanceRef"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextProvenanceRef"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "countPublicContextProvenanceRefDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering-compaction.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context provenance-ref diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context provenance-ref diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context provenance-ref diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-preserved-fact-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextPreservedFact",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextPreservedFact"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextPreservedFact"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "countPublicContextPreservedFactDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering-compaction.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context preserved-fact diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context preserved-fact diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context preserved-fact diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-assumption-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextAssumption",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextAssumption"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextAssumption"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "countPublicContextAssumptionDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering-compaction.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context assumption diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context assumption diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context assumption diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-command-outcome-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextCommandOutcome",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextCommandOutcome"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextCommandOutcome"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "countPublicContextCommandOutcomeDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering-compaction.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context command-outcome diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context command-outcome diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context command-outcome diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-invalidation-key-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextInvalidationKey",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextInvalidationKey"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextInvalidationKey"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "countPublicContextInvalidationKeyDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering-compaction.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context invalidation-key diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context invalidation-key diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context invalidation-key diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-rehydration-handle-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextRehydrationHandle",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextRehydrationHandle"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextRehydrationHandle"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "countPublicContextRehydrationHandleDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering-compaction.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context rehydration-handle diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context rehydration-handle diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context rehydration-handle diagnostic counts actual ordered public refusals"
+        }
+      ]
+    },
+    {
+      "id": "context-compaction-record-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextCompactionRecord",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextCompactionRecord"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "validateContextCompactionRecord"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
+        "exportName": "countPublicContextCompactionRecordDiagnostics"
+      },
+      "proofs": ["packages/keiko-contracts/src/context-engineering-compaction.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context compaction-record diagnostic retains independent source and public closed result types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context compaction-record diagnostic preserves healthy input and counts no reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
+          "testName": "shipped context compaction-record diagnostic counts actual ordered public refusals"
+        }
+      ]
     }
   ]
 }
