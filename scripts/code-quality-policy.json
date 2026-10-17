@@ -5957,6 +5957,182 @@
           "testName": "Managed LSP runtime configuration public parser (#3918) refuses raw shapes provenance authority paths and cross-language settings"
         }
       ]
+    },
+    {
+      "id": "workspace-search-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceSearchRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceSearchRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceSearchRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "countPublicWorkspaceSearchDiagnostics",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/workspace-search.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace search diagnostic public proof retains exact unknown and closed diagnostic types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace search diagnostic public proof admits healthy input without mutating it"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace search diagnostic public proof refuses malformed input with ordered reasons and numeric counts"
+        }
+      ]
+    },
+    {
+      "id": "workspace-symbol-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceSymbolSearchRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceSymbolSearchRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceSymbolSearchRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "countPublicWorkspaceSymbolSearchDiagnostics",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/workspace-search.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace symbol diagnostic public proof retains exact unknown and closed diagnostic types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace symbol diagnostic public proof admits healthy input without mutating it"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace symbol diagnostic public proof refuses malformed input with ordered reasons and numeric counts"
+        }
+      ]
+    },
+    {
+      "id": "workspace-preview-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceReplacePreviewRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceReplacePreviewRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceReplacePreviewRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "countPublicWorkspaceReplacePreviewDiagnostics",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/workspace-search.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace preview diagnostic public proof retains exact unknown and closed diagnostic types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace preview diagnostic public proof admits healthy input without mutating it"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace preview diagnostic public proof refuses malformed input with ordered reasons and numeric counts"
+        }
+      ]
+    },
+    {
+      "id": "workspace-apply-diagnostic-public-proof",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "diagnostic-checker",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceReplaceApplyRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceReplaceApplyRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "validateWorkspaceReplaceApplyRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+        "exportName": "countPublicWorkspaceReplaceApplyDiagnostics",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/workspace-search.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace apply diagnostic public proof retains exact unknown and closed diagnostic types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace apply diagnostic public proof admits healthy input without mutating it"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "workspace apply diagnostic public proof refuses malformed input with ordered reasons and numeric counts"
+        }
+      ]
     }
   ]
 }

@@ -296,6 +296,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "managed-lsp-control-response-public-parser",
       "managed-lsp-control-mutation-response-public-parser",
       "managed-lsp-runtime-configuration-public-parser",
+      "workspace-search-diagnostic-public-proof",
+      "workspace-symbol-diagnostic-public-proof",
+      "workspace-preview-diagnostic-public-proof",
+      "workspace-apply-diagnostic-public-proof",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1547,5 +1551,54 @@ describe("Managed LSP existing public parser obligations (#3918)", () => {
     const removed = structuredClone(policy);
     removed.responsibilities = removed.responsibilities.filter((entry) => entry.id !== id);
     expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+  });
+});
+
+describe("workspace diagnostic checker provenance", () => {
+  it.each([
+    {
+      id: "workspace-search-diagnostic-public-proof",
+      producer: "validateWorkspaceSearchRequest",
+      witness: "countPublicWorkspaceSearchDiagnostics",
+    },
+    {
+      id: "workspace-symbol-diagnostic-public-proof",
+      producer: "validateWorkspaceSymbolSearchRequest",
+      witness: "countPublicWorkspaceSymbolSearchDiagnostics",
+    },
+    {
+      id: "workspace-preview-diagnostic-public-proof",
+      producer: "validateWorkspaceReplacePreviewRequest",
+      witness: "countPublicWorkspaceReplacePreviewDiagnostics",
+    },
+    {
+      id: "workspace-apply-diagnostic-public-proof",
+      producer: "validateWorkspaceReplaceApplyRequest",
+      witness: "countPublicWorkspaceReplaceApplyDiagnostics",
+    },
+  ])("retains exact existing diagnostic roles for $producer", ({ id, producer, witness }) => {
+    const record = policy.responsibilities.find((entry) => entry.id === id);
+    const selector = {
+      consumerPath: "packages/keiko-contracts/src/workspace-search.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/workspace-search",
+      exportName: producer,
+    };
+    expect(record.kind).toBe("diagnostic-checker");
+    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+    expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
+    expect(record.transform).toEqual(selector);
+    expect(record.output).toEqual(selector);
+    expect(record.consumer).toEqual({
+      ...selector,
+      kind: "public-api-proof",
+      owner: record.owner,
+      exportName: witness,
+    });
+    expect(record.proofs).toEqual([selector.consumerPath]);
+    expect(record.proofAssertions).toHaveLength(3);
+    expect(record.proofAssertions.every((proof) => proof.path === selector.consumerPath)).toBe(
+      true,
+    );
+    expect(validatePolicy(policy)).toEqual([]);
   });
 });

@@ -462,6 +462,11 @@ describe("workspace search/replace guard coverage", () => {
 import {
   isWorkspaceSearchResultMatch as publicSearchResultMatch,
   validateWorkspaceSearchRequest as publicSearchRequest,
+  validateWorkspaceSymbolSearchRequest as publicSymbolRequest,
+  validateWorkspaceReplacePreviewRequest as publicPreviewRequest,
+  validateWorkspaceReplaceApplyRequest as publicApplyRequest,
+  WORKSPACE_SEARCH_MAX_RESULTS,
+  WORKSPACE_REPLACE_MAX_FILES,
 } from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
 
 describe.each([
@@ -526,3 +531,365 @@ describe("Connected primitive production consumer", () => {
     expect(match.lineRange).toEqual({ startLine: 1, endLine: 5 });
   });
 });
+
+import type { ValidationResult as PublicValidationResult } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+
+export function countPublicWorkspaceSearchDiagnostics(input: unknown): number {
+  const result = publicSearchRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace search diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<Parameters<typeof validateWorkspaceSearchRequest>[0]>().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicSearchRequest>[0]>().toEqualTypeOf<unknown>();
+    expectTypeOf<
+      Parameters<typeof countPublicWorkspaceSearchDiagnostics>[0]
+    >().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicSearchRequest>[0]>().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof validateWorkspaceSearchRequest>
+    >().toEqualTypeOf<ValidationResult>();
+    expectTypeOf<ReturnType<typeof publicSearchRequest>>().toEqualTypeOf<PublicValidationResult>();
+    expectTypeOf<ReturnType<typeof publicSearchRequest>>().not.toBeAny();
+    expectTypeOf<Extract<ReturnType<typeof publicSearchRequest>, { ok: true }>>().toEqualTypeOf<
+      Readonly<{ ok: true }>
+    >();
+    expectTypeOf<
+      Extract<ReturnType<typeof validateWorkspaceSearchRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicSearchRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicSearchRequest>, { ok: false }>["reasons"]
+    >().not.toBeAny();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicSearchRequest>, { ok: false }>["reasons"][number]
+    >().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof countPublicWorkspaceSearchDiagnostics>
+    >().toEqualTypeOf<number>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = searchRequest();
+    const before = structuredClone(input);
+    expect(validateWorkspaceSearchRequest(input)).toEqual({ ok: true });
+    expect(publicSearchRequest(input)).toEqual({ ok: true });
+    expect(countPublicWorkspaceSearchDiagnostics(input)).toBe(0);
+    expect(input).toEqual(before);
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    for (const entry of workspaceSearchRefusals()) {
+      expect(validateWorkspaceSearchRequest(entry.input)).toEqual({
+        ok: false,
+        reasons: entry.reasons,
+      });
+      expect(publicSearchRequest(entry.input)).toEqual({ ok: false, reasons: entry.reasons });
+      expect(countPublicWorkspaceSearchDiagnostics(entry.input)).toBe(entry.reasons.length);
+    }
+  });
+});
+
+export function countPublicWorkspaceSymbolSearchDiagnostics(input: unknown): number {
+  const result = publicSymbolRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace symbol diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<
+      Parameters<typeof validateWorkspaceSymbolSearchRequest>[0]
+    >().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicSymbolRequest>[0]>().toEqualTypeOf<unknown>();
+    expectTypeOf<
+      Parameters<typeof countPublicWorkspaceSymbolSearchDiagnostics>[0]
+    >().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicSymbolRequest>[0]>().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof validateWorkspaceSymbolSearchRequest>
+    >().toEqualTypeOf<ValidationResult>();
+    expectTypeOf<ReturnType<typeof publicSymbolRequest>>().toEqualTypeOf<PublicValidationResult>();
+    expectTypeOf<ReturnType<typeof publicSymbolRequest>>().not.toBeAny();
+    expectTypeOf<Extract<ReturnType<typeof publicSymbolRequest>, { ok: true }>>().toEqualTypeOf<
+      Readonly<{ ok: true }>
+    >();
+    expectTypeOf<
+      Extract<ReturnType<typeof validateWorkspaceSymbolSearchRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicSymbolRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicSymbolRequest>, { ok: false }>["reasons"]
+    >().not.toBeAny();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicSymbolRequest>, { ok: false }>["reasons"][number]
+    >().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof countPublicWorkspaceSymbolSearchDiagnostics>
+    >().toEqualTypeOf<number>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = symbolRequest();
+    const before = structuredClone(input);
+    expect(validateWorkspaceSymbolSearchRequest(input)).toEqual({ ok: true });
+    expect(publicSymbolRequest(input)).toEqual({ ok: true });
+    expect(countPublicWorkspaceSymbolSearchDiagnostics(input)).toBe(0);
+    expect(input).toEqual(before);
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    for (const entry of workspaceSymbolSearchRefusals()) {
+      expect(validateWorkspaceSymbolSearchRequest(entry.input)).toEqual({
+        ok: false,
+        reasons: entry.reasons,
+      });
+      expect(publicSymbolRequest(entry.input)).toEqual({ ok: false, reasons: entry.reasons });
+      expect(countPublicWorkspaceSymbolSearchDiagnostics(entry.input)).toBe(entry.reasons.length);
+    }
+  });
+});
+
+export function countPublicWorkspaceReplacePreviewDiagnostics(input: unknown): number {
+  const result = publicPreviewRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace preview diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<
+      Parameters<typeof validateWorkspaceReplacePreviewRequest>[0]
+    >().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicPreviewRequest>[0]>().toEqualTypeOf<unknown>();
+    expectTypeOf<
+      Parameters<typeof countPublicWorkspaceReplacePreviewDiagnostics>[0]
+    >().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicPreviewRequest>[0]>().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof validateWorkspaceReplacePreviewRequest>
+    >().toEqualTypeOf<ValidationResult>();
+    expectTypeOf<ReturnType<typeof publicPreviewRequest>>().toEqualTypeOf<PublicValidationResult>();
+    expectTypeOf<ReturnType<typeof publicPreviewRequest>>().not.toBeAny();
+    expectTypeOf<Extract<ReturnType<typeof publicPreviewRequest>, { ok: true }>>().toEqualTypeOf<
+      Readonly<{ ok: true }>
+    >();
+    expectTypeOf<
+      Extract<ReturnType<typeof validateWorkspaceReplacePreviewRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicPreviewRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicPreviewRequest>, { ok: false }>["reasons"]
+    >().not.toBeAny();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicPreviewRequest>, { ok: false }>["reasons"][number]
+    >().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof countPublicWorkspaceReplacePreviewDiagnostics>
+    >().toEqualTypeOf<number>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = replaceRequest();
+    const before = structuredClone(input);
+    expect(validateWorkspaceReplacePreviewRequest(input)).toEqual({ ok: true });
+    expect(publicPreviewRequest(input)).toEqual({ ok: true });
+    expect(countPublicWorkspaceReplacePreviewDiagnostics(input)).toBe(0);
+    expect(input).toEqual(before);
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    for (const entry of workspaceReplacePreviewRefusals()) {
+      expect(validateWorkspaceReplacePreviewRequest(entry.input)).toEqual({
+        ok: false,
+        reasons: entry.reasons,
+      });
+      expect(publicPreviewRequest(entry.input)).toEqual({ ok: false, reasons: entry.reasons });
+      expect(countPublicWorkspaceReplacePreviewDiagnostics(entry.input)).toBe(entry.reasons.length);
+    }
+  });
+});
+
+export function countPublicWorkspaceReplaceApplyDiagnostics(input: unknown): number {
+  const result = publicApplyRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace apply diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<
+      Parameters<typeof validateWorkspaceReplaceApplyRequest>[0]
+    >().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicApplyRequest>[0]>().toEqualTypeOf<unknown>();
+    expectTypeOf<
+      Parameters<typeof countPublicWorkspaceReplaceApplyDiagnostics>[0]
+    >().toEqualTypeOf<unknown>();
+    expectTypeOf<Parameters<typeof publicApplyRequest>[0]>().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof validateWorkspaceReplaceApplyRequest>
+    >().toEqualTypeOf<ValidationResult>();
+    expectTypeOf<ReturnType<typeof publicApplyRequest>>().toEqualTypeOf<PublicValidationResult>();
+    expectTypeOf<ReturnType<typeof publicApplyRequest>>().not.toBeAny();
+    expectTypeOf<Extract<ReturnType<typeof publicApplyRequest>, { ok: true }>>().toEqualTypeOf<
+      Readonly<{ ok: true }>
+    >();
+    expectTypeOf<
+      Extract<ReturnType<typeof validateWorkspaceReplaceApplyRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicApplyRequest>, { ok: false }>["reasons"]
+    >().toEqualTypeOf<readonly string[]>();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicApplyRequest>, { ok: false }>["reasons"]
+    >().not.toBeAny();
+    expectTypeOf<
+      Extract<ReturnType<typeof publicApplyRequest>, { ok: false }>["reasons"][number]
+    >().not.toBeAny();
+    expectTypeOf<
+      ReturnType<typeof countPublicWorkspaceReplaceApplyDiagnostics>
+    >().toEqualTypeOf<number>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = applyRequest();
+    const before = structuredClone(input);
+    expect(validateWorkspaceReplaceApplyRequest(input)).toEqual({ ok: true });
+    expect(publicApplyRequest(input)).toEqual({ ok: true });
+    expect(countPublicWorkspaceReplaceApplyDiagnostics(input)).toBe(0);
+    expect(input).toEqual(before);
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    for (const entry of workspaceReplaceApplyRefusals()) {
+      expect(validateWorkspaceReplaceApplyRequest(entry.input)).toEqual({
+        ok: false,
+        reasons: entry.reasons,
+      });
+      expect(publicApplyRequest(entry.input)).toEqual({ ok: false, reasons: entry.reasons });
+      expect(countPublicWorkspaceReplaceApplyDiagnostics(entry.input)).toBe(entry.reasons.length);
+    }
+  });
+});
+
+type WorkspaceDiagnosticRefusal = Readonly<{ input: unknown; reasons: readonly string[] }>;
+
+function workspaceSearchRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    {
+      input: {
+        ...searchRequest(),
+        root: "",
+        query: "",
+        mode: "future",
+        caseSensitive: "yes",
+        includeGlobs: null,
+        excludeGlobs: null,
+      },
+      reasons: [
+        "root empty",
+        "mode invalid",
+        "query empty",
+        "caseSensitive invalid",
+        "includeGlobs invalid",
+        "excludeGlobs invalid",
+      ],
+    },
+    {
+      input: {
+        ...searchRequest(),
+        maxResults: WORKSPACE_SEARCH_MAX_RESULTS + 1,
+        wholeWord: "yes",
+        scopePath: "../escape",
+      },
+      reasons: ["maxResults invalid", "wholeWord invalid", "scopePath invalid"],
+    },
+    {
+      input: { ...searchRequest(), includeGlobs: ["../escape"], excludeGlobs: ["/absolute"] },
+      reasons: ["includeGlobs invalid", "excludeGlobs invalid"],
+    },
+  ];
+}
+
+function workspaceSymbolSearchRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    {
+      input: {
+        ...symbolRequest(),
+        root: "",
+        query: "",
+        maxResults: WORKSPACE_SEARCH_MAX_RESULTS + 1,
+        scopePath: "../escape",
+      },
+      reasons: ["root empty", "query empty", "maxResults invalid", "scopePath invalid"],
+    },
+  ];
+}
+
+function workspaceReplacePreviewRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    {
+      input: {
+        ...replaceRequest(),
+        root: "",
+        query: "",
+        mode: "future",
+        caseSensitive: "yes",
+        includeGlobs: null,
+        excludeGlobs: null,
+        replacement: null,
+        maxFiles: WORKSPACE_REPLACE_MAX_FILES + 1,
+      },
+      reasons: [
+        "root empty",
+        "mode invalid",
+        "query empty",
+        "caseSensitive invalid",
+        "includeGlobs invalid",
+        "excludeGlobs invalid",
+        "replacement invalid",
+        "maxFiles invalid",
+      ],
+    },
+  ];
+}
+
+function workspaceReplaceApplyRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    { input: { ...applyRequest(), root: "", files: [] }, reasons: ["root empty", "files invalid"] },
+    {
+      input: {
+        ...applyRequest(),
+        files: Array.from(
+          { length: WORKSPACE_REPLACE_MAX_FILES + 1 },
+          () => applyRequest().files[0],
+        ),
+      },
+      reasons: ["files too many"],
+    },
+    {
+      input: {
+        ...applyRequest(),
+        files: [
+          {
+            path: "../escape",
+            baseContentHash: "invalid",
+            edits: [
+              {
+                range: { startLine: 2, startColumn: 1, endLine: 1, endColumn: 1 },
+                originalText: null,
+                newText: null,
+              },
+            ],
+          },
+        ],
+      },
+      reasons: [
+        "file path invalid",
+        "file baseContentHash invalid",
+        "edit range invalid",
+        "edit text invalid",
+      ],
+    },
+  ];
+}

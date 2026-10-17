@@ -1120,3 +1120,26 @@ fresh-copy assertions while the same-field source healthy/refusal anchors pass. 
 is restored exactly before the identical first positive control. These bounded results do not replace
 fresh complete-cohort qualification or activate a rule scope. No product runtime or shared
 throw-classification behavior is changed here.
+
+### Workspace search and replace diagnostic proofs (#3918)
+
+Four prospective diagnostic-checker records bind the existing search, symbol search, replace preview
+and replace apply unknown-zero validators to canonical numeric public API proof witnesses. They
+append after the independently prepared Managed LSP four-record overlay; that dependency must be
+composed before this delta. All existing identities, rule lists, proof bindings and scopes remain
+intact. The witnesses return only zero or the actual diagnostic reason count, not a parsed value.
+Real server search/replace handlers remain separate production provenance with their retained
+consumer tests. No runtime behavior, public signature, engine capability or scope changes here.
+
+Source/public strict result and nested reason pins are independent; ordinary malformed tables pin
+ordered closed reasons and actual numeric witness counts. Existing mode double-read/coercion,
+relative-path, physical range and backward-edit regression tests remain authoritative. The bounded default
+assessment binds all four roots ready with semantic proofs pending, with nine stored unknown-parameter
+memberships across the four roots and five same-owner helpers. The collective assignment preserves
+contributing IDs; private apply-file/edit traversal and query mode's second unknown parameter are not
+claimed covered. No complete helper closure or active rule scope is inferred. Four canonical root
+return-any declarations and one shared diagnostic-reasons erasure fail the strict public type pins.
+Four canonical JavaScript success bypasses fail public refusal/count assertions while source positive
+and refusal anchors pass; all artifacts are restored before identical first positive controls. Fresh
+complete-cohort qualification remains mandatory. Raw typeof/dictionary obligations are not granted,
+and no universal getter or throw-free behavior is asserted.
