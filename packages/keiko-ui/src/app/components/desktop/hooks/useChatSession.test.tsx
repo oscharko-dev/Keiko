@@ -303,6 +303,37 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("reloads a bootstrap snapshot invalidated by an acknowledged scope mutation", async () => {
+    const initial = chat({ id: "chat-scope-bootstrap", updatedAt: 1 });
+    const changed = chat({
+      id: initial.id,
+      updatedAt: 2,
+      connectedScopes: [
+        { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 2 },
+      ],
+    });
+    const pending = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats)
+      .mockResolvedValueOnce({ chats: [initial] })
+      .mockResolvedValue({ chats: [changed] });
+    vi.mocked(fetchChatMessages)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ messages: [] });
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+    act(() => notifyChatUpsert(changed));
+    await act(async () => pending.resolve({ messages: [] }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.connectedScopes).toEqual(changed.connectedScopes);
+    expect(result.current.chats.find((entry) => entry.id === initial.id)?.connectedScopes).toEqual(
+      changed.connectedScopes,
+    );
+    await waitFor(() => expect(result.current.draftPersistence?.phase).toBe("saved"));
+    unmount();
+  });
+
   it("restores the private unsent draft when a chat window is reopened", async () => {
     vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
