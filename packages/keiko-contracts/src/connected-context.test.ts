@@ -3,7 +3,7 @@
 // minimal: no excerpts, no ledger refs, single happy-path scope. Tests that need extras build
 // on top of these.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 import { DEFAULT_CONTEXT_PROFILE } from "./context-engineering.js";
 import {
   CANDIDATE_OMISSION_REASONS,
@@ -35,6 +35,7 @@ import type {
   EvidenceAtomRedactionState,
   ExplorationBudget,
   ExplorationUsage,
+  IsValidScopePathOptions,
   RetrievalQuery,
   RetrievalQueryKind,
   SelectedScope,
@@ -1769,7 +1770,12 @@ describe("MAX_OMITTED_CONTEXT_ENTRIES", () => {
   });
 });
 
-import { validateConnectedContextPack as publicConnectedPack } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import {
+  isValidScopePath as publicScopePath,
+  isValidLineRange as publicLineRange,
+  validateConnectedContextPack as publicConnectedPack,
+  type IsValidScopePathOptions as PublicScopePathOptions,
+} from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 describe.each([
   ["source", validateConnectedContextPack],
@@ -1822,5 +1828,103 @@ describe.each([
         "pack.files excerpt atom.ledgerRef invalid",
       ],
     });
+  });
+});
+
+describe("Connected primitive validator public ownership", () => {
+  it("retains independent scope path input options and boolean types", () => {
+    expectTypeOf<Parameters<typeof isValidScopePath>>().toEqualTypeOf<
+      [path: unknown, options: IsValidScopePathOptions]
+    >();
+    expectTypeOf<Parameters<typeof publicScopePath>>().toEqualTypeOf<
+      [path: unknown, options: PublicScopePathOptions]
+    >();
+    expectTypeOf<IsValidScopePathOptions>().toEqualTypeOf<{ readonly mustBeRelative: boolean }>();
+    expectTypeOf<PublicScopePathOptions>().toEqualTypeOf<{ readonly mustBeRelative: boolean }>();
+    expectTypeOf<Parameters<typeof publicScopePath>[0]>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof isValidScopePath>>().toEqualTypeOf<boolean>();
+    expectTypeOf<ReturnType<typeof publicScopePath>>().toEqualTypeOf<boolean>();
+    expectTypeOf<ReturnType<typeof publicScopePath>>().not.toBeAny();
+  });
+
+  it("retains independent line range unknown input and boolean types", () => {
+    expectTypeOf<Parameters<typeof isValidLineRange>>().toEqualTypeOf<[range: unknown]>();
+    expectTypeOf<Parameters<typeof publicLineRange>>().toEqualTypeOf<[range: unknown]>();
+    expectTypeOf<Parameters<typeof publicLineRange>[0]>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof isValidLineRange>>().toEqualTypeOf<boolean>();
+    expectTypeOf<ReturnType<typeof publicLineRange>>().toEqualTypeOf<boolean>();
+    expectTypeOf<ReturnType<typeof publicLineRange>>().not.toBeAny();
+  });
+
+  it("admits public portable paths and refuses malformed paths and unsupported mode", () => {
+    for (const path of ["src/index.ts", "a", "a..b/c", "foo/ /bar"])
+      expect(publicScopePath(path, { mustBeRelative: true })).toBe(true);
+    for (const path of [
+      null,
+      undefined,
+      0,
+      "",
+      "../escape",
+      "/abs",
+      "C:/win",
+      "~/secrets",
+      "foo//bar",
+      "./relative",
+      "foo/../bar",
+      "foo\\bar",
+      "foo\0bar",
+    ])
+      expect(publicScopePath(path, { mustBeRelative: true })).toBe(false);
+    expect(publicScopePath("src/index.ts", { mustBeRelative: false })).toBe(false);
+  });
+
+  it("admits public integer ranges and refuses malformed ordered bounds", () => {
+    expect(publicLineRange({ startLine: 1, endLine: 1 })).toBe(true);
+    expect(publicLineRange({ startLine: 42, endLine: 9999, extra: true })).toBe(true);
+    for (const range of [
+      null,
+      undefined,
+      [],
+      {},
+      { startLine: 0, endLine: 1 },
+      { startLine: 2, endLine: 1 },
+      { startLine: 1.5, endLine: 5 },
+      { startLine: 1, endLine: 2.5 },
+      { startLine: Number.NaN, endLine: 5 },
+      { startLine: 1, endLine: Number.POSITIVE_INFINITY },
+      { startLine: "1", endLine: 2 },
+    ])
+      expect(publicLineRange(range)).toBe(false);
+  });
+
+  it("captures each public line bound once and retains inherited member support", () => {
+    let startReads = 0;
+    let endReads = 0;
+    const range = {
+      get startLine(): number {
+        startReads++;
+        return 2;
+      },
+      get endLine(): number {
+        endReads++;
+        return 3;
+      },
+    };
+    expect(publicLineRange(range)).toBe(true);
+    expect(startReads).toBe(1);
+    expect(endReads).toBe(1);
+    class InheritedRange {
+      constructor(
+        private readonly first: number,
+        private readonly last: number,
+      ) {}
+      get startLine(): number {
+        return this.first;
+      }
+      get endLine(): number {
+        return this.last;
+      }
+    }
+    expect(publicLineRange(new InheritedRange(2, 3))).toBe(true);
   });
 });

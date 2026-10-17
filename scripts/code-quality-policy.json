@@ -5541,6 +5541,102 @@
           "testName": "shipped context tool observation diagnostic counts actual ordered public refusals"
         }
       ]
+    },
+    {
+      "id": "connected-scope-path-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.ts",
+        "specifier": "./connected-context.js",
+        "exportName": "isValidScopePath",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.ts",
+        "specifier": "./connected-context.js",
+        "exportName": "isValidScopePath"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.ts",
+        "specifier": "./connected-context.js",
+        "exportName": "isValidScopePath"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./workspace-search.js",
+        "exportName": "isWorkspaceSearchResultMatch",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/connected-context.test.ts",
+        "packages/keiko-contracts/src/workspace-search.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/connected-context.test.ts",
+          "testName": "Connected primitive validator public ownership retains independent scope path input options and boolean types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/connected-context.test.ts",
+          "testName": "Connected primitive validator public ownership admits public portable paths and refuses malformed paths and unsupported mode"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "Connected primitive production consumer admits the public result and refuses malformed scope paths and line ranges"
+        }
+      ]
+    },
+    {
+      "id": "connected-line-range-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.ts",
+        "specifier": "./connected-context.js",
+        "exportName": "isValidLineRange",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.ts",
+        "specifier": "./connected-context.js",
+        "exportName": "isValidLineRange"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/workspace-search.ts",
+        "specifier": "./connected-context.js",
+        "exportName": "isValidLineRange"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./workspace-search.js",
+        "exportName": "isWorkspaceSearchResultMatch",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/connected-context.test.ts",
+        "packages/keiko-contracts/src/workspace-search.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/connected-context.test.ts",
+          "testName": "Connected primitive validator public ownership retains independent line range unknown input and boolean types"
+        },
+        {
+          "path": "packages/keiko-contracts/src/connected-context.test.ts",
+          "testName": "Connected primitive validator public ownership admits public integer ranges and refuses malformed ordered bounds"
+        },
+        {
+          "path": "packages/keiko-contracts/src/connected-context.test.ts",
+          "testName": "Connected primitive validator public ownership captures each public line bound once and retains inherited member support"
+        },
+        {
+          "path": "packages/keiko-contracts/src/workspace-search.test.ts",
+          "testName": "Connected primitive production consumer admits the public result and refuses malformed scope paths and line ranges"
+        }
+      ]
     }
   ]
 }

@@ -1019,3 +1019,21 @@ imported/exported helper and accumulator limits remain unchanged: actual assessm
 name unsupported slots rather than granting the entire family implicitly. Future strict
 source/public declaration controls, unsafe-body malformed controls and genuine complete
 cohort qualification remain required before readiness is claimed.
+
+### Connected path and line-range validators (#3918)
+
+Two existing `validator` records select unknown parameter0 of `isValidScopePath` and
+`isValidLineRange` through the real value imports in workspace-search.ts from
+`./connected-context.js`. Their real production consumer is the existing
+`isWorkspaceSearchResultMatch` implementation: it directly calls both validators before
+admitting a result. The consumer selector uses index.ts's existing type-only reference to
+`./workspace-search.js` to resolve that production implementation. This is provenance through
+a type-only barrel, not a runtime root export or a public-proof consumer binding.
+
+Separate canonical runtime imports provide independent source/public parameter and boolean-result
+pins, actual public primitive admission/refusal tests and public result-consumer controls. Path
+options retain their defensive unsupported-mode refusal; line ranges retain inherited members and
+single captured bound reads. All prior105 records, rule dispositions, scopes and proof selectors
+remain intact. These two additional records still require default assessment, actual helper
+accounting and fresh107-record qualification. Typed connected-context diagnostics and other
+raw-helper obligations are not adapted by this registration.

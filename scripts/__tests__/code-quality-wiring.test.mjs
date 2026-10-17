@@ -81,7 +81,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
         activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
       })),
     );
-    expect(production.responsibilities).toHaveLength(105);
+    expect(production.responsibilities).toHaveLength(107);
     expect(
       production.rules
         .filter((rule) => rule.activeScopes.includes(CONTRACTS_SCOPE))
@@ -844,7 +844,7 @@ function qualificationValidatorFixture() {
     rules: policy.rules,
     violations: [],
     responsibilities: {
-      counts: { ready: 105, incomplete: 0, invalid: 0, qualified: 105, pending: 0, rejected: 0 },
+      counts: { ready: 107, incomplete: 0, invalid: 0, qualified: 107, pending: 0, rejected: 0 },
       assessments: policy.responsibilities.map((record) => ({
         id: record.id,
         owner: record.owner,
@@ -899,7 +899,7 @@ describe("complete production qualification owner", () => {
       (r) => {
         r.outcome = "failed";
         r.responsibilities.counts.qualified = 0;
-        r.responsibilities.counts.pending = 105;
+        r.responsibilities.counts.pending = 107;
         for (const a of r.responsibilities.assessments) {
           a.semantic = "pending";
           a.proofs.forEach((p) => {
@@ -1311,5 +1311,31 @@ describe("canonical JSON decoder production responsibility wiring (#3918)", () =
           "shared canonical browser report producer charges UTF-8 bytes identically to Node for 😀",
       },
     ]);
+  });
+});
+
+describe("Connected primitive validator responsibility wiring", () => {
+  it("binds both real validators to the existing public workspace result consumer", () => {
+    const policy = JSON.parse(read("scripts/code-quality-policy.json"));
+    const records = policy.responsibilities.slice(-2);
+    expect(records.map(({ id }) => id)).toEqual([
+      "connected-scope-path-validator",
+      "connected-line-range-validator",
+    ]);
+    expect(records.map(({ input }) => input.exportName)).toEqual([
+      "isValidScopePath",
+      "isValidLineRange",
+    ]);
+    for (const record of records) {
+      expect(record.kind).toBe("validator");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input.parameterIndex).toBe(0);
+      expect(record.consumer).toEqual({
+        consumerPath: "packages/keiko-contracts/src/index.ts",
+        specifier: "./workspace-search.js",
+        exportName: "isWorkspaceSearchResultMatch",
+        owner: "@oscharko-dev/keiko-contracts",
+      });
+    }
   });
 });

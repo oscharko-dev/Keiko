@@ -290,6 +290,8 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "shaped-search-diagnostic-public-proof",
       "shaped-browser-diagnostic-public-proof",
       "context-tool-observation-diagnostic-public-proof",
+      "connected-scope-path-validator",
+      "connected-line-range-validator",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1428,6 +1430,40 @@ describe("Context compaction diagnostic responsibility provenance", () => {
           proof.path === "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
       ),
     ).toBe(true);
+    expect(validatePolicy(policy)).toEqual([]);
+  });
+});
+
+describe("Connected primitive validator production provenance", () => {
+  it.each([
+    ["connected-scope-path-validator", "isValidScopePath", 3],
+    ["connected-line-range-validator", "isValidLineRange", 4],
+  ])("retains the exact existing validator role for %s", (id, producer, assertions) => {
+    const record = policy.responsibilities.find((entry) => entry.id === id);
+    expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+    expect(record.kind).toBe("validator");
+    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+    expect(record.input).toEqual({
+      consumerPath: "packages/keiko-contracts/src/workspace-search.ts",
+      specifier: "./connected-context.js",
+      exportName: producer,
+      parameterIndex: 0,
+    });
+    const { parameterIndex, ...selector } = record.input;
+    expect(parameterIndex).toBe(0);
+    expect(record.transform).toEqual(selector);
+    expect(record.output).toEqual(selector);
+    expect(record.consumer).toEqual({
+      consumerPath: "packages/keiko-contracts/src/index.ts",
+      specifier: "./workspace-search.js",
+      exportName: "isWorkspaceSearchResultMatch",
+      owner: record.owner,
+    });
+    expect(record.proofs).toEqual([
+      "packages/keiko-contracts/src/connected-context.test.ts",
+      "packages/keiko-contracts/src/workspace-search.test.ts",
+    ]);
+    expect(record.proofAssertions).toHaveLength(assertions);
     expect(validatePolicy(policy)).toEqual([]);
   });
 });

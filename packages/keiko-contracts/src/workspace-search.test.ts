@@ -459,7 +459,10 @@ describe("workspace search/replace guard coverage", () => {
   });
 });
 
-import { validateWorkspaceSearchRequest as publicSearchRequest } from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
+import {
+  isWorkspaceSearchResultMatch as publicSearchResultMatch,
+  validateWorkspaceSearchRequest as publicSearchRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
 
 describe.each([
   ["source", validateWorkspaceSearchRequest],
@@ -499,4 +502,27 @@ it("retains public search's explicit refusal reasons", () => {
   expectTypeOf<
     Extract<ReturnType<typeof publicSearchRequest>, { ok: false }>["reasons"]
   >().toEqualTypeOf<readonly string[]>();
+});
+
+describe("Connected primitive production consumer", () => {
+  it("admits the public result and refuses malformed scope paths and line ranges", () => {
+    const match = {
+      path: "src/index.ts",
+      lineRange: { startLine: 1, endLine: 5 },
+      snippet: "match",
+      score: 0.5,
+    };
+    expect(publicSearchResultMatch(match)).toBe(true);
+    expect(isWorkspaceSearchResultMatch(match)).toBe(true);
+    for (const path of ["../escape", "/absolute", "~/secrets", "src\\file.ts"])
+      expect(publicSearchResultMatch({ ...match, path })).toBe(false);
+    for (const lineRange of [
+      null,
+      { startLine: 0, endLine: 1 },
+      { startLine: 5, endLine: 4 },
+      { startLine: 1, endLine: Number.POSITIVE_INFINITY },
+    ])
+      expect(publicSearchResultMatch({ ...match, lineRange })).toBe(false);
+    expect(match.lineRange).toEqual({ startLine: 1, endLine: 5 });
+  });
 });
