@@ -5676,20 +5676,21 @@ export function buildCodeIntelligenceIndexFromCandidatesAsync(
   deps?: InternalBuildDeps,
 ): Promise<CodeIntelligenceIndex> {
   const steps = codeIntelligenceBuildSteps(scope, limits, fs, candidateSet, deps);
-  return new Promise((resolve, reject) => {
-    const advance = (): void => {
-      try {
-        const step = advanceCodeIntelligenceBatch(steps);
-        if (step.done) resolve(step.value);
-        else setImmediate(advance);
-      } catch (error) {
-        reject(
-          error instanceof Error ? error : new Error("Code index build failed", { cause: error }),
-        );
-      }
-    };
-    advance();
-  });
+  return new Promise(
+    (resolve, reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1]) => {
+      const advance = (): void => {
+        try {
+          const step = advanceCodeIntelligenceBatch(steps);
+          if (step.done) resolve(step.value);
+          else setImmediate(advance);
+        } catch (error) {
+          if (error instanceof Error) reject(error);
+          else reject(new Error("Code index build failed", { cause: error }));
+        }
+      };
+      advance();
+    },
+  );
 }
 
 function advanceCodeIntelligenceBatch(
