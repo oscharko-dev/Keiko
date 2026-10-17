@@ -114,6 +114,28 @@ function manySourceFiles(count: number): Readonly<Record<string, string>> {
 }
 
 describe("cooperative code-index construction", () => {
+  it("rejects the shared build when execution control fails after a yield", async () => {
+    const failure = new Error("Synthetic execution clock failure");
+    let failClock = false;
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      limits(512),
+      memFs(ROOT, manySourceFiles(512)),
+      {
+        nowMs: (): number => {
+          if (failClock) throw failure;
+          return 0;
+        },
+      },
+    );
+    context.candidatePaths();
+    const pending = context.codeIntelligenceIndex();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    failClock = true;
+    await expect(pending).rejects.toBe(failure);
+    expect(context.codeIntelligenceIndex()).toBe(pending);
+  });
+
   it("never reports complete coverage when its deadline expires between build stages", async () => {
     for (let deadlineAtMs = 1; deadlineAtMs <= 20; deadlineAtMs += 1) {
       const result = await buildWhileEventLoopClockAdvances(deadlineAtMs);
