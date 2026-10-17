@@ -5,7 +5,7 @@ import {
   type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   Dispatch,
   KeyboardEvent as ReactKeyboardEvent,
@@ -791,7 +791,9 @@ export function FilesWidget({
   const [rootDraft, setRootDraft] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const selectedPathRef = useRef(selectedPath);
-  selectedPathRef.current = selectedPath;
+  useLayoutEffect((): void => {
+    selectedPathRef.current = selectedPath;
+  }, [selectedPath]);
   const navigation = useFilesNavigation(
     apiRoot,
     onRootChange,

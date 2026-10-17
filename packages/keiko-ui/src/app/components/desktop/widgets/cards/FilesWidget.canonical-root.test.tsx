@@ -1,9 +1,22 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Suspense, startTransition, type ComponentProps, type ReactNode } from "react";
 import { fetchFilesTree } from "@/lib/api";
 import { FilesWidget } from "./FilesWidget";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 import { nativeFilesChatFixture } from "../../../../../../../../tests/support/files-chat-native-support";
+
+const previewSuspension = vi.hoisted((): { current?: () => void } => ({}));
+vi.mock("./FilePreview", async (original) => {
+  const actual = await original<typeof import("./FilePreview")>();
+  return {
+    ...actual,
+    FilePreview(props: ComponentProps<typeof actual.FilePreview>): ReactNode {
+      previewSuspension.current?.();
+      return <actual.FilePreview {...props} />;
+    },
+  };
+});
 
 vi.mock("@/lib/api", async (original) => ({
   ...(await original<typeof import("@/lib/api")>()),
@@ -30,6 +43,7 @@ vi.mock("@/lib/client-diagnostics", async (original) => ({
 }));
 
 afterEach(() => {
+  delete previewSuspension.current;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -281,6 +295,53 @@ it.each(["close-preview", "change-root"] as const)(
     }
   },
 );
+
+it("keeps the committed selection while a concurrent preview render is suspended", async () => {
+  const native = await nativeFilesChatFixture();
+  const pending = delayedRootRefresh(native);
+  const preview = deferred<void>();
+  let attempted = false;
+  try {
+    const active = vi.fn();
+    render(
+      <Suspense fallback={<span>Loading preview</span>}>
+        <FilesWidget
+          root={native.root}
+          initialDirectoryPath="Alpha"
+          onActiveFileChange={active}
+          watchActive={false}
+        />
+      </Suspense>,
+    );
+    const row = await screen.findByRole("treeitem", { name: /one\.ts/u });
+    pending.hold();
+    await act(async () => {
+      notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" });
+      await pending.entered;
+    });
+    previewSuspension.current = (): void => {
+      attempted = true;
+      throw preview.promise;
+    };
+    act(() =>
+      startTransition(() => {
+        fireEvent.click(row);
+      }),
+    );
+    expect(attempted).toBe(true);
+    expect(screen.queryByRole("button", { name: "Back to files" })).toBeNull();
+    active.mockClear();
+    await act(async () => pending.release());
+    expect(active).toHaveBeenLastCalledWith(null, native.root, "Alpha");
+    expect(active.mock.calls.some(([path]) => path === "Alpha/one.ts")).toBe(false);
+  } finally {
+    cleanup();
+    delete previewSuspension.current;
+    pending.release();
+    preview.resolve();
+    await native.close();
+  }
+});
 
 it("clears a preview and its directory when an unchanged root resolves elsewhere", async () => {
   const native = await nativeFilesChatFixture();

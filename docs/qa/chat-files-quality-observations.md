@@ -818,10 +818,18 @@ and narrow English/German layouts after retiring the obsolete confirmation contr
 
 The Sonar S9382 repair preserves sequential 32-source batches and stage yields through bounded
 `setImmediate` continuations. Error propagation uses the same explicitly typed Promise rejection
-port already used by the structural request context. The 193 code-intelligence/request-context
+port already used by the structural request context. The 194 code-intelligence/request-context
 cases and the complete Activity Log gate pass. Default local Sonar analysis exhausted its 4.5 GiB
 heap; the documented 12 GiB configuration completes without unresolved findings. No analyzer rule,
 coverage floor, timeout or read boundary was weakened.
+
+A final review identified a render-phase selection leak. A suspended preview could update the
+selection ref before React committed that preview, allowing a pending root read to report that
+uncommitted file. A native-root fixture with a suspended preview reproduces the wrong callback
+before the repair. The ref now updates in a layout effect, before passive reads begin; all 124
+Files, MultiRoot and accessibility tests pass. The existing navigation/read and scope-decision
+Activity Log remains the observation path. This correction does not establish the deferred
+immediate client-intent or N+1 compaction guarantees.
 
 The fixed native host passes all 56 tests locally under CI-pinned Node 24.18.0. The prior Windows
 success and EOF timeout ran on the same merge candidate. Neither local success nor static review
