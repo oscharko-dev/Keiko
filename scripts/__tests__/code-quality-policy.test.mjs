@@ -255,6 +255,9 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "git-editor-diff-response-public-parser",
       "git-editor-blame-request-public-parser",
       "git-editor-blame-response-public-parser",
+      "command-request-public-parser",
+      "command-catalog-public-parser",
+      "command-result-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1061,6 +1064,46 @@ describe("Git read public parser obligations (#3918)", () => {
       expect(record.proofs).toEqual(["packages/keiko-contracts/src/git-editor.test.ts"]);
       expect(record.proofAssertions).toHaveLength(assertions);
       expect(validatePolicy(policy)).toEqual([]);
+    },
+  );
+});
+
+describe("Command parser unknown input obligations (#3918)", () => {
+  it.each([
+    {
+      id: "command-request-public-parser",
+      producer: "parseCommandTaskRunRequest",
+      witness: "parsePublicCommandRequest",
+      assertions: 5,
+    },
+    {
+      id: "command-catalog-public-parser",
+      producer: "validateCommandTaskCatalog",
+      witness: "parsePublicCommandCatalog",
+      assertions: 6,
+    },
+    {
+      id: "command-result-public-parser",
+      producer: "validateCommandTaskRunResult",
+      witness: "parsePublicCommandResult",
+      assertions: 4,
+    },
+  ])(
+    "retains declared raw input responsibility of $producer",
+    ({ id, producer, witness, assertions }) => {
+      const record = policy.responsibilities.find((entry) => entry.id === id);
+      expect(record).toMatchObject({
+        owner: "@oscharko-dev/keiko-contracts",
+        kind: "public-parser",
+        rules: ["anti-slop/no-unknown-parameters"],
+        input: { exportName: producer, parameterIndex: 0 },
+        consumer: { exportName: witness, kind: "public-api-proof" },
+      });
+      expect(record.proofs).toEqual(["packages/keiko-contracts/src/command-runner.test.ts"]);
+      expect(record.proofAssertions).toHaveLength(assertions);
+      expect(record.proofAssertions.every((proof) => proof.path === record.proofs[0])).toBe(true);
+      expect(record.transform.exportName).toBe(producer);
+      expect(record.output.exportName).toBe(producer);
     },
   );
 });

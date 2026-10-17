@@ -121,6 +121,18 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
+    "packages/keiko-contracts/src/command-runner.ts:parseCommandTaskRunRequest",
+    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+  ],
+  [
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskCatalog",
+    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+  ],
+  [
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskRunResult",
+    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+  ],
+  [
     "packages/keiko-contracts/src/git-editor.ts:parserInspectionClass",
     "Pure hostile error classification returns the fixed unknown-error refusal without reading private fields. The parser propagates a closed rejection; UI failBffResponse reports the existing correlated contract-validation diagnostic and server blame admission uses its fixed BAD_REQUEST refusal. The classifier does not emit a separate logged fact.",
   ],
@@ -488,11 +500,46 @@ function isReviewedFailurePath(path, owner, node) {
   if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`)) return false;
   if (path === "packages/keiko-contracts/src/git-editor.ts" && owner === "parserInspectionClass")
     return exactFailureFallback(node, "unknown error");
+  if (path === "packages/keiko-contracts/src/command-runner.ts")
+    return exactCommandInspectionRefusal(node);
   if (path !== "packages/keiko-contracts/src/observability.ts") return true;
   if (owner === "completeRegistrationShape") return exactFailureFallback(node, false);
   if (owner === "rejectedActivityLogEventKind")
     return exactFailureFallback(node, "registration-mismatch");
   return true;
+}
+
+function namedFailureProperty(property, name) {
+  return (
+    ts.isPropertyAssignment(property) &&
+    ts.isIdentifier(property.name) &&
+    property.name.text === name
+  );
+}
+
+function exactInspectionErrors(property) {
+  if (!namedFailureProperty(property, "errors")) return false;
+  const value = property.initializer;
+  return (
+    ts.isArrayLiteralExpression(value) &&
+    value.elements.length === 1 &&
+    ts.isStringLiteral(value.elements[0]) &&
+    value.elements[0].text === "payload could not be inspected"
+  );
+}
+
+function exactCommandInspectionRefusal(node) {
+  if (node.block.statements.length !== 1) return false;
+  const statement = node.block.statements[0];
+  if (!ts.isReturnStatement(statement) || statement.expression === undefined) return false;
+  const expression = statement.expression;
+  if (!ts.isObjectLiteralExpression(expression) || expression.properties.length !== 2) return false;
+  const [ok, errors] = expression.properties;
+  return (
+    namedFailureProperty(ok, "ok") &&
+    ok.initializer.kind === ts.SyntaxKind.FalseKeyword &&
+    exactInspectionErrors(errors)
+  );
 }
 
 function exactFailureFallback(node, value) {

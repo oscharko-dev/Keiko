@@ -96,6 +96,13 @@ interface GitApiFixture {
     readonly userInitiated: true;
   }) => Promise<unknown>;
 }
+interface CommandApiFixture {
+  readonly fetchCommandCatalog: (projectId: string) => Promise<unknown>;
+  readonly createCommandRun: (input: {
+    readonly projectId: string;
+    readonly taskId: string;
+  }) => Promise<unknown>;
+}
 interface ClientDiagnosticsFixture {
   readonly resetClientDiagnosticWriter: () => void;
   readonly setClientDiagnosticWriter: (writer: (message: string, meta?: unknown) => void) => void;
@@ -284,6 +291,90 @@ async function driveStructuredGitRefusal(
   });
   for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
     expect(bodies[0]).not.toContain(value);
+}
+
+function commandResponse(kind: "catalog" | "run", malformed: boolean): Response {
+  const payload =
+    kind === "catalog"
+      ? { schemaVersion: "1", projectId: "/private-command-project", tasks: [] }
+      : {
+          schemaVersion: "1",
+          runId: "command-scenario",
+          taskId: "npm-script:test",
+          kind: "test",
+          exitCode: 0,
+          durationMs: 1,
+          truncated: false,
+          timedOut: false,
+          failureReason: "none",
+          stdout: "private-command-output",
+          stderr: "",
+        };
+  return new Response(JSON.stringify(malformed ? "private-command-body" : payload), {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-Correlation-Id": `command-${kind}-response-scenario`,
+    },
+  });
+}
+
+async function loadCommandDiagnosticFixture(): Promise<CommandApiFixture> {
+  const api = await vi.importActual<CommandApiFixture>(
+    "../../packages/keiko-ui/src/lib/commands-api.js",
+  );
+  if (typeof api.fetchCommandCatalog !== "function" || typeof api.createCommandRun !== "function")
+    throw new TypeError("actual command exports required");
+  const { diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  return api;
+}
+
+async function driveCommandRefusal(
+  context: (body: string) => RouteContext,
+  kind: "catalog" | "run",
+): Promise<void> {
+  const api = await loadCommandDiagnosticFixture();
+  let malformed = false;
+  let delivery: Promise<Response> | undefined;
+  let commandCalls = 0;
+  const bodies: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (typeof input !== "string") throw new TypeError("fixture string request required");
+      if (input.startsWith("/api/commands/")) {
+        commandCalls += 1;
+        return commandResponse(kind, malformed);
+      }
+      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+        throw new TypeError("unexpected fixture request");
+      bodies.push(init.body);
+      delivery = handleClientDiagnosticIngest(context(init.body)).then(
+        (result): Response => new Response(null, { status: result.status }),
+      );
+      return delivery;
+    },
+  );
+  const read = (): Promise<unknown> =>
+    kind === "catalog"
+      ? api.fetchCommandCatalog("/private-command-project")
+      : api.createCommandRun({ projectId: "/private-command-project", taskId: "npm-script:test" });
+  await expect(read()).resolves.toMatchObject({ schemaVersion: "1" });
+  expect(bodies).toEqual([]);
+  malformed = true;
+  const failure = await read().catch((error: unknown): unknown => error);
+  expect(bodies).toHaveLength(1);
+  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+  expect((await delivery).status).toBe(204);
+  expect(failure).toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+    correlationId: `command-${kind}-response-scenario`,
+  });
+  expect(commandCalls).toBe(2);
+  expect(bodies[0]).not.toContain("private-command");
 }
 
 function gitSyncResponse(malformed: boolean): Response {
@@ -803,6 +894,50 @@ describe("Activity Log scenario: client-diagnostics", () => {
     expect(trace.failureClasses).toContain("client-diagnostic");
     for (const value of ["private-git-root", "private-git-file", "private-git-json-body"])
       expect(log).not.toContain(value);
+  });
+
+  it("reconstructs actual command catalog JSON refusal without replay", async () => {
+    const startedAtMs = Date.now();
+    await driveCommandRefusal(context, "catalog");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "command-catalog-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-command");
+  });
+
+  it("reconstructs actual command run JSON refusal without replay", async () => {
+    const startedAtMs = Date.now();
+    await driveCommandRefusal(context, "run");
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(1);
+    expect(parsedLine(lines[0])).toMatchObject({
+      correlationId: "command-run-response-scenario",
+      clientKind: "other",
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    expect(log).not.toContain("private-command");
   });
 
   it("persists a malformed Git sync response without replaying the mutation", async () => {

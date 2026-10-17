@@ -305,11 +305,15 @@ function requestFieldsAreValid(
 }
 
 export function parseCommandTaskRunRequest(input: unknown): CommandTaskRunRequestParse {
-  const errors: string[] = [];
-  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
-  errors.push(...unknownKeys(input, RUN_REQUEST_KEYS, "request"));
-  if (!requestFieldsAreValid(input, errors) || errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: input };
+  try {
+    const errors: string[] = [];
+    if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
+    errors.push(...unknownKeys(input, RUN_REQUEST_KEYS, "request"));
+    if (!requestFieldsAreValid(input, errors) || errors.length > 0) return { ok: false, errors };
+    return { ok: true, value: input };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
+  }
 }
 
 function validateTaskArgs(
@@ -416,11 +420,15 @@ function catalogFieldsAreValid(
 }
 
 export function validateCommandTaskCatalog(value: unknown): CommandTaskCatalogParse {
-  const errors: string[] = [];
-  if (!isRecord(value)) return { ok: false, errors: ["catalog must be an object"] };
-  errors.push(...unknownKeys(value, CATALOG_KEYS, "catalog"));
-  if (!catalogFieldsAreValid(value, errors) || errors.length > 0) return { ok: false, errors };
-  return { ok: true, value };
+  try {
+    const errors: string[] = [];
+    if (!isRecord(value)) return { ok: false, errors: ["catalog must be an object"] };
+    errors.push(...unknownKeys(value, CATALOG_KEYS, "catalog"));
+    if (!catalogFieldsAreValid(value, errors) || errors.length > 0) return { ok: false, errors };
+    return { ok: true, value };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
+  }
 }
 
 // KEIKO-0601: the field-by-field scalar/runtime checks below (schemaVersion, runId, taskId, kind,
@@ -429,24 +437,28 @@ export function validateCommandTaskCatalog(value: unknown): CommandTaskCatalogPa
 // validateRunResultCore, parameterized by this executor's own schema version, COMMAND_TASK_KINDS and
 // COMMAND_FAILURE_REASONS. Only the unknown-key rejection above is command-runner-specific.
 export function validateCommandTaskRunResult(value: unknown): CommandTaskRunResultParse {
-  const errors: string[] = [];
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["result must be an object"] };
+  try {
+    const errors: string[] = [];
+    if (!isRecord(value)) {
+      return { ok: false, errors: ["result must be an object"] };
+    }
+    errors.push(...unknownKeys(value, RUN_RESULT_KEYS, "result"));
+    if (
+      !validateRunResultCore(
+        value,
+        {
+          schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
+          kinds: COMMAND_TASK_KINDS,
+          failureReasons: COMMAND_FAILURE_REASONS,
+        },
+        errors,
+      ) ||
+      errors.length > 0
+    ) {
+      return { ok: false, errors };
+    }
+    return { ok: true, value };
+  } catch {
+    return { ok: false, errors: ["payload could not be inspected"] };
   }
-  errors.push(...unknownKeys(value, RUN_RESULT_KEYS, "result"));
-  if (
-    !validateRunResultCore(
-      value,
-      {
-        schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
-        kinds: COMMAND_TASK_KINDS,
-        failureReasons: COMMAND_FAILURE_REASONS,
-      },
-      errors,
-    ) ||
-    errors.length > 0
-  ) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value };
 }

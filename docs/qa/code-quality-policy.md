@@ -853,3 +853,28 @@ entries, while UI structured-diff/blame consumers use the existing parsed-respon
 primitive, null, empty and object refusals retain their actual response correlation on the existing
 contract-validation diagnostic. This runtime repair and the public-parser registration require
 their own actual red/green, coverage and Activity Log evidence; registration alone supplies none.
+
+### Command runner public admission (#3918)
+
+Three existing command request, catalog and run-result parsers extend the cohort from 70 to 73
+using `public-parser` and only `anti-slop/no-unknown-parameters` parameter zero. One canonical named
+public import supplies three forwarding witnesses with producer-owned result aliases. Strict
+source/public/witness type pins and canonical public proofs preserve original identities, optional
+fields, observation order, timer and identifier bounds, ordered refusals, and physical sparse and
+inherited collection behavior. Existing source regression pins remain authoritative.
+
+Hostile property inspection returns one fixed closed refusal without inspecting the thrown value.
+The three exact reviewed catches admit only that literal refusal; the legacy register is unchanged.
+UI catalog and run-result admission uses the existing BFF validator transport and correlated client
+diagnostic, including primitive, null and empty responses. A malformed run response never replays
+execution. Activity Log scenarios carry both refusals through the existing ingest, writer and complete
+support analysis. These are execution obligations, not evidence supplied merely by registration.
+The existing raw-helper closure also accounts for the request parser's five private scalar predicates
+(`isBoundedNonEmptyString`, `isBoundedControlFreeString`, `isValidTaskId`, `isPositiveSafeInteger`,
+`isValidRequestId`). They receive raw request fields, are not exported or escaped, and have no callers
+outside that admission chain. The actual request assessment has six unknown-parameter slots; catalog
+and result each have one. Canonical public bound/refusal proofs detect a bypass of each helper while
+original source controls remain healthy. This uses the existing helper-inclusive reader without
+changing an engine capability or manufacturing a separate grant. No scopes, exports, authority,
+logging ports or optional argument/dictionary/typeof grants change. Actual reader eligibility and fresh full-cohort
+qualification remain required; source preparation does not activate the unknown-parameter scope.

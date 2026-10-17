@@ -3925,6 +3925,162 @@
           "testName": "G1 physical Git read collections public refuses an absent blame line"
         }
       ]
+    },
+    {
+      "id": "command-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "parseCommandTaskRunRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "parseCommandTaskRunRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "parseCommandTaskRunRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "parsePublicCommandRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/command-runner.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command request public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command request public parser (#3918) preserves request identity optionals and owning field observation order"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command request public parser (#3918) enforces producer owned identifier bounds and timer safety"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command request public parser (#3918) preserves ordered closed field refusals and rejects extra data"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command request public parser (#3918) closes hostile getters undefined throws and revoked proxies without private error inspection"
+        }
+      ]
+    },
+    {
+      "id": "command-catalog-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "validateCommandTaskCatalog",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "validateCommandTaskCatalog"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "validateCommandTaskCatalog"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "parsePublicCommandCatalog",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/command-runner.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command catalog public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command catalog public parser (#3918) preserves original catalog task argument identity and admission reads"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command catalog public parser (#3918) refuses unknown and malformed catalog task fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command catalog public parser (#3918) validates physical task and argument members despite replaced callbacks"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command catalog public parser (#3918) preserves inherited tasks sparse first hole and changing second observation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command catalog public parser (#3918) closes hostile getters undefined throws and revoked proxies without private error inspection"
+        }
+      ]
+    },
+    {
+      "id": "command-result-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "validateCommandTaskRunResult",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "validateCommandTaskRunResult"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "validateCommandTaskRunResult"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/command-runner.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/command-runner",
+        "exportName": "parsePublicCommandResult",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/command-runner.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command result public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command result public parser (#3918) preserves result identity nullable exits and eager common field order"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command result public parser (#3918) refuses malformed result scalars vocabulary and extra fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/command-runner.test.ts",
+          "testName": "Command result public parser (#3918) closes hostile getters undefined throws and revoked proxies without private error inspection"
+        }
+      ]
     }
   ]
 }
