@@ -935,3 +935,28 @@ and public root/nested pins preserve actual generic alias provenance. Existing d
 source tests remain unchanged, including physical arrays, identity, optional presence, eager error
 order and calendar-date refusal. During artifact controls those old dynamic public cases must not
 be mislabeled as independent source controls. No production runtime or public exports change.
+
+### Prompt admission responsibilities (#3918)
+
+Six existing request, analysis, grounding-plan, enhanced-prompt, scorecard and selection validators
+extend the declared cohort from 83 to 89 using the existing `public-parser` kind and only
+`anti-slop/no-unknown-parameters` parameter zero. All earlier records, fields, scopes and proof
+selectors remain intact. Source preparation establishes neither actual structural eligibility nor
+semantic qualification; the existing owner API and fresh complete-cohort qualification remain
+mandatory. Helper-inclusive admission is assessed from actual source rather than presumed to have
+one slot per root. No optional grant, engine, export or activation changes.
+
+Canonical public result-forwarding witnesses use the existing public validation generic and
+producer-owned DTOs. Source and public nominal brands retain independent expectations. Strict
+unknown/result/nested-field pins and public identity/refusal proofs preserve physical members,
+optional presence, eager diagnostics and changing healthy observations. Existing source and dynamic
+public regression pins stay authoritative. Request workflow and analysis generator consumers remain
+unchanged; the other four roots use real same-owner public API proofs without fabricated production
+callers. No product runtime change or logging promise follows merely from registration.
+
+Scorecard and selection retain the documented nonthrowing boundary repaired independently before
+this registration: unreadable payloads return a fixed refusal without inspecting the thrown value.
+Their original operation order, admitted identity and ordered ordinary errors remain authoritative.
+This declaration grants no universal hostile-accessor promise to the other four validators and
+changes no runtime behavior. The separate collective graph-budget refusal must be resolved through
+its owning implementation before these six records can be assessed and qualified.

@@ -268,6 +268,12 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "workbench-authority-public-parser",
       "workbench-permission-public-parser",
       "workbench-runtime-event-public-parser",
+      "prompt-request-public-parser",
+      "prompt-analysis-public-parser",
+      "prompt-grounding-public-parser",
+      "enhanced-prompt-public-parser",
+      "prompt-scorecard-public-parser",
+      "prompt-selection-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1250,6 +1256,86 @@ describe("Workbench family raw input responsibilities (#3918)", () => {
       expect(record.proofs).toEqual([consumerPath]);
       expect(record.proofAssertions).toHaveLength(3);
       expect(record.proofAssertions.every((proof) => proof.path === consumerPath)).toBe(true);
+      expect(validatePolicy(policy)).toEqual([]);
+    },
+  );
+});
+
+describe("Prompt family raw input responsibilities (#3918)", () => {
+  it.each([
+    {
+      id: "prompt-request-public-parser",
+      producer: "validatePromptEnhancementRequest",
+      witness: "parsePublicPromptRequest",
+      path: "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+      assertions: 4,
+    },
+    {
+      id: "prompt-analysis-public-parser",
+      producer: "validatePromptTaskAnalysis",
+      witness: "parsePublicPromptAnalysis",
+      path: "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+      assertions: 4,
+    },
+    {
+      id: "prompt-grounding-public-parser",
+      producer: "validateGroundingPlan",
+      witness: "parsePublicPromptGrounding",
+      path: "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+      assertions: 4,
+    },
+    {
+      id: "enhanced-prompt-public-parser",
+      producer: "validateEnhancedPrompt",
+      witness: "parsePublicEnhancedPrompt",
+      path: "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+      assertions: 4,
+    },
+    {
+      id: "prompt-scorecard-public-parser",
+      producer: "validatePromptCandidateScorecard",
+      witness: "parsePublicPromptScorecard",
+      path: "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+      assertions: 5,
+    },
+    {
+      id: "prompt-selection-public-parser",
+      producer: "validatePromptCandidateSelection",
+      witness: "parsePublicPromptSelection",
+      path: "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+      specifier: "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+      assertions: 5,
+    },
+  ])(
+    "preserves the declared producer and proof owner for $producer",
+    ({ id, producer, witness, path, specifier, assertions }) => {
+      const record = policy.responsibilities.find((entry) => entry.id === id);
+      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+      expect(record.kind).toBe("public-parser");
+      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.input).toEqual({
+        consumerPath: path,
+        specifier,
+        exportName: producer,
+        parameterIndex: 0,
+      });
+      expect(record.transform).toEqual({ consumerPath: path, specifier, exportName: producer });
+      expect(record.output).toEqual(record.transform);
+      expect(record.consumer).toEqual({
+        consumerPath: path,
+        specifier,
+        exportName: witness,
+        kind: "public-api-proof",
+        owner: record.owner,
+      });
+      expect(record.proofs).toEqual([path]);
+      expect(record.proofAssertions).toHaveLength(assertions);
+      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
       expect(validatePolicy(policy)).toEqual([]);
     },
   );

@@ -4541,6 +4541,302 @@
           "testName": "Workbench runtime event public parser (#3918) refuses malformed runtime event dates counts and raw fields at the public boundary"
         }
       ]
+    },
+    {
+      "id": "prompt-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptEnhancementRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptEnhancementRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptEnhancementRequest"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "parsePublicPromptRequest",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/prompt-enhancer-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt request public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt request public parser (#3918) pins independent public nested output fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt request public parser (#3918) preserves healthy public identity and owned nested fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt request public parser (#3918) refuses malformed public input and physical members"
+        }
+      ]
+    },
+    {
+      "id": "prompt-analysis-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptTaskAnalysis",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptTaskAnalysis"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptTaskAnalysis"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "parsePublicPromptAnalysis",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/prompt-enhancer-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt analysis public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt analysis public parser (#3918) pins independent public nested output fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt analysis public parser (#3918) preserves healthy public identity and owned nested fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt analysis public parser (#3918) refuses malformed public input and physical members"
+        }
+      ]
+    },
+    {
+      "id": "prompt-grounding-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validateGroundingPlan",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validateGroundingPlan"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validateGroundingPlan"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "parsePublicPromptGrounding",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/prompt-enhancer-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt grounding public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt grounding public parser (#3918) pins independent public nested output fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt grounding public parser (#3918) preserves healthy public identity and owned nested fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Prompt grounding public parser (#3918) refuses malformed public input and physical members"
+        }
+      ]
+    },
+    {
+      "id": "enhanced-prompt-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validateEnhancedPrompt",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validateEnhancedPrompt"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validateEnhancedPrompt"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "parsePublicEnhancedPrompt",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/prompt-enhancer-validation.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Enhanced prompt public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Enhanced prompt public parser (#3918) pins independent public nested output fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Enhanced prompt public parser (#3918) preserves healthy public identity and owned nested fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-validation.test.ts",
+          "testName": "Enhanced prompt public parser (#3918) refuses malformed public input and physical members"
+        }
+      ]
+    },
+    {
+      "id": "prompt-scorecard-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptCandidateScorecard",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptCandidateScorecard"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptCandidateScorecard"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "parsePublicPromptScorecard",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/prompt-enhancer-critic.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt scorecard public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt scorecard public parser (#3918) pins independent public nested output fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt scorecard public parser (#3918) preserves healthy public identity and owned nested fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt scorecard public parser (#3918) refuses malformed public input and physical members"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt documented nonthrowing admission (#3918) public scorecard inspection returns only the fixed refusal"
+        }
+      ]
+    },
+    {
+      "id": "prompt-selection-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptCandidateSelection",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptCandidateSelection"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "validatePromptCandidateSelection"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation",
+        "exportName": "parsePublicPromptSelection",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/prompt-enhancer-critic.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt selection public parser (#3918) pins source public and forwarding unknown inputs and checked results"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt selection public parser (#3918) pins independent public nested output fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt selection public parser (#3918) preserves healthy public identity and owned nested fields"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt selection public parser (#3918) refuses malformed public input and physical members"
+        },
+        {
+          "path": "packages/keiko-contracts/src/prompt-enhancer-critic.test.ts",
+          "testName": "Prompt documented nonthrowing admission (#3918) public selection inspection returns only the fixed refusal"
+        }
+      ]
     }
   ]
 }
