@@ -837,3 +837,14 @@ establishes that failure's cause; the host and its timeouts remain unchanged, an
 native CI is still required. Release metadata covers #4036 plus #4039, preserves existing manual
 update eligibility and does not claim complete model or skill qualification. Final release-package,
 coverage and exact-head CI results must be recorded before integration/publication.
+
+The subsequent Intel macOS native-host run failed one readiness wait and one EOF-labelled wait
+(54/56 passed). The latter could include a second process's cold stale-database refusal; the
+original error did not identify which wait failed. Both cases pass locally on arm64, which does
+not establish their Intel cause. The required native-host command now runs its same four isolated
+test files sequentially, avoiding file-level startup contention without changing the 10-second
+readiness or 5-second EOF deadlines. Timeout diagnostics retain only phase, age and readiness/exit
+booleans. The two affected tests retain every success/refusal assertion and always dispose their
+owned children without a second cleanup timeout hiding the primary failure. All 56 host cases and
+111 wiring/reuse checks pass locally. This is a bounded test-scheduling mitigation, not evidence
+that a product lifecycle defect was fixed; final native Intel CI remains required.

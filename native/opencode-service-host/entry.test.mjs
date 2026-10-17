@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 
 const { fetch, AbortSignal, TextDecoder } = globalThis;
 const moduleRoot =
@@ -114,6 +115,7 @@ function fixture(toolProfile = "direct") {
 }
 
 function start(own, args = [], environment = {}, cwd = own.input.workspace) {
+  const startedAt = performance.now();
   const env = { ...process.env, ...environment };
   delete env.NODE_OPTIONS;
   if ("NODE_OPTIONS" in environment) env.NODE_OPTIONS = environment.NODE_OPTIONS;
@@ -137,7 +139,20 @@ function start(own, args = [], environment = {}, cwd = own.input.workspace) {
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal, stdout, stderr }));
   });
-  return { child, exited, output: () => stdout };
+  return { child, exited, startedAt, output: () => stdout };
+}
+
+function timeoutError(owned, phase) {
+  return new Error(`fixed-entry-${phase}-timeout`, {
+    cause: {
+      ageMs: Math.round(performance.now() - owned.startedAt),
+      readinessObserved: owned
+        .output()
+        .split("\n")
+        .some((line) => line.startsWith('{"url":')),
+      processExited: owned.child.exitCode !== null || owned.child.signalCode !== null,
+    },
+  });
 }
 
 async function ready(owned) {
@@ -151,18 +166,28 @@ async function ready(owned) {
     if (owned.child.exitCode !== null) throw new Error("fixed-entry-exited-before-ready");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("fixed-entry-ready-timeout");
+  throw timeoutError(owned, "ready");
 }
 
-async function finish(owned) {
+async function finish(owned, phase = "eof") {
   owned.child.stdin.end();
-  return Promise.race([
-    owned.exited,
-    new Promise((_, reject) => {
-      const timer = setTimeout(() => reject(new Error("fixed-entry-eof-timeout")), 5000);
-      timer.unref();
-    }),
-  ]);
+  let timer;
+  try {
+    return await Promise.race([
+      owned.exited,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(timeoutError(owned, phase)), 5000);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function disposeChild(owned) {
+  if (owned.child.exitCode === null && owned.child.signalCode === null) owned.child.kill();
+  await owned.exited;
 }
 
 function authenticated(input) {
@@ -199,7 +224,7 @@ test("the fixed host entry serves original auth/routes/SSE and closes its socket
     assert.equal(result.stdout.split("\n").filter(Boolean).length, 1);
     await assert.rejects(fetch(url + "/api/info", { signal: AbortSignal.timeout(1000) }));
   } finally {
-    await finish(owned);
+    await disposeChild(owned);
     own.cleanup();
   }
 });
@@ -294,6 +319,7 @@ test("EOF during native graph acquisition publishes no stale ready endpoint", as
 test("a fragmented bounded packet boots once and an old native database cannot resume", async () => {
   const own = fixture();
   const owned = start(own);
+  const children = [owned];
   try {
     const text = JSON.stringify(own.input);
     owned.child.stdin.write(text.slice(0, 20));
@@ -303,13 +329,14 @@ test("a fragmented bounded packet boots once and an old native database cannot r
     await ready(owned);
     assert.equal((await finish(owned)).code, 0);
     const reused = start(own);
+    children.push(reused);
     reused.child.stdin.write(JSON.stringify(own.input) + "\n");
-    const result = await finish(reused);
+    const result = await finish(reused, "cold-refusal");
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, "host-entry-refused\n");
   } finally {
-    await finish(owned);
+    await Promise.all(children.map(disposeChild));
     own.cleanup();
   }
 });
